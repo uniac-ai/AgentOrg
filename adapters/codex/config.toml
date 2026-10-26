@@ -1,0 +1,15 @@
+# agentorg MCP server for Codex. Add one of the two tables below to
+# ~/.codex/config.toml (or a trusted project's .codex/config.toml).
+
+# stdio (default): Codex starts `agentorg mcp`, which forwards to the local
+# service and reads the service token from the agentorg home on its own.
+[mcp_servers.agentorg]
+command = "agentorg"
+args = ["mcp", "--client", "codex"]
+
+# Streamable HTTP: Codex connects to the service directly and sends the token
+# from the AGENTORG_TOKEN environment variable as a bearer token.
+# [mcp_servers.agentorg]
+# url = "http://127.0.0.1:8740/mcp"
+# bearer_token_env_var = "AGENTORG_TOKEN"
+# http_headers = { "Agentorg-Client" = "codex" }

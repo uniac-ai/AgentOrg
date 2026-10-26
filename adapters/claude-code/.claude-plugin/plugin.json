@@ -1,0 +1,29 @@
+{
+  "name": "agentorg",
+  "description": "The task-execution and reporting skills, and the agentorg MCP server.",
+  "author": {
+    "name": "The agentorg authors"
+  },
+  "homepage": "https://github.com/uniac-ai/agentorg",
+  "repository": "https://github.com/uniac-ai/agentorg",
+  "license": "MIT",
+  "mcpServers": {
+    "agentorg": {
+      "command": "agentorg",
+      "args": ["mcp", "--client", "claude-code", "--client-session-env", "CLAUDE_CODE_SESSION_ID"]
+    }
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "agentorg session context --client claude-code --client-session-id \"$CLAUDE_CODE_SESSION_ID\" 2>/dev/null || true",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
