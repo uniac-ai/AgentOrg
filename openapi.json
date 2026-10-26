@@ -3,7 +3,7 @@
   "info": {
     "title": "agentorg",
     "summary": "The record of agent sessions, tasks, asks, items and reports.",
-    "version": "0.1.0.dev0"
+    "version": "0.0.1"
   },
   "paths": {
     "/api/session/start": {

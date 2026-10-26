@@ -12,7 +12,7 @@ The project has three pieces:
 
 ## Status
 
-Phase 1, decisions end to end on one machine, is in progress. Nothing is released yet.
+agentorg is pre-alpha, and its API may change. Phase 1, decisions end to end on one machine, is in progress.
 
 ## Design
 
