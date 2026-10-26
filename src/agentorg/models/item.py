@@ -17,7 +17,7 @@ class Item(ContractModel):
     session: Id | None = Field(description="The session doing the work.")
     title: Title
     state: ItemState
-    summary: Summary = Field(description="Short Markdown.")
+    summary: Summary = Field(description="Short plain text; line breaks are kept.")
     links: list[Link]
     evidence: list[Id]
     blockers: list[Short] = Field(description="Who unblocks the item.")
@@ -33,7 +33,9 @@ class ItemPut(ContractModel):
     task: Id | None = Field(default=None, description="Defaults to the session's task.")
     title: Title
     state: ItemState
-    summary: Summary = Field(default="", description="Short Markdown; no logs.")
+    summary: Summary = Field(
+        default="", description="Short plain text, never a log; line breaks are kept."
+    )
     links: list[Link] = Field(default_factory=list, max_length=20)
     blockers: list[Short] = Field(default_factory=list, max_length=10)
 

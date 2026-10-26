@@ -2072,7 +2072,7 @@
             "type": "string",
             "maxLength": 2000,
             "title": "Summary",
-            "description": "Short Markdown."
+            "description": "Short plain text; line breaks are kept."
           },
           "links": {
             "items": {
@@ -2259,7 +2259,7 @@
             "type": "string",
             "maxLength": 2000,
             "title": "Summary",
-            "description": "Short Markdown; no logs.",
+            "description": "Short plain text, never a log; line breaks are kept.",
             "default": ""
           },
           "links": {

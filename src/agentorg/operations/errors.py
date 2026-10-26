@@ -27,3 +27,12 @@ class Conflict(OperationError):
     """The record's state does not allow it, such as answering an ask already answered."""
 
     code = "conflict"
+
+
+def invalid(problems: list[dict]) -> Invalid:
+    """An `Invalid` listing validation problems, from Pydantic or FastAPI, as `field: message`."""
+    described = []
+    for problem in problems:
+        field = ".".join(str(part) for part in problem["loc"] if part != "body")
+        described.append(f"{field or 'request'}: {problem['msg']}")
+    return Invalid("; ".join(described))

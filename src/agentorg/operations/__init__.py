@@ -5,7 +5,14 @@ and commands from it, each serving the operations whose `Kind` is meant for it, 
 added to `Operations` appears on every surface it belongs on.
 """
 
-from agentorg.operations.errors import Conflict, Forbidden, Invalid, NotFound, OperationError
+from agentorg.operations.errors import (
+    Conflict,
+    Forbidden,
+    Invalid,
+    NotFound,
+    OperationError,
+    invalid,
+)
 from agentorg.operations.interface import (
     OPERATIONS,
     Caller,
@@ -26,5 +33,6 @@ __all__ = [
     "OperationError",
     "OperationSpec",
     "Operations",
+    "invalid",
     "operation",
 ]
