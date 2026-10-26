@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  launchd user agent that keeps `agentorg serve` running.
+  launchd expands neither `~` nor environment variables, so docs/install.md
+  replaces @AGENTORG@ with the absolute path of the agentorg command and
+  @AGENTORG_HOME@ with the agentorg home before loading this file.
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>agentorg</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>@AGENTORG@</string>
+		<string>serve</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<key>StandardOutPath</key>
+	<string>@AGENTORG_HOME@/logs/serve.log</string>
+	<key>StandardErrorPath</key>
+	<string>@AGENTORG_HOME@/logs/serve.log</string>
+</dict>
+</plist>

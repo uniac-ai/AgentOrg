@@ -1,0 +1,14 @@
+{
+  "name": "agentorg",
+  "description": "agentorg's Claude Code plugin, installed from this repository.",
+  "owner": {
+    "name": "The agentorg authors"
+  },
+  "plugins": [
+    {
+      "name": "agentorg",
+      "source": "./adapters/claude-code",
+      "description": "The task-execution and reporting skills, and the agentorg MCP server."
+    }
+  ]
+}
