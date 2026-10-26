@@ -18,6 +18,9 @@ dependencies = [
     "uvicorn>=0.54",
 ]
 
+[project.scripts]
+agentorg = "agentorg.cli:main"
+
 [project.urls]
 Repository = "https://github.com/uniac-ai/agentorg"
 
