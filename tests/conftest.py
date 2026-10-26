@@ -21,8 +21,13 @@ def anyio_backend():
 
 
 @pytest.fixture
-def auth():
-    return {"Authorization": f"Bearer {TOKEN}"}
+def token():
+    return TOKEN
+
+
+@pytest.fixture
+def auth(token):
+    return {"Authorization": f"Bearer {token}"}
 
 
 @pytest.fixture
