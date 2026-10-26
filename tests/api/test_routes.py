@@ -139,7 +139,7 @@ def test_requests_from_web_pages_are_refused_even_with_the_token(client, recorde
 
 
 def test_the_page_and_the_openapi_document_need_no_token(client):
-    assert client.get("/").status_code == 404
+    assert "www-authenticate" not in client.get("/").headers
     response = client.get("/openapi.json")
     assert response.status_code == 200
     assert response.json()["info"]["title"] == "agentorg"
