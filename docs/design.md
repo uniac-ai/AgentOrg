@@ -51,7 +51,7 @@ The **`agentorg` CLI** is generated from the contract. It covers every agent and
 | Task | id, title, project (free text: a repo, an area), owner session, parent task, state | |
 | Session | id (issued by the service), client kind, client session id (if the client has one), title, parent session, task, machine, started, archived | The hierarchy as data. The session names its role itself; the record holds none. |
 | Ask | task, asking session, title, context (two or three sentences), options[], recommendation, state (open / answered / withdrawn), answer {choice, the user's words, channel, time} | The unit of the decisions page |
-| Item | task, title, state (waiting / review / running / blocked), summary (short Markdown), links, evidence[], blockers (who unblocks), child session | Resolving it removes it, so only open items show |
+| Item | task, title, state (waiting / review / running / blocked), summary (short plain text), links, evidence[], blockers (who unblocks), child session | Resolving it removes it, so only open items show |
 | Evidence | id, item, kind (before / after / single), width, caption, file, content type | Uploaded once; parent and child reference the same file |
 | Report | from, to, outcome, open asks, evidence[], sent, acknowledged | A durable mailbox; acknowledging is the parent's review |
 
