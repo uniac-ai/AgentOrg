@@ -14,8 +14,8 @@ from agentorg.models.common import (
     Title,
 )
 
-AskState = Literal["open", "answered"]
-AnswerChannel = Literal["page", "session", "api"]
+AskState = Literal["open", "answered", "withdrawn"]
+AnswerChannel = Literal["page", "session"]
 
 OPTIONS_MIN = 2
 OPTIONS_MAX = 6
@@ -82,7 +82,7 @@ class AskWait(ContractModel):
 
 
 class AskAnswer(ContractModel):
-    """The user's answer, given on the decisions page or through the API."""
+    """The user's answer, given on the decisions page."""
 
     ask: Id
     choice: Short | None = Field(default=None, description="The label of the chosen option.")
@@ -104,9 +104,10 @@ class AskRecordAnswer(ContractModel):
     choice: Short | None = Field(default=None, description="The option those words choose, if any.")
 
 
+class AskWithdraw(ContractModel):
+    session: Id = Field(description="The asking session; only it withdraws its asks.")
+    ask: Id
+
+
 class AskList(ContractModel):
     state: AskState | None = Field(default="open", description="Null lists every ask.")
-
-
-class AskListResult(ContractModel):
-    asks: list[Ask]

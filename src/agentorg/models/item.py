@@ -48,7 +48,3 @@ class ItemResolve(ContractModel):
 class ItemList(ContractModel):
     task: Id | None = None
     include_resolved: bool = False
-
-
-class ItemListResult(ContractModel):
-    items: list[Item]

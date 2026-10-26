@@ -36,7 +36,7 @@ It runs as a user service (launchd on macOS, a systemd user unit on Linux), list
 | **HTTP JSON API**, described by a committed `openapi.json` | Scripts, non-MCP agents | The contract itself; CI fails if the document drifts from the models |
 | **The decisions page**, at `/` | The user, in any browser | Every open ask with answer buttons, then open workstreams. Server-rendered, with no build step and no CDN. |
 
-The **`agentorg` CLI** is generated from the contract. It covers every operation, plus `agentorg ask wait`, `agentorg session start`, `agentorg mcp` and `agentorg ui`.
+The **`agentorg` CLI** is generated from the contract. It covers every agent and API operation, plus `agentorg ask wait`, `agentorg session start`, `agentorg session context`, `agentorg mcp` and `agentorg ui`.
 
 ### Stack
 
@@ -49,32 +49,43 @@ The **`agentorg` CLI** is generated from the contract. It covers every operation
 | Record | Fields | Notes |
 |---|---|---|
 | Task | id, title, project (free text: a repo, an area), owner session, parent task, state | |
-| Session | id (issued by the service), client kind, client session id (if the client has one), title, parent session, task, role as the session declares it, machine, started, archived | The hierarchy as data. The role is recorded, never assigned. |
-| Ask | task, asking session, title, context (two or three sentences), options[], recommendation, state, answer {choice, the user's words, channel, time} | The unit of the decisions page |
+| Session | id (issued by the service), client kind, client session id (if the client has one), title, parent session, task, machine, started, archived | The hierarchy as data. The session names its role itself; the record holds none. |
+| Ask | task, asking session, title, context (two or three sentences), options[], recommendation, state (open / answered / withdrawn), answer {choice, the user's words, channel, time} | The unit of the decisions page |
 | Item | task, title, state (waiting / review / running / blocked), summary (short Markdown), links, evidence[], blockers (who unblocks), child session | Resolving it removes it, so only open items show |
 | Evidence | id, item, kind (before / after / single), width, caption, file, content type | Uploaded once; parent and child reference the same file |
 | Report | from, to, outcome, open asks, evidence[], sent, acknowledged | A durable mailbox; acknowledging is the parent's review |
 
+### Operations
+
+Every operation has one of three kinds, which decides where it is served:
+- **Agent operations** are MCP tools, and are also on the HTTP API and the CLI.
+- **API operations** are on the HTTP API and the CLI only, for scripts and the user's terminal: `ask.list`, `item.list` and `audit.list`, which return the tasks and sessions they refer to, and `ui.login_link`.
+- **User operations** are served only to a signed-in decisions page session, never on the API, MCP or the CLI, so the agents' bearer token cannot reach them. Answering an ask, `ask.answer`, is the only one.
+
+On MCP and in the API, an operation's name uses an underscore (`session_start`); the CLI runs it as `agentorg session start`. Writes name the acting session in the request, and the audit trail records it.
+
 ### Agent tools (MCP and CLI)
 
-- `session.start(client, client_session_id?, title, parent?, task?)` → a session id and facts only: parent, task, owed asks with any answers, unacknowledged reports. The skill decides the session's role from these facts; the service gives no verdict.
+- `session.start(client, client_session_id?, title, parent?, task?)` → a session id and facts only: parent, task, owed asks with any answers, unacknowledged reports. The skill decides the session's role from these facts; the service gives no verdict. Starting again with the same client and client session id resumes the session.
+- `session.context(client, client_session_id)` → the same facts for a client session already started, and nothing otherwise. It never starts or changes anything, so a client hook can call it on startup, resume and compaction.
 - `task.open` / `task.close`
 - `ask.open` → an ask id. `ask.get` reads its state.
-- `ask.wait(id)` blocks until the ask is answered. Over MCP it sends progress notifications so the call isn't timed out. `agentorg ask wait <id>` is the same as a long poll, meant to run in the background.
+- `ask.wait(id)` blocks until the ask is answered or withdrawn. Over MCP it sends progress notifications so the call isn't timed out. `agentorg ask wait <id>` is the same as a long poll, meant to run in the background.
 - `ask.record_answer` stores an answer the user gave inside the asking session: their words quoted, channel `session`, only for asks that session opened.
+- `ask.withdraw` withdraws an open ask that no longer needs the user, only for asks that session opened. It leaves the page.
 - `item.put` / `item.resolve`
 - `evidence.add` → a local file path, or bytes over the HTTP API
 - `report.send` / `inbox.read` / `report.ack`
-- `session.archive` → the cleanup list: evidence and items recorded against the session, plus anything the session registered, such as worktrees or pages
+- `session.archive` → the cleanup list: the session's open items and their evidence, plus the open asks archiving withdrew
 
-The agents' tool set can't answer asks in general. Answers come from the decisions page, or from `ask.record_answer` for the asking session's own conversation.
+The agents' tool set can't answer asks in general. Answers come from the decisions page, through the user operation `ask.answer`, or from `ask.record_answer` for the asking session's own conversation.
 
 ### How an answer reaches the session that asked
 
 Each client uses whichever it supports:
 1. **Background wait.** `agentorg ask wait <id>` exits when the ask is answered. Any agent that runs a background process and is woken when it exits gets the answer that way.
 2. **Blocking tool.** `ask.wait` over MCP, for a session with nothing else to do.
-3. **Pull.** The next `session.start` or `ask.get` returns it.
+3. **Pull.** The next `session.start`, `session.context` or `ask.get` returns it.
 
 ### The decisions page
 
@@ -85,16 +96,16 @@ Each client uses whichever it supports:
 ### Control over sessions
 
 - **Validation:** refuses an ask without context, options and a recommendation; an item without a state; a summary past a size cap.
-- **Start context:** `session.start` returns the facts above. The `task-execution` skill tells every agent to call it first.
+- **Start context:** `session.start` returns the facts above, and `session.context` returns them without starting a session. The `task-execution` skill tells every agent to call `session.start` first.
 - **Instructions:** the MCP server's instructions carry the short contract, under 4,096 characters, the smallest cap among known clients.
 - **Review tracking:** unacknowledged child reports and open asks return on every `session.start` and `inbox.read`.
-- **Cleanup:** `session.archive` gives a manager the list it clears when it archives a child.
+- **Cleanup:** `session.archive` withdraws the child's open asks and gives its manager the list it clears.
 
 ### Security
 
 - **Binding:** `127.0.0.1` only.
 - **Agent access:** the MCP and API surfaces require a bearer token read from a mode-600 file. They reject requests carrying a browser `Origin` header, which blocks DNS rebinding from web pages.
-- **The decisions page** uses a cookie set from a one-time link that `agentorg ui` opens. Answers carry a CSRF token.
+- **The decisions page** uses a cookie set from a one-time link that `agentorg ui` opens. Answers carry a CSRF token. User operations, such as answering an ask, are served only there.
 - **Separation is by convention, made visible by an audit trail.** Agents run as the same OS user, so a determined agent could reach anything the user can. Every write logs `{session, client, operation, target, channel, outcome}`.
 
 ### Beyond one machine
@@ -109,7 +120,7 @@ The default serves one machine. A tunnel (SSH, Tailscale) or running the same pr
 
 ## Client adapters
 
-- **Claude Code** (`adapters/claude-code/`), packaged as a Claude Code plugin from this repository: the skills, the MCP server entry, and an optional SessionStart command hook that runs `agentorg session start` and injects its output.
+- **Claude Code** (`adapters/claude-code/`), packaged as a Claude Code plugin from this repository: the skills, the MCP server entry, and an optional SessionStart command hook that runs `agentorg session context` and injects its output.
   - Claude Code wakes a session when a background command exits, so `agentorg ask wait` delivers answers.
   - `CLAUDE_CODE_SESSION_ID` reaches the stdio proxy and hooks.
 - **Codex** (`adapters/codex/`): a `config.toml` snippet for stdio or HTTP (`bearer_token_env_var`), and the skills directory.

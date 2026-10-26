@@ -34,11 +34,3 @@ class TaskClose(ContractModel):
     session: Id | None = Field(
         default=None, description="The session closing the task; omit when the user closes it."
     )
-
-
-class TaskList(ContractModel):
-    state: TaskState | None = Field(default="open", description="Null lists every task.")
-
-
-class TaskListResult(ContractModel):
-    tasks: list[Task]

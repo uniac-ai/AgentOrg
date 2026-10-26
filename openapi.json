@@ -30,7 +30,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SessionStartResult"
+                  "$ref": "#/components/schemas/SessionFacts"
                 }
               }
             }
@@ -78,18 +78,18 @@
         }
       }
     },
-    "/api/session/declare_role": {
+    "/api/session/context": {
       "post": {
         "tags": [
           "session"
         ],
-        "summary": "Record the role the session declares: it manages or it executes.",
-        "operationId": "session_declare_role",
+        "summary": "Read the facts session_start would return for a client session already started, without starting one. The facts are null when no session was started with that client session id.",
+        "operationId": "session_context",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/SessionDeclareRole"
+                "$ref": "#/components/schemas/SessionContext"
               }
             }
           },
@@ -101,78 +101,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Session"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "NotFound",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Forbidden",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Conflict",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Invalid",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/session/register": {
-      "post": {
-        "tags": [
-          "session"
-        ],
-        "summary": "Register something the session created, such as a worktree or a page, so that archiving the session lists it for cleanup.",
-        "operationId": "session_register",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SessionRegister"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Resource"
+                  "$ref": "#/components/schemas/SessionContextResult"
                 }
               }
             }
@@ -226,7 +155,7 @@
           "session"
         ],
         "summary": "Archive a session and return its cleanup list.",
-        "description": "The list holds the items and evidence recorded against the session and the resources it registered. Its manager clears them.",
+        "description": "Archiving withdraws the session's open asks. The list holds the session's open items, their evidence and the asks it withdrew. Its manager clears them.",
         "operationId": "session_archive",
         "requestBody": {
           "content": {
@@ -245,77 +174,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/SessionArchiveResult"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "NotFound",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Forbidden",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Conflict",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Invalid",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/session/list": {
-      "post": {
-        "tags": [
-          "session"
-        ],
-        "summary": "List sessions, oldest first.",
-        "operationId": "session_list",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SessionList"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SessionListResult"
                 }
               }
             }
@@ -458,77 +316,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Task"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "NotFound",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Forbidden",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Conflict",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Invalid",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/task/list": {
-      "post": {
-        "tags": [
-          "task"
-        ],
-        "summary": "List tasks, oldest first.",
-        "operationId": "task_list",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/TaskList"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TaskListResult"
                 }
               }
             }
@@ -724,7 +511,7 @@
         "tags": [
           "ask"
         ],
-        "summary": "Wait until an ask is answered and return it.",
+        "summary": "Wait until an ask is answered or withdrawn and return it.",
         "description": "With a timeout, return the ask after that long even if it is still open.",
         "operationId": "ask_wait",
         "requestBody": {
@@ -863,18 +650,19 @@
         }
       }
     },
-    "/api/ask/answer": {
+    "/api/ask/withdraw": {
       "post": {
         "tags": [
           "ask"
         ],
-        "summary": "Answer an ask as the user, with a choice, a note in the user's words, or both.",
-        "operationId": "ask_answer",
+        "summary": "Withdraw an open ask that no longer needs the user, which removes it from the page.",
+        "description": "Only the session that opened the ask may withdraw it.",
+        "operationId": "ask_withdraw",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/AskAnswer"
+                "$ref": "#/components/schemas/AskWithdraw"
               }
             }
           },
@@ -939,7 +727,7 @@
         "tags": [
           "ask"
         ],
-        "summary": "List asks, oldest first.",
+        "summary": "List asks, oldest first, with the tasks they belong to and the sessions that asked.",
         "operationId": "ask_list",
         "requestBody": {
           "content": {
@@ -1153,7 +941,7 @@
         "tags": [
           "item"
         ],
-        "summary": "List items, open ones only unless asked otherwise, oldest first.",
+        "summary": "List items, open ones unless asked otherwise, oldest first, with the tasks they belong to and the sessions doing the work.",
         "operationId": "item_list",
         "requestBody": {
           "content": {
@@ -1611,8 +1399,7 @@
             "type": "string",
             "enum": [
               "page",
-              "session",
-              "api"
+              "session"
             ],
             "title": "Channel"
           },
@@ -1689,7 +1476,8 @@
             "type": "string",
             "enum": [
               "open",
-              "answered"
+              "answered",
+              "withdrawn"
             ],
             "title": "State"
           },
@@ -1725,51 +1513,6 @@
         ],
         "title": "Ask"
       },
-      "AskAnswer": {
-        "properties": {
-          "ask": {
-            "type": "string",
-            "maxLength": 64,
-            "minLength": 1,
-            "title": "Ask"
-          },
-          "choice": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 80,
-                "minLength": 1
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Choice",
-            "description": "The label of the chosen option."
-          },
-          "words": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 4000,
-                "minLength": 1
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Words",
-            "description": "An optional note in the user's words."
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "ask"
-        ],
-        "title": "AskAnswer",
-        "description": "The user's answer, given on the decisions page or through the API."
-      },
       "AskGet": {
         "properties": {
           "ask": {
@@ -1794,7 +1537,8 @@
                 "type": "string",
                 "enum": [
                   "open",
-                  "answered"
+                  "answered",
+                  "withdrawn"
                 ]
               },
               {
@@ -1818,12 +1562,30 @@
             },
             "type": "array",
             "title": "Asks"
+          },
+          "tasks": {
+            "items": {
+              "$ref": "#/components/schemas/Task"
+            },
+            "type": "array",
+            "title": "Tasks",
+            "description": "The tasks the asks belong to."
+          },
+          "sessions": {
+            "items": {
+              "$ref": "#/components/schemas/Session"
+            },
+            "type": "array",
+            "title": "Sessions",
+            "description": "The sessions that asked."
           }
         },
         "additionalProperties": false,
         "type": "object",
         "required": [
-          "asks"
+          "asks",
+          "tasks",
+          "sessions"
         ],
         "title": "AskListResult"
       },
@@ -1967,6 +1729,30 @@
           "ask"
         ],
         "title": "AskWait"
+      },
+      "AskWithdraw": {
+        "properties": {
+          "session": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Session",
+            "description": "The asking session; only it withdraws its asks."
+          },
+          "ask": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Ask"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "session",
+          "ask"
+        ],
+        "title": "AskWithdraw"
       },
       "AuditEntry": {
         "properties": {
@@ -2382,12 +2168,30 @@
             },
             "type": "array",
             "title": "Items"
+          },
+          "tasks": {
+            "items": {
+              "$ref": "#/components/schemas/Task"
+            },
+            "type": "array",
+            "title": "Tasks",
+            "description": "The tasks the items belong to."
+          },
+          "sessions": {
+            "items": {
+              "$ref": "#/components/schemas/Session"
+            },
+            "type": "array",
+            "title": "Sessions",
+            "description": "The sessions doing the work."
           }
         },
         "additionalProperties": false,
         "type": "object",
         "required": [
-          "items"
+          "items",
+          "tasks",
+          "sessions"
         ],
         "title": "ItemListResult"
       },
@@ -2742,45 +2546,6 @@
         ],
         "title": "ReportSend"
       },
-      "Resource": {
-        "properties": {
-          "session": {
-            "type": "string",
-            "maxLength": 64,
-            "minLength": 1,
-            "title": "Session"
-          },
-          "kind": {
-            "type": "string",
-            "maxLength": 80,
-            "minLength": 1,
-            "title": "Kind",
-            "description": "What it is, such as \"worktree\", \"branch\" or \"page\"."
-          },
-          "ref": {
-            "type": "string",
-            "maxLength": 2000,
-            "minLength": 1,
-            "title": "Ref",
-            "description": "Where it is: a path or a URL."
-          },
-          "registered_at": {
-            "type": "string",
-            "format": "date-time",
-            "title": "Registered At"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "session",
-          "kind",
-          "ref",
-          "registered_at"
-        ],
-        "title": "Resource",
-        "description": "Something a session registered so that archiving it lists it for cleanup."
-      },
       "Session": {
         "properties": {
           "id": {
@@ -2845,22 +2610,6 @@
             ],
             "title": "Task"
           },
-          "role": {
-            "anyOf": [
-              {
-                "type": "string",
-                "enum": [
-                  "manages",
-                  "executes"
-                ]
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Role",
-            "description": "The role as the session declared it."
-          },
           "machine": {
             "type": "string",
             "maxLength": 80,
@@ -2894,7 +2643,6 @@
           "title",
           "parent",
           "task",
-          "role",
           "machine",
           "started_at",
           "archived_at"
@@ -2928,21 +2676,24 @@
               "$ref": "#/components/schemas/Item"
             },
             "type": "array",
-            "title": "Items"
+            "title": "Items",
+            "description": "The session's open items."
           },
           "evidence": {
             "items": {
               "$ref": "#/components/schemas/Evidence"
             },
             "type": "array",
-            "title": "Evidence"
+            "title": "Evidence",
+            "description": "The evidence of the session's items."
           },
-          "resources": {
+          "withdrawn_asks": {
             "items": {
-              "$ref": "#/components/schemas/Resource"
+              "$ref": "#/components/schemas/Ask"
             },
             "type": "array",
-            "title": "Resources"
+            "title": "Withdrawn Asks",
+            "description": "The open asks that archiving withdrew."
           }
         },
         "additionalProperties": false,
@@ -2951,94 +2702,121 @@
           "session",
           "items",
           "evidence",
-          "resources"
+          "withdrawn_asks"
         ],
         "title": "SessionArchiveResult",
         "description": "The cleanup list for the manager that archives the session."
       },
-      "SessionDeclareRole": {
+      "SessionContext": {
         "properties": {
-          "session": {
-            "type": "string",
-            "maxLength": 64,
-            "minLength": 1,
-            "title": "Session"
-          },
-          "role": {
-            "type": "string",
-            "enum": [
-              "manages",
-              "executes"
+          "client": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 40,
+                "minLength": 1,
+                "pattern": "^[a-z0-9][a-z0-9._-]*$"
+              },
+              {
+                "type": "null"
+              }
             ],
-            "title": "Role"
+            "title": "Client",
+            "description": "Defaults to the client the transport names."
+          },
+          "client_session_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Session Id",
+            "description": "Defaults to the one the transport carries."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "SessionContext"
+      },
+      "SessionContextResult": {
+        "properties": {
+          "facts": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SessionFacts"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null when no session was started with this client session id."
           }
         },
         "additionalProperties": false,
         "type": "object",
         "required": [
-          "session",
-          "role"
+          "facts"
         ],
-        "title": "SessionDeclareRole"
+        "title": "SessionContextResult"
       },
-      "SessionList": {
+      "SessionFacts": {
         "properties": {
-          "include_archived": {
-            "type": "boolean",
-            "title": "Include Archived",
-            "default": false
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "title": "SessionList"
-      },
-      "SessionListResult": {
-        "properties": {
-          "sessions": {
+          "session": {
+            "$ref": "#/components/schemas/Session"
+          },
+          "parent": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Session"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "task": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Task"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "asks": {
             "items": {
-              "$ref": "#/components/schemas/Session"
+              "$ref": "#/components/schemas/Ask"
             },
             "type": "array",
-            "title": "Sessions"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "sessions"
-        ],
-        "title": "SessionListResult"
-      },
-      "SessionRegister": {
-        "properties": {
-          "session": {
-            "type": "string",
-            "maxLength": 64,
-            "minLength": 1,
-            "title": "Session"
+            "title": "Asks",
+            "description": "The session's own asks that are open or answered."
           },
-          "kind": {
-            "type": "string",
-            "maxLength": 80,
-            "minLength": 1,
-            "title": "Kind"
-          },
-          "ref": {
-            "type": "string",
-            "maxLength": 2000,
-            "minLength": 1,
-            "title": "Ref"
+          "inbox": {
+            "items": {
+              "$ref": "#/components/schemas/Report"
+            },
+            "type": "array",
+            "title": "Inbox",
+            "description": "Reports to the session not yet acknowledged."
           }
         },
         "additionalProperties": false,
         "type": "object",
         "required": [
           "session",
-          "kind",
-          "ref"
+          "parent",
+          "task",
+          "asks",
+          "inbox"
         ],
-        "title": "SessionRegister"
+        "title": "SessionFacts",
+        "description": "What a session acts on, facts only: the skill decides the session's role from them."
       },
       "SessionStart": {
         "properties": {
@@ -3125,60 +2903,6 @@
           "title"
         ],
         "title": "SessionStart"
-      },
-      "SessionStartResult": {
-        "properties": {
-          "session": {
-            "$ref": "#/components/schemas/Session"
-          },
-          "parent": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/Session"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "task": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/Task"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "asks": {
-            "items": {
-              "$ref": "#/components/schemas/Ask"
-            },
-            "type": "array",
-            "title": "Asks",
-            "description": "The session's own asks that are open or answered."
-          },
-          "inbox": {
-            "items": {
-              "$ref": "#/components/schemas/Report"
-            },
-            "type": "array",
-            "title": "Inbox",
-            "description": "Reports to the session not yet acknowledged."
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "session",
-          "parent",
-          "task",
-          "asks",
-          "inbox"
-        ],
-        "title": "SessionStartResult",
-        "description": "Facts only: the skill decides the session's role from them."
       },
       "Task": {
         "properties": {
@@ -3298,47 +3022,6 @@
           "task"
         ],
         "title": "TaskClose"
-      },
-      "TaskList": {
-        "properties": {
-          "state": {
-            "anyOf": [
-              {
-                "type": "string",
-                "enum": [
-                  "open",
-                  "closed"
-                ]
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "State",
-            "description": "Null lists every task.",
-            "default": "open"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "title": "TaskList"
-      },
-      "TaskListResult": {
-        "properties": {
-          "tasks": {
-            "items": {
-              "$ref": "#/components/schemas/Task"
-            },
-            "type": "array",
-            "title": "Tasks"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "tasks"
-        ],
-        "title": "TaskListResult"
       },
       "TaskOpen": {
         "properties": {

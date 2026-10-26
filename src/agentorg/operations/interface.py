@@ -4,7 +4,7 @@ import inspect
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import get_type_hints
+from typing import Literal, get_type_hints
 
 from pydantic import BaseModel
 
@@ -17,6 +17,7 @@ from agentorg.models import (
     AskOpen,
     AskRecordAnswer,
     AskWait,
+    AskWithdraw,
     AuditList,
     AuditListResult,
     Channel,
@@ -33,22 +34,25 @@ from agentorg.models import (
     Report,
     ReportAck,
     ReportSend,
-    Resource,
-    Session,
     SessionArchive,
     SessionArchiveResult,
-    SessionDeclareRole,
-    SessionList,
-    SessionListResult,
-    SessionRegister,
+    SessionContext,
+    SessionContextResult,
+    SessionFacts,
     SessionStart,
-    SessionStartResult,
     Task,
     TaskClose,
-    TaskList,
-    TaskListResult,
     TaskOpen,
 )
+
+Kind = Literal["agent", "api", "user"]
+"""Who an operation is served to.
+
+- `agent`: an MCP tool, and on the API and the CLI.
+- `api`: on the API and the CLI only, for scripts and the user's terminal.
+- `user`: only to a signed-in page session, through the service layer; never on the API, MCP or
+  the CLI, so the agents' bearer token cannot reach it.
+"""
 
 
 @dataclass(frozen=True)
@@ -73,17 +77,17 @@ class OperationSpec:
     verb: str
     request: type[BaseModel]
     response: type[BaseModel]
-    agent: bool
+    kind: Kind
     writes: bool
     description: str
 
 
-def operation(*, agent: bool, writes: bool) -> Callable[[Callable], Callable]:
-    """Mark a method of `Operations` as an operation. `agent` exposes it as an MCP tool, and
+def operation(*, kind: Kind, writes: bool) -> Callable[[Callable], Callable]:
+    """Mark a method of `Operations` as an operation. `kind` says who it is served to, and
     `writes` records each call in the audit log."""
 
     def mark(method: Callable) -> Callable:
-        method.__agentorg_operation__ = (agent, writes)
+        method.__agentorg_operation__ = (kind, writes)
         return method
 
     return mark
@@ -99,9 +103,9 @@ class Operations(ABC):
 
     # Sessions
 
-    @operation(agent=True, writes=True)
+    @operation(kind="agent", writes=True)
     @abstractmethod
-    async def session_start(self, request: SessionStart, caller: Caller) -> SessionStartResult:
+    async def session_start(self, request: SessionStart, caller: Caller) -> SessionFacts:
         """Start a session, or resume it, and return the facts it acts on.
 
         Call it first. It returns the session's id, its parent, its task, its own asks that are
@@ -109,53 +113,41 @@ class Operations(ABC):
         client and client session id resumes the same session.
         """
 
-    @operation(agent=True, writes=True)
+    @operation(kind="agent", writes=False)
     @abstractmethod
-    async def session_declare_role(self, request: SessionDeclareRole, caller: Caller) -> Session:
-        """Record the role the session declares: it manages or it executes."""
+    async def session_context(
+        self, request: SessionContext, caller: Caller
+    ) -> SessionContextResult:
+        """Read the facts session_start would return for a client session already started, without
+        starting one. The facts are null when no session was started with that client session id.
+        """
 
-    @operation(agent=True, writes=True)
-    @abstractmethod
-    async def session_register(self, request: SessionRegister, caller: Caller) -> Resource:
-        """Register something the session created, such as a worktree or a page, so that
-        archiving the session lists it for cleanup."""
-
-    @operation(agent=True, writes=True)
+    @operation(kind="agent", writes=True)
     @abstractmethod
     async def session_archive(
         self, request: SessionArchive, caller: Caller
     ) -> SessionArchiveResult:
         """Archive a session and return its cleanup list.
 
-        The list holds the items and evidence recorded against the session and the resources it
-        registered. Its manager clears them.
+        Archiving withdraws the session's open asks. The list holds the session's open items,
+        their evidence and the asks it withdrew. Its manager clears them.
         """
-
-    @operation(agent=False, writes=False)
-    @abstractmethod
-    async def session_list(self, request: SessionList, caller: Caller) -> SessionListResult:
-        """List sessions, oldest first."""
 
     # Tasks
 
-    @operation(agent=True, writes=True)
+    @operation(kind="agent", writes=True)
     @abstractmethod
     async def task_open(self, request: TaskOpen, caller: Caller) -> Task:
         """Open a task. Asks and items belong to a task, and the page groups them by its project."""
 
-    @operation(agent=True, writes=True)
+    @operation(kind="agent", writes=True)
     @abstractmethod
     async def task_close(self, request: TaskClose, caller: Caller) -> Task:
         """Close a task."""
 
-    @operation(agent=False, writes=False)
-    @abstractmethod
-    async def task_list(self, request: TaskList, caller: Caller) -> TaskListResult:
-        """List tasks, oldest first."""
-
     # Asks
 
-    @operation(agent=True, writes=True)
+    @operation(kind="agent", writes=True)
     @abstractmethod
     async def ask_open(self, request: AskOpen, caller: Caller) -> Ask:
         """Ask the user for a decision. It appears on the decisions page until answered.
@@ -165,20 +157,20 @@ class Operations(ABC):
         it later with ask_get.
         """
 
-    @operation(agent=True, writes=False)
+    @operation(kind="agent", writes=False)
     @abstractmethod
     async def ask_get(self, request: AskGet, caller: Caller) -> Ask:
         """Read an ask, with its answer once it has one."""
 
-    @operation(agent=True, writes=False)
+    @operation(kind="agent", writes=False)
     @abstractmethod
     async def ask_wait(self, request: AskWait, caller: Caller) -> Ask:
-        """Wait until an ask is answered and return it.
+        """Wait until an ask is answered or withdrawn and return it.
 
         With a timeout, return the ask after that long even if it is still open.
         """
 
-    @operation(agent=True, writes=True)
+    @operation(kind="agent", writes=True)
     @abstractmethod
     async def ask_record_answer(self, request: AskRecordAnswer, caller: Caller) -> Ask:
         """Record an answer the user gave in the asking session's own conversation.
@@ -186,19 +178,27 @@ class Operations(ABC):
         Quote the user's words exactly. Only the session that opened the ask may record its answer.
         """
 
-    @operation(agent=False, writes=True)
+    @operation(kind="agent", writes=True)
+    @abstractmethod
+    async def ask_withdraw(self, request: AskWithdraw, caller: Caller) -> Ask:
+        """Withdraw an open ask that no longer needs the user, which removes it from the page.
+
+        Only the session that opened the ask may withdraw it.
+        """
+
+    @operation(kind="user", writes=True)
     @abstractmethod
     async def ask_answer(self, request: AskAnswer, caller: Caller) -> Ask:
         """Answer an ask as the user, with a choice, a note in the user's words, or both."""
 
-    @operation(agent=False, writes=False)
+    @operation(kind="api", writes=False)
     @abstractmethod
     async def ask_list(self, request: AskList, caller: Caller) -> AskListResult:
-        """List asks, oldest first."""
+        """List asks, oldest first, with the tasks they belong to and the sessions that asked."""
 
     # Items
 
-    @operation(agent=True, writes=True)
+    @operation(kind="agent", writes=True)
     @abstractmethod
     async def item_put(self, request: ItemPut, caller: Caller) -> Item:
         """Create an open item, a workstream with its state, or replace one.
@@ -206,44 +206,45 @@ class Operations(ABC):
         Keep the summary short; it is a status, not a log.
         """
 
-    @operation(agent=True, writes=True)
+    @operation(kind="agent", writes=True)
     @abstractmethod
     async def item_resolve(self, request: ItemResolve, caller: Caller) -> Item:
         """Resolve an item, which removes it from the open workstreams."""
 
-    @operation(agent=False, writes=False)
+    @operation(kind="api", writes=False)
     @abstractmethod
     async def item_list(self, request: ItemList, caller: Caller) -> ItemListResult:
-        """List items, open ones only unless asked otherwise, oldest first."""
+        """List items, open ones unless asked otherwise, oldest first, with the tasks they belong
+        to and the sessions doing the work."""
 
     # Reports
 
-    @operation(agent=True, writes=True)
+    @operation(kind="agent", writes=True)
     @abstractmethod
     async def report_send(self, request: ReportSend, caller: Caller) -> Report:
         """Send a report to the session's parent. It stays in the parent's inbox until the parent
         acknowledges it."""
 
-    @operation(agent=True, writes=False)
+    @operation(kind="agent", writes=False)
     @abstractmethod
     async def inbox_read(self, request: InboxRead, caller: Caller) -> Inbox:
         """Read the reports to the session that it has not acknowledged."""
 
-    @operation(agent=True, writes=True)
+    @operation(kind="agent", writes=True)
     @abstractmethod
     async def report_ack(self, request: ReportAck, caller: Caller) -> Report:
         """Acknowledge a report, after reviewing it. Only its recipient may."""
 
     # Audit
 
-    @operation(agent=False, writes=False)
+    @operation(kind="api", writes=False)
     @abstractmethod
     async def audit_list(self, request: AuditList, caller: Caller) -> AuditListResult:
         """List audit entries, newest first."""
 
     # Decisions page sign-in
 
-    @operation(agent=False, writes=True)
+    @operation(kind="api", writes=True)
     @abstractmethod
     async def ui_login_link(self, request: LoginLinkCreate, caller: Caller) -> LoginLink:
         """Mint a one-time link that signs the browser in to the decisions page."""
@@ -269,7 +270,7 @@ def _specs() -> tuple[OperationSpec, ...]:
         marker = getattr(method, "__agentorg_operation__", None)
         if marker is None:
             continue
-        agent, writes = marker
+        kind, writes = marker
         hints = get_type_hints(method)
         subject, verb = name.split("_", 1)
         specs.append(
@@ -279,7 +280,7 @@ def _specs() -> tuple[OperationSpec, ...]:
                 verb=verb,
                 request=hints["request"],
                 response=hints["return"],
-                agent=agent,
+                kind=kind,
                 writes=writes,
                 description=_unwrap(inspect.getdoc(method) or ""),
             )

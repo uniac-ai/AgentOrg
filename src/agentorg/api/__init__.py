@@ -1,5 +1,6 @@
-"""The HTTP JSON API: one `POST /api/{subject}/{verb}` route per operation, derived from
-`OPERATIONS`. The OpenAPI document of these routes is the committed `openapi.json`."""
+"""The HTTP JSON API: one `POST /api/{subject}/{verb}` route per agent and API operation,
+derived from `OPERATIONS`. User operations are never served here. The OpenAPI document of these
+routes is the committed `openapi.json`."""
 
 import inspect
 from typing import Any
@@ -76,8 +77,10 @@ _ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
     for error, status in ERROR_STATUS.items()
 }
 
+API_OPERATIONS = [spec for spec in OPERATIONS if spec.kind in ("agent", "api")]
+
 router = APIRouter(prefix="/api")
-for _spec in OPERATIONS:
+for _spec in API_OPERATIONS:
     summary, _, description = _spec.description.partition("\n\n")
     router.add_api_route(
         f"/{_spec.subject}/{_spec.verb}",
