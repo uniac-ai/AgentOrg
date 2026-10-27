@@ -4,7 +4,7 @@
  * text in UTC. The partial unique indexes keep one attached session per agent and per client session.
  */
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 export const SCHEMA = `
 CREATE TABLE agents (
@@ -32,6 +32,15 @@ CREATE TABLE sessions (
 CREATE UNIQUE INDEX one_attached_session_per_agent ON sessions (agent) WHERE detached_at IS NULL;
 CREATE UNIQUE INDEX one_attachment_per_client_session ON sessions (client, client_session_id)
   WHERE detached_at IS NULL AND client_session_id IS NOT NULL;
+
+CREATE TABLE status_history (
+  state TEXT NOT NULL,
+  summary TEXT NOT NULL,
+  links JSON NOT NULL,
+  blockers JSON NOT NULL,
+  at TEXT NOT NULL,
+  session TEXT NOT NULL REFERENCES sessions (id)
+);
 
 CREATE TABLE asks (
   id TEXT PRIMARY KEY,

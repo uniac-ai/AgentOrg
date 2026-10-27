@@ -8,12 +8,21 @@
 
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import type { z } from "zod";
-import { Agent, Ask, AuditEntry, Evidence, Message, Session } from "../contract/index.ts";
+import {
+  Agent,
+  Ask,
+  AuditEntry,
+  Evidence,
+  Message,
+  Session,
+  StatusEntry,
+} from "../contract/index.ts";
 import { SCHEMA, SCHEMA_VERSION } from "./schema.ts";
 
 export const TABLES = {
   agents: Agent,
   sessions: Session,
+  status_history: StatusEntry,
   asks: Ask,
   messages: Message,
   evidence: Evidence,

@@ -549,3 +549,80 @@ test("a login link works once and before it expires, and a page session expires"
   clock.now = new Date(clock.now.getTime() + 7 * 24 * 60 * 60 * 1000);
   assert.equal(await service.getPageSession(page.id), null);
 });
+
+test("each status joins the agent's history, newest first and at most 100", async () => {
+  const { service, parse, clock, child, working } = await organization();
+  for (let n = 1; n <= 102; n++) {
+    clock.now = new Date(clock.now.getTime() + 1000);
+    await service.status_set(
+      parse("status_set", {
+        session: working.session.id,
+        state: n % 2 ? "running" : "blocked",
+        summary: `Step ${n}.`,
+        blockers: n % 2 ? [] : ["CI"],
+      }),
+      API,
+    );
+  }
+  const { agent, status_history: history } = await service.agent_get({ agent: child.id }, API);
+  assert.equal(history.length, 100);
+  assert.deepEqual(history[0], {
+    state: "blocked",
+    summary: "Step 102.",
+    links: [],
+    blockers: ["CI"],
+    at: agent.status?.updated_at,
+    session: working.session.id,
+  });
+  assert.equal(history[99]?.summary, "Step 3.");
+});
+
+test("the agent list shows who is attached and when each agent last acted", async () => {
+  const { service, parse, clock, manager, managing, child, working } = await organization();
+  const created = clock.now.toISOString();
+  clock.now = new Date(clock.now.getTime() + 60_000);
+  const grandchild = await service.agent_create(
+    parse("agent_create", { session: working.session.id, title: "Sub", purpose: "A part." }),
+    API,
+  );
+  const later = clock.now.toISOString();
+  clock.now = new Date(clock.now.getTime() + 60_000);
+  const summaries = async () =>
+    Object.fromEntries(
+      (await service.agent_list(parse("agent_list", {}), API)).agents.map((each) => [
+        each.agent.id,
+        each,
+      ]),
+    );
+
+  let list = await summaries();
+  assert.deepEqual(list[child.id]?.attached_session, {
+    id: working.session.id,
+    client: "claude-code",
+    attached_at: working.session.attached_at,
+  });
+  assert.equal(
+    list[child.id]?.last_activity_at,
+    later,
+    "creating the grandchild is the child's write",
+  );
+  assert.equal(list[manager.id]?.last_activity_at, created);
+  assert.deepEqual(
+    [list[grandchild.id]?.attached_session, list[grandchild.id]?.last_activity_at],
+    [null, grandchild.created_at],
+  );
+
+  await service.agent_close(
+    parse("agent_close", { session: working.session.id, agent: grandchild.id }),
+    API,
+  );
+  await service.agent_close(
+    parse("agent_close", { session: managing.session.id, agent: child.id }),
+    API,
+  );
+  list = await summaries();
+  assert.equal(list[child.id], undefined);
+  const closed = (await service.agent_list(parse("agent_list", { include_closed: true }), API))
+    .agents;
+  assert.equal(closed.find((each) => each.agent.id === child.id)?.attached_session, null);
+});
