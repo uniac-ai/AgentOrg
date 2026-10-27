@@ -3,6 +3,7 @@
 
 import { Link } from "@tanstack/react-router";
 import {
+  ArchiveIcon,
   ChevronRightIcon,
   ExternalLinkIcon,
   FileTextIcon,
@@ -10,6 +11,17 @@ import {
   OctagonAlertIcon,
   StickyNoteIcon,
 } from "lucide-react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
@@ -21,6 +33,62 @@ import { nameOf, Route } from "./thread.tsx";
 import { Ago } from "./time.tsx";
 
 const isWebLink = (url: string) => /^https?:\/\//i.test(url);
+
+/** Close the agent, after a confirmation that says what closing does; while agents under it
+ * are open, the confirmation names them instead and cannot be given. */
+function CloseAgent({ model }: { model: AgentModel }) {
+  const { agent } = model.detail;
+  const blocked = model.openChildren.length > 0;
+  return (
+    <AlertDialog>
+      <AlertDialogTrigger
+        render={<Button variant="ghost" size="icon-sm" className="text-muted-foreground" />}
+      >
+        <ArchiveIcon aria-hidden="true" />
+        <SR>Close agent</SR>
+      </AlertDialogTrigger>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Close {agent.title}?</AlertDialogTitle>
+          <AlertDialogDescription>
+            {blocked
+              ? "Agents under it are still open."
+              : model.openAsks === 0
+                ? "Its session detaches."
+                : `Its session detaches, and its ${model.openAsks === 1 ? "open ask is" : `${model.openAsks} open asks are`} withdrawn.`}
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        {blocked ? (
+          <ul className="flex flex-col gap-1 text-sm">
+            {model.openChildren.map((child) => (
+              <li key={child.id}>
+                <Link
+                  to="/people/$agentId"
+                  params={{ agentId: child.id }}
+                  className="inline-flex items-center gap-2 hover:underline"
+                >
+                  <StateMark agent={child} />
+                  {child.title}
+                  <StateName agent={child} />
+                </Link>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+        <AlertDialogFooter>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction
+            variant="destructive"
+            disabled={blocked || model.closing}
+            onClick={model.onCloseAgent}
+          >
+            Close agent
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
 
 function Header({ model }: { model: AgentModel }) {
   const { agent } = model.detail;
@@ -41,6 +109,7 @@ function Header({ model }: { model: AgentModel }) {
               <Ago at={model.summary.last_activity_at} />
             </span>
           ) : null}
+          {agent.state === "closed" ? null : <CloseAgent model={model} />}
         </span>
       </div>
       <p className="text-sm text-muted-foreground">{agent.purpose}</p>

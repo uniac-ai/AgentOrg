@@ -1,15 +1,18 @@
 // An agent's pane, control: the agent with its presence, what waits on it, its recent work, and
-// the ask open beside it. The feed starts short and grows only on request.
+// the ask open beside it. The feed starts short and grows only on request. Closing it is the
+// user's to do here, once the agents under it are closed.
 
 import { useQuery } from "@tanstack/react-query";
-import { Outlet, useParams } from "@tanstack/react-router";
+import { Outlet, useNavigate, useParams } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { useRowKeys } from "@/lib/keys";
 import type { AgentFull, AgentRecord, AgentSummary } from "../../../src/page/types.ts";
 import { ApiError } from "../data/client.ts";
+import { useCloseAgent } from "../data/mutations.ts";
 import { agentQuery, agentsQuery } from "../data/queries.ts";
 import { type FeedEntry, feed, type Pending, pending } from "../model/activity.ts";
 import { AgentView } from "../views/agent.tsx";
+import { notices } from "../views/notices.ts";
 import { NotFoundView, PaneSkeleton } from "../views/states.tsx";
 
 const FEED_START = 8;
@@ -28,6 +31,12 @@ export interface AgentModel {
   onShowMore: () => void;
   openAsk: string | undefined;
   thread: React.ReactNode;
+  /** The agents under it that are not closed; it may be closed only once there are none. */
+  openChildren: AgentRecord[];
+  /** Its own open asks, which closing withdraws. */
+  openAsks: number;
+  closing: boolean;
+  onCloseAgent: () => void;
 }
 
 export function AgentControl() {
@@ -36,6 +45,8 @@ export function AgentControl() {
   const agent = useQuery(agentQuery(id));
   const agents = useQuery(agentsQuery);
   const [shown, setShown] = useState(FEED_START);
+  const close = useCloseAgent();
+  const navigate = useNavigate();
   useRowKeys();
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: another agent starts its feed short again.
@@ -54,6 +65,22 @@ export function AgentControl() {
     onShowMore: () => setShown((count) => count + FEED_STEP),
     openAsk: askId,
     thread: askId ? <Outlet /> : null,
+    openChildren: (agents.data?.agents ?? [])
+      .map((summary) => summary.agent)
+      .filter((child) => child.manager === id && child.state !== "closed"),
+    openAsks: agent.data.own_asks.filter((ask) => ask.state === "open").length,
+    closing: close.isPending,
+    onCloseAgent: () =>
+      close.mutate(id, {
+        onSuccess: (closed) => {
+          notices.closed(closed);
+          const manager = closed.agent.manager;
+          void (manager === null
+            ? navigate({ to: "/" })
+            : navigate({ to: "/people/$agentId", params: { agentId: manager } }));
+        },
+        onError: notices.refused,
+      }),
   };
   return <AgentView {...model} />;
 }

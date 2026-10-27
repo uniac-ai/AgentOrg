@@ -4,7 +4,7 @@
  */
 
 import { useMutation } from "@tanstack/react-query";
-import type { AskRecord, Inbox, MessageRecord } from "../../../src/page/types.ts";
+import type { AskRecord, ClosedAgent, Inbox, MessageRecord } from "../../../src/page/types.ts";
 import { request } from "./client.ts";
 import { queryClient } from "./queries.ts";
 
@@ -58,3 +58,12 @@ function useMessageWrite(verb: "ack" | "read") {
 
 export const useAcknowledge = () => useMessageWrite("ack");
 export const useMarkRead = () => useMessageWrite("read");
+
+/** Close an agent as the user; the service refuses while agents under it are open. */
+export function useCloseAgent() {
+  return useMutation({
+    mutationFn: (agent: string) =>
+      request<ClosedAgent>(path("agents", agent, "close"), { body: {} }),
+    onSettled: refetch,
+  });
+}
