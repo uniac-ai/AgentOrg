@@ -11,6 +11,9 @@
   "engines": {
     "node": ">=22.13"
   },
+  "bin": {
+    "agentorg": "dist/src/cli/bin.js"
+  },
   "files": [
     "dist/src",
     "openapi.json"

@@ -11,8 +11,12 @@ import {
   type CallToolResult,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import { z } from "zod";
-import { OPERATION_NAMES, OPERATIONS, type OperationName } from "../contract/index.ts";
+import {
+  OPERATION_NAMES,
+  OPERATIONS,
+  type OperationName,
+  objectSchema,
+} from "../contract/index.ts";
 import { CLIENT_HEADER, CLIENT_SESSION_HEADER } from "../http.ts";
 import { type Caller, invalid, OperationError, type Operations } from "../operations/index.ts";
 import { VERSION } from "../version.ts";
@@ -24,25 +28,6 @@ export const AGENT_OPERATIONS: readonly OperationName[] = OPERATION_NAMES.filter
 
 /** How often a waiting ask_wait reports progress, so that clients do not time the call out. */
 export const PROGRESS_INTERVAL_MS = 15_000;
-
-type JsonSchema = { [key: string]: unknown };
-
-/** A schema as an object at the top, with the schemas it refers to in `$defs`, as MCP requires. */
-function objectSchema(schema: z.ZodType, io: "input" | "output"): JsonSchema {
-  const {
-    $schema,
-    $ref,
-    $defs = {},
-    ...rest
-  } = z.toJSONSchema(schema, { io }) as JsonSchema & {
-    $ref?: string;
-    $defs?: Record<string, JsonSchema>;
-  };
-  if (typeof $ref !== "string") return rest;
-  const id = $ref.split("/").pop() as string;
-  const { [id]: top, ...others } = $defs;
-  return Object.keys(others).length > 0 ? { ...top, $defs: others } : { ...top };
-}
 
 export const TOOLS = AGENT_OPERATIONS.map((name) => ({
   name,
