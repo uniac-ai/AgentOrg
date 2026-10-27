@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { AgentFull, AskRecord, MessageRecord } from "../../src/page/types.ts";
-import { chain, feed, pending } from "../../web/src/model/activity.ts";
+import type { AskRecord, EntityView, MessageRecord } from "../../src/page/types.ts";
+import { chain, feed } from "../../web/src/model/activity.ts";
 
 const at = (minute: number) => `2026-01-01T00:${String(minute).padStart(2, "0")}:00Z`;
 
@@ -30,46 +30,16 @@ const message = (id: string, fields: Partial<MessageRecord> = {}): MessageRecord
     ...fields,
   }) as MessageRecord;
 
-const detail = (fields: Partial<AgentFull>): AgentFull =>
-  ({
-    agent: { id: "lead", status: null },
-    own_asks: [],
-    addressed_asks: [],
-    messages: [],
-    sessions: [],
-    status_history: [],
-    ...fields,
-  }) as AgentFull;
-
-test("what waits on an agent: open asks to it, unread notes and unreviewed reports to it, oldest first", () => {
-  const waiting = pending(
-    detail({
-      addressed_asks: [
-        ask("newer", { opened_at: at(5) }),
-        ask("answered", { state: "answered" }),
-        ask("older", { opened_at: at(2) }),
-      ],
-      messages: [
-        message("unread"),
-        message("read", { read_at: at(3) }),
-        message("report-read", { kind: "report", read_at: at(3), sent_at: at(0) }),
-        message("report-done", { kind: "report", read_at: at(3), acknowledged_at: at(4) }),
-        message("sent-up", { from: "lead", to: null }),
-      ],
-    }),
-  );
-
-  assert.deepEqual(
-    waiting.asks.map((a) => a.id),
-    ["older", "newer"],
-  );
-  assert.deepEqual(
-    waiting.messages.map((m) => m.id),
-    ["report-read", "unread"],
-  );
+const status = (minute: number, summary: string) => ({
+  state: "running" as const,
+  summary,
+  links: [],
+  blockers: [],
+  at: at(minute),
+  session: "s",
 });
 
-test("the feed mixes statuses, asks, answers and messages, newest first, without what is pinned or the current status", () => {
+test("the feed mixes statuses, asks, answers and messages, newest first, without what is pinned, open asks going up or the current status", () => {
   const answered = ask("own", {
     agent: "lead",
     to: null,
@@ -77,28 +47,29 @@ test("the feed mixes statuses, asks, answers and messages, newest first, without
     state: "answered",
     answer: { choice: "Keep", words: null, by: null, channel: "page", answered_at: at(6) },
   });
-  const entries = feed(
-    detail({
-      agent: { id: "lead", status: { updated_at: at(9) } } as AgentFull["agent"],
-      own_asks: [answered],
-      addressed_asks: [
+  const stillOpen = ask("still-open", { opened_at: at(7) });
+  const goingUp = ask("going-up", { agent: "lead", to: null, opened_at: at(7) });
+  const unread = message("unread", { sent_at: at(8) });
+  const view = {
+    agent: { id: "lead", status: { updated_at: at(9) } },
+    asks_to_answer: [stillOpen],
+    own_asks: [answered, goingUp],
+    inbox: [unread],
+    history: {
+      asks: [
+        answered,
         ask("from-child", { opened_at: at(4), state: "withdrawn" }),
-        ask("still-open", { opened_at: at(7) }),
+        stillOpen,
+        goingUp,
       ],
-      messages: [
-        message("note", { sent_at: at(5), read_at: at(5) }),
-        message("unread", { sent_at: at(8) }),
-      ],
-      status_history: [
-        { state: "running", summary: "Started.", links: [], blockers: [], at: at(1), session: "s" },
-        { state: "waiting", summary: "Asked.", links: [], blockers: [], at: at(3), session: "s" },
-        { state: "review", summary: "Current.", links: [], blockers: [], at: at(9), session: "s" },
-      ],
-    }),
-  );
+      messages: [message("note", { sent_at: at(5), read_at: at(5) }), unread],
+      sessions: [],
+      status_history: [status(9, "Current."), status(3, "Asked."), status(1, "Started.")],
+    },
+  } as unknown as EntityView;
 
   assert.deepEqual(
-    entries.map((entry) => [entry.kind, entry.at]),
+    feed(view).map((entry) => [entry.kind, entry.at]),
     [
       ["answered", at(6)],
       ["message", at(5)],

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { AgentRecord, AgentSummary } from "../../src/page/types.ts";
-import { managers, organization } from "../../web/src/model/organization.ts";
+import { below, managers, organization } from "../../web/src/model/organization.ts";
 
 const agent = (id: string, manager: string | null, state: AgentRecord["state"] = "active") =>
   ({ id, title: id, manager, state }) as AgentRecord;
@@ -52,4 +52,16 @@ test("an agent's managers run from the user down, and a cycle ends the path", ()
     managers("x", byId).map((m) => m.id),
     ["x", "y"],
   );
+});
+
+test("the tree below an entity is its subtree; below the user it is the whole organization", () => {
+  const tree = organization(
+    [agent("a", null), agent("a1", "a"), agent("a1x", "a1"), agent("b", null)].map(summary),
+  );
+  const ids = (nodes: ReturnType<typeof organization>) => nodes.map((n) => n.summary.agent.id);
+  assert.deepEqual(ids(below(tree, null)), ["a", "b"]);
+  assert.deepEqual(ids(below(tree, "a")), ["a1"]);
+  assert.deepEqual(ids(below(tree, "a1")), ["a1x"]);
+  assert.deepEqual(ids(below(tree, "a1x")), []);
+  assert.deepEqual(ids(below(tree, "missing")), []);
 });

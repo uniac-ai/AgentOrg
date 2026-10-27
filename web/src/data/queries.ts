@@ -5,12 +5,11 @@
 
 import { QueryClient, queryOptions } from "@tanstack/react-query";
 import type {
-  Activity,
-  AgentFull,
   AgentList,
   AskList,
   AskRecord,
-  Inbox,
+  EntityView,
+  PageActivity,
   PageBootstrap,
 } from "../../../src/page/types.ts";
 import { ApiError, keepCsrfToken, request } from "./client.ts";
@@ -43,15 +42,11 @@ export const agentsQuery = queryOptions({
   queryFn: () => request<AgentList>("/agents"),
 });
 
-export const inboxQuery = queryOptions({
-  queryKey: ["inbox"],
-  queryFn: () => request<Inbox>("/inbox"),
-});
-
-export const agentQuery = (id: string) =>
+/** What an entity sees: "user" for the user, or an agent's id. */
+export const viewQuery = (entity: string) =>
   queryOptions({
-    queryKey: ["agent", id],
-    queryFn: () => request<AgentFull>(`/agents/${encodeURIComponent(id)}`),
+    queryKey: ["view", entity],
+    queryFn: () => request<EntityView>(`/view/${encodeURIComponent(entity)}`),
   });
 
 export const askQuery = (id: string) =>
@@ -75,6 +70,6 @@ export const allAsksQuery = queryOptions({
 export const activityQuery = (limit: number) =>
   queryOptions({
     queryKey: ["activity", limit],
-    queryFn: () => request<Activity>(`/activity?limit=${limit}`),
+    queryFn: () => request<PageActivity>(`/activity?limit=${limit}`),
     placeholderData: (previous) => previous,
   });

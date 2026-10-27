@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { openapiDocument } from "../../src/api/openapi.ts";
-import type { AskRecord, Inbox, MessageRecord } from "../../src/page/types.ts";
+import type { AskRecord, EntityView, PageActivity } from "../../src/page/types.ts";
 import { harness } from "./harness.ts";
 
 const WRITES = [
@@ -78,7 +78,7 @@ test("refusals come back as the API's error codes", async () => {
   assert.equal((await post("/ui/api/asks/ask_missing/answer", { choice: "Keep" })).status, 404);
 });
 
-test("the inbox holds the asks and messages waiting on the user, oldest first", async () => {
+test("the user's view holds the asks and messages waiting on the user, oldest first", async () => {
   const { get, post, organization } = await harness();
   const { lead, store, ask, send } = await organization();
   const lower = await ask(store.session.id, "Delete the files?");
@@ -87,21 +87,21 @@ test("the inbox holds the asks and messages waiting on the user, oldest first", 
   const note = await send(lead.session.id, "note", "Starting phase two.");
   await send(store.session.id, "note", "Only for the lead.");
 
-  const inbox = (await (await get("/ui/api/inbox")).json()) as Inbox;
+  const view = (await (await get("/ui/api/view/user")).json()) as EntityView;
 
   assert.deepEqual(
-    inbox.asks.map((a) => a.id),
+    view.asks_to_answer.map((a) => a.id),
     [carried.id],
   );
   assert.deepEqual(
-    inbox.messages.map((m: MessageRecord) => m.id),
+    view.inbox.map((m) => m.id),
     [report.id, note.id],
   );
 
   assert.equal((await post(`/ui/api/messages/${report.id}/ack`)).status, 200);
   assert.equal((await post(`/ui/api/messages/${note.id}/read`)).status, 200);
-  const after = (await (await get("/ui/api/inbox")).json()) as Inbox;
-  assert.deepEqual(after.messages, []);
+  const after = (await (await get("/ui/api/view/user")).json()) as EntityView;
+  assert.deepEqual(after.inbox, []);
 });
 
 test("closing an agent waits until the agents under it are closed", async () => {
@@ -115,7 +115,7 @@ test("closing an agent waits until the agents under it are closed", async () => 
   assert.equal((await post(`/ui/api/agents/${lead.agent.id}/close`)).status, 200);
 });
 
-test("reads return the record: agents, one agent, asks in a state, and activity", async () => {
+test("reads return the record: agents, an entity's view, asks in a state, and activity", async () => {
   const { get, organization } = await harness();
   const { lead, store, ask } = await organization();
   await ask(store.session.id, "Delete the files?");
@@ -124,20 +124,40 @@ test("reads return the record: agents, one agent, asks in a state, and activity"
     agents: { agent: { id: string } }[];
   };
   assert.equal(agents.agents.length, 2);
-  const detail = (await (await get(`/ui/api/agents/${lead.agent.id}`)).json()) as {
-    addressed_asks: unknown[];
-  };
-  assert.equal(detail.addressed_asks.length, 1);
+  const view = (await (await get(`/ui/api/view/${lead.agent.id}`)).json()) as EntityView;
+  assert.equal(view.asks_to_answer.length, 1);
   const all = (await (await get("/ui/api/asks?state=all")).json()) as { asks: unknown[] };
   assert.equal(all.asks.length, 1);
   assert.equal((await get("/ui/api/asks?state=nonsense")).status, 422);
-  const activity = (await (await get("/ui/api/activity?limit=2")).json()) as { entries: unknown[] };
+  const activity = (await (await get("/ui/api/activity?limit=2")).json()) as PageActivity;
   assert.equal(activity.entries.length, 2);
-  assert.equal((await get("/ui/api/agents/agt_missing")).status, 404);
+  assert.equal(activity.more, true);
 });
 
 test("the page's routes stay out of the public contract", () => {
   const paths = Object.keys((openapiDocument() as { paths: Record<string, unknown> }).paths);
   assert.ok(paths.every((path) => path.startsWith("/api/")));
   assert.ok(!paths.some((path) => path.includes("as_user")));
+});
+
+test("activity leaves out sign-in links and shows each status set with its summary", async () => {
+  const { service, get, organization } = await harness();
+  const { store } = await organization();
+  await service.status_set(
+    {
+      session: store.session.id,
+      state: "running",
+      summary: "Copying batch 3 of 8.",
+      links: [],
+      blockers: [],
+    },
+    { channel: "mcp", client: "claude-code", clientSessionId: "c" },
+  );
+  await service.ui_login_link({}, { channel: "api" });
+
+  const { entries } = (await (await get("/ui/api/activity")).json()) as PageActivity;
+
+  assert.ok(entries.every((entry) => entry.operation !== "ui_login_link"));
+  const status = entries.find((entry) => entry.operation === "status_set");
+  assert.equal(status?.summary, "Copying batch 3 of 8.");
 });

@@ -1,25 +1,21 @@
-// The overview: the organization summarized. A strip of totals and what changed lately, then the
-// chart of agents under the user, each manager with a bar of its subtree's progress. It shows
-// states and marks, not a stream of events; the full record is in each agent's pane and Activity.
+// The organization below an entity: a strip of its totals and what changed lately, then the
+// chart of the agents under it, each with its status in a line and, for a manager, a bar of its
+// subtree's progress. It shows states and marks, not a stream of events.
 
 import { Link } from "@tanstack/react-router";
-import {
-  ChevronRightIcon,
-  ClockAlertIcon,
-  HistoryIcon,
-  InboxIcon,
-  UserRoundIcon,
-} from "lucide-react";
+import { ChevronRightIcon, ClockAlertIcon, HistoryIcon, InboxIcon } from "lucide-react";
 import { useState } from "react";
 import { cn } from "@/lib/utils";
-import type { ChartNode, OverviewModel } from "../control/overview.tsx";
+import type { AgentSummary } from "../../../src/page/types.ts";
+import type { ChartNode } from "../control/entity.tsx";
+import type { Counts } from "../model/progress.ts";
 import { progressState } from "../model/state.ts";
 import { ClientMark, SR, StateMark, StateName } from "./marks.tsx";
 import { RollupBar, StateCounts } from "./progress.tsx";
 import { Ago } from "./time.tsx";
 
 function Node({ node, depth }: { node: ChartNode; depth: number }) {
-  const [open, setOpen] = useState(depth < 2);
+  const [open, setOpen] = useState(depth < 1);
   const { agent, asks_to_answer, unread_messages, attached_session, last_activity_at } =
     node.summary;
   const blocked = progressState(agent) === "blocked";
@@ -31,7 +27,7 @@ function Node({ node, depth }: { node: ChartNode; depth: number }) {
           to="/people/$agentId"
           params={{ agentId: agent.id }}
           className={cn(
-            "flex min-w-0 flex-1 flex-col gap-2 rounded-lg border bg-card px-3 py-2.5 outline-none transition-colors hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-ring",
+            "flex min-w-0 flex-1 flex-col gap-1.5 rounded-lg border bg-card px-3 py-2.5 outline-none transition-colors hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-ring",
             blocked && "border-state-blocked/50 bg-state-blocked/5",
             node.stale && "border-dashed",
           )}
@@ -74,6 +70,11 @@ function Node({ node, depth }: { node: ChartNode; depth: number }) {
               </span>
             </span>
           </span>
+          {agent.status?.summary ? (
+            <span className="truncate pl-5 text-sm text-muted-foreground">
+              {agent.status.summary}
+            </span>
+          ) : null}
           {node.rollup ? <RollupBar counts={node.rollup} /> : null}
         </Link>
         {node.children.length > 0 ? (
@@ -106,60 +107,45 @@ function Nodes({ nodes, depth }: { nodes: ChartNode[]; depth: number }) {
   );
 }
 
-export function OverviewView(model: OverviewModel) {
+/** The subtree's progress: its totals by state, and the agents in it that changed lately. */
+export function ProgressStrip({ totals, recent }: { totals: Counts; recent: AgentSummary[] }) {
   return (
-    <div className="mx-auto flex w-full max-w-4xl flex-col gap-6 p-4 sm:p-6">
-      <h1 className="sr-only">Overview</h1>
-      <section aria-label="Progress" className="flex flex-col gap-3 rounded-lg border bg-card p-4">
-        <RollupBar counts={model.totals} className="h-2.5" />
-        <StateCounts counts={model.totals} />
-        {model.recent.length > 0 ? (
-          <ul aria-label="Changed recently" className="flex flex-col gap-1 border-t pt-3">
-            {model.recent.map(({ agent }) => (
-              <li key={agent.id}>
-                <Link
-                  to="/people/$agentId"
-                  params={{ agentId: agent.id }}
-                  className="flex min-w-0 items-center gap-2 rounded-md px-1 py-0.5 text-sm hover:bg-muted"
-                >
-                  <HistoryIcon
-                    aria-hidden="true"
-                    className="size-3.5 shrink-0 text-muted-foreground"
+    <section aria-label="Progress" className="flex flex-col gap-3 rounded-lg border bg-card p-4">
+      <RollupBar counts={totals} className="h-2.5" />
+      <StateCounts counts={totals} />
+      {recent.length > 0 ? (
+        <ul aria-label="Changed recently" className="flex flex-col gap-1 border-t pt-3">
+          {recent.map(({ agent }) => (
+            <li key={agent.id}>
+              <Link
+                to="/people/$agentId"
+                params={{ agentId: agent.id }}
+                className="flex min-w-0 items-center gap-2 rounded-md px-1 py-0.5 text-sm hover:bg-muted"
+              >
+                <HistoryIcon
+                  aria-hidden="true"
+                  className="size-3.5 shrink-0 text-muted-foreground"
+                />
+                <StateMark agent={agent} />
+                <span className="shrink-0 font-medium">{agent.title}</span>
+                <StateName agent={agent} />
+                <span className="min-w-0 truncate text-muted-foreground">
+                  {agent.status?.summary}
+                </span>
+                {agent.status ? (
+                  <Ago
+                    at={agent.status.updated_at}
+                    className="ml-auto shrink-0 text-xs text-muted-foreground tabular-nums"
                   />
-                  <StateMark agent={agent} />
-                  <span className="shrink-0 font-medium">{agent.title}</span>
-                  <StateName agent={agent} />
-                  <span className="min-w-0 truncate text-muted-foreground">
-                    {agent.status?.summary}
-                  </span>
-                  {agent.status ? (
-                    <Ago
-                      at={agent.status.updated_at}
-                      className="ml-auto shrink-0 text-xs text-muted-foreground tabular-nums"
-                    />
-                  ) : null}
-                </Link>
-              </li>
-            ))}
-          </ul>
-        ) : null}
-      </section>
-      <section aria-label="Organization" className="flex flex-col gap-1.5">
-        <Link
-          to="/inbox"
-          className="flex items-center gap-2 self-start rounded-lg border bg-card px-3 py-2 font-medium hover:bg-muted/60"
-        >
-          <UserRoundIcon aria-hidden="true" className="size-4" />
-          You
-          {model.inboxCount > 0 ? (
-            <span className="rounded-md bg-primary px-1.5 text-xs text-primary-foreground tabular-nums">
-              {model.inboxCount}
-              <SR> waiting</SR>
-            </span>
-          ) : null}
-        </Link>
-        {model.chart.length === 0 ? null : <Nodes nodes={model.chart} depth={1} />}
-      </section>
-    </div>
+                ) : null}
+              </Link>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </section>
   );
 }
+
+/** The agents below an entity, as a chart; the first level opens, deeper ones on request. */
+export const Chart = ({ nodes }: { nodes: ChartNode[] }) => <Nodes nodes={nodes} depth={0} />;

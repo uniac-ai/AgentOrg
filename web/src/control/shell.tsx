@@ -6,7 +6,7 @@ import { Outlet, useNavigate, useParams, useRouterState } from "@tanstack/react-
 import { useKeys } from "@/lib/keys";
 import type { AgentRecord } from "../../../src/page/types.ts";
 import { isSignedOut } from "../data/client.ts";
-import { agentsQuery, inboxQuery, sessionQuery } from "../data/queries.ts";
+import { agentsQuery, sessionQuery, viewQuery } from "../data/queries.ts";
 import { managers, type OrgNode, organization } from "../model/organization.ts";
 import { ShellView } from "../views/shell.tsx";
 import { PaneSkeleton, SignedOutView, UnreachableView } from "../views/states.tsx";
@@ -14,8 +14,7 @@ import { PaletteControl } from "./palette.tsx";
 
 /** Where the user is, for the sidebar's selection and the path above the pane. */
 export type Place =
-  | { view: "overview" }
-  | { view: "inbox" }
+  | { view: "you" }
   | { view: "activity" }
   | { view: "agent"; id: string }
   | { view: "other" };
@@ -23,7 +22,8 @@ export type Place =
 export interface ShellModel {
   /** Undefined until the organization first loads. */
   organization: OrgNode[] | undefined;
-  inboxCount: number;
+  /** What waits on the user, for the user's entry in the sidebar. */
+  waitingOnYou: number;
   /** The service stopped answering after the page loaded; what shows may be stale. */
   offline: boolean;
   place: Place;
@@ -33,23 +33,23 @@ export interface ShellModel {
 }
 
 export function ShellControl() {
-  const [session, agents, inbox] = useQueries({
-    queries: [sessionQuery, agentsQuery, inboxQuery],
+  const [session, agents, you] = useQueries({
+    queries: [sessionQuery, agentsQuery, viewQuery("user")],
   });
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const { agentId } = useParams({ strict: false });
-  const queries = [session, agents, inbox];
+  const queries = [session, agents, you];
   const navigate = useNavigate();
   const tree = agents.data ? organization(agents.data.agents) : undefined;
 
-  // ⌥↑ and ⌥↓ step through the sidebar: your own pane first, then every agent in tree order.
+  // ⌥↑ and ⌥↓ step through the sidebar: your own view first, then every agent in tree order.
   useKeys((event) => {
     if (!event.altKey || (event.key !== "ArrowUp" && event.key !== "ArrowDown")) return false;
     const order = [undefined, ...flatten(tree ?? [])];
     const at = order.indexOf(agentId);
     const next =
       order[Math.min(order.length - 1, Math.max(0, at + (event.key === "ArrowDown" ? 1 : -1)))];
-    if (next === undefined) void navigate({ to: "/inbox" });
+    if (next === undefined) void navigate({ to: "/" });
     else void navigate({ to: "/people/$agentId", params: { agentId: next } });
     return true;
   });
@@ -62,16 +62,14 @@ export function ShellControl() {
   const place: Place =
     agentId !== undefined
       ? { view: "agent", id: agentId }
-      : pathname.startsWith("/inbox")
-        ? { view: "inbox" }
-        : pathname === "/activity"
-          ? { view: "activity" }
-          : pathname === "/"
-            ? { view: "overview" }
-            : { view: "other" };
+      : pathname === "/activity"
+        ? { view: "activity" }
+        : pathname === "/" || pathname.startsWith("/asks/")
+          ? { view: "you" }
+          : { view: "other" };
   const model: ShellModel = {
     organization: tree,
-    inboxCount: (inbox.data?.asks.length ?? 0) + (inbox.data?.messages.length ?? 0),
+    waitingOnYou: (you.data?.asks_to_answer.length ?? 0) + (you.data?.inbox.length ?? 0),
     offline: queries.some((query) => query.isError),
     place,
     path: place.view === "agent" ? managers(place.id, byId) : [],

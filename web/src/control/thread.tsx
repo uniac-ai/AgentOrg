@@ -48,7 +48,7 @@ export function ThreadControl() {
 
   const close = () =>
     agentId === undefined
-      ? navigate({ to: "/inbox" })
+      ? navigate({ to: "/" })
       : navigate({ to: "/people/$agentId", params: { agentId } });
   const send = () => {
     if (ask.data?.state !== "open" || answer.isPending || (!choice && !words.trim())) return;

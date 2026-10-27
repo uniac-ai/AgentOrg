@@ -87,3 +87,34 @@ export const AskListResult = z
       .describe("The agents the asks come from and go to, for building escalation chains."),
   })
   .meta({ id: "AskListResult" });
+
+export const ViewAsUser = z
+  .strictObject({
+    agent: Id.nullable().describe("The agent to view; null views the user."),
+  })
+  .meta({ id: "ViewAsUser" });
+
+export const View = z
+  .strictObject({
+    agent: Agent.nullable().describe("The agent viewed; null when it is the user."),
+    manager: Agent.nullable().describe("Its manager; null for the user and agents under the user."),
+    children: z.array(Agent).describe("Its direct reports that are not closed, with their status."),
+    asks_to_answer: z.array(Ask).describe("Open asks addressed to it."),
+    own_asks: z.array(Ask).describe("Its own asks that are open or answered; none for the user."),
+    inbox: z.array(Message).describe("Unread messages, and reports not yet acknowledged, to it."),
+    history: z
+      .strictObject({
+        asks: z.array(Ask).describe("Every ask it opened or was sent, in any state."),
+        messages: z.array(Message).describe("Every message from it or to it."),
+        sessions: z.array(Session).describe("Every session that attached to it, newest first."),
+        status_history: z
+          .array(StatusEntry)
+          .describe("The statuses its sessions set, newest first."),
+      })
+      .describe("What happened to it, for its feed."),
+  })
+  .meta({
+    id: "View",
+    description:
+      "What an entity sees, the user or an agent: the same facts session_attach gives an agent, and its history.",
+  });

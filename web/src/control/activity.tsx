@@ -1,16 +1,17 @@
 // Activity, control: every write on the record, newest first, with the agents and asks it names
-// resolved for display. The list starts at a page and grows on request.
+// resolved for display, and each status set with its summary. The list starts at a page and
+// grows on request.
 
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
-import type { Activity, AgentRecord, AskRecord } from "../../../src/page/types.ts";
+import type { AgentRecord, AskRecord, PageActivity } from "../../../src/page/types.ts";
 import { activityQuery, agentsQuery, allAsksQuery } from "../data/queries.ts";
 import { ActivityView } from "../views/activity.tsx";
 import { PaneSkeleton } from "../views/states.tsx";
 
 const PAGE = 100;
 
-export type ActivityEntry = Activity["entries"][number];
+export type ActivityEntry = PageActivity["entries"][number];
 
 export interface ActivityModel {
   entries: ActivityEntry[];
@@ -31,7 +32,7 @@ export function ActivityControl() {
     entries: activity.data.entries,
     agents: new Map(agents.data?.agents.map(({ agent }) => [agent.id, agent])),
     asks: new Map(asks.data?.asks.map((ask) => [ask.id, ask])),
-    more: activity.data.entries.length === limit && limit < 1000,
+    more: activity.data.more && limit < 1000,
     onShowMore: () => setLimit((current) => Math.min(1000, current + PAGE * 3)),
   };
   return <ActivityView {...model} />;

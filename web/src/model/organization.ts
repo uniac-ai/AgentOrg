@@ -34,3 +34,20 @@ export function managers(id: string, agents: ReadonlyMap<string, AgentRecord>): 
   }
   return above;
 }
+
+/** The tree below an entity: the user's (null) is the whole organization. */
+export function below(tree: OrgNode[], id: string | null): OrgNode[] {
+  if (id === null) return tree;
+  const find = (nodes: OrgNode[]): OrgNode | undefined => {
+    for (const node of nodes) {
+      const found = node.summary.agent.id === id ? node : find(node.children);
+      if (found) return found;
+    }
+    return undefined;
+  };
+  return find(tree)?.children ?? [];
+}
+
+/** Every agent in a tree, in order. */
+export const flatten = (nodes: OrgNode[]): AgentSummary[] =>
+  nodes.flatMap((node) => [node.summary, ...flatten(node.children)]);

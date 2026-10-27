@@ -27,6 +27,7 @@ const AGENT_OPERATIONS = [
 const API_OPERATIONS = ["agent_list", "agent_get", "ask_list", "audit_list", "ui_login_link"];
 const USER_OPERATIONS = [
   "agent_close_as_user",
+  "view_as_user",
   "ask_answer_as_user",
   "message_read_as_user",
   "message_ack_as_user",

@@ -1,6 +1,6 @@
 // The jump palette: views, agents and open asks in one filtered list, each told apart by its mark.
 
-import { ActivityIcon, InboxIcon, MessageCircleQuestionIcon, NetworkIcon } from "lucide-react";
+import { ActivityIcon, MessageCircleQuestionIcon, UserRoundIcon } from "lucide-react";
 import {
   Command,
   CommandDialog,
@@ -15,8 +15,7 @@ import { StateMark, StateName } from "./marks.tsx";
 import { Route } from "./thread.tsx";
 
 const VIEWS = [
-  { to: "/", name: "Overview", Icon: NetworkIcon },
-  { to: "/inbox", name: "Inbox", Icon: InboxIcon },
+  { to: "/", name: "You", Icon: UserRoundIcon },
   { to: "/activity", name: "Activity", Icon: ActivityIcon },
 ] as const;
 
