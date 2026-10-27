@@ -1,0 +1,33 @@
+{
+  "name": "@agentorg/cli",
+  "version": "0.0.0",
+  "description": "A local service that organizes AI agent sessions like a company: agents, asks to the manager, and reports up",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/uniac-ai/agentorg.git"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "files": [
+    "dist/src",
+    "openapi.json"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "biome check .",
+    "test": "npm run build && node --test \"dist/test/**/*.test.js\"",
+    "openapi": "npm run build && node dist/src/api/print-openapi.js > openapi.json"
+  },
+  "dependencies": {
+    "hono": "^4.13.14",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.6.3",
+    "@types/node": "^22.20.5",
+    "typescript": "^7.0.2"
+  }
+}

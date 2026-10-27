@@ -2,41 +2,41 @@
   "openapi": "3.1.0",
   "info": {
     "title": "agentorg",
-    "summary": "The record of agent sessions, tasks, asks, items and reports.",
-    "version": "0.0.1"
+    "version": "0.0.0",
+    "summary": "The record of agents, their sessions, asks to managers, and messages up."
   },
   "paths": {
-    "/api/session/start": {
+    "/api/agent/create": {
       "post": {
+        "operationId": "agent_create",
         "tags": [
-          "session"
+          "agent"
         ],
-        "summary": "Start a session, or resume it, and return the facts it acts on.",
-        "description": "Call it first. It returns the session's id, its parent, its task, its own asks that are open or answered, and the reports to it not yet acknowledged. Starting again with the same client and client session id resumes the same session.",
-        "operationId": "session_start",
+        "summary": "Create an agent: a work responsibility managed by the acting session's agent.",
+        "description": "Returns the new agent; put its id in the brief of the session that will attach to it. Without a session, it is the user creating an agent directly under the user.",
         "requestBody": {
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/SessionStart"
+                "$ref": "#/components/schemas/AgentCreate"
               }
             }
-          },
-          "required": true
+          }
         },
         "responses": {
           "200": {
-            "description": "Successful Response",
+            "description": "The result.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SessionFacts"
+                  "$ref": "#/components/schemas/Agent"
                 }
               }
             }
           },
-          "404": {
-            "description": "NotFound",
+          "403": {
+            "description": "forbidden",
             "content": {
               "application/json": {
                 "schema": {
@@ -45,8 +45,8 @@
               }
             }
           },
-          "403": {
-            "description": "Forbidden",
+          "404": {
+            "description": "not_found",
             "content": {
               "application/json": {
                 "schema": {
@@ -56,7 +56,7 @@
             }
           },
           "409": {
-            "description": "Conflict",
+            "description": "conflict",
             "content": {
               "application/json": {
                 "schema": {
@@ -66,7 +66,293 @@
             }
           },
           "422": {
-            "description": "Invalid",
+            "description": "invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/agent/close": {
+      "post": {
+        "operationId": "agent_close",
+        "tags": [
+          "agent"
+        ],
+        "summary": "Close a child agent whose work is done, and return the cleanup list.",
+        "description": "Closing detaches its session and withdraws its open asks. Only its manager closes it, once its own children are closed.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentClose"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentCloseResult"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/agent/list": {
+      "post": {
+        "operationId": "agent_list",
+        "tags": [
+          "agent"
+        ],
+        "summary": "List the agent tree, each agent with its status and what waits on it: open asks addressed to it and unread messages to it.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentList"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentListResult"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/agent/get": {
+      "post": {
+        "operationId": "agent_get",
+        "tags": [
+          "agent"
+        ],
+        "summary": "Read one agent with its sessions, the asks it opened and the asks addressed to it, and its messages. It marks nothing read.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentGet"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentDetail"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/session/attach": {
+      "post": {
+        "operationId": "session_attach",
+        "tags": [
+          "session"
+        ],
+        "summary": "Attach this session to an agent and return the facts it acts on.",
+        "description": "Call it first, with the agent id from your brief. When the user started you with an appointment in words and no agent id, name new_agent instead, once. Attaching ends any earlier session of the agent. The facts are the agent, its manager, its children with their status, the open asks addressed to it, its own asks with any answers, and its inbox. Keep the session id it returns: every write names it as session.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionAttach"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Facts"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "invalid",
             "content": {
               "application/json": {
                 "schema": {
@@ -80,24 +366,25 @@
     },
     "/api/session/context": {
       "post": {
+        "operationId": "session_context",
         "tags": [
           "session"
         ],
-        "summary": "Read the facts session_start would return for a client session already started, without starting one. The facts are null when no session was started with that client session id.",
-        "operationId": "session_context",
+        "summary": "Read the facts session_attach returns, for a client session already attached, without changing anything.",
+        "description": "The facts are null when no session with that client session id is attached.",
         "requestBody": {
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/SessionContext"
               }
             }
-          },
-          "required": true
+          }
         },
         "responses": {
           "200": {
-            "description": "Successful Response",
+            "description": "The result.",
             "content": {
               "application/json": {
                 "schema": {
@@ -106,8 +393,8 @@
               }
             }
           },
-          "404": {
-            "description": "NotFound",
+          "403": {
+            "description": "forbidden",
             "content": {
               "application/json": {
                 "schema": {
@@ -116,8 +403,8 @@
               }
             }
           },
-          "403": {
-            "description": "Forbidden",
+          "404": {
+            "description": "not_found",
             "content": {
               "application/json": {
                 "schema": {
@@ -127,7 +414,7 @@
             }
           },
           "409": {
-            "description": "Conflict",
+            "description": "conflict",
             "content": {
               "application/json": {
                 "schema": {
@@ -137,7 +424,7 @@
             }
           },
           "422": {
-            "description": "Invalid",
+            "description": "invalid",
             "content": {
               "application/json": {
                 "schema": {
@@ -149,108 +436,37 @@
         }
       }
     },
-    "/api/session/archive": {
+    "/api/status/set": {
       "post": {
+        "operationId": "status_set",
         "tags": [
-          "session"
+          "status"
         ],
-        "summary": "Archive a session and return its cleanup list.",
-        "description": "Archiving withdraws the session's open asks. The list holds the session's open items, their evidence and the asks it withdrew. Its manager clears them.",
-        "operationId": "session_archive",
+        "summary": "Set the status of the session's agent: its state, a short plain-text summary, links and blockers.",
+        "description": "Its manager and the user see it. It is a status, not a log.",
         "requestBody": {
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/SessionArchive"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SessionArchiveResult"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "NotFound",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Forbidden",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Conflict",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Invalid",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
+                "$ref": "#/components/schemas/StatusSet"
               }
             }
           }
-        }
-      }
-    },
-    "/api/task/open": {
-      "post": {
-        "tags": [
-          "task"
-        ],
-        "summary": "Open a task. Asks and items belong to a task, and the page groups them by its project.",
-        "operationId": "task_open",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/TaskOpen"
-              }
-            }
-          },
-          "required": true
         },
         "responses": {
           "200": {
-            "description": "Successful Response",
+            "description": "The result.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Task"
+                  "$ref": "#/components/schemas/Agent"
                 }
               }
             }
           },
-          "404": {
-            "description": "NotFound",
+          "403": {
+            "description": "forbidden",
             "content": {
               "application/json": {
                 "schema": {
@@ -259,8 +475,8 @@
               }
             }
           },
-          "403": {
-            "description": "Forbidden",
+          "404": {
+            "description": "not_found",
             "content": {
               "application/json": {
                 "schema": {
@@ -270,7 +486,7 @@
             }
           },
           "409": {
-            "description": "Conflict",
+            "description": "conflict",
             "content": {
               "application/json": {
                 "schema": {
@@ -280,78 +496,7 @@
             }
           },
           "422": {
-            "description": "Invalid",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/task/close": {
-      "post": {
-        "tags": [
-          "task"
-        ],
-        "summary": "Close a task.",
-        "operationId": "task_close",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/TaskClose"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Task"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "NotFound",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Forbidden",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Conflict",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Invalid",
+            "description": "invalid",
             "content": {
               "application/json": {
                 "schema": {
@@ -365,25 +510,25 @@
     },
     "/api/ask/open": {
       "post": {
+        "operationId": "ask_open",
         "tags": [
           "ask"
         ],
-        "summary": "Ask the user for a decision. It appears on the decisions page until answered.",
-        "description": "Give the context a reader outside the session needs, two to six options, and the label of the option you recommend. Then wait for the answer with ask_wait, or keep working and read it later with ask_get.",
-        "operationId": "ask_open",
+        "summary": "Ask the agent's manager a question. It is addressed to the manager automatically; when the manager is the user, it appears on the decisions page.",
+        "description": "Give context for a reader outside the session, two to six options and the label you recommend. To carry a child's ask up, list it in escalates. Then keep working and read the answer with ask_get or your next session_attach, or wait with ask_wait when you cannot go on without it.",
         "requestBody": {
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/AskOpen"
               }
             }
-          },
-          "required": true
+          }
         },
         "responses": {
           "200": {
-            "description": "Successful Response",
+            "description": "The result.",
             "content": {
               "application/json": {
                 "schema": {
@@ -392,8 +537,8 @@
               }
             }
           },
-          "404": {
-            "description": "NotFound",
+          "403": {
+            "description": "forbidden",
             "content": {
               "application/json": {
                 "schema": {
@@ -402,8 +547,8 @@
               }
             }
           },
-          "403": {
-            "description": "Forbidden",
+          "404": {
+            "description": "not_found",
             "content": {
               "application/json": {
                 "schema": {
@@ -413,7 +558,7 @@
             }
           },
           "409": {
-            "description": "Conflict",
+            "description": "conflict",
             "content": {
               "application/json": {
                 "schema": {
@@ -423,7 +568,7 @@
             }
           },
           "422": {
-            "description": "Invalid",
+            "description": "invalid",
             "content": {
               "application/json": {
                 "schema": {
@@ -437,24 +582,24 @@
     },
     "/api/ask/get": {
       "post": {
+        "operationId": "ask_get",
         "tags": [
           "ask"
         ],
         "summary": "Read an ask, with its answer once it has one.",
-        "operationId": "ask_get",
         "requestBody": {
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/AskGet"
               }
             }
-          },
-          "required": true
+          }
         },
         "responses": {
           "200": {
-            "description": "Successful Response",
+            "description": "The result.",
             "content": {
               "application/json": {
                 "schema": {
@@ -463,8 +608,8 @@
               }
             }
           },
-          "404": {
-            "description": "NotFound",
+          "403": {
+            "description": "forbidden",
             "content": {
               "application/json": {
                 "schema": {
@@ -473,8 +618,8 @@
               }
             }
           },
-          "403": {
-            "description": "Forbidden",
+          "404": {
+            "description": "not_found",
             "content": {
               "application/json": {
                 "schema": {
@@ -484,7 +629,7 @@
             }
           },
           "409": {
-            "description": "Conflict",
+            "description": "conflict",
             "content": {
               "application/json": {
                 "schema": {
@@ -494,7 +639,7 @@
             }
           },
           "422": {
-            "description": "Invalid",
+            "description": "invalid",
             "content": {
               "application/json": {
                 "schema": {
@@ -508,97 +653,25 @@
     },
     "/api/ask/wait": {
       "post": {
+        "operationId": "ask_wait",
         "tags": [
           "ask"
         ],
         "summary": "Wait until an ask is answered or withdrawn and return it.",
         "description": "With a timeout, return the ask after that long even if it is still open.",
-        "operationId": "ask_wait",
         "requestBody": {
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/AskWait"
               }
             }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Ask"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "NotFound",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Forbidden",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Conflict",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Invalid",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
           }
-        }
-      }
-    },
-    "/api/ask/record_answer": {
-      "post": {
-        "tags": [
-          "ask"
-        ],
-        "summary": "Record an answer the user gave in the asking session's own conversation.",
-        "description": "Quote the user's words exactly. Only the session that opened the ask may record its answer.",
-        "operationId": "ask_record_answer",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/AskRecordAnswer"
-              }
-            }
-          },
-          "required": true
         },
         "responses": {
           "200": {
-            "description": "Successful Response",
+            "description": "The result.",
             "content": {
               "application/json": {
                 "schema": {
@@ -607,8 +680,8 @@
               }
             }
           },
-          "404": {
-            "description": "NotFound",
+          "403": {
+            "description": "forbidden",
             "content": {
               "application/json": {
                 "schema": {
@@ -617,8 +690,8 @@
               }
             }
           },
-          "403": {
-            "description": "Forbidden",
+          "404": {
+            "description": "not_found",
             "content": {
               "application/json": {
                 "schema": {
@@ -628,7 +701,7 @@
             }
           },
           "409": {
-            "description": "Conflict",
+            "description": "conflict",
             "content": {
               "application/json": {
                 "schema": {
@@ -638,7 +711,7 @@
             }
           },
           "422": {
-            "description": "Invalid",
+            "description": "invalid",
             "content": {
               "application/json": {
                 "schema": {
@@ -652,25 +725,24 @@
     },
     "/api/ask/withdraw": {
       "post": {
+        "operationId": "ask_withdraw",
         "tags": [
           "ask"
         ],
-        "summary": "Withdraw an open ask that no longer needs the user, which removes it from the page.",
-        "description": "Only the session that opened the ask may withdraw it.",
-        "operationId": "ask_withdraw",
+        "summary": "Withdraw an open ask that no longer needs an answer. Only the asking agent's sessions may.",
         "requestBody": {
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/AskWithdraw"
               }
             }
-          },
-          "required": true
+          }
         },
         "responses": {
           "200": {
-            "description": "Successful Response",
+            "description": "The result.",
             "content": {
               "application/json": {
                 "schema": {
@@ -679,8 +751,8 @@
               }
             }
           },
-          "404": {
-            "description": "NotFound",
+          "403": {
+            "description": "forbidden",
             "content": {
               "application/json": {
                 "schema": {
@@ -689,8 +761,8 @@
               }
             }
           },
-          "403": {
-            "description": "Forbidden",
+          "404": {
+            "description": "not_found",
             "content": {
               "application/json": {
                 "schema": {
@@ -700,7 +772,7 @@
             }
           },
           "409": {
-            "description": "Conflict",
+            "description": "conflict",
             "content": {
               "application/json": {
                 "schema": {
@@ -710,7 +782,150 @@
             }
           },
           "422": {
-            "description": "Invalid",
+            "description": "invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ask/answer": {
+      "post": {
+        "operationId": "ask_answer",
+        "tags": [
+          "ask"
+        ],
+        "summary": "Answer an open ask addressed to the session's agent, with a choice, words, or both.",
+        "description": "Answer it yourself when you can. When only your manager can, escalate it: open your own ask with the child's ask in escalates, and answer the child once you have the answer.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AskAnswer"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Ask"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ask/record_answer": {
+      "post": {
+        "operationId": "ask_record_answer",
+        "tags": [
+          "ask"
+        ],
+        "summary": "Record an answer the user gave in the asking session's own conversation, for an ask addressed to the user. Quote the user's words exactly.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AskRecordAnswer"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Ask"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "invalid",
             "content": {
               "application/json": {
                 "schema": {
@@ -724,24 +939,24 @@
     },
     "/api/ask/list": {
       "post": {
+        "operationId": "ask_list",
         "tags": [
           "ask"
         ],
-        "summary": "List asks, oldest first, with the tasks they belong to and the sessions that asked.",
-        "operationId": "ask_list",
+        "summary": "List every ask in a state, oldest first, whoever it is addressed to, with the agents it refers to.",
         "requestBody": {
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/AskList"
               }
             }
-          },
-          "required": true
+          }
         },
         "responses": {
           "200": {
-            "description": "Successful Response",
+            "description": "The result.",
             "content": {
               "application/json": {
                 "schema": {
@@ -750,8 +965,8 @@
               }
             }
           },
-          "404": {
-            "description": "NotFound",
+          "403": {
+            "description": "forbidden",
             "content": {
               "application/json": {
                 "schema": {
@@ -760,8 +975,8 @@
               }
             }
           },
-          "403": {
-            "description": "Forbidden",
+          "404": {
+            "description": "not_found",
             "content": {
               "application/json": {
                 "schema": {
@@ -771,7 +986,7 @@
             }
           },
           "409": {
-            "description": "Conflict",
+            "description": "conflict",
             "content": {
               "application/json": {
                 "schema": {
@@ -781,7 +996,7 @@
             }
           },
           "422": {
-            "description": "Invalid",
+            "description": "invalid",
             "content": {
               "application/json": {
                 "schema": {
@@ -793,108 +1008,36 @@
         }
       }
     },
-    "/api/item/put": {
+    "/api/message/send": {
       "post": {
+        "operationId": "message_send",
         "tags": [
-          "item"
+          "message"
         ],
-        "summary": "Create an open item, a workstream with its state, or replace one.",
-        "description": "Keep the summary short; it is a status, not a log.",
-        "operationId": "item_put",
+        "summary": "Send a note or a report to the agent's manager. Messages only go up; the manager reads them when it chooses.",
         "requestBody": {
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/ItemPut"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Item"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "NotFound",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Forbidden",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Conflict",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Invalid",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
+                "$ref": "#/components/schemas/MessageSend"
               }
             }
           }
-        }
-      }
-    },
-    "/api/item/resolve": {
-      "post": {
-        "tags": [
-          "item"
-        ],
-        "summary": "Resolve an item, which removes it from the open workstreams.",
-        "operationId": "item_resolve",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ItemResolve"
-              }
-            }
-          },
-          "required": true
         },
         "responses": {
           "200": {
-            "description": "Successful Response",
+            "description": "The result.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Item"
+                  "$ref": "#/components/schemas/Message"
                 }
               }
             }
           },
-          "404": {
-            "description": "NotFound",
+          "403": {
+            "description": "forbidden",
             "content": {
               "application/json": {
                 "schema": {
@@ -903,8 +1046,8 @@
               }
             }
           },
-          "403": {
-            "description": "Forbidden",
+          "404": {
+            "description": "not_found",
             "content": {
               "application/json": {
                 "schema": {
@@ -914,7 +1057,7 @@
             }
           },
           "409": {
-            "description": "Conflict",
+            "description": "conflict",
             "content": {
               "application/json": {
                 "schema": {
@@ -924,149 +1067,7 @@
             }
           },
           "422": {
-            "description": "Invalid",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/item/list": {
-      "post": {
-        "tags": [
-          "item"
-        ],
-        "summary": "List items, open ones unless asked otherwise, oldest first, with the tasks they belong to and the sessions doing the work.",
-        "operationId": "item_list",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ItemList"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ItemListResult"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "NotFound",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Forbidden",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Conflict",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Invalid",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/report/send": {
-      "post": {
-        "tags": [
-          "report"
-        ],
-        "summary": "Send a report to the session's parent. It stays in the parent's inbox until the parent acknowledges it.",
-        "operationId": "report_send",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ReportSend"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Report"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "NotFound",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Forbidden",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Conflict",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Invalid",
+            "description": "invalid",
             "content": {
               "application/json": {
                 "schema": {
@@ -1080,24 +1081,24 @@
     },
     "/api/inbox/read": {
       "post": {
+        "operationId": "inbox_read",
         "tags": [
           "inbox"
         ],
-        "summary": "Read the reports to the session that it has not acknowledged.",
-        "operationId": "inbox_read",
+        "summary": "Read the agent's unread messages and the reports it has not acknowledged, and mark them read.",
         "requestBody": {
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/InboxRead"
               }
             }
-          },
-          "required": true
+          }
         },
         "responses": {
           "200": {
-            "description": "Successful Response",
+            "description": "The result.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1106,8 +1107,8 @@
               }
             }
           },
-          "404": {
-            "description": "NotFound",
+          "403": {
+            "description": "forbidden",
             "content": {
               "application/json": {
                 "schema": {
@@ -1116,8 +1117,8 @@
               }
             }
           },
-          "403": {
-            "description": "Forbidden",
+          "404": {
+            "description": "not_found",
             "content": {
               "application/json": {
                 "schema": {
@@ -1127,7 +1128,7 @@
             }
           },
           "409": {
-            "description": "Conflict",
+            "description": "conflict",
             "content": {
               "application/json": {
                 "schema": {
@@ -1137,7 +1138,7 @@
             }
           },
           "422": {
-            "description": "Invalid",
+            "description": "invalid",
             "content": {
               "application/json": {
                 "schema": {
@@ -1149,36 +1150,36 @@
         }
       }
     },
-    "/api/report/ack": {
+    "/api/message/ack": {
       "post": {
+        "operationId": "message_ack",
         "tags": [
-          "report"
+          "message"
         ],
-        "summary": "Acknowledge a report, after reviewing it. Only its recipient may.",
-        "operationId": "report_ack",
+        "summary": "Acknowledge a report to the agent after reviewing it. Only its recipient may.",
         "requestBody": {
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/ReportAck"
+                "$ref": "#/components/schemas/MessageAck"
               }
             }
-          },
-          "required": true
+          }
         },
         "responses": {
           "200": {
-            "description": "Successful Response",
+            "description": "The result.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Report"
+                  "$ref": "#/components/schemas/Message"
                 }
               }
             }
           },
-          "404": {
-            "description": "NotFound",
+          "403": {
+            "description": "forbidden",
             "content": {
               "application/json": {
                 "schema": {
@@ -1187,8 +1188,8 @@
               }
             }
           },
-          "403": {
-            "description": "Forbidden",
+          "404": {
+            "description": "not_found",
             "content": {
               "application/json": {
                 "schema": {
@@ -1198,7 +1199,7 @@
             }
           },
           "409": {
-            "description": "Conflict",
+            "description": "conflict",
             "content": {
               "application/json": {
                 "schema": {
@@ -1208,7 +1209,7 @@
             }
           },
           "422": {
-            "description": "Invalid",
+            "description": "invalid",
             "content": {
               "application/json": {
                 "schema": {
@@ -1222,24 +1223,24 @@
     },
     "/api/audit/list": {
       "post": {
+        "operationId": "audit_list",
         "tags": [
           "audit"
         ],
         "summary": "List audit entries, newest first.",
-        "operationId": "audit_list",
         "requestBody": {
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/AuditList"
               }
             }
-          },
-          "required": true
+          }
         },
         "responses": {
           "200": {
-            "description": "Successful Response",
+            "description": "The result.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1248,8 +1249,8 @@
               }
             }
           },
-          "404": {
-            "description": "NotFound",
+          "403": {
+            "description": "forbidden",
             "content": {
               "application/json": {
                 "schema": {
@@ -1258,8 +1259,8 @@
               }
             }
           },
-          "403": {
-            "description": "Forbidden",
+          "404": {
+            "description": "not_found",
             "content": {
               "application/json": {
                 "schema": {
@@ -1269,7 +1270,7 @@
             }
           },
           "409": {
-            "description": "Conflict",
+            "description": "conflict",
             "content": {
               "application/json": {
                 "schema": {
@@ -1279,7 +1280,7 @@
             }
           },
           "422": {
-            "description": "Invalid",
+            "description": "invalid",
             "content": {
               "application/json": {
                 "schema": {
@@ -1293,24 +1294,24 @@
     },
     "/api/ui/login_link": {
       "post": {
+        "operationId": "ui_login_link",
         "tags": [
           "ui"
         ],
         "summary": "Mint a one-time link that signs the browser in to the decisions page.",
-        "operationId": "ui_login_link",
         "requestBody": {
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/LoginLinkCreate"
               }
             }
-          },
-          "required": true
+          }
         },
         "responses": {
           "200": {
-            "description": "Successful Response",
+            "description": "The result.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1319,8 +1320,8 @@
               }
             }
           },
-          "404": {
-            "description": "NotFound",
+          "403": {
+            "description": "forbidden",
             "content": {
               "application/json": {
                 "schema": {
@@ -1329,8 +1330,8 @@
               }
             }
           },
-          "403": {
-            "description": "Forbidden",
+          "404": {
+            "description": "not_found",
             "content": {
               "application/json": {
                 "schema": {
@@ -1340,7 +1341,7 @@
             }
           },
           "409": {
-            "description": "Conflict",
+            "description": "conflict",
             "content": {
               "application/json": {
                 "schema": {
@@ -1350,7 +1351,7 @@
             }
           },
           "422": {
-            "description": "Invalid",
+            "description": "invalid",
             "content": {
               "application/json": {
                 "schema": {
@@ -1365,112 +1366,421 @@
   },
   "components": {
     "schemas": {
-      "Answer": {
+      "Agent": {
+        "type": "object",
         "properties": {
-          "choice": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "description": "Issued by the service."
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "purpose": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "manager": {
             "anyOf": [
               {
                 "type": "string",
-                "maxLength": 80,
-                "minLength": 1
+                "minLength": 1,
+                "maxLength": 64
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Choice",
+            "description": "The managing agent; null when the user is the manager."
+          },
+          "created_by": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The session that created it; null when the user did."
+          },
+          "created_at_attach": {
+            "type": "boolean",
+            "description": "True when a session created it directly under the user as it attached, on the user's appointment in words."
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "active",
+              "closed"
+            ],
+            "description": "Pending until a session first attaches, then active, then closed."
+          },
+          "status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Status"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+          },
+          "closed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "purpose",
+          "manager",
+          "created_by",
+          "created_at_attach",
+          "state",
+          "status",
+          "created_at",
+          "closed_at"
+        ],
+        "additionalProperties": false
+      },
+      "AgentClose": {
+        "type": "object",
+        "properties": {
+          "session": {
+            "description": "The manager's acting session. Omit when the user closes it.",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "agent": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          }
+        },
+        "required": [
+          "agent"
+        ],
+        "additionalProperties": false
+      },
+      "AgentCloseResult": {
+        "type": "object",
+        "properties": {
+          "agent": {
+            "$ref": "#/components/schemas/Agent"
+          },
+          "withdrawn_asks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Ask"
+            },
+            "description": "The open asks closing withdrew."
+          },
+          "detached_sessions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Session"
+            },
+            "description": "The session closing detached, if one was attached."
+          }
+        },
+        "required": [
+          "agent",
+          "withdrawn_asks",
+          "detached_sessions"
+        ],
+        "additionalProperties": false,
+        "description": "The cleanup list for the manager."
+      },
+      "AgentCreate": {
+        "type": "object",
+        "properties": {
+          "session": {
+            "description": "The acting session; the new agent is a child of its agent. Omit when the user creates it.",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "The responsibility, such as \"Migrate session storage\"."
+          },
+          "purpose": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000,
+            "description": "What the agent is for, for a reader outside the session."
+          }
+        },
+        "required": [
+          "title",
+          "purpose"
+        ],
+        "additionalProperties": false
+      },
+      "AgentDetail": {
+        "type": "object",
+        "properties": {
+          "agent": {
+            "$ref": "#/components/schemas/Agent"
+          },
+          "own_asks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Ask"
+            },
+            "description": "Every ask the agent opened, with the manager each went to."
+          },
+          "addressed_asks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Ask"
+            },
+            "description": "Every ask addressed to the agent."
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Message"
+            },
+            "description": "Messages from the agent and to it."
+          },
+          "sessions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Session"
+            },
+            "description": "Every session that attached to it, newest first."
+          }
+        },
+        "required": [
+          "agent",
+          "own_asks",
+          "addressed_asks",
+          "messages",
+          "sessions"
+        ],
+        "additionalProperties": false,
+        "description": "One agent in full; reading it marks nothing read."
+      },
+      "AgentGet": {
+        "type": "object",
+        "properties": {
+          "agent": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          }
+        },
+        "required": [
+          "agent"
+        ],
+        "additionalProperties": false
+      },
+      "AgentList": {
+        "type": "object",
+        "properties": {
+          "include_closed": {
+            "default": false,
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "AgentListResult": {
+        "type": "object",
+        "properties": {
+          "agents": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AgentSummary"
+            },
+            "description": "Oldest first; managers before children."
+          }
+        },
+        "required": [
+          "agents"
+        ],
+        "additionalProperties": false
+      },
+      "AgentSummary": {
+        "type": "object",
+        "properties": {
+          "agent": {
+            "$ref": "#/components/schemas/Agent"
+          },
+          "asks_to_answer": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "Open asks addressed to the agent."
+          },
+          "unread_messages": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "Unread messages addressed to the agent."
+          }
+        },
+        "required": [
+          "agent",
+          "asks_to_answer",
+          "unread_messages"
+        ],
+        "additionalProperties": false
+      },
+      "Answer": {
+        "type": "object",
+        "properties": {
+          "choice": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80
+              },
+              {
+                "type": "null"
+              }
+            ],
             "description": "The label of the chosen option, if one was chosen."
           },
           "words": {
             "anyOf": [
               {
                 "type": "string",
-                "maxLength": 4000,
-                "minLength": 1
+                "minLength": 1,
+                "maxLength": 4000
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Words",
-            "description": "The user's own words, quoted."
+            "description": "The answerer's own words, quoted."
+          },
+          "by": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The answering agent; null when the user answered."
           },
           "channel": {
             "type": "string",
             "enum": [
               "page",
-              "session"
-            ],
-            "title": "Channel"
+              "session",
+              "agent"
+            ]
           },
           "answered_at": {
             "type": "string",
             "format": "date-time",
-            "title": "Answered At"
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
           }
         },
-        "additionalProperties": false,
-        "type": "object",
         "required": [
           "choice",
           "words",
+          "by",
           "channel",
           "answered_at"
         ],
-        "title": "Answer"
+        "additionalProperties": false
       },
       "Ask": {
+        "type": "object",
         "properties": {
           "id": {
             "type": "string",
-            "maxLength": 64,
             "minLength": 1,
-            "title": "Id"
+            "maxLength": 64
           },
-          "task": {
+          "agent": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "description": "The asking agent."
+          },
+          "session": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "description": "The session that asked."
+          },
+          "to": {
             "anyOf": [
               {
                 "type": "string",
-                "maxLength": 64,
-                "minLength": 1
+                "minLength": 1,
+                "maxLength": 64
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Task"
-          },
-          "session": {
-            "type": "string",
-            "maxLength": 64,
-            "minLength": 1,
-            "title": "Session",
-            "description": "The session that asked."
+            "description": "The asking agent's manager; null when it is the user."
           },
           "title": {
             "type": "string",
-            "maxLength": 200,
             "minLength": 1,
-            "title": "Title"
+            "maxLength": 200
           },
           "context": {
             "type": "string",
-            "maxLength": 1000,
             "minLength": 1,
-            "title": "Context"
+            "maxLength": 1000
           },
           "options": {
+            "type": "array",
             "items": {
               "$ref": "#/components/schemas/Option"
-            },
-            "type": "array",
-            "title": "Options"
+            }
           },
           "recommendation": {
             "type": "string",
-            "maxLength": 80,
             "minLength": 1,
-            "title": "Recommendation"
+            "maxLength": 80
+          },
+          "escalates": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            },
+            "description": "The asks addressed to the asking agent that this one carries up."
           },
           "state": {
             "type": "string",
@@ -1478,8 +1788,7 @@
               "open",
               "answered",
               "withdrawn"
-            ],
-            "title": "State"
+            ]
           },
           "answer": {
             "anyOf": [
@@ -1494,44 +1803,78 @@
           "opened_at": {
             "type": "string",
             "format": "date-time",
-            "title": "Opened At"
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
           }
         },
-        "additionalProperties": false,
-        "type": "object",
         "required": [
           "id",
-          "task",
+          "agent",
           "session",
+          "to",
           "title",
           "context",
           "options",
           "recommendation",
+          "escalates",
           "state",
           "answer",
           "opened_at"
         ],
-        "title": "Ask"
+        "additionalProperties": false
+      },
+      "AskAnswer": {
+        "type": "object",
+        "properties": {
+          "session": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "description": "A session of the agent the ask is addressed to."
+          },
+          "ask": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "choice": {
+            "description": "The label of the chosen option.",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "words": {
+            "description": "A note in the answerer's own words.",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          }
+        },
+        "required": [
+          "session",
+          "ask"
+        ],
+        "additionalProperties": false
       },
       "AskGet": {
+        "type": "object",
         "properties": {
           "ask": {
             "type": "string",
-            "maxLength": 64,
             "minLength": 1,
-            "title": "Ask"
+            "maxLength": 64
           }
         },
-        "additionalProperties": false,
-        "type": "object",
         "required": [
           "ask"
         ],
-        "title": "AskGet"
+        "additionalProperties": false
       },
       "AskList": {
+        "type": "object",
         "properties": {
           "state": {
+            "default": "open",
+            "description": "Null lists asks in every state.",
             "anyOf": [
               {
                 "type": "string",
@@ -1544,107 +1887,81 @@
               {
                 "type": "null"
               }
-            ],
-            "title": "State",
-            "description": "Null lists every ask.",
-            "default": "open"
+            ]
           }
         },
-        "additionalProperties": false,
-        "type": "object",
-        "title": "AskList"
+        "additionalProperties": false
       },
       "AskListResult": {
+        "type": "object",
         "properties": {
           "asks": {
+            "type": "array",
             "items": {
               "$ref": "#/components/schemas/Ask"
-            },
-            "type": "array",
-            "title": "Asks"
+            }
           },
-          "tasks": {
-            "items": {
-              "$ref": "#/components/schemas/Task"
-            },
+          "agents": {
             "type": "array",
-            "title": "Tasks",
-            "description": "The tasks the asks belong to."
-          },
-          "sessions": {
             "items": {
-              "$ref": "#/components/schemas/Session"
+              "$ref": "#/components/schemas/Agent"
             },
-            "type": "array",
-            "title": "Sessions",
-            "description": "The sessions that asked."
+            "description": "The agents the asks come from and go to, for building escalation chains."
           }
         },
-        "additionalProperties": false,
-        "type": "object",
         "required": [
           "asks",
-          "tasks",
-          "sessions"
+          "agents"
         ],
-        "title": "AskListResult"
+        "additionalProperties": false
       },
       "AskOpen": {
+        "type": "object",
         "properties": {
           "session": {
             "type": "string",
-            "maxLength": 64,
             "minLength": 1,
-            "title": "Session",
-            "description": "The asking session."
-          },
-          "task": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 64,
-                "minLength": 1
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Task",
-            "description": "Defaults to the asking session's task."
+            "maxLength": 64,
+            "description": "The asking session; the ask goes to its agent's manager."
           },
           "title": {
             "type": "string",
-            "maxLength": 200,
             "minLength": 1,
-            "title": "Title",
+            "maxLength": 200,
             "description": "The decision, as a short question."
           },
           "context": {
             "type": "string",
-            "maxLength": 1000,
             "minLength": 1,
-            "title": "Context",
+            "maxLength": 1000,
             "description": "Two or three sentences for a reader outside the session."
           },
           "options": {
+            "minItems": 2,
+            "maxItems": 6,
+            "type": "array",
             "items": {
               "$ref": "#/components/schemas/Option"
-            },
-            "type": "array",
-            "maxItems": 6,
-            "minItems": 2,
-            "title": "Options"
+            }
           },
           "recommendation": {
             "type": "string",
-            "maxLength": 80,
             "minLength": 1,
-            "title": "Recommendation",
+            "maxLength": 80,
             "description": "The label of the recommended option."
+          },
+          "escalates": {
+            "default": [],
+            "description": "Open asks addressed to the asking agent that this ask carries up to its manager.",
+            "maxItems": 6,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            }
           }
         },
-        "additionalProperties": false,
-        "type": "object",
         "required": [
           "session",
           "title",
@@ -1652,164 +1969,158 @@
           "options",
           "recommendation"
         ],
-        "title": "AskOpen"
+        "additionalProperties": false
       },
       "AskRecordAnswer": {
+        "type": "object",
         "properties": {
           "session": {
             "type": "string",
-            "maxLength": 64,
             "minLength": 1,
-            "title": "Session",
-            "description": "The asking session; only it records answers to its asks."
+            "maxLength": 64,
+            "description": "A session of the asking agent, in whose conversation the user answered."
           },
           "ask": {
             "type": "string",
-            "maxLength": 64,
             "minLength": 1,
-            "title": "Ask"
+            "maxLength": 64,
+            "description": "An ask of that agent addressed to the user."
           },
           "words": {
             "type": "string",
-            "maxLength": 4000,
             "minLength": 1,
-            "title": "Words",
+            "maxLength": 4000,
             "description": "The user's words, quoted exactly."
           },
           "choice": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 80,
-                "minLength": 1
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Choice",
-            "description": "The option those words choose, if any."
+            "description": "The option those words choose, if any.",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
           }
         },
-        "additionalProperties": false,
-        "type": "object",
         "required": [
           "session",
           "ask",
           "words"
         ],
-        "title": "AskRecordAnswer",
-        "description": "An answer the user gave inside the asking session's own conversation."
+        "additionalProperties": false
       },
       "AskWait": {
+        "type": "object",
         "properties": {
           "ask": {
             "type": "string",
-            "maxLength": 64,
             "minLength": 1,
-            "title": "Ask"
+            "maxLength": 64
           },
           "timeout_seconds": {
+            "default": null,
+            "description": "Return the ask, still open, after this long; null waits until it is settled.",
             "anyOf": [
               {
                 "type": "number",
-                "exclusiveMinimum": 0.0
+                "exclusiveMinimum": 0
               },
               {
                 "type": "null"
               }
-            ],
-            "title": "Timeout Seconds",
-            "description": "Return the ask, still open, after this long; null waits until it is answered."
+            ]
           }
         },
-        "additionalProperties": false,
-        "type": "object",
         "required": [
           "ask"
         ],
-        "title": "AskWait"
+        "additionalProperties": false
       },
       "AskWithdraw": {
+        "type": "object",
         "properties": {
           "session": {
             "type": "string",
-            "maxLength": 64,
             "minLength": 1,
-            "title": "Session",
-            "description": "The asking session; only it withdraws its asks."
+            "maxLength": 64,
+            "description": "A session of the asking agent; only it withdraws the ask."
           },
           "ask": {
             "type": "string",
-            "maxLength": 64,
             "minLength": 1,
-            "title": "Ask"
+            "maxLength": 64
           }
         },
-        "additionalProperties": false,
-        "type": "object",
         "required": [
           "session",
           "ask"
         ],
-        "title": "AskWithdraw"
+        "additionalProperties": false
       },
       "AuditEntry": {
+        "type": "object",
         "properties": {
           "id": {
             "type": "integer",
-            "title": "Id"
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
           },
           "at": {
             "type": "string",
             "format": "date-time",
-            "title": "At"
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
           },
           "session": {
             "anyOf": [
               {
                 "type": "string",
-                "maxLength": 64,
-                "minLength": 1
+                "minLength": 1,
+                "maxLength": 64
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Session",
             "description": "The acting session, when the request names one."
+          },
+          "agent": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The acting session's agent."
           },
           "client": {
             "anyOf": [
               {
                 "type": "string",
-                "maxLength": 80,
-                "minLength": 1
+                "minLength": 1,
+                "maxLength": 80
               },
               {
                 "type": "null"
               }
-            ],
-            "title": "Client"
+            ]
           },
           "operation": {
             "type": "string",
-            "maxLength": 80,
             "minLength": 1,
-            "title": "Operation"
+            "maxLength": 80
           },
           "target": {
             "anyOf": [
               {
                 "type": "string",
-                "maxLength": 64,
-                "minLength": 1
+                "minLength": 1,
+                "maxLength": 64
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Target",
             "description": "The record the operation acted on."
           },
           "channel": {
@@ -1818,1260 +2129,642 @@
               "mcp",
               "api",
               "page"
-            ],
-            "title": "Channel"
+            ]
           },
           "outcome": {
             "type": "string",
-            "maxLength": 80,
             "minLength": 1,
-            "title": "Outcome",
+            "maxLength": 80,
             "description": "\"ok\", or the error code the operation returned."
           }
         },
-        "additionalProperties": false,
-        "type": "object",
         "required": [
           "id",
           "at",
           "session",
+          "agent",
           "client",
           "operation",
           "target",
           "channel",
           "outcome"
         ],
-        "title": "AuditEntry"
+        "additionalProperties": false
       },
       "AuditList": {
+        "type": "object",
         "properties": {
           "session": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 64,
-                "minLength": 1
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Session"
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "agent": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
           },
           "limit": {
+            "default": 100,
             "type": "integer",
-            "maximum": 1000.0,
-            "minimum": 1.0,
-            "title": "Limit",
-            "default": 100
+            "minimum": 1,
+            "maximum": 1000
           }
         },
-        "additionalProperties": false,
-        "type": "object",
-        "title": "AuditList"
+        "additionalProperties": false
       },
       "AuditListResult": {
+        "type": "object",
         "properties": {
           "entries": {
+            "type": "array",
             "items": {
               "$ref": "#/components/schemas/AuditEntry"
             },
-            "type": "array",
-            "title": "Entries",
             "description": "Newest first."
           }
         },
-        "additionalProperties": false,
-        "type": "object",
         "required": [
           "entries"
         ],
-        "title": "AuditListResult"
+        "additionalProperties": false
       },
       "ErrorBody": {
+        "type": "object",
         "properties": {
           "code": {
-            "type": "string",
-            "title": "Code"
+            "type": "string"
           },
           "message": {
-            "type": "string",
-            "title": "Message"
+            "type": "string"
           }
         },
-        "additionalProperties": false,
-        "type": "object",
         "required": [
           "code",
           "message"
         ],
-        "title": "ErrorBody",
+        "additionalProperties": false,
         "description": "The body of every API error response."
       },
-      "Evidence": {
+      "Facts": {
+        "type": "object",
         "properties": {
-          "id": {
-            "type": "string",
-            "maxLength": 64,
-            "minLength": 1,
-            "title": "Id"
+          "session": {
+            "$ref": "#/components/schemas/Session"
           },
-          "item": {
-            "type": "string",
-            "maxLength": 64,
-            "minLength": 1,
-            "title": "Item"
+          "agent": {
+            "$ref": "#/components/schemas/Agent"
           },
-          "kind": {
-            "type": "string",
-            "enum": [
-              "before",
-              "after",
-              "single"
-            ],
-            "title": "Kind"
-          },
-          "width": {
+          "manager": {
             "anyOf": [
               {
-                "type": "integer",
-                "exclusiveMinimum": 0.0
+                "$ref": "#/components/schemas/Agent"
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Width",
-            "description": "Display width in CSS pixels."
+            "description": "Null when the user is the manager."
           },
-          "caption": {
-            "type": "string",
-            "maxLength": 200,
-            "minLength": 1,
-            "title": "Caption"
+          "children": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Agent"
+            },
+            "description": "The agent's children that are not closed, with their status."
           },
-          "file": {
-            "type": "string",
-            "maxLength": 2000,
-            "minLength": 1,
-            "title": "File",
-            "description": "The stored file's path, relative to the files directory."
+          "asks_to_answer": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Ask"
+            },
+            "description": "Open asks addressed to the agent."
           },
-          "content_type": {
-            "type": "string",
-            "maxLength": 80,
-            "minLength": 1,
-            "title": "Content Type"
+          "own_asks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Ask"
+            },
+            "description": "The agent's own asks that are open or answered."
           },
-          "added_at": {
-            "type": "string",
-            "format": "date-time",
-            "title": "Added At"
+          "inbox": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Message"
+            },
+            "description": "Unread messages, and reports not yet acknowledged."
           }
         },
-        "additionalProperties": false,
-        "type": "object",
         "required": [
-          "id",
-          "item",
-          "kind",
-          "width",
-          "caption",
-          "file",
-          "content_type",
-          "added_at"
+          "session",
+          "agent",
+          "manager",
+          "children",
+          "asks_to_answer",
+          "own_asks",
+          "inbox"
         ],
-        "title": "Evidence"
+        "additionalProperties": false,
+        "description": "What a session acts on, facts only: the skill decides how to act on them."
       },
       "Inbox": {
+        "type": "object",
         "properties": {
-          "reports": {
-            "items": {
-              "$ref": "#/components/schemas/Report"
-            },
+          "messages": {
             "type": "array",
-            "title": "Reports",
-            "description": "Reports to the session not yet acknowledged."
+            "items": {
+              "$ref": "#/components/schemas/Message"
+            },
+            "description": "Unread messages, and reports not yet acknowledged, oldest first."
           }
         },
-        "additionalProperties": false,
-        "type": "object",
         "required": [
-          "reports"
+          "messages"
         ],
-        "title": "Inbox"
+        "additionalProperties": false
       },
       "InboxRead": {
+        "type": "object",
         "properties": {
           "session": {
             "type": "string",
-            "maxLength": 64,
             "minLength": 1,
-            "title": "Session"
+            "maxLength": 64,
+            "description": "A session of the reading agent."
           }
         },
-        "additionalProperties": false,
-        "type": "object",
         "required": [
           "session"
         ],
-        "title": "InboxRead"
-      },
-      "Item": {
-        "properties": {
-          "id": {
-            "type": "string",
-            "maxLength": 64,
-            "minLength": 1,
-            "title": "Id"
-          },
-          "task": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 64,
-                "minLength": 1
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Task"
-          },
-          "session": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 64,
-                "minLength": 1
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Session",
-            "description": "The session doing the work."
-          },
-          "title": {
-            "type": "string",
-            "maxLength": 200,
-            "minLength": 1,
-            "title": "Title"
-          },
-          "state": {
-            "type": "string",
-            "enum": [
-              "waiting",
-              "review",
-              "running",
-              "blocked"
-            ],
-            "title": "State"
-          },
-          "summary": {
-            "type": "string",
-            "maxLength": 2000,
-            "title": "Summary",
-            "description": "Short plain text; line breaks are kept."
-          },
-          "links": {
-            "items": {
-              "$ref": "#/components/schemas/Link"
-            },
-            "type": "array",
-            "title": "Links"
-          },
-          "evidence": {
-            "items": {
-              "type": "string",
-              "maxLength": 64,
-              "minLength": 1
-            },
-            "type": "array",
-            "title": "Evidence"
-          },
-          "blockers": {
-            "items": {
-              "type": "string",
-              "maxLength": 80,
-              "minLength": 1
-            },
-            "type": "array",
-            "title": "Blockers",
-            "description": "Who unblocks the item."
-          },
-          "updated_at": {
-            "type": "string",
-            "format": "date-time",
-            "title": "Updated At"
-          },
-          "resolved_at": {
-            "anyOf": [
-              {
-                "type": "string",
-                "format": "date-time"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Resolved At"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "id",
-          "task",
-          "session",
-          "title",
-          "state",
-          "summary",
-          "links",
-          "evidence",
-          "blockers",
-          "updated_at",
-          "resolved_at"
-        ],
-        "title": "Item"
-      },
-      "ItemList": {
-        "properties": {
-          "task": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 64,
-                "minLength": 1
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Task"
-          },
-          "include_resolved": {
-            "type": "boolean",
-            "title": "Include Resolved",
-            "default": false
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "title": "ItemList"
-      },
-      "ItemListResult": {
-        "properties": {
-          "items": {
-            "items": {
-              "$ref": "#/components/schemas/Item"
-            },
-            "type": "array",
-            "title": "Items"
-          },
-          "tasks": {
-            "items": {
-              "$ref": "#/components/schemas/Task"
-            },
-            "type": "array",
-            "title": "Tasks",
-            "description": "The tasks the items belong to."
-          },
-          "sessions": {
-            "items": {
-              "$ref": "#/components/schemas/Session"
-            },
-            "type": "array",
-            "title": "Sessions",
-            "description": "The sessions doing the work."
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "items",
-          "tasks",
-          "sessions"
-        ],
-        "title": "ItemListResult"
-      },
-      "ItemPut": {
-        "properties": {
-          "item": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 64,
-                "minLength": 1
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Item",
-            "description": "The item to replace; omit to create a new one."
-          },
-          "session": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 64,
-                "minLength": 1
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Session",
-            "description": "The session doing the work."
-          },
-          "task": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 64,
-                "minLength": 1
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Task",
-            "description": "Defaults to the session's task."
-          },
-          "title": {
-            "type": "string",
-            "maxLength": 200,
-            "minLength": 1,
-            "title": "Title"
-          },
-          "state": {
-            "type": "string",
-            "enum": [
-              "waiting",
-              "review",
-              "running",
-              "blocked"
-            ],
-            "title": "State"
-          },
-          "summary": {
-            "type": "string",
-            "maxLength": 2000,
-            "title": "Summary",
-            "description": "Short plain text, never a log; line breaks are kept.",
-            "default": ""
-          },
-          "links": {
-            "items": {
-              "$ref": "#/components/schemas/Link"
-            },
-            "type": "array",
-            "maxItems": 20,
-            "title": "Links"
-          },
-          "blockers": {
-            "items": {
-              "type": "string",
-              "maxLength": 80,
-              "minLength": 1
-            },
-            "type": "array",
-            "maxItems": 10,
-            "title": "Blockers"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "title",
-          "state"
-        ],
-        "title": "ItemPut"
-      },
-      "ItemResolve": {
-        "properties": {
-          "item": {
-            "type": "string",
-            "maxLength": 64,
-            "minLength": 1,
-            "title": "Item"
-          },
-          "session": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 64,
-                "minLength": 1
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Session",
-            "description": "The session resolving it; omit when the user does."
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "item"
-        ],
-        "title": "ItemResolve"
+        "additionalProperties": false
       },
       "Link": {
+        "type": "object",
         "properties": {
           "label": {
             "type": "string",
-            "maxLength": 80,
             "minLength": 1,
-            "title": "Label"
+            "maxLength": 80
           },
           "url": {
             "type": "string",
-            "maxLength": 2000,
             "minLength": 1,
-            "title": "Url"
+            "maxLength": 2000
           }
         },
-        "additionalProperties": false,
-        "type": "object",
         "required": [
           "label",
           "url"
         ],
-        "title": "Link"
+        "additionalProperties": false
       },
       "LoginLink": {
+        "type": "object",
         "properties": {
           "path": {
             "type": "string",
-            "maxLength": 2000,
             "minLength": 1,
-            "title": "Path",
+            "maxLength": 2000,
             "description": "The page path that signs in: /ui/login?token=... It works once."
           },
           "expires_at": {
             "type": "string",
             "format": "date-time",
-            "title": "Expires At"
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
           }
         },
-        "additionalProperties": false,
-        "type": "object",
         "required": [
           "path",
           "expires_at"
         ],
-        "title": "LoginLink"
+        "additionalProperties": false
       },
       "LoginLinkCreate": {
+        "type": "object",
         "properties": {},
-        "additionalProperties": false,
-        "type": "object",
-        "title": "LoginLinkCreate"
+        "additionalProperties": false
       },
-      "Option": {
-        "properties": {
-          "label": {
-            "type": "string",
-            "maxLength": 80,
-            "minLength": 1,
-            "title": "Label",
-            "description": "The button text; unique within the ask."
-          },
-          "detail": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 300,
-                "minLength": 1
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Detail",
-            "description": "One sentence on what it means."
-          }
-        },
-        "additionalProperties": false,
+      "Message": {
         "type": "object",
-        "required": [
-          "label"
-        ],
-        "title": "Option"
-      },
-      "Report": {
         "properties": {
           "id": {
             "type": "string",
-            "maxLength": 64,
             "minLength": 1,
-            "title": "Id"
+            "maxLength": 64
           },
-          "sender": {
+          "from": {
             "type": "string",
-            "maxLength": 64,
             "minLength": 1,
-            "title": "Sender",
-            "description": "The reporting session."
+            "maxLength": 64,
+            "description": "The sending agent."
           },
-          "recipient": {
+          "to": {
             "anyOf": [
               {
                 "type": "string",
-                "maxLength": 64,
-                "minLength": 1
+                "minLength": 1,
+                "maxLength": 64
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Recipient",
-            "description": "The sender's parent session; null for the user."
+            "description": "The sender's manager; null when it is the user."
           },
-          "outcome": {
+          "kind": {
             "type": "string",
-            "maxLength": 4000,
-            "minLength": 1,
-            "title": "Outcome",
-            "description": "Markdown, organized at the sender's level."
+            "enum": [
+              "note",
+              "report"
+            ]
           },
-          "open_asks": {
-            "items": {
-              "type": "string",
-              "maxLength": 64,
-              "minLength": 1
-            },
-            "type": "array",
-            "title": "Open Asks",
-            "description": "The sender's asks still open when it reported."
+          "body": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000,
+            "description": "Plain text with line breaks, organized at the sender's level."
           },
           "evidence": {
+            "type": "array",
             "items": {
               "type": "string",
-              "maxLength": 64,
-              "minLength": 1
-            },
-            "type": "array",
-            "title": "Evidence"
+              "minLength": 1,
+              "maxLength": 64
+            }
           },
           "sent_at": {
             "type": "string",
             "format": "date-time",
-            "title": "Sent At"
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+          },
+          "read_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "acknowledged_at": {
             "anyOf": [
               {
                 "type": "string",
-                "format": "date-time"
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Acknowledged At"
+            "description": "Reports only: set when the recipient reviewed it."
           }
         },
-        "additionalProperties": false,
-        "type": "object",
         "required": [
           "id",
-          "sender",
-          "recipient",
-          "outcome",
-          "open_asks",
+          "from",
+          "to",
+          "kind",
+          "body",
           "evidence",
           "sent_at",
+          "read_at",
           "acknowledged_at"
         ],
-        "title": "Report"
+        "additionalProperties": false
       },
-      "ReportAck": {
+      "MessageAck": {
+        "type": "object",
         "properties": {
           "session": {
             "type": "string",
-            "maxLength": 64,
             "minLength": 1,
-            "title": "Session",
-            "description": "The recipient; acknowledging is its review of the report."
+            "maxLength": 64,
+            "description": "A session of the report's recipient."
           },
-          "report": {
+          "message": {
             "type": "string",
-            "maxLength": 64,
             "minLength": 1,
-            "title": "Report"
+            "maxLength": 64
           }
         },
-        "additionalProperties": false,
-        "type": "object",
         "required": [
           "session",
-          "report"
+          "message"
         ],
-        "title": "ReportAck"
+        "additionalProperties": false
       },
-      "ReportSend": {
+      "MessageSend": {
+        "type": "object",
         "properties": {
           "session": {
             "type": "string",
+            "minLength": 1,
             "maxLength": 64,
-            "minLength": 1,
-            "title": "Session",
-            "description": "The reporting session; the report goes to its parent."
+            "description": "The sending session; the message goes to its agent's manager."
           },
-          "outcome": {
+          "kind": {
             "type": "string",
-            "maxLength": 4000,
-            "minLength": 1,
-            "title": "Outcome"
+            "enum": [
+              "note",
+              "report"
+            ]
           },
-          "evidence": {
-            "items": {
-              "type": "string",
-              "maxLength": 64,
-              "minLength": 1
-            },
-            "type": "array",
-            "title": "Evidence"
+          "body": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
           }
         },
-        "additionalProperties": false,
-        "type": "object",
         "required": [
           "session",
-          "outcome"
+          "kind",
+          "body"
         ],
-        "title": "ReportSend"
+        "additionalProperties": false
+      },
+      "NewAgent": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "purpose": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          }
+        },
+        "required": [
+          "title",
+          "purpose"
+        ],
+        "additionalProperties": false,
+        "description": "An agent to create directly under the user."
+      },
+      "Option": {
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "description": "The button text; unique within the ask."
+          },
+          "detail": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          }
+        },
+        "required": [
+          "label"
+        ],
+        "additionalProperties": false
       },
       "Session": {
+        "type": "object",
         "properties": {
           "id": {
             "type": "string",
-            "maxLength": 64,
             "minLength": 1,
-            "title": "Id",
-            "description": "Issued by the service."
+            "maxLength": 64,
+            "description": "Issued by the service; writes name it as `session`."
+          },
+          "agent": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
           },
           "client": {
             "type": "string",
-            "maxLength": 40,
             "minLength": 1,
+            "maxLength": 40,
             "pattern": "^[a-z0-9][a-z0-9._-]*$",
-            "title": "Client",
             "description": "The client kind, such as \"claude-code\" or \"codex\"."
           },
           "client_session_id": {
             "anyOf": [
               {
                 "type": "string",
-                "maxLength": 80,
-                "minLength": 1
+                "minLength": 1,
+                "maxLength": 80
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Client Session Id",
-            "description": "The client's own id for the session."
-          },
-          "title": {
-            "type": "string",
-            "maxLength": 200,
-            "minLength": 1,
-            "title": "Title"
-          },
-          "parent": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 64,
-                "minLength": 1
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Parent",
-            "description": "The parent session; null when the user is the parent."
-          },
-          "task": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 64,
-                "minLength": 1
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Task"
+            "description": "The client's own id for the conversation."
           },
           "machine": {
             "type": "string",
-            "maxLength": 80,
             "minLength": 1,
-            "title": "Machine"
+            "maxLength": 80
           },
-          "started_at": {
+          "attached_at": {
             "type": "string",
             "format": "date-time",
-            "title": "Started At"
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
           },
-          "archived_at": {
+          "detached_at": {
             "anyOf": [
               {
                 "type": "string",
-                "format": "date-time"
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Archived At"
+            "description": "Set when another session attached to the agent."
           }
         },
-        "additionalProperties": false,
-        "type": "object",
         "required": [
           "id",
+          "agent",
           "client",
           "client_session_id",
-          "title",
-          "parent",
-          "task",
           "machine",
-          "started_at",
-          "archived_at"
+          "attached_at",
+          "detached_at"
         ],
-        "title": "Session"
+        "additionalProperties": false
       },
-      "SessionArchive": {
+      "SessionAttach": {
+        "type": "object",
         "properties": {
-          "session": {
+          "agent": {
+            "description": "The agent to act for, from the brief its manager wrote.",
             "type": "string",
-            "maxLength": 64,
             "minLength": 1,
-            "title": "Session",
-            "description": "The session to archive."
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "session"
-        ],
-        "title": "SessionArchive"
-      },
-      "SessionArchiveResult": {
-        "properties": {
-          "session": {
-            "$ref": "#/components/schemas/Session"
+            "maxLength": 64
           },
-          "items": {
-            "items": {
-              "$ref": "#/components/schemas/Item"
-            },
-            "type": "array",
-            "title": "Items",
-            "description": "The session's open items."
+          "new_agent": {
+            "description": "Instead of agent: create an agent directly under the user and attach to it, when the user started this session with an appointment in words. Allowed only on the client session's first attach.",
+            "$ref": "#/components/schemas/NewAgent"
           },
-          "evidence": {
-            "items": {
-              "$ref": "#/components/schemas/Evidence"
-            },
-            "type": "array",
-            "title": "Evidence",
-            "description": "The evidence of the session's items."
-          },
-          "withdrawn_asks": {
-            "items": {
-              "$ref": "#/components/schemas/Ask"
-            },
-            "type": "array",
-            "title": "Withdrawn Asks",
-            "description": "The open asks that archiving withdrew."
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "session",
-          "items",
-          "evidence",
-          "withdrawn_asks"
-        ],
-        "title": "SessionArchiveResult",
-        "description": "The cleanup list for the manager that archives the session."
-      },
-      "SessionContext": {
-        "properties": {
           "client": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 40,
-                "minLength": 1,
-                "pattern": "^[a-z0-9][a-z0-9._-]*$"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Client",
-            "description": "Defaults to the client the transport names."
+            "description": "Defaults to the client the transport names.",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 40,
+            "pattern": "^[a-z0-9][a-z0-9._-]*$"
           },
           "client_session_id": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 80,
-                "minLength": 1
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Client Session Id",
-            "description": "Defaults to the one the transport carries."
+            "description": "Defaults to the one the transport carries.",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "machine": {
+            "description": "Defaults to the service's host name.",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
           }
         },
-        "additionalProperties": false,
+        "additionalProperties": false
+      },
+      "SessionContext": {
         "type": "object",
-        "title": "SessionContext"
+        "properties": {
+          "client": {
+            "description": "Defaults to the client the transport names.",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 40,
+            "pattern": "^[a-z0-9][a-z0-9._-]*$"
+          },
+          "client_session_id": {
+            "description": "Defaults to the one the transport carries.",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          }
+        },
+        "additionalProperties": false
       },
       "SessionContextResult": {
+        "type": "object",
         "properties": {
           "facts": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/SessionFacts"
+                "$ref": "#/components/schemas/Facts"
               },
               {
                 "type": "null"
               }
             ],
-            "description": "Null when no session was started with this client session id."
+            "description": "Null when no session with this client session id is attached."
           }
         },
-        "additionalProperties": false,
-        "type": "object",
         "required": [
           "facts"
         ],
-        "title": "SessionContextResult"
+        "additionalProperties": false
       },
-      "SessionFacts": {
+      "Status": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "running",
+              "waiting",
+              "blocked",
+              "review"
+            ]
+          },
+          "summary": {
+            "type": "string",
+            "maxLength": 2000,
+            "description": "Plain text; line breaks are kept."
+          },
+          "links": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Link"
+            }
+          },
+          "blockers": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80
+            },
+            "description": "Who unblocks the agent."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+          }
+        },
+        "required": [
+          "state",
+          "summary",
+          "links",
+          "blockers",
+          "updated_at"
+        ],
+        "additionalProperties": false,
+        "description": "The agent's status, set by its attached session."
+      },
+      "StatusSet": {
+        "type": "object",
         "properties": {
           "session": {
-            "$ref": "#/components/schemas/Session"
-          },
-          "parent": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/Session"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "task": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/Task"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "asks": {
-            "items": {
-              "$ref": "#/components/schemas/Ask"
-            },
-            "type": "array",
-            "title": "Asks",
-            "description": "The session's own asks that are open or answered."
-          },
-          "inbox": {
-            "items": {
-              "$ref": "#/components/schemas/Report"
-            },
-            "type": "array",
-            "title": "Inbox",
-            "description": "Reports to the session not yet acknowledged."
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "session",
-          "parent",
-          "task",
-          "asks",
-          "inbox"
-        ],
-        "title": "SessionFacts",
-        "description": "What a session acts on, facts only: the skill decides the session's role from them."
-      },
-      "SessionStart": {
-        "properties": {
-          "client": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 40,
-                "minLength": 1,
-                "pattern": "^[a-z0-9][a-z0-9._-]*$"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Client",
-            "description": "Defaults to the client the transport names."
-          },
-          "client_session_id": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 80,
-                "minLength": 1
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Client Session Id",
-            "description": "Defaults to the one the transport carries. Starting again with the same client and client session id resumes that session."
-          },
-          "title": {
             "type": "string",
-            "maxLength": 200,
             "minLength": 1,
-            "title": "Title"
-          },
-          "parent": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 64,
-                "minLength": 1
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Parent",
-            "description": "The parent session's id."
-          },
-          "task": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 64,
-                "minLength": 1
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Task"
-          },
-          "machine": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 80,
-                "minLength": 1
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Machine",
-            "description": "Defaults to the service's host name."
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "title"
-        ],
-        "title": "SessionStart"
-      },
-      "Task": {
-        "properties": {
-          "id": {
-            "type": "string",
-            "maxLength": 64,
-            "minLength": 1,
-            "title": "Id"
-          },
-          "title": {
-            "type": "string",
-            "maxLength": 200,
-            "minLength": 1,
-            "title": "Title"
-          },
-          "project": {
-            "type": "string",
-            "maxLength": 80,
-            "minLength": 1,
-            "title": "Project",
-            "description": "Free text naming where the work lives: a repo, an area."
-          },
-          "owner": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 64,
-                "minLength": 1
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Owner",
-            "description": "The session that owns the task; null when the user does."
-          },
-          "parent": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 64,
-                "minLength": 1
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Parent",
-            "description": "The task this one is part of."
+            "maxLength": 64
           },
           "state": {
             "type": "string",
             "enum": [
-              "open",
-              "closed"
-            ],
-            "title": "State"
+              "running",
+              "waiting",
+              "blocked",
+              "review"
+            ]
           },
-          "opened_at": {
+          "summary": {
+            "default": "",
+            "description": "Plain text, never a log; line breaks are kept.",
             "type": "string",
-            "format": "date-time",
-            "title": "Opened At"
+            "maxLength": 2000
           },
-          "closed_at": {
-            "anyOf": [
-              {
-                "type": "string",
-                "format": "date-time"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Closed At"
+          "links": {
+            "default": [],
+            "maxItems": 20,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Link"
+            }
+          },
+          "blockers": {
+            "default": [],
+            "maxItems": 10,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80
+            }
           }
         },
-        "additionalProperties": false,
-        "type": "object",
         "required": [
-          "id",
-          "title",
-          "project",
-          "owner",
-          "parent",
-          "state",
-          "opened_at",
-          "closed_at"
+          "session",
+          "state"
         ],
-        "title": "Task"
-      },
-      "TaskClose": {
-        "properties": {
-          "task": {
-            "type": "string",
-            "maxLength": 64,
-            "minLength": 1,
-            "title": "Task"
-          },
-          "session": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 64,
-                "minLength": 1
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Session",
-            "description": "The session closing the task; omit when the user closes it."
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "task"
-        ],
-        "title": "TaskClose"
-      },
-      "TaskOpen": {
-        "properties": {
-          "session": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 64,
-                "minLength": 1
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Session",
-            "description": "The session that owns the task; omit when the user opens it."
-          },
-          "title": {
-            "type": "string",
-            "maxLength": 200,
-            "minLength": 1,
-            "title": "Title"
-          },
-          "project": {
-            "type": "string",
-            "maxLength": 80,
-            "minLength": 1,
-            "title": "Project"
-          },
-          "parent": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 64,
-                "minLength": 1
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Parent"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "title",
-          "project"
-        ],
-        "title": "TaskOpen"
+        "additionalProperties": false
       }
     },
     "securitySchemes": {

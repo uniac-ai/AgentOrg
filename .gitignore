@@ -1,23 +1,7 @@
-# Byte-compiled and cached files
-__pycache__/
-*.py[cod]
-
-# Packaging
-build/
+# Dependencies and build output
+node_modules/
 dist/
-*.egg-info/
-.eggs/
-
-# Virtual environments
-.venv/
-venv/
-
-# Tool caches
-.pytest_cache/
-.ruff_cache/
-.mypy_cache/
-.coverage
-htmlcov/
+*.tsbuildinfo
 
 # Editors and OS
 .idea/
