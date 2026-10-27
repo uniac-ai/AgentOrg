@@ -15,12 +15,15 @@ import {
   ASK_WAIT_HELP,
   askWait,
   CALLER,
+  MCP_HELP,
   mcpCommand,
   openPage,
   print,
+  SERVE_HELP,
   SESSION_CONTEXT_HELP,
   serveCommand,
   sessionContext,
+  UI_HELP,
 } from "./commands.ts";
 import { helpOf, operationOf, requestOf, usage } from "./operations.ts";
 
@@ -41,18 +44,23 @@ async function run(argv: string[]): Promise<number> {
     process.stdout.write(`${VERSION}\n`);
     return 0;
   }
-  if (command === "serve") return serveCommand(argv.slice(1));
-  if (command === "mcp") return mcpCommand(argv.slice(1));
-  if (command === "ui" && (verb === undefined || verb.startsWith("-"))) return openPage();
+  // Help comes before anything a command does, so asking for it never acts.
+  const help = argv.includes("--help") || argv.includes("-h");
+  const show = (text: string) => {
+    process.stdout.write(`${text}\n`);
+    return 0;
+  };
+  if (command === "serve") return help ? show(SERVE_HELP) : serveCommand(argv.slice(1));
+  if (command === "mcp") return help ? show(MCP_HELP) : mcpCommand(argv.slice(1));
+  if (command === "ui" && (verb === undefined || verb.startsWith("-"))) {
+    return help ? show(UI_HELP) : openPage();
+  }
   const name = verb === undefined ? undefined : operationOf(command, verb);
   if (name === undefined) {
     process.stderr.write(`agentorg: unknown command ${argv.slice(0, 2).join(" ")}\n\n${usage()}\n`);
     return 2;
   }
-  if (rest.includes("--help") || rest.includes("-h")) {
-    process.stdout.write(`${helpOf(name, HELP[name])}\n`);
-    return 0;
-  }
+  if (help) return show(helpOf(name, HELP[name]));
   const request = requestOf(name, rest);
   if (name === "ask_wait") return askWait(request as RequestOf<"ask_wait">);
   if (name === "session_context") return sessionContext(request as RequestOf<"session_context">);

@@ -83,6 +83,7 @@ No operation subscribes. A session that needs an answer before it can go on may 
   - The MCP and API surfaces require a bearer token from a mode-600 file, and refuse any request that carries a browser `Origin` header.
   - The page signs in with a one-time link from `agentorg ui`, then uses an HttpOnly, SameSite=Strict cookie and CSRF tokens on every form. A strict Content-Security-Policy runs no scripts.
   - Separation between sessions and the user is by convention, made visible by the audit trail.
+  - Browsers share cookies for `127.0.0.1` across ports, so any local web server the same user runs receives the `agentorg_page` cookie. That is within the same-user trust above; isolating it would take a dedicated host name or HTTPS.
 - **CLI:**
   - generated from the contract, plus `serve`, `mcp`, `ui` and `ask wait`;
   - `ask wait` exits 0 when the ask is answered, 2 when it's withdrawn, and 1 on timeout or error;

@@ -9,7 +9,7 @@ import { parseArgs } from "node:util";
 import { serve as listen } from "@hono/node-server";
 import type { z } from "zod";
 import { createApp } from "../app.ts";
-import { port, remoteOperations, serviceUrl, Unavailable } from "../client.ts";
+import { DEFAULT_PORT, port, remoteOperations, serviceUrl, Unavailable } from "../client.ts";
 import type { Ask } from "../contract/index.ts";
 import { databasePath, ensureHome, ensureToken } from "../home.ts";
 import { runProxy } from "../mcp/proxy.ts";
@@ -78,11 +78,27 @@ export async function mcpCommand(args: string[]): Promise<number> {
   return 0;
 }
 
-/** Open the decisions page, signed in by a one-time link. `BROWSER` names the opener, if set. */
+export const SERVE_HELP = `usage: agentorg serve [--port <n>]
+
+Run the service on 127.0.0.1, at --port, else AGENTORG_PORT, else ${DEFAULT_PORT}. On first start it creates the agentorg home (AGENTORG_HOME, default ~/.local/share/agentorg) and a token file readable only by you. It logs to stderr and stops on SIGINT or SIGTERM.`;
+
+export const MCP_HELP = `usage: agentorg mcp --client <kind> [--client-session-env <variable>]
+
+Serve MCP over stdin and stdout for clients that only spawn stdio servers, performing each call over the service's API. --client names the client kind, and --client-session-env names the environment variable holding the client's own session id. It exits when the client closes stdin.`;
+
+export const UI_HELP = `usage: agentorg ui
+
+Mint a one-time link that signs a browser in to the decisions page, and print it. In a terminal it also opens the link, with BROWSER or the system's opener. The link works once, for five minutes. \`agentorg ui login-link\` prints the link as JSON.`;
+
+/**
+ * Print a one-time link that signs a browser in to the decisions page, and open it when run in a
+ * terminal, with `BROWSER` or the system's opener. Run from a script or a pipe, it only prints.
+ */
 export async function openPage(): Promise<number> {
   const link = await remoteOperations().ui_login_link({}, CALLER);
   const url = serviceUrl() + link.path;
   process.stdout.write(`${url}\n`);
+  if (!process.stdout.isTTY) return 0;
   const platform = process.platform;
   const opener =
     process.env.BROWSER ||
