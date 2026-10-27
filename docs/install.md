@@ -4,17 +4,29 @@ agentorg runs as one local service per user. Agents reach it over MCP, either th
 
 ## 1. Install the package
 
-agentorg needs Python 3.11 or later. Clone the repository and install it with [pipx](https://pipx.pypa.io):
+agentorg needs Node.js 22.13 or later. Clone the repository, build it, and install it globally with npm:
 
 ```bash
 git clone https://github.com/uniac-ai/agentorg
 ```
 
 ```bash
-pipx install ./agentorg
+cd agentorg
 ```
 
-pipx puts the `agentorg` command in `~/.local/bin`. Any installer that puts `agentorg` on your `PATH` works too. Later steps take the service files and the skills from the clone, so run them from the directory that holds it.
+```bash
+npm ci
+```
+
+```bash
+npm run build
+```
+
+```bash
+npm install -g .
+```
+
+npm links the clone into its global folder as `$(npm root -g)/@agentorg/cli` and puts the `agentorg` command in its global bin directory. Later steps take the service files and the skills from that folder. To upgrade, run `git pull`, `npm ci` and `npm run build` in the clone.
 
 ## 2. Run the service
 
@@ -22,32 +34,32 @@ pipx puts the `agentorg` command in `~/.local/bin`. Any installer that puts `age
 
 ### macOS (launchd)
 
-launchd expands neither `~` nor environment variables, so the plist in `service/` holds placeholders. These commands fill them in, install the plist as a user agent, and load it:
+launchd expands neither `~` nor environment variables, and it runs jobs with only the system directories on `PATH`, where it finds no `node` installed by Homebrew or a version manager. So the plist in the package's `service/` folder holds placeholders for the paths of `node`, `agentorg` and the agentorg home. These commands create the home readable by you only, since it holds the token and the database, then fill in the placeholders, install the plist as a user agent, and load it:
 
 ```bash
-mkdir -p ~/.local/share/agentorg/logs
+mkdir -p -m 700 ~/.local/share/agentorg ~/.local/share/agentorg/logs
 ```
 
 ```bash
-sed -e "s|@AGENTORG@|$(command -v agentorg)|" -e "s|@AGENTORG_HOME@|$HOME/.local/share/agentorg|" agentorg/service/agentorg.plist > ~/Library/LaunchAgents/agentorg.plist
+sed -e "s|@NODE@|$(command -v node)|" -e "s|@AGENTORG@|$(command -v agentorg)|" -e "s|@AGENTORG_HOME@|$HOME/.local/share/agentorg|" "$(npm root -g)/@agentorg/cli/service/agentorg.plist" > ~/Library/LaunchAgents/agentorg.plist
 ```
 
 ```bash
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/agentorg.plist
 ```
 
-launchd restarts the service whenever it exits and starts it at login. Its output goes to `~/.local/share/agentorg/logs/serve.log`. To stop it, run `launchctl bootout gui/$(id -u)/agentorg`.
+launchd restarts the service whenever it exits and starts it at login. Its output goes to `~/.local/share/agentorg/logs/serve.log`. To stop it, run `launchctl bootout gui/$(id -u)/agentorg`. The plist pins the paths of `node` and `agentorg` from when you filled it in, so after upgrading or switching Node.js, stop the service, fill in the plist again and load it.
 
 ### Linux (systemd)
 
-The unit runs `~/.local/bin/agentorg`. If `command -v agentorg` prints another path, change `ExecStart` in the copied file.
+The unit names `node` and `agentorg` by their absolute paths too, since the systemd user manager's `PATH` may hold neither:
 
 ```bash
 mkdir -p ~/.config/systemd/user
 ```
 
 ```bash
-cp agentorg/service/agentorg.service ~/.config/systemd/user/
+sed -e "s|@NODE@|$(command -v node)|" -e "s|@AGENTORG@|$(command -v agentorg)|" "$(npm root -g)/@agentorg/cli/service/agentorg.service" > ~/.config/systemd/user/agentorg.service
 ```
 
 ```bash
@@ -58,7 +70,7 @@ systemctl --user daemon-reload
 systemctl --user enable --now agentorg
 ```
 
-systemd restarts the service whenever it exits and starts it with your user session. Read its output with `journalctl --user -u agentorg`. To keep it running while you are logged out, run `loginctl enable-linger`.
+systemd restarts the service whenever it exits and starts it with your user session. Read its output with `journalctl --user -u agentorg`. To keep it running while you are logged out, run `loginctl enable-linger`. The unit pins the same paths, so after upgrading or switching Node.js, fill it in again and run `systemctl --user daemon-reload` and `systemctl --user restart agentorg`.
 
 ### The decisions page
 
@@ -80,7 +92,7 @@ The plugin adds:
 
 - **The skills** `agentorg:task-execution` and `agentorg:reporting`.
 - **The MCP server** `agentorg`, over stdio through `agentorg mcp`. The proxy reads the token from the agentorg home, and Claude Code's session id from the `CLAUDE_CODE_SESSION_ID` variable that Claude Code sets.
-- **A SessionStart hook.** When the session is already registered with agentorg, the hook prints its facts at start, resume, clear and compaction: its parent, its task, its open asks with any answers, and reports not yet acknowledged. A session not yet registered gets nothing, and neither does any session while the service is down. Sessions register by calling `session_start`, as the task-execution skill tells them to.
+- **A SessionStart hook.** When the session is already attached to an agent, the hook prints its facts at start, resume, clear and compaction: the agent, its manager, its children with their status, the open asks addressed to it, its own asks with any answers, and its inbox. A session not yet attached gets nothing, and neither does any session while the service is down. Sessions attach by calling `session_attach`, as the task-execution skill tells them to.
 
 The plugin carries no version number, so each install takes the repository's latest commit, and `claude plugin update agentorg@agentorg` brings later changes to the skills. `claude plugin validate` warns about the missing version; that is expected.
 
@@ -105,14 +117,14 @@ Add one of the two tables in [`adapters/codex/config.toml`](../adapters/codex/co
 - **stdio**, the default: Codex starts `agentorg mcp`. Codex passes a stdio server only a fixed set of environment variables, among them `HOME`, which is all the proxy needs to find the token. If you set `AGENTORG_HOME` or `AGENTORG_URL`, list them in the table's `env_vars`.
 - **HTTP**: Codex connects to the service and sends the token from the `AGENTORG_TOKEN` variable, set as shown above.
 
-Codex loads skills from `~/.agents/skills` and follows symlinked skill folders. Link the two skills from the clone, so `git pull` there updates them:
+Codex loads skills from `~/.agents/skills` and follows symlinked skill folders. Link the two skills from the installed package, so they change only when agentorg is upgraded:
 
 ```bash
 mkdir -p ~/.agents/skills
 ```
 
 ```bash
-ln -s "$PWD/agentorg/skills/task-execution" "$PWD/agentorg/skills/reporting" ~/.agents/skills/
+ln -s "$(npm root -g)/@agentorg/cli/skills/task-execution" "$(npm root -g)/@agentorg/cli/skills/reporting" ~/.agents/skills/
 ```
 
 ## 5. Connect any other MCP client
@@ -121,4 +133,4 @@ Point the client at the service's Streamable HTTP endpoint, `http://127.0.0.1:87
 
 A client that only starts stdio servers runs `agentorg mcp --client <name>` instead. If the client puts its session id in an environment variable, add `--client-session-env <variable>`.
 
-Agents that load skills get them from `skills/` in the clone.
+Agents that load skills get them from the `skills/` folder in `$(npm root -g)/@agentorg/cli`.
