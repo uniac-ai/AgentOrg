@@ -1,6 +1,6 @@
 {
   "name": "@agentorg/cli",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "description": "A local service that organizes AI agent sessions like a company: agents, asks to the manager, and reports up",
   "license": "MIT",
   "repository": {
@@ -16,10 +16,13 @@
   },
   "files": [
     "dist/src",
-    "openapi.json"
+    "openapi.json",
+    "service",
+    "skills"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "prepack": "npm run build",
     "check": "biome check .",
     "test": "npm run build && node --test \"dist/test/**/*.test.js\"",
     "openapi": "npm run build && node dist/src/api/print-openapi.js > openapi.json"
