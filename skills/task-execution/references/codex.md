@@ -2,6 +2,8 @@
 
 Codex separates subagents within the current task from user-owned app tasks. The current host's tool contracts define exact arguments and availability; below, `collaboration` names the subagent tools and `mcp__codex_app__*` the app tools. [OpenAI's subagent documentation](https://learn.chatgpt.com/docs/agent-configuration/subagents) explains the delegation and context model.
 
+**Attach with the thread id.** Codex sets the thread id only in the shell commands it runs, never for its MCP servers. So a session reads it with `echo $CODEX_THREAD_ID` and passes it as `client_session_id` to `session_attach`, whether attaching by agent id or with `new_agent`, and to `session_context`.
+
 ## Subagents within the current task
 
 A subagent is a child.
