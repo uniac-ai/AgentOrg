@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -94,4 +95,18 @@ test("with no service ever started, the proxy still starts and each call says ho
   } finally {
     rmSync(home, { recursive: true });
   }
+});
+
+test("the proxy exits 0 when its client closes stdin", async () => {
+  const child = spawn(process.execPath, [BIN, "mcp", "--client=x"], {
+    env: { ...process.env, AGENTORG_TOKEN: "" },
+  });
+  let stderr = "";
+  child.stderr.on("data", (chunk) => {
+    stderr += chunk;
+  });
+  child.stdin.end();
+  const code = await new Promise((resolve) => child.on("close", resolve));
+  assert.equal(code, 0, stderr);
+  assert.doesNotMatch(stderr, /unsettled/);
 });

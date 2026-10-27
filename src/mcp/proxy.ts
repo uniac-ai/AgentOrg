@@ -12,12 +12,17 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import type { Caller, Operations } from "../operations/index.ts";
 import { buildServer } from "./server.ts";
 
-/** Serve MCP on stdio until the client closes it. */
+/**
+ * Serve MCP on stdio until the client closes it. The SDK's stdio transport does not notice stdin
+ * ending, so the end of stdin is what closes the server.
+ */
 export async function runProxy(operations: Operations, caller: Caller): Promise<void> {
   const server = buildServer(operations, { caller });
-  const closed = new Promise<void>((resolve) => {
+  const ended = new Promise<void>((resolve) => {
+    process.stdin.once("end", resolve);
     server.onclose = () => resolve();
   });
   await server.connect(new StdioServerTransport());
-  await closed;
+  await ended;
+  await server.close();
 }
