@@ -159,7 +159,7 @@ test("requests from web pages are refused even with the token", async () => {
 
 test("the page and the OpenAPI document need no token", async () => {
   const { app } = recording(() => ({}));
-  assert.equal((await app.request("/")).status, 404);
+  assert.equal((await app.request("/")).headers.get("www-authenticate"), null);
   const document = await app.request("/openapi.json");
   assert.equal(document.status, 200);
   assert.equal(((await document.json()) as { info: { title: string } }).info.title, "agentorg");

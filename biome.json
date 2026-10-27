@@ -1,10 +1,23 @@
 {
   "$schema": "https://biomejs.dev/schemas/2.6.3/schema.json",
   "files": {
-    "includes": ["src/**", "test/**", "*.json", "!package-lock.json", "!openapi.json", "!!adapters"]
+    "includes": [
+      "src/**",
+      "test/**",
+      "web/**",
+      "*.json",
+      "!package-lock.json",
+      "!openapi.json",
+      "!!adapters"
+    ]
   },
   "formatter": {
     "indentStyle": "space",
     "lineWidth": 100
+  },
+  "css": {
+    "parser": {
+      "tailwindDirectives": true
+    }
   }
 }
