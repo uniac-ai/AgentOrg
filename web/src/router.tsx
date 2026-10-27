@@ -5,6 +5,7 @@ import { createRootRoute, createRoute, createRouter, redirect } from "@tanstack/
 import { AgentControl } from "./control/agent.tsx";
 import { InboxControl } from "./control/inbox.tsx";
 import { ShellControl } from "./control/shell.tsx";
+import { ThreadControl } from "./control/thread.tsx";
 import { NotFoundView } from "./views/states.tsx";
 
 const root = createRootRoute({ component: ShellControl, notFoundComponent: NotFoundView });
@@ -25,7 +26,25 @@ const person = createRoute({
   component: AgentControl,
 });
 
-export const router = createRouter({ routeTree: root.addChildren([home, inbox, person]) });
+const inboxThread = createRoute({
+  getParentRoute: () => inbox,
+  path: "asks/$askId",
+  component: ThreadControl,
+});
+
+const personThread = createRoute({
+  getParentRoute: () => person,
+  path: "asks/$askId",
+  component: ThreadControl,
+});
+
+export const router = createRouter({
+  routeTree: root.addChildren([
+    home,
+    inbox.addChildren([inboxThread]),
+    person.addChildren([personThread]),
+  ]),
+});
 
 declare module "@tanstack/react-router" {
   interface Register {
