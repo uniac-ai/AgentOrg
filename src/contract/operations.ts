@@ -50,6 +50,8 @@ import {
   AskListResult,
   Facts,
   SessionContextResult,
+  View,
+  ViewAsUser,
 } from "./results.ts";
 import { SessionAttach, SessionContext } from "./session.ts";
 import { LoginLink, LoginLinkCreate } from "./ui.ts";
@@ -108,6 +110,14 @@ Closing detaches its session and withdraws its open asks. Only its manager's ses
     response: AgentDetail,
     description:
       "Read one agent with its sessions, the asks it opened and the asks addressed to it, and its messages. It marks nothing read.",
+  },
+  view_as_user: {
+    kind: "user",
+    writes: false,
+    request: ViewAsUser,
+    response: View,
+    description:
+      "See any entity, the user or an agent, as it sees itself: what waits on it, its own asks, its direct reports and manager, and its history. It marks nothing read.",
   },
   session_attach: {
     kind: "agent",

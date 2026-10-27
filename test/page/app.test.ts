@@ -8,6 +8,7 @@ test("the app's paths serve its index.html under a policy that runs only its own
   for (const path of [
     "/",
     "/inbox",
+    "/asks/ask_1",
     "/inbox/asks/ask_1",
     "/people/agt_1",
     "/people/agt_1/asks/ask_1",
@@ -25,7 +26,7 @@ test("the app's paths serve its index.html under a policy that runs only its own
   assert.match(policy, /script-src 'self'(;|$)/);
   assert.match(policy, /frame-ancestors 'none'/);
   assert.doesNotMatch(policy, /unsafe-inline|unsafe-eval/);
-  assert.deepEqual(APP_PATHS, ["/", "/inbox", "/inbox/*", "/people/*", "/activity"]);
+  assert.deepEqual(APP_PATHS, ["/", "/asks/*", "/people/*", "/activity", "/inbox", "/inbox/*"]);
 });
 
 test("the built index.html loads only scripts and styles from the app's own assets", async () => {

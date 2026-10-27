@@ -10,6 +10,7 @@ import type {
   AskListResult,
   AuditListResult,
   Message,
+  View,
 } from "../contract/index.ts";
 
 export type AgentRecord = z.output<typeof Agent>;
@@ -21,6 +22,7 @@ export type AskList = z.output<typeof AskListResult>;
 export type MessageRecord = z.output<typeof Message>;
 export type Activity = z.output<typeof AuditListResult>;
 export type ClosedAgent = z.output<typeof AgentCloseResult>;
+export type EntityView = z.output<typeof View>;
 
 /** `GET /ui/api/session`: the page session the cookie names, with the token every write carries. */
 export interface PageBootstrap {
@@ -28,12 +30,11 @@ export interface PageBootstrap {
   expires_at: string;
 }
 
-/** `GET /ui/api/inbox`: what waits on the user. */
-export interface Inbox {
-  /** Open asks addressed to the user, oldest first. */
-  asks: AskRecord[];
-  /** Unread notes and unacknowledged reports to the user, oldest first. */
-  messages: MessageRecord[];
+/** `GET /ui/api/activity`: the audit trail without sign-in links, each status set with its summary. */
+export interface PageActivity {
+  entries: (Activity["entries"][number] & { summary?: string | null })[];
+  /** Whether older entries may exist beyond these. */
+  more: boolean;
 }
 
 /** The header every write carries, holding the page session's CSRF token. */

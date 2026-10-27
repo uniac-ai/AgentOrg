@@ -1,7 +1,6 @@
 // One line per thing that happened to an agent: a status set, an ask opened or answered, a
 // message sent or received. Asks open in the thread beside the pane.
 
-import { Link } from "@tanstack/react-router";
 import {
   ArrowRightIcon,
   CheckIcon,
@@ -10,42 +9,22 @@ import {
   StickyNoteIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { AgentRecord, AskRecord } from "../../../src/page/types.ts";
+import type { AgentRecord } from "../../../src/page/types.ts";
 import type { FeedEntry } from "../model/activity.ts";
+import { AskLink } from "./links.tsx";
 import { SR, StateShape } from "./marks.tsx";
 import { nameOf, Route } from "./thread.tsx";
 import { Ago } from "./time.tsx";
 
 const firstLine = (text: string) => text.split("\n")[0] ?? text;
 
-function AskLink({
-  ask,
-  agent,
-  children,
-}: {
-  ask: AskRecord;
-  agent: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <Link
-      data-row
-      to="/people/$agentId/asks/$askId"
-      params={{ agentId: agent, askId: ask.id }}
-      className="flex min-w-0 flex-1 items-start gap-2.5 rounded-md outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
-    >
-      {children}
-    </Link>
-  );
-}
-
 function Line({
   entry,
-  agent,
+  entity,
   agents,
 }: {
   entry: FeedEntry;
-  agent: AgentRecord;
+  entity: AgentRecord | null;
   agents: ReadonlyMap<string, AgentRecord>;
 }) {
   switch (entry.kind) {
@@ -61,7 +40,11 @@ function Line({
     }
     case "asked":
       return (
-        <AskLink ask={entry.ask} agent={agent.id}>
+        <AskLink
+          ask={entry.ask}
+          entity={entity}
+          className="min-w-0 flex-1 hover:bg-transparent hover:underline"
+        >
           <MessageCircleQuestionIcon
             aria-hidden="true"
             className="mt-0.5 size-4 shrink-0 text-state-waiting"
@@ -77,7 +60,11 @@ function Line({
     case "answered": {
       const answer = entry.ask.answer;
       return (
-        <AskLink ask={entry.ask} agent={agent.id}>
+        <AskLink
+          ask={entry.ask}
+          entity={entity}
+          className="min-w-0 flex-1 hover:bg-transparent hover:underline"
+        >
           <CheckIcon aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-state-closed" />
           <span className="flex min-w-0 flex-col">
             <span>
@@ -114,11 +101,11 @@ function Line({
 
 export function Feed({
   entries,
-  agent,
+  entity,
   agents,
 }: {
   entries: FeedEntry[];
-  agent: AgentRecord;
+  entity: AgentRecord | null;
   agents: ReadonlyMap<string, AgentRecord>;
 }) {
   return (
@@ -129,7 +116,7 @@ export function Feed({
           key={`${entry.kind}-${entry.at}-${index}`}
           className={cn("flex items-start gap-3 border-l py-2 pl-4 text-sm", index === 0 && "pt-0")}
         >
-          <Line entry={entry} agent={agent} agents={agents} />
+          <Line entry={entry} entity={entity} agents={agents} />
           <Ago at={entry.at} className="shrink-0 text-xs text-muted-foreground tabular-nums" />
         </li>
       ))}

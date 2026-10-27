@@ -4,22 +4,24 @@
  */
 
 import { useMutation } from "@tanstack/react-query";
-import type { AskRecord, ClosedAgent, Inbox, MessageRecord } from "../../../src/page/types.ts";
+import type { AskRecord, ClosedAgent, EntityView, MessageRecord } from "../../../src/page/types.ts";
 import { request } from "./client.ts";
 import { queryClient } from "./queries.ts";
 
 const path = (...parts: string[]) => `/${parts.map(encodeURIComponent).join("/")}`;
 
-/** Take something out of the inbox while its write is in flight; the returned value puts it back. */
-async function withoutInInbox(keep: (inbox: Inbox) => Inbox) {
-  await queryClient.cancelQueries({ queryKey: ["inbox"] });
-  const before = queryClient.getQueryData<Inbox>(["inbox"]);
-  if (before) queryClient.setQueryData<Inbox>(["inbox"], keep(before));
+type Snapshot = [readonly unknown[], EntityView | undefined][];
+
+/** Take something out of every view while its write is in flight; the snapshot puts it back. */
+async function without(drop: (view: EntityView) => EntityView): Promise<Snapshot> {
+  await queryClient.cancelQueries({ queryKey: ["view"] });
+  const before = queryClient.getQueriesData<EntityView>({ queryKey: ["view"] });
+  queryClient.setQueriesData<EntityView>({ queryKey: ["view"] }, (view) => view && drop(view));
   return before;
 }
 
-function restore(before: Inbox | undefined) {
-  if (before) queryClient.setQueryData(["inbox"], before);
+function restore(before: Snapshot | undefined) {
+  for (const [key, view] of before ?? []) queryClient.setQueryData(key, view);
 }
 
 const refetch = () => queryClient.invalidateQueries();
@@ -35,7 +37,10 @@ export function useAnswer() {
     mutationFn: ({ ask, choice, words }: AnswerInput) =>
       request<AskRecord>(path("asks", ask, "answer"), { body: { choice, words } }),
     onMutate: ({ ask }) =>
-      withoutInInbox((inbox) => ({ ...inbox, asks: inbox.asks.filter((a) => a.id !== ask) })),
+      without((view) => ({
+        ...view,
+        asks_to_answer: view.asks_to_answer.filter((open) => open.id !== ask),
+      })),
     onSuccess: (answered) => queryClient.setQueryData(["ask", answered.id], answered),
     onError: (_error, _input, before) => restore(before),
     onSettled: refetch,
@@ -47,10 +52,7 @@ function useMessageWrite(verb: "ack" | "read") {
     mutationFn: (message: string) =>
       request<MessageRecord>(path("messages", message, verb), { body: {} }),
     onMutate: (message) =>
-      withoutInInbox((inbox) => ({
-        ...inbox,
-        messages: inbox.messages.filter((m) => m.id !== message),
-      })),
+      without((view) => ({ ...view, inbox: view.inbox.filter((m) => m.id !== message) })),
     onError: (_error, _message, before) => restore(before),
     onSettled: refetch,
   });

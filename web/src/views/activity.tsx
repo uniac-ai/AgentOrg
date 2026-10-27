@@ -23,7 +23,6 @@ const VERBS: Record<string, string> = {
   message_ack: "acknowledged a report",
   message_ack_as_user: "acknowledged a report",
   message_read_as_user: "read a note",
-  ui_login_link: "made a sign-in link",
 };
 
 function Target({ entry, model }: { entry: ActivityEntry; model: ActivityModel }) {
@@ -75,6 +74,11 @@ function Line({ entry, model }: { entry: ActivityEntry; model: ActivityModel }) 
         <span className="font-medium">{actor}</span>
         <span className="text-muted-foreground">{VERBS[entry.operation] ?? entry.operation}</span>
         <Target entry={entry} model={model} />
+        {entry.summary ? (
+          <span className="min-w-0 basis-full truncate text-muted-foreground sm:basis-auto">
+            {entry.summary}
+          </span>
+        ) : null}
         {entry.outcome !== "ok" ? (
           <span className="text-xs text-destructive">{entry.outcome}</span>
         ) : null}

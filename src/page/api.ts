@@ -13,7 +13,7 @@ import { errorResponse } from "../api/index.ts";
 import { OPERATIONS, type OperationName } from "../contract/index.ts";
 import type { AppEnv } from "../http.ts";
 import { type Caller, Invalid, invalid, OperationError } from "../operations/index.ts";
-import { CSRF_HEADER, type Inbox, type MessageRecord, type PageBootstrap } from "./types.ts";
+import { CSRF_HEADER, type PageActivity, type PageBootstrap } from "./types.ts";
 
 export const COOKIE = "agentorg_page";
 const CALLER: Caller = { channel: "page" };
@@ -40,12 +40,6 @@ async function body(c: Context<PageEnv>): Promise<object> {
     throw new Invalid("the body must be a JSON object");
   }
   return value;
-}
-
-/** A note waits on the user until read; a report, until acknowledged. */
-export function waitsOnUser(message: MessageRecord): boolean {
-  if (message.to !== null) return false;
-  return message.kind === "report" ? message.acknowledged_at === null : message.read_at === null;
 }
 
 export function pageApi(): Hono<PageEnv> {
@@ -81,31 +75,47 @@ export function pageApi(): Hono<PageEnv> {
   });
 
   api.get("/agents", (c) => run(c, "agent_list", { include_closed: true }));
-  api.get("/agents/:agent", (c) => run(c, "agent_get", { agent: c.req.param("agent") }));
+  api.get("/view/:entity", (c) => {
+    const entity = c.req.param("entity");
+    return run(c, "view_as_user", { agent: entity === "user" ? null : entity });
+  });
   api.get("/asks", (c) => {
     const state = c.req.query("state");
     return run(c, "ask_list", state === "all" ? { state: null } : { state });
   });
   api.get("/asks/:ask", (c) => run(c, "ask_get", { ask: c.req.param("ask") }));
-  api.get("/activity", (c) => {
+  /** The audit trail without the page's own sign-in links, each status set with its summary. */
+  api.get("/activity", async (c) => {
     const limit = c.req.query("limit");
-    return run(c, "audit_list", limit === undefined ? {} : { limit: Number(limit) });
-  });
-
-  api.get("/inbox", async (c) => {
-    const service = c.var.service;
-    const [{ agents }, { asks }] = await Promise.all([
-      service.agent_list({ include_closed: false }, CALLER),
-      service.ask_list({ state: "open" }, CALLER),
-    ]);
-    const topLevel = agents.filter(({ agent }) => agent.manager === null);
-    const details = await Promise.all(
-      topLevel.map(({ agent }) => service.agent_get({ agent: agent.id }, CALLER)),
+    const request = OPERATIONS.audit_list.request.safeParse(
+      limit === undefined ? {} : { limit: Number(limit) },
     );
-    const messages = details
-      .flatMap((detail) => detail.messages.filter(waitsOnUser))
-      .sort((a, b) => a.sent_at.localeCompare(b.sent_at));
-    return c.json({ asks: asks.filter((ask) => ask.to === null), messages } satisfies Inbox);
+    if (!request.success) throw invalid(request.error.issues);
+    const service = c.var.service;
+    const { entries } = await service.audit_list(request.data, CALLER);
+    const setters = entries.filter((entry) => entry.operation === "status_set" && entry.agent);
+    const agents = [...new Set(setters.map((entry) => entry.agent as string))];
+    const statuses = (
+      await Promise.all(agents.map((agent) => service.agent_get({ agent }, CALLER)))
+    ).flatMap((detail) => detail.status_history);
+    // A status's audit line is written just after the status, by the same session.
+    const summaryOf = (entry: (typeof entries)[number]) =>
+      statuses
+        .filter((status) => status.session === entry.session && status.at <= entry.at)
+        .reduce<(typeof statuses)[number] | undefined>(
+          (latest, status) => (latest && latest.at > status.at ? latest : status),
+          undefined,
+        )?.summary;
+    return c.json({
+      entries: entries
+        .filter((entry) => entry.operation !== "ui_login_link")
+        .map((entry) =>
+          entry.operation === "status_set"
+            ? { ...entry, summary: summaryOf(entry) ?? null }
+            : entry,
+        ),
+      more: entries.length === request.data.limit,
+    } satisfies PageActivity);
   });
 
   api.post("/asks/:ask/answer", async (c) =>

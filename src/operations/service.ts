@@ -200,21 +200,52 @@ export class StoreService implements Service {
 
   agent_get: Op<"agent_get"> = async (request) => {
     const agent = this.found("agents", request.agent);
+    const { asks, ...history } = this.history(agent.id);
     return {
       agent,
-      own_asks: this.store.select("asks", "agent = ?", [agent.id]),
-      addressed_asks: this.store.select("asks", `"to" = ?`, [agent.id]),
-      messages: this.store.select("messages", `"from" = ? OR "to" = ?`, [agent.id, agent.id]),
-      sessions: this.store.select("sessions", "agent = ?", [agent.id], "rowid DESC"),
+      own_asks: asks.filter((ask) => ask.agent === agent.id),
+      addressed_asks: asks.filter((ask) => ask.to === agent.id),
+      ...history,
+    };
+  };
+
+  view_as_user: Op<"view_as_user"> = async (request) => ({
+    ...this.view(request.agent),
+    history: this.history(request.agent),
+  });
+
+  /**
+   * What an entity sees, the user (null) or an agent: itself, its manager, its direct reports,
+   * the open asks addressed to it, its own asks and its inbox. An attaching session gets the same,
+   * as its facts, so the user and every agent see the same structure.
+   */
+  private view(agentId: string | null) {
+    const agent = agentId === null ? null : this.found("agents", agentId);
+    return {
+      agent,
+      manager: agent?.manager ? this.found("agents", agent.manager) : null,
+      children: this.store.select("agents", "manager IS ? AND state != 'closed'", [agentId]),
+      asks_to_answer: this.store.select("asks", `"to" IS ? AND state = 'open'`, [agentId]),
+      own_asks: this.store.select("asks", "agent IS ? AND state != 'withdrawn'", [agentId]),
+      inbox: this.inbox(agentId),
+    };
+  }
+
+  /** Everything that happened to an entity: its asks both ways, its messages, sessions and statuses. */
+  private history(agentId: string | null) {
+    return {
+      asks: this.store.select("asks", `agent IS ? OR "to" IS ?`, [agentId, agentId]),
+      messages: this.store.select("messages", `"from" IS ? OR "to" IS ?`, [agentId, agentId]),
+      sessions: this.store.select("sessions", "agent IS ?", [agentId], "rowid DESC"),
       status_history: this.store.select(
         "status_history",
-        "session IN (SELECT id FROM sessions WHERE agent = ?)",
-        [agent.id],
+        "session IN (SELECT id FROM sessions WHERE agent IS ?)",
+        [agentId],
         "rowid DESC",
         STATUS_HISTORY_MAX,
       ),
     };
-  };
+  }
 
   // Sessions
 
@@ -306,16 +337,9 @@ export class StoreService implements Service {
   }
 
   private facts(session: SessionRecord): ResponseOf<"session_attach"> {
-    const agent = this.found("agents", session.agent);
-    return {
-      session,
-      agent,
-      manager: agent.manager === null ? null : this.found("agents", agent.manager),
-      children: this.store.select("agents", "manager = ? AND state != 'closed'", [agent.id]),
-      asks_to_answer: this.store.select("asks", `"to" = ? AND state = 'open'`, [agent.id]),
-      own_asks: this.store.select("asks", "agent = ? AND state != 'withdrawn'", [agent.id]),
-      inbox: this.inbox(agent.id),
-    };
+    const { agent, ...view } = this.view(session.agent);
+    if (agent === null) throw new NotFound(`session ${session.id} has no agent`);
+    return { session, agent, ...view };
   }
 
   // Status
@@ -507,11 +531,11 @@ export class StoreService implements Service {
     };
   };
 
-  /** Unread messages to the agent, and reports to it not yet acknowledged. */
-  private inbox(agentId: string): MessageRecord[] {
+  /** Unread messages to the agent, or to the user (null), and reports to it not yet acknowledged. */
+  private inbox(agentId: string | null): MessageRecord[] {
     return this.store.select(
       "messages",
-      `"to" = ? AND (read_at IS NULL OR (kind = 'report' AND acknowledged_at IS NULL))`,
+      `"to" IS ? AND (read_at IS NULL OR (kind = 'report' AND acknowledged_at IS NULL))`,
       [agentId],
     );
   }

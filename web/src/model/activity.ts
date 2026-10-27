@@ -1,34 +1,11 @@
 /**
- * One agent's work over time, and what waits on it: the pinned items an agent's pane leads with,
- * the feed below them, and the chain of asks an ask carries up.
+ * What happened to an entity, the user or an agent, as the feed below its pinned items; and the
+ * chain of asks an ask carries up.
  */
 
-import type { AgentFull, AskRecord, MessageRecord } from "../../../src/page/types.ts";
+import type { AskRecord, EntityView, MessageRecord } from "../../../src/page/types.ts";
 
-type StatusEntry = AgentFull["status_history"][number];
-
-/** What waits on an agent: open asks addressed to it, then unread messages and unreviewed reports to it. */
-export interface Pending {
-  asks: AskRecord[];
-  messages: MessageRecord[];
-}
-
-export function waitsOnRecipient(message: MessageRecord): boolean {
-  return message.kind === "report" ? message.acknowledged_at === null : message.read_at === null;
-}
-
-/** Oldest first, so the item that has waited longest leads. */
-export function pending(detail: AgentFull): Pending {
-  const id = detail.agent.id;
-  return {
-    asks: detail.addressed_asks
-      .filter((ask) => ask.state === "open")
-      .sort((a, b) => a.opened_at.localeCompare(b.opened_at)),
-    messages: detail.messages
-      .filter((message) => message.to === id && waitsOnRecipient(message))
-      .sort((a, b) => a.sent_at.localeCompare(b.sent_at)),
-  };
-}
+type StatusEntry = EntityView["history"]["status_history"][number];
 
 export type FeedEntry =
   | { kind: "status"; at: string; status: StatusEntry }
@@ -37,17 +14,23 @@ export type FeedEntry =
   | { kind: "message"; at: string; message: MessageRecord };
 
 /**
- * What happened to an agent, newest first: the statuses its sessions set, each ask it opened or
+ * What happened to an entity, newest first: the statuses its sessions set, each ask it opened or
  * was sent and each answer to one, and each message it sent or received. Its current status,
- * and what still waits on it, show above the feed, so they are left out here.
+ * what still waits on it and its own asks still open show above the feed, so they are left out here.
  */
-export function feed(detail: AgentFull): FeedEntry[] {
-  const waiting = pending(detail);
-  const pinned = new Set([...waiting.asks, ...waiting.messages].map((record) => record.id));
-  const asks = [...detail.own_asks, ...detail.addressed_asks];
+export function feed(view: EntityView): FeedEntry[] {
+  const pinned = new Set(
+    [
+      ...view.asks_to_answer,
+      ...view.own_asks.filter((ask) => ask.state === "open"),
+      ...view.inbox,
+    ].map((record) => record.id),
+  );
+  const current = view.agent?.status?.updated_at;
+  const { asks, messages, status_history } = view.history;
   const entries: FeedEntry[] = [
-    ...detail.status_history
-      .filter((status) => status.at !== detail.agent.status?.updated_at)
+    ...status_history
+      .filter((status) => status.at !== current)
       .map((status) => ({ kind: "status" as const, at: status.at, status })),
     ...asks
       .filter((ask) => !pinned.has(ask.id))
@@ -55,7 +38,7 @@ export function feed(detail: AgentFull): FeedEntry[] {
     ...asks.flatMap((ask) =>
       ask.answer ? [{ kind: "answered" as const, at: ask.answer.answered_at, ask }] : [],
     ),
-    ...detail.messages
+    ...messages
       .filter((message) => !pinned.has(message.id))
       .map((message) => ({ kind: "message" as const, at: message.sent_at, message })),
   ];

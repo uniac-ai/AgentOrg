@@ -22,7 +22,7 @@ import { COOKIE, pageApi } from "./api.ts";
 const BUILT = fileURLToPath(new URL("../../page", import.meta.url));
 
 /** The app's own paths; each serves `index.html`, and the app's router picks the view. */
-export const APP_PATHS = ["/", "/inbox", "/inbox/*", "/people/*", "/activity"];
+export const APP_PATHS = ["/", "/asks/*", "/people/*", "/activity", "/inbox", "/inbox/*"];
 
 export const PAGE_HEADERS = {
   "Content-Security-Policy": [
