@@ -48,7 +48,7 @@ sed -e "s|@NODE@|$(command -v node)|" -e "s|@AGENTORG@|$(command -v agentorg)|" 
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/agentorg.plist
 ```
 
-launchd restarts the service whenever it exits and starts it at login. Its output goes to `~/.local/share/agentorg/logs/serve.log`. To stop it, run `launchctl bootout gui/$(id -u)/agentorg`. After switching to another Node.js installation, stop the service, then fill in the plist again and load it.
+launchd restarts the service whenever it exits and starts it at login. Its output goes to `~/.local/share/agentorg/logs/serve.log`. To stop it, run `launchctl bootout gui/$(id -u)/agentorg`. The plist pins the paths of `node` and `agentorg` from when you filled it in, so after upgrading or switching Node.js, stop the service, fill in the plist again and load it.
 
 ### Linux (systemd)
 
@@ -70,7 +70,7 @@ systemctl --user daemon-reload
 systemctl --user enable --now agentorg
 ```
 
-systemd restarts the service whenever it exits and starts it with your user session. Read its output with `journalctl --user -u agentorg`. To keep it running while you are logged out, run `loginctl enable-linger`. After switching to another Node.js installation, fill in the unit again and run `systemctl --user daemon-reload` and `systemctl --user restart agentorg`.
+systemd restarts the service whenever it exits and starts it with your user session. Read its output with `journalctl --user -u agentorg`. To keep it running while you are logged out, run `loginctl enable-linger`. The unit pins the same paths, so after upgrading or switching Node.js, fill it in again and run `systemctl --user daemon-reload` and `systemctl --user restart agentorg`.
 
 ### The decisions page
 
