@@ -19,7 +19,8 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
-          cache: npm
+      # No Actions cache: a release installs only from the lockfile, never from a cache that
+      # other workflow runs can write.
       - name: Install
         run: npm ci
       - name: Build and test
