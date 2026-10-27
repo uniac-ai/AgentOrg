@@ -38,15 +38,17 @@ export type FeedEntry =
 
 /**
  * What happened to an agent, newest first: the statuses its sessions set, each ask it opened or
- * was sent and each answer to one, and each message it sent or received. What still waits on it
- * is pinned above the feed, so it is left out here.
+ * was sent and each answer to one, and each message it sent or received. Its current status,
+ * and what still waits on it, show above the feed, so they are left out here.
  */
 export function feed(detail: AgentFull): FeedEntry[] {
   const waiting = pending(detail);
   const pinned = new Set([...waiting.asks, ...waiting.messages].map((record) => record.id));
   const asks = [...detail.own_asks, ...detail.addressed_asks];
   const entries: FeedEntry[] = [
-    ...detail.status_history.map((status) => ({ kind: "status" as const, at: status.at, status })),
+    ...detail.status_history
+      .filter((status) => status.at !== detail.agent.status?.updated_at)
+      .map((status) => ({ kind: "status" as const, at: status.at, status })),
     ...asks
       .filter((ask) => !pinned.has(ask.id))
       .map((ask) => ({ kind: "asked" as const, at: ask.opened_at, ask })),

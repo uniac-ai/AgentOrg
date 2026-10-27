@@ -2,23 +2,10 @@
 
 import { cn } from "@/lib/utils";
 import type { AgentRecord } from "../../../src/page/types.ts";
+import { type ProgressState, progressState } from "../model/state.ts";
 
-export type MarkState =
-  | "running"
-  | "waiting"
-  | "blocked"
-  | "review"
-  | "pending"
-  | "closed"
-  | "idle";
-
-/** What an agent's mark shows: its status once a session reports one, else its lifecycle. */
-export function markState(agent: AgentRecord): MarkState {
-  if (agent.state !== "active") return agent.state;
-  return agent.status?.state ?? "idle";
-}
-
-const SHAPES: Record<MarkState, string> = {
+/** Each state's shape and color; a state is told apart by shape as well as color. */
+export const SHAPES: Record<ProgressState, string> = {
   running: "rounded-full bg-state-running",
   waiting: "rounded-full bg-state-waiting",
   blocked: "rounded-[2px] bg-state-blocked",
@@ -29,7 +16,7 @@ const SHAPES: Record<MarkState, string> = {
 };
 
 /** A state as a shape and a color, for assistive tech hidden; name it beside it where it matters. */
-export function StateShape({ state, className }: { state: MarkState; className?: string }) {
+export function StateShape({ state, className }: { state: ProgressState; className?: string }) {
   return (
     <span
       aria-hidden="true"
@@ -42,12 +29,12 @@ export function StateShape({ state, className }: { state: MarkState; className?:
 
 /** The agent's state as a shape and a color; `StateName` says it to assistive tech. */
 export const StateMark = ({ agent, className }: { agent: AgentRecord; className?: string }) => (
-  <StateShape state={markState(agent)} className={className} />
+  <StateShape state={progressState(agent)} className={className} />
 );
 
 /** The agent's state in words, for assistive tech, read after its name. */
 export const StateName = ({ agent }: { agent: AgentRecord }) => (
-  <span className="sr-only">, {markState(agent)}</span>
+  <span className="sr-only">, {progressState(agent)}</span>
 );
 
 export const SR = ({ children }: { children: string }) => (

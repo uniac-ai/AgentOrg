@@ -5,6 +5,7 @@
 
 import { QueryClient, queryOptions } from "@tanstack/react-query";
 import type {
+  Activity,
   AgentFull,
   AgentList,
   AskList,
@@ -64,3 +65,16 @@ export const openAsksQuery = queryOptions({
   queryKey: ["asks", "open"],
   queryFn: () => request<AskList>("/asks?state=open"),
 });
+
+/** Every ask in every state, for naming what the activity trail refers to. */
+export const allAsksQuery = queryOptions({
+  queryKey: ["asks", "all"],
+  queryFn: () => request<AskList>("/asks?state=all"),
+});
+
+export const activityQuery = (limit: number) =>
+  queryOptions({
+    queryKey: ["activity", limit],
+    queryFn: () => request<Activity>(`/activity?limit=${limit}`),
+    placeholderData: (previous) => previous,
+  });

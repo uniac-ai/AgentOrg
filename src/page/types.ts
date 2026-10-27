@@ -3,6 +3,7 @@
 import type { z } from "zod";
 import type {
   Agent,
+  AgentCloseResult,
   AgentDetail,
   AgentListResult,
   Ask,
@@ -19,6 +20,7 @@ export type AskRecord = z.output<typeof Ask>;
 export type AskList = z.output<typeof AskListResult>;
 export type MessageRecord = z.output<typeof Message>;
 export type Activity = z.output<typeof AuditListResult>;
+export type ClosedAgent = z.output<typeof AgentCloseResult>;
 
 /** `GET /ui/api/session`: the page session the cookie names, with the token every write carries. */
 export interface PageBootstrap {

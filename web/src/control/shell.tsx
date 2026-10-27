@@ -10,9 +10,15 @@ import { agentsQuery, inboxQuery, sessionQuery } from "../data/queries.ts";
 import { managers, type OrgNode, organization } from "../model/organization.ts";
 import { ShellView } from "../views/shell.tsx";
 import { PaneSkeleton, SignedOutView, UnreachableView } from "../views/states.tsx";
+import { PaletteControl } from "./palette.tsx";
 
 /** Where the user is, for the sidebar's selection and the path above the pane. */
-export type Place = { view: "inbox" } | { view: "agent"; id: string } | { view: "other" };
+export type Place =
+  | { view: "overview" }
+  | { view: "inbox" }
+  | { view: "activity" }
+  | { view: "agent"; id: string }
+  | { view: "other" };
 
 export interface ShellModel {
   /** Undefined until the organization first loads. */
@@ -58,14 +64,25 @@ export function ShellControl() {
       ? { view: "agent", id: agentId }
       : pathname.startsWith("/inbox")
         ? { view: "inbox" }
-        : { view: "other" };
+        : pathname === "/activity"
+          ? { view: "activity" }
+          : pathname === "/"
+            ? { view: "overview" }
+            : { view: "other" };
   const model: ShellModel = {
     organization: tree,
     inboxCount: (inbox.data?.asks.length ?? 0) + (inbox.data?.messages.length ?? 0),
     offline: queries.some((query) => query.isError),
     place,
     path: place.view === "agent" ? managers(place.id, byId) : [],
-    pane: session.data ? <Outlet /> : <PaneSkeleton />,
+    pane: session.data ? (
+      <>
+        <Outlet />
+        <PaletteControl />
+      </>
+    ) : (
+      <PaneSkeleton />
+    ),
   };
   return <ShellView {...model} />;
 }

@@ -2,14 +2,13 @@
 // selected pane beside it. At phone width the sidebar becomes a sheet.
 
 import { Link } from "@tanstack/react-router";
-import { ChevronRightIcon, InboxIcon, UnplugIcon } from "lucide-react";
+import { ActivityIcon, ChevronRightIcon, InboxIcon, NetworkIcon, UnplugIcon } from "lucide-react";
 import { useEffect } from "react";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
   Sidebar,
   SidebarContent,
   SidebarGroup,
-  SidebarHeader,
   SidebarInset,
   SidebarMenu,
   SidebarMenuAction,
@@ -98,14 +97,16 @@ export function ShellView({ organization, inboxCount, offline, place, path, pane
     <SidebarProvider>
       <CloseSheetOn place={selected ?? place.view} />
       <Sidebar>
-        <SidebarHeader>
-          <Link to="/inbox" className="px-2 py-1 text-sm font-semibold tracking-tight">
-            agentorg
-          </Link>
-        </SidebarHeader>
         <SidebarContent>
+          <h2 className="sr-only">agentorg</h2>
           <SidebarGroup>
             <SidebarMenu>
+              <SidebarMenuItem>
+                <SidebarMenuButton isActive={place.view === "overview"} render={<Link to="/" />}>
+                  <NetworkIcon aria-hidden="true" />
+                  <span>Overview</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
               <SidebarMenuItem>
                 <SidebarMenuButton isActive={place.view === "inbox"} render={<Link to="/inbox" />}>
                   <InboxIcon aria-hidden="true" />
@@ -117,6 +118,15 @@ export function ShellView({ organization, inboxCount, offline, place, path, pane
                     <span className="sr-only"> waiting</span>
                   </SidebarMenuBadge>
                 ) : null}
+              </SidebarMenuItem>
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  isActive={place.view === "activity"}
+                  render={<Link to="/activity" />}
+                >
+                  <ActivityIcon aria-hidden="true" />
+                  <span>Activity</span>
+                </SidebarMenuButton>
               </SidebarMenuItem>
             </SidebarMenu>
           </SidebarGroup>
@@ -142,6 +152,10 @@ export function ShellView({ organization, inboxCount, offline, place, path, pane
           <SidebarTrigger />
           {place.view === "inbox" ? (
             <InboxIcon aria-hidden="true" className="size-4 text-muted-foreground" />
+          ) : place.view === "overview" ? (
+            <NetworkIcon aria-hidden="true" className="size-4 text-muted-foreground" />
+          ) : place.view === "activity" ? (
+            <ActivityIcon aria-hidden="true" className="size-4 text-muted-foreground" />
           ) : null}
           <nav aria-label="Managers" className="flex min-w-0 items-center gap-1 text-sm">
             {path.map((manager) => (

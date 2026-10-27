@@ -32,7 +32,7 @@ const message = (id: string, fields: Partial<MessageRecord> = {}): MessageRecord
 
 const detail = (fields: Partial<AgentFull>): AgentFull =>
   ({
-    agent: { id: "lead" },
+    agent: { id: "lead", status: null },
     own_asks: [],
     addressed_asks: [],
     messages: [],
@@ -69,7 +69,7 @@ test("what waits on an agent: open asks to it, unread notes and unreviewed repor
   );
 });
 
-test("the feed mixes statuses, asks, answers and messages, newest first, without what is pinned", () => {
+test("the feed mixes statuses, asks, answers and messages, newest first, without what is pinned or the current status", () => {
   const answered = ask("own", {
     agent: "lead",
     to: null,
@@ -79,6 +79,7 @@ test("the feed mixes statuses, asks, answers and messages, newest first, without
   });
   const entries = feed(
     detail({
+      agent: { id: "lead", status: { updated_at: at(9) } } as AgentFull["agent"],
       own_asks: [answered],
       addressed_asks: [
         ask("from-child", { opened_at: at(4), state: "withdrawn" }),
@@ -91,6 +92,7 @@ test("the feed mixes statuses, asks, answers and messages, newest first, without
       status_history: [
         { state: "running", summary: "Started.", links: [], blockers: [], at: at(1), session: "s" },
         { state: "waiting", summary: "Asked.", links: [], blockers: [], at: at(3), session: "s" },
+        { state: "review", summary: "Current.", links: [], blockers: [], at: at(9), session: "s" },
       ],
     }),
   );
