@@ -17,6 +17,20 @@ export const Status = z
   })
   .meta({ id: "Status", description: "The agent's status, set by its attached session." });
 
+export const StatusEntry = z
+  .strictObject({
+    state: StatusState,
+    summary: Summary.describe("Plain text; line breaks are kept."),
+    links: z.array(Link),
+    blockers: z.array(Short),
+    at: Timestamp,
+    session: Id.describe("The session that set it."),
+  })
+  .meta({
+    id: "StatusEntry",
+    description: "One status a session set, as the agent's history keeps it.",
+  });
+
 export const Agent = z
   .strictObject({
     id: Id.describe("Issued by the service."),

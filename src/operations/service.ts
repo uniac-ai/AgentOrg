@@ -26,6 +26,7 @@ import {
   type ResponseOf,
   type Session,
   Short,
+  STATUS_HISTORY_MAX,
 } from "../contract/index.ts";
 import type { Store } from "../store/index.ts";
 import {
@@ -176,11 +177,24 @@ export class StoreService implements Service {
       ? this.store.select("agents")
       : this.store.select("agents", "state != 'closed'");
     return {
-      agents: agents.map((agent) => ({
-        agent,
-        asks_to_answer: this.store.count("asks", `"to" = ? AND state = 'open'`, [agent.id]),
-        unread_messages: this.store.count("messages", `"to" = ? AND read_at IS NULL`, [agent.id]),
-      })),
+      agents: agents.map((agent) => {
+        const [attached] = this.store.select("sessions", "agent = ? AND detached_at IS NULL", [
+          agent.id,
+        ]);
+        const [latest] = this.store.all(
+          "SELECT max(at) AS at FROM audit WHERE agent = ? AND outcome = 'ok'",
+          [agent.id],
+        );
+        return {
+          agent,
+          asks_to_answer: this.store.count("asks", `"to" = ? AND state = 'open'`, [agent.id]),
+          unread_messages: this.store.count("messages", `"to" = ? AND read_at IS NULL`, [agent.id]),
+          attached_session: attached
+            ? { id: attached.id, client: attached.client, attached_at: attached.attached_at }
+            : null,
+          last_activity_at: typeof latest?.at === "string" ? latest.at : agent.created_at,
+        };
+      }),
     };
   };
 
@@ -192,6 +206,13 @@ export class StoreService implements Service {
       addressed_asks: this.store.select("asks", `"to" = ?`, [agent.id]),
       messages: this.store.select("messages", `"from" = ? OR "to" = ?`, [agent.id, agent.id]),
       sessions: this.store.select("sessions", "agent = ?", [agent.id], "rowid DESC"),
+      status_history: this.store.select(
+        "status_history",
+        "session IN (SELECT id FROM sessions WHERE agent = ?)",
+        [agent.id],
+        "rowid DESC",
+        STATUS_HISTORY_MAX,
+      ),
     };
   };
 
@@ -300,11 +321,24 @@ export class StoreService implements Service {
   // Status
 
   status_set: Op<"status_set"> = async (request) => {
-    const { agent } = this.actor(request.session);
+    const { session, agent } = this.actor(request.session);
     const { state, summary, links, blockers } = request;
-    const status = { state, summary, links, blockers, updated_at: this.time() };
-    const updated: AgentRecord = { ...agent, status };
-    this.store.update("agents", updated);
+    const at = this.time();
+    const updated: AgentRecord = {
+      ...agent,
+      status: { state, summary, links, blockers, updated_at: at },
+    };
+    this.store.transaction(() => {
+      this.store.update("agents", updated);
+      this.store.insert("status_history", {
+        state,
+        summary,
+        links,
+        blockers,
+        at,
+        session: session.id,
+      });
+    });
     return updated;
   };
 

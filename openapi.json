@@ -1571,6 +1571,13 @@
               "$ref": "#/components/schemas/Session"
             },
             "description": "Every session that attached to it, newest first."
+          },
+          "status_history": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatusEntry"
+            },
+            "description": "The statuses its sessions set, newest first, at most 100."
           }
         },
         "required": [
@@ -1578,7 +1585,8 @@
           "own_asks",
           "addressed_asks",
           "messages",
-          "sessions"
+          "sessions",
+          "status_history"
         ],
         "additionalProperties": false,
         "description": "One agent in full; reading it marks nothing read."
@@ -1640,12 +1648,31 @@
             "minimum": -9007199254740991,
             "maximum": 9007199254740991,
             "description": "Unread messages addressed to the agent."
+          },
+          "attached_session": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AttachedSession"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null when no session is attached."
+          },
+          "last_activity_at": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+            "description": "The latest write any of the agent's sessions made, or the agent's creation when there is none."
           }
         },
         "required": [
           "agent",
           "asks_to_answer",
-          "unread_messages"
+          "unread_messages",
+          "attached_session",
+          "last_activity_at"
         ],
         "additionalProperties": false
       },
@@ -2048,6 +2075,34 @@
           "ask"
         ],
         "additionalProperties": false
+      },
+      "AttachedSession": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "client": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 40,
+            "pattern": "^[a-z0-9][a-z0-9._-]*$"
+          },
+          "attached_at": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+          }
+        },
+        "required": [
+          "id",
+          "client",
+          "attached_at"
+        ],
+        "additionalProperties": false,
+        "description": "The session attached to an agent now."
       },
       "AuditEntry": {
         "type": "object",
@@ -2712,6 +2767,60 @@
         ],
         "additionalProperties": false,
         "description": "The agent's status, set by its attached session."
+      },
+      "StatusEntry": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "running",
+              "waiting",
+              "blocked",
+              "review"
+            ]
+          },
+          "summary": {
+            "type": "string",
+            "maxLength": 2000,
+            "description": "Plain text; line breaks are kept."
+          },
+          "links": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Link"
+            }
+          },
+          "blockers": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80
+            }
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+          },
+          "session": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "description": "The session that set it."
+          }
+        },
+        "required": [
+          "state",
+          "summary",
+          "links",
+          "blockers",
+          "at",
+          "session"
+        ],
+        "additionalProperties": false,
+        "description": "One status a session set, as the agent's history keeps it."
       },
       "StatusSet": {
         "type": "object",

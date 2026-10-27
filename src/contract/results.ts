@@ -1,8 +1,9 @@
 /** Results that bring together records of several subjects for one reader. */
 
 import { z } from "zod";
-import { Agent } from "./agent.ts";
+import { Agent, StatusEntry } from "./agent.ts";
 import { Ask } from "./ask.ts";
+import { ClientKind, Id, Timestamp } from "./common.ts";
 import { Message } from "./message.ts";
 import { Session } from "./session.ts";
 
@@ -23,6 +24,8 @@ export const Facts = z
     description: "What a session acts on, facts only: the skill decides how to act on them.",
   });
 
+export const STATUS_HISTORY_MAX = 100;
+
 export const SessionContextResult = z
   .strictObject({
     facts: Facts.nullable().describe(
@@ -41,11 +44,19 @@ export const AgentCloseResult = z
   })
   .meta({ id: "AgentCloseResult", description: "The cleanup list for the manager." });
 
+export const AttachedSession = z
+  .strictObject({ id: Id, client: ClientKind, attached_at: Timestamp })
+  .meta({ id: "AttachedSession", description: "The session attached to an agent now." });
+
 export const AgentSummary = z
   .strictObject({
     agent: Agent,
     asks_to_answer: z.number().int().describe("Open asks addressed to the agent."),
     unread_messages: z.number().int().describe("Unread messages addressed to the agent."),
+    attached_session: AttachedSession.nullable().describe("Null when no session is attached."),
+    last_activity_at: Timestamp.describe(
+      "The latest write any of the agent's sessions made, or the agent's creation when there is none.",
+    ),
   })
   .meta({ id: "AgentSummary" });
 
@@ -62,6 +73,9 @@ export const AgentDetail = z
     addressed_asks: z.array(Ask).describe("Every ask addressed to the agent."),
     messages: z.array(Message).describe("Messages from the agent and to it."),
     sessions: z.array(Session).describe("Every session that attached to it, newest first."),
+    status_history: z
+      .array(StatusEntry)
+      .describe(`The statuses its sessions set, newest first, at most ${STATUS_HISTORY_MAX}.`),
   })
   .meta({ id: "AgentDetail", description: "One agent in full; reading it marks nothing read." });
 
