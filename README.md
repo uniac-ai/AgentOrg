@@ -1,8 +1,13 @@
 # agentorg
 
-agentorg organizes AI agent execution the way a company organizes work. Agents are work responsibilities, each with a manager: another agent, or the one human at the top, the user. Sessions in a client attach to an agent and act for it. Questions go to the manager, which answers them or carries them up, and notes and reports only go up, so everything that waits on the user lands in one place.
+agentorg organizes AI agent work the way a company organizes people. You sit at the top, and the agent sessions you already run fill in the organization below you.
 
-agentorg does not run agents. It organizes the sessions you already run, in Claude Code, Codex or any other MCP client, into one tree under you, with one page for every decision waiting on you and reports that stay in each manager's inbox until the manager acknowledges them. To install it and connect your clients, see [docs/install.md](docs/install.md).
+- **Positions and the people in them.** Each agent is a position: a work responsibility with a manager above it, either another agent or you. A session in a client staffs the position for now, and a later session can take it over where it left off.
+- **Delegation and questions.** Managers delegate by creating positions under them. Anyone can ask a question, and it goes to their manager, who answers it or carries it up in their own terms. Only what reaches the top lands on your desk, and you can look into any part of the organization and step in.
+- **Reports and check-ins.** Work reports up the chain. Managers check in on their teams when they choose, as in a real workplace; nothing pings them on every update.
+- **What it isn't.** agentorg doesn't run agents. It organizes the sessions you run in Claude Code, Codex or any other MCP client, and gives you one page for the organization, its progress and what is waiting on you.
+
+To install it and connect your clients, see [docs/install.md](docs/install.md). The design is in [docs/design.md](docs/design.md).
 
 The project has three pieces:
 
@@ -13,10 +18,6 @@ The project has three pieces:
 ## Status
 
 agentorg is pre-alpha, and its API may change. Phase 1, the model end to end on one machine, is in progress.
-
-## Design
-
-The design is in [docs/design.md](docs/design.md).
 
 ## License
 

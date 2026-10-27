@@ -5,7 +5,7 @@
 
 [Unit]
 Description=agentorg service
-Documentation=https://github.com/uniac-ai/agentorg/blob/main/docs/install.md
+Documentation=https://github.com/uniac-ai/AgentOrg/blob/main/docs/install.md
 
 [Service]
 ExecStart=@NODE@ @AGENTORG@ serve

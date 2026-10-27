@@ -5,7 +5,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/uniac-ai/agentorg.git"
+    "url": "git+https://github.com/uniac-ai/AgentOrg.git"
+  },
+  "homepage": "https://github.com/uniac-ai/AgentOrg#readme",
+  "bugs": {
+    "url": "https://github.com/uniac-ai/AgentOrg/issues"
   },
   "type": "module",
   "engines": {

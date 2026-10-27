@@ -7,7 +7,7 @@ agentorg runs as one local service per user. Agents reach it over MCP, either th
 agentorg needs Node.js 22.13 or later. Clone the repository, build it, and install it globally with npm:
 
 ```bash
-git clone https://github.com/uniac-ai/agentorg
+git clone https://github.com/uniac-ai/AgentOrg agentorg
 ```
 
 ```bash
@@ -81,7 +81,7 @@ systemd restarts the service whenever it exits and starts it with your user sess
 The repository is a Claude Code plugin marketplace with one plugin, `agentorg`:
 
 ```bash
-claude plugin marketplace add uniac-ai/agentorg
+claude plugin marketplace add uniac-ai/AgentOrg
 ```
 
 ```bash
