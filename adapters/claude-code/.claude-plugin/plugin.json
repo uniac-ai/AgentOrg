@@ -4,8 +4,8 @@
   "author": {
     "name": "The agentorg authors"
   },
-  "homepage": "https://github.com/uniac-ai/agentorg",
-  "repository": "https://github.com/uniac-ai/agentorg",
+  "homepage": "https://github.com/uniac-ai/AgentOrg",
+  "repository": "https://github.com/uniac-ai/AgentOrg",
   "license": "MIT",
   "mcpServers": {
     "agentorg": {
