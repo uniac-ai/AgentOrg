@@ -4,7 +4,14 @@
  */
 
 import { QueryClient, queryOptions } from "@tanstack/react-query";
-import type { AgentFull, AgentList, Inbox, PageBootstrap } from "../../../src/page/types.ts";
+import type {
+  AgentFull,
+  AgentList,
+  AskList,
+  AskRecord,
+  Inbox,
+  PageBootstrap,
+} from "../../../src/page/types.ts";
 import { ApiError, keepCsrfToken, request } from "./client.ts";
 
 export const REFRESH_MS = 5_000;
@@ -45,3 +52,15 @@ export const agentQuery = (id: string) =>
     queryKey: ["agent", id],
     queryFn: () => request<AgentFull>(`/agents/${encodeURIComponent(id)}`),
   });
+
+export const askQuery = (id: string) =>
+  queryOptions({
+    queryKey: ["ask", id],
+    queryFn: () => request<AskRecord>(`/asks/${encodeURIComponent(id)}`),
+  });
+
+/** Every open ask, whoever it is addressed to, for building escalation chains. */
+export const openAsksQuery = queryOptions({
+  queryKey: ["asks", "open"],
+  queryFn: () => request<AskList>("/asks?state=open"),
+});

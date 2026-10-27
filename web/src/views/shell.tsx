@@ -25,10 +25,10 @@ import {
 import { cn } from "@/lib/utils";
 import type { ShellModel } from "../control/shell.tsx";
 import type { OrgNode } from "../model/organization.ts";
-import { StateMark, StateName } from "./marks.tsx";
+import { ClientMark, StateMark, StateName } from "./marks.tsx";
 
 function AgentItem({ node, selected }: { node: OrgNode; selected: string | undefined }) {
-  const { agent, asks_to_answer, unread_messages } = node.summary;
+  const { agent, asks_to_answer, unread_messages, attached_session } = node.summary;
   const hasChildren = node.children.length > 0;
   const item = (
     <>
@@ -41,6 +41,7 @@ function AgentItem({ node, selected }: { node: OrgNode; selected: string | undef
           {agent.title}
         </span>
         <StateName agent={agent} />
+        {attached_session ? <ClientMark client={attached_session.client} live /> : null}
         {unread_messages > 0 ? (
           <span className="sr-only">, {unread_messages} unread messages</span>
         ) : null}
@@ -169,7 +170,7 @@ export function ShellView({ organization, inboxCount, offline, place, path, pane
             </span>
           ) : null}
         </header>
-        <div className="min-h-0 flex-1 overflow-y-auto">{pane}</div>
+        <div className="min-h-0 flex-1 overflow-hidden">{pane}</div>
       </SidebarInset>
     </SidebarProvider>
   );

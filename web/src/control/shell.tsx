@@ -2,7 +2,8 @@
 // the whole-app states or the shell view, with the route's pane inside.
 
 import { useQueries } from "@tanstack/react-query";
-import { Outlet, useParams, useRouterState } from "@tanstack/react-router";
+import { Outlet, useNavigate, useParams, useRouterState } from "@tanstack/react-router";
+import { useKeys } from "@/lib/keys";
 import type { AgentRecord } from "../../../src/page/types.ts";
 import { isSignedOut } from "../data/client.ts";
 import { agentsQuery, inboxQuery, sessionQuery } from "../data/queries.ts";
@@ -32,6 +33,20 @@ export function ShellControl() {
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const { agentId } = useParams({ strict: false });
   const queries = [session, agents, inbox];
+  const navigate = useNavigate();
+  const tree = agents.data ? organization(agents.data.agents) : undefined;
+
+  // ⌥↑ and ⌥↓ step through the sidebar: your own pane first, then every agent in tree order.
+  useKeys((event) => {
+    if (!event.altKey || (event.key !== "ArrowUp" && event.key !== "ArrowDown")) return false;
+    const order = [undefined, ...flatten(tree ?? [])];
+    const at = order.indexOf(agentId);
+    const next =
+      order[Math.min(order.length - 1, Math.max(0, at + (event.key === "ArrowDown" ? 1 : -1)))];
+    if (next === undefined) void navigate({ to: "/inbox" });
+    else void navigate({ to: "/people/$agentId", params: { agentId: next } });
+    return true;
+  });
 
   if (queries.some((query) => isSignedOut(query.error))) return <SignedOutView />;
   if (queries.some((query) => query.isError && query.data === undefined)) {
@@ -41,11 +56,11 @@ export function ShellControl() {
   const place: Place =
     agentId !== undefined
       ? { view: "agent", id: agentId }
-      : pathname === "/inbox"
+      : pathname.startsWith("/inbox")
         ? { view: "inbox" }
         : { view: "other" };
   const model: ShellModel = {
-    organization: agents.data ? organization(agents.data.agents) : undefined,
+    organization: tree,
     inboxCount: (inbox.data?.asks.length ?? 0) + (inbox.data?.messages.length ?? 0),
     offline: queries.some((query) => query.isError),
     place,
@@ -54,3 +69,7 @@ export function ShellControl() {
   };
   return <ShellView {...model} />;
 }
+
+/** The agents' ids in the order the sidebar shows them. */
+const flatten = (nodes: OrgNode[]): string[] =>
+  nodes.flatMap((node) => [node.summary.agent.id, ...flatten(node.children)]);
