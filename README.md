@@ -1,6 +1,6 @@
 # agentorg
 
-agentorg is an orchestration framework for the coding agents you already use. Sessions in Codex, Claude Code and any other MCP client work together as one organization, so you can combine their plans in one piece of work. You hear only about what needs you, not every update, and everything else is there when you want to look.
+Coding agents in Claude Code, Codex or any other MCP client are the execution layer, which is what they do best. agentorg is the orchestration framework above them, the organization layer: it connects their sessions so they take on large tasks together as one organization, and the subscriptions you already have, such as a Claude plan and a ChatGPT plan for Codex, work together in it. It takes the managing off your hands: you hear only about what needs you, and everything else is there when you want to look.
 
 It works the way a company organizes people: you sit at the top, and your agent sessions fill in the organization below you.
 
