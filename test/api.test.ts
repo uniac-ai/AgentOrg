@@ -25,7 +25,12 @@ const AGENT_OPERATIONS = [
   "message_ack",
 ];
 const API_OPERATIONS = ["agent_list", "agent_get", "ask_list", "audit_list", "ui_login_link"];
-const USER_OPERATIONS = ["ask_answer_as_user", "message_read_as_user", "message_ack_as_user"];
+const USER_OPERATIONS = [
+  "agent_close_as_user",
+  "ask_answer_as_user",
+  "message_read_as_user",
+  "message_ack_as_user",
+];
 
 type Call = [name: string, request: unknown, caller: Caller];
 
@@ -123,6 +128,7 @@ test("an invalid request is refused before the service", async () => {
 test("user operations are not on the API, even with the agents' token", async () => {
   const { calls, app } = recording(() => ({}));
   for (const path of [
+    "/api/agent/close_as_user",
     "/api/ask/answer_as_user",
     "/api/message/read_as_user",
     "/api/message/ack_as_user",

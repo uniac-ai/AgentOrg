@@ -13,7 +13,15 @@
  */
 
 import type { z } from "zod";
-import { Agent, AgentClose, AgentCreate, AgentGet, AgentList, StatusSet } from "./agent.ts";
+import {
+  Agent,
+  AgentClose,
+  AgentCloseAsUser,
+  AgentCreate,
+  AgentGet,
+  AgentList,
+  StatusSet,
+} from "./agent.ts";
 import {
   Ask,
   AskAnswer,
@@ -66,7 +74,7 @@ export const OPERATIONS = {
     response: Agent,
     description: `Create an agent: a work responsibility managed by the acting session's agent.
 
-Returns the new agent; put its id in the brief of the session that will attach to it. Without a session, it is the user creating an agent directly under the user.`,
+Returns the new agent; put its id in the brief of the session that will attach to it. Agents directly under the user come only from new_agent at attach.`,
   },
   agent_close: {
     kind: "agent",
@@ -75,7 +83,15 @@ Returns the new agent; put its id in the brief of the session that will attach t
     response: AgentCloseResult,
     description: `Close a child agent whose work is done, and return the cleanup list.
 
-Closing detaches its session and withdraws its open asks. Only its manager closes it, once its own children are closed.`,
+Closing detaches its session and withdraws its open asks. Only its manager's sessions close it, once its own children are closed.`,
+  },
+  agent_close_as_user: {
+    kind: "user",
+    writes: true,
+    request: AgentCloseAsUser,
+    response: AgentCloseResult,
+    description:
+      "Close any agent as the user, once its own children are closed, and return the cleanup list.",
   },
   agent_list: {
     kind: "api",

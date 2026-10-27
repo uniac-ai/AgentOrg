@@ -23,7 +23,9 @@ export const Agent = z
     title: Title,
     purpose: Text,
     manager: Id.nullable().describe("The managing agent; null when the user is the manager."),
-    created_by: Id.nullable().describe("The session that created it; null when the user did."),
+    created_by: Id.describe(
+      "The session that created it: its manager's, or the session that attached with new_agent.",
+    ),
     created_at_attach: z
       .boolean()
       .describe(
@@ -38,9 +40,7 @@ export const Agent = z
 
 export const AgentCreate = z
   .strictObject({
-    session: Id.optional().describe(
-      "The acting session; the new agent is a child of its agent. Omit when the user creates it.",
-    ),
+    session: Id.describe("The acting session; the new agent is a child of its agent."),
     title: Title.describe('The responsibility, such as "Migrate session storage".'),
     purpose: Text.describe("What the agent is for, for a reader outside the session."),
   })
@@ -48,10 +48,14 @@ export const AgentCreate = z
 
 export const AgentClose = z
   .strictObject({
-    session: Id.optional().describe("The manager's acting session. Omit when the user closes it."),
+    session: Id.describe("A session of the agent's manager."),
     agent: Id,
   })
   .meta({ id: "AgentClose" });
+
+export const AgentCloseAsUser = z
+  .strictObject({ agent: Id.describe("Any agent whose own children are closed.") })
+  .meta({ id: "AgentCloseAsUser" });
 
 export const StatusSet = z
   .strictObject({

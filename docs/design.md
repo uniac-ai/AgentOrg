@@ -49,8 +49,9 @@ An operation's name, such as `ask_open`, is its MCP tool name; the API serves it
 
 | Operation | Kind | What it does |
 |---|---|---|
-| `agent_create(session?, title, purpose)` | agent | Creates a child of the session's agent, and returns it for the child's brief. Without a session, the user creates an agent directly under the user. |
-| `agent_close(session?, agent)` | agent | The manager closes a child. Refused while the child has open children, so closing goes bottom-up. Detaches its session, withdraws its open asks and returns the cleanup list. |
+| `agent_create(session, title, purpose)` | agent | Creates a child of the session's agent, and returns it for the child's brief. Agents directly under the user come only from `new_agent` at attach. |
+| `agent_close(session, agent)` | agent | The manager closes a child. Refused while the child has open children, so closing goes bottom-up. Detaches its session, withdraws its open asks and returns the cleanup list. |
+| `agent_close_as_user(agent)` | user | Page only: the user closes any agent, under the same bottom-up rule, such as a top-level agent created at attach by mistake. |
 | `agent_list` | api | The tree. Each agent comes with two counts of what waits on it: open asks addressed to it, and unread messages to it. |
 | `agent_get(agent)` | api | One agent, with its sessions (current and past), its asks (opened by it and addressed to it) and its messages (from it and to it). It marks nothing read. |
 | `session_attach(agent \| new_agent, client, client_session_id)` | agent | Attaches, ending any earlier attachment. `new_agent: {title, purpose}` creates an agent directly under the user, for a session the user started with an appointment in words; it is allowed only on a client session's first attach, and the agent is marked as created at attach. Returns facts only: the agent, its manager, its children with their status, open asks addressed to it, its own asks with any answers, and its inbox. Gives no role verdict. |

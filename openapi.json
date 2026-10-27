@@ -13,7 +13,7 @@
           "agent"
         ],
         "summary": "Create an agent: a work responsibility managed by the acting session's agent.",
-        "description": "Returns the new agent; put its id in the brief of the session that will attach to it. Without a session, it is the user creating an agent directly under the user.",
+        "description": "Returns the new agent; put its id in the brief of the session that will attach to it. Agents directly under the user come only from new_agent at attach.",
         "requestBody": {
           "required": true,
           "content": {
@@ -85,7 +85,7 @@
           "agent"
         ],
         "summary": "Close a child agent whose work is done, and return the cleanup list.",
-        "description": "Closing detaches its session and withdraws its open asks. Only its manager closes it, once its own children are closed.",
+        "description": "Closing detaches its session and withdraws its open asks. Only its manager's sessions close it, once its own children are closed.",
         "requestBody": {
           "required": true,
           "content": {
@@ -1399,17 +1399,10 @@
             "description": "The managing agent; null when the user is the manager."
           },
           "created_by": {
-            "anyOf": [
-              {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 64
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "The session that created it; null when the user did."
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "description": "The session that created it: its manager's, or the session that attached with new_agent."
           },
           "created_at_attach": {
             "type": "boolean",
@@ -1470,10 +1463,10 @@
         "type": "object",
         "properties": {
           "session": {
-            "description": "The manager's acting session. Omit when the user closes it.",
             "type": "string",
             "minLength": 1,
-            "maxLength": 64
+            "maxLength": 64,
+            "description": "A session of the agent's manager."
           },
           "agent": {
             "type": "string",
@@ -1482,6 +1475,7 @@
           }
         },
         "required": [
+          "session",
           "agent"
         ],
         "additionalProperties": false
@@ -1519,10 +1513,10 @@
         "type": "object",
         "properties": {
           "session": {
-            "description": "The acting session; the new agent is a child of its agent. Omit when the user creates it.",
             "type": "string",
             "minLength": 1,
-            "maxLength": 64
+            "maxLength": 64,
+            "description": "The acting session; the new agent is a child of its agent."
           },
           "title": {
             "type": "string",
@@ -1538,6 +1532,7 @@
           }
         },
         "required": [
+          "session",
           "title",
           "purpose"
         ],

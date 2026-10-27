@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  AgentClose,
+  AgentCreate,
   AskAnswer,
   AskAnswerAsUser,
   AskOpen,
@@ -72,4 +74,12 @@ test("an attach names either an agent or a new agent, not both", () => {
   assert.ok(SessionAttach.safeParse({ new_agent: newAgent }).success);
   assert.equal(SessionAttach.safeParse({}).success, false);
   assert.equal(SessionAttach.safeParse({ agent: "agt_1", new_agent: newAgent }).success, false);
+});
+
+test("creating and closing an agent need the acting session", () => {
+  const brief = { title: "Migrate storage", purpose: "Move sessions to SQLite." };
+  assert.equal(AgentCreate.safeParse(brief).success, false);
+  assert.ok(AgentCreate.safeParse({ session: "ses_1", ...brief }).success);
+  assert.equal(AgentClose.safeParse({ agent: "agt_1" }).success, false);
+  assert.ok(AgentClose.safeParse({ session: "ses_1", agent: "agt_1" }).success);
 });
