@@ -3,7 +3,8 @@
  * `~/.local/share/agentorg/`. Backing up means copying it.
  */
 
-import { mkdirSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -20,4 +21,34 @@ export function ensureHome(): string {
 
 export function databasePath(): string {
   return join(home(), "agentorg.db");
+}
+
+export function tokenPath(): string {
+  return join(home(), "token");
+}
+
+function readPrivate(path: string): string {
+  if (statSync(path).mode & 0o077) {
+    throw new Error(`${path} is readable by other users; run chmod 600 ${path}`);
+  }
+  return readFileSync(path, "utf8").trim();
+}
+
+/** The bearer token: `AGENTORG_TOKEN` when set, else the token file, which must be mode 600. */
+export function readToken(): string | undefined {
+  if (process.env.AGENTORG_TOKEN) return process.env.AGENTORG_TOKEN;
+  return existsSync(tokenPath()) ? readPrivate(tokenPath()) : undefined;
+}
+
+/** The token in the token file, created with mode 600 when there is none. */
+export function ensureToken(): string {
+  try {
+    writeFileSync(tokenPath(), `${randomBytes(32).toString("base64url")}\n`, {
+      flag: "wx",
+      mode: 0o600,
+    });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+  }
+  return readPrivate(tokenPath());
 }

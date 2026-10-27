@@ -10,6 +10,7 @@ export * from "./ask.ts";
 export * from "./audit.ts";
 export * from "./common.ts";
 export * from "./evidence.ts";
+export * from "./json-schema.ts";
 export * from "./message.ts";
 export * from "./operations.ts";
 export * from "./results.ts";
