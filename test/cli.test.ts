@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { chmodSync, mkdtempSync, rmSync, statSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -236,12 +236,62 @@ test("refusals and a stopped service exit 1 with the reason on stderr", async ()
   assert.match(down.stderr, /agentorg service not running at .*; start it with `agentorg serve`/);
 });
 
-test("ui prints and opens a one-time sign-in link", async () => {
-  await withService(async (env, server) => {
-    const result = await agentorg(["ui"], { ...env, BROWSER: "true" });
-    assert.equal(result.code, 0, result.stderr);
-    assert.match(result.stdout.trim(), new RegExp(`^${server.url}/ui/login\\?token=`));
-  });
+/** A BROWSER that leaves a file behind when anything asks it to open a link. */
+function recordingBrowser() {
+  const directory = mkdtempSync(join(tmpdir(), "agentorg-browser-"));
+  const opened = join(directory, "opened");
+  const browser = join(directory, "browser");
+  writeFileSync(browser, `#!/bin/sh\necho "$1" > "${opened}"\n`, { mode: 0o755 });
+  return {
+    browser,
+    opened: () => existsSync(opened),
+    remove: () => rmSync(directory, { recursive: true }),
+  };
+}
+
+test("ui prints a one-time sign-in link, and opens nothing when not run in a terminal", async () => {
+  const browser = recordingBrowser();
+  try {
+    await withService(async (env, server) => {
+      const result = await agentorg(["ui"], { ...env, BROWSER: browser.browser });
+      assert.equal(result.code, 0, result.stderr);
+      assert.match(result.stdout.trim(), new RegExp(`^${server.url}/ui/login\\?token=`));
+      assert.equal(browser.opened(), false);
+    });
+  } finally {
+    browser.remove();
+  }
+});
+
+test("help comes before anything a command does", async () => {
+  const browser = recordingBrowser();
+  const home = join(mkdtempSync(join(tmpdir(), "agentorg-help-")), "home");
+  try {
+    await withService(async (env, server) => {
+      for (const args of [
+        ["ui", "--help"],
+        ["ui", "-h"],
+        ["serve", "--help"],
+        ["mcp", "-h"],
+        ["ask", "wait", "-h"],
+      ]) {
+        const result = await agentorg(args, {
+          ...env,
+          AGENTORG_HOME: home,
+          BROWSER: browser.browser,
+        });
+        assert.equal(result.code, 0, `${args.join(" ")}: ${result.stderr}`);
+        assert.match(result.stdout, /^usage: agentorg /, args.join(" "));
+      }
+      const minted = (await server.service.audit_list({ limit: 100 }, { channel: "api" })).entries;
+      assert.equal(minted.filter((entry) => entry.operation === "ui_login_link").length, 0);
+      assert.equal(browser.opened(), false);
+      assert.equal(existsSync(home), false, "serve --help created no home");
+    });
+  } finally {
+    browser.remove();
+    rmSync(join(home, ".."), { recursive: true, force: true });
+  }
 });
 
 test("the token file is private", () => {
