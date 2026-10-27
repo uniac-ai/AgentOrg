@@ -25,13 +25,32 @@ export const print = (value: unknown) =>
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
 const note = (text: string) => process.stderr.write(`agentorg: ${text}\n`);
 
+/**
+ * Load the store, which only the service needs, without the warning Node 22 prints the first time
+ * `node:sqlite` loads, which would otherwise open every service log. Other warnings pass through.
+ */
+async function withoutSqliteWarning<T>(load: () => Promise<T>): Promise<T> {
+  const emitWarning = process.emitWarning;
+  process.emitWarning = ((warning: string | Error, ...rest: unknown[]) => {
+    const options = rest[0];
+    const type = typeof options === "string" ? options : (options as { type?: string })?.type;
+    const message = typeof warning === "string" ? warning : warning.message;
+    if (type === "ExperimentalWarning" && message.startsWith("SQLite")) return;
+    return (emitWarning as (...args: unknown[]) => void).call(process, warning, ...rest);
+  }) as typeof process.emitWarning;
+  try {
+    return await load();
+  } finally {
+    process.emitWarning = emitWarning;
+  }
+}
+
 export async function serveCommand(args: string[]): Promise<number> {
   const { values } = parseArgs({ args, options: { port: { type: "string" } }, strict: true });
   const listenPort = values.port === undefined ? port() : Number(values.port);
   ensureHome();
   const token = ensureToken();
-  // The store loads node:sqlite, which only the service needs.
-  const { Store } = await import("../store/index.ts");
+  const { Store } = await withoutSqliteWarning(() => import("../store/index.ts"));
   const store = new Store(databasePath());
   const app = createApp(new StoreService(store), { token });
   const server = listen({ fetch: app.fetch, hostname: "127.0.0.1", port: listenPort });

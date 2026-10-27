@@ -292,6 +292,7 @@ test("serve creates its home and serves on loopback until stopped", async () => 
     running.child.kill("SIGTERM");
     const stopped = await running;
     assert.equal(stopped.code, 0, stopped.stderr);
+    assert.doesNotMatch(stopped.stderr, /ExperimentalWarning/);
     rmSync(join(home, ".."), { recursive: true });
   }
 });
