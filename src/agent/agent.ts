@@ -167,7 +167,10 @@ export class Agent implements Presented {
     return { state: "done", value: { actor, created: request.actor === undefined } };
   }
 
-  /** Create the session's position under the root, with the root's credential, used for that only. */
+  /**
+   * Create the session's position under the root, marked as created at attach, with the root's
+   * credential, used for that only.
+   */
   async #createUnderRoot(name: string, purpose: string): Promise<Answer> {
     const file = rootCredentialPath();
     if (!existsSync(file)) return refused("not_found", `no root credential in ${file}`);
@@ -177,7 +180,7 @@ export class Agent implements Presented {
       name: "agentorg-agent",
     });
     try {
-      const answer = await root.call("actor_create", { name, purpose });
+      const answer = await root.call("actor_create", { name, purpose, created_at_attach: true });
       if (answer.state !== "done") return answer;
       const created = answer.value as ResponseOf<"actor_create">;
       credentials.write(created.actor.id, created.credential);

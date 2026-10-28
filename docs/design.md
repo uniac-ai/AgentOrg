@@ -156,8 +156,8 @@ The agent actor, `agentorg agent` in `src/agent/`, lets a Claude Code or Codex s
   - `actor_close` forgets the closed position's credential.
 - **Resumed sessions.** `sessions/<client>-<session id>/position` names the position a session fills, so a resumed session fills it again without attaching. Claude Code names the session in `CLAUDE_CODE_SESSION_ID`. Codex names none, so a Codex session attaches each time it starts.
 - **Delivery and waking.** The client's hooks run the waiter, `agentorg agent wait`, when the session starts and whenever its turn ends. In Claude Code they are `asyncRewake` hooks.
-  - The waiter waits, as the position, for messages to it that it has not read.
-  - It writes them framed as agentorg's, with each sender's path and each message's id, marks them read, and exits with status 2. Claude Code hands that output to the session as its next input, starting a turn when the session is idle.
+  - The waiter waits, as the position, for what the session has not seen: unread messages to the position, questions addressed to it, and answers to its own questions. The session's cursor, a place in the sequence questions and messages share, marks what was delivered.
+  - It writes them framed as agentorg's, each with its kind, its sender's path and its id, marks the messages read, and exits with status 2. Claude Code hands that output to the session as its next input, starting a turn when the session is idle.
   - A newer waiter replaces an older one, which then ends without writing. Delivery is at least once.
 
 ## The network

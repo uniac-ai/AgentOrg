@@ -12,7 +12,7 @@ import { presentOverStdio } from "../actor/index.ts";
 import { coreUrl } from "../network/index.ts";
 import { Agent } from "./agent.ts";
 import { sessions } from "./sessions.ts";
-import { waitForMessages } from "./waiter.ts";
+import { waitForNews } from "./waiter.ts";
 
 interface Client {
   /** The client's id for the session, which the agent actor and the waiter both see. */
@@ -88,7 +88,7 @@ export async function agentCommand(args: string[]): Promise<number> {
   if (rest[0] === "wait") {
     const waiter = chosen.waiter;
     if (waiter === undefined || session === undefined) return 0;
-    const delivered = await waitForMessages({
+    const delivered = await waitForNews({
       coreUrl: coreUrl(),
       session,
       alive: waiter.alive,

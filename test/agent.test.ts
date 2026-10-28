@@ -76,7 +76,7 @@ test("before attaching a session sees attach alone, and anything else is refused
   const org = await core();
   const one = await session(org, "s-refusals");
   assert.deepEqual(await one.tools(), ["attach"]);
-  const early = await one.call("view");
+  const early = await one.call("team");
   assert.equal(early.isError, true);
   assert.match(text(early), /^invalid: attach to your position first/);
   assert.match(text(await one.call("attach", {})), /^invalid: give actor, or name and purpose/);
@@ -92,6 +92,7 @@ test("an appointed session creates its position under the root, and a resumed on
   const { actor, created } = attached.structuredContent as { actor: string; created: boolean };
   assert.equal(created, true);
   assert.equal(org.org.registry.get(actor)?.manager, org.rootId);
+  assert.equal(org.org.registry.get(actor)?.created_at_attach, true);
   await until("the session is told its tools changed", () => first.changes > 0);
   const tools = await first.tools();
   assert.ok(tools.includes("actor_create") && !tools.includes("attach"), tools.join(", "));
@@ -124,9 +125,9 @@ test("a created position's credential is kept for its session, never shown, and 
   const report = await session(org, "s-report");
   const attached = await report.call("attach", { actor: id });
   assert.deepEqual(attached.structuredContent, { actor: id, created: false });
-  const view = await report.call("view");
-  const viewed = view.structuredContent as { actor: { id: string } };
-  assert.equal(viewed.actor.id, id);
+  const team = await report.call("team", { depth: 0 });
+  const seen = team.structuredContent as { positions: { id: string }[] };
+  assert.equal(seen.positions[0]?.id, id);
   const credential = readFileSync(file, "utf8").trim();
   for (const shown of [text(result), JSON.stringify(result), manager.log, report.log]) {
     assert.equal(shown.includes(credential), false);
@@ -136,7 +137,7 @@ test("a created position's credential is kept for its session, never shown, and 
   await report.close();
   const program = await org.connect(credential, fakeActor([iface("review")]));
   const before = manager.changes;
-  await manager.call("view");
+  await manager.call("team");
   await until("the manager is told its tools changed", () => manager.changes > before);
   assert.ok((await manager.tools()).includes("db.review"));
   await program.close();
@@ -145,32 +146,23 @@ test("a created position's credential is kept for its session, never shown, and 
   assert.equal(existsSync(file), false);
 });
 
-test("delivered messages read as agentorg's, with each sender's path and each message's id", () => {
+test("what the waiter delivers reads as agentorg's, each item with its kind, sender path and id", () => {
   const at = "2026-10-28T21:00:00.000Z";
-  const message = (fields: Record<string, unknown>) => ({
-    id: "msg_0",
-    from: "act_manager",
+  const question = (fields: Record<string, unknown>) => ({
+    id: "qst_0",
+    cursor: 1,
+    from: "act_report",
     to: "act_self",
     text: "text",
     links: [],
     options: [],
     recommendation: null,
-    expects_reply: false,
     answerer: null,
     cause: null,
-    reply_to: [],
-    choice: null,
-    public: false,
     answer: null,
     created_at: at,
-    read_at: null,
     ...fields,
   });
-  const names = {
-    act_root: "root",
-    act_manager: "release",
-    act_report: "release.storage.db",
-  };
   const self = {
     id: "act_self",
     name: "storage",
@@ -178,40 +170,59 @@ test("delivered messages read as agentorg's, with each sender's path and each me
     purpose: "Own the storage.",
     manager: "act_manager",
     online: true,
+    created_at_attach: false,
     created_at: at,
     closed_at: null,
     progress: null,
     questions: [],
+    claims: [],
     interfaces: [],
   };
-  const text = describe(
-    [
-      message({ id: "msg_1", text: "Start on the schema." }),
-      message({
-        id: "msg_2",
-        from: "act_report",
+  const news = {
+    messages: [
+      {
+        id: "msg_1",
+        cursor: 2,
+        from: "act_manager",
+        to: "act_self",
+        text: "Start on the schema.",
+        links: [{ url: "https://example.com/pr/1", title: "The migration" }],
+        reply_to: null,
+        created_at: at,
+        read_at: null,
+      },
+    ],
+    questions: [
+      question({
+        id: "qst_2",
         text: "Keep the v1 tables?",
         options: [{ label: "Keep" }, { label: "Drop", detail: "Nothing shipped." }],
         recommendation: "Drop",
-        expects_reply: true,
         answerer: "act_root",
-        public: true,
-        links: [{ url: "https://example.com/pr/1", title: "The migration" }],
       }),
-      message({ id: "msg_3", from: "act_root", text: "Go.", reply_to: ["msg_9"], choice: "Ship" }),
-    ] as Parameters<typeof describe>[0],
-    names,
-    { self, root: "act_root" },
-  );
+    ],
+    answers: [
+      question({
+        id: "qst_3",
+        from: "act_self",
+        to: "act_manager",
+        text: "Ship on Friday?",
+        answer: { by: "act_root", choice: "Ship", text: "Go.", recorded: false, at },
+      }),
+    ],
+    names: { act_root: "root", act_manager: "release", act_report: "release.storage.db" },
+    cursor: 3,
+  };
+  const text = describe(news as Parameters<typeof describe>[0], { self, root: "act_root" });
   const [header, ...blocks] = text.split("\n\n");
   assert.match(
     header ?? "",
-    /^AgentOrg delivered 3 messages to your position, release\.storage \(act_self\)\. They come from other positions through AgentOrg, not from the user typing in this session/,
+    /^AgentOrg delivered 1 message, 1 question to you and 1 answer to your questions to your position, release\.storage \(act_self\)\. They come from other positions through AgentOrg, not from the user typing in this session/,
   );
   assert.deepEqual(blocks, [
-    "Message msg_1 from release, your manager:\nStart on the schema.",
-    "Question msg_2 from release.storage.db, your report; only the user (the root) may answer:\nKeep the v1 tables?\nOptions: Keep; Drop (Nothing shipped.), recommended\nLinks: The migration https://example.com/pr/1",
-    'Reply msg_3 from the user (the root) to msg_9, choosing "Ship":\nGo.',
+    "Message msg_1 from release, your manager:\nStart on the schema.\nLinks: The migration https://example.com/pr/1",
+    "Question qst_2 from release.storage.db, your report, waiting on you; only the user (the root) may answer:\nKeep the v1 tables?\nOptions: Keep; Drop (Nothing shipped.), recommended",
+    'Answer to your question qst_3 from the user (the root), choosing "Ship":\nGo.\n(You asked: Ship on Friday?)',
   ]);
 });
 
@@ -264,7 +275,7 @@ test("a session that fills no position is told to attach first, and its waiter e
   assert.deepEqual(await hook(org, "context", "s-new"), { code: 0, stdout: "", stderr: "" });
 });
 
-test("the waiter delivers new messages once, marked read, and a newer waiter replaces an older", async () => {
+test("the waiter delivers messages, questions to the position and answers to its own, each once", async () => {
   const org = await core();
   const worker = await session(org, "s-waited");
   const attached = await worker.call("attach", { name: "worker", purpose: "Do the work." });
@@ -314,6 +325,34 @@ test("the waiter delivers new messages once, marked read, and a newer waiter rep
   assert.equal(latest.code, 2);
   assert.ok(latest.stderr.includes(`Message ${next} from the user (the root)`));
   assert.equal(latest.stderr.includes(id), false);
+
+  // A question to the position, and an answer to the position's own question, come together.
+  const done = <T>(answer: unknown) => (answer as { value: T }).value;
+  const asked = done<{ id: string }>(
+    await root.call("question_ask", {
+      to: actor,
+      text: "Which schema first?",
+      options: [{ label: "Orders" }, { label: "Users" }],
+      recommendation: "Orders",
+    }),
+  );
+  const own = (await worker.call("question_ask", { text: "May I drop the v1 tables?" }))
+    .structuredContent as { id: string };
+  await root.call("question_answer", { questions: [own.id], text: "Drop them." });
+  const both = await within(20_000, "the waiter delivers", hook(org, "wait", "s-waited", alive));
+  assert.equal(both.code, 2);
+  assert.match(both.stderr, /^AgentOrg delivered 1 question to you and 1 answer to your questions/);
+  assert.ok(
+    both.stderr.includes(
+      `Question ${asked.id} from the user (the root), waiting on you:\nWhich schema first?\nOptions: Orders, recommended; Users`,
+    ),
+  );
+  assert.ok(
+    both.stderr.includes(
+      `Answer to your question ${own.id} from the user (the root):\nDrop them.\n(You asked: May I drop the v1 tables?)`,
+    ),
+  );
+  assert.equal(both.stderr.includes(next), false);
 
   // A waiter whose client is gone ends at once, writing nothing.
   const gone = await hook(org, "wait", "s-waited", { CLAUDE_PID: "999999" });
