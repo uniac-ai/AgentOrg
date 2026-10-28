@@ -44,7 +44,7 @@ export async function coreCommand(args: string[]): Promise<number> {
     port,
     onError: (actor, error) => note(`the channel of ${actor} failed to start: ${error.message}`),
   });
-  rootCredential(core.organization.registry, rootCredentialPath());
+  await rootCredential(core.organization.registry, rootCredentialPath());
   note(`core serving on ${core.url}; the root's credential is in ${rootCredentialPath()}`);
   await Promise.race([once(process, "SIGINT"), once(process, "SIGTERM")]);
   await core.close();

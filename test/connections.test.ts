@@ -12,30 +12,30 @@ import { CLOSE_REPLACED, CLOSE_REVOKED } from "../src/network/index.ts";
 import { SqliteStore } from "../src/storage/sqlite/index.ts";
 import { fakeActor, iface, startCore, until } from "./harness.ts";
 
-test("the first start creates the root and its credential file, readable only by its owner", () => {
+test("the first start creates the root and its credential file, readable only by its owner", async () => {
   const directory = mkdtempSync(join(tmpdir(), "agentorg-root-"));
   try {
     const file = join(directory, "root-credential");
     const store = new SqliteStore(join(directory, "core.db"));
     const { registry } = new Organization(store);
-    const credential = rootCredential(registry, file);
+    const credential = await rootCredential(registry, file);
     assert.equal(statSync(file).mode & 0o777, 0o600);
     const root = registry.root();
     assert.equal(root?.manager, null);
-    assert.equal(registry.byCredential(credential)?.id, root?.id);
+    assert.equal((await registry.byCredential(credential))?.id, root?.id);
     // A later start reads the same credential.
-    assert.equal(rootCredential(registry, file), credential);
+    assert.equal(await rootCredential(registry, file), credential);
 
     // Without the file, a new credential is minted and the old one stops working.
     rmSync(file);
-    const minted = rootCredential(registry, file);
+    const minted = await rootCredential(registry, file);
     assert.notEqual(minted, credential);
-    assert.equal(registry.byCredential(credential), undefined);
+    assert.equal(await registry.byCredential(credential), undefined);
     assert.equal(registry.root()?.id, root?.id);
 
     // A file that holds something else is refused rather than overwritten.
     writeFileSync(file, "not-the-credential\n", { mode: 0o600 });
-    assert.throws(() => rootCredential(registry, file), /does not hold the root's credential/);
+    await assert.rejects(rootCredential(registry, file), /does not hold the root's credential/);
     store.close();
   } finally {
     rmSync(directory, { recursive: true, force: true });
@@ -90,7 +90,7 @@ test("both endpoints refuse a missing or wrong credential and any request from a
 test("the core learns an actor's interfaces when it connects, again when they change, and marks it online", async () => {
   const core = await startCore();
   try {
-    const { actor: storage, credential } = core.org.registry.create(
+    const { actor: storage, credential } = await core.org.registry.create(
       core.rootId,
       "storage",
       "Storage",
@@ -115,7 +115,7 @@ test("the core learns an actor's interfaces when it connects, again when they ch
 test("a newer connection of the same actor replaces the older, which does not connect again", async () => {
   const core = await startCore();
   try {
-    const { actor, credential } = core.org.registry.create(core.rootId, "web", "Web");
+    const { actor, credential } = await core.org.registry.create(core.rootId, "web", "Web");
     const first = await core.connect(credential, fakeActor([iface("one")]));
     await until("first online", () => core.org.registry.get(actor.id)?.online === true);
     const firstLink = core.org.link(actor.id);
@@ -138,7 +138,7 @@ test("a newer connection of the same actor replaces the older, which does not co
 test("a closed actor's credential is refused and its connection ends for good", async () => {
   const core = await startCore();
   try {
-    const { actor, credential } = core.org.registry.create(core.rootId, "old", "Old");
+    const { actor, credential } = await core.org.registry.create(core.rootId, "old", "Old");
     const connection = await core.connect(credential);
     await until("online", () => core.org.registry.get(actor.id)?.online === true);
 
@@ -146,7 +146,7 @@ test("a closed actor's credential is refused and its connection ends for good", 
     await core.org.link(actor.id)?.close();
     await until("ended", () => connection.ended === CLOSE_REVOKED);
     assert.equal(core.org.registry.get(actor.id)?.online, false);
-    assert.equal(core.org.identify(credential), undefined);
+    assert.equal(await core.org.identify(credential), undefined);
     const refused = await fetch(`${core.url}${PATHS.request}`, {
       method: "POST",
       headers: { Authorization: `Bearer ${credential}` },
@@ -160,7 +160,7 @@ test("a closed actor's credential is refused and its connection ends for good", 
 test("an actor connects again after its connection drops", async () => {
   const core = await startCore();
   try {
-    const { actor, credential } = core.org.registry.create(core.rootId, "batch", "Batch");
+    const { actor, credential } = await core.org.registry.create(core.rootId, "batch", "Batch");
     await core.connect(credential, fakeActor([iface("run")]));
     await until("online", () => core.org.registry.get(actor.id)?.online === true);
     const before = core.org.link(actor.id);

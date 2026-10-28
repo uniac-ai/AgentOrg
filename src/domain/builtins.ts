@@ -38,7 +38,7 @@ export function builtins(
 
   return {
     actor_create: async (actor, request) => {
-      const { actor: created, credential } = registry.create(
+      const { actor: created, credential } = await registry.create(
         actor.id,
         request.name,
         request.purpose,

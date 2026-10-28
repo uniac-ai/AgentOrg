@@ -61,7 +61,7 @@ export class Organization implements Application, Presence {
   }
 
   /** Who a credential is: the id of its open actor. */
-  identify(credential: string): string | undefined {
+  identify(credential: string): Promise<string | undefined> {
     return this.registry.identify(credential);
   }
 

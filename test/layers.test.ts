@@ -35,9 +35,9 @@ const FILES = sources("src").map((file) => {
   return { file, text, imports };
 });
 
-/** A package matches its name and its subpaths; a folder, anything inside it. */
+/** A package matches its name and its subpaths; a folder or a scheme such as `node:`, anything in it. */
 const matches = (imported: string, pattern: string) =>
-  pattern.endsWith("/")
+  pattern.endsWith("/") || pattern.endsWith(":")
     ? imported.startsWith(pattern)
     : imported === pattern || imported.startsWith(`${pattern}/`);
 
@@ -51,18 +51,17 @@ function breaches(layer: string, forbidden: string[]): string[] {
 
 const MCP = "@modelcontextprotocol/";
 
-test("the domain imports no protocol, network, web framework, WebSocket or database", (t) => {
-  const forbidden = [MCP, "hono", "@hono/", "ws", "node:http", "node:sqlite"];
+test("the domain imports no protocol, network, web framework, WebSocket, database or Node built-in", (t) => {
+  const forbidden = [MCP, "hono", "@hono/", "ws", "node:"];
   const outer = ["src/network/", "src/bindings/", "src/storage/", "src/actor/", "src/core/"];
   assert.deepEqual(breaches("src/domain/", [...forbidden, ...outer, "src/cli/", "src/human/"]), []);
   t.diagnostic(`${FILES.filter(({ file }) => file.startsWith("src/domain/")).length} files`);
 });
 
-test("the domain's model, which the web app type-checks through, uses nothing Node-only", () => {
-  const model = FILES.filter(({ file }) => file.startsWith("src/domain/model/"));
-  assert.deepEqual(breaches("src/domain/model/", ["node:"]), []);
+test("the domain, whose model the web app type-checks through, uses no Node globals", () => {
+  const domain = FILES.filter(({ file }) => file.startsWith("src/domain/"));
   assert.deepEqual(
-    model.filter(({ text }) => /\bprocess\b/.test(text)).map(({ file }) => file),
+    domain.filter(({ text }) => /\b(process|Buffer)\b/.test(text)).map(({ file }) => file),
     [],
   );
 });

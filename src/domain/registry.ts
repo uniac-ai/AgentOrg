@@ -3,10 +3,10 @@
  *
  * Each actor has one credential, a random secret of which only the hash is kept; the credential is
  * shown once, when the actor is created. The root is the one actor without a manager. A closed
- * actor's credential no longer identifies it.
+ * actor's credential no longer identifies it. Secrets and hashes come from Web Crypto, so the
+ * domain runs wherever that does.
  */
 
-import { createHash, randomBytes } from "node:crypto";
 import type { z } from "zod";
 import { Conflict, NotFound } from "./errors.ts";
 import {
@@ -19,9 +19,24 @@ import type { ActorRow, Store } from "./ports.ts";
 
 export type { ActorRow };
 
-export const newId = (prefix: string) => `${prefix}_${randomBytes(5).toString("hex")}`;
-const digest = (credential: string) => createHash("sha256").update(credential).digest("hex");
-const mintCredential = () => randomBytes(32).toString("base64url");
+const random = (length: number) => crypto.getRandomValues(new Uint8Array(length));
+const hex = (bytes: Uint8Array) =>
+  Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+
+export const newId = (prefix: string) => `${prefix}_${hex(random(5))}`;
+
+/** A credential's SHA-256 hash, in hex: all the registry keeps of it. */
+async function digest(credential: string): Promise<string> {
+  const bytes = new TextEncoder().encode(credential);
+  return hex(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)));
+}
+
+/** 32 random bytes, in base64url. */
+const mintCredential = () =>
+  btoa(String.fromCharCode(...random(32)))
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replace(/=+$/, "");
 
 export class Registry {
   private readonly actors: Store["actors"];
@@ -37,31 +52,40 @@ export class Registry {
   }
 
   /** Create the root, the user's position, and return its credential. */
-  createRoot(): { root: ActorRow; credential: string } {
-    const { actor, credential } = this.insert(
-      null,
-      "root",
-      "The user, at the organization's root.",
-    );
-    return { root: actor, credential };
+  async createRoot(): Promise<{ root: ActorRow; credential: string }> {
+    const { credential, hash } = await this.mint();
+    return {
+      root: this.insert(null, "root", "The user, at the organization's root.", hash),
+      credential,
+    };
   }
 
   /** Create a report of `manager` and return it with its credential. */
-  create(manager: string, name: string, purpose: string): { actor: ActorRow; credential: string } {
+  async create(
+    manager: string,
+    name: string,
+    purpose: string,
+  ): Promise<{ actor: ActorRow; credential: string }> {
+    // Hashing waits, so it comes first: the check and the insert then run with nothing between.
+    const { credential, hash } = await this.mint();
     if (this.reports(manager).some((report) => report.name === name)) {
       throw new Conflict(`a report of ${manager} is already named ${name}`);
     }
-    return this.insert(manager, name, purpose);
+    return { actor: this.insert(manager, name, purpose, hash), credential };
   }
 
-  private insert(manager: string | null, name: string, purpose: string) {
+  private async mint(): Promise<{ credential: string; hash: string }> {
     const credential = mintCredential();
+    return { credential, hash: await digest(credential) };
+  }
+
+  private insert(manager: string | null, name: string, purpose: string, hash: string): ActorRow {
     const actor: ActorRow = {
       id: newId("act"),
       name,
       purpose,
       manager,
-      credential_hash: digest(credential),
+      credential_hash: hash,
       online: false,
       interfaces: [],
       status: null,
@@ -69,13 +93,13 @@ export class Registry {
       closed_at: null,
     };
     this.actors.insert(actor);
-    return { actor, credential };
+    return actor;
   }
 
   /** Replace an actor's credential, as when the root's file is lost, and return the new one. */
-  rotateCredential(id: string): string {
-    const credential = mintCredential();
-    this.actors.update({ ...this.found(id), credential_hash: digest(credential) });
+  async rotateCredential(id: string): Promise<string> {
+    const { credential, hash } = await this.mint();
+    this.actors.update({ ...this.found(id), credential_hash: hash });
     return credential;
   }
 
@@ -90,13 +114,13 @@ export class Registry {
   }
 
   /** The open actor whose credential this is. */
-  byCredential(credential: string): ActorRow | undefined {
-    return this.actors.byCredentialHash(digest(credential));
+  async byCredential(credential: string): Promise<ActorRow | undefined> {
+    return this.actors.byCredentialHash(await digest(credential));
   }
 
   /** The id of the open actor whose credential this is: who a connection is. */
-  identify(credential: string): string | undefined {
-    return this.byCredential(credential)?.id;
+  async identify(credential: string): Promise<string | undefined> {
+    return (await this.byCredential(credential))?.id;
   }
 
   /** The actor's open direct reports, oldest first. */
