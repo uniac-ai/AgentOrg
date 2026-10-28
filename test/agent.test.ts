@@ -215,6 +215,16 @@ test("delivered messages read as agentorg's, with each sender's path and each me
   ]);
 });
 
+/** `promise`, or a failure naming what never happened once `ms` pass. */
+function within<T>(ms: number, what: string, promise: Promise<T>): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error(`never happened: ${what}`)), ms).unref(),
+    ),
+  ]);
+}
+
 /** Run a hook's `agentorg agent` command for session `id`, as Claude Code runs it. */
 function hook(
   org: Core & { home: string },
@@ -293,14 +303,14 @@ test("the waiter delivers new messages once, marked read, and a newer waiter rep
   before = readFileSync(claim, "utf8");
   const newer = hook(org, "wait", "s-waited", alive);
   await claimed(before);
+  // The replaced waiter stops on its own, long before its read would end.
+  assert.deepEqual(await within(5000, "the replaced waiter stops", older), {
+    code: 0,
+    stdout: "",
+    stderr: "",
+  });
   const next = await send("Then the data.");
-  const [old, latest] = await Promise.race([
-    Promise.all([older, newer]),
-    new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error("never happened: both waiters ended")), 20_000).unref(),
-    ),
-  ]);
-  assert.deepEqual(old, { code: 0, stdout: "", stderr: "" });
+  const latest = await within(20_000, "the newer waiter delivers", newer);
   assert.equal(latest.code, 2);
   assert.ok(latest.stderr.includes(`Message ${next} from the user (the root)`));
   assert.equal(latest.stderr.includes(id), false);

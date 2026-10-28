@@ -43,20 +43,29 @@ export async function waitForMessages(options: WaitOptions): Promise<boolean> {
   if (actor === undefined) return false;
   sessions.claimWaiter(session, process.pid);
   const current = () => options.alive() && sessions.waiter(session) === process.pid;
-  for (let pause = 250; current(); pause = Math.min(pause * 2, 10_000)) {
-    const credential = credentials.read(actor);
-    if (credential === undefined) return false;
-    let client: Actor | undefined;
-    try {
-      client = await connectClient({ url: options.coreUrl, credential, name: "agentorg-waiter" });
-      return await deliver(client, options, current);
-    } catch {
-      await new Promise((resolve) => setTimeout(resolve, pause));
-    } finally {
-      await client?.close();
+  let client: Actor | undefined;
+  // A replaced waiter, or one whose client session ended, stops within a second rather than at
+  // the end of its read: closing the connection ends the read.
+  const watch = setInterval(() => {
+    if (!current()) void client?.close();
+  }, 1000);
+  try {
+    for (let pause = 250; current(); pause = Math.min(pause * 2, 10_000)) {
+      const credential = credentials.read(actor);
+      if (credential === undefined) return false;
+      try {
+        client = await connectClient({ url: options.coreUrl, credential, name: "agentorg-waiter" });
+        return await deliver(client, options, current);
+      } catch {
+        await new Promise((resolve) => setTimeout(resolve, pause));
+      } finally {
+        await client?.close();
+      }
     }
+    return false;
+  } finally {
+    clearInterval(watch);
   }
-  return false;
 }
 
 async function deliver(
