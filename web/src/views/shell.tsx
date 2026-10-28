@@ -1,8 +1,9 @@
-// The app shell: the organization as a sidebar, like a messaging app's people list, and the
-// selected pane beside it. At phone width the sidebar becomes a sheet.
+// The app shell: the organization as a sidebar, like a messaging app's people list, with the
+// shared resources each actor holds under its name, and the selected pane beside it. At phone
+// width the sidebar becomes a sheet.
 
 import { Link } from "@tanstack/react-router";
-import { ActivityIcon, ChevronRightIcon, UnplugIcon, UserRoundIcon } from "lucide-react";
+import { ActivityIcon, ChevronRightIcon, LockIcon, UnplugIcon, UserRoundIcon } from "lucide-react";
 import { useEffect } from "react";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
@@ -24,6 +25,31 @@ import {
 import { cn } from "@/lib/utils";
 import type { ShellModel, SidebarNode } from "../control/shell.tsx";
 import { OnlineMark, StateMark, StateName } from "./marks.tsx";
+
+/** The shared resources an actor holds, a lock and a name each; the note shows on hover. */
+function Claims({ claims }: { claims: SidebarNode["member"]["claims"] }) {
+  if (claims.length === 0) return null;
+  return (
+    <ul aria-label="Holds" className="flex flex-col pb-0.5 pl-7">
+      {claims.map((claim) => {
+        const until = claim.until
+          ? `, until ${new Date(claim.until).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
+          : "";
+        return (
+          <li
+            key={claim.resource}
+            title={`${claim.note}${until}`}
+            className="flex min-w-0 items-center gap-1 text-xs text-sidebar-foreground/70"
+          >
+            <LockIcon aria-hidden="true" className="size-3 shrink-0" />
+            <span className="truncate font-mono">{claim.resource}</span>
+            <span className="sr-only">{`: ${claim.note}${until}`}</span>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
 
 function ActorItem({ node, selected }: { node: SidebarNode; selected: string | undefined }) {
   const { member, waiting } = node;
@@ -50,6 +76,7 @@ function ActorItem({ node, selected }: { node: SidebarNode; selected: string | u
           <span className="sr-only"> waiting on it</span>
         </SidebarMenuBadge>
       ) : null}
+      <Claims claims={member.claims} />
     </>
   );
   if (!hasChildren) return <SidebarMenuItem>{item}</SidebarMenuItem>;
