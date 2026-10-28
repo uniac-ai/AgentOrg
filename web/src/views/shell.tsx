@@ -24,36 +24,31 @@ import {
 import { cn } from "@/lib/utils";
 import type { ShellModel } from "../control/shell.tsx";
 import type { OrgNode } from "../model/organization.ts";
-import { ClientMark, StateMark, StateName } from "./marks.tsx";
+import { OnlineMark, StateMark, StateName } from "./marks.tsx";
 
-function AgentItem({ node, selected }: { node: OrgNode; selected: string | undefined }) {
-  const { agent, asks_to_answer, unread_messages, attached_session } = node.summary;
+function ActorItem({ node, selected }: { node: OrgNode; selected: string | undefined }) {
+  const { actor, pending } = node.view;
   const hasChildren = node.children.length > 0;
   const item = (
     <>
       <SidebarMenuButton
-        isActive={selected === agent.id}
-        render={<Link to="/people/$agentId" params={{ agentId: agent.id }} />}
+        isActive={selected === actor.id}
+        render={<Link to="/people/$actorId" params={{ actorId: actor.id }} />}
       >
-        <StateMark agent={agent} />
-        <span className={cn("truncate", unread_messages > 0 && "font-semibold")}>
-          {agent.title}
-        </span>
-        <StateName agent={agent} />
-        {attached_session ? <ClientMark client={attached_session.client} live /> : null}
-        {unread_messages > 0 ? (
-          <span className="sr-only">, {unread_messages} unread messages</span>
-        ) : null}
+        <StateMark actor={actor} />
+        <span className="truncate">{actor.name}</span>
+        <StateName actor={actor} />
+        {actor.online ? <OnlineMark /> : null}
       </SidebarMenuButton>
-      {asks_to_answer > 0 ? (
+      {pending.length > 0 ? (
         <SidebarMenuBadge
           className={cn(
             "bg-state-waiting/15 text-state-waiting peer-hover/menu-button:text-state-waiting peer-data-active/menu-button:text-state-waiting",
             hasChildren && "right-7",
           )}
         >
-          {asks_to_answer}
-          <span className="sr-only"> asks to answer</span>
+          {pending.length}
+          <span className="sr-only"> waiting on it</span>
         </SidebarMenuBadge>
       ) : null}
     </>
@@ -65,7 +60,7 @@ function AgentItem({ node, selected }: { node: OrgNode; selected: string | undef
       <CollapsibleTrigger
         render={
           <SidebarMenuAction
-            aria-label={`${agent.title}: agents under it`}
+            aria-label={`${actor.name}: actors under it`}
             className="data-[panel-open]:rotate-90"
           />
         }
@@ -75,7 +70,7 @@ function AgentItem({ node, selected }: { node: OrgNode; selected: string | undef
       <CollapsibleContent>
         <SidebarMenuSub className="mr-0 pr-0">
           {node.children.map((child) => (
-            <AgentItem key={child.summary.agent.id} node={child} selected={selected} />
+            <ActorItem key={child.view.actor.id} node={child} selected={selected} />
           ))}
         </SidebarMenuSub>
       </CollapsibleContent>
@@ -92,7 +87,7 @@ function CloseSheetOn({ place }: { place: string }) {
 }
 
 export function ShellView({ organization, waitingOnYou, offline, place, path, pane }: ShellModel) {
-  const selected = place.view === "agent" ? place.id : undefined;
+  const selected = place.view === "actor" ? place.id : undefined;
   return (
     <SidebarProvider>
       <CloseSheetOn place={selected ?? place.view} />
@@ -134,14 +129,14 @@ export function ShellView({ organization, waitingOnYou, offline, place, path, pa
                       </SidebarMenuItem>
                     ))
                   : organization.map((node) => (
-                      <AgentItem key={node.summary.agent.id} node={node} selected={selected} />
+                      <ActorItem key={node.view.actor.id} node={node} selected={selected} />
                     ))}
               </SidebarMenu>
             </nav>
           </SidebarGroup>
         </SidebarContent>
       </Sidebar>
-      <SidebarInset>
+      <SidebarInset className="h-svh min-w-0">
         <header className="flex h-12 shrink-0 items-center gap-2 border-b px-3">
           <SidebarTrigger />
           {place.view === "you" ? (
@@ -156,11 +151,11 @@ export function ShellView({ organization, waitingOnYou, offline, place, path, pa
                 className="flex min-w-0 items-center gap-1 text-muted-foreground"
               >
                 <Link
-                  to="/people/$agentId"
-                  params={{ agentId: manager.id }}
+                  to="/people/$actorId"
+                  params={{ actorId: manager.id }}
                   className="truncate hover:text-foreground"
                 >
-                  {manager.title}
+                  {manager.name}
                 </Link>
                 <ChevronRightIcon aria-hidden="true" className="size-3.5 shrink-0" />
               </span>
@@ -176,7 +171,7 @@ export function ShellView({ organization, waitingOnYou, offline, place, path, pa
             </span>
           ) : null}
         </header>
-        <div className="min-h-0 flex-1 overflow-hidden">{pane}</div>
+        <div className="relative min-h-0 flex-1 overflow-y-auto">{pane}</div>
       </SidebarInset>
     </SidebarProvider>
   );

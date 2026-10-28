@@ -10,7 +10,6 @@ const FILLS: Record<ProgressState, string> = {
   review: "bg-state-review",
   waiting: "bg-state-waiting",
   blocked: "bg-state-blocked",
-  pending: "bg-state-pending/40",
   idle: "bg-state-pending/70",
   closed: "bg-state-closed",
 };

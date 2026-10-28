@@ -1,5 +1,6 @@
 /**
- * The human actor's HTTP surface, on its own origin: sign-in, and the web app's API under `/api`.
+ * The human actor's HTTP surface, on its own origin: the web app (`web.ts`), its sign-in, and its
+ * API under `/api`.
  *
  * `POST /signin/link` mints a one-time sign-in link for `agentorg ui`, which presents the root
  * credential; like every agent surface it refuses requests from web pages. `GET /signin` redeems a
@@ -24,6 +25,7 @@ import {
   type PendingList,
   type SessionBootstrap,
 } from "./types.ts";
+import { web } from "./web.ts";
 
 class ApiError extends Error {
   readonly status: ContentfulStatusCode;
@@ -41,7 +43,7 @@ type Env = { Variables: { session: Session } };
 const resultText = (result: CallToolResult) =>
   result.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n");
 
-/** A call's structured result; a refusal becomes an error response. */
+/** A call's output; a refusal becomes an error response, so no protocol shape reaches the app. */
 function structured(result: CallToolResult): Record<string, unknown> {
   if (result.isError) throw new ApiError(400, "refused", resultText(result));
   return result.structuredContent ?? {};
@@ -145,7 +147,7 @@ export function humanApp(options: {
   api.get("/tools", async (c) => c.json({ tools: await core.tools() }));
 
   api.post("/tools/:name", async (c) =>
-    c.json(await core.call(c.req.param("name"), await body(c))),
+    c.json(structured(await core.call(c.req.param("name"), await body(c)))),
   );
 
   api.get("/view", async (c) => c.json(structured(await core.call("view", {}))));
@@ -164,5 +166,6 @@ export function humanApp(options: {
   });
 
   app.route("/api", api);
+  app.route("/", web);
   return app;
 }

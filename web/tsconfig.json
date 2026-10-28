@@ -10,7 +10,7 @@
     "noUncheckedIndexedAccess": true,
     "verbatimModuleSyntax": true,
     "jsx": "react-jsx",
-    "types": ["vite/client"],
+    "types": ["vite/client", "node"],
     "paths": { "@/*": ["./src/*"] },
     "skipLibCheck": true
   },

@@ -1,22 +1,25 @@
-// Activity, control: every write on the record, newest first, with the agents and asks it names
-// resolved for display, and each status set with its summary. The list starts at a page and
-// grows on request.
+// Activity, control: every write and every routed call on the record, newest first, with the
+// actors and calls each names resolved for display. The list starts at a page and grows on request.
 
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
-import type { AgentRecord, AskRecord, PageActivity } from "../../../src/page/types.ts";
-import { activityQuery, agentsQuery, allAsksQuery } from "../data/queries.ts";
+import type { AuditRecord, CallRecord } from "../../../src/human/types.ts";
+import { activityQuery, organizationQuery } from "../data/queries.ts";
+import { calls } from "../model/organization.ts";
 import { ActivityView } from "../views/activity.tsx";
+import type { Names } from "../views/calls.tsx";
 import { PaneSkeleton } from "../views/states.tsx";
+import { namesOf } from "./entity.tsx";
 
 const PAGE = 100;
-
-export type ActivityEntry = PageActivity["entries"][number];
+const MAX = 1000;
 
 export interface ActivityModel {
-  entries: ActivityEntry[];
-  agents: ReadonlyMap<string, AgentRecord>;
-  asks: ReadonlyMap<string, AskRecord>;
+  entries: AuditRecord[];
+  names: Names;
+  /** The root's id: entries by it are the user's own. */
+  root: string | undefined;
+  calls: ReadonlyMap<string, CallRecord>;
   /** Whether older entries may exist beyond those shown. */
   more: boolean;
   onShowMore: () => void;
@@ -25,15 +28,16 @@ export interface ActivityModel {
 export function ActivityControl() {
   const [limit, setLimit] = useState(PAGE);
   const activity = useQuery(activityQuery(limit));
-  const agents = useQuery(agentsQuery);
-  const asks = useQuery(allAsksQuery);
+  const organization = useQuery(organizationQuery);
   if (!activity.data) return <PaneSkeleton />;
+  const org = organization.data;
   const model: ActivityModel = {
     entries: activity.data.entries,
-    agents: new Map(agents.data?.agents.map(({ agent }) => [agent.id, agent])),
-    asks: new Map(asks.data?.asks.map((ask) => [ask.id, ask])),
-    more: activity.data.more && limit < 1000,
-    onShowMore: () => setLimit((current) => Math.min(1000, current + PAGE * 3)),
+    names: org ? namesOf(org) : new Map(),
+    root: org?.root,
+    calls: org ? calls(org) : new Map(),
+    more: activity.data.entries.length === limit && limit < MAX,
+    onShowMore: () => setLimit((current) => Math.min(MAX, current + PAGE * 3)),
   };
   return <ActivityView {...model} />;
 }

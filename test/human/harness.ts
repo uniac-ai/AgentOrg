@@ -94,8 +94,9 @@ export async function program(
   post: (path: string, body: unknown) => Promise<Response>,
   name = "storage",
 ) {
-  const created = await json(post("/api/tools/actor_create", { name, purpose: "Move storage." }));
-  const { actor, credential } = created.structuredContent;
+  const { actor, credential } = await json(
+    post("/api/tools/actor_create", { name, purpose: "Move storage." }),
+  );
   const reviews = fakeActor([REVIEW], async (params) =>
     structured({ verdict: `looked at ${params.arguments?.change}` }),
   );

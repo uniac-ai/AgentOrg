@@ -1,11 +1,12 @@
 /**
- * The typed client of the page's JSON routes under `/ui/api`. Reads send the page session's
- * cookie; writes also carry its CSRF token, which the session bootstrap hands over.
+ * The typed client of the human actor's API under `/api`. Reads send the session's cookie; writes
+ * also carry its CSRF token, which the session bootstrap hands over. The app reaches the core only
+ * through it.
  */
 
-import { CSRF_HEADER, type PageError } from "../../../src/page/types.ts";
+import { type ApiErrorBody, CSRF_HEADER } from "../../../src/human/types.ts";
 
-/** A refused or failed request. `status` 0 means the service could not be reached. */
+/** A refused or failed request. `status` 0 means the human actor could not be reached. */
 export class ApiError extends Error {
   readonly status: number;
   readonly code: string;
@@ -26,10 +27,12 @@ export function keepCsrfToken(token: string) {
   csrfToken = token;
 }
 
+export const path = (...parts: string[]) => `/${parts.map(encodeURIComponent).join("/")}`;
+
 export async function request<T>(path: string, write?: { body?: unknown }): Promise<T> {
   let response: Response;
   try {
-    response = await fetch(`/ui/api${path}`, {
+    response = await fetch(`/api${path}`, {
       method: write ? "POST" : "GET",
       credentials: "same-origin",
       headers: write ? { "Content-Type": "application/json", [CSRF_HEADER]: csrfToken } : {},
@@ -39,7 +42,7 @@ export async function request<T>(path: string, write?: { body?: unknown }): Prom
     throw new ApiError(0, "unreachable", "agentorg is not reachable");
   }
   if (!response.ok) {
-    const error = (await response.json().catch(() => null)) as PageError | null;
+    const error = (await response.json().catch(() => null)) as ApiErrorBody | null;
     throw new ApiError(
       response.status,
       error?.code ?? "error",
@@ -48,3 +51,7 @@ export async function request<T>(path: string, write?: { body?: unknown }): Prom
   }
   return (await response.json()) as T;
 }
+
+/** Call one of the user's available tools and return its output; a refusal throws. */
+export const callTool = <T>(name: string, args: Record<string, unknown>) =>
+  request<T>(path("tools", name), { body: args });

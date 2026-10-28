@@ -1,32 +1,35 @@
-// ⌘K (or Ctrl+K), control: jump to a view, an agent or an open ask. An ask opens where it
-// waits: in the user's own view when it is addressed to the user, else in its addressee's view.
+// ⌘K (or Ctrl+K), control: jump to a view, an actor or a pending call. A call opens where it
+// waits: in the user's own view when it waits on the user, else in its callee's view.
 
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
 import { useKeys } from "@/lib/keys";
-import type { AgentRecord, AskRecord } from "../../../src/page/types.ts";
-import { agentsQuery, openAsksQuery } from "../data/queries.ts";
+import type { ActorRecord, CallRecord } from "../../../src/human/types.ts";
+import { organizationQuery } from "../data/queries.ts";
+import { flatten, tree } from "../model/organization.ts";
+import type { Names } from "../views/calls.tsx";
 import { PaletteView } from "../views/palette.tsx";
+import { namesOf } from "./entity.tsx";
 
 export type Destination = "/" | "/activity";
 
 export interface PaletteModel {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  agents: AgentRecord[];
-  asks: AskRecord[];
-  byId: ReadonlyMap<string, AgentRecord>;
+  actors: ActorRecord[];
+  /** Every call waiting on someone, oldest first. */
+  calls: CallRecord[];
+  names: Names;
   onView: (to: Destination) => void;
-  onAgent: (agent: AgentRecord) => void;
-  onAsk: (ask: AskRecord) => void;
+  onActor: (actor: ActorRecord) => void;
+  onCall: (call: CallRecord) => void;
 }
 
 export function PaletteControl() {
   const [open, setOpen] = useState(false);
   const navigate = useNavigate();
-  const agents = useQuery(agentsQuery);
-  const asks = useQuery(openAsksQuery);
+  const organization = useQuery(organizationQuery);
   useKeys((event) => {
     if (event.key.toLowerCase() !== "k" || !(event.metaKey || event.ctrlKey)) return false;
     setOpen((current) => !current);
@@ -36,23 +39,27 @@ export function PaletteControl() {
     setOpen(false);
     void to();
   };
-  const all = agents.data?.agents.map(({ agent }) => agent) ?? [];
+  const org = organization.data;
   const model: PaletteModel = {
     open,
     onOpenChange: setOpen,
-    agents: all.filter((agent) => agent.state !== "closed"),
-    asks: asks.data?.asks ?? [],
-    byId: new Map(all.map((agent) => [agent.id, agent])),
+    actors: org ? flatten(tree(org)) : [],
+    calls: org
+      ? Object.values(org.views)
+          .flatMap((view) => view.pending)
+          .sort((a, b) => a.created_at.localeCompare(b.created_at))
+      : [],
+    names: org ? namesOf(org) : new Map(),
     onView: (to) => go(() => navigate({ to })),
-    onAgent: (agent) =>
-      go(() => navigate({ to: "/people/$agentId", params: { agentId: agent.id } })),
-    onAsk: (ask) =>
+    onActor: (actor) =>
+      go(() => navigate({ to: "/people/$actorId", params: { actorId: actor.id } })),
+    onCall: (call) =>
       go(() =>
-        ask.to === null
-          ? navigate({ to: "/asks/$askId", params: { askId: ask.id } })
+        call.to === org?.root
+          ? navigate({ to: "/calls/$callId", params: { callId: call.id } })
           : navigate({
-              to: "/people/$agentId/asks/$askId",
-              params: { agentId: ask.to, askId: ask.id },
+              to: "/people/$actorId/calls/$callId",
+              params: { actorId: call.to, callId: call.id },
             }),
       ),
   };

@@ -1,53 +1,62 @@
 /**
- * The organization as the app shows it: the open agents as a tree under the user, and the path
- * from the user down to any agent.
+ * The organization as the app shows it: the views of the root and every open actor under it, as a
+ * tree of reports, and the path from the root down to any actor.
  */
 
-import type { AgentRecord, AgentSummary } from "../../../src/page/types.ts";
+import type { ActorRecord, CallRecord, ViewRecord } from "../../../src/human/types.ts";
+
+/** Every open actor's view, by actor id, from the root down. */
+export interface Organization {
+  root: string;
+  views: Record<string, ViewRecord>;
+}
 
 export interface OrgNode {
-  summary: AgentSummary;
+  view: ViewRecord;
   children: OrgNode[];
 }
 
-/** The agents that are not closed, as a tree in the order given; one without a listed manager is a root. */
-export function organization(agents: readonly AgentSummary[]): OrgNode[] {
-  const open = agents.filter(({ agent }) => agent.state !== "closed");
-  const nodes = new Map(open.map((summary) => [summary.agent.id, { summary, children: [] }]));
-  const roots: OrgNode[] = [];
-  for (const node of nodes.values()) {
-    const manager = node.summary.agent.manager;
-    const parent = manager === null ? undefined : nodes.get(manager);
-    (parent?.children ?? roots).push(node);
-  }
-  return roots;
+/** The actors under `id` as a tree, in the order their views list them; the root's is everyone. */
+export function tree(organization: Organization, id = organization.root): OrgNode[] {
+  return (organization.views[id]?.reports ?? []).flatMap((report) => {
+    const view = organization.views[report.id];
+    return view ? [{ view, children: tree(organization, report.id) }] : [];
+  });
 }
 
-/** The managers above an agent, outermost first; an unknown or cyclic manager ends the path. */
-export function managers(id: string, agents: ReadonlyMap<string, AgentRecord>): AgentRecord[] {
-  const above: AgentRecord[] = [];
-  for (let next = agents.get(id)?.manager ?? null; next !== null; ) {
-    const manager = agents.get(next);
-    if (manager === undefined || above.includes(manager)) break;
+/** Every actor the organization's views show, by id. */
+export function actors(organization: Organization): Map<string, ActorRecord> {
+  const all = new Map<string, ActorRecord>();
+  for (const view of Object.values(organization.views)) {
+    for (const actor of [view.actor, ...(view.manager ? [view.manager] : []), ...view.reports]) {
+      if (!all.has(actor.id)) all.set(actor.id, actor);
+    }
+  }
+  return all;
+}
+
+/** Every call the organization's views show, by id. */
+export function calls(organization: Organization): Map<string, CallRecord> {
+  const all = new Map<string, CallRecord>();
+  for (const view of Object.values(organization.views)) {
+    for (const call of [...view.pending, ...view.open_calls, ...view.history])
+      all.set(call.id, call);
+  }
+  return all;
+}
+
+/** The managers above an actor, outermost first, without the root; an unknown one ends the path. */
+export function managers(id: string, known: ReadonlyMap<string, ActorRecord>): ActorRecord[] {
+  const above: ActorRecord[] = [];
+  for (let next = known.get(id)?.manager ?? null; next !== null; ) {
+    const manager = known.get(next);
+    if (manager === undefined || manager.manager === null || above.includes(manager)) break;
     above.unshift(manager);
     next = manager.manager;
   }
   return above;
 }
 
-/** The tree below an entity: the user's (null) is the whole organization. */
-export function below(tree: OrgNode[], id: string | null): OrgNode[] {
-  if (id === null) return tree;
-  const find = (nodes: OrgNode[]): OrgNode | undefined => {
-    for (const node of nodes) {
-      const found = node.summary.agent.id === id ? node : find(node.children);
-      if (found) return found;
-    }
-    return undefined;
-  };
-  return find(tree)?.children ?? [];
-}
-
-/** Every agent in a tree, in order. */
-export const flatten = (nodes: OrgNode[]): AgentSummary[] =>
-  nodes.flatMap((node) => [node.summary, ...flatten(node.children)]);
+/** Every actor in a tree, in order. */
+export const flatten = (nodes: OrgNode[]): ActorRecord[] =>
+  nodes.flatMap((node) => [node.view.actor, ...flatten(node.children)]);
