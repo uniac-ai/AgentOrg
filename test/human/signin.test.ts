@@ -18,11 +18,11 @@ test("a sign-in link takes the root credential, and never comes from a web page"
     assert.equal(refused.headers.get("www-authenticate"), "Bearer");
   }
   const fromPage = await mint({
-    Authorization: `Bearer ${core.credential}`,
+    Authorization: `Bearer ${core.root}`,
     Origin: "http://127.0.0.1:8741",
   });
   assert.equal(fromPage.status, 403);
-  const minted = await mint({ Authorization: `Bearer ${core.credential}` });
+  const minted = await mint({ Authorization: `Bearer ${core.root}` });
   assert.match((await json(minted)).path, /^\/signin\?token=[\w-]{43}$/);
 });
 
@@ -45,7 +45,7 @@ test("a sign-in link works once", async () => {
   const { actor, core } = await setup();
   const minted = await fetch(`${actor.url}/signin/link`, {
     method: "POST",
-    headers: { Authorization: `Bearer ${core.credential}` },
+    headers: { Authorization: `Bearer ${core.root}` },
   });
   const { path } = await json(minted);
   assert.ok((await fetch(actor.url + path, { redirect: "manual" })).headers.get("set-cookie"));
@@ -80,8 +80,8 @@ test("without a current session, every API route answers signed out", async () =
 });
 
 test("every write carries the session's CSRF token", async () => {
-  const { core, post, csrf, pending } = await setup();
-  const call = core.deliver("note", { text: "Read me." });
+  const { storage, post, csrf, pending } = await setup();
+  const call = await storage.ask("note", { text: "Read me." });
   await pending(call);
   for (const token of [undefined, "", `${csrf.slice(0, -1)}x`]) {
     const headers = token === undefined ? {} : { [CSRF_HEADER]: token };
@@ -89,7 +89,7 @@ test("every write carries the session's CSRF token", async () => {
     assert.equal(response.status, 403);
     assert.equal((await json(response)).code, "forbidden");
   }
-  assert.equal(core.calls.get(call)?.state, "pending");
+  assert.equal((await storage.result(call, 0)).state, "pending");
   assert.equal((await post(`/api/pending/${call}`)).status, 200);
 });
 

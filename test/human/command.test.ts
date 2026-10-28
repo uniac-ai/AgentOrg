@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { createServer } from "node:net";
 import { test } from "node:test";
 import { until } from "../harness.ts";
-import { fakeCore } from "./fake-core.ts";
+import { online, core as startCore } from "./harness.ts";
 
 const BIN = new URL("../../src/cli/bin.js", import.meta.url).pathname;
 
@@ -32,16 +32,16 @@ async function freePort(): Promise<number> {
 }
 
 test("agentorg human serves as the root of the core, and agentorg ui prints its sign-in link", async () => {
-  const core = await fakeCore();
+  const core = await startCore();
   const port = await freePort();
   const env = {
     AGENTORG_URL: core.url,
-    AGENTORG_CREDENTIAL: core.credential,
+    AGENTORG_CREDENTIAL: core.root,
     AGENTORG_HUMAN_PORT: String(port),
   };
   const running = agentorg(["human"], env);
   try {
-    await until("the human actor comes online", () => core.onlines() > 0);
+    await until("the human actor comes online", () => online(core));
     const ui = await agentorg(["ui"], { ...env, BROWSER: "/usr/bin/false" });
     assert.equal(ui.code, 0, ui.stderr);
     const link = ui.stdout.trim();
@@ -51,7 +51,6 @@ test("agentorg human serves as the root of the core, and agentorg ui prints its 
   } finally {
     running.child.kill("SIGTERM");
     const stopped = await running;
-    await core.close();
     assert.equal(stopped.code, 0, stopped.stderr);
   }
 });
