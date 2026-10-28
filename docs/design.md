@@ -159,6 +159,10 @@ The agent actor, `agentorg agent` in `src/agent/`, lets a Claude Code or Codex s
   - The waiter waits, as the position, for what the session has not seen: unread messages to the position, questions addressed to it, and answers to its own questions. The session's cursor, a place in the sequence questions and messages share, marks what was delivered.
   - It writes them framed as agentorg's, each with its kind, its sender's path and its id, marks the messages read, and exits with status 2. Claude Code hands that output to the session as its next input, starting a turn when the session is idle.
   - A newer waiter replaces an older one, which then ends without writing. Delivery is at least once.
+- **Answers recorded from the user's words.** When the user answers a question in the asking session itself, the session records the answer with `question_answer {recorded: true}`.
+  - The client's prompt hook, `agentorg agent prompt`, keeps the words the user last typed in the session, in `sessions/<client>-<session id>/prompt`. It doesn't keep what the client delivers wrapped in an element, such as the waiter's output or another session's message.
+  - The agent actor passes a recorded answer on only when those words came after every question it answers. It puts the words in the answer's text verbatim, in place of the session's own text, and then forgets them.
+  - The core refuses a recorded answer to a question that names an answerer.
 
 ## The network
 

@@ -1,9 +1,11 @@
 /**
  * What the agent actor presents to its session. Until the session fills a position, that is
  * `attach` alone, the actor's sign-in. Once it does, it is the position's available interfaces as
- * the core offers them, passed through unchanged, with one exception: a credential that
+ * the core offers them, passed through unchanged, with two exceptions. A credential that
  * `actor_create` returns is kept in the credential store, and the session sees that it was kept,
- * never the credential.
+ * never the credential. And an answer the session records from the user's words, with
+ * `question_answer {recorded: true}`, carries the words the user last typed in the session,
+ * verbatim, and only words typed after every question it answers.
  */
 
 import { existsSync } from "node:fs";
@@ -16,6 +18,7 @@ import {
   type InterfaceDescriptor,
   type Offer,
   objectSchema,
+  type QuestionsResult,
   type ResponseOf,
   Text,
 } from "../domain/model/index.ts";
@@ -117,7 +120,14 @@ export class Agent implements Presented {
     const wait = typeof input.wait === "number" ? input.wait : 0;
     const timeout = Math.max(DEFAULT_TIMEOUT_SECONDS, wait + MARGIN_SECONDS);
     try {
-      const answer = await position.call(name, input, { ...options, timeoutMs: timeout * 1000 });
+      const recorded = name === "question_answer" && input.recorded === true;
+      const typed = recorded ? await this.#typed(position, input.questions) : undefined;
+      if (typeof typed === "object") return typed;
+      const sent = typed === undefined ? input : { ...input, text: typed };
+      const answer = await position.call(name, sent, { ...options, timeoutMs: timeout * 1000 });
+      if (typed !== undefined && answer.state === "done" && this.#options.session !== undefined) {
+        sessions.forgetTyped(this.#options.session);
+      }
       await this.#refresh();
       return this.#withheld(name, answer);
     } catch (error) {
@@ -200,6 +210,37 @@ export class Agent implements Presented {
     this.#position = position;
     this.#offers = await position.available();
     this.#changed();
+  }
+
+  /**
+   * The words the user last typed in this session, for an answer the session records: refused
+   * unless they came after every question it answers, which the session asked.
+   */
+  async #typed(position: Actor, questions: unknown): Promise<string | Answer> {
+    const session = this.#options.session;
+    const typed = session === undefined ? undefined : sessions.typed(session);
+    if (typed === undefined) {
+      return refused(
+        "forbidden",
+        "the user has typed nothing in this session to record: a recorded answer quotes the words the user typed here, after the question; ask the user, or let them answer in the web app",
+      );
+    }
+    const asked = await position.call("questions", { from: this.#filled, open: true, limit: 200 });
+    if (asked.state !== "done") return asked;
+    const open = (asked.value as z.output<typeof QuestionsResult>).questions;
+    const ids = Array.isArray(questions) ? questions : [];
+    const later = open.filter(
+      (question) =>
+        ids.includes(question.id) && Date.parse(question.created_at) >= Date.parse(typed.at),
+    );
+    if (later.length > 0) {
+      const names = later.map((question) => question.id).join(", ");
+      return refused(
+        "forbidden",
+        `the user last typed in this session before ${names} was asked; ask the user, then record what they type`,
+      );
+    }
+    return typed.text;
   }
 
   /** List the offers again, since the core tells no caller when they change. */

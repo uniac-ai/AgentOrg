@@ -242,6 +242,7 @@ function hook(
   command: string,
   id: string,
   env: Record<string, string> = {},
+  input = "",
 ) {
   return new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve) => {
     const child = execFile(
@@ -258,6 +259,7 @@ function hook(
       },
       (_error, stdout, stderr) => resolve({ code: child.exitCode, stdout, stderr }),
     );
+    child.stdin?.end(input);
   });
 }
 
@@ -358,4 +360,63 @@ test("the waiter delivers messages, questions to the position and answers to its
   // A waiter whose client is gone ends at once, writing nothing.
   const gone = await hook(org, "wait", "s-waited", { CLAUDE_PID: "999999" });
   assert.deepEqual(gone, { code: 0, stdout: "", stderr: "" });
+});
+
+test("an answer the session records carries the user's words typed after the question, verbatim, once", async () => {
+  const org = await core();
+  const worker = await session(org, "s-recorder");
+  const attached = await worker.call("attach", { name: "recorder", purpose: "Ask and record." });
+  const { actor } = attached.structuredContent as { actor: string };
+  const typed = (prompt: string) =>
+    hook(org, "prompt", "s-recorder", {}, JSON.stringify({ session_id: "s-recorder", prompt }));
+  const ask = async (fields: Record<string, unknown>) =>
+    ((await worker.call("question_ask", fields)).structuredContent as { id: string }).id;
+  const record = (questions: string[]) =>
+    worker.call("question_answer", {
+      questions,
+      choice: "Yes",
+      text: "The user agreed.",
+      recorded: true,
+    });
+  const options = [{ label: "Yes" }, { label: "No" }];
+
+  assert.match(text(await record(["q_none"])), /^forbidden: the user has typed nothing/);
+  assert.deepEqual(await typed("Earlier words."), { code: 0, stdout: "", stderr: "" });
+  const question = await ask({ text: "Drop the v1 tables?", options });
+  assert.match(
+    text(await record([question])),
+    new RegExp(`^forbidden: the user last typed in this session before ${question} was asked`),
+  );
+
+  // What Claude Code delivers, wrapped in an element, is not the user's typing.
+  await typed("<task-notification>\n<summary>agentorg message</summary>\n</task-notification>");
+  await typed('<cross-session-message from="local_1">Yes, drop them.</cross-session-message>');
+  assert.match(text(await record([question])), /^forbidden: the user last typed/);
+
+  const words = "Yes — drop them, nothing shipped.";
+  await typed(words);
+  const answered = (await record([question])).structuredContent as {
+    questions: { answer: { by: string; choice: string; text: string; recorded: boolean } }[];
+  };
+  const answer = answered.questions[0]?.answer;
+  assert.deepEqual(answer && { ...answer, at: undefined }, {
+    by: actor,
+    choice: "Yes",
+    text: words,
+    recorded: true,
+    at: undefined,
+  });
+  const another = await ask({ text: "Ship on Friday?", options });
+  assert.match(text(await record([another])), /^forbidden: the user has typed nothing/);
+
+  // The core still refuses a recorded answer to a question only the root may answer, and the
+  // user's words stay kept.
+  const approval = await ask({ text: "Release to prod?", options, answerer: org.rootId });
+  await typed("Yes, release.");
+  assert.equal((await record([approval])).isError, true);
+  assert.ok(existsSync(join(org.home, "sessions/claude-code-s-recorder/prompt")));
+
+  // A session that fills no position keeps nothing.
+  await hook(org, "prompt", "s-none", {}, JSON.stringify({ prompt: "Hello." }));
+  assert.equal(existsSync(join(org.home, "sessions/claude-code-s-none")), false);
 });

@@ -1,16 +1,23 @@
 /**
  * Which client session fills which position, kept in the home's `sessions/<session>/` so that a
  * resumed session fills it again: `position` holds the actor id, `waiter` the process id of the
- * session's current waiter, and `cursor` the newest message the waiters have delivered. Each file
- * has one writer: the agent actor writes `position`, a starting waiter `waiter`, and a delivering
- * waiter `cursor`.
+ * session's current waiter, `cursor` the newest message the waiters have delivered, and `prompt`
+ * the words the user last typed in the session, until a recorded answer uses them. Each file has
+ * one writer: the agent actor writes `position` and uses up `prompt`, a starting waiter writes
+ * `waiter`, a delivering waiter `cursor`, and the client's prompt hook `prompt`.
  */
 
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { home, privateDirectory } from "../home.ts";
 
-type Entry = "position" | "waiter" | "cursor";
+type Entry = "position" | "waiter" | "cursor" | "prompt";
+
+/** Words the user typed in the session, and when. */
+export interface Typed {
+  text: string;
+  at: string;
+}
 
 const SESSION = /^[A-Za-z0-9_-]{1,128}$/;
 
@@ -40,4 +47,11 @@ export const sessions = {
   claimWaiter: (session: string, pid: number) => write(session, "waiter", String(pid)),
   cursor: (session: string) => read(session, "cursor"),
   advance: (session: string, cursor: string) => write(session, "cursor", cursor),
+  typed(session: string): Typed | undefined {
+    const kept = read(session, "prompt");
+    return kept === undefined ? undefined : (JSON.parse(kept) as Typed);
+  },
+  keepTyped: (session: string, text: string) =>
+    write(session, "prompt", JSON.stringify({ text, at: new Date().toISOString() })),
+  forgetTyped: (session: string) => rmSync(join(directory(session), "prompt"), { force: true }),
 };
