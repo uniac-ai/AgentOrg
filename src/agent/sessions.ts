@@ -8,24 +8,27 @@
 
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { privateDirectory } from "../home.ts";
+import { home, privateDirectory } from "../home.ts";
 
 type Entry = "position" | "waiter" | "cursor";
 
 const SESSION = /^[A-Za-z0-9_-]{1,128}$/;
 
-function directory(session: string): string {
+function named(session: string): string {
   if (!SESSION.test(session)) throw new Error(`not a session name: ${session}`);
-  return privateDirectory(join("sessions", session));
+  return join("sessions", session);
 }
+
+const directory = (session: string) => join(home(), named(session));
 
 function read(session: string, entry: Entry): string | undefined {
   const path = join(directory(session), entry);
   return existsSync(path) ? readFileSync(path, "utf8").trim() || undefined : undefined;
 }
 
+/** Only writing creates a session's directory, so a session that never attaches leaves none. */
 function write(session: string, entry: Entry, value: string): void {
-  writeFileSync(join(directory(session), entry), `${value}\n`, { mode: 0o600 });
+  writeFileSync(join(privateDirectory(named(session)), entry), `${value}\n`, { mode: 0o600 });
 }
 
 export const sessions = {

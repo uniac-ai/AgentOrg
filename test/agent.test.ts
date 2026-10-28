@@ -269,6 +269,7 @@ test("a session that fills no position is told to attach first, and its waiter e
     stderr: "",
   });
   assert.deepEqual(await hook(org, "wait", "s-new"), { code: 0, stdout: "", stderr: "" });
+  assert.equal(existsSync(join(org.home, "sessions/claude-code-s-new")), false);
 
   const attached = await session(org, "s-new");
   await attached.call("attach", { name: "builds", purpose: "Run the builds." });
