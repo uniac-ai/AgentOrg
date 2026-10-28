@@ -1,117 +1,110 @@
 # agentorg: design
 
-Status: draft. Phase 1 is in progress, and the code builds toward this design.
+Status: draft. The code builds toward this design.
 
 ## What it is
 
-agentorg organizes agent execution the way a company organizes work.
-- **Agents are the organization.** An agent is a work responsibility, such as "migrate session storage", with a manager: either another agent or the user.
-- **Sessions do the work.** A session is a conversation in a client (Claude Code, Codex, any MCP client) that attaches to one agent and acts for it.
-- **Decisions go to the manager.** Any session can ask a question, and it goes to its agent's manager.
-- **One place for the user.** Everything that waits on the user lands on one page, and the user can inspect the rest of the organization from there.
+agentorg organizes AI agents and programs the way a company organizes people.
+- **Actors are positions.** An actor is a position with a manager. The user is the root, the one actor without a manager.
+- **Calls go up and down.** An actor calls its manager's tools and its direct reports' tools. The root calls any actor's.
+- **Processing a call is the actor's own business.** The core routes and records calls; what an actor does with one is up to it.
+- **Nothing subscribes.** A manager reads its reports' status and calls when it chooses.
 
-agentorg ships three things:
-1. **The service:** the record, its rules, and the decisions page.
-2. **The skills:** `task-execution` and `reporting`, in plain Markdown.
-3. **Thin client adapters.**
+## Components
+
+| Component | Role |
+|---|---|
+| **The core** | It manages everything: actors and their credentials, connections, the wiring of who calls whom, routing, call records and the audit trail. It holds no UI. |
+| **Actors** | Each is a process that fills a position. To the core it is an MCP client, whose calls out are its *available* tools, and an MCP server, whose tools are its *exposed* tools: the calls into it. |
+
+## The protocol: MCP in both directions
+
+The core serves two endpoints, and an actor dials both with its credential, `Authorization: Bearer <credential>`. The core never dials out.
+
+| Endpoint | MCP roles | Transport |
+|---|---|---|
+| `/mcp` | the core is the server, the actor its client | Streamable HTTP. Each request stands alone, without an MCP session. |
+| `/mcp/reverse` | the core is the client, the actor its server | A WebSocket the actor opens, with subprotocol `mcp` and one JSON-RPC message per text frame. The core runs an MCP client over it. |
+
+- **An actor's tool list is its manifest.** The core learns an actor's exposed tools with `tools/list` over the reverse connection, and lists them again on `notifications/tools/list_changed`. There is no other descriptor format: the MCP `Tool` object is the standard. A tool name holds letters, digits, `_` and `-`, since dots join handles and tool names.
+- **The connection layer is its own module.** It turns a credential into an actor, holds each actor's reverse connection, and tracks whether the actor is online: from the moment its tools are listed until its reverse connection ends. A newer reverse connection replaces the older, which the core closes with code 4000. Closing an actor closes its connection with code 4001. Each time an actor comes online, routing delivers what is pending on it.
+- **The shared code is `src/protocol/`:** the endpoint contract, the records and the built-ins' schemas, the WebSocket transport both ends use, and `ActorConnection`. A Node actor built on the MCP SDK uses `ActorConnection` to dial both endpoints. It dials the reverse connection again after a drop, but not after code 4000 or 4001.
 
 ## Records
 
 | Record | Fields | Rules |
 |---|---|---|
-| **Agent** | id; title; purpose; manager (an agent id, or null for the user); created by (session); created at attach (true when a session created it under the user as it attached); state (`pending` until a session first attaches, then `active`, then `closed`); status: state (`running` / `waiting` / `blocked` / `review`), summary (plain text), links, blockers, updated at; created at; closed at | Its manager creates it and closes it. Closing withdraws its open asks and returns the cleanup list. Its status is set by its attached session and shows in the organization view; each status set joins the agent's status history. |
-| **Session** | id; agent; client kind; client session id; machine; attached at; detached at | One attached session per agent. A new attachment (restart, resume, another machine) ends the old one. The agent's records outlive any session. |
-| **Ask** | id; asking agent; asking session; to (the asking agent's manager: an agent id, or the user); title; context; options (2–6); recommendation; escalates (the child asks this one carries up); state (`open` / `answered` / `withdrawn`); answer: choice, words, by (an agent id or the user), channel (`page` / `session` / `agent`), at | It is addressed to the asker's manager automatically. Only its addressee answers it, except that the user may step in on any open ask; the answer then records `by: user`, visibly. Only the asker withdraws it. Answering or withdrawing wakes anyone waiting on it. |
-| **Message** | id; from agent; to (its manager); kind (`note` or `report`); body (plain text with line breaks); evidence; sent at; read at; acknowledged at (reports only) | It only ever goes up, to the sender's manager. The recipient reads it when it chooses; nothing pushes it. A report waits until its recipient acknowledges it after review. |
-| **Evidence** (phase 2) | id; message; kind (before / after / single); width; caption; file | Attached to a message. |
-| **Audit** | at; session; agent; client; operation; target; channel; outcome | One line per write. |
+| **Actor** | id; name, a handle unique among its open siblings; purpose; manager (an actor id, or null for the root); credential hash; online; exposed tools as last listed; status (`running`, `waiting`, `blocked` or `review`, with a plain-text summary); created at; closed at | Its manager creates it, and its manager or the root closes it, once its own reports are closed. Its path is its handles from the root's report down, as `release.storage`. |
+| **Call** | id; from; to; tool (the callee's own name for it); input; state (`pending`, `done`, `failed` or `withdrawn`); output or error; cause (the call that led to this one); task (the MCP task the callee runs it as); created, delivered and settled at | It is recorded before it is delivered, and settles once. A result that arrives after it settled is dropped. |
+| **Audit entry** | id; at; actor; operation; target; outcome | One line for each write, and for each routed call when it is created, refused and settled. |
 
-Tasks and items are gone. An agent is the unit of work, and its status is its workstream.
+## Wiring: who calls what
 
-## Who sees what
+An actor's available tools, its `tools/list` on `/mcp`, are:
+- the core's built-ins;
+- its manager's exposed tools, named `manager.<tool>`, as in `manager.decide`;
+- each direct report's exposed tools, named `<handle>.<tool>`, as in `storage.review`;
+- for the root, every actor's exposed tools, named by its path, as in `release.storage.review`.
 
-- **A session** sees its own agent: its status, its asks, and messages to it. It also sees its agent's direct children: their status, their asks addressed to it, and their messages.
-- **The user** sees everything:
-  - *"Waiting on you"*: open asks addressed to the user, which come from agents directly under them. An ask that escalates a child's ask shows the chain. Below the asks: unacknowledged reports and unread notes from those agents, with "Acknowledge" or "Mark read".
-  - *The organization view*: the agent tree, each agent with its status and its counts of open asks and unread messages.
-  - *Inspection*: open any agent to see its asks (with the manager each is addressed to), its messages and its sessions. The user can step in and answer any open ask from there.
+Lateral grants are deferred; they would be one table the root writes.
 
-## Operations
+## Routing a call
 
-Every operation is in one contract, which the HTTP API, MCP and the CLI derive from. A session acts for the agent it is attached to; writes name the session, and the service resolves its agent.
+When actor A calls `B.tool` on `/mcp`:
+1. The core finds the tool in A's list and checks the input against B's `inputSchema`. A refused call is not recorded.
+2. It records the call as `pending`. If A sets `_meta["agentorg/cause"]` to the id of a call into A, that call is recorded as the cause.
+3. It delivers the call over B's reverse connection as `tools/call`, with `_meta["agentorg/call"] = {id, from, cause}`. It delivers it again each time B comes online while the call is pending, so delivery is at least once, and a handler must tolerate a repeat. A call to an offline actor waits.
+4. It checks B's result against B's `outputSchema` and records the call as `done`. A result that breaks the schema, an `isError` result or a JSON-RPC error records it as `failed`.
+5. How A's `tools/call` returns:
+   - **Within the bounded wait.** A's call waits up to 30 seconds, sending progress notifications when A passed a progress token. If the call is done by then, A gets B's own result, with `_meta["agentorg/call"] = {id, state}`.
+   - **Still pending.** A gets `{call, state: "pending"}`, and reads the call later with `call_result`. So that clients checking results accept both, a routed tool's listed `outputSchema` is B's or that pending shape.
+   - **One-way.** A call into a one-way tool, whose output schema is the empty object, returns pending at once.
 
-Each operation has one of three kinds, which decides where it is served:
-- **Agent operations** are MCP tools, and are also on the HTTP API and the CLI.
-- **API operations** are on the HTTP API and the CLI only, for scripts, the page and the user's terminal.
-- **User operations** are served only to a signed-in decisions page session, never on the API, MCP or the CLI, so the agents' bearer token cannot reach them.
+### Long-running calls
 
-An operation's name, such as `ask_open`, is its MCP tool name; the API serves it at `POST /api/ask/open`, and the CLI runs it as `agentorg ask open`.
+A human may answer hours later, so calls into an actor can run as MCP tasks.
+- **Declaring it.** A tool declares `execution.taskSupport`, and its server declares `tasks.requests.tools.call`.
+- **Delivery.** The core then sends the call with `params.task`. The actor returns a task at once, and finishes it whenever it is ready. The core waits on `tasks/result`, which returns once the task is finished.
+- **Reconnects.** After a reconnect, the core asks for the same task's result again. If the actor no longer knows the task, as after a restart with an in-memory task store, the core delivers the call again, and the actor holds a fresh task. So an actor can rebuild its queue from the calls pending on it, and a reconnect alone does not deliver a call twice.
+- **Withdrawal.** A withdrawn call's task is cancelled with `tasks/cancel`.
+- **Tools without task support** answer within 60 seconds, or the call fails.
 
-| Operation | Kind | What it does |
-|---|---|---|
-| `agent_create(session, title, purpose)` | agent | Creates a child of the session's agent, and returns it for the child's brief. Agents directly under the user come only from `new_agent` at attach. |
-| `agent_close(session, agent)` | agent | The manager closes a child. Refused while the child has open children, so closing goes bottom-up. Detaches its session, withdraws its open asks and returns the cleanup list. |
-| `agent_close_as_user(agent)` | user | Page only: the user closes any agent, under the same bottom-up rule, such as a top-level agent created at attach by mistake. |
-| `agent_list` | api | The tree. Each agent comes with two counts of what waits on it (open asks addressed to it, and unread messages to it), its attached session if any, and the time of the latest write by any of its sessions. |
-| `agent_get(agent)` | api | One agent, with its sessions (current and past), its asks (opened by it and addressed to it), its messages (from it and to it), and its status history, the newest 100. It marks nothing read. |
-| `session_attach(agent \| new_agent, client, client_session_id)` | agent | Attaches, ending any earlier attachment. `new_agent: {title, purpose}` creates an agent directly under the user, for a session the user started with an appointment in words; it is allowed only on a client session's first attach, and the agent is marked as created at attach. Returns facts only: the agent, its manager, its children with their status, open asks addressed to it, its own asks with any answers, and its inbox. Gives no role verdict. |
-| `session_context(client, client_session_id)` | agent | Returns the same facts, read-only. `facts: null` when the session is unknown. |
-| `status_set(session, state, summary, links, blockers)` | agent | Sets the status of the session's agent. |
-| `ask_open(session, title, context, options, recommendation, escalates?)` | agent | Opens an ask to the agent's manager. `escalates` lists open asks addressed to the agent that this one carries up. |
-| `ask_get`, `ask_wait`, `ask_withdraw` | agent | `ask_wait` returns once the ask is answered or withdrawn, and sends MCP progress notifications while it waits. Only the asking agent withdraws. |
-| `ask_answer(session, ask, choice?, words?)` | agent | Answers an open ask addressed to the session's agent, with channel `agent`. |
-| `ask_record_answer(session, ask, words, choice?)` | agent | Records an answer the user gave inside the asking session, for an ask addressed to the user, with channel `session`. |
-| `ask_answer_as_user(ask, choice?, words?)` | user | Page only: any open ask, with channel `page` and `by: user`. |
-| `ask_list(state)` | api | Every ask in that state, whoever it is addressed to, with the agents it refers to, so the page can build escalation chains. |
-| `message_send(session, kind, body)` | agent | Sends a note or a report to the agent's manager. |
-| `inbox_read(session)` | agent | Reads the agent's unread messages and its unacknowledged reports, and marks them read. |
-| `message_ack(session, message)` | agent | The recipient acknowledges a report after review. |
-| `message_read_as_user(message)`, `message_ack_as_user(message)` | user | Page only: mark a note read, or acknowledge a report, from an agent directly under the user. |
-| `audit_list`, `ui_login_link` | api | Read the audit trail; mint the page's sign-in link. |
+## Built-in tools
 
-No operation subscribes. A session that needs an answer before it can go on may wait on its own ask with `ask_wait`, or with `agentorg ask wait`. Managers read their children's status, asks and messages when they check in.
+| Tool | What it does |
+|---|---|
+| `actor_create {name, purpose}` | Creates a report of the caller, and returns it with its credential. The credential is shown only once. |
+| `actor_close {actor}` | The manager, or the root, closes an actor. It is refused while the actor has open reports of its own. The actor's own pending calls are withdrawn, the calls into it fail, and its connection closes. The root is never closed. |
+| `status_set {state, summary}` | Sets the caller's own status. |
+| `view {actor?}` | The caller's own position, or a direct report's; the root may view anyone. It holds what is pending on that actor and from whom, its own open calls, its reports with their status, its manager, and its 50 most recent settled calls. |
+| `call_result {call, wait?}` | Reads a call the caller made, optionally waiting up to 600 seconds for it to settle, with progress. |
+| `call_withdraw {call}` | The caller withdraws a pending call. |
+| `activity {since?, limit?}` | The audit trail, newest first. Listed to the root only. |
 
-## The service
+## The core process
 
-- **Process:** one local process under launchd or systemd, at `127.0.0.1:8740`, with its home in `~/.local/share/agentorg` (database, token, logs).
-- **Surfaces:**
-  - MCP over Streamable HTTP at `/mcp`;
-  - the stdio proxy, `agentorg mcp --client <kind> --client-session-env <VAR>`;
-  - the HTTP API at `POST /api/{subject}/{verb}`;
-  - the decisions page at `/`.
+- **Process:** `agentorg core`, one local process under launchd or systemd, at `127.0.0.1:8740`. Its home is `~/.local/share/agentorg`, mode 700, holding the database `core.db` and the root's credential.
+- **The root's credential:**
+  - The first start creates the root and writes its credential to `root-credential`, mode 600.
+  - Only hashes of credentials are stored, so when that file is gone the core mints a new credential.
+  - When the file holds something else, the core refuses to start.
 - **Security:**
-  - The MCP and API surfaces require a bearer token from a mode-600 file, and refuse any request that carries a browser `Origin` header.
-  - The page signs in with a one-time link from `agentorg ui`, then uses an HttpOnly, SameSite=Strict cookie and CSRF tokens on every form. A strict Content-Security-Policy runs no scripts.
-  - Separation between sessions and the user is by convention, made visible by the audit trail.
-  - Browsers share cookies for `127.0.0.1` across ports, so any local web server the same user runs receives the `agentorg_page` cookie. That is within the same-user trust above; isolating it would take a dedicated host name or HTTPS.
-- **CLI:**
-  - generated from the contract, plus `serve`, `mcp`, `ui` and `ask wait`;
-  - `ask wait` exits 0 when the ask is answered, 2 when it's withdrawn, and 1 on timeout or error;
-  - `session context` prints nothing and exits 0 when the session is unknown or the service is down.
+  - Each actor proves its identity with its own credential, a random secret.
+  - Both endpoints refuse any request that carries an `Origin` header. That blocks web pages, which could otherwise reach a local port by DNS rebinding or open a WebSocket to it.
+  - Separation between actors is the wiring above, and the audit trail records every write.
+- **The command line:**
+  - `agentorg core` runs the core.
+  - A command for each built-in, generated from its schema, runs it over `/mcp`: `agentorg actor create`, `agentorg actor close`, `agentorg status set`, `agentorg view`, `agentorg call result`, `agentorg call withdraw` and `agentorg activity`.
+  - A command acts as the actor whose credential is in `AGENTORG_CREDENTIAL`, else as the root.
 
 ## Stack
 
 - **Language and runtime:** TypeScript on Node 22.13 or later (an LTS release).
 - **Libraries:**
-  - MCP: the official TypeScript SDK, `@modelcontextprotocol/sdk`.
-  - The contract: Zod schemas, with the committed `openapi.json` generated from them and CI failing on drift.
-  - HTTP: Hono, which the MCP SDK already depends on. The page renders with Hono's JSX, which escapes by default.
-  - SQLite: `node:sqlite`, built into Node 22.13 and later, so nothing needs a native build.
-  - CLI parsing and tests: Node's own `util.parseArgs` and `node:test`.
-  - Lint and format: Biome. TypeScript compiles to `dist/` for the package.
+  - **MCP:** the official TypeScript SDK, `@modelcontextprotocol/sdk`, including its experimental tasks and its JSON Schema validator.
+  - **Records and requests:** Zod schemas, from which the built-ins' JSON Schemas are generated.
+  - **HTTP:** Hono on `@hono/node-server`, with `ws` for the WebSocket upgrade.
+  - **SQLite:** `node:sqlite`, built into Node 22.13 and later, so nothing needs a native build.
+  - **CLI parsing and tests:** Node's own `util.parseArgs` and `node:test`.
+  - **Lint and format:** Biome. TypeScript compiles to `dist/` for the package.
 - **Distribution:** npm, as `@agentorg/cli`. The command is `agentorg`. A release workflow publishes on `v*` tags through npm Trusted Publishing, with no token.
-
-## Client adapters
-
-- **Claude Code:** a plugin from this repository. It brings the skills, the stdio MCP server, and a SessionStart hook that calls `agentorg session context`.
-- **Codex:** a `config.toml` snippet for stdio or HTTP, and installing the skills.
-- **Any MCP client:** HTTP plus the token.
-
-## Phases
-
-1. **The model end to end on one machine:**
-   - the contract, store, service, MCP, API, CLI, page and adapters in TypeScript;
-   - Python removed;
-   - an end-to-end check covering:
-     - a manager creates a child, and a session attaches to it;
-     - the child asks its manager, and the manager answers;
