@@ -1,12 +1,13 @@
 /**
  * The domain: the organization's actors and their interfaces, the wiring of who calls whom, calls
- * and their lifecycle, the built-ins and the audit trail. It knows no protocol, network or
- * database: it meets them through the ports in `ports.ts`.
+ * and their lifecycle, progress and messages, the built-ins and the audit trail. It knows no
+ * protocol, network or database: it meets them through the ports in `ports.ts`.
  *
  * - `model/`: the vocabulary, which actors may import too.
  * - `registry.ts`: the actors, the tree they form, and their credentials.
  * - `wiring.ts`: whose interfaces each actor may call, under what names.
  * - `calls.ts`: call records, delivery and redelivery, runs, and waits.
+ * - `communication.ts`: progress, messages and questions.
  * - `builtins.ts` and `application.ts`: the built-ins, and what an actor may call.
  * - `audit.ts`: the audit trail. `validation.ts`: JSON Schema checks.
  *
@@ -18,6 +19,7 @@ import { AvailableInterfaces, type Timing } from "./application.ts";
 import { Audit } from "./audit.ts";
 import { builtins } from "./builtins.ts";
 import { Calls } from "./calls.ts";
+import { Communication } from "./communication.ts";
 import type { Answer, InterfaceDescriptor, Offer } from "./model/index.ts";
 import type { ActorLink, Application, Invocation, Presence, Store } from "./ports.ts";
 import { Registry } from "./registry.ts";
@@ -46,7 +48,8 @@ export class Organization implements Application, Presence {
       now,
       linkOf: (actor) => this.links.get(actor),
     });
-    const handlers = builtins(store, this.registry, this.calls, this.audit, {
+    const communication = new Communication(store, this.registry, now);
+    const handlers = builtins(store, this.registry, this.calls, this.audit, communication, {
       now,
       disconnect: async (actor) => {
         const link = this.links.get(actor);

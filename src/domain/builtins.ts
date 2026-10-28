@@ -5,7 +5,8 @@
  */
 
 import type { Audit } from "./audit.ts";
-import type { CallRecord, Calls } from "./calls.ts";
+import type { Calls } from "./calls.ts";
+import type { Communication } from "./communication.ts";
 import { Conflict, Forbidden, Invalid } from "./errors.ts";
 import { type BuiltinName, HISTORY_MAX, type RequestOf, type ResponseOf } from "./model/index.ts";
 import type { Store } from "./ports.ts";
@@ -31,6 +32,7 @@ export function builtins(
   registry: Registry,
   calls: Calls,
   audit: Audit,
+  communication: Communication,
   options: { now: () => string; disconnect: (actor: string) => Promise<void> },
 ): Handlers {
   const { now } = options;
@@ -93,9 +95,21 @@ export function builtins(
         pending,
         open_calls: openCalls,
         history,
-        names: names(registry, [...pending, ...openCalls, ...history]),
+        names: registry.names(
+          [...pending, ...openCalls, ...history].flatMap((call) => [call.from, call.to]),
+        ),
       };
     },
+
+    progress_set: async (actor, request) => communication.setProgress(actor, request),
+    question_ask: async (actor, request) => communication.ask(actor, request),
+    question_answer: async (actor, request) => communication.answer(actor, request),
+    questions: (actor, request, waiting) => communication.questions(actor, request, waiting),
+    team: async (actor, request) => communication.team(actor, request),
+    progress: async (actor, request) => communication.progress(actor, request),
+    message_send: async (actor, request) => communication.send(actor, request),
+    messages: (actor, request, waiting) => communication.messages(actor, request, waiting),
+    message_read: async (actor, request) => communication.read(actor, request),
 
     call_result: async (actor, request, waiting) => {
       const call = calls.found(request.call);
@@ -110,15 +124,4 @@ export function builtins(
       return { entries: audit.list(request.since, request.limit) };
     },
   };
-}
-
-/** Each actor the calls name, by id: its path, or for the root its name. */
-function names(registry: Registry, calls: CallRecord[]): Record<string, string> {
-  const ids = new Set(calls.flatMap((call) => [call.from, call.to]));
-  const named: Record<string, string> = {};
-  for (const id of ids) {
-    const actor = registry.get(id);
-    if (actor) named[id] = registry.path(actor) || actor.name;
-  }
-  return named;
 }

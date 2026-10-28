@@ -182,6 +182,16 @@ export class Registry {
     return handles.join(".");
   }
 
+  /** Each of these actors by id: its path, or for the root its name. */
+  names(ids: Iterable<string>): Record<string, string> {
+    const named: Record<string, string> = {};
+    for (const id of new Set(ids)) {
+      const actor = this.get(id);
+      if (actor) named[id] = this.path(actor) || actor.name;
+    }
+    return named;
+  }
+
   /** The actor as built-ins return it: with its path, without its credential's hash. */
   asActor(actor: ActorRow): z.output<typeof Actor> {
     const { credential_hash: _, ...fields } = actor;
