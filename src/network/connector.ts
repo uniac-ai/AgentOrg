@@ -8,6 +8,9 @@ import { type Channel, dial } from "./channel.ts";
 import { CLOSE_REPLACED, CLOSE_REVOKED } from "./codes.ts";
 import type { Paths } from "./listener.ts";
 
+/** The causes of a failed `fetch` that mean its connection was already closed by the core. */
+const CLOSED = new Set(["ECONNRESET", "EPIPE", "UND_ERR_SOCKET"]);
+
 export interface ConnectorOptions {
   /** The core's address, such as `http://127.0.0.1:8740`. */
   url: string;
@@ -32,11 +35,20 @@ export class Connector {
     this.requestUrl = new URL(options.paths.request, options.url);
   }
 
-  /** `fetch`, with the credential on every request. */
-  readonly fetch = (input: string | URL | Request, init: RequestInit = {}) => {
+  /**
+   * `fetch`, with the credential on every request. A request sent on a kept-alive connection the
+   * core has closed, as when it restarted, fails as the connection resets or ends; it is sent once
+   * more, on a new one.
+   */
+  readonly fetch = async (input: string | URL | Request, init: RequestInit = {}) => {
     const headers = new Headers(init.headers);
     headers.set("Authorization", `Bearer ${this.options.credential}`);
-    return fetch(input, { ...init, headers });
+    try {
+      return await fetch(input, { ...init, headers });
+    } catch (error) {
+      if (!CLOSED.has((error as { cause?: { code?: string } }).cause?.code ?? "")) throw error;
+      return fetch(input, { ...init, headers });
+    }
   };
 
   /**
