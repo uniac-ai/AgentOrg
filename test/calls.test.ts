@@ -5,15 +5,7 @@ import { test } from "node:test";
 import type { Actor } from "../src/actor/index.ts";
 import type { Answer } from "../src/domain/model/index.ts";
 import { CLOSE_REVOKED } from "../src/network/index.ts";
-import {
-  type Core,
-  done,
-  type FakeActor,
-  fakeActor,
-  iface,
-  startCore,
-  until,
-} from "./harness.ts";
+import { type Core, done, type FakeActor, fakeActor, iface, startCore, until } from "./harness.ts";
 
 const DECIDE = iface("decide", {
   input: { type: "object", properties: { question: { type: "string" } }, required: ["question"] },
@@ -80,6 +72,8 @@ const BUILTINS = [
   "message_send",
   "messages",
   "message_read",
+  "claim",
+  "release",
   "call_result",
   "call_withdraw",
 ];

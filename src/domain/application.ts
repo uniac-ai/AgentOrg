@@ -116,17 +116,11 @@ export class AvailableInterfaces implements Application {
       result = (await handler(actor, parsed.data, waiting)) as Record<string, unknown>;
     } catch (error) {
       if (spec.writes && error instanceof Refusal) {
-        const target = (input.actor ?? input.call ?? null) as string | null;
-        this.audit.record(actor.id, name, target, error.code);
+        this.audit.record(actor.id, name, targetOf(input), error.code);
       }
       throw error;
     }
-    if (spec.writes) {
-      // The record written: the result itself, or the actor it names, by id or as a record.
-      const { id, actor: subject } = result as { id?: string; actor?: string | { id: string } };
-      const target = id ?? (typeof subject === "string" ? subject : subject?.id) ?? null;
-      this.audit.record(actor.id, name, target, "ok");
-    }
+    if (spec.writes) this.audit.record(actor.id, name, targetOf(result), "ok");
     return { state: "done", value: result };
   }
 
@@ -155,6 +149,17 @@ export class AvailableInterfaces implements Application {
     });
     return answerOf(settled);
   }
+}
+
+/** The record a write acted on, as its request or result names it. */
+function targetOf(record: Record<string, unknown>): string | null {
+  const { id, call, resource, actor } = record as {
+    id?: string;
+    call?: string;
+    resource?: string;
+    actor?: string | { id: string };
+  };
+  return id ?? call ?? resource ?? (typeof actor === "string" ? actor : actor?.id) ?? null;
 }
 
 /** A routed call's answer for its caller: the called actor's own result once done. */

@@ -120,6 +120,20 @@ export class SqliteStore implements Store {
     },
   };
 
+  readonly claims: Store["claims"] = {
+    get: (resource) => this.database.select("claims", "resource = ?", [resource])[0],
+    put: (claim) => {
+      this.database.run(
+        "INSERT OR REPLACE INTO claims (resource, holder, note, until, claimed_at) VALUES (?, ?, ?, ?, ?)",
+        [claim.resource, claim.holder, claim.note, claim.until, claim.claimed_at],
+      );
+    },
+    remove: (resource) => {
+      this.database.run("DELETE FROM claims WHERE resource = ?", [resource]);
+    },
+    heldBy: (actor) => this.database.select("claims", "holder = ?", [actor]),
+  };
+
   head(): number {
     const [row] = this.database.all(
       "SELECT max(cursor) AS head FROM (SELECT cursor FROM questions UNION ALL SELECT cursor FROM messages)",
