@@ -1,6 +1,6 @@
 # Claude Code
 
-These notes cover the Claude desktop app's session tools, plus the `agentorg` plugin. The plugin's MCP server is `org`, so its tools appear as `mcp__plugin_agentorg_org__<name>`, with each dot shown as an underscore: `manager.decide` appears as `mcp__plugin_agentorg_org__manager_decide`.
+These notes cover the Claude desktop app's session tools, plus the `agentorg` plugin. The plugin's MCP server is `org`, so its tools appear as `mcp__plugin_agentorg_org__<name>`, with each dot shown as an underscore: a report's `storage.check` appears as `mcp__plugin_agentorg_org__storage_check`.
 
 - **Attach first.** Before attaching, `attach` is the only tool offered. After it, the tools are the position's interfaces, and a resumed session is reattached on its own.
 - **Messages arrive as input.** The plugin delivers each message and answer to the session as input, framed as an AgentOrg message with its sender's path and its id, and wakes an idle session for it. A repeated id is the same message, delivered again.
