@@ -102,7 +102,7 @@ From a terminal, the built-in tools run as commands over `/mcp`. Each command ac
 agentorg actor create --name builds --purpose "Run the nightly builds"
 ```
 
-It prints the new actor and its `credential` as JSON. `agentorg view` shows your position, and `agentorg activity` shows the audit trail. `agentorg --help` lists every command, and `agentorg <command> --help` shows its flags.
+It prints the new actor and its `credential` as JSON. `agentorg team` shows your position and its reports, and `agentorg activity` shows the audit trail. `agentorg --help` lists every command, and `agentorg <command> --help` shows its flags.
 
 ## 5. Connect a program
 
