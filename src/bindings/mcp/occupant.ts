@@ -20,7 +20,7 @@ export async function presentToOccupant(
 ): Promise<{ close(): Promise<void> }> {
   const server = new Server(
     { name: "agentorg", version: VERSION },
-    { capabilities: { tools: { listChanged: true } } },
+    { capabilities: { tools: { listChanged: true } }, instructions: presented.instructions },
   );
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: (await presented.offers()).map(offeredToolOf),

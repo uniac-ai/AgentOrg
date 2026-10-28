@@ -113,25 +113,37 @@ A program fills a position by dialing the core's two endpoints with that positio
 
 The core refuses requests that carry a browser `Origin` header, so connect from a local process, not from a web page. A Node program can use the actor library's `connectActor`, from `@agentorg/cli/actor`, and never meets MCP itself. It exposes interfaces with their handlers, calls the ones available, and reconnects when its connection drops. A long-running handler just returns a promise that settles when it is ready. [design.md](design.md) describes the layers and the protocol.
 
-## 6. Fill positions from Claude Code or Codex
+## 6. Fill positions from Claude Code, Codex or another MCP client
 
-A Claude Code or Codex session fills a position through the agent actor, `agentorg agent`, which the client starts for each session. It finds the core at `AGENTORG_URL` and the agentorg home at `AGENTORG_HOME`, with the same defaults as the other commands, so set them in the environment the client starts with when yours differ.
+A session fills a position through the agent actor, `agentorg agent`, which the client starts for each session. It finds the core at `AGENTORG_URL` and the agentorg home at `AGENTORG_HOME`, with the same defaults as the other commands, so set them in the environment the client starts with when yours differ. Connect a client in the project folder whose sessions should fill positions, and sessions elsewhere stay as they are. The `agentorg` skill, which tells a session how to work in a position, holds these steps too, in `skills/agentorg/references/connecting.md`, so an agent can follow them for you.
 
-**Claude Code.** Install the plugin from this repository:
+**Claude Code.** From the project folder, install the plugin for that project:
 
 ```bash
-claude plugin marketplace add uniac-ai/AgentOrg
+claude plugin marketplace add uniac-ai/AgentOrg --scope project
 ```
 
 ```bash
-claude plugin install agentorg@agentorg
+claude plugin install agentorg@agentorg --scope project
 ```
 
-The plugin brings:
+Without `--scope project`, the plugin is enabled in every project. It brings:
 - the agent actor's MCP server, `org`;
 - the hooks that deliver messages to the session and wake it when it is idle, and keep what you type in the session, so it can record your answers to its questions;
-- the task-execution and reporting skills.
+- the `agentorg` skill.
 
 A session attaches to its position with the `attach` tool. That's the actor id its brief names, or for a session you start yourself, a handle and a purpose, which create its position under you. Its tools are then the position's interfaces, named `mcp__plugin_agentorg_org__<name>`, with dots shown as underscores.
 
-**Codex.** Add the table in the clone's `adapters/codex/config.toml` to `~/.codex/config.toml`. A Codex session attaches each time it starts, and nothing wakes it when idle yet.
+**Codex.** In the project folder, add the table in the clone's `adapters/codex/config.toml` to `.codex/config.toml`, naming `agentorg` by its absolute path, since Codex may start it without your shell's `PATH`. Codex reads that file once you trust the project. Then link the skill into the project's skills folder:
+
+```bash
+mkdir -p .agents/skills
+```
+
+```bash
+ln -s "$(npm root -g)/@agentorg/cli/skills/agentorg" .agents/skills/agentorg
+```
+
+A Codex session attaches each time it starts, and nothing wakes it when idle yet.
+
+**Another MCP client.** Run `agentorg agent` as a stdio MCP server named `org`, and give the client the skill through its own skills mechanism, or `skills/agentorg/SKILL.md` as its instructions. A session there works as a Codex session does.

@@ -1,6 +1,6 @@
 {
   "name": "agentorg",
-  "description": "Fill a position in an agentorg organization from a Claude Code session: the agent actor's MCP server, the hooks that deliver messages and wake the session, and the task-execution and reporting skills.",
+  "description": "Fill a position in an agentorg organization from a Claude Code session: the agent actor's MCP server, the hooks that deliver messages and wake the session, and the agentorg skill.",
   "author": {
     "name": "The agentorg authors"
   },

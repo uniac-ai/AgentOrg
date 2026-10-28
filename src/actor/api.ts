@@ -43,6 +43,8 @@ export interface CallOptions {
  * it offers there, and calling them.
  */
 export interface Presented {
+  /** What the occupant's client may tell its model about the offers as a whole. */
+  readonly instructions?: string;
   offers(): Promise<Offer[]>;
   call(
     name: string,
