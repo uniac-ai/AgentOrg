@@ -1,7 +1,8 @@
-// Where an actor's work stands, as one word: its status once it reports one, else idle, and closed
-// once its manager closes it. Every mark, count and roll-up in the app uses these words.
+// Where an actor's work stands, as one word: its progress state once it publishes one, else idle,
+// and closed once its manager closes it. An item's state reads the same way, a planned one as
+// idle. Every mark, count and roll-up in the app uses these words.
 
-import type { ActorRecord } from "../../../src/human/types.ts";
+import type { ItemRecord, PositionRecord } from "../../../src/human/types.ts";
 
 /** In display order: work moving, work waiting, then actors idle or done. */
 export const PROGRESS_STATES = [
@@ -15,7 +16,12 @@ export const PROGRESS_STATES = [
 
 export type ProgressState = (typeof PROGRESS_STATES)[number];
 
-export function progressState(actor: ActorRecord): ProgressState {
-  if (actor.closed_at !== null) return "closed";
-  return actor.status?.state ?? "idle";
+export function progressState(
+  position: Pick<PositionRecord, "closed_at" | "progress">,
+): ProgressState {
+  if (position.closed_at !== null) return "closed";
+  return position.progress?.state ?? "idle";
 }
+
+export const itemState = (item: ItemRecord): ProgressState =>
+  item.state === "planned" ? "idle" : item.state;

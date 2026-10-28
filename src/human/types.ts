@@ -5,35 +5,28 @@ import type {
   Actor,
   ActorClosed as ActorClosedResult,
   AuditEntry,
-  Call,
-  View,
+  BUILTINS,
+  COMMUNICATION,
+  Item,
+  Link,
+  Message,
+  Offer,
+  Position,
+  Progress,
+  Question,
+  QuestionAnswer,
+  WaitsOn,
 } from "../domain/model/index.ts";
-import type { InputOf, InterfaceName } from "./interfaces.ts";
-
-/** A call waiting on the user, as the core delivered it to one of the human's interfaces. */
-export type Pending = {
-  [T in InterfaceName]: {
-    /** The call's id at the core. */
-    call: string;
-    /** The calling actor's id. */
-    from: string;
-    /** The call that led to this one, if the caller named it. */
-    cause: string | null;
-    interface: T;
-    input: InputOf<T>;
-    received_at: string;
-  };
-}[InterfaceName];
-
-/** `GET /api/pending`: the calls waiting on the user, oldest first. */
-export interface PendingList {
-  pending: Pending[];
-}
 
 /** `GET /api/session`: the sign-in session the cookie names, with the token every write carries. */
 export interface SessionBootstrap {
   csrf_token: string;
   expires_at: string;
+}
+
+/** `GET /api/interfaces`: the root's available interfaces, as the core offers them. */
+export interface InterfaceList {
+  interfaces: Offer[];
 }
 
 /** The header every write carries, holding the session's CSRF token. */
@@ -49,9 +42,25 @@ export interface ApiErrorBody {
   message: string;
 }
 
-/** The core's records, as `view` and `activity` pass them through. */
+/** The core's records, as its built-ins return them. */
 export type ActorRecord = z.output<typeof Actor>;
-export type CallRecord = z.output<typeof Call>;
-export type ViewRecord = z.output<typeof View>;
 export type AuditRecord = z.output<typeof AuditEntry>;
 export type ActorClosed = z.output<typeof ActorClosedResult>;
+export type PositionRecord = z.output<typeof Position>;
+export type ProgressRecord = z.output<typeof Progress>;
+export type ItemRecord = z.output<typeof Item>;
+export type LinkRecord = z.output<typeof Link>;
+export type WaitsOnRecord = z.output<typeof WaitsOn>;
+export type MessageRecord = z.output<typeof Message>;
+export type QuestionRecord = z.output<typeof Question>;
+export type AnswerRecord = z.output<typeof QuestionAnswer>;
+
+type Specs = typeof BUILTINS & typeof COMMUNICATION;
+
+/** Each built-in: its input, as a caller writes it, and its result. */
+export type Builtins = {
+  [N in keyof Specs]: {
+    input: z.input<Specs[N]["request"]>;
+    result: z.output<Specs[N]["response"]>;
+  };
+};

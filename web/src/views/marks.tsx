@@ -2,7 +2,7 @@
 
 import { PlugIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { ActorRecord } from "../../../src/human/types.ts";
+import type { PositionRecord } from "../../../src/human/types.ts";
 import { type ProgressState, progressState } from "../model/state.ts";
 
 /** Each state's shape and color; a state is told apart by shape as well as color. */
@@ -27,14 +27,16 @@ export function StateShape({ state, className }: { state: ProgressState; classNa
   );
 }
 
-/** The actor's state as a shape and a color; `StateName` says it to assistive tech. */
-export const StateMark = ({ actor, className }: { actor: ActorRecord; className?: string }) => (
-  <StateShape state={progressState(actor)} className={className} />
+type Standing = Pick<PositionRecord, "closed_at" | "progress">;
+
+/** The member's state as a shape and a color; `StateName` says it to assistive tech. */
+export const StateMark = ({ member, className }: { member: Standing; className?: string }) => (
+  <StateShape state={progressState(member)} className={className} />
 );
 
-/** The actor's state in words, for assistive tech, read after its name. */
-export const StateName = ({ actor }: { actor: ActorRecord }) => (
-  <span className="sr-only">, {progressState(actor)}</span>
+/** The member's state in words, for assistive tech, read after its name. */
+export const StateName = ({ member }: { member: Standing }) => (
+  <span className="sr-only">, {progressState(member)}</span>
 );
 
 export const SR = ({ children }: { children: string }) => (

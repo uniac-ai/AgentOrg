@@ -1,10 +1,11 @@
 /**
- * The human actor's connection to the core, as the root, through the actor library: it exposes the
- * human's interfaces and calls the interfaces available to the root. Until the core first answers
- * it connects again; once connected, the library reconnects after any drop.
+ * The human actor's connection to the core, as the root, through the actor library. It exposes
+ * nothing of its own: the user reaches the organization through the root's available interfaces.
+ * Until the core first answers it connects again; once connected, the library reconnects after
+ * any drop.
  */
 
-import { type Actor, connectActor, type Exposed } from "../actor/index.ts";
+import { type Actor, connectActor } from "../actor/index.ts";
 import type { Answer, Offer } from "../domain/model/index.ts";
 
 /** The core did not answer, or refused the root credential. */
@@ -17,9 +18,9 @@ export class Core {
   #actor: Actor | undefined;
   #closed = false;
 
-  constructor(url: string, credential: string, exposed: Exposed[]) {
+  constructor(url: string, credential: string) {
     this.url = url;
-    void this.#open(credential, exposed);
+    void this.#open(credential);
   }
 
   /** The interfaces available to the root. */
@@ -37,13 +38,13 @@ export class Core {
     await this.#actor?.close();
   }
 
-  async #open(credential: string, exposed: Exposed[]) {
+  async #open(credential: string) {
     for (let pause = 250; !this.#closed; pause = Math.min(pause * 2, MAX_PAUSE_MS)) {
       try {
         const actor = await connectActor({
           url: this.url,
           credential,
-          exposed,
+          exposed: [],
           name: "agentorg-human",
         });
         if (this.#closed) await actor.close();

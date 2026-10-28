@@ -22,32 +22,31 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar";
 import { cn } from "@/lib/utils";
-import type { ShellModel } from "../control/shell.tsx";
-import type { OrgNode } from "../model/organization.ts";
+import type { ShellModel, SidebarNode } from "../control/shell.tsx";
 import { OnlineMark, StateMark, StateName } from "./marks.tsx";
 
-function ActorItem({ node, selected }: { node: OrgNode; selected: string | undefined }) {
-  const { actor, pending } = node.view;
+function ActorItem({ node, selected }: { node: SidebarNode; selected: string | undefined }) {
+  const { member, waiting } = node;
   const hasChildren = node.children.length > 0;
   const item = (
     <>
       <SidebarMenuButton
-        isActive={selected === actor.id}
-        render={<Link to="/people/$actorId" params={{ actorId: actor.id }} />}
+        isActive={selected === member.id}
+        render={<Link to="/people/$actorId" params={{ actorId: member.id }} />}
       >
-        <StateMark actor={actor} />
-        <span className="truncate">{actor.name}</span>
-        <StateName actor={actor} />
-        {actor.online ? <OnlineMark /> : null}
+        <StateMark member={member} />
+        <span className="truncate">{member.name}</span>
+        <StateName member={member} />
+        {member.online ? <OnlineMark /> : null}
       </SidebarMenuButton>
-      {pending.length > 0 ? (
+      {waiting > 0 ? (
         <SidebarMenuBadge
           className={cn(
             "bg-state-waiting/15 text-state-waiting peer-hover/menu-button:text-state-waiting peer-data-active/menu-button:text-state-waiting",
             hasChildren && "right-7",
           )}
         >
-          {pending.length}
+          {waiting}
           <span className="sr-only"> waiting on it</span>
         </SidebarMenuBadge>
       ) : null}
@@ -60,7 +59,7 @@ function ActorItem({ node, selected }: { node: OrgNode; selected: string | undef
       <CollapsibleTrigger
         render={
           <SidebarMenuAction
-            aria-label={`${actor.name}: actors under it`}
+            aria-label={`${member.name}: actors under it`}
             className="data-[panel-open]:rotate-90"
           />
         }
@@ -70,7 +69,7 @@ function ActorItem({ node, selected }: { node: OrgNode; selected: string | undef
       <CollapsibleContent>
         <SidebarMenuSub className="mr-0 pr-0">
           {node.children.map((child) => (
-            <ActorItem key={child.view.actor.id} node={child} selected={selected} />
+            <ActorItem key={child.member.id} node={child} selected={selected} />
           ))}
         </SidebarMenuSub>
       </CollapsibleContent>
@@ -129,7 +128,7 @@ export function ShellView({ organization, waitingOnYou, offline, place, path, pa
                       </SidebarMenuItem>
                     ))
                   : organization.map((node) => (
-                      <ActorItem key={node.view.actor.id} node={node} selected={selected} />
+                      <ActorItem key={node.member.id} node={node} selected={selected} />
                     ))}
               </SidebarMenu>
             </nav>
