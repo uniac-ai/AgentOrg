@@ -5,27 +5,19 @@
  * `POST /signin/link` mints a one-time sign-in link for `agentorg ui`, which presents the root
  * credential; like every agent surface it refuses requests from web pages. `GET /signin` redeems a
  * link into a session cookie. Every `/api` route needs that cookie, and every write also carries
- * the session's CSRF token in the `X-CSRF-Token` header. Answering a pending call completes it from
- * the human's queue; every other route passes through to the core over the human actor's own
- * connection, so the web app never talks to the core. A call's value comes back as it is, and a
- * refusal as an error response, so nothing of the protocol reaches the app.
+ * the session's CSRF token in the `X-CSRF-Token` header. The API lists the root's available
+ * interfaces and calls them, passed through to the core over the human actor's own connection, so
+ * the web app never talks to the core. A call's value comes back as it is, and a refusal as an
+ * error response, so nothing of the protocol reaches the app.
  */
 
 import { type Context, Hono } from "hono";
 import { getCookie, setCookie } from "hono/cookie";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
-import { z } from "zod";
 import type { Answer } from "../domain/model/index.ts";
 import { type Core, CoreUnreachable } from "./core.ts";
-import { answerOf } from "./interfaces.ts";
-import type { Queue } from "./queue.ts";
 import { COOKIE, matches, type Session, type SignIn } from "./signin.ts";
-import {
-  type ApiErrorBody,
-  CSRF_HEADER,
-  type PendingList,
-  type SessionBootstrap,
-} from "./types.ts";
+import { type ApiErrorBody, CSRF_HEADER, type SessionBootstrap } from "./types.ts";
 import { web } from "./web.ts";
 
 class ApiError extends Error {
@@ -68,13 +60,8 @@ async function body(c: Context): Promise<Record<string, unknown>> {
   return value as Record<string, unknown>;
 }
 
-export function humanApp(options: {
-  core: Core;
-  queue: Queue;
-  signIn: SignIn;
-  credential: string;
-}): Hono {
-  const { core, queue, signIn, credential } = options;
+export function humanApp(options: { core: Core; signIn: SignIn; credential: string }): Hono {
+  const { core, signIn, credential } = options;
   const app = new Hono();
 
   app.onError((error, c) => {
@@ -137,41 +124,11 @@ export function humanApp(options: {
 
   api.get("/session", (c) => c.json(c.var.session satisfies SessionBootstrap));
 
-  api.get("/pending", (c) => c.json({ pending: queue.pending() } satisfies PendingList));
-
-  api.post("/pending/:call", async (c) => {
-    const id = c.req.param("call");
-    const call = queue.pending().find((each) => each.call === id);
-    const output = call && answerOf(call.interface, call.input, await body(c));
-    if (output?.success === false) {
-      throw new ApiError(400, "invalid", z.prettifyError(output.error));
-    }
-    if (!output || !queue.complete(id, output.data)) {
-      throw new ApiError(404, "not_found", "No call with this id waits on you.");
-    }
-    return c.json({ call: id, output: output.data });
-  });
-
   api.get("/interfaces", async (c) => c.json({ interfaces: await core.available() }));
 
   api.post("/interfaces/:name", async (c) =>
     c.json(resultOf(await core.call(c.req.param("name"), await body(c)))),
   );
-
-  api.get("/view", async (c) => c.json(resultOf(await core.call("view", {}))));
-  api.get("/view/:actor", async (c) =>
-    c.json(resultOf(await core.call("view", { actor: c.req.param("actor") }))),
-  );
-
-  api.get("/activity", async (c) => {
-    const { since, limit } = c.req.query();
-    const request = Object.fromEntries(
-      Object.entries({ since, limit }).flatMap(([key, value]) =>
-        value ? [[key, Number(value)]] : [],
-      ),
-    );
-    return c.json(resultOf(await core.call("activity", request)));
-  });
 
   app.route("/api", api);
   app.route("/", web);

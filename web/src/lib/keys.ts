@@ -23,6 +23,12 @@ export function useKeys(handle: (event: KeyboardEvent) => boolean | undefined) {
   }, []);
 }
 
+/** The row that has focus: its `data-row` value, else undefined. */
+export function focusedRow(): string | undefined {
+  const row = document.activeElement?.closest<HTMLElement>("[data-row]");
+  return row?.dataset.row || undefined;
+}
+
 /**
  * `j`/`k` (or ↓/↑ with no field focused) move focus through the rows of the list on screen, as
  * in a mail client; a row is any element marked `data-row`. Enter then opens or acts on it.
@@ -34,7 +40,7 @@ export function useRowKeys() {
     if (step === undefined) return false;
     const rows = [...document.querySelectorAll<HTMLElement>("[data-row]")];
     if (rows.length === 0) return false;
-    const at = rows.indexOf(document.activeElement as HTMLElement);
+    const at = rows.findIndex((row) => row.contains(document.activeElement));
     const next = at === -1 ? 0 : Math.min(rows.length - 1, Math.max(0, at + step));
     rows[next]?.focus();
     return true;

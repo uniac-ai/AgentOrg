@@ -5,13 +5,7 @@ import { setup } from "./harness.ts";
 
 test("the app's paths serve its index.html under a policy that runs only its own code", async () => {
   const { actor } = await setup();
-  for (const path of [
-    "/",
-    "/calls/call_1",
-    "/people/act_1",
-    "/people/act_1/calls/call_1",
-    "/activity",
-  ]) {
+  for (const path of ["/", "/people/act_1", "/activity"]) {
     const response = await fetch(actor.url + path);
     assert.equal(response.status, 200, path);
     assert.match(await response.text(), /<div id="root"><\/div>/);
@@ -24,7 +18,7 @@ test("the app's paths serve its index.html under a policy that runs only its own
   assert.match(policy, /script-src 'self'(;|$)/);
   assert.match(policy, /frame-ancestors 'none'/);
   assert.doesNotMatch(policy, /unsafe-inline|unsafe-eval/);
-  assert.deepEqual(APP_PATHS, ["/", "/calls/*", "/people/*", "/activity"]);
+  assert.deepEqual(APP_PATHS, ["/", "/people/*", "/activity"]);
 });
 
 test("the built index.html loads only scripts and styles from the app's own assets", async () => {
@@ -46,6 +40,7 @@ test("assets outside the build and unknown paths are not found", async () => {
     "/assets/missing.js",
     "/assets/../index.html",
     "/assets/%2e%2e/index.html",
+    "/calls/call_1",
     "/nope",
   ]) {
     assert.equal((await fetch(actor.url + path)).status, 404, path);

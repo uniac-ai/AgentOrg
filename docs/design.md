@@ -34,7 +34,7 @@ How the layers meet:
 - **`test/layers.test.ts` enforces the rules:**
   - The domain imports no MCP, web framework, WebSocket, database or Node built-in, and uses no Node globals. Its secrets and hashes come from Web Crypto, so it runs on any JavaScript runtime that has that, and the web app type-checks through its model.
   - The network imports no domain, binding or storage.
-  - Only the MCP binding imports MCP, with one exception: `src/human/`, until it moves onto the actor library.
+  - Only the MCP binding imports MCP.
 
 ## The domain
 
@@ -160,6 +160,15 @@ How the domain is encoded:
   - `agentorg core` runs the core.
   - A command for each built-in, generated from its schema, runs it, such as `agentorg actor create`, `agentorg progress set`, `agentorg team`, `agentorg question ask`, `agentorg message send`, `agentorg claim` and `agentorg activity`.
   - A command acts as the actor whose credential is in `AGENTORG_CREDENTIAL`, else as the root.
+
+## The human actor
+
+- **Process:** `agentorg human`, at `127.0.0.1:8741`. It connects to the core as the root through the actor library, and serves the web app on its own origin.
+- **It exposes nothing of its own.** The user reaches the organization through the root's available interfaces, the core's communication methods among them, so the human actor has no queue and keeps nothing durable.
+- **Its API is sign-in and list-and-call:**
+  - `agentorg ui` presents the root's credential for a one-time link, and the link starts a session in an HttpOnly, SameSite=Strict cookie. Every call carries the session's CSRF token.
+  - `GET /api/interfaces` lists the root's available interfaces, and `POST /api/interfaces/<name>` calls one with the body as its input. A call's value comes back as it is, and a refusal as an error response.
+- **The web app** is built only from that API. It reads `team`, `progress`, `questions` and `messages`, and writes with `question_answer`, `message_send`, `message_read` and `actor_close`. Every page carries a Content-Security-Policy that runs only the app's own scripts and styles.
 
 ## Stack
 

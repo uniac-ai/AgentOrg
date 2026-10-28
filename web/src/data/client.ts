@@ -1,10 +1,10 @@
 /**
- * The typed client of the human actor's API under `/api`. Reads send the session's cookie; writes
- * also carry its CSRF token, which the session bootstrap hands over. The app reaches the core only
- * through it.
+ * The typed client of the human actor's API under `/api`: the session bootstrap, and calls into
+ * the interfaces available to the user, the root. Every call carries the session's CSRF token, so
+ * calls wait for the bootstrap to hand it over. The app reaches the core only through it.
  */
 
-import { type ApiErrorBody, CSRF_HEADER } from "../../../src/human/types.ts";
+import { type ApiErrorBody, type Builtins, CSRF_HEADER } from "../../../src/human/types.ts";
 
 /** A refused or failed request. `status` 0 means the human actor could not be reached. */
 export class ApiError extends Error {
@@ -20,14 +20,16 @@ export class ApiError extends Error {
 
 export const isSignedOut = (error: unknown) => error instanceof ApiError && error.status === 401;
 
-let csrfToken = "";
+let keep: (token: string) => void = () => {};
+let csrfToken = new Promise<string>((resolve) => {
+  keep = resolve;
+});
 
-/** Keep the token the session bootstrap returned, for every write that follows. */
+/** Keep the token the session bootstrap returned, for every call that follows. */
 export function keepCsrfToken(token: string) {
-  csrfToken = token;
+  keep(token);
+  csrfToken = Promise.resolve(token);
 }
-
-export const path = (...parts: string[]) => `/${parts.map(encodeURIComponent).join("/")}`;
 
 export async function request<T>(path: string, write?: { body?: unknown }): Promise<T> {
   let response: Response;
@@ -35,7 +37,7 @@ export async function request<T>(path: string, write?: { body?: unknown }): Prom
     response = await fetch(`/api${path}`, {
       method: write ? "POST" : "GET",
       credentials: "same-origin",
-      headers: write ? { "Content-Type": "application/json", [CSRF_HEADER]: csrfToken } : {},
+      headers: write ? { "Content-Type": "application/json", [CSRF_HEADER]: await csrfToken } : {},
       body: write ? JSON.stringify(write.body ?? {}) : undefined,
     });
   } catch {
@@ -52,6 +54,6 @@ export async function request<T>(path: string, write?: { body?: unknown }): Prom
   return (await response.json()) as T;
 }
 
-/** Call one of the interfaces available to the user and return its value; a refusal throws. */
-export const callInterface = <T>(name: string, input: Record<string, unknown>) =>
-  request<T>(path("interfaces", name), { body: input });
+/** Call one of the core's built-ins as the user and return its result; a refusal throws. */
+export const call = <N extends keyof Builtins>(name: N, input: Builtins[N]["input"]) =>
+  request<Builtins[N]["result"]>(`/interfaces/${encodeURIComponent(name)}`, { body: input });
