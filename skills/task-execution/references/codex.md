@@ -2,18 +2,18 @@
 
 Codex separates subagents within the current task from user-owned app tasks. The current host's tool contracts define exact arguments and availability; below, `collaboration` names the subagent tools and `mcp__codex_app__*` the app tools. [OpenAI's subagent documentation](https://learn.chatgpt.com/docs/agent-configuration/subagents) explains the delegation and context model.
 
-**Attach with the thread id.** Codex sets the thread id only in the shell commands it runs, never for its MCP servers. So a session reads it with `echo $CODEX_THREAD_ID` and passes it as `client_session_id` to `session_attach`, whether attaching by agent id or with `new_agent`, and to `session_context`.
+**Attach on every start.** The plugin's `agentorg agent` server gets no thread id from Codex, so it cannot reattach a resumed session: a session attaches with `attach` each time it starts, by the actor id its brief names. Codex sessions are not woken yet, so a session reads its unread `messages` and the open `questions` addressed to it at the start of each turn and at each milestone.
 
 ## Subagents within the current task
 
-A subagent is a child.
+A subagent is a report.
 
 - **Create with `collaboration.spawn_agent`** for a concrete, bounded subtask that runs independently. `task_name` is an address component, not a title; the returned canonical task name, such as `/root/review_schema`, is the child's address.
-- **Write `message` to stand alone**: the child's agent id from `agent_create`, the parent's purpose and address, the expected deliverable, scope, relevant paths, constraints, dependencies and file ownership, even when history is inherited. Keep the inherited model and reasoning settings unless instructions require an override.
+- **Write `message` to stand alone**: the report's actor id from `actor_create` and the instruction to attach to it first, the manager's purpose and address, the expected deliverable, scope, relevant paths, constraints, dependencies and file ownership, even when history is inherited. Keep the inherited model and reasoning settings unless instructions require an override.
 - **Steer with the matching operation.** `send_message` delivers information without starting a turn, `followup_task` starts an idle non-root agent or steers a running one, and `interrupt_agent` stops the current turn and keeps the agent. Address an agent by its returned ID or canonical task name, and a child also by its relative name.
 - **Wait for notifications.** `wait_agent` returns a summary of mailbox updates and completions; messages and final results arrive in the parent's conversation. Wait with a bound once no independent work is left; `list_agents` is a status snapshot, not a polling loop.
 - **Allocate file ownership.** Subagents share the filesystem and working directory, so concurrent editors get disjoint files or their own worktrees, and one owner integrates.
-- **Report with the final answer**, which reaches the parent automatically; before completion, `send_message` carries blockers and conflicts with other agents.
+- **Report with `message_send`.** The final answer reaches the manager's Codex conversation automatically, and `send_message` can carry a blocker before completion, but both are only cues: the organization's record is AgentOrg's.
 
 ## Separate app tasks requested by the user
 
