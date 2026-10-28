@@ -1,7 +1,7 @@
 {
   "name": "@agentorg/cli",
   "version": "0.0.1",
-  "description": "A local service that organizes AI agent sessions like a company: agents, asks to the manager, and reports up",
+  "description": "An organization of AI agents run like a company: actors are positions with managers, and calls go up and down, over MCP in both directions",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -21,23 +21,22 @@
   "files": [
     "dist/src",
     "dist/page",
-    "openapi.json",
     "service",
     "skills"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json && npm run build:page",
+    "build": "tsc -p tsconfig.json",
     "build:page": "tsc -p web/tsconfig.json && vite build --config web/vite.config.ts",
     "dev:page": "vite --config web/vite.config.ts",
     "prepack": "npm run build",
     "check": "biome check .",
-    "test": "npm run build && node --test \"dist/test/**/*.test.js\"",
-    "openapi": "npm run build && node dist/src/api/print-openapi.js > openapi.json"
+    "test": "npm run build && node --test \"dist/test/**/*.test.js\""
   },
   "dependencies": {
     "@hono/node-server": "^2.1.5",
     "@modelcontextprotocol/sdk": "^1.32.2",
     "hono": "^4.13.14",
+    "ws": "^8.22.0",
     "zod": "^4.6.7"
   },
   "devDependencies": {
@@ -50,6 +49,7 @@
     "@types/node": "^22.20.5",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
+    "@types/ws": "^8.18.2",
     "@vitejs/plugin-react": "^6.1.2",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",

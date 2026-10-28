@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  launchd user agent that keeps `agentorg serve` running.
+  launchd user agent that keeps `agentorg core` running.
   launchd expands neither `~` nor environment variables, and its PATH holds
   only the system directories, so the job names node itself. docs/install.md
   replaces @NODE@ and @AGENTORG@ with the absolute paths of node and the
@@ -15,15 +15,15 @@
 	<array>
 		<string>@NODE@</string>
 		<string>@AGENTORG@</string>
-		<string>serve</string>
+		<string>core</string>
 	</array>
 	<key>RunAtLoad</key>
 	<true/>
 	<key>KeepAlive</key>
 	<true/>
 	<key>StandardOutPath</key>
-	<string>@AGENTORG_HOME@/logs/serve.log</string>
+	<string>@AGENTORG_HOME@/logs/core.log</string>
 	<key>StandardErrorPath</key>
-	<string>@AGENTORG_HOME@/logs/serve.log</string>
+	<string>@AGENTORG_HOME@/logs/core.log</string>
 </dict>
 </plist>
