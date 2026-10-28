@@ -4,9 +4,16 @@
  * UTC. Only the hash of an actor's credential is stored.
  */
 
-import { ActorRecord, AuditEntry, Call, Message, Progress } from "../../domain/model/index.ts";
+import {
+  ActorRecord,
+  AuditEntry,
+  Call,
+  Claim,
+  Message,
+  Progress,
+} from "../../domain/model/index.ts";
 
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 export const SCHEMA = `
 CREATE TABLE actors (
@@ -73,6 +80,15 @@ CREATE TABLE messages (
 CREATE INDEX messages_to ON messages ("to");
 CREATE INDEX messages_from ON messages ("from");
 
+CREATE TABLE claims (
+  resource TEXT PRIMARY KEY,
+  holder TEXT NOT NULL REFERENCES actors (id),
+  note TEXT NOT NULL,
+  until TEXT,
+  claimed_at TEXT NOT NULL
+);
+CREATE INDEX claims_holder ON claims (holder);
+
 CREATE TABLE audit (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   at TEXT NOT NULL,
@@ -88,5 +104,6 @@ export const TABLES = {
   calls: Call,
   progress: Progress,
   messages: Message,
+  claims: Claim,
   audit: AuditEntry,
 } as const;

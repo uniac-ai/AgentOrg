@@ -379,3 +379,52 @@ test("messages waits until a match exists, and ends empty when none comes in tim
     await core.close();
   }
 });
+
+test("a claim holds a shared resource for one actor at a time, shown in team, until released, past its until or its holder closed", async () => {
+  let clock = Date.parse("2026-01-01T00:00:00Z");
+  const { core, root, release, storage, web } = await organization({ now: () => new Date(clock) });
+  try {
+    const lane = { resource: "prod-lane", note: "Promoting v2", until: "2026-01-01T01:00:00Z" };
+    assert.equal((await done(storage.actor.call("claim", lane))).holder, storage.id);
+    const taken = await web.actor.call("claim", { resource: "prod-lane", note: "Promoting web" });
+    assert.equal(
+      taken.state === "refused" && taken.message,
+      "prod-lane is held by release.storage until 2026-01-01T01:00:00.000Z: Promoting v2",
+    );
+    const team = await done(web.actor.call("team", { actor: root.id, depth: 2 }));
+    assert.deepEqual(
+      team.positions.map((position: Json) => [
+        position.path,
+        position.claims.map((claim: Json) => claim.resource),
+      ]),
+      [
+        ["", []],
+        ["release", []],
+        ["release.storage", ["prod-lane"]],
+        ["web", []],
+      ],
+    );
+    assert.equal(await refused(web.actor.call("release", { resource: "prod-lane" })), "forbidden");
+
+    clock = Date.parse("2026-01-01T01:00:01Z");
+    await done(web.actor.call("claim", { resource: "prod-lane", note: "Promoting web" }));
+    assert.equal((await done(web.actor.call("release", { resource: "prod-lane" }))).holder, web.id);
+    assert.equal(await refused(web.actor.call("release", { resource: "prod-lane" })), "not_found");
+    const passed = web.actor.call("claim", { ...lane, note: "Late" });
+    assert.equal(await refused(passed), "invalid");
+
+    await done(storage.actor.call("claim", { resource: "dev-cluster", note: "Load test" }));
+    const renewed = await done(
+      storage.actor.call("claim", { resource: "dev-cluster", note: "Soak" }),
+    );
+    assert.equal(renewed.note, "Soak");
+    await done(release.actor.call("actor_close", { actor: storage.id }));
+    await done(web.actor.call("claim", { resource: "dev-cluster", note: "Next" }));
+    assert.equal(
+      (await done(root.actor.call("release", { resource: "dev-cluster" }))).holder,
+      web.id,
+    );
+  } finally {
+    await core.close();
+  }
+});

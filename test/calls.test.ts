@@ -80,6 +80,8 @@ const BUILTINS = [
   "message_send",
   "messages",
   "message_read",
+  "claim",
+  "release",
   "call_result",
   "call_withdraw",
 ];

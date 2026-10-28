@@ -1,6 +1,6 @@
 /**
- * The communication standard: the records of progress and messages, and the requests, results and
- * descriptions of the built-ins that write and read them.
+ * The communication standard: the records of progress, messages and claims, and the requests,
+ * results and descriptions of the built-ins that write and read them.
  *
  * Who can read something and who it waits on are separate:
  * - **Progress** is where an actor stands, a snapshot it replaces. Anyone in the organization reads
@@ -9,6 +9,7 @@
  *   answer, and it waits on its addressee until answered.
  * - **Any other message** is private to its two parties, the manager of either, and the root. It
  *   waits on its addressee until read.
+ * - **A claim** says which actor holds a shared resource. Anyone sees it.
  */
 
 import { z } from "zod";
@@ -116,6 +117,20 @@ export const Message = z
   })
   .meta({ id: "Message", description: "A message between two actors, or a question." });
 
+export const Resource = text(LIMITS.id).describe(
+  "A shared resource, by the name the organization knows it by, such as dev-cluster.",
+);
+
+export const Claim = z
+  .strictObject({
+    resource: Resource,
+    holder: Id,
+    note: Text.describe("What the holder is doing with it."),
+    until: Timestamp.nullable().describe("When it ends by itself; null holds it until released."),
+    claimed_at: Timestamp,
+  })
+  .meta({ id: "Claim", description: "A shared resource an actor holds, which anyone sees." });
+
 const Names = z
   .record(z.string(), z.string())
   .describe("The path of each actor the records name, by id; for the root, its name.");
@@ -186,6 +201,7 @@ export const Position = Actor.pick({
     interfaces: z
       .array(z.string())
       .describe("Its exposed interfaces you can call, by the names you call them."),
+    claims: z.array(Claim).describe("The shared resources it holds now."),
   })
   .meta({ id: "Position", description: "A position in the organization, as anyone sees it." });
 
@@ -308,6 +324,16 @@ export const MessageRead = z
   .strictObject({ ids: z.array(Id).min(1).max(200).describe("Messages addressed to you.") })
   .meta({ id: "MessageRead" });
 
+export const ClaimRequest = z
+  .strictObject({
+    resource: Resource,
+    note: Text.describe("What you are doing with it, for whoever wants it next."),
+    until: Timestamp.optional().describe("When the claim ends by itself. Default: when released."),
+  })
+  .meta({ id: "ClaimRequest" });
+
+export const ReleaseRequest = z.strictObject({ resource: Resource }).meta({ id: "ReleaseRequest" });
+
 export const COMMUNICATION = {
   progress_set: {
     writes: true,
@@ -323,7 +349,7 @@ state is running, waiting, blocked or review. summary is a short current paragra
     rootOnly: false,
     request: TeamRequest,
     response: Team,
-    description: `Explore the organization: a position and its reports, each with its purpose, whether it is online, its progress state and summary, its open questions, and its interfaces you can call.
+    description: `Explore the organization: a position and its reports, each with its purpose, whether it is online, its progress state and summary, its open questions, the shared resources it holds, and its interfaces you can call.
 
 Default: you and your direct reports. Anyone may explore any position.`,
   },
@@ -364,5 +390,21 @@ Default: those addressed to you. box out lists those you sent, and actor another
     request: MessageRead,
     response: MessagesResult,
     description: "Mark messages addressed to you read. Each sender sees when.",
+  },
+  claim: {
+    writes: true,
+    rootOnly: false,
+    request: ClaimRequest,
+    response: Claim,
+    description: `Claim a shared resource, such as a release lane or a cluster, while you use it.
+
+Anyone sees current claims in team. Claiming a resource another actor holds is refused, naming the holder; claiming one you hold renews it. until ends the claim by itself, and closing an actor ends its claims.`,
+  },
+  release: {
+    writes: true,
+    rootOnly: false,
+    request: ReleaseRequest,
+    response: Claim,
+    description: "Release a shared resource you hold; the root may release any.",
   },
 } as const satisfies Record<string, BuiltinSpec>;

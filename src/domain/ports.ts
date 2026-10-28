@@ -11,6 +11,7 @@ import type {
   Answer,
   AuditEntry,
   Call,
+  Claim,
   Delivery,
   InterfaceDescriptor,
   Message,
@@ -24,6 +25,7 @@ export type CallRow = z.output<typeof Call>;
 export type AuditRow = z.output<typeof AuditEntry>;
 export type ProgressRow = z.output<typeof Progress>;
 export type MessageRow = z.output<typeof Message>;
+export type ClaimRow = z.output<typeof Claim>;
 
 /** Which messages to list: those matching every field given, newest first. */
 export interface MessageQuery {
@@ -143,6 +145,13 @@ export interface Store {
     read(ids: string[], at: string): void;
     /** Record the reply that answers an open question. */
     answer(question: string, reply: string): void;
+  };
+  claims: {
+    get(resource: string): ClaimRow | undefined;
+    /** Hold the resource, replacing the claim it had. */
+    put(claim: ClaimRow): void;
+    remove(resource: string): void;
+    heldBy(actor: string): ClaimRow[];
   };
   audit: {
     append(entry: Omit<AuditRow, "id">): void;
