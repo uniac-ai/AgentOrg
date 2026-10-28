@@ -1,0 +1,131 @@
+/**
+ * The built-in tools: the management surface every actor has on `/mcp`. Each takes the calling
+ * actor and its request, already checked against the request schema in `src/protocol/builtins.ts`.
+ */
+
+import {
+  type BuiltinName,
+  HISTORY_MAX,
+  type RequestOf,
+  type ResponseOf,
+} from "../protocol/index.ts";
+import type { Audit } from "./audit.ts";
+import type { CallRecord, Calls } from "./calls.ts";
+import type { Connections } from "./connections.ts";
+import { Conflict, Forbidden, Invalid } from "./errors.ts";
+import type { ActorRecord, Registry } from "./registry.ts";
+import type { Store } from "./store.ts";
+
+/** What `call_result` needs from the `/mcp` request it serves. */
+export interface Waiting {
+  stepMs: number;
+  progress: () => Promise<void>;
+  signal: AbortSignal;
+}
+
+type Handlers = {
+  [N in BuiltinName]: (
+    actor: ActorRecord,
+    request: RequestOf<N>,
+    waiting: Waiting,
+  ) => Promise<ResponseOf<N>>;
+};
+
+export function builtins(
+  store: Store,
+  registry: Registry,
+  connections: Connections,
+  calls: Calls,
+  audit: Audit,
+  now: () => string,
+): Handlers {
+  const isRoot = (actor: ActorRecord) => actor.manager === null;
+
+  return {
+    actor_create: async (actor, request) => {
+      const { actor: created, credential } = registry.create(
+        actor.id,
+        request.name,
+        request.purpose,
+      );
+      return { actor: registry.asActor(created), credential };
+    },
+
+    actor_close: async (actor, request) => {
+      const target = registry.found(request.actor);
+      if (target.manager === null) throw new Invalid("the root is never closed");
+      if (target.manager !== actor.id && !isRoot(actor)) {
+        throw new Forbidden(`only its manager or the root closes ${target.name}`);
+      }
+      if (target.closed_at !== null) return { actor: registry.asActor(target), ended_calls: [] };
+      const open = registry.reports(target.id);
+      if (open.length > 0) {
+        const names = open.map((report) => report.name).join(", ");
+        throw new Conflict(`${target.name} has open reports (${names}); close them first`);
+      }
+      const closed = registry.close(target.id);
+      const ended = calls.endFor(target, actor.id);
+      await connections.disconnect(target.id);
+      return { actor: registry.asActor(closed), ended_calls: ended };
+    },
+
+    status_set: async (actor, request) =>
+      registry.asActor(
+        registry.setStatus(actor.id, {
+          state: request.state,
+          summary: request.summary,
+          updated_at: now(),
+        }),
+      ),
+
+    view: async (actor, request) => {
+      const target = request.actor === undefined ? actor : registry.found(request.actor);
+      if (target.id !== actor.id && target.manager !== actor.id && !isRoot(actor)) {
+        throw new Forbidden(`you see yourself and your direct reports, not ${target.name}`);
+      }
+      const pending = store.select("calls", `"to" = ? AND state = 'pending'`, [target.id]);
+      const openCalls = store.select("calls", `"from" = ? AND state = 'pending'`, [target.id]);
+      const history = store.select(
+        "calls",
+        `("to" = ? OR "from" = ?) AND state != 'pending'`,
+        [target.id, target.id],
+        "settled_at DESC",
+        HISTORY_MAX,
+      );
+      const manager = target.manager === null ? undefined : registry.get(target.manager);
+      return {
+        actor: registry.asActor(target),
+        manager: manager ? registry.asActor(manager) : null,
+        reports: registry.reports(target.id).map((report) => registry.asActor(report)),
+        pending,
+        open_calls: openCalls,
+        history,
+        names: names(registry, [...pending, ...openCalls, ...history]),
+      };
+    },
+
+    call_result: async (actor, request, waiting) => {
+      const call = calls.found(request.call);
+      if (call.from !== actor.id) throw new Forbidden(`only its caller reads call ${call.id}`);
+      return calls.wait(call.id, request.wait * 1000, waiting);
+    },
+
+    call_withdraw: async (actor, request) => calls.withdraw(actor, request.call),
+
+    activity: async (actor, request) => {
+      if (!isRoot(actor)) throw new Forbidden("only the root reads the activity");
+      return { entries: audit.list(request.since, request.limit) };
+    },
+  };
+}
+
+/** Each actor the calls name, by id: its path, or for the root its name. */
+function names(registry: Registry, calls: CallRecord[]): Record<string, string> {
+  const ids = new Set(calls.flatMap((call) => [call.from, call.to]));
+  const named: Record<string, string> = {};
+  for (const id of ids) {
+    const actor = registry.get(id);
+    if (actor) named[id] = registry.path(actor) || actor.name;
+  }
+  return named;
+}
