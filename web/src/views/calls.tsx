@@ -24,14 +24,14 @@ const text = (value: unknown) => (typeof value === "string" ? value : undefined)
 /** What the call is about, in one line: a decision's question, a note, a report's outcome. */
 export function callTitle(call: CallRecord): string {
   const words =
-    call.tool === "decide"
+    call.interface === "decide"
       ? text(call.input.question)
-      : call.tool === "note"
+      : call.interface === "note"
         ? text(call.input.text)
-        : call.tool === "report"
+        : call.interface === "report"
           ? text(call.input.outcome)
           : undefined;
-  return words ? firstLine(words) : call.tool;
+  return words ? firstLine(words) : call.interface;
 }
 
 const ICONS: Record<string, typeof SquareFunctionIcon> = {
@@ -41,13 +41,13 @@ const ICONS: Record<string, typeof SquareFunctionIcon> = {
 };
 
 export function CallIcon({ call, className }: { call: CallRecord; className?: string }) {
-  const Icon = ICONS[call.tool] ?? SquareFunctionIcon;
+  const Icon = ICONS[call.interface] ?? SquareFunctionIcon;
   return (
     <Icon
       aria-hidden="true"
       className={cn(
         "size-4 shrink-0",
-        call.tool === "decide" ? "text-state-waiting" : "text-muted-foreground",
+        call.interface === "decide" ? "text-state-waiting" : "text-muted-foreground",
         className,
       )}
     />
@@ -72,8 +72,8 @@ export function outcomeOf(call: CallRecord): string {
   if (call.state === "failed") return call.error ? `Failed: ${call.error}` : "Failed";
   if (call.state === "pending") return "Pending";
   const output = outputOf(call);
-  if (call.tool === "decide") return text(output.choice) ?? text(output.words) ?? "Answered";
-  if (call.tool === "report") return "Acknowledged";
-  if (call.tool === "note") return "Read";
+  if (call.interface === "decide") return text(output.choice) ?? text(output.words) ?? "Answered";
+  if (call.interface === "report") return "Acknowledged";
+  if (call.interface === "note") return "Read";
   return "Done";
 }

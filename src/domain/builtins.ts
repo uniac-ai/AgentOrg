@@ -1,31 +1,26 @@
 /**
- * The built-in tools: the management surface every actor has on `/mcp`. Each takes the calling
- * actor and its request, already checked against the request schema in `src/protocol/builtins.ts`.
+ * The built-ins: the management surface every actor has among its available interfaces. Each
+ * takes the calling actor and its request, already checked against the request schema in
+ * `model/builtins.ts`.
  */
 
-import {
-  type BuiltinName,
-  HISTORY_MAX,
-  type RequestOf,
-  type ResponseOf,
-} from "../protocol/index.ts";
 import type { Audit } from "./audit.ts";
 import type { CallRecord, Calls } from "./calls.ts";
-import type { Connections } from "./connections.ts";
 import { Conflict, Forbidden, Invalid } from "./errors.ts";
-import type { ActorRecord, Registry } from "./registry.ts";
-import type { Store } from "./store.ts";
+import { type BuiltinName, HISTORY_MAX, type RequestOf, type ResponseOf } from "./model/index.ts";
+import type { Store } from "./ports.ts";
+import type { ActorRow, Registry } from "./registry.ts";
 
-/** What `call_result` needs from the `/mcp` request it serves. */
+/** What `call_result` needs from the request it serves. */
 export interface Waiting {
   stepMs: number;
   progress: () => Promise<void>;
   signal: AbortSignal;
 }
 
-type Handlers = {
+export type Handlers = {
   [N in BuiltinName]: (
-    actor: ActorRecord,
+    actor: ActorRow,
     request: RequestOf<N>,
     waiting: Waiting,
   ) => Promise<ResponseOf<N>>;
@@ -34,12 +29,12 @@ type Handlers = {
 export function builtins(
   store: Store,
   registry: Registry,
-  connections: Connections,
   calls: Calls,
   audit: Audit,
-  now: () => string,
+  options: { now: () => string; disconnect: (actor: string) => Promise<void> },
 ): Handlers {
-  const isRoot = (actor: ActorRecord) => actor.manager === null;
+  const { now } = options;
+  const isRoot = (actor: ActorRow) => actor.manager === null;
 
   return {
     actor_create: async (actor, request) => {
@@ -65,7 +60,7 @@ export function builtins(
       }
       const closed = registry.close(target.id);
       const ended = calls.endFor(target, actor.id);
-      await connections.disconnect(target.id);
+      await options.disconnect(target.id);
       return { actor: registry.asActor(closed), ended_calls: ended };
     },
 
@@ -83,15 +78,9 @@ export function builtins(
       if (target.id !== actor.id && target.manager !== actor.id && !isRoot(actor)) {
         throw new Forbidden(`you see yourself and your direct reports, not ${target.name}`);
       }
-      const pending = store.select("calls", `"to" = ? AND state = 'pending'`, [target.id]);
-      const openCalls = store.select("calls", `"from" = ? AND state = 'pending'`, [target.id]);
-      const history = store.select(
-        "calls",
-        `("to" = ? OR "from" = ?) AND state != 'pending'`,
-        [target.id, target.id],
-        "settled_at DESC",
-        HISTORY_MAX,
-      );
+      const pending = store.calls.pendingTo(target.id);
+      const openCalls = store.calls.pendingFrom(target.id);
+      const history = store.calls.settled(target.id, HISTORY_MAX);
       const manager = target.manager === null ? undefined : registry.get(target.manager);
       return {
         actor: registry.asActor(target),

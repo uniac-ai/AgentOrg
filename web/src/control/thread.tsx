@@ -62,7 +62,7 @@ export function ThreadControl() {
   }
   const call = known.get(callId);
   const decision =
-    call?.tool === "decide" && call.state === "pending" && call.to === organization.data?.root
+    call?.interface === "decide" && call.state === "pending" && call.to === organization.data?.root
       ? (call.input as InputOf<"decide">)
       : undefined;
 

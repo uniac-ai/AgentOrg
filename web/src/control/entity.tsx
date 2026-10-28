@@ -137,7 +137,7 @@ export function EntityControl() {
     thread: callId ? <Outlet /> : null,
     onSettle: isYou
       ? (call) => {
-          const output = call.tool === "report" ? { acknowledged: true } : {};
+          const output = call.interface === "report" ? { acknowledged: true } : {};
           answer.mutate(
             { call: call.id, output },
             { onSuccess: () => notices.answered(call, output), onError: notices.refused },

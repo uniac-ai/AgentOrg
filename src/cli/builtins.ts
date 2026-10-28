@@ -1,24 +1,24 @@
 /**
- * Commands generated from the core's built-in tools: `actor_create` is `agentorg actor create`,
- * and `view` is `agentorg view`. Each runs over `/mcp` as the actor whose credential is in
+ * Commands generated from the core's built-ins: `actor_create` is `agentorg actor create`,
+ * and `view` is `agentorg view`. Each runs against the core as the actor whose credential is in
  * `AGENTORG_CREDENTIAL`, else as the root.
  *
- * Each top-level field of the tool's request becomes a flag (`since` becomes `--since`); a list
+ * Each top-level field of the built-in's request becomes a flag (`since` becomes `--since`); a list
  * field takes its flag once per item, and an object field is given as JSON. A required field named
  * after the command's first word, such as `actor` in `agentorg actor close`, is positional.
  * `--json` gives the whole request as JSON, with any flags overriding its fields. The request is
- * checked against the tool's schema before it is sent.
+ * checked against the built-in's schema before it is sent.
  */
 
 import { parseArgs } from "node:util";
-import { invalid } from "../core/errors.ts";
+import { invalid } from "../domain/errors.ts";
 import {
   BUILTIN_NAMES,
   BUILTINS,
   type BuiltinName,
   type JsonSchema,
   objectSchema,
-} from "../protocol/index.ts";
+} from "../domain/model/index.ts";
 
 type Kind = "string" | "number" | "boolean" | "strings" | "objects" | "json";
 

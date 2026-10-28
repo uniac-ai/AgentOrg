@@ -1,9 +1,9 @@
 /**
- * SQLite storage for the core's records, in WAL mode, through Node's built-in `node:sqlite`.
+ * A SQLite database of the records, in WAL mode, through Node's built-in `node:sqlite`.
  *
- * Each record schema has a table (`TABLES`) with a column per field. The store turns records into
- * rows and back, validating rows against their schema as it reads; the rules of the records live
- * in the modules that own them.
+ * Each record schema has a table (`TABLES`) with a column per field. The database turns records
+ * into rows and back, validating rows against their schema as it reads; the rules of the records
+ * live in the domain.
  */
 
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
@@ -15,7 +15,7 @@ export type RecordOf<T extends Table> = z.output<(typeof TABLES)[T]>;
 
 const quote = (column: string) => `"${column}"`;
 
-export class Store {
+export class Database {
   readonly db: DatabaseSync;
   private readonly kinds: Record<string, Record<string, string>> = {};
 

@@ -29,4 +29,4 @@ export function causes(call: CallRecord, known: ReadonlyMap<string, CallRecord>)
 
 /** A done call's output. The one place that reads the shape of the core's call result. */
 export const outputOf = (call: CallRecord): Record<string, unknown> =>
-  (call.output?.structuredContent as Record<string, unknown> | undefined) ?? {};
+  (call.output?.value as Record<string, unknown> | undefined) ?? {};

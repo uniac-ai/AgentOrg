@@ -1,13 +1,12 @@
 /**
- * The core's tables. Each holds one record schema, with a column per field; columns declared JSON
- * hold lists and nested objects, and columns declared BOOLEAN hold 0 or 1. Times are ISO 8601 text
- * in UTC. Only the hash of an actor's credential is stored.
+ * The tables. Each holds one record schema, with a column per field; columns declared JSON hold
+ * lists and nested objects, and columns declared BOOLEAN hold 0 or 1. Times are ISO 8601 text in
+ * UTC. Only the hash of an actor's credential is stored.
  */
 
-import { z } from "zod";
-import { Actor, AuditEntry, Call } from "../protocol/index.ts";
+import { ActorRecord, AuditEntry, Call } from "../../domain/model/index.ts";
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 export const SCHEMA = `
 CREATE TABLE actors (
@@ -17,7 +16,7 @@ CREATE TABLE actors (
   manager TEXT REFERENCES actors (id),
   credential_hash TEXT NOT NULL UNIQUE,
   online BOOLEAN NOT NULL,
-  tools JSON NOT NULL,
+  interfaces JSON NOT NULL,
   status JSON,
   created_at TEXT NOT NULL,
   closed_at TEXT
@@ -29,13 +28,13 @@ CREATE TABLE calls (
   id TEXT PRIMARY KEY,
   "from" TEXT NOT NULL REFERENCES actors (id),
   "to" TEXT NOT NULL REFERENCES actors (id),
-  tool TEXT NOT NULL,
+  interface TEXT NOT NULL,
   input JSON NOT NULL,
   state TEXT NOT NULL,
   output JSON,
   error TEXT,
   cause TEXT REFERENCES calls (id),
-  task TEXT,
+  run TEXT,
   created_at TEXT NOT NULL,
   delivered_at TEXT,
   settled_at TEXT
@@ -52,6 +51,4 @@ CREATE TABLE audit (
 );
 `;
 
-export const ActorRow = Actor.omit({ path: true }).extend({ credential_hash: z.string() });
-
-export const TABLES = { actors: ActorRow, calls: Call, audit: AuditEntry } as const;
+export const TABLES = { actors: ActorRecord, calls: Call, audit: AuditEntry } as const;

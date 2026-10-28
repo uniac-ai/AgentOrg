@@ -9,7 +9,8 @@ const SETTLED: Record<string, string> = { note: "Marked read", report: "Acknowle
 export const notices = {
   answered: (call: CallRecord, output: Record<string, unknown>) =>
     toasts.add({
-      title: SETTLED[call.tool] ?? (typeof output.choice === "string" ? output.choice : "Answered"),
+      title:
+        SETTLED[call.interface] ?? (typeof output.choice === "string" ? output.choice : "Answered"),
       description: callTitle(call),
     }),
   closed: ({ actor }: ActorClosed) => toasts.add({ title: "Closed", description: actor.name }),

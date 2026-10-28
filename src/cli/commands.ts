@@ -1,13 +1,11 @@
-/** The commands that do more than parse flags: the core, and a built-in run over `/mcp`. */
+/** The commands that do more than parse flags: the core, and a built-in run against it. */
 
 import { once } from "node:events";
 import { parseArgs } from "node:util";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { connectClient } from "../actor/index.ts";
+import type { BuiltinName } from "../domain/model/index.ts";
 import { databasePath, ensureHome, readCredential, rootCredentialPath } from "../home.ts";
-import { type BuiltinName, coreUrl, DEFAULT_CORE_PORT, MCP_PATH } from "../protocol/index.ts";
-import { VERSION } from "../version.ts";
+import { coreUrl, DEFAULT_CORE_PORT } from "../network/index.ts";
 
 const note = (text: string) => process.stderr.write(`agentorg: ${text}\n`);
 
@@ -39,26 +37,24 @@ export async function coreCommand(args: string[]): Promise<number> {
   const { values } = parseArgs({ args, options: { port: { type: "string" } }, strict: true });
   const port = Number(values.port ?? (process.env.AGENTORG_PORT || DEFAULT_CORE_PORT));
   ensureHome();
-  const { Store } = await withoutSqliteWarning(() => import("../core/store.ts"));
-  const { Core, rootCredential } = await import("../core/index.ts");
-  const { listen } = await import("../core/app.ts");
-  const store = new Store(databasePath());
-  const core = new Core(store);
-  rootCredential(core.registry, rootCredentialPath());
-  core.connections.onError = (actor, error) =>
-    note(`the reverse connection of ${actor} failed to start: ${error.message}`);
-  const server = await listen(core.app, { port });
-  note(`core serving on ${server.url}; the root's credential is in ${rootCredentialPath()}`);
+  const { SqliteStore } = await withoutSqliteWarning(() => import("../storage/sqlite/index.ts"));
+  const { rootCredential, startCore } = await import("../core/index.ts");
+  const store = new SqliteStore(databasePath());
+  const core = await startCore(store, {
+    port,
+    onError: (actor, error) => note(`the channel of ${actor} failed to start: ${error.message}`),
+  });
+  rootCredential(core.organization.registry, rootCredentialPath());
+  note(`core serving on ${core.url}; the root's credential is in ${rootCredentialPath()}`);
   await Promise.race([once(process, "SIGINT"), once(process, "SIGTERM")]);
   await core.close();
-  await server.close();
   store.close();
   return 0;
 }
 
 /**
- * Run a built-in over `/mcp` as the actor whose credential is in `AGENTORG_CREDENTIAL`, else as
- * the root, and print its result as JSON. A refusal goes to stderr, with exit status 1.
+ * Run a built-in as the actor whose credential is in `AGENTORG_CREDENTIAL`, else as the root, and
+ * print its result as JSON. A refusal goes to stderr, with exit status 1.
  */
 export async function builtinCommand(
   name: BuiltinName,
@@ -71,29 +67,17 @@ export async function builtinCommand(
     );
   }
   const url = coreUrl();
-  const client = new Client({ name: "agentorg-cli", version: VERSION });
-  try {
-    await client.connect(
-      new StreamableHTTPClientTransport(new URL(MCP_PATH, url), {
-        requestInit: { headers: { Authorization: `Bearer ${credential}` } },
-      }),
-    );
-  } catch (error) {
-    throw new Error(
-      `the core at ${url} did not accept the connection: ${(error as Error).message}`,
-    );
-  }
+  const client = await connectClient({ url, credential, name: "agentorg-cli" }).catch((error) => {
+    throw new Error(`the core at ${url} did not accept the connection: ${error.message}`);
+  });
   try {
     const wait = typeof request.wait === "number" ? request.wait : 0;
-    const result = (await client.callTool({ name, arguments: request }, undefined, {
-      timeout: (wait + 30) * 1000,
-    })) as CallToolResult;
-    const text = result.content.map((part) => (part.type === "text" ? part.text : "")).join("");
-    if (result.isError) {
-      note(text);
+    const answer = await client.call(name, request, { timeoutMs: (wait + 30) * 1000 });
+    if (answer.state !== "done") {
+      note(answer.state === "refused" ? `${answer.code}: ${answer.message}` : answer.state);
       return 1;
     }
-    process.stdout.write(`${JSON.stringify(result.structuredContent, null, 2)}\n`);
+    process.stdout.write(`${JSON.stringify(answer.value, null, 2)}\n`);
     return 0;
   } finally {
     await client.close();

@@ -28,7 +28,7 @@ const SETTLED: Record<string, string> = { note: "read", report: "acknowledged" }
 
 function verbOf(entry: AuditRecord, model: ActivityModel): string {
   if (entry.operation !== "call") return VERBS[entry.operation] ?? entry.operation;
-  const tool = entry.target ? model.calls.get(entry.target)?.tool : undefined;
+  const tool = entry.target ? model.calls.get(entry.target)?.interface : undefined;
   if (entry.outcome === "done" && tool && SETTLED[tool]) return SETTLED[tool];
   return CALL_VERBS[entry.outcome] ?? "called";
 }

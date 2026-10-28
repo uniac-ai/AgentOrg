@@ -1,8 +1,8 @@
 /** What the human actor's API under `/api` returns; the web app imports these types. */
 
 import type { z } from "zod";
-import type { ActorClosed as ActorClosedResult, View } from "../protocol/builtins.ts";
-import type { Actor, AuditEntry, Call } from "../protocol/records.ts";
+import type { ActorClosed as ActorClosedResult, View } from "../domain/model/builtins.ts";
+import type { Actor, AuditEntry, Call } from "../domain/model/records.ts";
 import type { InputOf, ToolName } from "./tools.ts";
 
 /** A call waiting on the user, as the core delivered it to one of the human's tools. */

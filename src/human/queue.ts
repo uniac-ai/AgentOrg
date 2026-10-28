@@ -17,7 +17,7 @@ import {
   McpError,
 } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
-import { CALL_META, type DeliveredCall } from "../protocol/index.ts";
+import { CALL_META, type DeliveredCall } from "../bindings/mcp/index.ts";
 import { VERSION } from "../version.ts";
 import { isToolName, TOOL_LIST, TOOLS } from "./tools.ts";
 import type { Pending } from "./types.ts";

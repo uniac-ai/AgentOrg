@@ -6,72 +6,83 @@ Status: draft. The code builds toward this design.
 
 agentorg organizes AI agents and programs the way a company organizes people.
 - **Actors are positions.** An actor is a position with a manager. The user is the root, the one actor without a manager.
-- **Calls go up and down.** An actor calls its manager's tools and its direct reports' tools. The root calls any actor's.
+- **Calls go up and down.** An actor calls the interfaces its manager and its direct reports expose. The root calls any actor's.
 - **Processing a call is the actor's own business.** The core routes and records calls; what an actor does with one is up to it.
 - **Nothing subscribes.** A manager reads its reports' status and calls when it chooses.
 
-## Components
+## Layers
 
-| Component | Role |
-|---|---|
-| **The core** | It manages everything: actors and their credentials, connections, the wiring of who calls whom, routing, call records and the audit trail. It holds no UI. |
-| **Actors** | Each is a process that fills a position. To the core it is an MCP client, whose calls out are its *available* tools, and an MCP server, whose tools are its *exposed* tools: the calls into it. |
+The code is in layers. Each depends only on the one below it, through a small interface (a port), so any layer can be replaced without touching the others. MCP is today's protocol, not the model: another binding, such as plain HTTP JSON or gRPC, would implement the same ports.
 
-## The protocol: MCP in both directions
+| Layer | Folder | What it owns | Today's choice |
+|---|---|---|---|
+| **Network** | `src/network/` | Moving text between a party and the core: the listener, credential to identity, one channel per party, dialing again. It knows no tools, calls or actors. | HTTP and a WebSocket on 127.0.0.1 |
+| **Protocol binding** | `src/bindings/mcp/` | Encoding the domain's operations on the wire, both ways: listing interfaces, calls, runs, cancellation, change notices, metadata. It is the only code that imports MCP. | MCP |
+| **Domain** | `src/domain/` | Actors and their interfaces, calls and their lifecycle, the wiring, the built-ins, the audit trail. | agentorg's own model |
+| **Storage** | `src/storage/sqlite/` | Keeping the domain's records, behind the domain's `Store` port. | SQLite through `node:sqlite` |
+| **Actors** | `src/actor/`, `src/human/`, programs | What a party does with a call. The actor library gives an actor an API that names no protocol or network. | the human actor, programs |
 
-The core serves two endpoints, and an actor dials both with its credential, `Authorization: Bearer <credential>`. The core never dials out.
+How the layers meet:
+- **The domain's ports** are in `src/domain/ports.ts`:
+  - `ActorLink`, the way to one reachable actor: deliver a call, wait on a run, cancel a run, and close. A binding implements it.
+  - `Presence`, which a binding tells when an actor can be reached through which link, and what it exposes.
+  - `Application`, which a binding serves to callers: what an actor may call, and calling it.
+  - `Store`, the record reads and writes the domain needs. The storage layer implements it.
+- **The composition root**, `src/core/index.ts`, assembles the core from the domain, SQLite storage, the MCP binding and the network listener.
+- **The actor library** (`src/actor/`) assembles the network's connector with the binding on an actor's side.
+- **`test/layers.test.ts` enforces the rules:**
+  - The domain imports no MCP, web framework, WebSocket, HTTP server or database.
+  - The domain's model, which the web app type-checks through, uses nothing Node-only.
+  - The network imports no domain, binding or storage.
+  - Only the MCP binding imports MCP, with one exception: `src/human/`, until it moves onto the actor library.
 
-| Endpoint | MCP roles | Transport |
-|---|---|---|
-| `/mcp` | the core is the server, the actor its client | Streamable HTTP. Each request stands alone, without an MCP session. |
-| `/mcp/reverse` | the core is the client, the actor its server | A WebSocket the actor opens, with subprotocol `mcp` and one JSON-RPC message per text frame. The core runs an MCP client over it. |
+## The domain
 
-- **An actor's tool list is its manifest.** The core learns an actor's exposed tools with `tools/list` over the reverse connection, and lists them again on `notifications/tools/list_changed`. There is no other descriptor format: the MCP `Tool` object is the standard. A tool name holds letters, digits, `_` and `-`, since dots join handles and tool names.
-- **The connection layer is its own module.** It turns a credential into an actor, holds each actor's reverse connection, and tracks whether the actor is online: from the moment its tools are listed until its reverse connection ends. A newer reverse connection replaces the older, which the core closes with code 4000. Closing an actor closes its connection with code 4001. Each time an actor comes online, routing delivers what is pending on it.
-- **The shared code is `src/protocol/`:** the endpoint contract, the records and the built-ins' schemas, the WebSocket transport both ends use, and `ActorConnection`. A Node actor built on the MCP SDK uses `ActorConnection` to dial both endpoints. It dials the reverse connection again after a drop, but not after code 4000 or 4001.
+### Interfaces
 
-## Records
+The domain's interface descriptor is its own: name, title and description, input schema, output schema, whether it is one-way, and whether it is long-running.
+- **Schemas** are JSON Schema, the domain's schema language. The domain checks inputs and outputs against them with Ajv.
+- **A one-way interface's caller** does not wait for its result.
+- **A long-running interface** may take a call as a run, which it finishes hours later.
+
+### Records
 
 | Record | Fields | Rules |
 |---|---|---|
-| **Actor** | id; name, a handle unique among its open siblings; purpose; manager (an actor id, or null for the root); credential hash; online; exposed tools as last listed; status (`running`, `waiting`, `blocked` or `review`, with a plain-text summary); created at; closed at | Its manager creates it, and its manager or the root closes it, once its own reports are closed. Its path is its handles from the root's report down, as `release.storage`. |
-| **Call** | id; from; to; tool (the callee's own name for it); input; state (`pending`, `done`, `failed` or `withdrawn`); output or error; cause (the call that led to this one); task (the MCP task the callee runs it as); created, delivered and settled at | It is recorded before it is delivered, and settles once. A result that arrives after it settled is dropped. |
+| **Actor** | id; name, a handle unique among its open siblings; purpose; manager (an actor id, or null for the root); credential hash; online; its exposed interfaces as last listed; status (`running`, `waiting`, `blocked` or `review`, with a plain-text summary); created at; closed at | Its manager creates it, and its manager or the root closes it, once its own reports are closed. Its path is its handles from the root's report down, as `release.storage`. An interface name holds letters, digits, `_` and `-`, since dots join handles and names. |
+| **Call** | id; from; to; interface (the callee's own name for it); input; state (`pending`, `done`, `failed` or `withdrawn`); output, as a structured value and parts, or error; cause (the call that led to this one); run (the callee's handle for it while it runs long); created, delivered and settled at | It is recorded before it is delivered, and settles once. A result that arrives after it settled is dropped. |
 | **Audit entry** | id; at; actor; operation; target; outcome | One line for each write, and for each routed call when it is created, refused and settled. |
 
-## Wiring: who calls what
+### Wiring: who calls what
 
-An actor's available tools, its `tools/list` on `/mcp`, are:
+An actor's available interfaces are:
 - the core's built-ins;
-- its manager's exposed tools, named `manager.<tool>`, as in `manager.decide`;
-- each direct report's exposed tools, named `<handle>.<tool>`, as in `storage.review`;
-- for the root, every actor's exposed tools, named by its path, as in `release.storage.review`.
+- its manager's exposed interfaces, named `manager.<name>`, as in `manager.decide`;
+- each direct report's exposed interfaces, named `<handle>.<name>`, as in `storage.review`;
+- for the root, every actor's exposed interfaces, named by its path, as in `release.storage.review`.
 
 Lateral grants are deferred; they would be one table the root writes.
 
-## Routing a call
+### Routing a call
 
-When actor A calls `B.tool` on `/mcp`:
-1. The core finds the tool in A's list and checks the input against B's `inputSchema`. A refused call is not recorded.
-2. It records the call as `pending`. If A sets `_meta["agentorg/cause"]` to the id of a call into A, that call is recorded as the cause.
-3. It delivers the call over B's reverse connection as `tools/call`, with `_meta["agentorg/call"] = {id, from, cause}`. It delivers it again each time B comes online while the call is pending, so delivery is at least once, and a handler must tolerate a repeat. A call to an offline actor waits.
-4. It checks B's result against B's `outputSchema` and records the call as `done`. A result that breaks the schema, an `isError` result or a JSON-RPC error records it as `failed`.
-5. How A's `tools/call` returns:
-   - **Within the bounded wait.** A's call waits up to 30 seconds, sending progress notifications when A passed a progress token. If the call is done by then, A gets B's own result, with `_meta["agentorg/call"] = {id, state}`.
-   - **Still pending.** A gets `{call, state: "pending"}`, and reads the call later with `call_result`. So that clients checking results accept both, a routed tool's listed `outputSchema` is B's or that pending shape.
-   - **One-way.** A call into a one-way tool, whose output schema is the empty object, returns pending at once.
+When actor A calls `B.name`:
+1. The core finds the interface among A's and checks the input against its input schema. A refused call is not recorded.
+2. It records the call as `pending`, with the cause A names, which must be a call into A.
+3. It delivers the call through B's link while B is reachable, and again each time B comes back while the call is pending. So delivery is at least once, and a handler must tolerate a repeat. A call to an unreachable actor waits.
+4. It checks B's structured value against the output schema and records the call as `done`. A value that breaks the schema, a missing value where there is a schema, or a failure records it as `failed`.
+5. A waits up to 30 seconds, with progress. If the call is done by then, A gets B's result. Otherwise A's answer is pending, and A reads the call later with `call_result`. A call into a one-way interface answers pending at once.
 
 ### Long-running calls
 
-A human may answer hours later, so calls into an actor can run as MCP tasks.
-- **Declaring it.** A tool declares `execution.taskSupport`, and its server declares `tasks.requests.tools.call`.
-- **Delivery.** The core then sends the call with `params.task`. The actor returns a task at once, and finishes it whenever it is ready. The core waits on `tasks/result`, which returns once the task is finished.
-- **Reconnects.** After a reconnect, the core asks for the same task's result again. If the actor no longer knows the task, as after a restart with an in-memory task store, the core delivers the call again, and the actor holds a fresh task. So an actor can rebuild its queue from the calls pending on it, and a reconnect alone does not deliver a call twice.
-- **Withdrawal.** A withdrawn call's task is cancelled with `tasks/cancel`.
-- **Tools without task support** answer within 60 seconds, or the call fails.
+A human may answer hours later, so a long-running interface may take a call as a run:
+- **The wait.** The core records the run and waits on it.
+- **After a reconnect.** The core waits on the same run again. If the actor no longer knows the run, as after a restart, the core delivers the call again and the actor takes it as a new run. So an actor can rebuild its queue from the calls pending on it, and a reconnect alone does not deliver a call twice.
+- **Withdrawal.** A withdrawn call's run is cancelled.
+- **Interfaces that are not long-running** answer within 60 seconds, or the call fails.
 
-## Built-in tools
+### Built-ins
 
-| Tool | What it does |
+| Built-in | What it does |
 |---|---|
 | `actor_create {name, purpose}` | Creates a report of the caller, and returns it with its credential. The credential is shown only once. |
 | `actor_close {actor}` | The manager, or the root, closes an actor. It is refused while the actor has open reports of its own. The actor's own pending calls are withdrawn, the calls into it fail, and its connection closes. The root is never closed. |
@@ -79,7 +90,31 @@ A human may answer hours later, so calls into an actor can run as MCP tasks.
 | `view {actor?}` | The caller's own position, or a direct report's; the root may view anyone. It holds what is pending on that actor and from whom, its own open calls, its reports with their status, its manager, and its 50 most recent settled calls. |
 | `call_result {call, wait?}` | Reads a call the caller made, optionally waiting up to 600 seconds for it to settle, with progress. |
 | `call_withdraw {call}` | The caller withdraws a pending call. |
-| `activity {since?, limit?}` | The audit trail, newest first. Listed to the root only. |
+| `activity {since?, limit?}` | The audit trail, newest first. Offered to the root only. |
+
+## Today's binding: MCP in both directions
+
+The network gives each party two endpoints, and the MCP binding names them:
+
+| Endpoint | MCP roles | Transport |
+|---|---|---|
+| `/mcp`, the request endpoint | the core is the server, the actor its client | Streamable HTTP. Each request stands alone, without an MCP session. |
+| `/mcp/reverse`, the channel endpoint | the core is the client, the actor its server | A WebSocket the actor opens, with subprotocol `mcp` and one JSON-RPC message per text frame. |
+
+How the domain is encoded:
+- **An interface is an MCP `Tool`.** The core learns an actor's interfaces with `tools/list` over the channel, and lists them again on `notifications/tools/list_changed`.
+  - A tool is one-way when its output schema is the empty object.
+  - It is long-running when it declares `execution.taskSupport` and its server declares `tasks.requests.tools.call`.
+- **A call is `tools/call`**, with `_meta["agentorg/call"] = {id, from, cause}`. A caller names its cause with `_meta["agentorg/cause"]`.
+- **A run is an MCP task.** The core sends a long-running call with `params.task`, waits on `tasks/result`, and asks again at once when the actor's `notifications/tasks/status` says the task finished. Cancelling is `tasks/cancel`, and an unknown task is a lost run.
+- **An answer is a `CallToolResult`.** A done call returns B's own result, with `_meta["agentorg/call"] = {id, state}`. A pending one returns `{call, state: "pending"}`. A routed tool's listed `outputSchema` is B's or that pending shape, so that clients checking results accept both.
+
+## The network
+
+- **Access.** Both endpoints take `Authorization: Bearer <credential>`. The domain's registry tells who a credential is.
+- **Web pages are refused.** A request with an `Origin` header comes from a web page, so it is refused; that blocks DNS rebinding and cross-site WebSockets.
+- **One channel per party.** A newer channel replaces the older, which closes with code 4000. Closing an actor closes its channel with code 4001.
+- **The party's side, the connector.** It dials the channel again after a drop, but not after 4000 or 4001.
 
 ## The core process
 
@@ -88,21 +123,17 @@ A human may answer hours later, so calls into an actor can run as MCP tasks.
   - The first start creates the root and writes its credential to `root-credential`, mode 600.
   - Only hashes of credentials are stored, so when that file is gone the core mints a new credential.
   - When the file holds something else, the core refuses to start.
-- **Security:**
-  - Each actor proves its identity with its own credential, a random secret.
-  - Both endpoints refuse any request that carries an `Origin` header. That blocks web pages, which could otherwise reach a local port by DNS rebinding or open a WebSocket to it.
-  - Separation between actors is the wiring above, and the audit trail records every write.
 - **The command line:**
   - `agentorg core` runs the core.
-  - A command for each built-in, generated from its schema, runs it over `/mcp`: `agentorg actor create`, `agentorg actor close`, `agentorg status set`, `agentorg view`, `agentorg call result`, `agentorg call withdraw` and `agentorg activity`.
+  - A command for each built-in, generated from its schema, runs it: `agentorg actor create`, `agentorg actor close`, `agentorg status set`, `agentorg view`, `agentorg call result`, `agentorg call withdraw` and `agentorg activity`.
   - A command acts as the actor whose credential is in `AGENTORG_CREDENTIAL`, else as the root.
 
 ## Stack
 
 - **Language and runtime:** TypeScript on Node 22.13 or later (an LTS release).
 - **Libraries:**
-  - **MCP:** the official TypeScript SDK, `@modelcontextprotocol/sdk`, including its experimental tasks and its JSON Schema validator.
-  - **Records and requests:** Zod schemas, from which the built-ins' JSON Schemas are generated.
+  - **MCP, in the binding only:** the official TypeScript SDK, `@modelcontextprotocol/sdk`, including its experimental tasks.
+  - **Records and requests:** Zod schemas, from which the built-ins' JSON Schemas are generated, with Ajv to check JSON Schema.
   - **HTTP:** Hono on `@hono/node-server`, with `ws` for the WebSocket upgrade.
   - **SQLite:** `node:sqlite`, built into Node 22.13 and later, so nothing needs a native build.
   - **CLI parsing and tests:** Node's own `util.parseArgs` and `node:test`.

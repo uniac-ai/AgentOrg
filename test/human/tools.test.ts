@@ -2,25 +2,25 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { DECISION, json, setup } from "./harness.ts";
 
-test("the core lists the human's three tools, each run as a task", async () => {
+test("the core learns the human's three interfaces, each long-running and note one-way", async () => {
   const { core } = await setup();
-  const { tools } = (await core.core.connections.peer(core.rootId)?.listTools()) ?? { tools: [] };
+  const interfaces = core.org.registry.get(core.rootId)?.interfaces ?? [];
   assert.deepEqual(
-    tools.map((tool) => [tool.name, tool.execution?.taskSupport]),
+    interfaces.map((each) => [each.name, each.long_running, each.one_way]),
     [
-      ["decide", "required"],
-      ["note", "required"],
-      ["report", "required"],
+      ["decide", true, false],
+      ["note", true, true],
+      ["report", true, false],
     ],
   );
   const output: Record<string, unknown> =
-    tools.find((tool) => tool.name === "decide")?.outputSchema ?? {};
+    interfaces.find((each) => each.name === "decide")?.output ?? {};
   assert.deepEqual(output.required, ["choice", "words"]);
   assert.deepEqual(output.anyOf, [
     { properties: { choice: { type: "string" } } },
     { properties: { words: { type: "string" } } },
   ]);
-  const note = tools.find((tool) => tool.name === "note")?.outputSchema;
+  const note = interfaces.find((each) => each.name === "note")?.output;
   assert.deepEqual(note, { type: "object", properties: {}, additionalProperties: false });
 });
 
@@ -46,7 +46,7 @@ test("a program's decide waits on the user, with who it is from, and the program
   assert.equal((await post(`/api/pending/${call}`, answer)).status, 200);
   const settled = await storage.result(call);
   assert.equal(settled.state, "done");
-  assert.deepEqual(settled.output?.structuredContent, answer);
+  assert.deepEqual(settled.output?.value, answer);
   await pending();
 });
 
@@ -68,7 +68,7 @@ test("a decision's answer is one of its options, the user's words, or both", asy
 
   const answer = { choice: null, words: "Ask me tomorrow." };
   assert.equal((await post(`/api/pending/${call}`, answer)).status, 200);
-  assert.deepEqual((await storage.result(call)).output?.structuredContent, answer);
+  assert.deepEqual((await storage.result(call)).output?.value, answer);
 });
 
 test("a note completes with nothing once read, and a report once acknowledged", async () => {
@@ -79,11 +79,11 @@ test("a note completes with nothing once read, and a report once acknowledged", 
   await pending(note, report);
 
   assert.equal((await post(`/api/pending/${note}`, {})).status, 200);
-  assert.deepEqual((await storage.result(note)).output?.structuredContent, {});
+  assert.deepEqual((await storage.result(note)).output?.value, {});
   assert.equal((await post(`/api/pending/${report}`, {})).status, 400);
   assert.equal((await post(`/api/pending/${report}`, { acknowledged: true })).status, 200);
   const acknowledged = await storage.result(report);
-  assert.deepEqual(acknowledged.output?.structuredContent, { acknowledged: true });
+  assert.deepEqual(acknowledged.output?.value, { acknowledged: true });
 });
 
 test("a call the human's tool refuses fails at the core and never waits on the user", async () => {

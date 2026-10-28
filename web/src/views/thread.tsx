@@ -31,10 +31,10 @@ function Causes({ calls, names }: { calls: CallRecord[]; names: Names }) {
 
 /** What the call carries beyond its title: a decision's context, any other tool's input. */
 function Body({ call }: { call: CallRecord }) {
-  if (call.tool === "decide") {
+  if (call.interface === "decide") {
     return <p className="whitespace-pre-wrap">{String(call.input.context ?? "")}</p>;
   }
-  if (call.tool === "note" || call.tool === "report") {
+  if (call.interface === "note" || call.interface === "report") {
     const text = String(call.input.text ?? call.input.outcome ?? "");
     return text.includes("\n") ? <p className="whitespace-pre-wrap">{text}</p> : null;
   }
@@ -57,7 +57,7 @@ function Body({ call }: { call: CallRecord }) {
 /** How the call ended, once it has. */
 function Outcome({ call }: { call: CallRecord }) {
   if (call.state === "pending") return null;
-  const words = call.tool === "decide" ? outputOf(call).words : undefined;
+  const words = call.interface === "decide" ? outputOf(call).words : undefined;
   return (
     <div
       className={cn(

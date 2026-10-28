@@ -1,47 +1,41 @@
-/** The connection layer: credentials, both endpoints, pairing, online state and exposed tools. */
+/** Credentials, both endpoints, one channel per actor, reachability and exposed interfaces. */
 
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { Core, rootCredential } from "../src/core/index.ts";
-import { Store } from "../src/core/store.ts";
-import {
-  CLOSE_ACTOR_CLOSED,
-  CLOSE_REPLACED,
-  MCP_PATH,
-  REVERSE_PATH,
-  SUBPROTOCOL,
-} from "../src/protocol/index.ts";
-import { fakeActor, startCore, tool, until } from "./harness.ts";
+import { PATHS, SUBPROTOCOL } from "../src/bindings/mcp/index.ts";
+import { rootCredential } from "../src/core/index.ts";
+import { Organization } from "../src/domain/index.ts";
+import { CLOSE_REPLACED, CLOSE_REVOKED } from "../src/network/index.ts";
+import { SqliteStore } from "../src/storage/sqlite/index.ts";
+import { fakeActor, iface, startCore, until } from "./harness.ts";
 
 test("the first start creates the root and its credential file, readable only by its owner", () => {
   const directory = mkdtempSync(join(tmpdir(), "agentorg-root-"));
   try {
     const file = join(directory, "root-credential");
-    const store = new Store(join(directory, "core.db"));
-    const core = new Core(store);
-    const credential = rootCredential(core.registry, file);
+    const store = new SqliteStore(join(directory, "core.db"));
+    const { registry } = new Organization(store);
+    const credential = rootCredential(registry, file);
     assert.equal(statSync(file).mode & 0o777, 0o600);
-    const root = core.registry.root();
+    const root = registry.root();
     assert.equal(root?.manager, null);
-    assert.equal(core.registry.byCredential(credential)?.id, root?.id);
+    assert.equal(registry.byCredential(credential)?.id, root?.id);
     // A later start reads the same credential.
-    assert.equal(rootCredential(core.registry, file), credential);
+    assert.equal(rootCredential(registry, file), credential);
 
     // Without the file, a new credential is minted and the old one stops working.
     rmSync(file);
-    const minted = rootCredential(core.registry, file);
+    const minted = rootCredential(registry, file);
     assert.notEqual(minted, credential);
-    assert.equal(core.registry.byCredential(credential), undefined);
-    assert.equal(core.registry.root()?.id, root?.id);
+    assert.equal(registry.byCredential(credential), undefined);
+    assert.equal(registry.root()?.id, root?.id);
 
     // A file that holds something else is refused rather than overwritten.
     writeFileSync(file, "not-the-credential\n", { mode: 0o600 });
-    assert.throws(() => rootCredential(core.registry, file), /does not hold the root's credential/);
+    assert.throws(() => rootCredential(registry, file), /does not hold the root's credential/);
     store.close();
   } finally {
     rmSync(directory, { recursive: true, force: true });
@@ -52,7 +46,7 @@ test("both endpoints refuse a missing or wrong credential and any request from a
   const core = await startCore();
   try {
     const post = (headers: Record<string, string>) =>
-      fetch(`${core.url}${MCP_PATH}`, {
+      fetch(`${core.url}${PATHS.request}`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -71,7 +65,7 @@ test("both endpoints refuse a missing or wrong credential and any request from a
 
     const upgrade = (headers: Record<string, string>) =>
       new Promise<number>((resolve) => {
-        const url = `${core.url.replace("http", "ws")}${REVERSE_PATH}`;
+        const url = `${core.url.replace("http", "ws")}${PATHS.channel}`;
         const socket = new WebSocket(url, {
           protocols: [SUBPROTOCOL],
           headers,
@@ -93,83 +87,67 @@ test("both endpoints refuse a missing or wrong credential and any request from a
   }
 });
 
-test("an actor's client on /mcp acts as the actor its credential names", async () => {
+test("the core learns an actor's interfaces when it connects, again when they change, and marks it online", async () => {
   const core = await startCore();
   try {
-    const client = new Client({ name: "probe", version: "0" });
-    await client.connect(
-      new StreamableHTTPClientTransport(new URL(MCP_PATH, core.url), {
-        requestInit: { headers: { Authorization: `Bearer ${core.root}` } },
-      }),
-    );
-    assert.deepEqual(client.getServerVersion()?.name, "agentorg");
-    assert.ok(Array.isArray((await client.listTools()).tools));
-    await client.close();
-  } finally {
-    await core.close();
-  }
-});
-
-test("the core lists an actor's tools over its reverse connection and marks it online", async () => {
-  const core = await startCore();
-  try {
-    const { actor: storage, credential } = core.core.registry.create(
+    const { actor: storage, credential } = core.org.registry.create(
       core.rootId,
       "storage",
       "Storage",
     );
-    assert.equal(core.core.registry.get(storage.id)?.online, false);
-    const fake = fakeActor([tool("review"), tool("not.a.handle"), tool("archive")]);
-    await core.connect(credential, fake);
-    await until("storage online", () => core.core.registry.get(storage.id)?.online === true);
-    const listed = core.core.registry.get(storage.id)?.tools.map((each) => each.name);
-    assert.deepEqual(listed, ["review", "archive"], "a tool whose name has a dot is not listed");
-    assert.ok(core.core.connections.peer(storage.id));
+    assert.equal(core.org.registry.get(storage.id)?.online, false);
+    const fake = fakeActor([iface("review"), iface("not.a.handle"), iface("archive")]);
+    const connection = await core.connect(credential, fake);
+    await until("storage online", () => core.org.registry.get(storage.id)?.online === true);
+    const listed = core.org.registry.get(storage.id)?.interfaces.map((each) => each.name);
+    assert.deepEqual(listed, ["review", "archive"], "an interface whose name has a dot is dropped");
+    assert.ok(core.org.link(storage.id));
 
-    // A list_changed notification makes the core list again.
-    fake.tools.push(tool("restore"));
-    await fake.server.sendToolListChanged();
+    await connection.expose([...fake.exposed, ...fakeActor([iface("restore")]).exposed]);
     await until("restore listed", () =>
-      (core.core.registry.get(storage.id)?.tools ?? []).some((each) => each.name === "restore"),
+      (core.org.registry.get(storage.id)?.interfaces ?? []).some((each) => each.name === "restore"),
     );
   } finally {
     await core.close();
   }
 });
 
-test("a newer reverse connection replaces the older, which does not dial again", async () => {
+test("a newer connection of the same actor replaces the older, which does not connect again", async () => {
   const core = await startCore();
   try {
-    const { actor, credential } = core.core.registry.create(core.rootId, "web", "Web");
-    const first = await core.connect(credential, fakeActor([tool("one")]));
-    await until("first online", () => core.core.registry.get(actor.id)?.online === true);
-    const firstPeer = core.core.connections.peer(actor.id);
+    const { actor, credential } = core.org.registry.create(core.rootId, "web", "Web");
+    const first = await core.connect(credential, fakeActor([iface("one")]));
+    await until("first online", () => core.org.registry.get(actor.id)?.online === true);
+    const firstLink = core.org.link(actor.id);
 
-    await core.connect(credential, fakeActor([tool("two")]));
+    await core.connect(credential, fakeActor([iface("two")]));
     await until("first replaced", () => first.ended === CLOSE_REPLACED);
-    await until("second's tools listed", () =>
-      (core.core.registry.get(actor.id)?.tools ?? []).some((each) => each.name === "two"),
+    await until("second's interfaces listed", () =>
+      (core.org.registry.get(actor.id)?.interfaces ?? []).some((each) => each.name === "two"),
     );
-    assert.notEqual(core.core.connections.peer(actor.id), firstPeer);
-    assert.equal(core.core.registry.get(actor.id)?.online, true);
+    assert.notEqual(core.org.link(actor.id), firstLink);
+    await until(
+      "online through the second",
+      () => core.org.registry.get(actor.id)?.online === true,
+    );
   } finally {
     await core.close();
   }
 });
 
-test("a closed actor's credential is refused and its reverse connection ends for good", async () => {
+test("a closed actor's credential is refused and its connection ends for good", async () => {
   const core = await startCore();
   try {
-    const { actor, credential } = core.core.registry.create(core.rootId, "old", "Old");
+    const { actor, credential } = core.org.registry.create(core.rootId, "old", "Old");
     const connection = await core.connect(credential);
-    await until("online", () => core.core.registry.get(actor.id)?.online === true);
+    await until("online", () => core.org.registry.get(actor.id)?.online === true);
 
-    core.core.registry.close(actor.id);
-    await core.core.connections.disconnect(actor.id);
-    await until("ended", () => connection.ended === CLOSE_ACTOR_CLOSED);
-    assert.equal(core.core.registry.get(actor.id)?.online, false);
-    assert.equal(core.core.connections.identify(credential), undefined);
-    const refused = await fetch(`${core.url}${MCP_PATH}`, {
+    core.org.registry.close(actor.id);
+    await core.org.link(actor.id)?.close();
+    await until("ended", () => connection.ended === CLOSE_REVOKED);
+    assert.equal(core.org.registry.get(actor.id)?.online, false);
+    assert.equal(core.org.identify(credential), undefined);
+    const refused = await fetch(`${core.url}${PATHS.request}`, {
       method: "POST",
       headers: { Authorization: `Bearer ${credential}` },
     });
@@ -179,18 +157,18 @@ test("a closed actor's credential is refused and its reverse connection ends for
   }
 });
 
-test("an actor dials its reverse connection again after it drops", async () => {
+test("an actor connects again after its connection drops", async () => {
   const core = await startCore();
   try {
-    const { actor, credential } = core.core.registry.create(core.rootId, "batch", "Batch");
-    await core.connect(credential, fakeActor([tool("run")]));
-    await until("online", () => core.core.registry.get(actor.id)?.online === true);
-    const before = core.core.connections.peer(actor.id);
-    await core.core.connections.closeAll();
-    await until("online again on a new connection", () => {
-      const peer = core.core.connections.peer(actor.id);
+    const { actor, credential } = core.org.registry.create(core.rootId, "batch", "Batch");
+    await core.connect(credential, fakeActor([iface("run")]));
+    await until("online", () => core.org.registry.get(actor.id)?.online === true);
+    const before = core.org.link(actor.id);
+    core.drop();
+    await until("online again on a new link", () => {
+      const link = core.org.link(actor.id);
       return (
-        peer !== undefined && peer !== before && core.core.registry.get(actor.id)?.online === true
+        link !== undefined && link !== before && core.org.registry.get(actor.id)?.online === true
       );
     });
   } finally {

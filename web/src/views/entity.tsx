@@ -158,9 +158,10 @@ function Pending({ model }: { model: EntityModel }) {
       className="flex flex-col gap-0.5 rounded-lg border border-state-waiting/30 bg-state-waiting/5 p-1.5"
     >
       {model.pending.map((call) => {
-        const settle = call.tool === "note" || call.tool === "report" ? model.onSettle : undefined;
+        const settle =
+          call.interface === "note" || call.interface === "report" ? model.onSettle : undefined;
         if (settle) {
-          const report = call.tool === "report";
+          const report = call.interface === "report";
           return (
             <div key={call.id} className="flex flex-wrap items-start gap-2.5 px-2.5 py-2 text-sm">
               <CallIcon call={call} className="mt-0.5" />

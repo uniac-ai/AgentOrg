@@ -1,64 +1,69 @@
-/** A real core over a fresh store on a free port, and fake actors that dial it. */
+/** A real core over a fresh store on a free port, and fake actors on the actor library. */
 
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { InMemoryTaskStore } from "@modelcontextprotocol/sdk/experimental/tasks/stores/in-memory.js";
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import type { RequestTaskStore } from "@modelcontextprotocol/sdk/shared/protocol.js";
 import {
-  type CallToolRequest,
-  CallToolRequestSchema,
-  type CallToolResult,
-  ListToolsRequestSchema,
-  type Tool,
-} from "@modelcontextprotocol/sdk/types.js";
-import { listen } from "../src/core/app.ts";
-import { Core, type CoreOptions, rootCredential } from "../src/core/index.ts";
-import { Store } from "../src/core/store.ts";
-import { ActorConnection } from "../src/protocol/index.ts";
+  type Actor,
+  connectActor,
+  connectClient,
+  type Exposed,
+  type Incoming,
+  type Reply,
+} from "../src/actor/index.ts";
+import { type CoreOptions, rootCredential, startCore as start } from "../src/core/index.ts";
+import type { InterfaceDescriptor } from "../src/domain/model/index.ts";
+import { SqliteStore } from "../src/storage/sqlite/index.ts";
 
 export async function startCore(options: CoreOptions = {}) {
   const directory = mkdtempSync(join(tmpdir(), "agentorg-core-"));
   const credentialFile = join(directory, "root-credential");
-  let store = new Store(join(directory, "core.db"));
-  let core = new Core(store, options);
-  const root = rootCredential(core.registry, credentialFile);
-  let server = await listen(core.app, { port: 0 });
-  const port = Number(new URL(server.url).port);
-  const actors: ActorConnection[] = [];
+  let store = new SqliteStore(join(directory, "core.db"));
+  let running = await start(store, { ...options, port: 0 });
+  const root = rootCredential(running.organization.registry, credentialFile);
+  const url = running.url;
+  const port = Number(new URL(url).port);
+  const actors: Actor[] = [];
   const stop = async () => {
-    await core.close();
-    await server.close();
+    await running.close();
     store.close();
   };
   return {
-    get core() {
-      return core;
+    get org() {
+      return running.organization;
     },
-    url: server.url,
+    get store() {
+      return store;
+    },
+    url,
     /** The root's credential. */
     root,
-    rootId: core.registry.root()?.id as string,
+    rootId: running.organization.registry.root()?.id as string,
     credentialFile,
+    /** End every actor's channel, as a lost network would. */
+    drop: () => running.drop(),
     /** Connect a fake actor with this credential, closed with the core. */
     async connect(credential: string, actor: FakeActor = fakeActor()) {
-      const connection = new ActorConnection({
-        url: server.url,
+      const connection = await connectActor({
+        url,
         credential,
-        server: actor.server,
+        exposed: actor.exposed,
         maxRetryMs: 100,
       });
       actors.push(connection);
-      await connection.open();
+      return connection;
+    },
+    /** Connect a client that only calls. */
+    async client(credential: string) {
+      const connection = await connectClient({ url, credential });
+      actors.push(connection);
       return connection;
     },
     /** Stop the core and start it again on the same database and port. */
     async restart() {
       await stop();
-      store = new Store(join(directory, "core.db"));
-      core = new Core(store, options);
-      server = await listen(core.app, { port });
+      store = new SqliteStore(join(directory, "core.db"));
+      running = await start(store, { ...options, port });
     },
     async close() {
       await Promise.allSettled(actors.map((actor) => actor.close()));
@@ -68,77 +73,65 @@ export async function startCore(options: CoreOptions = {}) {
   };
 }
 
-export type Handler = (params: CallToolRequest["params"]) => Promise<CallToolResult>;
+export type Core = Awaited<ReturnType<typeof startCore>>;
 
-export interface HeldTask {
-  taskId: string;
-  params: CallToolRequest["params"];
-  /** Finish the task, as when the human answers. */
-  complete(result: CallToolResult, status?: "completed" | "failed"): Promise<void>;
+export interface Received {
+  name: string;
+  input: Record<string, unknown>;
+  call: Incoming;
+}
+
+/** A long-running call the actor holds, which the test finishes. */
+export interface Held extends Received {
+  complete(reply: Reply): void;
+  fail(message: string): void;
 }
 
 export interface FakeActor {
-  server: Server;
-  tools: Tool[];
+  exposed: Exposed[];
   /** Calls the actor received, in order. */
-  received: CallToolRequest["params"][];
-  /** Calls it took as tasks, in order. */
-  tasks: HeldTask[];
-  taskStore: InMemoryTaskStore | undefined;
+  received: Received[];
+  /** Long-running calls it holds, in order. */
+  held: Held[];
 }
 
 /**
- * An actor exposing `tools`, answering each call with `handler`. With `tasks`, it has a task store,
- * and a call that asks for a task gets one, which the test completes.
+ * An actor exposing `interfaces`, answering each call with `handler`. A long-running interface's
+ * call is held until the test completes it.
  */
 export function fakeActor(
-  tools: Tool[] = [],
-  handler: Handler = async () => ({ content: [] }),
-  options: { tasks?: boolean } = {},
+  interfaces: InterfaceDescriptor[] = [],
+  handler: (input: Record<string, unknown>, call: Incoming) => Promise<Reply> = async () => ({}),
 ): FakeActor {
-  const taskStore = options.tasks ? new InMemoryTaskStore() : undefined;
-  const server = new Server(
-    { name: "fake", version: "0" },
-    taskStore
-      ? {
-          capabilities: {
-            tools: { listChanged: true },
-            tasks: { requests: { tools: { call: {} } }, cancel: {} },
-          },
-          taskStore,
-        }
-      : { capabilities: { tools: { listChanged: true } } },
-  );
-  const actor: FakeActor = { server, tools, received: [], tasks: [], taskStore };
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: actor.tools }));
-  server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
-    actor.received.push(request.params);
-    const store = extra.taskStore as RequestTaskStore | undefined;
-    if (request.params.task && store) {
-      const task = await store.createTask({ pollInterval: 20 });
-      actor.tasks.push({
-        taskId: task.taskId,
-        params: request.params,
-        complete: (result, status = "completed") =>
-          store.storeTaskResult(task.taskId, status, result),
+  const actor: FakeActor = { exposed: [], received: [], held: [] };
+  actor.exposed = interfaces.map((each) => ({
+    interface: each,
+    handle: (input, call) => {
+      actor.received.push({ name: each.name, input, call });
+      if (!each.long_running) return handler(input, call);
+      return new Promise<Reply>((resolve, reject) => {
+        actor.held.push({
+          name: each.name,
+          input,
+          call,
+          complete: resolve,
+          fail: (message) => reject(new Error(message)),
+        });
       });
-      return { task };
-    }
-    return handler(request.params);
-  });
+    },
+  }));
   return actor;
 }
 
-export const tool = (name: string, extra: Partial<Tool> = {}): Tool => ({
+export const iface = (
+  name: string,
+  extra: Partial<InterfaceDescriptor> = {},
+): InterfaceDescriptor => ({
   name,
-  inputSchema: { type: "object" },
+  input: { type: "object" },
+  one_way: false,
+  long_running: false,
   ...extra,
-});
-
-/** A result with structured content, as a tool with an output schema returns it. */
-export const structured = (value: Record<string, unknown>): CallToolResult => ({
-  content: [{ type: "text", text: JSON.stringify(value) }],
-  structuredContent: value,
 });
 
 /** Wait until `condition` holds, failing after a generous guard that names what never happened. */
