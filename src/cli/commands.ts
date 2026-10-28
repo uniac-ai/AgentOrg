@@ -1,9 +1,13 @@
-/** The commands that run a process: the core. */
+/** The commands that do more than parse flags: the core, and a built-in run over `/mcp`. */
 
 import { once } from "node:events";
 import { parseArgs } from "node:util";
-import { databasePath, ensureHome, rootCredentialPath } from "../home.ts";
-import { DEFAULT_CORE_PORT } from "../protocol/index.ts";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { databasePath, ensureHome, readCredential, rootCredentialPath } from "../home.ts";
+import { type BuiltinName, coreUrl, DEFAULT_CORE_PORT, MCP_PATH } from "../protocol/index.ts";
+import { VERSION } from "../version.ts";
 
 const note = (text: string) => process.stderr.write(`agentorg: ${text}\n`);
 
@@ -50,4 +54,48 @@ export async function coreCommand(args: string[]): Promise<number> {
   await server.close();
   store.close();
   return 0;
+}
+
+/**
+ * Run a built-in over `/mcp` as the actor whose credential is in `AGENTORG_CREDENTIAL`, else as
+ * the root, and print its result as JSON. A refusal goes to stderr, with exit status 1.
+ */
+export async function builtinCommand(
+  name: BuiltinName,
+  request: Record<string, unknown>,
+): Promise<number> {
+  const credential = readCredential();
+  if (!credential) {
+    throw new Error(
+      `no credential: set AGENTORG_CREDENTIAL, or run \`agentorg core\`, which writes the root's to ${rootCredentialPath()}`,
+    );
+  }
+  const url = coreUrl();
+  const client = new Client({ name: "agentorg-cli", version: VERSION });
+  try {
+    await client.connect(
+      new StreamableHTTPClientTransport(new URL(MCP_PATH, url), {
+        requestInit: { headers: { Authorization: `Bearer ${credential}` } },
+      }),
+    );
+  } catch (error) {
+    throw new Error(
+      `the core at ${url} did not accept the connection: ${(error as Error).message}`,
+    );
+  }
+  try {
+    const wait = typeof request.wait === "number" ? request.wait : 0;
+    const result = (await client.callTool({ name, arguments: request }, undefined, {
+      timeout: (wait + 30) * 1000,
+    })) as CallToolResult;
+    const text = result.content.map((part) => (part.type === "text" ? part.text : "")).join("");
+    if (result.isError) {
+      note(text);
+      return 1;
+    }
+    process.stdout.write(`${JSON.stringify(result.structuredContent, null, 2)}\n`);
+    return 0;
+  } finally {
+    await client.close();
+  }
 }
