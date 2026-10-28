@@ -129,7 +129,7 @@ claude plugin install agentorg@agentorg
 
 The plugin brings:
 - the agent actor's MCP server, `org`;
-- the hooks that deliver messages to the session and wake it when it is idle;
+- the hooks that deliver messages to the session and wake it when it is idle, and keep what you type in the session, so it can record your answers to its questions;
 - the task-execution and reporting skills.
 
 A session attaches to its position with the `attach` tool. That's the actor id its brief names, or for a session you start yourself, a handle and a purpose, which create its position under you. Its tools are then the position's interfaces, named `mcp__plugin_agentorg_org__<name>`, with dots shown as underscores.
