@@ -75,6 +75,9 @@ const BUILTINS = [
   "status_set",
   "view",
   "progress_set",
+  "question_ask",
+  "question_answer",
+  "questions",
   "team",
   "progress",
   "message_send",
@@ -384,6 +387,23 @@ test("an actor is closed by its manager once its reports are, which ends its cal
       headers: { Authorization: `Bearer ${storage.credential}` },
     });
     assert.equal(login.status, 401);
+  } finally {
+    await core.close();
+  }
+});
+
+test("the root alone creates a position as a session attaches, and the position is marked so", async () => {
+  const { core, root, release } = await organization();
+  try {
+    const attached = await done(
+      root.call("actor_create", { name: "solo", purpose: "A session", created_at_attach: true }),
+    );
+    assert.equal(attached.actor.created_at_attach, true);
+    const chosen = await done(root.call("actor_create", { name: "web", purpose: "The web" }));
+    assert.equal(chosen.actor.created_at_attach, false);
+    const request = { name: "lane", purpose: "A lane", created_at_attach: true };
+    const refused = await release.connection.call("actor_create", request);
+    assert.equal(refused.state === "refused" && refused.code, "forbidden");
   } finally {
     await core.close();
   }

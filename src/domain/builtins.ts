@@ -42,10 +42,14 @@ export function builtins(
 
   return {
     actor_create: async (actor, request) => {
+      if (request.created_at_attach && !isRoot(actor)) {
+        throw new Forbidden("only the root creates a position as a session attaches");
+      }
       const { actor: created, credential } = await registry.create(
         actor.id,
         request.name,
         request.purpose,
+        request.created_at_attach,
       );
       return { actor: registry.asActor(created), credential };
     },
@@ -100,6 +104,9 @@ export function builtins(
     },
 
     progress_set: async (actor, request) => communication.setProgress(actor, request),
+    question_ask: async (actor, request) => communication.ask(actor, request),
+    question_answer: async (actor, request) => communication.answer(actor, request),
+    questions: (actor, request, waiting) => communication.questions(actor, request, waiting),
     team: async (actor, request) => communication.team(actor, request),
     progress: async (actor, request) => communication.progress(actor, request),
     message_send: async (actor, request) => communication.send(actor, request),

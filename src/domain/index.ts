@@ -7,7 +7,7 @@
  * - `registry.ts`: the actors, the tree they form, and their credentials.
  * - `wiring.ts`: whose interfaces each actor may call, under what names.
  * - `calls.ts`: call records, delivery and redelivery, runs, and waits.
- * - `communication.ts`: progress, messages and questions. `claims.ts`: claims on shared resources.
+ * - `communication.ts`: progress, questions and messages. `claims.ts`: claims on shared resources.
  * - `builtins.ts` and `application.ts`: the built-ins, and what an actor may call.
  * - `audit.ts`: the audit trail. `validation.ts`: JSON Schema checks.
  *

@@ -175,3 +175,17 @@ test("an actor connects again after its connection drops", async () => {
     await core.close();
   }
 });
+
+test("a caller's first request after the core restarts is answered, though its kept-alive connection closed", async () => {
+  const core = await startCore();
+  try {
+    const client = await core.client(core.root);
+    for (let round = 0; round < 3; round += 1) {
+      assert.equal((await client.call("view")).state, "done");
+      await core.restart();
+      assert.equal((await client.call("view")).state, "done", `after restart ${round + 1}`);
+    }
+  } finally {
+    await core.close();
+  }
+});

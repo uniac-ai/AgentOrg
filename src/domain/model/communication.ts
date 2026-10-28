@@ -1,15 +1,18 @@
 /**
- * The communication standard: the records of progress, messages and claims, and the requests,
- * results and descriptions of the built-ins that write and read them.
+ * The communication standard: the records of progress, questions, messages and claims, and the
+ * requests, results and descriptions of the built-ins that write and read them.
  *
  * Who can read something and who it waits on are separate:
  * - **Progress** is where an actor stands, a snapshot it replaces. Anyone in the organization reads
  *   it, and it waits on nobody.
- * - **A question** is a message with options or one that expects a reply. Anyone reads it and its
- *   answer, and it waits on its addressee until answered.
- * - **Any other message** is private to its two parties, the manager of either, and the root. It
- *   waits on its addressee until read.
+ * - **A question** is published, like progress: anyone reads it and its answer. It names one
+ *   addressee, on whom it waits until answered.
+ * - **A message** is private correspondence between two actors, read by its parties, the manager
+ *   of either, and the root. It waits on its addressee until read.
  * - **A claim** says which actor holds a shared resource. Anyone sees it.
+ *
+ * Questions and messages share one cursor, a sequence number that a question takes again when it
+ * is answered, so one `since` finds new messages, new questions and new answers.
  */
 
 import { z } from "zod";
@@ -77,6 +80,12 @@ export const Progress = z
     description: "Where an actor stands, as it last set it. Anyone in the organization reads it.",
   });
 
+export const Cursor = z
+  .number()
+  .int()
+  .min(0)
+  .describe("A place in the sequence questions and messages share; a greater one is newer.");
+
 export const Option = z
   .strictObject({
     label: Label.describe("Unique within the question."),
@@ -84,38 +93,63 @@ export const Option = z
   })
   .meta({ id: "Option" });
 
+export const QuestionAnswer = z
+  .strictObject({
+    by: Id.describe(
+      "The actor whose credential answered: the addressee, the answerer, the root, or the asker recording the user's words.",
+    ),
+    choice: Label.nullable().describe("The option chosen; null when the answer is words only."),
+    text: text(LIMITS.message).nullable().describe("The answer's words."),
+    recorded: z
+      .boolean()
+      .describe(
+        "The asker recorded the user's words, given in its own session: the user did not answer through the core.",
+      ),
+    at: Timestamp,
+  })
+  .meta({ id: "QuestionAnswer", description: "How a question was answered, and by whom." });
+
+export const Question = z
+  .strictObject({
+    id: Id,
+    cursor: Cursor.describe(
+      "Its place in the sequence: where it was asked, or once answered, where.",
+    ),
+    from: Id.describe("The asker."),
+    to: Id.describe("The addressee, on whom it is pending until answered."),
+    text: text(LIMITS.message),
+    links: z.array(Link),
+    options: z.array(Option).describe("Empty for an open question."),
+    recommendation: Label.nullable().describe("The label of the option the asker recommends."),
+    answerer: Id.nullable().describe(
+      "The only actor besides the root that may answer it. Null lets its addressee answer, or the root step in.",
+    ),
+    cause: Id.nullable().describe("The question this one carries up, in the asker's own terms."),
+    answer: QuestionAnswer.nullable().describe("Null while open."),
+    created_at: Timestamp,
+  })
+  .meta({
+    id: "Question",
+    description: "A question an actor published, waiting on its addressee. Anyone reads it.",
+  });
+
 export const Message = z
   .strictObject({
     id: Id,
+    cursor: Cursor.describe("Its place in the sequence."),
     from: Id.describe("The sender, as its credential identified it."),
-    to: Id.describe("The addressee, on whom it is pending."),
+    to: Id.describe("The addressee, on whom it is pending until read."),
     text: text(LIMITS.message),
     links: z.array(Link),
-    options: z.array(Option).describe("A question's options; empty for none."),
-    recommendation: Label.nullable().describe("The label of the option the sender recommends."),
-    expects_reply: z
-      .boolean()
-      .describe("True for a question: it is pending on its addressee until answered."),
-    answerer: Id.nullable().describe(
-      "The only actor that may answer the question. Null lets its addressee answer, or the root step in.",
-    ),
-    cause: Id.nullable().describe(
-      "The message that led to this one, such as a report's question this one escalates.",
-    ),
-    reply_to: z
-      .array(Id)
-      .describe("The messages this one replies to. It answers each question among them."),
-    choice: Label.nullable().describe("The option it chose, of the questions it answers."),
-    public: z
-      .boolean()
-      .describe(
-        "Anyone in the organization reads it: a question, or a reply that answers one. Otherwise only its two parties, the manager of either, and the root read it.",
-      ),
-    answer: Id.nullable().describe("For a question, the reply that answered it; null while open."),
+    reply_to: Id.nullable().describe("The message this one replies to."),
     created_at: Timestamp,
-    read_at: Timestamp.nullable().describe("When its addressee read it or replied to it."),
+    read_at: Timestamp.nullable().describe("When its addressee read it, or replied to it."),
   })
-  .meta({ id: "Message", description: "A message between two actors, or a question." });
+  .meta({
+    id: "Message",
+    description:
+      "A private message between two actors, read by its parties, the manager of either, and the root.",
+  });
 
 export const Resource = text(LIMITS.id).describe(
   "A shared resource, by the name the organization knows it by, such as dev-cluster.",
@@ -134,6 +168,10 @@ export const Claim = z
 const Names = z
   .record(z.string(), z.string())
   .describe("The path of each actor the records name, by id; for the root, its name.");
+
+const Newest = Cursor.describe(
+  "The newest cursor when this read ran: give it as since to see only what comes after.",
+);
 
 /** Item titles are unique, and an item waits only on items that are there. */
 const uniqueItems = (items: z.output<typeof Item>[], context: z.RefinementCtx) => {
@@ -188,6 +226,7 @@ export const Position = Actor.pick({
   purpose: true,
   manager: true,
   online: true,
+  created_at_attach: true,
   created_at: true,
   closed_at: true,
 })
@@ -195,9 +234,7 @@ export const Position = Actor.pick({
     progress: Progress.pick({ version: true, state: true, summary: true, updated_at: true })
       .nullable()
       .describe("Its progress state and summary; null until it sets them."),
-    questions: z
-      .array(Message)
-      .describe("Its open questions: those it asked that are not answered yet, oldest first."),
+    questions: z.array(Question).describe("Its open questions, oldest first."),
     interfaces: z
       .array(z.string())
       .describe("Its exposed interfaces you can call, by the names you call them."),
@@ -234,43 +271,28 @@ export const ProgressResult = z
   .strictObject({
     actor: Id,
     progress: Progress.nullable().describe("Null until the actor sets it."),
-    questions: z.array(Message).describe("Its open questions, oldest first."),
+    questions: z.array(Question).describe("Its open questions, oldest first."),
     history: z.array(Progress).describe("Earlier versions, newest first, as many as asked."),
     names: Names,
   })
   .meta({ id: "ProgressResult" });
 
-export const MessageSend = z
+export const QuestionAsk = z
   .strictObject({
     to: Id.optional().describe(
-      "The addressee: your manager or a direct report, or anyone for the root. Default: your manager, or for a reply, the sender of what it replies to.",
+      "The addressee: your manager or a direct report, or anyone for the root. Default: your manager.",
     ),
-    text: text(LIMITS.message),
+    text: text(LIMITS.message).describe("The question, with the context its addressee needs."),
     links: z.array(Link).max(20).optional(),
-    options: z.array(Option).min(2).max(6).optional().describe("Makes it a question with these."),
+    options: z.array(Option).min(2).max(6).optional(),
     recommendation: Label.optional().describe("The label of the option you recommend."),
-    expects_reply: z.boolean().optional().describe("Makes it a question, with options or without."),
     answerer: Id.optional().describe(
-      "For a question, the only actor that may answer it, such as the root for an approval only the user gives.",
+      "The only actor besides the root that may answer it, such as the root itself for an approval only the user gives.",
     ),
-    cause: Id.optional().describe(
-      "A message to you that led to this one, such as your report's question this one escalates.",
-    ),
-    reply_to: z
-      .array(Id)
-      .min(1)
-      .max(20)
-      .optional()
-      .describe(
-        "The messages this replies to. It marks them read and answers each question among them.",
-      ),
-    choice: Label.optional().describe(
-      "For a reply, the option chosen, which each question it answers with options must offer.",
-    ),
+    cause: Id.optional().describe("A question to you that this one carries up, in your own terms."),
   })
   .superRefine((request, context) => {
     const labels = (request.options ?? []).map((option) => option.label);
-    const question = labels.length > 0 || request.expects_reply === true;
     if (new Set(labels).size !== labels.length) {
       context.addIssue({ code: "custom", path: ["options"], message: "labels must be unique" });
     }
@@ -281,12 +303,75 @@ export const MessageSend = z
         message: "must be the label of one of the options",
       });
     }
-    if (request.answerer !== undefined && !question) {
-      context.addIssue({ code: "custom", path: ["answerer"], message: "only a question has one" });
+  })
+  .meta({ id: "QuestionAsk" });
+
+export const QuestionAnswerRequest = z
+  .strictObject({
+    questions: z.array(Id).min(1).max(20).describe("The open questions it answers."),
+    choice: Label.optional().describe(
+      "The option chosen, which each question with options must offer.",
+    ),
+    text: text(LIMITS.message)
+      .optional()
+      .describe("Your words, which may reject the options and reframe."),
+    recorded: z
+      .boolean()
+      .default(false)
+      .describe(
+        "The user answered in your own session: record their words, quoted in text, for questions you asked.",
+      ),
+  })
+  .superRefine((request, context) => {
+    if (request.choice === undefined && request.text === undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["text"],
+        message: "an answer needs a choice or text",
+      });
     }
-    if (request.choice !== undefined && request.reply_to === undefined) {
-      context.addIssue({ code: "custom", path: ["choice"], message: "only a reply has one" });
+    if (request.recorded && request.text === undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["text"],
+        message: "a recorded answer quotes the user's words",
+      });
     }
+  })
+  .meta({ id: "QuestionAnswerRequest" });
+
+export const QuestionsRequest = z
+  .strictObject({
+    to: Id.optional().describe("Only those addressed to this actor."),
+    from: Id.optional().describe("Only those this actor asked."),
+    open: z.boolean().default(false).describe("Only those not answered yet."),
+    since: Cursor.optional().describe("Only those asked or answered after this cursor."),
+    limit: z.number().int().min(1).max(200).default(50),
+    wait: z
+      .number()
+      .min(0)
+      .max(MAX_WAIT_SECONDS)
+      .default(0)
+      .describe("Seconds to hold the read until a match exists, with progress notifications."),
+  })
+  .meta({ id: "QuestionsRequest" });
+
+export const QuestionsResult = z
+  .strictObject({
+    questions: z.array(Question).describe("Newest first."),
+    cursor: Newest,
+    names: Names,
+  })
+  .meta({ id: "QuestionsResult" });
+
+export const MessageSend = z
+  .strictObject({
+    to: Id.describe("Any open position, found with team."),
+    text: text(LIMITS.message),
+    links: z.array(Link).max(20).optional(),
+    reply_to: Id.optional().describe(
+      "A message between you and the addressee that this one replies to. A reply marks it read.",
+    ),
   })
   .meta({ id: "MessageSend" });
 
@@ -294,18 +379,12 @@ export const MessagesRequest = z
   .strictObject({
     box: z
       .enum(["in", "out"])
-      .optional()
-      .describe("in: addressed to the actor; out: sent by it. Default: in, or with reply_to, any."),
-    pending: z
-      .boolean()
-      .default(false)
-      .describe(
-        "Only those still pending on their addressee: a message until read, a question until answered.",
-      ),
+      .default("in")
+      .describe("in: those addressed to the actor; out: those it sent."),
+    unread: z.boolean().default(false).describe("Only those their addressee has not read."),
     actor: Id.optional().describe("Whose box. Default: you."),
     with: Id.optional().describe("Only those between the actor and this other party."),
-    reply_to: Id.optional().describe("Only replies to this message."),
-    since: Timestamp.optional().describe("Only those sent after this time."),
+    since: Cursor.optional().describe("Only those sent after this cursor."),
     limit: z.number().int().min(1).max(200).default(50),
     wait: z
       .number()
@@ -317,7 +396,11 @@ export const MessagesRequest = z
   .meta({ id: "MessagesRequest" });
 
 export const MessagesResult = z
-  .strictObject({ messages: z.array(Message).describe("Newest first."), names: Names })
+  .strictObject({
+    messages: z.array(Message).describe("Newest first."),
+    cursor: Newest,
+    names: Names,
+  })
   .meta({ id: "MessagesResult" });
 
 export const MessageRead = z
@@ -344,6 +427,33 @@ export const COMMUNICATION = {
 
 state is running, waiting, blocked or review. summary is a short current paragraph at your own level. items are your open workstreams or steps, each with a title and a state; done ones drop off. links are what you produced. Fields you leave out keep their value, and each set keeps the one before as history. Publish only what you choose: your transcript and reasoning stay with you.`,
   },
+  question_ask: {
+    writes: true,
+    rootOnly: false,
+    request: QuestionAsk,
+    response: Question,
+    description: `Ask a question, published for anyone to read and pending on its addressee until answered.
+
+It goes to your manager, or to a direct report; the root may ask anyone. To carry up a question you cannot settle, ask your manager a new one in your own terms, with your recommendation, and cause naming the question; once answered, answer the original. answerer names the only actor besides the root that may answer, as the root for an approval only the user gives. Wait for the answer with questions, from you and since a cursor.`,
+  },
+  question_answer: {
+    writes: true,
+    rootOnly: false,
+    request: QuestionAnswerRequest,
+    response: QuestionsResult,
+    description: `Answer one or more open questions addressed to you; the root may answer any.
+
+A question that names an answerer is answered by that actor or the root alone. choice is optional, and text may reject the options and reframe; either way the question is answered. When the user answers in your own session, answer your own question with recorded and their words quoted in text: it is marked as recorded by you. An approval with an answerer is never recorded: the user answers it through the core.`,
+  },
+  questions: {
+    writes: false,
+    rootOnly: false,
+    request: QuestionsRequest,
+    response: QuestionsResult,
+    description: `List questions, newest first, as anyone may. It changes nothing.
+
+What waits on you is to you and open. New answers to yours are from you since a cursor. With wait, hold until a match exists or the seconds run out.`,
+  },
   team: {
     writes: false,
     rootOnly: false,
@@ -367,22 +477,18 @@ history adds that many earlier versions.`,
     rootOnly: false,
     request: MessageSend,
     response: Message,
-    description: `Send a message, ask a question, or reply.
+    description: `Send a private message to any open position, found with team: findings, evidence, a brief or a handoff.
 
-A message goes to your manager or a direct report; the root may send to anyone. It is private to its two parties, the manager of either and the root, and is pending on its addressee until read. With options or expects_reply it is a question instead: anyone may read it and its answer, and it is pending on its addressee until answered.
-
-To carry a question up that you cannot settle, ask your manager a new question in your own terms, with your recommendation, and cause naming the question it escalates; once answered, answer the original. answerer names the only actor that may answer, as the root for an approval only the user gives. Otherwise a question's addressee answers it, or the root steps in.
-
-A reply names in reply_to the messages it answers, one or more, and goes to their sender. It marks them read, and answers each question among them. choice picks one of their options; the text may reject them instead.`,
+Its two parties, the manager of either, and the root may read it. It is pending on its addressee until read, and you see when it is. To ask for a decision, ask a question instead.`,
   },
   messages: {
     writes: false,
     rootOnly: false,
     request: MessagesRequest,
     response: MessagesResult,
-    description: `List the messages and questions you may see, newest first. It changes nothing.
+    description: `List the messages you may see, newest first. It changes nothing.
 
-Default: those addressed to you. box out lists those you sent, and actor another actor's box, as far as you may see it. pending keeps those still waiting on their addressee. reply_to lists the replies to one message, as the answer to a question. With wait, hold until a match exists or the seconds run out.`,
+Default: those addressed to you. box out lists those you sent, and actor another actor's box, as far as you may see it. With wait, hold until a match exists or the seconds run out; since a cursor, that is a new message.`,
   },
   message_read: {
     writes: true,
