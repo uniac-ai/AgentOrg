@@ -8,6 +8,7 @@
  * - `outbound.ts`: the core's MCP client on each actor's channel, as that actor's link, telling
  *   the domain's Presence when it can be reached.
  * - `actor.ts`: an actor's side, behind the actor library's API.
+ * - `occupant.ts`: an actor's server for the session that fills its position, over stdio.
  * - `transport.ts`: an MCP transport over a network channel.
  */
 

@@ -1,10 +1,12 @@
 /**
  * The `agentorg` command line. `agentorg core` runs the core, `agentorg human` runs the human
- * actor, and `agentorg ui` signs a browser in to it. A command for each of the core's built-in
+ * actor, `agentorg ui` signs a browser in to it, and `agentorg agent` runs the agent actor for a
+ * client's session. A command for each of the core's built-in
  * tools, such as `agentorg actor create`, runs it over `/mcp`. Every command prints its errors on
  * stderr and exits non-zero when it fails or the core refuses.
  */
 
+import { AGENT_HELP, agentCommand } from "../agent/command.ts";
 import { HUMAN_HELP, humanCommand, UI_HELP, uiCommand } from "../human/command.ts";
 import { VERSION } from "../version.ts";
 import { builtinLines, builtinOf, helpOf, requestOf } from "./builtins.ts";
@@ -19,6 +21,7 @@ const usage = () =>
     "  core [--port <n>]       run the core on 127.0.0.1",
     "  human [--port <n>]      run the human actor, which serves the web app",
     "  ui                      open the web app, signed in",
+    "  agent [wait]            fill a position from an agent session, as its client starts it",
     ...builtinLines(),
     "",
     "A built-in runs as the actor whose credential is in AGENTORG_CREDENTIAL, else as the root.",
@@ -30,6 +33,7 @@ const COMMANDS: Record<string, [string, (args: string[]) => Promise<number>]> = 
   core: [CORE_HELP, coreCommand],
   human: [HUMAN_HELP, humanCommand],
   ui: [UI_HELP, uiCommand],
+  agent: [AGENT_HELP, agentCommand],
 };
 
 async function run(argv: string[]): Promise<number> {

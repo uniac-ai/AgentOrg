@@ -1,6 +1,6 @@
 {
   "name": "agentorg",
-  "description": "The task-execution and reporting skills, and the agentorg MCP server.",
+  "description": "Fill a position in an agentorg organization from a Claude Code session: the agent actor's MCP server, the hooks that deliver messages and wake the session, and the task-execution and reporting skills.",
   "author": {
     "name": "The agentorg authors"
   },
@@ -8,9 +8,13 @@
   "repository": "https://github.com/uniac-ai/AgentOrg",
   "license": "MIT",
   "mcpServers": {
-    "agentorg": {
+    "org": {
       "command": "agentorg",
-      "args": ["mcp", "--client", "claude-code", "--client-session-env", "CLAUDE_CODE_SESSION_ID"]
+      "args": [
+        "agent",
+        "--client",
+        "claude-code"
+      ]
     }
   },
   "hooks": {
@@ -19,8 +23,30 @@
         "hooks": [
           {
             "type": "command",
-            "command": "agentorg session context --client claude-code --client-session-id \"$CLAUDE_CODE_SESSION_ID\" 2>/dev/null || true",
+            "command": "agentorg agent context --client claude-code",
             "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "agentorg agent wait --client claude-code",
+            "asyncRewake": true,
+            "timeout": 604800,
+            "rewakeMessage": "From the agentorg plugin:",
+            "rewakeSummary": "agentorg message"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "agentorg agent wait --client claude-code",
+            "asyncRewake": true,
+            "timeout": 604800,
+            "rewakeMessage": "From the agentorg plugin:",
+            "rewakeSummary": "agentorg message"
           }
         ]
       }

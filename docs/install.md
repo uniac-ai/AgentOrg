@@ -94,7 +94,7 @@ The link works once, within five minutes. The session it starts lasts seven days
 
 Every actor has its own credential, a random secret that only it holds; the core stores only its hash.
 - **The root.** The root's credential is in `~/.local/share/agentorg/root-credential`. If you delete that file, the core mints a new credential at its next start, and the old one stops working.
-- **Other actors.** An actor's credential comes from `actor_create`, once, when its manager creates it.
+- **Other actors.** An actor's credential comes from `actor_create`, once, when its manager creates it. When the manager is an agent session, the agent actor keeps the credential in `~/.local/share/agentorg/actors/` for the session that fills the position, and neither session sees it.
 
 From a terminal, the built-in tools run as commands over `/mcp`. Each command acts as the actor whose credential is in `AGENTORG_CREDENTIAL`, else as the root. To create a position under you and get its credential:
 
@@ -102,7 +102,7 @@ From a terminal, the built-in tools run as commands over `/mcp`. Each command ac
 agentorg actor create --name builds --purpose "Run the nightly builds"
 ```
 
-It prints the new actor and its `credential` as JSON. `agentorg view` shows your position, and `agentorg activity` shows the audit trail. `agentorg --help` lists every command, and `agentorg <command> --help` shows its flags.
+It prints the new actor and its `credential` as JSON. `agentorg team` shows your position and its reports, and `agentorg activity` shows the audit trail. `agentorg --help` lists every command, and `agentorg <command> --help` shows its flags.
 
 ## 5. Connect a program
 
@@ -111,4 +111,27 @@ A program fills a position by dialing the core's two endpoints with that positio
 - `http://127.0.0.1:8740/mcp`, Streamable HTTP, where the program is the MCP client. Its tools are the core's built-ins, its manager's tools as `manager.<tool>`, and each direct report's as `<handle>.<tool>`.
 - `ws://127.0.0.1:8740/mcp/reverse`, a WebSocket with subprotocol `mcp`, where the program is the MCP server. Its tools are the calls into it.
 
-The core refuses requests that carry a browser `Origin` header, so connect from a local process, not from a web page. A Node program can use the actor library's `connectActor`, from `dist/src/actor/index.js` in the installed package, and never meets MCP itself. It exposes interfaces with their handlers, calls the ones available, and reconnects when its connection drops. A long-running handler just returns a promise that settles when it is ready. [design.md](design.md) describes the layers and the protocol.
+The core refuses requests that carry a browser `Origin` header, so connect from a local process, not from a web page. A Node program can use the actor library's `connectActor`, from `@agentorg/cli/actor`, and never meets MCP itself. It exposes interfaces with their handlers, calls the ones available, and reconnects when its connection drops. A long-running handler just returns a promise that settles when it is ready. [design.md](design.md) describes the layers and the protocol.
+
+## 6. Fill positions from Claude Code or Codex
+
+A Claude Code or Codex session fills a position through the agent actor, `agentorg agent`, which the client starts for each session. It finds the core at `AGENTORG_URL` and the agentorg home at `AGENTORG_HOME`, with the same defaults as the other commands, so set them in the environment the client starts with when yours differ.
+
+**Claude Code.** Install the plugin from this repository:
+
+```bash
+claude plugin marketplace add uniac-ai/AgentOrg
+```
+
+```bash
+claude plugin install agentorg@agentorg
+```
+
+The plugin brings:
+- the agent actor's MCP server, `org`;
+- the hooks that deliver messages to the session and wake it when it is idle;
+- the task-execution and reporting skills.
+
+A session attaches to its position with the `attach` tool. That's the actor id its brief names, or for a session you start yourself, a handle and a purpose, which create its position under you. Its tools are then the position's interfaces, named `mcp__plugin_agentorg_org__<name>`, with dots shown as underscores.
+
+**Codex.** Add the table in the clone's `adapters/codex/config.toml` to `~/.codex/config.toml`. A Codex session attaches each time it starts, and nothing wakes it when idle yet.

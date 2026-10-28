@@ -18,6 +18,12 @@
   "bin": {
     "agentorg": "dist/src/cli/bin.js"
   },
+  "exports": {
+    "./actor": {
+      "types": "./dist/src/actor/index.d.ts",
+      "default": "./dist/src/actor/index.js"
+    }
+  },
   "files": [
     "dist/src",
     "dist/page",

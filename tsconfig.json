@@ -15,6 +15,7 @@
     "types": ["node"],
     "rootDir": ".",
     "outDir": "dist",
+    "declaration": true,
     "skipLibCheck": true
   },
   "include": ["src", "test"]
