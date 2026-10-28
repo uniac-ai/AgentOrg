@@ -60,18 +60,22 @@ export class Registry {
     };
   }
 
-  /** Create a report of `manager` and return it with its credential. */
+  /**
+   * Create a report of `manager` and return it with its credential; `createdAtAttach` marks one
+   * created as a session the user started attaches to it.
+   */
   async create(
     manager: string,
     name: string,
     purpose: string,
+    createdAtAttach = false,
   ): Promise<{ actor: ActorRow; credential: string }> {
     // Hashing waits, so it comes first: the check and the insert then run with nothing between.
     const { credential, hash } = await this.mint();
     if (this.reports(manager).some((report) => report.name === name)) {
       throw new Conflict(`a report of ${manager} is already named ${name}`);
     }
-    return { actor: this.insert(manager, name, purpose, hash), credential };
+    return { actor: this.insert(manager, name, purpose, hash, createdAtAttach), credential };
   }
 
   private async mint(): Promise<{ credential: string; hash: string }> {
@@ -79,7 +83,13 @@ export class Registry {
     return { credential, hash: await digest(credential) };
   }
 
-  private insert(manager: string | null, name: string, purpose: string, hash: string): ActorRow {
+  private insert(
+    manager: string | null,
+    name: string,
+    purpose: string,
+    hash: string,
+    createdAtAttach = false,
+  ): ActorRow {
     const actor: ActorRow = {
       id: newId("act"),
       name,
@@ -89,6 +99,7 @@ export class Registry {
       online: false,
       interfaces: [],
       status: null,
+      created_at_attach: createdAtAttach,
       created_at: this.now(),
       closed_at: null,
     };

@@ -18,6 +18,7 @@ CREATE TABLE actors (
   online BOOLEAN NOT NULL,
   interfaces JSON NOT NULL,
   status JSON,
+  created_at_attach BOOLEAN NOT NULL,
   created_at TEXT NOT NULL,
   closed_at TEXT
 );
