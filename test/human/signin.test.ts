@@ -64,7 +64,7 @@ test("without a current session, every API route answers signed out", async () =
       ["GET", "/api/pending"],
       ["GET", "/api/view"],
       ["POST", "/api/pending/call_1"],
-      ["POST", "/api/tools/view"],
+      ["POST", "/api/interfaces/view"],
     ] as const) {
       const response = await fetch(actor.url + path, {
         method,

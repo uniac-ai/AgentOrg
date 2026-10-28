@@ -6,7 +6,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { isTyping, useKeys } from "@/lib/keys";
-import type { InputOf } from "../../../src/human/tools.ts";
+import type { InputOf } from "../../../src/human/interfaces.ts";
 import type { CallRecord } from "../../../src/human/types.ts";
 import { useAnswer } from "../data/mutations.ts";
 import { organizationQuery, viewQuery } from "../data/queries.ts";

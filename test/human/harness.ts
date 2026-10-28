@@ -86,7 +86,7 @@ export const REVIEW = iface("review", {
 
 /**
  * A program actor under the root, created by the user through the web app's API: it exposes
- * `review`, and calls the human's tools as its manager's.
+ * `review`, and calls the human's interfaces as its manager's.
  */
 export async function program(
   core: Core,
@@ -94,20 +94,20 @@ export async function program(
   name = "storage",
 ) {
   const { actor, credential } = await json(
-    post("/api/tools/actor_create", { name, purpose: "Move storage." }),
+    post("/api/interfaces/actor_create", { name, purpose: "Move storage." }),
   );
   const reviews = fakeActor([REVIEW], async (input) => ({
     value: { verdict: `looked at ${input.change}` },
   }));
   const connection = await core.connect(credential, reviews);
   await until(`${name} comes online`, () => core.org.registry.get(actor.id)?.online === true);
-  const call = (tool: string, args: Record<string, unknown>) => connection.call(tool, args);
+  const call = (name: string, input: Record<string, unknown>) => connection.call(name, input);
   return {
     id: actor.id as string,
     received: reviews.received,
-    /** Call one of the human's tools, as its manager's; returns the call's id. */
-    async ask(tool: string, input: Record<string, unknown>) {
-      const answer = await call(`manager.${tool}`, input);
+    /** Call one of the human's interfaces, as its manager's; returns the call's id. */
+    async ask(name: string, input: Record<string, unknown>) {
+      const answer = await call(`manager.${name}`, input);
       return (answer as { call: string }).call;
     },
     /** The call, once settled or after `wait` seconds. */

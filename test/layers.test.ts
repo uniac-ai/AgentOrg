@@ -88,9 +88,7 @@ test("the actor library's API names no protocol or network", () => {
 });
 
 test("only the MCP binding imports MCP", (t) => {
-  // src/human/ is the one exception, until it moves onto src/actor/ (see the legacy file).
-  const speakers = ["src/bindings/mcp/", "src/human/"];
-  const others = FILES.filter(({ file }) => !speakers.some((speaker) => file.startsWith(speaker)));
+  const others = FILES.filter(({ file }) => !file.startsWith("src/bindings/mcp/"));
   const found = others.flatMap(({ file, imports }) =>
     imports
       .filter((imported) => matches(imported, MCP))

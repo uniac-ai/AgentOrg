@@ -7,18 +7,19 @@
  * link into a session cookie. Every `/api` route needs that cookie, and every write also carries
  * the session's CSRF token in the `X-CSRF-Token` header. Answering a pending call completes it from
  * the human's queue; every other route passes through to the core over the human actor's own
- * connection, so the web app never talks to the core.
+ * connection, so the web app never talks to the core. A call's value comes back as it is, and a
+ * refusal as an error response, so nothing of the protocol reaches the app.
  */
 
-import { type CallToolResult, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { type Context, Hono } from "hono";
 import { getCookie, setCookie } from "hono/cookie";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { z } from "zod";
+import type { Answer } from "../domain/model/index.ts";
 import { type Core, CoreUnreachable } from "./core.ts";
+import { answerOf } from "./interfaces.ts";
 import type { Queue } from "./queue.ts";
 import { COOKIE, matches, type Session, type SignIn } from "./signin.ts";
-import { answerOf } from "./tools.ts";
 import {
   type ApiErrorBody,
   CSRF_HEADER,
@@ -40,13 +41,23 @@ class ApiError extends Error {
 
 type Env = { Variables: { session: Session } };
 
-const resultText = (result: CallToolResult) =>
-  result.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n");
-
-/** A call's output; a refusal becomes an error response, so no protocol shape reaches the app. */
-function structured(result: CallToolResult): Record<string, unknown> {
-  if (result.isError) throw new ApiError(400, "refused", resultText(result));
-  return result.structuredContent ?? {};
+/**
+ * A call's value. A call still pending gives its id; one that the core refused, that failed or
+ * that was withdrawn becomes an error response.
+ */
+function resultOf(answer: Answer): unknown {
+  switch (answer.state) {
+    case "done":
+      return answer.value;
+    case "pending":
+      return { call: answer.call, state: answer.state };
+    case "refused":
+      throw new ApiError(400, "refused", `${answer.code}: ${answer.message}`);
+    case "failed":
+      throw new ApiError(400, "failed", answer.error);
+    case "withdrawn":
+      throw new ApiError(400, "withdrawn", `call ${answer.call} was withdrawn`);
+  }
 }
 
 async function body(c: Context): Promise<Record<string, unknown>> {
@@ -70,11 +81,9 @@ export function humanApp(options: {
     const known =
       error instanceof ApiError
         ? error
-        : error instanceof McpError
-          ? new ApiError(400, "refused", error.message)
-          : error instanceof CoreUnreachable
-            ? new ApiError(503, "core_unreachable", error.message)
-            : undefined;
+        : error instanceof CoreUnreachable
+          ? new ApiError(503, "core_unreachable", error.message)
+          : undefined;
     if (known === undefined) {
       console.error(error);
       return c.json({ code: "error", message: "The human actor failed; see its log." }, 500);
@@ -128,31 +137,30 @@ export function humanApp(options: {
 
   api.get("/session", (c) => c.json(c.var.session satisfies SessionBootstrap));
 
-  api.get("/pending", async (c) =>
-    c.json({ pending: await queue.pending() } satisfies PendingList),
-  );
+  api.get("/pending", (c) => c.json({ pending: queue.pending() } satisfies PendingList));
 
   api.post("/pending/:call", async (c) => {
     const id = c.req.param("call");
-    const call = (await queue.pending()).find((each) => each.call === id);
-    const output = call && answerOf(call.tool, call.input, await body(c));
-    if (output?.success === false)
+    const call = queue.pending().find((each) => each.call === id);
+    const output = call && answerOf(call.interface, call.input, await body(c));
+    if (output?.success === false) {
       throw new ApiError(400, "invalid", z.prettifyError(output.error));
-    if (!output || !(await queue.complete(id, output.data))) {
+    }
+    if (!output || !queue.complete(id, output.data)) {
       throw new ApiError(404, "not_found", "No call with this id waits on you.");
     }
     return c.json({ call: id, output: output.data });
   });
 
-  api.get("/tools", async (c) => c.json({ tools: await core.tools() }));
+  api.get("/interfaces", async (c) => c.json({ interfaces: await core.available() }));
 
-  api.post("/tools/:name", async (c) =>
-    c.json(structured(await core.call(c.req.param("name"), await body(c)))),
+  api.post("/interfaces/:name", async (c) =>
+    c.json(resultOf(await core.call(c.req.param("name"), await body(c)))),
   );
 
-  api.get("/view", async (c) => c.json(structured(await core.call("view", {}))));
+  api.get("/view", async (c) => c.json(resultOf(await core.call("view", {}))));
   api.get("/view/:actor", async (c) =>
-    c.json(structured(await core.call("view", { actor: c.req.param("actor") }))),
+    c.json(resultOf(await core.call("view", { actor: c.req.param("actor") }))),
   );
 
   api.get("/activity", async (c) => {
@@ -162,7 +170,7 @@ export function humanApp(options: {
         value ? [[key, Number(value)]] : [],
       ),
     );
-    return c.json(structured(await core.call("activity", request)));
+    return c.json(resultOf(await core.call("activity", request)));
   });
 
   app.route("/api", api);

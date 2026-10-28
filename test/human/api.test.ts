@@ -2,22 +2,22 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { json, setup } from "./harness.ts";
 
-test("the user's available tools come from the core, and calling one goes through the core", async () => {
+test("the user's available interfaces come from the core, and calling one goes through the core", async () => {
   const { get, post, storage } = await setup();
-  const { tools } = await json(get("/api/tools"));
-  const names = tools.map((tool: { name: string }) => tool.name);
+  const { interfaces } = await json(get("/api/interfaces"));
+  const names = interfaces.map((offer: { interface: { name: string } }) => offer.interface.name);
   for (const name of ["view", "activity", "actor_create", "storage.review"]) {
     assert.ok(names.includes(name), name);
   }
 
-  const called = await post("/api/tools/storage.review", { change: "#41" });
+  const called = await post("/api/interfaces/storage.review", { change: "#41" });
   assert.equal(called.status, 200);
   assert.deepEqual(await json(called), { verdict: "looked at #41" });
   assert.deepEqual(
     storage.received.map((each) => [each.name, each.input]),
     [["review", { change: "#41" }]],
   );
-  const refused = await post("/api/tools/nothing.here", {});
+  const refused = await post("/api/interfaces/nothing.here", {});
   assert.equal(refused.status, 400);
   assert.equal((await json(refused)).code, "refused");
 });
