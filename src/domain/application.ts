@@ -122,7 +122,9 @@ export class AvailableInterfaces implements Application {
       throw error;
     }
     if (spec.writes) {
-      const target = (result.id ?? (result.actor as { id?: string } | undefined)?.id) as string;
+      // The record written: the result itself, or the actor it names, by id or as a record.
+      const { id, actor: subject } = result as { id?: string; actor?: string | { id: string } };
+      const target = id ?? (typeof subject === "string" ? subject : subject?.id) ?? null;
       this.audit.record(actor.id, name, target, "ok");
     }
     return { state: "done", value: result };

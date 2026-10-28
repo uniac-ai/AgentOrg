@@ -5,7 +5,16 @@ import { test } from "node:test";
 import type { Actor } from "../src/actor/index.ts";
 import type { Answer } from "../src/domain/model/index.ts";
 import { CLOSE_REVOKED } from "../src/network/index.ts";
-import { type Core, type FakeActor, fakeActor, iface, startCore, until } from "./harness.ts";
+import {
+  type Core,
+  done,
+  type FakeActor,
+  fakeActor,
+  iface,
+  type Json,
+  startCore,
+  until,
+} from "./harness.ts";
 
 const DECIDE = iface("decide", {
   input: { type: "object", properties: { question: { type: "string" } }, required: ["question"] },
@@ -25,16 +34,6 @@ const REVIEW = iface("review", {
   input: { type: "object", properties: { change: { type: "string" } }, required: ["change"] },
   output: { type: "object", properties: { verdict: { type: "string" } }, required: ["verdict"] },
 });
-
-// biome-ignore lint/suspicious/noExplicitAny: the tests read results loosely.
-type Json = any;
-
-/** The value of a done answer, failing on any other. */
-async function done(answer: Answer | Promise<Answer>): Promise<Json> {
-  const settled = await answer;
-  if (settled.state !== "done") throw new Error(`not done: ${JSON.stringify(settled)}`);
-  return settled.value;
-}
 
 /** The call a pending answer names. */
 function pendingCall(answer: Answer): string {
@@ -75,6 +74,12 @@ const BUILTINS = [
   "actor_close",
   "status_set",
   "view",
+  "progress_set",
+  "team",
+  "progress",
+  "message_send",
+  "messages",
+  "message_read",
   "call_result",
   "call_withdraw",
 ];

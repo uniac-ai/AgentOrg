@@ -52,7 +52,8 @@ test("help lists the core and every built-in, and asking for it acts on nothing"
   try {
     const help = await agentorg(["--help"], { AGENTORG_HOME: home });
     assert.equal(help.status, 0);
-    for (const command of ["core", "actor create", "actor close", "status set", "view"]) {
+    const commands = ["core", "actor create", "actor close", "status set", "view", "progress set"];
+    for (const command of [...commands, "progress", "team", "message send", "messages"]) {
       assert.match(help.stdout, new RegExp(`^  ${command} `, "m"));
     }
     const coreHelp = await agentorg(["core", "--help"], { AGENTORG_HOME: home });
@@ -94,6 +95,14 @@ test("agentorg core creates the root's credential, and the built-ins run as the 
     assert.match(refused.stderr, /not_found: there is no interface activity/);
     const activity = await agentorg(["activity", "--limit", "5"], asRoot);
     assert.equal(JSON.parse(activity.stdout).entries[0].operation, "actor_create");
+
+    const set = await agentorg(
+      ["progress", "set", "--state", "running", "--summary", "Up"],
+      asProg,
+    );
+    assert.equal(set.status, 0, set.stderr);
+    const progress = await agentorg(["progress", "--actor", actor.id], asRoot);
+    assert.equal(JSON.parse(progress.stdout).progress.summary, "Up");
 
     const invalid = await agentorg(["status", "set", "--state", "asleep"], asProg);
     assert.equal(invalid.status, 1);

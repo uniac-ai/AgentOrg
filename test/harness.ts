@@ -12,7 +12,7 @@ import {
   type Reply,
 } from "../src/actor/index.ts";
 import { type CoreOptions, rootCredential, startCore as start } from "../src/core/index.ts";
-import type { InterfaceDescriptor } from "../src/domain/model/index.ts";
+import type { Answer, InterfaceDescriptor } from "../src/domain/model/index.ts";
 import { SqliteStore } from "../src/storage/sqlite/index.ts";
 
 export async function startCore(options: CoreOptions = {}) {
@@ -145,4 +145,21 @@ export async function until(
     if (Date.now() > deadline) throw new Error(`never happened: ${what}`);
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
+}
+
+// biome-ignore lint/suspicious/noExplicitAny: the tests read results loosely.
+export type Json = any;
+
+/** The value of a done answer, failing on any other. */
+export async function done(answer: Answer | Promise<Answer>): Promise<Json> {
+  const settled = await answer;
+  if (settled.state !== "done") throw new Error(`not done: ${JSON.stringify(settled)}`);
+  return settled.value;
+}
+
+/** The code of a refused answer, failing on any other. */
+export async function refused(answer: Answer | Promise<Answer>): Promise<string> {
+  const settled = await answer;
+  if (settled.state !== "refused") throw new Error(`not refused: ${JSON.stringify(settled)}`);
+  return settled.code;
 }

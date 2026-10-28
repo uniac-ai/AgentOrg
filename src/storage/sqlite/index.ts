@@ -3,7 +3,8 @@
  * statement on the tables in `schema.ts`.
  */
 
-import type { Store } from "../../domain/ports.ts";
+import type { SQLInputValue } from "node:sqlite";
+import type { MessageQuery, Store } from "../../domain/ports.ts";
 import { Database } from "./database.ts";
 
 export { Database };
@@ -76,6 +77,37 @@ export class SqliteStore implements Store {
       ) > 0,
   };
 
+  readonly progress: Store["progress"] = {
+    insert: (progress) => this.database.insert("progress", progress),
+    latest: (actor, limit) =>
+      this.database.select("progress", "actor = ?", [actor], "version DESC", limit),
+  };
+
+  readonly messages: Store["messages"] = {
+    insert: (message) => this.database.insert("messages", message),
+    get: (id) => this.database.get("messages", id),
+    list: (query) => {
+      const { where, parameters } = messageConditions(query);
+      return this.database.select("messages", where, parameters, "rowid DESC", query.limit ?? -1);
+    },
+    read: (ids, at) => {
+      this.database.run(
+        `UPDATE messages SET read_at = ? WHERE read_at IS NULL AND id IN (${ids.map(() => "?").join(", ")})`,
+        [at, ...ids],
+      );
+    },
+    answer: (question, reply) => {
+      this.database.run(
+        "UPDATE messages SET answer = ? WHERE id = ? AND expects_reply = 1 AND answer IS NULL",
+        [reply, question],
+      );
+    },
+  };
+
+  transaction<T>(work: () => T): T {
+    return this.database.transaction(work);
+  }
+
   readonly audit: Store["audit"] = {
     append: (entry) => {
       this.database.run(
@@ -85,4 +117,33 @@ export class SqliteStore implements Store {
     },
     list: (since, limit) => this.database.select("audit", "id > ?", [since ?? 0], "id DESC", limit),
   };
+}
+
+/** The SQL condition for a message query, with its parameters. */
+function messageConditions(query: MessageQuery): { where: string; parameters: SQLInputValue[] } {
+  const conditions: string[] = [];
+  const parameters: SQLInputValue[] = [];
+  const add = (condition: string, ...values: SQLInputValue[]) => {
+    conditions.push(condition);
+    parameters.push(...values);
+  };
+  if (query.viewer !== null) {
+    add(
+      `(public = 1 OR EXISTS (SELECT 1 FROM actors WHERE actors.id IN (messages."from", messages."to") AND (actors.id = ? OR actors.manager = ?)))`,
+      query.viewer,
+      query.viewer,
+    );
+  }
+  if (query.to !== undefined) add(`"to" = ?`, query.to);
+  if (query.from !== undefined) add(`"from" = ?`, query.from);
+  for (const party of query.parties ?? []) add(`(? IN ("from", "to"))`, party);
+  if (query.replyTo !== undefined) {
+    add("EXISTS (SELECT 1 FROM json_each(messages.reply_to) WHERE value = ?)", query.replyTo);
+  }
+  if (query.pending) {
+    add("(CASE WHEN expects_reply = 1 THEN answer IS NULL ELSE read_at IS NULL END)");
+  }
+  if (query.questions) add("expects_reply = 1");
+  if (query.since !== undefined) add("created_at > ?", query.since);
+  return { where: conditions.join(" AND ") || "1", parameters };
 }

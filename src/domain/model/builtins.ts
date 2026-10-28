@@ -1,9 +1,11 @@
 /**
- * The core's built-ins, the management surface every actor finds among its available interfaces:
- * their requests, results and descriptions. `activity` is offered to the root only.
+ * The core's built-ins, the surface every actor finds among its available interfaces: their
+ * requests, results and descriptions. The communication standard's are in `communication.ts`.
+ * `activity` is offered to the root only.
  */
 
 import { z } from "zod";
+import { COMMUNICATION } from "./communication.ts";
 import {
   Actor,
   AuditEntry,
@@ -155,6 +157,7 @@ Your manager sees it in its view. It is a status, not a log.`,
 
 The root may view any actor.`,
   },
+  ...COMMUNICATION,
   call_result: {
     writes: false,
     rootOnly: false,

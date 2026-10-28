@@ -4,9 +4,9 @@
  * UTC. Only the hash of an actor's credential is stored.
  */
 
-import { ActorRecord, AuditEntry, Call } from "../../domain/model/index.ts";
+import { ActorRecord, AuditEntry, Call, Message, Progress } from "../../domain/model/index.ts";
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 export const SCHEMA = `
 CREATE TABLE actors (
@@ -41,6 +41,38 @@ CREATE TABLE calls (
 );
 CREATE INDEX pending_calls ON calls ("to") WHERE state = 'pending';
 
+CREATE TABLE progress (
+  actor TEXT NOT NULL REFERENCES actors (id),
+  version INTEGER NOT NULL,
+  state TEXT NOT NULL,
+  summary TEXT NOT NULL,
+  items JSON NOT NULL,
+  links JSON NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (actor, version)
+);
+
+CREATE TABLE messages (
+  id TEXT PRIMARY KEY,
+  "from" TEXT NOT NULL REFERENCES actors (id),
+  "to" TEXT NOT NULL REFERENCES actors (id),
+  text TEXT NOT NULL,
+  links JSON NOT NULL,
+  options JSON NOT NULL,
+  recommendation TEXT,
+  expects_reply BOOLEAN NOT NULL,
+  answerer TEXT REFERENCES actors (id),
+  cause TEXT REFERENCES messages (id),
+  reply_to JSON NOT NULL,
+  choice TEXT,
+  public BOOLEAN NOT NULL,
+  answer TEXT REFERENCES messages (id),
+  created_at TEXT NOT NULL,
+  read_at TEXT
+);
+CREATE INDEX messages_to ON messages ("to");
+CREATE INDEX messages_from ON messages ("from");
+
 CREATE TABLE audit (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   at TEXT NOT NULL,
@@ -51,4 +83,10 @@ CREATE TABLE audit (
 );
 `;
 
-export const TABLES = { actors: ActorRecord, calls: Call, audit: AuditEntry } as const;
+export const TABLES = {
+  actors: ActorRecord,
+  calls: Call,
+  progress: Progress,
+  messages: Message,
+  audit: AuditEntry,
+} as const;

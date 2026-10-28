@@ -70,15 +70,15 @@ function fieldsOf(name: BuiltinName): Field[] {
   );
 }
 
-/** The built-in a command line names, such as `actor create`, and the arguments after it. */
+/**
+ * The built-in a command line names, such as `actor create`, and the arguments after it. The
+ * longest match wins, so `progress set` is not `progress` with an argument.
+ */
 export function builtinOf(argv: string[]): { name: BuiltinName; rest: string[] } | undefined {
-  for (const name of BUILTIN_NAMES) {
-    const words = wordsOf(name);
-    if (words.every((word, index) => argv[index] === word)) {
-      return { name, rest: argv.slice(words.length) };
-    }
-  }
-  return undefined;
+  const [name] = BUILTIN_NAMES.filter((each) =>
+    wordsOf(each).every((word, index) => argv[index] === word),
+  ).sort((a, b) => wordsOf(b).length - wordsOf(a).length);
+  return name && { name, rest: argv.slice(wordsOf(name).length) };
 }
 
 const json = (text: string, flag: string) => {
