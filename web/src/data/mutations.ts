@@ -1,42 +1,44 @@
 /**
- * The user's writes. Each updates what the app shows at once, puts it back if it is refused, and
- * then refetches, so the record has the last word.
+ * The user's writes. Each takes what it settles out of what the app shows at once, puts it back
+ * if it is refused, and then refetches, so the record has the last word.
  */
 
 import { useMutation } from "@tanstack/react-query";
-import type { ActorClosed, ViewRecord } from "../../../src/human/types.ts";
-import type { Organization } from "../model/organization.ts";
-import { callInterface, path, request } from "./client.ts";
-import { answered, queryClient } from "./queries.ts";
+import type { Builtins } from "../../../src/human/types.ts";
+import { call } from "./client.ts";
+import { queryClient } from "./queries.ts";
 
 type Snapshot = [readonly unknown[], unknown][];
 
-const withoutCall = (view: ViewRecord, call: string): ViewRecord => ({
-  ...view,
-  pending: view.pending.filter((pending) => pending.id !== call),
-});
+const KEYS = [["questions"], ["messages"], ["team"], ["progress"]];
 
-/** Take a call out of what waits, everywhere it shows, while its answer is in flight. */
-async function without(call: string): Promise<Snapshot> {
-  await queryClient.cancelQueries({ queryKey: ["view"] });
-  await queryClient.cancelQueries({ queryKey: ["organization"] });
-  const before = [
-    ...queryClient.getQueriesData({ queryKey: ["view"] }),
-    ...queryClient.getQueriesData({ queryKey: ["organization"] }),
-  ];
-  queryClient.setQueriesData<ViewRecord>(
-    { queryKey: ["view"] },
-    (view) => view && withoutCall(view, call),
-  );
-  queryClient.setQueriesData<Organization>(
-    { queryKey: ["organization"] },
-    (organization) =>
-      organization && {
-        ...organization,
-        views: Object.fromEntries(
-          Object.entries(organization.views).map(([id, view]) => [id, withoutCall(view, call)]),
-        ),
+const without = <T extends { id: string }>(records: T[], ids: ReadonlySet<string>) =>
+  records.filter((record) => !ids.has(record.id));
+
+/** Take the questions and messages a write settles out of what waits, everywhere they show. */
+async function settle(ids: ReadonlySet<string>): Promise<Snapshot> {
+  await Promise.all(KEYS.map((queryKey) => queryClient.cancelQueries({ queryKey })));
+  const before = KEYS.flatMap((queryKey) => queryClient.getQueriesData({ queryKey }));
+  for (const queryKey of [["questions"], ["messages"]]) {
+    queryClient.setQueriesData<{ id: string }[]>(
+      { queryKey },
+      (records) => records && without(records, ids),
+    );
+  }
+  queryClient.setQueriesData<Builtins["team"]["result"]>(
+    { queryKey: ["team"] },
+    (team) =>
+      team && {
+        ...team,
+        positions: team.positions.map((position) => ({
+          ...position,
+          questions: without(position.questions, ids),
+        })),
       },
+  );
+  queryClient.setQueriesData<Builtins["progress"]["result"]>(
+    { queryKey: ["progress"] },
+    (progress) => progress && { ...progress, questions: without(progress.questions, ids) },
   );
   return before;
 }
@@ -47,27 +49,32 @@ function restore(before: Snapshot | undefined) {
 
 const refetch = () => queryClient.invalidateQueries();
 
-export interface AnswerInput {
-  call: string;
-  /** The call's output: a decision's choice and words, `{}` for a note, `{acknowledged: true}` for a report. */
-  output: Record<string, unknown>;
-}
-
-/** Answer a call waiting on the user, which completes it. */
+/** Answer one or more questions; the root may answer any. */
 export function useAnswer() {
   return useMutation({
-    mutationFn: ({ call, output }: AnswerInput) =>
-      request<{ call: string; output: Record<string, unknown> }>(path("pending", call), {
-        body: output,
-      }),
-    onMutate: ({ call }) => {
-      answered.add(call);
-      return without(call);
-    },
-    onError: (_error, { call }, before) => {
-      answered.delete(call);
-      restore(before);
-    },
+    mutationFn: (input: Builtins["question_answer"]["input"]) => call("question_answer", input),
+    onMutate: (input) => settle(new Set(input.questions)),
+    onError: (_error, _input, before) => restore(before),
+    onSettled: refetch,
+  });
+}
+
+/** Send a private message to any position; a reply marks the message it replies to read. */
+export function useSend() {
+  return useMutation({
+    mutationFn: (input: Builtins["message_send"]["input"]) => call("message_send", input),
+    onMutate: (input) => settle(new Set(input.reply_to === undefined ? [] : [input.reply_to])),
+    onError: (_error, _input, before) => restore(before),
+    onSettled: refetch,
+  });
+}
+
+/** Mark messages to the user read. */
+export function useRead() {
+  return useMutation({
+    mutationFn: (ids: string[]) => call("message_read", { ids }),
+    onMutate: (ids) => settle(new Set(ids)),
+    onError: (_error, _ids, before) => restore(before),
     onSettled: refetch,
   });
 }
@@ -75,7 +82,7 @@ export function useAnswer() {
 /** Close an actor as the root; the core refuses while actors under it are open. */
 export function useCloseActor() {
   return useMutation({
-    mutationFn: (actor: string) => callInterface<ActorClosed>("actor_close", { actor }),
+    mutationFn: (actor: string) => call("actor_close", { actor }),
     onSettled: refetch,
   });
 }

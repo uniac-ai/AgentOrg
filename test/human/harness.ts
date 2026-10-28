@@ -1,7 +1,6 @@
 /** The human actor on a real core, a browser signed in to it, and program actors under the root. */
 
 import { after } from "node:test";
-import type { ResponseOf } from "../../src/domain/model/index.ts";
 import { startHuman } from "../../src/human/index.ts";
 import { CSRF_HEADER } from "../../src/human/types.ts";
 import { fakeActor, iface, startCore, until } from "../harness.ts";
@@ -10,14 +9,6 @@ const open: { close(): Promise<void> }[] = [];
 after(() => Promise.allSettled(open.map((each) => each.close())));
 
 export type Core = Awaited<ReturnType<typeof startCore>>;
-type Call = ResponseOf<"call_result">;
-
-export const DECISION = {
-  question: "Keep the v1 tables?",
-  context: "The new schema starts fresh. Keeping them costs a migration later.",
-  options: [{ label: "Keep" }, { label: "Drop", detail: "Nothing has shipped." }],
-  recommendation: "Drop",
-};
 
 /** A response's JSON body, read loosely. */
 // biome-ignore lint/suspicious/noExplicitAny: the tests read responses loosely.
@@ -63,16 +54,7 @@ export async function browser(url: string, credential: string) {
       },
       body: JSON.stringify(body),
     });
-  /** The calls waiting on the user, once they are exactly `calls`. */
-  const pending = async (...calls: string[]) => {
-    let listed: { call: string }[] = [];
-    await until(`the queue holds ${calls.join(", ") || "nothing"}`, async () => {
-      listed = (await json(get("/api/pending"))).pending;
-      return listed.map((each) => each.call).join() === calls.join();
-    });
-    return listed;
-  };
-  return { login, cookie, csrf: session.csrf_token as string, get, post, pending };
+  return { login, cookie, csrf: session.csrf_token as string, get, post };
 }
 
 export const REVIEW = iface("review", {
@@ -84,10 +66,7 @@ export const REVIEW = iface("review", {
   },
 });
 
-/**
- * A program actor under the root, created by the user through the web app's API: it exposes
- * `review`, and calls the human's interfaces as its manager's.
- */
+/** A program actor under the root, created by the user through the web app's API, exposing `review`. */
 export async function program(
   core: Core,
   post: (path: string, body: unknown) => Promise<Response>,
@@ -101,23 +80,7 @@ export async function program(
   }));
   const connection = await core.connect(credential, reviews);
   await until(`${name} comes online`, () => core.org.registry.get(actor.id)?.online === true);
-  const call = (name: string, input: Record<string, unknown>) => connection.call(name, input);
-  return {
-    id: actor.id as string,
-    received: reviews.received,
-    /** Call one of the human's interfaces, as its manager's; returns the call's id. */
-    async ask(name: string, input: Record<string, unknown>) {
-      const answer = await call(`manager.${name}`, input);
-      return (answer as { call: string }).call;
-    },
-    /** The call, once settled or after `wait` seconds. */
-    async result(id: string, wait = 5): Promise<Call> {
-      return ((await call("call_result", { call: id, wait })) as { value: Call }).value;
-    },
-    async withdraw(id: string) {
-      await call("call_withdraw", { call: id });
-    },
-  };
+  return { id: actor.id as string, received: reviews.received, connection };
 }
 
 /** A core, a human actor on it, a signed-in browser, and a program actor under the root. */

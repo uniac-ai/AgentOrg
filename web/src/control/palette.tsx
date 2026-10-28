@@ -1,29 +1,29 @@
-// ⌘K (or Ctrl+K), control: jump to a view, an actor or a pending call. A call opens where it
-// waits: in the user's own view when it waits on the user, else in its callee's view.
+// ⌘K (or Ctrl+K), control: jump to a view, an actor or an open question. A question opens where
+// the user answers it: on the user's page when it waits on the user, else on its asker's page.
 
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
 import { useKeys } from "@/lib/keys";
-import type { ActorRecord, CallRecord } from "../../../src/human/types.ts";
+import type { QuestionRecord } from "../../../src/human/types.ts";
 import { organizationQuery } from "../data/queries.ts";
-import { flatten, tree } from "../model/organization.ts";
-import type { Names } from "../views/calls.tsx";
+import { flatten, type Member, openQuestions } from "../model/organization.ts";
+import type { Names } from "../views/messages.tsx";
 import { PaletteView } from "../views/palette.tsx";
-import { namesOf } from "./entity.tsx";
+import { namesOf } from "./cards.ts";
 
 export type Destination = "/" | "/activity";
 
 export interface PaletteModel {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  actors: ActorRecord[];
-  /** Every call waiting on someone, oldest first. */
-  calls: CallRecord[];
+  members: Member[];
+  /** Every open question, oldest first. */
+  questions: QuestionRecord[];
   names: Names;
   onView: (to: Destination) => void;
-  onActor: (actor: ActorRecord) => void;
-  onCall: (call: CallRecord) => void;
+  onActor: (member: Member) => void;
+  onQuestion: (question: QuestionRecord) => void;
 }
 
 export function PaletteControl() {
@@ -40,27 +40,21 @@ export function PaletteControl() {
     void to();
   };
   const org = organization.data;
+  const root = org?.root.id;
   const model: PaletteModel = {
     open,
     onOpenChange: setOpen,
-    actors: org ? flatten(tree(org)) : [],
-    calls: org
-      ? Object.values(org.views)
-          .flatMap((view) => view.pending)
-          .sort((a, b) => a.created_at.localeCompare(b.created_at))
-      : [],
+    members: org ? flatten(org.root.reports) : [],
+    questions: org ? openQuestions(org) : [],
     names: org ? namesOf(org) : new Map(),
     onView: (to) => go(() => navigate({ to })),
-    onActor: (actor) =>
-      go(() => navigate({ to: "/people/$actorId", params: { actorId: actor.id } })),
-    onCall: (call) =>
+    onActor: (member) =>
+      go(() => navigate({ to: "/people/$actorId", params: { actorId: member.id } })),
+    onQuestion: (question) =>
       go(() =>
-        call.to === org?.root
-          ? navigate({ to: "/calls/$callId", params: { callId: call.id } })
-          : navigate({
-              to: "/people/$actorId/calls/$callId",
-              params: { actorId: call.to, callId: call.id },
-            }),
+        question.to === root || question.answerer === root
+          ? navigate({ to: "/" })
+          : navigate({ to: "/people/$actorId", params: { actorId: question.from } }),
       ),
   };
   return <PaletteView {...model} />;

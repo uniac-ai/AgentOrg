@@ -6,12 +6,16 @@ import { ActivityIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { AuditRecord } from "../../../src/human/types.ts";
 import type { ActivityModel } from "../control/activity.tsx";
-import { callTitle, nameOf } from "./calls.tsx";
+import { nameOf } from "./messages.tsx";
 
 const VERBS: Record<string, string> = {
   actor_create: "created",
   actor_close: "closed",
-  status_set: "set its status",
+  progress_set: "set its progress",
+  question_ask: "asked a question",
+  question_answer: "answered",
+  message_send: "sent a message",
+  message_read: "read messages",
   call_withdraw: "withdrew",
 };
 
@@ -23,45 +27,22 @@ const CALL_VERBS: Record<string, string> = {
   withdrawn: "withdrew",
 };
 
-/** How the user settles a note or a report: there is nothing to answer. */
-const SETTLED: Record<string, string> = { note: "read", report: "acknowledged" };
-
-function verbOf(entry: AuditRecord, model: ActivityModel): string {
-  if (entry.operation !== "call") return VERBS[entry.operation] ?? entry.operation;
-  const tool = entry.target ? model.calls.get(entry.target)?.interface : undefined;
-  if (entry.outcome === "done" && tool && SETTLED[tool]) return SETTLED[tool];
-  return CALL_VERBS[entry.outcome] ?? "called";
-}
+const verbOf = (entry: AuditRecord) =>
+  entry.operation === "call"
+    ? (CALL_VERBS[entry.outcome] ?? "called")
+    : (VERBS[entry.operation] ?? entry.operation);
 
 /** Whether the entry records a refusal, which shows its error code. */
 const refused = (entry: AuditRecord) =>
   entry.operation === "call" ? !(entry.outcome in CALL_VERBS) : entry.outcome !== "ok";
 
+/** The actor an entry acted on, when it names one other than the actor and the user. */
 function Target({ entry, model }: { entry: AuditRecord; model: ActivityModel }) {
-  // An actor acting on itself, such as setting its status, names no one else.
-  if (entry.target === null || entry.target === entry.actor) return null;
-  const call = model.calls.get(entry.target);
-  if (call) {
-    return call.to === model.root ? (
-      <Link
-        to="/calls/$callId"
-        params={{ callId: call.id }}
-        className="truncate font-medium hover:underline"
-      >
-        {callTitle(call)}
-      </Link>
-    ) : (
-      <Link
-        to="/people/$actorId/calls/$callId"
-        params={{ actorId: call.to, callId: call.id }}
-        className="truncate font-medium hover:underline"
-      >
-        {callTitle(call)}
-      </Link>
-    );
+  if (entry.target === null || entry.target === entry.actor || entry.target === model.root) {
+    return null;
   }
   if (!model.names.has(entry.target)) return null;
-  return entry.target === model.root ? null : (
+  return (
     <Link
       to="/people/$actorId"
       params={{ actorId: entry.target }}
@@ -89,7 +70,7 @@ function Line({ entry, model }: { entry: AuditRecord; model: ActivityModel }) {
       </time>
       <span className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-1.5">
         <span className="font-medium">{actor}</span>
-        <span className="text-muted-foreground">{verbOf(entry, model)}</span>
+        <span className="text-muted-foreground">{verbOf(entry)}</span>
         <Target entry={entry} model={model} />
         {refused(entry) ? <span className="text-xs text-destructive">{entry.outcome}</span> : null}
       </span>

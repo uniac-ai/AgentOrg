@@ -2,13 +2,21 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { json, setup } from "./harness.ts";
 
-test("the user's available interfaces come from the core, and calling one goes through the core", async () => {
-  const { get, post, storage } = await setup();
+test("the human actor exposes nothing of its own to the core", async () => {
+  const { core } = await setup();
+  assert.deepEqual(core.org.registry.get(core.rootId)?.interfaces, []);
+});
+
+test("the user's available interfaces are the root's, listed and called through the core", async () => {
+  const { core, get, post, storage } = await setup();
   const { interfaces } = await json(get("/api/interfaces"));
-  const names = interfaces.map((offer: { interface: { name: string } }) => offer.interface.name);
-  for (const name of ["view", "activity", "actor_create", "storage.review"]) {
-    assert.ok(names.includes(name), name);
-  }
+  const listed = interfaces.map((offer: { interface: { name: string } }) => offer.interface.name);
+  const available = await (await core.client(core.root)).available();
+  assert.deepEqual(
+    listed,
+    available.map((offer) => offer.interface.name),
+  );
+  assert.ok(listed.includes("activity") && listed.includes("storage.review"));
 
   const called = await post("/api/interfaces/storage.review", { change: "#41" });
   assert.equal(called.status, 200);
@@ -17,43 +25,25 @@ test("the user's available interfaces come from the core, and calling one goes t
     storage.received.map((each) => [each.name, each.input]),
     [["review", { change: "#41" }]],
   );
+
+  const { entries } = await json(post("/api/interfaces/activity", { limit: 2 }));
+  assert.equal(entries.length, 2);
+
   const refused = await post("/api/interfaces/nothing.here", {});
   assert.equal(refused.status, 400);
   assert.equal((await json(refused)).code, "refused");
-});
-
-test("view and activity pass through from the core", async () => {
-  const { core, get, pending, storage } = await setup();
-  const call = await storage.ask("note", { text: "Read me." });
-  await pending(call);
-
-  const view = await json(get("/api/view"));
-  assert.equal(view.actor.id, core.rootId);
-  assert.deepEqual(
-    view.pending.map((each: { id: string }) => each.id),
-    [call],
-  );
-  assert.equal(view.names[storage.id], "storage");
-  assert.equal((await json(get(`/api/view/${storage.id}`))).actor.name, "storage");
-  const unknown = await get("/api/view/act_nobody");
-  assert.equal(unknown.status, 400);
-  assert.equal((await json(unknown)).code, "refused");
-
-  const { entries } = await json(get("/api/activity?limit=2"));
-  assert.equal(entries.length, 2);
-  const older = await json(get(`/api/activity?since=${entries[1].id - 1}`));
-  assert.deepEqual(
-    older.entries.map((entry: { id: number }) => entry.id),
-    entries.map((entry: { id: number }) => entry.id),
-  );
+  const invalid = await post("/api/interfaces/activity", { limit: "two" });
+  assert.equal(invalid.status, 400);
+  assert.equal((await json(invalid)).code, "refused");
 });
 
 test("while the core is down, the API says so, and the session holds", async () => {
-  const { core, get } = await setup();
+  const { core, get, post } = await setup();
   await core.close();
 
-  const down = await get("/api/view");
-  assert.equal(down.status, 503);
-  assert.equal((await json(down)).code, "core_unreachable");
+  for (const down of [await get("/api/interfaces"), await post("/api/interfaces/activity")]) {
+    assert.equal(down.status, 503);
+    assert.equal((await json(down)).code, "core_unreachable");
+  }
   assert.equal((await get("/api/session")).status, 200);
 });

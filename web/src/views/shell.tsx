@@ -1,8 +1,9 @@
-// The app shell: the organization as a sidebar, like a messaging app's people list, and the
-// selected pane beside it. At phone width the sidebar becomes a sheet.
+// The app shell: the organization as a sidebar, like a messaging app's people list, with the
+// shared resources each actor holds under its name, and the selected pane beside it. At phone
+// width the sidebar becomes a sheet.
 
 import { Link } from "@tanstack/react-router";
-import { ActivityIcon, ChevronRightIcon, UnplugIcon, UserRoundIcon } from "lucide-react";
+import { ActivityIcon, ChevronRightIcon, LockIcon, UnplugIcon, UserRoundIcon } from "lucide-react";
 import { useEffect } from "react";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
@@ -22,35 +23,60 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar";
 import { cn } from "@/lib/utils";
-import type { ShellModel } from "../control/shell.tsx";
-import type { OrgNode } from "../model/organization.ts";
+import type { ShellModel, SidebarNode } from "../control/shell.tsx";
 import { OnlineMark, StateMark, StateName } from "./marks.tsx";
 
-function ActorItem({ node, selected }: { node: OrgNode; selected: string | undefined }) {
-  const { actor, pending } = node.view;
+/** The shared resources an actor holds, a lock and a name each; the note shows on hover. */
+function Claims({ claims }: { claims: SidebarNode["member"]["claims"] }) {
+  if (claims.length === 0) return null;
+  return (
+    <ul aria-label="Holds" className="flex flex-col pb-0.5 pl-7">
+      {claims.map((claim) => {
+        const until = claim.until
+          ? `, until ${new Date(claim.until).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
+          : "";
+        return (
+          <li
+            key={claim.resource}
+            title={`${claim.note}${until}`}
+            className="flex min-w-0 items-center gap-1 text-xs text-sidebar-foreground/70"
+          >
+            <LockIcon aria-hidden="true" className="size-3 shrink-0" />
+            <span className="truncate font-mono">{claim.resource}</span>
+            <span className="sr-only">{`: ${claim.note}${until}`}</span>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+function ActorItem({ node, selected }: { node: SidebarNode; selected: string | undefined }) {
+  const { member, waiting } = node;
   const hasChildren = node.children.length > 0;
   const item = (
     <>
       <SidebarMenuButton
-        isActive={selected === actor.id}
-        render={<Link to="/people/$actorId" params={{ actorId: actor.id }} />}
+        isActive={selected === member.id}
+        render={<Link to="/people/$actorId" params={{ actorId: member.id }} />}
       >
-        <StateMark actor={actor} />
-        <span className="truncate">{actor.name}</span>
-        <StateName actor={actor} />
-        {actor.online ? <OnlineMark /> : null}
+        <StateMark member={member} />
+        <span className="truncate">{member.name}</span>
+        <StateName member={member} />
+        {member.online ? <OnlineMark /> : null}
       </SidebarMenuButton>
-      {pending.length > 0 ? (
+      {waiting > 0 ? (
         <SidebarMenuBadge
           className={cn(
             "bg-state-waiting/15 text-state-waiting peer-hover/menu-button:text-state-waiting peer-data-active/menu-button:text-state-waiting",
             hasChildren && "right-7",
           )}
         >
-          {pending.length}
+          {waiting}
           <span className="sr-only"> waiting on it</span>
         </SidebarMenuBadge>
       ) : null}
+      <Claims claims={member.claims} />
     </>
   );
   if (!hasChildren) return <SidebarMenuItem>{item}</SidebarMenuItem>;
@@ -60,7 +86,7 @@ function ActorItem({ node, selected }: { node: OrgNode; selected: string | undef
       <CollapsibleTrigger
         render={
           <SidebarMenuAction
-            aria-label={`${actor.name}: actors under it`}
+            aria-label={`${member.name}: actors under it`}
             className="data-[panel-open]:rotate-90"
           />
         }
@@ -70,7 +96,7 @@ function ActorItem({ node, selected }: { node: OrgNode; selected: string | undef
       <CollapsibleContent>
         <SidebarMenuSub className="mr-0 pr-0">
           {node.children.map((child) => (
-            <ActorItem key={child.view.actor.id} node={child} selected={selected} />
+            <ActorItem key={child.member.id} node={child} selected={selected} />
           ))}
         </SidebarMenuSub>
       </CollapsibleContent>
@@ -129,7 +155,7 @@ export function ShellView({ organization, waitingOnYou, offline, place, path, pa
                       </SidebarMenuItem>
                     ))
                   : organization.map((node) => (
-                      <ActorItem key={node.view.actor.id} node={node} selected={selected} />
+                      <ActorItem key={node.member.id} node={node} selected={selected} />
                     ))}
               </SidebarMenu>
             </nav>

@@ -61,10 +61,8 @@ test("without a current session, every API route answers signed out", async () =
   for (const header of [undefined, "agentorg_human=unknown", tampered]) {
     for (const [method, path] of [
       ["GET", "/api/session"],
-      ["GET", "/api/pending"],
-      ["GET", "/api/view"],
-      ["POST", "/api/pending/call_1"],
-      ["POST", "/api/interfaces/view"],
+      ["GET", "/api/interfaces"],
+      ["POST", "/api/interfaces/activity"],
     ] as const) {
       const response = await fetch(actor.url + path, {
         method,
@@ -79,18 +77,22 @@ test("without a current session, every API route answers signed out", async () =
   }
 });
 
-test("every write carries the session's CSRF token", async () => {
-  const { storage, post, csrf, pending } = await setup();
-  const call = await storage.ask("note", { text: "Read me." });
-  await pending(call);
+test("every call carries the session's CSRF token", async () => {
+  const { core, post, csrf } = await setup();
+  const create = { name: "docs", purpose: "Write the docs." };
   for (const token of [undefined, "", `${csrf.slice(0, -1)}x`]) {
     const headers = token === undefined ? {} : { [CSRF_HEADER]: token };
-    const response = await post(`/api/pending/${call}`, {}, { [CSRF_HEADER]: "", ...headers });
+    const response = await post("/api/interfaces/actor_create", create, {
+      [CSRF_HEADER]: "",
+      ...headers,
+    });
     assert.equal(response.status, 403);
     assert.equal((await json(response)).code, "forbidden");
   }
-  assert.equal((await storage.result(call, 0)).state, "pending");
-  assert.equal((await post(`/api/pending/${call}`)).status, 200);
+  const names = () => core.org.registry.reports(core.rootId).map((actor) => actor.name);
+  assert.deepEqual(names(), ["storage"]);
+  assert.equal((await post("/api/interfaces/actor_create", create)).status, 200);
+  assert.deepEqual(names(), ["storage", "docs"]);
 });
 
 test("sessions and links expire, and a new credential ends every session", () => {

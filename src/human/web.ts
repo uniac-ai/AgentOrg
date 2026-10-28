@@ -13,7 +13,7 @@ import { type Context, Hono, type MiddlewareHandler } from "hono";
 const BUILT = fileURLToPath(new URL("../../page", import.meta.url));
 
 /** The app's own paths; each serves `index.html`. */
-export const APP_PATHS = ["/", "/calls/*", "/people/*", "/activity"];
+export const APP_PATHS = ["/", "/people/*", "/activity"];
 
 export const PAGE_HEADERS = {
   "Content-Security-Policy": [
