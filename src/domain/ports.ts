@@ -11,6 +11,7 @@ import type {
   Answer,
   AuditEntry,
   Call,
+  Claim,
   Delivery,
   InterfaceDescriptor,
   Message,
@@ -26,6 +27,7 @@ export type AuditRow = z.output<typeof AuditEntry>;
 export type ProgressRow = z.output<typeof Progress>;
 export type QuestionRow = z.output<typeof Question>;
 export type MessageRow = z.output<typeof Message>;
+export type ClaimRow = z.output<typeof Claim>;
 export type AnswerRow = NonNullable<QuestionRow["answer"]>;
 
 /** Which questions to list: those matching every field given, newest first. */
@@ -159,6 +161,13 @@ export interface Store {
   };
   /** The newest cursor of the sequence questions and messages share; 0 before either. */
   head(): number;
+  claims: {
+    get(resource: string): ClaimRow | undefined;
+    /** Hold the resource, replacing the claim it had. */
+    put(claim: ClaimRow): void;
+    remove(resource: string): void;
+    heldBy(actor: string): ClaimRow[];
+  };
   audit: {
     append(entry: Omit<AuditRow, "id">): void;
     /** Entries after `since`, newest first. */

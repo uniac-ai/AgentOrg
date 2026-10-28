@@ -16,6 +16,7 @@
  */
 
 import type { Waiting } from "./builtins.ts";
+import type { Claims } from "./claims.ts";
 import { Conflict, Forbidden, Invalid, NotFound } from "./errors.ts";
 import type { RequestOf, ResponseOf } from "./model/index.ts";
 import type { MessageRow, ProgressRow, QuestionRow, Store } from "./ports.ts";
@@ -46,13 +47,15 @@ const actorsIn = (items: ProgressRow["items"]) =>
 export class Communication {
   private readonly store: Store;
   private readonly registry: Registry;
+  private readonly claims: Claims;
   private readonly now: () => string;
   /** The reads waiting for a new question, answer or message. */
   private readonly waiters = new Set<() => void>();
 
-  constructor(store: Store, registry: Registry, now: () => string) {
+  constructor(store: Store, registry: Registry, claims: Claims, now: () => string) {
     this.store = store;
     this.registry = registry;
+    this.claims = claims;
     this.now = now;
   }
 
@@ -107,6 +110,7 @@ export class Communication {
           : null,
         questions: this.openQuestions(at.id),
         interfaces: callable.get(at.id) ?? [],
+        claims: this.claims.heldBy(at.id),
       });
       if (depth > 0) for (const report of this.registry.reports(at.id)) visit(report, depth - 1);
     };

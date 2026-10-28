@@ -9,7 +9,7 @@ agentorg organizes AI agents and programs the way a company organizes people.
 - **Calls go up and down.** An actor calls the interfaces its manager and its direct reports expose. The root calls any actor's.
 - **Processing a call is the actor's own business.** The core routes and records calls; what an actor does with one is up to it.
 - **Nothing subscribes.** A manager reads its reports' status and calls when it chooses.
-- **Communication is part of the core.** Each actor publishes its progress and its questions for anyone to read, and actors send each other private messages.
+- **Communication is part of the core.** Each actor publishes its progress and its questions for anyone to read, actors send each other private messages, and an actor claims a shared resource while it uses it.
 
 ## Layers
 
@@ -54,6 +54,7 @@ The domain's interface descriptor is its own: name, title and description, input
 | **Progress** | actor; version; state (`running`, `waiting`, `blocked` or `review`); summary; items, each with a title, a state (`planned`, `running`, `waiting`, `blocked` or `review`) and optionally a summary, links, an owner and what it waits on; links; updated at | Each set adds a version, and reads leave earlier versions out unless asked. Item titles are unique, and done items drop off. A link is an http, https or file URL. |
 | **Question** | id; cursor; from; to; text; links; options and a recommendation; answerer; cause; answer (who answered, the choice, the words, whether the asker recorded them, and when); created at | It is answered once. |
 | **Message** | id; cursor; from; to; text; links; reply to; created and read at | |
+| **Claim** | resource; holder; note; until; claimed at | A resource has at most one current claim. It ends when released, when `until` passes, or when its holder is closed. |
 | **Audit entry** | id; at; actor; operation; target; outcome | One line for each write, and for each routed call when it is created, refused and settled. |
 
 ### Wiring: who calls what
@@ -100,6 +101,7 @@ A human may answer hours later, so a long-running interface may take a call as a
   - When the user answers inside the asking session, the asker records their words for its own question, and the answer is marked as recorded. A question with an answerer refuses that: the user answers it through the core.
   - One answer may resolve several questions. Its choice is optional, and its words may reject the options.
 - **Messaging.** A message goes to any open position. A reply names the message it replies to, between the same two actors, and marks it read. A message the caller may not read is not found, so a private message's existence stays private.
+- **Claims.** An actor claims a shared resource, such as a release lane or a cluster, while it uses it, and anyone sees current claims in `team`. Claiming a resource another actor holds is refused, naming the holder.
 - **The cursor.** Questions and messages share one sequence. A question takes a new cursor when it is answered. So a read since a cursor finds new messages, new questions and new answers. A read with `wait` holds until a match exists, for up to 600 seconds, and every write wakes it.
 
 ### Built-ins
@@ -111,7 +113,7 @@ A human may answer hours later, so a long-running interface may take a call as a
 | `status_set {state, summary}` | Sets the caller's own status. |
 | `view {actor?}` | The caller's own position, or a direct report's; the root may view anyone. It holds what is pending on that actor and from whom, its own open calls, its reports with their status, its manager, and its 50 most recent settled calls. |
 | `progress_set {state?, summary?, items?, links?}` | Replaces the fields given of the caller's progress. The first set names its state. |
-| `team {actor?, depth?}` | A position and its reports down to a depth, by default the caller and its direct reports: each one's purpose, presence, progress state and summary, open questions, and its interfaces the caller can call, with the root's id. Anyone may read any position. |
+| `team {actor?, depth?}` | A position and its reports down to a depth, by default the caller and its direct reports: each one's purpose, presence, progress state and summary, open questions, claims, and its interfaces the caller can call, with the root's id. Anyone may read any position. |
 | `progress {actor, history?}` | An actor's full progress, with its open questions and, when asked, earlier versions. Anyone may read it. |
 | `question_ask {to?, text, links?, options?, recommendation?, answerer?, cause?}` | Publishes a question. |
 | `question_answer {questions, choice?, text?, recorded?}` | Answers one or more open questions. |
@@ -119,6 +121,8 @@ A human may answer hours later, so a long-running interface may take a call as a
 | `message_send {to, text, links?, reply_to?}` | Sends a private message. |
 | `messages {box?, unread?, actor?, with?, since?, limit?, wait?}` | The messages the caller may see, newest first, with the newest cursor: by default those addressed to it. It changes nothing. |
 | `message_read {ids}` | Marks messages addressed to the caller read; each sender sees when. |
+| `claim {resource, note, until?}` | Claims a shared resource, or renews the caller's claim. It is refused while another actor holds it. |
+| `release {resource}` | Releases a resource the caller holds; the root may release any. |
 | `call_result {call, wait?}` | Reads a call the caller made, optionally waiting up to 600 seconds for it to settle, with progress. |
 | `call_withdraw {call}` | The caller withdraws a pending call. |
 | `activity {since?, limit?}` | The audit trail, newest first. Offered to the root only. |
@@ -156,7 +160,7 @@ How the domain is encoded:
   - When the file holds something else, the core refuses to start.
 - **The command line:**
   - `agentorg core` runs the core.
-  - A command for each built-in, generated from its schema, runs it, such as `agentorg actor create`, `agentorg progress set`, `agentorg team`, `agentorg question ask`, `agentorg message send` and `agentorg activity`.
+  - A command for each built-in, generated from its schema, runs it, such as `agentorg actor create`, `agentorg progress set`, `agentorg team`, `agentorg question ask`, `agentorg message send`, `agentorg claim` and `agentorg activity`.
   - A command acts as the actor whose credential is in `AGENTORG_CREDENTIAL`, else as the root.
 
 ## Stack

@@ -53,7 +53,8 @@ test("help lists the core and every built-in, and asking for it acts on nothing"
     const help = await agentorg(["--help"], { AGENTORG_HOME: home });
     assert.equal(help.status, 0);
     const commands = ["core", "actor create", "actor close", "status set", "view", "progress set"];
-    for (const command of [...commands, "question ask", "questions", "team", "message send"]) {
+    const communication = ["question ask", "questions", "team", "message send", "claim", "release"];
+    for (const command of [...commands, ...communication]) {
       assert.match(help.stdout, new RegExp(`^  ${command} `, "m"));
     }
     const coreHelp = await agentorg(["core", "--help"], { AGENTORG_HOME: home });

@@ -6,6 +6,7 @@
 
 import type { Audit } from "./audit.ts";
 import type { Calls } from "./calls.ts";
+import type { Claims } from "./claims.ts";
 import type { Communication } from "./communication.ts";
 import { Conflict, Forbidden, Invalid } from "./errors.ts";
 import { type BuiltinName, HISTORY_MAX, type RequestOf, type ResponseOf } from "./model/index.ts";
@@ -33,6 +34,7 @@ export function builtins(
   calls: Calls,
   audit: Audit,
   communication: Communication,
+  claims: Claims,
   options: { now: () => string; disconnect: (actor: string) => Promise<void> },
 ): Handlers {
   const { now } = options;
@@ -110,6 +112,8 @@ export function builtins(
     message_send: async (actor, request) => communication.send(actor, request),
     messages: (actor, request, waiting) => communication.messages(actor, request, waiting),
     message_read: async (actor, request) => communication.read(actor, request),
+    claim: async (actor, request) => claims.claim(actor, request),
+    release: async (actor, request) => claims.release(actor, request),
 
     call_result: async (actor, request, waiting) => {
       const call = calls.found(request.call);
