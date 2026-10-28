@@ -28,13 +28,13 @@ npm install -g .
 
 npm links the clone into its global folder as `$(npm root -g)/@agentorg/cli` and puts the `agentorg` command in its global bin directory. Later steps take the service files and the skills from that folder. To upgrade, run `git pull`, `npm ci` and `npm run build` in the clone.
 
-## 2. Run the service
+## 2. Run the core
 
-`agentorg serve` runs the service in the foreground. It listens on `127.0.0.1:8740` and keeps its database and its token in the agentorg home, `~/.local/share/agentorg`, creating the token on its first start. `AGENTORG_PORT` and `AGENTORG_HOME` change those defaults, and clients then find the service through `AGENTORG_URL`. To keep it running, install it as a user service.
+`agentorg core` runs the core in the foreground. It listens on `127.0.0.1:8740` and keeps its database and the root's credential in the agentorg home, `~/.local/share/agentorg`, creating the root and its credential on its first start. `AGENTORG_PORT` and `AGENTORG_HOME` change those defaults, and actors then find the core through `AGENTORG_URL`. To keep it running, install it as a user service.
 
 ### macOS (launchd)
 
-launchd expands neither `~` nor environment variables, and it runs jobs with only the system directories on `PATH`, where it finds no `node` installed by Homebrew or a version manager. So the plist in the package's `service/` folder holds placeholders for the paths of `node`, `agentorg` and the agentorg home. These commands create the home readable by you only, since it holds the token and the database, then fill in the placeholders, install the plist as a user agent, and load it:
+launchd expands neither `~` nor environment variables, and it runs jobs with only the system directories on `PATH`, where it finds no `node` installed by Homebrew or a version manager. So the plist in the package's `service/` folder holds placeholders for the paths of `node`, `agentorg` and the agentorg home. These commands create the home readable by you only, since it holds the root's credential and the database, then fill in the placeholders, install the plist as a user agent, and load it:
 
 ```bash
 mkdir -p -m 700 ~/.local/share/agentorg ~/.local/share/agentorg/logs
@@ -48,7 +48,7 @@ sed -e "s|@NODE@|$(command -v node)|" -e "s|@AGENTORG@|$(command -v agentorg)|" 
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/agentorg.plist
 ```
 
-launchd restarts the service whenever it exits and starts it at login. Its output goes to `~/.local/share/agentorg/logs/serve.log`. To stop it, run `launchctl bootout gui/$(id -u)/agentorg`. The plist pins the paths of `node` and `agentorg` from when you filled it in, so after upgrading or switching Node.js, stop the service, fill in the plist again and load it.
+launchd restarts the service whenever it exits and starts it at login. Its output goes to `~/.local/share/agentorg/logs/core.log`. To stop it, run `launchctl bootout gui/$(id -u)/agentorg`. The plist pins the paths of `node` and `agentorg` from when you filled it in, so after upgrading or switching Node.js, stop the service, fill in the plist again and load it.
 
 ### Linux (systemd)
 

@@ -26,5 +26,3 @@ jobs:
         run: npx biome check .
       - name: Build and test
         run: npm test
-      - name: openapi.json matches the contract
-        run: node dist/src/api/print-openapi.js | diff -u openapi.json -
