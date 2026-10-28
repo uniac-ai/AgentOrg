@@ -1,10 +1,11 @@
 /**
- * The `agentorg` command line. `agentorg core` runs the core, and a command for each of the core's
- * built-in tools, such as `agentorg actor create`, runs it over `/mcp`. Every command prints its
- * result as JSON on stdout and its errors on stderr, and exits non-zero when it fails or the core
- * refuses.
+ * The `agentorg` command line. `agentorg core` runs the core, `agentorg human` runs the human
+ * actor, and `agentorg ui` signs a browser in to it. A command for each of the core's built-in
+ * tools, such as `agentorg actor create`, runs it over `/mcp`. Every command prints its errors on
+ * stderr and exits non-zero when it fails or the core refuses.
  */
 
+import { HUMAN_HELP, humanCommand, UI_HELP, uiCommand } from "../human/command.ts";
 import { VERSION } from "../version.ts";
 import { builtinLines, builtinOf, helpOf, requestOf } from "./builtins.ts";
 import { builtinCommand, CORE_HELP, coreCommand } from "./commands.ts";
@@ -16,11 +17,20 @@ const usage = () =>
     "An organization of AI agents, run like a company.",
     "",
     "  core [--port <n>]       run the core on 127.0.0.1",
+    "  human [--port <n>]      run the human actor, the user's side",
+    "  ui                      open the web app, signed in",
     ...builtinLines(),
     "",
     "A built-in runs as the actor whose credential is in AGENTORG_CREDENTIAL, else as the root.",
     "`agentorg <command> --help` shows a command's flags.",
   ].join("\n");
+
+/** Each command's help and what runs it. */
+const COMMANDS: Record<string, [string, (args: string[]) => Promise<number>]> = {
+  core: [CORE_HELP, coreCommand],
+  human: [HUMAN_HELP, humanCommand],
+  ui: [UI_HELP, uiCommand],
+};
 
 async function run(argv: string[]): Promise<number> {
   const [command] = argv;
@@ -38,7 +48,11 @@ async function run(argv: string[]): Promise<number> {
     process.stdout.write(`${text}\n`);
     return 0;
   };
-  if (command === "core") return help ? show(CORE_HELP) : coreCommand(argv.slice(1));
+  const found = Object.hasOwn(COMMANDS, command) ? COMMANDS[command] : undefined;
+  if (found) {
+    const [text, execute] = found;
+    return help ? show(text) : execute(argv.slice(1));
+  }
   const builtin = builtinOf(argv);
   if (builtin === undefined) {
     process.stderr.write(`agentorg: unknown command ${argv.slice(0, 2).join(" ")}\n\n${usage()}\n`);
