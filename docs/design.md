@@ -31,8 +31,7 @@ How the layers meet:
 - **The composition root**, `src/core/index.ts`, assembles the core from the domain, SQLite storage, the MCP binding and the network listener.
 - **The actor library** (`src/actor/`) assembles the network's connector with the binding on an actor's side.
 - **`test/layers.test.ts` enforces the rules:**
-  - The domain imports no MCP, web framework, WebSocket, HTTP server or database.
-  - The domain's model, which the web app type-checks through, uses nothing Node-only.
+  - The domain imports no MCP, web framework, WebSocket, database or Node built-in, and uses no Node globals. Its secrets and hashes come from Web Crypto, so it runs on any JavaScript runtime that has that, and the web app type-checks through its model.
   - The network imports no domain, binding or storage.
   - Only the MCP binding imports MCP, with one exception: `src/human/`, until it moves onto the actor library.
 

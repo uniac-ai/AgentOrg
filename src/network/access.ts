@@ -10,7 +10,7 @@ export type NetworkEnv = { Variables: { party: string } };
 
 /** Who a credential is, as the core's owner of credentials knows it. */
 export interface Identities {
-  identify(credential: string): string | undefined;
+  identify(credential: string): Promise<string | undefined>;
 }
 
 export function access(identities: Identities): MiddlewareHandler<NetworkEnv> {
@@ -19,7 +19,8 @@ export function access(identities: Identities): MiddlewareHandler<NetworkEnv> {
       return c.json({ code: "forbidden", message: "requests from web pages are refused" }, 403);
     }
     const [scheme = "", credential = ""] = (c.req.header("authorization") ?? "").split(" ");
-    const party = scheme.toLowerCase() === "bearer" ? identities.identify(credential) : undefined;
+    const party =
+      scheme.toLowerCase() === "bearer" ? await identities.identify(credential) : undefined;
     if (!party) {
       c.header("WWW-Authenticate", "Bearer");
       return c.json({ code: "unauthorized", message: "a valid credential is required" }, 401);

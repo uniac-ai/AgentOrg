@@ -53,20 +53,20 @@ export async function startCore(
  * The root's credential, kept in `file`: written with the root on the first start, and minted
  * again when the file is gone, since only its hash is stored.
  */
-export function rootCredential(registry: Registry, file: string): string {
+export async function rootCredential(registry: Registry, file: string): Promise<string> {
   const root = registry.root();
   if (!root) {
-    const { credential } = registry.createRoot();
+    const { credential } = await registry.createRoot();
     writePrivate(file, credential);
     return credential;
   }
   if (!existsSync(file)) {
-    const credential = registry.rotateCredential(root.id);
+    const credential = await registry.rotateCredential(root.id);
     writePrivate(file, credential);
     return credential;
   }
   const credential = readPrivate(file);
-  if (registry.byCredential(credential)?.id !== root.id) {
+  if ((await registry.byCredential(credential))?.id !== root.id) {
     throw new Error(
       `${file} does not hold the root's credential; delete it and start the core again to mint a new one`,
     );
