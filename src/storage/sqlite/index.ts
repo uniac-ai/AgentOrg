@@ -4,7 +4,7 @@
  */
 
 import type { SQLInputValue } from "node:sqlite";
-import type { MessageQuery, Store } from "../../domain/ports.ts";
+import type { Store } from "../../domain/ports.ts";
 import { Database } from "./database.ts";
 
 export { Database };
@@ -83,12 +83,42 @@ export class SqliteStore implements Store {
       this.database.select("progress", "actor = ?", [actor], "version DESC", limit),
   };
 
+  readonly questions: Store["questions"] = {
+    insert: (question) => this.database.insert("questions", question),
+    get: (id) => this.database.get("questions", id),
+    list: (query) => {
+      const { where, parameters } = conditions([
+        query.to !== undefined && [`"to" = ?`, query.to],
+        query.from !== undefined && [`"from" = ?`, query.from],
+        query.open === true && ["answer IS NULL"],
+        query.since !== undefined && ["cursor > ?", query.since],
+      ]);
+      return this.database.select("questions", where, parameters, "cursor DESC", query.limit ?? -1);
+    },
+    answer: (id, answer, cursor) => {
+      this.database.run(
+        "UPDATE questions SET answer = ?, cursor = ? WHERE id = ? AND answer IS NULL",
+        [JSON.stringify(answer), cursor, id],
+      );
+    },
+  };
+
   readonly messages: Store["messages"] = {
     insert: (message) => this.database.insert("messages", message),
     get: (id) => this.database.get("messages", id),
     list: (query) => {
-      const { where, parameters } = messageConditions(query);
-      return this.database.select("messages", where, parameters, "rowid DESC", query.limit ?? -1);
+      const { where, parameters } = conditions([
+        query.viewer !== null && [
+          `EXISTS (SELECT 1 FROM actors WHERE actors.id IN (messages."from", messages."to") AND (actors.id = ? OR actors.manager = ?))`,
+          query.viewer,
+          query.viewer,
+        ],
+        query.to !== undefined && [`"to" = ?`, query.to],
+        query.from !== undefined && [`"from" = ?`, query.from],
+        query.unread === true && ["read_at IS NULL"],
+        query.since !== undefined && ["cursor > ?", query.since],
+      ]);
+      return this.database.select("messages", where, parameters, "cursor DESC", query.limit ?? -1);
     },
     read: (ids, at) => {
       this.database.run(
@@ -96,13 +126,14 @@ export class SqliteStore implements Store {
         [at, ...ids],
       );
     },
-    answer: (question, reply) => {
-      this.database.run(
-        "UPDATE messages SET answer = ? WHERE id = ? AND expects_reply = 1 AND answer IS NULL",
-        [reply, question],
-      );
-    },
   };
+
+  head(): number {
+    const [row] = this.database.all(
+      "SELECT max(cursor) AS head FROM (SELECT cursor FROM questions UNION ALL SELECT cursor FROM messages)",
+    );
+    return Number(row?.head ?? 0);
+  }
 
   transaction<T>(work: () => T): T {
     return this.database.transaction(work);
@@ -119,31 +150,14 @@ export class SqliteStore implements Store {
   };
 }
 
-/** The SQL condition for a message query, with its parameters. */
-function messageConditions(query: MessageQuery): { where: string; parameters: SQLInputValue[] } {
-  const conditions: string[] = [];
-  const parameters: SQLInputValue[] = [];
-  const add = (condition: string, ...values: SQLInputValue[]) => {
-    conditions.push(condition);
-    parameters.push(...values);
+/** The conditions that apply, each with its parameters, joined into one SQL condition. */
+function conditions(given: (false | [string, ...SQLInputValue[]])[]): {
+  where: string;
+  parameters: SQLInputValue[];
+} {
+  const applying = given.filter((each) => each !== false);
+  return {
+    where: applying.map(([condition]) => condition).join(" AND ") || "1",
+    parameters: applying.flatMap(([, ...values]) => values),
   };
-  if (query.viewer !== null) {
-    add(
-      `(public = 1 OR EXISTS (SELECT 1 FROM actors WHERE actors.id IN (messages."from", messages."to") AND (actors.id = ? OR actors.manager = ?)))`,
-      query.viewer,
-      query.viewer,
-    );
-  }
-  if (query.to !== undefined) add(`"to" = ?`, query.to);
-  if (query.from !== undefined) add(`"from" = ?`, query.from);
-  for (const party of query.parties ?? []) add(`(? IN ("from", "to"))`, party);
-  if (query.replyTo !== undefined) {
-    add("EXISTS (SELECT 1 FROM json_each(messages.reply_to) WHERE value = ?)", query.replyTo);
-  }
-  if (query.pending) {
-    add("(CASE WHEN expects_reply = 1 THEN answer IS NULL ELSE read_at IS NULL END)");
-  }
-  if (query.questions) add("expects_reply = 1");
-  if (query.since !== undefined) add("created_at > ?", query.since);
-  return { where: conditions.join(" AND ") || "1", parameters };
 }

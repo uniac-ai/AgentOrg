@@ -1,34 +1,40 @@
 /**
- * Communication: progress, which each actor sets for anyone in the organization to read, and
- * messages between two actors, of which a question waits for an answer.
+ * Communication: progress and questions, which anyone in the organization reads, and private
+ * messages between two actors.
  *
  * - **Progress** is replaced in place, and every version is kept. A read gets the current one and,
  *   when asked, earlier ones.
- * - **A message** is pending on its addressee until read, and is private to its two parties, the
- *   manager of either, and the root.
- * - **A question** is pending on its addressee until answered, and anyone reads it and the reply
- *   that answers it. Its addressee answers it, or the root steps in. When it names an answerer, only
- *   that actor answers. The answer's sender is the actor whose credential sent it.
- * - **Addressing** goes one step up or down, as calls do, and the root reaches anyone. A reply goes
- *   to the sender of what it replies to.
+ * - **A question** goes to the asker's manager or a direct report; the root asks anyone. It is
+ *   pending on its addressee until answered. Its addressee answers it, or the answerer it names,
+ *   and the root may always. The answer records the actor whose credential gave it, or that the
+ *   asker recorded the user's words for its own question, which a question with an answerer
+ *   refuses.
+ * - **A message** goes to any open position and is pending on its addressee until read. Its two
+ *   parties, the manager of either, and the root read it; for anyone else it is not found.
+ * - **The cursor** orders questions and messages in one sequence. A question takes a new cursor
+ *   when answered. A read with `wait` holds until it finds something, and every write wakes it.
  */
 
 import type { Waiting } from "./builtins.ts";
 import { Conflict, Forbidden, Invalid, NotFound } from "./errors.ts";
 import type { RequestOf, ResponseOf } from "./model/index.ts";
-import type { MessageQuery, MessageRow, ProgressRow, Store } from "./ports.ts";
+import type { MessageRow, ProgressRow, QuestionRow, Store } from "./ports.ts";
 import { type ActorRow, newId, type Registry } from "./registry.ts";
 import { routes } from "./wiring.ts";
 
 const isRoot = (actor: ActorRow) => actor.manager === null;
 
-/** The actors messages name. */
-const partiesOf = (messages: MessageRow[]) =>
-  messages.flatMap((message) => [
-    message.from,
-    message.to,
-    ...(message.answerer === null ? [] : [message.answerer]),
+/** The actors questions name. */
+const askersOf = (questions: QuestionRow[]) =>
+  questions.flatMap((question) => [
+    question.from,
+    question.to,
+    ...(question.answerer === null ? [] : [question.answerer]),
+    ...(question.answer === null ? [] : [question.answer.by]),
   ]);
+
+const partiesOf = (messages: MessageRow[]) =>
+  messages.flatMap((message) => [message.from, message.to]);
 
 /** The actors items name, as owners and as what they wait on. */
 const actorsIn = (items: ProgressRow["items"]) =>
@@ -41,7 +47,7 @@ export class Communication {
   private readonly store: Store;
   private readonly registry: Registry;
   private readonly now: () => string;
-  /** The reads waiting for a new message. */
+  /** The reads waiting for a new question, answer or message. */
   private readonly waiters = new Set<() => void>();
 
   constructor(store: Store, registry: Registry, now: () => string) {
@@ -78,7 +84,7 @@ export class Communication {
     }
     const positions: ResponseOf<"team">["positions"] = [];
     const visit = (at: ActorRow, depth: number) => {
-      const { id, name, path, purpose, manager, online, created_at, closed_at } =
+      const { id, name, path, purpose, manager, online, created_at_attach, created_at, closed_at } =
         this.registry.asActor(at);
       const [current] = this.store.progress.latest(at.id, 1);
       positions.push({
@@ -88,6 +94,7 @@ export class Communication {
         purpose,
         manager,
         online,
+        created_at_attach,
         created_at,
         closed_at,
         progress: current
@@ -107,7 +114,7 @@ export class Communication {
     return {
       root: (this.registry.root() as ActorRow).id,
       positions,
-      names: this.registry.names(positions.flatMap((position) => partiesOf(position.questions))),
+      names: this.registry.names(positions.flatMap((position) => askersOf(position.questions))),
     };
   }
 
@@ -124,113 +131,165 @@ export class Communication {
       names: this.registry.names([
         target.id,
         ...versions.flatMap((version) => actorsIn(version.items)),
-        ...partiesOf(questions),
+        ...askersOf(questions),
       ]),
     };
   }
 
   /** The questions the actor asked that are not answered yet, oldest first. */
-  private openQuestions(actor: string): MessageRow[] {
-    const query = { viewer: null, from: actor, questions: true, pending: true };
-    return this.store.messages.list(query).reverse();
+  private openQuestions(actor: string): QuestionRow[] {
+    return this.store.questions.list({ from: actor, open: true }).reverse();
   }
 
-  send(actor: ActorRow, request: RequestOf<"message_send">): MessageRow {
-    const named = [...new Set(request.reply_to ?? [])].map((id) => this.found(actor, id));
-    for (const message of named) this.mayReply(actor, message);
-    const answered = named.filter((message) => message.expects_reply);
+  ask(actor: ActorRow, request: RequestOf<"question_ask">): QuestionRow {
+    const id = request.to ?? actor.manager;
+    if (id === null) throw new Invalid("to: the root names the addressee");
+    const to = this.recipient(actor, id);
+    if (!isRoot(actor) && to.id !== actor.manager && to.manager !== actor.id) {
+      throw new Forbidden(`you ask your manager or a direct report, not ${to.name}`);
+    }
+    if (request.answerer !== undefined) this.open(request.answerer);
+    if (request.cause !== undefined && this.store.questions.get(request.cause)?.to !== actor.id) {
+      throw new Invalid(`cause: ${request.cause} is not a question to you`);
+    }
+    const question = this.store.transaction(() => {
+      const asked: QuestionRow = {
+        id: newId("q"),
+        cursor: this.store.head() + 1,
+        from: actor.id,
+        to: to.id,
+        text: request.text,
+        links: request.links ?? [],
+        options: request.options ?? [],
+        recommendation: request.recommendation ?? null,
+        answerer: request.answerer ?? null,
+        cause: request.cause ?? null,
+        answer: null,
+        created_at: this.now(),
+      };
+      this.store.questions.insert(asked);
+      return asked;
+    });
+    this.wake();
+    return question;
+  }
+
+  answer(actor: ActorRow, request: RequestOf<"question_answer">): ResponseOf<"question_answer"> {
+    const questions = [...new Set(request.questions)].map((id) => {
+      const question = this.store.questions.get(id);
+      if (!question) throw new NotFound(`there is no question ${id}`);
+      this.mayAnswer(actor, question, request.recorded);
+      return question;
+    });
     if (request.choice !== undefined) {
-      const offering = answered.filter((question) => question.options.length > 0);
-      const offered = (question: MessageRow) =>
+      const offering = questions.filter((question) => question.options.length > 0);
+      const offered = (question: QuestionRow) =>
         question.options.some((option) => option.label === request.choice);
       if (offering.length === 0 || !offering.every(offered)) {
         throw new Invalid(`choice: ${request.choice} is not an option of what it answers`);
       }
     }
-    const to =
-      named.length > 0
-        ? this.replyAddressee(actor, named, request.to)
-        : this.addressee(actor, request.to);
-    if (request.answerer !== undefined) this.open(request.answerer);
-    if (request.cause !== undefined && this.store.messages.get(request.cause)?.to !== actor.id) {
-      throw new Invalid(`cause: ${request.cause} is not a message to you`);
-    }
-    const options = request.options ?? [];
-    const question = options.length > 0 || request.expects_reply === true;
-    const message: MessageRow = {
-      id: newId("msg"),
-      from: actor.id,
-      to: to.id,
-      text: request.text,
-      links: request.links ?? [],
-      options,
-      recommendation: request.recommendation ?? null,
-      expects_reply: question,
-      answerer: request.answerer ?? null,
-      cause: request.cause ?? null,
-      reply_to: named.map((each) => each.id),
+    const answer = {
+      by: actor.id,
       choice: request.choice ?? null,
-      public: question || answered.length > 0,
-      answer: null,
-      created_at: this.now(),
-      read_at: null,
+      text: request.text ?? null,
+      recorded: request.recorded,
+      at: this.now(),
     };
     this.store.transaction(() => {
-      this.store.messages.insert(message);
-      for (const each of answered) this.store.messages.answer(each.id, message.id);
-      if (named.length > 0) this.store.messages.read(message.reply_to, message.created_at);
+      for (const question of questions) {
+        this.store.questions.answer(question.id, answer, this.store.head() + 1);
+      }
     });
-    for (const wake of this.waiters) wake();
-    return message;
+    this.wake();
+    const answered = questions.map(
+      (question) => this.store.questions.get(question.id) as QuestionRow,
+    );
+    return {
+      questions: answered.reverse(),
+      cursor: this.store.head(),
+      names: this.registry.names(askersOf(answered)),
+    };
   }
 
-  /** A question is answered once, by its answerer, else by its addressee or the root. */
-  private mayReply(actor: ActorRow, message: MessageRow): void {
-    if (!message.expects_reply) {
-      if (message.to !== actor.id) {
-        throw new Forbidden(`only its addressee replies to message ${message.id}`);
+  /**
+   * An open question is answered by its addressee, or the answerer it names, and by the root.
+   * The asker records the user's words only for its own question without an answerer.
+   */
+  private mayAnswer(actor: ActorRow, question: QuestionRow, recorded: boolean): void {
+    if (question.answer !== null) {
+      throw new Conflict(`question ${question.id} is already answered`);
+    }
+    if (recorded) {
+      if (question.from !== actor.id) {
+        throw new Forbidden(`you record answers only to your own questions, not ${question.id}`);
+      }
+      if (question.answerer !== null) {
+        throw new Forbidden(
+          `question ${question.id} names its answerer, so the user answers it through the core`,
+        );
       }
       return;
     }
-    if (message.answer !== null) {
-      throw new Conflict(`question ${message.id} is already answered, by ${message.answer}`);
-    }
-    if (message.answerer !== null) {
-      if (actor.id !== message.answerer) {
-        const answerer = this.registry.get(message.answerer);
-        throw new Forbidden(
-          `only ${answerer?.name ?? message.answerer} answers question ${message.id}`,
-        );
-      }
-    } else if (actor.id !== message.to && !isRoot(actor)) {
-      throw new Forbidden(`only its addressee or the root answers question ${message.id}`);
+    const answerer = question.answerer ?? question.to;
+    if (actor.id !== answerer && !isRoot(actor)) {
+      const name = this.registry.get(answerer)?.name ?? answerer;
+      throw new Forbidden(`only ${name} or the root answers question ${question.id}`);
     }
   }
 
-  private replyAddressee(actor: ActorRow, named: MessageRow[], to: string | undefined): ActorRow {
-    const senders = [...new Set(named.map((message) => message.from))];
-    const id = to ?? (senders.length === 1 ? senders[0] : undefined);
-    if (id === undefined) {
-      throw new Invalid("to: what it replies to has several senders; name the one it goes to");
-    }
-    if (!senders.includes(id)) {
-      throw new Invalid(`to: a reply goes to the sender of what it replies to, not ${id}`);
-    }
-    return this.recipient(actor, id);
+  async questions(
+    _actor: ActorRow,
+    request: RequestOf<"questions">,
+    waiting: Waiting,
+  ): Promise<ResponseOf<"questions">> {
+    const query = {
+      ...(request.to && { to: request.to }),
+      ...(request.from && { from: request.from }),
+      ...(request.since !== undefined && { since: request.since }),
+      open: request.open,
+      limit: request.limit,
+    };
+    const found = await this.until(() => this.store.questions.list(query), request.wait, waiting);
+    return {
+      questions: found,
+      cursor: this.store.head(),
+      names: this.registry.names(askersOf(found)),
+    };
   }
 
-  private addressee(actor: ActorRow, to: string | undefined): ActorRow {
-    const id = to ?? actor.manager;
-    if (id === null) throw new Invalid("to: the root names the addressee");
-    const target = this.recipient(actor, id);
-    if (!isRoot(actor) && target.id !== actor.manager && target.manager !== actor.id) {
-      throw new Forbidden(`you message your manager and your direct reports, not ${target.name}`);
+  send(actor: ActorRow, request: RequestOf<"message_send">): MessageRow {
+    const to = this.recipient(actor, request.to);
+    const replied =
+      request.reply_to === undefined ? undefined : this.found(actor, request.reply_to);
+    if (
+      replied &&
+      ![replied.from, replied.to].every((party) => [actor.id, to.id].includes(party))
+    ) {
+      throw new Invalid(`reply_to: ${replied.id} is not between you and ${to.name}`);
     }
-    return target;
+    const message = this.store.transaction(() => {
+      const sent: MessageRow = {
+        id: newId("msg"),
+        cursor: this.store.head() + 1,
+        from: actor.id,
+        to: to.id,
+        text: request.text,
+        links: request.links ?? [],
+        reply_to: replied?.id ?? null,
+        created_at: this.now(),
+        read_at: null,
+      };
+      this.store.messages.insert(sent);
+      if (replied?.to === actor.id) this.store.messages.read([replied.id], sent.created_at);
+      return sent;
+    });
+    this.wake();
+    return message;
   }
 
   private recipient(actor: ActorRow, id: string): ActorRow {
-    if (id === actor.id) throw new Invalid("to: you do not message yourself");
+    if (id === actor.id) throw new Invalid("to: not yourself");
     return this.open(id);
   }
 
@@ -246,21 +305,22 @@ export class Communication {
     waiting: Waiting,
   ): Promise<ResponseOf<"messages">> {
     const owner = request.actor ?? actor.id;
-    const box = request.box ?? (request.reply_to === undefined ? "in" : undefined);
-    const query: MessageQuery = {
+    const other = request.with;
+    const query = {
       viewer: isRoot(actor) ? null : actor.id,
-      ...(box === "in" && { to: owner, ...(request.with && { from: request.with }) }),
-      ...(box === "out" && { from: owner, ...(request.with && { to: request.with }) }),
-      ...(box === undefined && {
-        parties: [request.actor, request.with].filter((id) => id !== undefined),
-      }),
-      ...(request.reply_to && { replyTo: request.reply_to }),
-      ...(request.since && { since: new Date(request.since).toISOString() }),
-      pending: request.pending,
+      ...(request.box === "in"
+        ? { to: owner, ...(other && { from: other }) }
+        : { from: owner, ...(other && { to: other }) }),
+      ...(request.since !== undefined && { since: request.since }),
+      unread: request.unread,
       limit: request.limit,
     };
     const found = await this.until(() => this.store.messages.list(query), request.wait, waiting);
-    return { messages: found, names: this.registry.names(partiesOf(found)) };
+    return {
+      messages: found,
+      cursor: this.store.head(),
+      names: this.registry.names(partiesOf(found)),
+    };
   }
 
   read(actor: ActorRow, request: RequestOf<"message_read">): ResponseOf<"message_read"> {
@@ -273,8 +333,12 @@ export class Communication {
     this.store.messages.read(ids, this.now());
     const messages = ids
       .map((id) => this.store.messages.get(id) as MessageRow)
-      .sort((a, b) => b.created_at.localeCompare(a.created_at));
-    return { messages, names: this.registry.names(partiesOf(messages)) };
+      .sort((a, b) => b.cursor - a.cursor);
+    return {
+      messages,
+      cursor: this.store.head(),
+      names: this.registry.names(partiesOf(messages)),
+    };
   }
 
   /** A message the actor may read; one it may not is not found, so its existence stays private. */
@@ -282,8 +346,7 @@ export class Communication {
     const message = this.store.messages.get(id);
     const readable =
       message !== undefined &&
-      (message.public ||
-        isRoot(actor) ||
+      (isRoot(actor) ||
         [message.from, message.to].some(
           (party) => party === actor.id || this.registry.get(party)?.manager === actor.id,
         ));
@@ -291,15 +354,15 @@ export class Communication {
     return message;
   }
 
+  private wake(): void {
+    for (const wake of this.waiters) wake();
+  }
+
   /**
-   * What `read` finds once it finds something or `seconds` pass, whichever is first. A new message
+   * What `read` finds once it finds something or `seconds` pass, whichever is first. Each write
    * reads again; each step of `stepMs` without one reports progress.
    */
-  private async until(
-    read: () => MessageRow[],
-    seconds: number,
-    waiting: Waiting,
-  ): Promise<MessageRow[]> {
+  private async until<T>(read: () => T[], seconds: number, waiting: Waiting): Promise<T[]> {
     const deadline = Date.now() + seconds * 1000;
     for (;;) {
       const found = read();

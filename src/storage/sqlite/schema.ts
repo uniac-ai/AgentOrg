@@ -4,9 +4,16 @@
  * UTC. Only the hash of an actor's credential is stored.
  */
 
-import { ActorRecord, AuditEntry, Call, Message, Progress } from "../../domain/model/index.ts";
+import {
+  ActorRecord,
+  AuditEntry,
+  Call,
+  Message,
+  Progress,
+  Question,
+} from "../../domain/model/index.ts";
 
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 export const SCHEMA = `
 CREATE TABLE actors (
@@ -53,21 +60,31 @@ CREATE TABLE progress (
   PRIMARY KEY (actor, version)
 );
 
-CREATE TABLE messages (
+CREATE TABLE questions (
   id TEXT PRIMARY KEY,
+  cursor INTEGER NOT NULL UNIQUE,
   "from" TEXT NOT NULL REFERENCES actors (id),
   "to" TEXT NOT NULL REFERENCES actors (id),
   text TEXT NOT NULL,
   links JSON NOT NULL,
   options JSON NOT NULL,
   recommendation TEXT,
-  expects_reply BOOLEAN NOT NULL,
   answerer TEXT REFERENCES actors (id),
-  cause TEXT REFERENCES messages (id),
-  reply_to JSON NOT NULL,
-  choice TEXT,
-  public BOOLEAN NOT NULL,
-  answer TEXT REFERENCES messages (id),
+  cause TEXT REFERENCES questions (id),
+  answer JSON,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX questions_to ON questions ("to");
+CREATE INDEX questions_from ON questions ("from");
+
+CREATE TABLE messages (
+  id TEXT PRIMARY KEY,
+  cursor INTEGER NOT NULL UNIQUE,
+  "from" TEXT NOT NULL REFERENCES actors (id),
+  "to" TEXT NOT NULL REFERENCES actors (id),
+  text TEXT NOT NULL,
+  links JSON NOT NULL,
+  reply_to TEXT REFERENCES messages (id),
   created_at TEXT NOT NULL,
   read_at TEXT
 );
@@ -88,6 +105,7 @@ export const TABLES = {
   actors: ActorRecord,
   calls: Call,
   progress: Progress,
+  questions: Question,
   messages: Message,
   audit: AuditEntry,
 } as const;

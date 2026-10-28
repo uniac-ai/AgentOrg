@@ -9,7 +9,7 @@ agentorg organizes AI agents and programs the way a company organizes people.
 - **Calls go up and down.** An actor calls the interfaces its manager and its direct reports expose. The root calls any actor's.
 - **Processing a call is the actor's own business.** The core routes and records calls; what an actor does with one is up to it.
 - **Nothing subscribes.** A manager reads its reports' status and calls when it chooses.
-- **Communication is part of the core.** Each actor publishes its progress for anyone to read, and actors send each other messages and questions.
+- **Communication is part of the core.** Each actor publishes its progress and its questions for anyone to read, and actors send each other private messages.
 
 ## Layers
 
@@ -49,10 +49,11 @@ The domain's interface descriptor is its own: name, title and description, input
 
 | Record | Fields | Rules |
 |---|---|---|
-| **Actor** | id; name, a handle unique among its open siblings; purpose; manager (an actor id, or null for the root); credential hash; online; its exposed interfaces as last listed; status (`running`, `waiting`, `blocked` or `review`, with a plain-text summary); created at; closed at | Its manager creates it, and its manager or the root closes it, once its own reports are closed. Its path is its handles from the root's report down, as `release.storage`. An interface name holds letters, digits, `_` and `-`, since dots join handles and names. |
+| **Actor** | id; name, a handle unique among its open siblings; purpose; manager (an actor id, or null for the root); credential hash; online; its exposed interfaces as last listed; status (`running`, `waiting`, `blocked` or `review`, with a plain-text summary); created at attach; created at; closed at | Its manager creates it, and its manager or the root closes it, once its own reports are closed. Its path is its handles from the root's report down, as `release.storage`. An interface name holds letters, digits, `_` and `-`, since dots join handles and names. A handle that begins a built-in's name, as `call` begins `call_result`, is refused, since clients turn a routed name's dot into `_`. |
 | **Call** | id; from; to; interface (the callee's own name for it); input; state (`pending`, `done`, `failed` or `withdrawn`); output, as a structured value and parts, or error; cause (the call that led to this one); run (the callee's handle for it while it runs long); created, delivered and settled at | It is recorded before it is delivered, and settles once. A result that arrives after it settled is dropped. |
 | **Progress** | actor; version; state (`running`, `waiting`, `blocked` or `review`); summary; items, each with a title, a state (`planned`, `running`, `waiting`, `blocked` or `review`) and optionally a summary, links, an owner and what it waits on; links; updated at | Each set adds a version, and reads leave earlier versions out unless asked. Item titles are unique, and done items drop off. A link is an http, https or file URL. |
-| **Message** | id; from; to; text; links; options and a recommendation; expects reply; answerer; cause; reply to; choice; public; answer; created and read at | A question is a message with options or one that expects a reply. It is answered once, and records the reply that answered it. |
+| **Question** | id; cursor; from; to; text; links; options and a recommendation; answerer; cause; answer (who answered, the choice, the words, whether the asker recorded them, and when); created at | It is answered once. |
+| **Message** | id; cursor; from; to; text; links; reply to; created and read at | |
 | **Audit entry** | id; at; actor; operation; target; outcome | One line for each write, and for each routed call when it is created, refused and settled. |
 
 ### Wiring: who calls what
@@ -91,24 +92,32 @@ A human may answer hours later, so a long-running interface may take a call as a
 | **Message** | its two parties, the manager of either, and the root | its addressee, until read |
 
 - **Progress** is where an actor stands: its state, a short summary at its own level, its open workstreams or steps, and links to what it produced. An actor publishes only what it chooses; its transcript and reasoning stay in its client.
-- **Addressing.** A message goes one step up or down, as calls do: to the sender's manager by default, or to a direct report. The root sends to anyone. A reply goes to the sender of what it replies to.
-- **Answering.** A question's addressee answers it, or the root steps in. A question that names an answerer is answered by that actor alone, as the root for an approval only the user gives. The answer's sender is the actor whose credential sent it, so a relayed approval does not count. One reply may answer several questions; its choice is optional, and its text may reject the options.
+- **Asking.** A question goes to the asker's manager by default, or to a direct report, so decisions follow the chain. The root asks anyone.
 - **Escalation** is a new question. A manager asks its own manager in its own terms, with `cause` naming the question it carries up, and answers the original once it has the answer.
-- **Reading.** A reply marks what it replies to read. A message the caller may not read is not found, so a private message's existence stays private.
+- **Answering:**
+  - A question's addressee answers it, or the answerer it names, as the root for an approval only the user gives. The root may answer any question.
+  - The answer records the actor whose credential gave it, so a relayed approval does not count.
+  - When the user answers inside the asking session, the asker records their words for its own question, and the answer is marked as recorded. A question with an answerer refuses that: the user answers it through the core.
+  - One answer may resolve several questions. Its choice is optional, and its words may reject the options.
+- **Messaging.** A message goes to any open position. A reply names the message it replies to, between the same two actors, and marks it read. A message the caller may not read is not found, so a private message's existence stays private.
+- **The cursor.** Questions and messages share one sequence. A question takes a new cursor when it is answered. So a read since a cursor finds new messages, new questions and new answers. A read with `wait` holds until a match exists, for up to 600 seconds, and every write wakes it.
 
 ### Built-ins
 
 | Built-in | What it does |
 |---|---|
-| `actor_create {name, purpose}` | Creates a report of the caller, and returns it with its credential. The credential is shown only once. |
+| `actor_create {name, purpose, created_at_attach?}` | Creates a report of the caller, and returns it with its credential. The credential is shown only once. The root alone may mark a position created as a session the user started attaches to it. |
 | `actor_close {actor}` | The manager, or the root, closes an actor. It is refused while the actor has open reports of its own. The actor's own pending calls are withdrawn, the calls into it fail, and its connection closes. The root is never closed. |
 | `status_set {state, summary}` | Sets the caller's own status. |
 | `view {actor?}` | The caller's own position, or a direct report's; the root may view anyone. It holds what is pending on that actor and from whom, its own open calls, its reports with their status, its manager, and its 50 most recent settled calls. |
 | `progress_set {state?, summary?, items?, links?}` | Replaces the fields given of the caller's progress. The first set names its state. |
 | `team {actor?, depth?}` | A position and its reports down to a depth, by default the caller and its direct reports: each one's purpose, presence, progress state and summary, open questions, and its interfaces the caller can call, with the root's id. Anyone may read any position. |
 | `progress {actor, history?}` | An actor's full progress, with its open questions and, when asked, earlier versions. Anyone may read it. |
-| `message_send {to?, text, links?, options?, recommendation?, expects_reply?, answerer?, cause?, reply_to?, choice?}` | Sends a message, asks a question, or replies. |
-| `messages {box?, pending?, actor?, with?, reply_to?, since?, limit?, wait?}` | The messages the caller may see, newest first: by default those addressed to it, and with `reply_to` the replies to one message in any box. It changes nothing. With `wait`, it holds the read for up to 600 seconds until a match exists. |
+| `question_ask {to?, text, links?, options?, recommendation?, answerer?, cause?}` | Publishes a question. |
+| `question_answer {questions, choice?, text?, recorded?}` | Answers one or more open questions. |
+| `questions {to?, from?, open?, since?, limit?, wait?}` | Questions, newest first, with the newest cursor. Anyone may read them. |
+| `message_send {to, text, links?, reply_to?}` | Sends a private message. |
+| `messages {box?, unread?, actor?, with?, since?, limit?, wait?}` | The messages the caller may see, newest first, with the newest cursor: by default those addressed to it. It changes nothing. |
 | `message_read {ids}` | Marks messages addressed to the caller read; each sender sees when. |
 | `call_result {call, wait?}` | Reads a call the caller made, optionally waiting up to 600 seconds for it to settle, with progress. |
 | `call_withdraw {call}` | The caller withdraws a pending call. |
@@ -147,7 +156,7 @@ How the domain is encoded:
   - When the file holds something else, the core refuses to start.
 - **The command line:**
   - `agentorg core` runs the core.
-  - A command for each built-in, generated from its schema, runs it, such as `agentorg actor create`, `agentorg progress set`, `agentorg team`, `agentorg message send`, `agentorg messages` and `agentorg activity`.
+  - A command for each built-in, generated from its schema, runs it, such as `agentorg actor create`, `agentorg progress set`, `agentorg team`, `agentorg question ask`, `agentorg message send` and `agentorg activity`.
   - A command acts as the actor whose credential is in `AGENTORG_CREDENTIAL`, else as the root.
 
 ## Stack

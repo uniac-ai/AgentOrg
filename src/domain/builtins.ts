@@ -102,6 +102,9 @@ export function builtins(
     },
 
     progress_set: async (actor, request) => communication.setProgress(actor, request),
+    question_ask: async (actor, request) => communication.ask(actor, request),
+    question_answer: async (actor, request) => communication.answer(actor, request),
+    questions: (actor, request, waiting) => communication.questions(actor, request, waiting),
     team: async (actor, request) => communication.team(actor, request),
     progress: async (actor, request) => communication.progress(actor, request),
     message_send: async (actor, request) => communication.send(actor, request),

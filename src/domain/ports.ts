@@ -17,32 +17,40 @@ import type {
   Offer,
   Outcome,
   Progress,
+  Question,
 } from "./model/index.ts";
 
 export type ActorRow = z.output<typeof ActorRecord>;
 export type CallRow = z.output<typeof Call>;
 export type AuditRow = z.output<typeof AuditEntry>;
 export type ProgressRow = z.output<typeof Progress>;
+export type QuestionRow = z.output<typeof Question>;
 export type MessageRow = z.output<typeof Message>;
+export type AnswerRow = NonNullable<QuestionRow["answer"]>;
+
+/** Which questions to list: those matching every field given, newest first. */
+export interface QuestionQuery {
+  to?: string;
+  from?: string;
+  /** Not answered yet. */
+  open?: boolean;
+  /** With a cursor after this one. */
+  since?: number;
+  limit?: number;
+}
 
 /** Which messages to list: those matching every field given, newest first. */
 export interface MessageQuery {
   /**
-   * Who reads them: only the public ones, and those with a party that is the viewer or one of its
-   * reports. Null reads every message, as the root does.
+   * Who reads them: those with a party that is the viewer or one of its reports. Null reads
+   * every message, as the root does.
    */
   viewer: string | null;
   to?: string;
   from?: string;
-  /** Actors each of which is the sender or the addressee. */
-  parties?: string[];
-  /** Replies to this message. */
-  replyTo?: string;
-  /** Still pending on the addressee: a question until answered, any other message until read. */
-  pending?: boolean;
-  questions?: boolean;
-  /** Sent after this time. */
-  since?: string;
+  unread?: boolean;
+  /** With a cursor after this one. */
+  since?: number;
   limit?: number;
 }
 
@@ -135,15 +143,22 @@ export interface Store {
     /** The actor's versions, newest first. */
     latest(actor: string, limit: number): ProgressRow[];
   };
+  questions: {
+    insert(question: QuestionRow): void;
+    get(id: string): QuestionRow | undefined;
+    list(query: QuestionQuery): QuestionRow[];
+    /** Record an open question's answer, moving it to `cursor`. */
+    answer(id: string, answer: AnswerRow, cursor: number): void;
+  };
   messages: {
     insert(message: MessageRow): void;
     get(id: string): MessageRow | undefined;
     list(query: MessageQuery): MessageRow[];
     /** Mark those not yet read as read now. */
     read(ids: string[], at: string): void;
-    /** Record the reply that answers an open question. */
-    answer(question: string, reply: string): void;
   };
+  /** The newest cursor of the sequence questions and messages share; 0 before either. */
+  head(): number;
   audit: {
     append(entry: Omit<AuditRow, "id">): void;
     /** Entries after `since`, newest first. */
