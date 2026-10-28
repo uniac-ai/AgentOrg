@@ -6,7 +6,7 @@
  */
 
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { after, test } from "node:test";
@@ -17,6 +17,7 @@ import {
   type CallToolResult,
   ToolListChangedNotificationSchema,
 } from "@modelcontextprotocol/sdk/types.js";
+import { claudeTakesInput } from "../src/agent/command.ts";
 import { describe } from "../src/agent/waiter.ts";
 import { type Core, fakeActor, iface, startCore, until } from "./harness.ts";
 
@@ -276,6 +277,45 @@ test("a session that fills no position is told to attach first, and its waiter e
   const attached = await session(org, "s-new");
   await attached.call("attach", { name: "builds", purpose: "Run the builds." });
   assert.deepEqual(await hook(org, "context", "s-new"), { code: 0, stdout: "", stderr: "" });
+});
+
+test("Claude Code takes later input unless in print mode with its prompt as an argument", () => {
+  assert.equal(claudeTakesInput("claude -p Reply with OK."), false);
+  assert.equal(claudeTakesInput("claude --print hello"), false);
+  assert.equal(
+    claudeTakesInput("claude -p --input-format stream-json --output-format stream-json"),
+    true,
+  );
+  assert.equal(claudeTakesInput("claude --input-format=stream-json -p"), true);
+  assert.equal(
+    claudeTakesInput("/app/claude --output-format stream-json --input-format stream-json"),
+    true,
+  );
+  assert.equal(claudeTakesInput("claude --resume abc"), true);
+});
+
+test("a waiter ends at once for a session in print mode, rather than hold the client open", async () => {
+  const org = await core();
+  const attached = await session(org, "s-print");
+  await attached.call("attach", { name: "builds", purpose: "Run the builds." });
+  // A stand-in for `claude -p <prompt>`: its command line holds `-p` and no stream-json input.
+  const printing = spawn(process.execPath, [
+    "-e",
+    "setTimeout(() => {}, 60_000)",
+    "--",
+    "-p",
+    "go",
+  ]);
+  try {
+    const ended = hook(org, "wait", "s-print", { CLAUDE_PID: String(printing.pid) });
+    assert.deepEqual(await within(10_000, "the waiter ending", ended), {
+      code: 0,
+      stdout: "",
+      stderr: "",
+    });
+  } finally {
+    printing.kill();
+  }
 });
 
 test("the waiter delivers messages, questions to the position and answers to its own, each once", async () => {

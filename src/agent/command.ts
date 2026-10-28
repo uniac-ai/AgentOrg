@@ -7,6 +7,7 @@
  * exit status with which a waiter's output wakes the session; `CLIENTS` holds it.
  */
 
+import { execFileSync } from "node:child_process";
 import { once } from "node:events";
 import { parseArgs } from "node:util";
 import { presentOverStdio } from "../actor/index.ts";
@@ -27,6 +28,11 @@ interface Client {
   waiter?: {
     /** True while the session's client process runs. */
     alive(): boolean;
+    /**
+     * False when the session takes no later input, so nothing the waiter writes could reach it; the
+     * waiter then ends at once rather than hold the client open.
+     */
+    takesInput(): boolean;
     /** The exit status that hands the waiter's output to the session as input. */
     wake: number;
   };
@@ -41,6 +47,32 @@ const running = (pid: number) => {
   }
 };
 
+const claudePid = () => Number(process.env.CLAUDE_PID) || process.ppid;
+
+/** A process's command line, or undefined where `ps` cannot tell. */
+function commandLine(pid: number): string | undefined {
+  try {
+    return execFileSync("ps", ["-o", "args=", "-p", String(pid)], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Whether Claude Code, run with this command line, takes input after its first prompt. In print
+ * mode (`-p`) with its prompt as an argument it takes none, and it runs its hooks to completion
+ * before exiting, so a waiter there would hold it open for good. Interactive sessions, and print
+ * mode reading stream-json input, as the desktop app's sessions do, take more.
+ */
+export function claudeTakesInput(line: string): boolean {
+  const args = line.trim().split(/\s+/);
+  const printing = args.includes("-p") || args.includes("--print");
+  return !printing || /--input-format(=|\s+)stream-json\b/.test(line);
+}
+
 /** Input Claude Code delivers comes wrapped in an element, such as `<task-notification>…`. */
 const WRAPPED = /^\s*<([A-Za-z][\w-]*)[\s>][\s\S]*<\/\1>/;
 
@@ -51,7 +83,11 @@ const CLIENTS: Record<string, Client> = {
       const { prompt } = JSON.parse(input) as { prompt?: unknown };
       return typeof prompt === "string" && !WRAPPED.test(prompt) ? prompt : undefined;
     },
-    waiter: { alive: () => running(Number(process.env.CLAUDE_PID) || process.ppid), wake: 2 },
+    waiter: {
+      alive: () => running(claudePid()),
+      takesInput: () => claudeTakesInput(commandLine(claudePid()) ?? ""),
+      wake: 2,
+    },
   },
   codex: { session: () => undefined },
 };
@@ -96,7 +132,7 @@ context prints, for a session that fills no position yet, the line telling it to
 
 prompt reads the client's prompt hook input on stdin and, for a session that fills a position, keeps what the user typed, so that the session can record it as the user's answer to its question. It keeps nothing the client delivered instead.
 
-wait is the waiter the client's hooks run: it waits for messages to the session's position, writes them on stderr and exits with the status that hands them to the session as input. It exits 0 with nothing to deliver.`;
+wait is the waiter the client's hooks run: it waits for messages to the session's position, writes them on stderr and exits with the status that hands them to the session as input. It exits 0 with nothing to deliver, and at once for a session that takes no later input, such as Claude Code's print mode with its prompt as an argument.`;
 
 export async function agentCommand(args: string[]): Promise<number> {
   const { name, client: chosen, rest } = client(args);
@@ -117,7 +153,7 @@ export async function agentCommand(args: string[]): Promise<number> {
   }
   if (rest[0] === "wait") {
     const waiter = chosen.waiter;
-    if (waiter === undefined || session === undefined) return 0;
+    if (waiter === undefined || session === undefined || !waiter.takesInput()) return 0;
     const delivered = await waitForNews({
       coreUrl: coreUrl(),
       session,
