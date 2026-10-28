@@ -2,18 +2,18 @@
 
 import { Link } from "@tanstack/react-router";
 import { cn } from "@/lib/utils";
-import type { AgentRecord, AskRecord } from "../../../src/page/types.ts";
+import type { ActorRecord, CallRecord } from "../../../src/human/types.ts";
 
-/** An ask, linked to its thread beside the entity it is on. */
-export function AskLink({
-  ask,
+/** A call, linked to its thread beside the entity it is on; a null entity is the user. */
+export function CallLink({
+  call,
   entity,
   open,
   children,
   className,
 }: {
-  ask: AskRecord;
-  entity: AgentRecord | null;
+  call: CallRecord;
+  entity: ActorRecord | null;
   open?: boolean;
   children: React.ReactNode;
   className?: string;
@@ -27,8 +27,8 @@ export function AskLink({
   return entity === null ? (
     <Link
       data-row
-      to="/asks/$askId"
-      params={{ askId: ask.id }}
+      to="/calls/$callId"
+      params={{ callId: call.id }}
       aria-current={current}
       className={style}
     >
@@ -37,8 +37,8 @@ export function AskLink({
   ) : (
     <Link
       data-row
-      to="/people/$agentId/asks/$askId"
-      params={{ agentId: entity.id, askId: ask.id }}
+      to="/people/$actorId/calls/$callId"
+      params={{ actorId: entity.id, callId: call.id }}
       aria-current={current}
       className={style}
     >

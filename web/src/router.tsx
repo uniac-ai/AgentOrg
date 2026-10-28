@@ -1,8 +1,8 @@
-// Every view has a URL. The service serves the app's index.html on each of these paths
-// (src/page/index.ts, APP_PATHS), and this router picks the view. Each entity, the user at `/`
-// and every agent at `/people/:id`, has the same view, with an open ask beside it.
+// Every view has a URL. The human actor serves the app's index.html on each of these paths
+// (src/human/web.ts, APP_PATHS), and this router picks the view. Each entity, the user at `/`
+// and every actor at `/people/:id`, has the same view, with a call open beside it.
 
-import { createRootRoute, createRoute, createRouter, redirect } from "@tanstack/react-router";
+import { createRootRoute, createRoute, createRouter } from "@tanstack/react-router";
 import { ActivityControl } from "./control/activity.tsx";
 import { EntityControl } from "./control/entity.tsx";
 import { ShellControl } from "./control/shell.tsx";
@@ -18,19 +18,19 @@ const yourView = createRoute({ getParentRoute: () => you, path: "/" });
 
 const yourThread = createRoute({
   getParentRoute: () => you,
-  path: "asks/$askId",
+  path: "calls/$callId",
   component: ThreadControl,
 });
 
 const person = createRoute({
   getParentRoute: () => root,
-  path: "/people/$agentId",
+  path: "/people/$actorId",
   component: EntityControl,
 });
 
 const personThread = createRoute({
   getParentRoute: () => person,
-  path: "asks/$askId",
+  path: "calls/$callId",
   component: ThreadControl,
 });
 
@@ -40,30 +40,11 @@ const activity = createRoute({
   component: ActivityControl,
 });
 
-/** The inbox became the user's own view; its old links still land there. */
-const inbox = createRoute({
-  getParentRoute: () => root,
-  path: "/inbox",
-  beforeLoad: () => {
-    throw redirect({ to: "/" });
-  },
-});
-
-const inboxThread = createRoute({
-  getParentRoute: () => root,
-  path: "/inbox/asks/$askId",
-  beforeLoad: ({ params }) => {
-    throw redirect({ to: "/asks/$askId", params: { askId: params.askId } });
-  },
-});
-
 export const router = createRouter({
   routeTree: root.addChildren([
     you.addChildren([yourView, yourThread]),
     person.addChildren([personThread]),
     activity,
-    inbox,
-    inboxThread,
   ]),
 });
 

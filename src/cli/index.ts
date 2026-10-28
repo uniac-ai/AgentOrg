@@ -17,7 +17,7 @@ const usage = () =>
     "An organization of AI agents, run like a company.",
     "",
     "  core [--port <n>]       run the core on 127.0.0.1",
-    "  human [--port <n>]      run the human actor, the user's side",
+    "  human [--port <n>]      run the human actor, which serves the web app",
     "  ui                      open the web app, signed in",
     ...builtinLines(),
     "",

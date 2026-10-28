@@ -1,6 +1,7 @@
-// The jump palette: views, agents and open asks in one filtered list, each told apart by its mark.
+// The jump palette: views, actors and pending calls in one filtered list, each told apart by its
+// mark.
 
-import { ActivityIcon, MessageCircleQuestionIcon, UserRoundIcon } from "lucide-react";
+import { ActivityIcon, UserRoundIcon } from "lucide-react";
 import {
   Command,
   CommandDialog,
@@ -11,8 +12,8 @@ import {
   CommandList,
 } from "@/components/ui/command";
 import type { PaletteModel } from "../control/palette.tsx";
+import { CallIcon, CallRoute, callTitle } from "./calls.tsx";
 import { StateMark, StateName } from "./marks.tsx";
-import { Route } from "./thread.tsx";
 
 const VIEWS = [
   { to: "/", name: "You", Icon: UserRoundIcon },
@@ -25,7 +26,7 @@ export function PaletteView(model: PaletteModel) {
       open={model.open}
       onOpenChange={model.onOpenChange}
       title="Jump to"
-      description="An agent, an open ask or a view"
+      description="An actor, a pending call or a view"
       className="sm:max-w-xl"
     >
       <Command>
@@ -41,29 +42,29 @@ export function PaletteView(model: PaletteModel) {
             ))}
           </CommandGroup>
           <CommandGroup>
-            {model.agents.map((agent) => (
+            {model.actors.map((actor) => (
               <CommandItem
-                key={agent.id}
-                value={`${agent.title} ${agent.id}`}
-                onSelect={() => model.onAgent(agent)}
+                key={actor.id}
+                value={`${actor.name} ${actor.id}`}
+                onSelect={() => model.onActor(actor)}
               >
-                <StateMark agent={agent} />
-                <span className="truncate">{agent.title}</span>
-                <StateName agent={agent} />
+                <StateMark actor={actor} />
+                <span className="truncate">{actor.name}</span>
+                <StateName actor={actor} />
               </CommandItem>
             ))}
           </CommandGroup>
           <CommandGroup>
-            {model.asks.map((ask) => (
+            {model.calls.map((call) => (
               <CommandItem
-                key={ask.id}
-                value={`${ask.title} ${ask.id}`}
-                onSelect={() => model.onAsk(ask)}
+                key={call.id}
+                value={`${callTitle(call)} ${call.id}`}
+                onSelect={() => model.onCall(call)}
               >
-                <MessageCircleQuestionIcon aria-hidden="true" className="text-state-waiting" />
-                <span className="min-w-0 flex-1 truncate">{ask.title}</span>
+                <CallIcon call={call} />
+                <span className="min-w-0 flex-1 truncate">{callTitle(call)}</span>
                 <span className="shrink-0 text-xs text-muted-foreground">
-                  <Route ask={ask} agents={model.byId} />
+                  <CallRoute call={call} names={model.names} />
                 </span>
               </CommandItem>
             ))}
