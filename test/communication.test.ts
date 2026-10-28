@@ -3,10 +3,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  ActorCreate,
   COMMUNICATION,
   MessageSend,
   objectSchema,
   ProgressSet,
+  QuestionAnswerRequest,
+  QuestionAsk,
 } from "../src/domain/model/index.ts";
 
 const issues = (result: { error?: { issues: { path: PropertyKey[]; message: string }[] } }) =>
@@ -22,23 +25,21 @@ test("each method's request and result is an object schema, as interfaces declar
 test("a request breaking the records' rules is refused before it reaches the core", () => {
   assert.deepEqual(
     issues(
-      MessageSend.safeParse({
+      QuestionAsk.safeParse({
         text: "Which order?",
         options: [{ label: "a" }, { label: "a" }],
         recommendation: "b",
-        choice: "a",
       }),
     ),
-    [
-      "options: labels must be unique",
-      "recommendation: must be the label of one of the options",
-      "choice: only a reply has one",
-    ],
+    ["options: labels must be unique", "recommendation: must be the label of one of the options"],
   );
-  assert.deepEqual(issues(MessageSend.safeParse({ text: "FYI", answerer: "act_1" })), [
-    "answerer: only a question has one",
+  assert.deepEqual(issues(QuestionAnswerRequest.safeParse({ questions: ["q_1"] })), [
+    "text: an answer needs a choice or text",
   ]);
-  assert.deepEqual(issues(MessageSend.safeParse({ text: "Go?", expects_reply: true })), []);
+  assert.deepEqual(
+    issues(QuestionAnswerRequest.safeParse({ questions: ["q_1"], choice: "a", recorded: true })),
+    ["text: a recorded answer quotes the user's words"],
+  );
   assert.deepEqual(
     issues(
       ProgressSet.safeParse({
@@ -50,8 +51,20 @@ test("a request breaking the records' rules is refused before it reaches the cor
     ),
     ["items: titles must be unique", "items.0.waits_on: there is no item Review"],
   );
-  assert.deepEqual(
-    issues(ProgressSet.safeParse({ links: [{ url: "javascript:alert(1)" }] })).length,
+  assert.equal(
+    issues(
+      MessageSend.safeParse({ to: "act_1", text: "Hi", links: [{ url: "javascript:alert(1)" }] }),
+    ).length,
     1,
   );
+});
+
+test("a handle that begins a built-in's name is refused, and one that is a whole built-in's is not", () => {
+  const named = (name: string) => issues(ActorCreate.safeParse({ name, purpose: "Work" }));
+  for (const name of ["actor", "call", "status"]) {
+    assert.deepEqual(named(name), ["name: begins a built-in's name, as call does"], name);
+  }
+  for (const name of ["team", "messages", "questions", "activity", "storage"]) {
+    assert.deepEqual(named(name), [], name);
+  }
 });

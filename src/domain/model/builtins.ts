@@ -16,10 +16,23 @@ import {
   Text,
 } from "./records.ts";
 
+/**
+ * A handle that begins a built-in's name. Clients such as Claude Code and Codex turn the dot of a
+ * routed name into `_`, so a report named `call` would offer `call_result` beside the built-in.
+ */
+const reserved = (handle: string): boolean =>
+  Object.keys(BUILTINS).some((name: string) => name.startsWith(`${handle}_`));
+
 export const ActorCreate = z
   .strictObject({
-    name: Handle,
+    name: Handle.refine((handle) => !reserved(handle), "begins a built-in's name, as call does"),
     purpose: Text.describe("What the actor is for, for a reader outside it."),
+    created_at_attach: z
+      .boolean()
+      .default(false)
+      .describe(
+        "For the root only: the position is created as a session the user started attaches to it.",
+      ),
   })
   .meta({ id: "ActorCreate" });
 

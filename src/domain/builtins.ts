@@ -38,10 +38,14 @@ export function builtins(
 
   return {
     actor_create: async (actor, request) => {
+      if (request.created_at_attach && !isRoot(actor)) {
+        throw new Forbidden("only the root creates a position as a session attaches");
+      }
       const { actor: created, credential } = await registry.create(
         actor.id,
         request.name,
         request.purpose,
+        request.created_at_attach,
       );
       return { actor: registry.asActor(created), credential };
     },

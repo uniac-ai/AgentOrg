@@ -68,6 +68,11 @@ export const Actor = z
     online: z.boolean().describe("True while the core can deliver calls to it."),
     interfaces: z.array(Interface).describe("Its exposed interfaces, as it last listed them."),
     status: Status.nullable(),
+    created_at_attach: z
+      .boolean()
+      .describe(
+        "Created when a session the user started attached to it, rather than by a manager's choice.",
+      ),
     created_at: Timestamp,
     closed_at: Timestamp.nullable(),
   })
