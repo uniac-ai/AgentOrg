@@ -6,7 +6,7 @@
 import { useMutation } from "@tanstack/react-query";
 import type { ActorClosed, ViewRecord } from "../../../src/human/types.ts";
 import type { Organization } from "../model/organization.ts";
-import { callTool, path, request } from "./client.ts";
+import { callInterface, path, request } from "./client.ts";
 import { answered, queryClient } from "./queries.ts";
 
 type Snapshot = [readonly unknown[], unknown][];
@@ -75,7 +75,7 @@ export function useAnswer() {
 /** Close an actor as the root; the core refuses while actors under it are open. */
 export function useCloseActor() {
   return useMutation({
-    mutationFn: (actor: string) => callTool<ActorClosed>("actor_close", { actor }),
+    mutationFn: (actor: string) => callInterface<ActorClosed>("actor_close", { actor }),
     onSettled: refetch,
   });
 }

@@ -9,7 +9,6 @@
  *   the domain's Presence when it can be reached.
  * - `actor.ts`: an actor's side, behind the actor library's API.
  * - `transport.ts`: an MCP transport over a network channel.
- * - `legacy-actor-connection.ts`: kept for `src/human/` until it moves onto `src/actor/`.
  */
 
 import type { Application, Presence } from "../../domain/ports.ts";

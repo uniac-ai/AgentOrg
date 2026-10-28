@@ -1,12 +1,11 @@
 /**
- * The human actor's connection to the core, as the root: an `ActorConnection` that dials `/mcp`
- * as the root's client and `/mcp/reverse` as the server of the human's tools. Until the core first
- * answers, it dials again; once open, the connection redials the reverse socket after any loss.
+ * The human actor's connection to the core, as the root, through the actor library: it exposes the
+ * human's interfaces and calls the interfaces available to the root. Until the core first answers
+ * it connects again; once connected, the library reconnects after any drop.
  */
 
-import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { type CallToolResult, McpError, type Tool } from "@modelcontextprotocol/sdk/types.js";
-import { ActorConnection } from "../bindings/mcp/legacy-actor-connection.ts";
+import { type Actor, connectActor, type Exposed } from "../actor/index.ts";
+import type { Answer, Offer } from "../domain/model/index.ts";
 
 /** The core did not answer, or refused the root credential. */
 export class CoreUnreachable extends Error {}
@@ -15,59 +14,53 @@ const MAX_PAUSE_MS = 10_000;
 
 export class Core {
   readonly url: string;
-  #connection: ActorConnection | undefined;
+  #actor: Actor | undefined;
   #closed = false;
 
-  constructor(url: string, credential: string, server: Server) {
+  constructor(url: string, credential: string, exposed: Exposed[]) {
     this.url = url;
-    void this.#open(credential, server);
+    void this.#open(credential, exposed);
   }
 
-  /** The tools available to the root. */
-  async tools(): Promise<Tool[]> {
-    return this.#use(async (connection) => (await connection.client.listTools()).tools);
+  /** The interfaces available to the root. */
+  async available(): Promise<Offer[]> {
+    return this.#use((actor) => actor.available());
   }
 
-  /** Call a tool available to the root; a refusal comes back as an error result. */
-  async call(name: string, args: Record<string, unknown>): Promise<CallToolResult> {
-    return this.#use(
-      (connection) =>
-        connection.client.callTool({ name, arguments: args }) as Promise<CallToolResult>,
-    );
+  /** Call an interface available to the root; the core's refusal comes back as an answer. */
+  async call(name: string, input: Record<string, unknown>): Promise<Answer> {
+    return this.#use((actor) => actor.call(name, input));
   }
 
   async close() {
     this.#closed = true;
-    await this.#connection?.close();
+    await this.#actor?.close();
   }
 
-  async #open(credential: string, server: Server) {
+  async #open(credential: string, exposed: Exposed[]) {
     for (let pause = 250; !this.#closed; pause = Math.min(pause * 2, MAX_PAUSE_MS)) {
-      const connection = new ActorConnection({
-        url: this.url,
-        credential,
-        server,
-        name: "agentorg-human",
-      });
       try {
-        await connection.open();
-        if (this.#closed) await connection.close();
-        else this.#connection = connection;
+        const actor = await connectActor({
+          url: this.url,
+          credential,
+          exposed,
+          name: "agentorg-human",
+        });
+        if (this.#closed) await actor.close();
+        else this.#actor = actor;
         return;
       } catch {
-        await connection.close();
         await new Promise((resolve) => setTimeout(resolve, pause).unref());
       }
     }
   }
 
-  async #use<T>(work: (connection: ActorConnection) => Promise<T>): Promise<T> {
-    const connection = this.#connection;
+  async #use<T>(work: (actor: Actor) => Promise<T>): Promise<T> {
+    const actor = this.#actor;
     try {
-      if (connection === undefined) throw new Error("not connected yet");
-      return await work(connection);
+      if (actor === undefined) throw new Error("not connected yet");
+      return await work(actor);
     } catch (error) {
-      if (error instanceof McpError) throw error;
       throw new CoreUnreachable(`the core is not reachable at ${this.url}`, { cause: error });
     }
   }

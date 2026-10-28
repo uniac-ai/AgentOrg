@@ -35,7 +35,7 @@ test("a program's decide waits on the user, with who it is from, and the program
       call,
       from: storage.id,
       cause: null,
-      tool: "decide",
+      interface: "decide",
       input: DECISION,
       received_at: undefined,
     },
@@ -86,7 +86,7 @@ test("a note completes with nothing once read, and a report once acknowledged", 
   assert.deepEqual(acknowledged.output?.value, { acknowledged: true });
 });
 
-test("a call the human's tool refuses fails at the core and never waits on the user", async () => {
+test("a call the human's interface refuses fails at the core and never waits on the user", async () => {
   const { storage, pending } = await setup();
   const call = await storage.ask("decide", { ...DECISION, recommendation: "Neither" });
   const failed = await storage.result(call);

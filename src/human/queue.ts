@@ -1,99 +1,73 @@
 /**
- * The human's queue: the calls into the user, held as MCP tasks. The core delivers a call to
- * `decide`, `note` or `report` as a task-augmented `tools/call`; the human's server takes it as a
- * task at once, and the call waits here until the user answers it in the web app, which completes
- * the task. The queue lives in memory: after a restart the core finds its tasks unknown and
- * delivers every pending call again, which rebuilds it.
+ * The human's queue: the calls into the user, waiting until the user answers them in the web app.
+ * The human's interfaces are long-running, so each call's handler returns a promise that the queue
+ * settles with the user's answer, however much later; a call its caller withdraws leaves the queue.
+ * The queue lives in memory: after a restart the core delivers every pending call again, which
+ * rebuilds it.
  */
 
-import { InMemoryTaskStore } from "@modelcontextprotocol/sdk/experimental/tasks/stores/in-memory.js";
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import type { RequestTaskStore } from "@modelcontextprotocol/sdk/shared/protocol.js";
-import {
-  CallToolRequestSchema,
-  type CallToolResult,
-  ErrorCode,
-  ListToolsRequestSchema,
-  McpError,
-} from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
-import { CALL_META, type DeliveredCall } from "../bindings/mcp/index.ts";
-import { VERSION } from "../version.ts";
-import { isToolName, TOOL_LIST, TOOLS } from "./tools.ts";
+import type { Exposed, Incoming, Reply } from "../actor/index.ts";
+import { descriptorOf, INTERFACES, type InterfaceName } from "./interfaces.ts";
 import type { Pending } from "./types.ts";
-
-/** How often the core's wait on a task's result looks again. */
-const POLL_MS = 500;
-
-/** A call the human refuses: the core records it as failed, with this message. */
-const refuse = (message: string) => new McpError(ErrorCode.InvalidParams, message);
 
 interface Held {
   pending: Pending;
-  task: string;
-  store: RequestTaskStore;
+  settled: Promise<Reply>;
+  answer: (output: Record<string, unknown>) => void;
 }
 
 export class Queue {
-  /** The MCP server the core reaches over the reverse connection. */
-  readonly server: Server;
   readonly #held = new Map<string, Held>();
 
-  constructor() {
-    this.server = new Server(
-      { name: "agentorg-human", version: VERSION },
-      {
-        capabilities: { tools: {}, tasks: { cancel: {}, requests: { tools: { call: {} } } } },
-        taskStore: new InMemoryTaskStore(),
-      },
-    );
-    this.server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOL_LIST }));
-    this.server.setRequestHandler(CallToolRequestSchema, async ({ params }, extra) => {
-      const delivered = params._meta?.[CALL_META] as DeliveredCall | undefined;
-      if (!isToolName(params.name)) throw refuse(`unknown tool ${params.name}`);
-      const input = TOOLS[params.name].input.safeParse(params.arguments ?? {});
-      if (!input.success) throw refuse(`invalid: ${z.prettifyError(input.error)}`);
-      if (params.task === undefined || extra.taskStore === undefined || !delivered?.id) {
-        throw refuse(`${params.name} runs as a task of a call the core delivers`);
-      }
-      const task = await extra.taskStore.createTask({ pollInterval: POLL_MS });
-      this.#held.set(delivered.id, {
-        pending: {
-          call: delivered.id,
-          from: delivered.from,
-          cause: delivered.cause,
-          tool: params.name,
-          input: input.data,
-          received_at: new Date().toISOString(),
-        } as Pending,
-        task: task.taskId,
-        store: extra.taskStore,
-      });
-      return { task };
+  /** The human's interfaces, each handled by holding its calls here until the user answers. */
+  readonly exposed: Exposed[] = (Object.keys(INTERFACES) as InterfaceName[]).map((name) => ({
+    interface: descriptorOf(name),
+    handle: (input, call) => this.#hold(name, input, call),
+  }));
+
+  #hold(name: InterfaceName, input: Record<string, unknown>, call: Incoming): Promise<Reply> {
+    const parsed = INTERFACES[name].input.safeParse(input);
+    if (!parsed.success) throw new Error(`invalid: ${z.prettifyError(parsed.error)}`);
+    // Delivery is at least once: a call already held keeps its place and its answer.
+    const known = this.#held.get(call.id);
+    if (known) return known.settled;
+    let answer!: Held["answer"];
+    let withdrawn!: (reason: Error) => void;
+    const settled = new Promise<Reply>((resolve, reject) => {
+      answer = (output) => resolve({ value: output });
+      withdrawn = reject;
     });
+    this.#held.set(call.id, {
+      pending: {
+        call: call.id,
+        from: call.from,
+        cause: call.cause,
+        interface: name,
+        input: parsed.data,
+        received_at: new Date().toISOString(),
+      } as Pending,
+      settled,
+      answer,
+    });
+    call.signal.addEventListener("abort", () => {
+      this.#held.delete(call.id);
+      withdrawn(new Error("withdrawn"));
+    });
+    return settled;
   }
 
-  /** The calls waiting on the user, oldest first. One its caller withdrew is dropped. */
-  async pending(): Promise<Pending[]> {
-    for (const [call, held] of this.#held) {
-      const task = await held.store.getTask(held.task).catch(() => undefined);
-      if (task?.status !== "working") this.#held.delete(call);
-    }
+  /** The calls waiting on the user, oldest first. */
+  pending(): Pending[] {
     return [...this.#held.values()].map((held) => held.pending);
   }
 
   /** Complete a waiting call with its output; false when the call no longer waits. */
-  async complete(call: string, output: Record<string, unknown>): Promise<boolean> {
+  complete(call: string, output: Record<string, unknown>): boolean {
     const held = this.#held.get(call);
     if (held === undefined) return false;
     this.#held.delete(call);
-    const result = {
-      content: [{ type: "text", text: JSON.stringify(output) }],
-      structuredContent: output,
-    };
-    return held.store
-      .storeTaskResult(held.task, "completed", result as CallToolResult)
-      .then(() => true)
-      .catch(() => false);
+    held.answer(output);
+    return true;
   }
 }

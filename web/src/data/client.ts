@@ -52,6 +52,6 @@ export async function request<T>(path: string, write?: { body?: unknown }): Prom
   return (await response.json()) as T;
 }
 
-/** Call one of the user's available tools and return its output; a refusal throws. */
-export const callTool = <T>(name: string, args: Record<string, unknown>) =>
-  request<T>(path("tools", name), { body: args });
+/** Call one of the interfaces available to the user and return its value; a refusal throws. */
+export const callInterface = <T>(name: string, input: Record<string, unknown>) =>
+  request<T>(path("interfaces", name), { body: input });

@@ -13,8 +13,9 @@ import {
   type CallToolResult,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import { CALL_META, PATHS, PENDING_OUTPUT } from "../src/bindings/mcp/index.ts";
-import { ActorConnection } from "../src/bindings/mcp/legacy-actor-connection.ts";
+import { CALL_META, PATHS, PENDING_OUTPUT, SUBPROTOCOL } from "../src/bindings/mcp/index.ts";
+import { ChannelTransport } from "../src/bindings/mcp/transport.ts";
+import { Connector } from "../src/network/index.ts";
 import { startCore, until } from "./harness.ts";
 
 test("over MCP, the core lists offers as tools, delivers calls as tasks with their metadata, and answers with receipts", async () => {
@@ -48,12 +49,21 @@ test("over MCP, the core lists offers as tools, delivers calls as tasks with the
     held.push({ params, taskId: task.taskId, store });
     return { task };
   });
-  const root = new ActorConnection({ url: core.url, credential: core.root, server });
-  await root.open();
+  const connector = new Connector({
+    url: core.url,
+    credential: core.root,
+    paths: PATHS,
+    subprotocol: SUBPROTOCOL,
+  });
+  const root = new Client({ name: "root", version: "0" });
+  await root.connect(
+    new StreamableHTTPClientTransport(connector.requestUrl, { fetch: connector.fetch }),
+  );
+  await connector.connect((channel) => server.connect(new ChannelTransport(channel)));
   const prog = new Client({ name: "prog", version: "0" });
   try {
     await until("root online", () => core.org.registry.get(core.rootId)?.online === true);
-    const created = (await root.client.callTool({
+    const created = (await root.callTool({
       name: "actor_create",
       arguments: { name: "prog", purpose: "A program" },
     })) as CallToolResult;
@@ -110,7 +120,7 @@ test("over MCP, the core lists offers as tools, delivers calls as tasks with the
     });
   } finally {
     await prog.close();
-    await root.close();
+    await Promise.allSettled([root.close(), connector.close()]);
     await core.close();
   }
 });

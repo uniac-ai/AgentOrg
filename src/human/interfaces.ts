@@ -1,11 +1,11 @@
 /**
- * The human's exposed tools, the calls into the user: `decide`, `note` and `report`, with their
- * schemas. Each runs as an MCP task that completes when the user answers, so a call may wait on the
- * user for hours. A note's output is the empty object, which makes it one-way: its caller does not
- * wait for it.
+ * The human's interfaces, the calls into the user: `decide`, `note` and `report`, with their
+ * schemas. Each is long-running and completes when the user answers, so a call may wait on the user
+ * for hours. A note is one-way: nothing comes back, so its caller does not wait for it.
  */
 
 import { z } from "zod";
+import type { InterfaceDescriptor } from "../domain/model/index.ts";
 
 const text = (max: number) => z.string().trim().min(1).max(max);
 const Label = text(80);
@@ -52,7 +52,7 @@ export const DecideOutput = z
     ],
   });
 
-export const TOOLS = {
+export const INTERFACES = {
   decide: {
     description:
       "Ask the user to decide. The call completes with the user's choice, their words, or both.",
@@ -71,37 +71,36 @@ export const TOOLS = {
   },
 } as const;
 
-export type ToolName = keyof typeof TOOLS;
-export type InputOf<T extends ToolName> = z.output<(typeof TOOLS)[T]["input"]>;
-export type OutputOf<T extends ToolName> = z.output<(typeof TOOLS)[T]["output"]>;
+export type InterfaceName = keyof typeof INTERFACES;
+export type InputOf<T extends InterfaceName> = z.output<(typeof INTERFACES)[T]["input"]>;
+export type OutputOf<T extends InterfaceName> = z.output<(typeof INTERFACES)[T]["output"]>;
 
-export const isToolName = (name: string): name is ToolName => Object.hasOwn(TOOLS, name);
-
-/** The tools as `tools/list` lists them. */
-export const TOOL_LIST = Object.entries(TOOLS).map(([name, tool]) => ({
-  name,
-  description: tool.description,
-  inputSchema: schema(tool.input, "input"),
-  outputSchema: schema(tool.output, "output"),
-  execution: { taskSupport: "required" as const },
-}));
-
-function schema(type: z.ZodType, io: "input" | "output") {
+const schema = (type: z.ZodType, io: "input" | "output") => {
   const { $schema: _, ...rest } = z.toJSONSchema(type, { io }) as Record<string, unknown>;
-  return rest as { type: "object"; [key: string]: unknown };
-}
+  return rest;
+};
+
+/** Each interface as the core learns it. */
+export const descriptorOf = (name: InterfaceName): InterfaceDescriptor => ({
+  name,
+  description: INTERFACES[name].description,
+  input: schema(INTERFACES[name].input, "input"),
+  output: schema(INTERFACES[name].output, "output"),
+  one_way: name === "note",
+  long_running: true,
+});
 
 /**
  * The user's answer to a pending call, as that call's output. A decision's choice must be one of
  * its options; a note or a report needs nothing.
  */
-export function answerOf<T extends ToolName>(
-  tool: T,
+export function answerOf<T extends InterfaceName>(
+  name: T,
   input: unknown,
   answer: unknown,
 ): z.ZodSafeParseResult<OutputOf<T>> {
-  if (tool !== "decide") {
-    return TOOLS[tool].output.safeParse(answer ?? {}) as z.ZodSafeParseResult<OutputOf<T>>;
+  if (name !== "decide") {
+    return INTERFACES[name].output.safeParse(answer ?? {}) as z.ZodSafeParseResult<OutputOf<T>>;
   }
   const labels = DecideInput.parse(input).options.map((option) => option.label);
   return DecideOutput.refine(({ choice }) => choice === null || labels.includes(choice), {
