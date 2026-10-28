@@ -216,7 +216,12 @@ test("delivered messages read as agentorg's, with each sender's path and each me
 });
 
 /** Run a hook's `agentorg agent` command for session `id`, as Claude Code runs it. */
-function hook(org: Core & { home: string }, command: string, id: string) {
+function hook(
+  org: Core & { home: string },
+  command: string,
+  id: string,
+  env: Record<string, string> = {},
+) {
   return new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve) => {
     const child = execFile(
       process.execPath,
@@ -227,6 +232,7 @@ function hook(org: Core & { home: string }, command: string, id: string) {
           AGENTORG_HOME: org.home,
           AGENTORG_URL: org.url,
           CLAUDE_CODE_SESSION_ID: id,
+          ...env,
         },
       },
       (_error, stdout, stderr) => resolve({ code: child.exitCode, stdout, stderr }),
@@ -246,4 +252,60 @@ test("a session that fills no position is told to attach first, and its waiter e
   const attached = await session(org, "s-new");
   await attached.call("attach", { name: "builds", purpose: "Run the builds." });
   assert.deepEqual(await hook(org, "context", "s-new"), { code: 0, stdout: "", stderr: "" });
+});
+
+test("the waiter delivers new messages once, marked read, and a newer waiter replaces an older", async () => {
+  const org = await core();
+  const worker = await session(org, "s-waited");
+  const attached = await worker.call("attach", { name: "worker", purpose: "Do the work." });
+  const { actor } = attached.structuredContent as { actor: string };
+  const root = await org.client(org.root);
+  const send = async (text: string) => {
+    const sent = await root.call("message_send", { to: actor, text });
+    return (sent as { value: { id: string } }).value.id;
+  };
+  const alive = { CLAUDE_PID: String(process.pid) };
+
+  const first = hook(org, "wait", "s-waited", alive);
+  await until("the first waiter waits", () =>
+    existsSync(join(org.home, "sessions/claude-code-s-waited/cursor")),
+  );
+  const id = await send("Start with the schema.");
+  const woke = await first;
+  assert.equal(woke.code, 2);
+  assert.match(woke.stderr, /^AgentOrg delivered 1 message to your position, worker \(act_/);
+  assert.ok(
+    woke.stderr.includes(`Message ${id} from the user (the root):\nStart with the schema.`),
+  );
+  const read = await root.call("messages", { box: "out", actor: org.rootId });
+  const delivered = (
+    read as { value: { messages: { id: string; read_at: string | null }[] } }
+  ).value.messages.find((message) => message.id === id);
+  assert.notEqual(delivered?.read_at, null);
+
+  // Two waiters at once, as when a turn ends while one still waits: only the newer delivers.
+  const claim = join(org.home, "sessions/claude-code-s-waited/waiter");
+  const claimed = (before: string) =>
+    until("a waiter claims the session", () => readFileSync(claim, "utf8") !== before);
+  let before = readFileSync(claim, "utf8");
+  const older = hook(org, "wait", "s-waited", alive);
+  await claimed(before);
+  before = readFileSync(claim, "utf8");
+  const newer = hook(org, "wait", "s-waited", alive);
+  await claimed(before);
+  const next = await send("Then the data.");
+  const [old, latest] = await Promise.race([
+    Promise.all([older, newer]),
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error("never happened: both waiters ended")), 20_000).unref(),
+    ),
+  ]);
+  assert.deepEqual(old, { code: 0, stdout: "", stderr: "" });
+  assert.equal(latest.code, 2);
+  assert.ok(latest.stderr.includes(`Message ${next} from the user (the root)`));
+  assert.equal(latest.stderr.includes(id), false);
+
+  // A waiter whose client is gone ends at once, writing nothing.
+  const gone = await hook(org, "wait", "s-waited", { CLAUDE_PID: "999999" });
+  assert.deepEqual(gone, { code: 0, stdout: "", stderr: "" });
 });
