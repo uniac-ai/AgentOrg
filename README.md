@@ -13,7 +13,8 @@ It works the way a company organizes people: you sit at the top, and your agents
 The project has these pieces:
 
 - **The core** (`agentorg core`), the system of record and the control point. It holds the actors and their credentials, wires who may call whom, routes and records every call, and keeps the audit trail. It holds no UI.
-- **The protocol** (`src/protocol/`), shared by the core and every actor: the two endpoints, the records, and the code a Node actor uses to connect.
+- **The actor library** (`src/actor/`), with which a Node program fills a position: it exposes interfaces with their handlers and calls the ones available to it.
+- **Layers** that keep the model apart from its carriers: the domain (`src/domain/`) knows no protocol, network or database, and MCP (`src/bindings/mcp/`), the network (`src/network/`) and SQLite (`src/storage/sqlite/`) each sit behind its ports.
 - **The command line** (`agentorg`), which runs the core and its built-in tools from a terminal.
 
 To install it, see [docs/install.md](docs/install.md). The design is in [docs/design.md](docs/design.md).

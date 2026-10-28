@@ -1,11 +1,10 @@
 /** The human actor on a real core, a browser signed in to it, and program actors under the root. */
 
 import { after } from "node:test";
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import type { ResponseOf } from "../../src/domain/model/index.ts";
 import { startHuman } from "../../src/human/index.ts";
 import { CSRF_HEADER } from "../../src/human/types.ts";
-import { CALL_META, type CallReceipt, type ResponseOf } from "../../src/protocol/index.ts";
-import { fakeActor, startCore, structured, tool, until } from "../harness.ts";
+import { fakeActor, iface, startCore, until } from "../harness.ts";
 
 const open: { close(): Promise<void> }[] = [];
 after(() => Promise.allSettled(open.map((each) => each.close())));
@@ -32,7 +31,7 @@ export async function core(): Promise<Core> {
   return started;
 }
 
-export const online = (core: Core) => core.core.registry.get(core.rootId)?.online === true;
+export const online = (core: Core) => core.org.registry.get(core.rootId)?.online === true;
 
 /** A human actor on `core`, a new one each time as after a restart, once the root is online. */
 export async function human(core: Core) {
@@ -76,9 +75,9 @@ export async function browser(url: string, credential: string) {
   return { login, cookie, csrf: session.csrf_token as string, get, post, pending };
 }
 
-export const REVIEW = tool("review", {
-  inputSchema: { type: "object", properties: { change: { type: "string" } }, required: ["change"] },
-  outputSchema: {
+export const REVIEW = iface("review", {
+  input: { type: "object", properties: { change: { type: "string" } }, required: ["change"] },
+  output: {
     type: "object",
     properties: { verdict: { type: "string" } },
     required: ["verdict"],
@@ -96,24 +95,23 @@ export async function program(
 ) {
   const created = await json(post("/api/tools/actor_create", { name, purpose: "Move storage." }));
   const { actor, credential } = created.structuredContent;
-  const reviews = fakeActor([REVIEW], async (params) =>
-    structured({ verdict: `looked at ${params.arguments?.change}` }),
-  );
+  const reviews = fakeActor([REVIEW], async (input) => ({
+    value: { verdict: `looked at ${input.change}` },
+  }));
   const connection = await core.connect(credential, reviews);
-  await until(`${name} comes online`, () => core.core.registry.get(actor.id)?.online === true);
-  const call = async (tool: string, args: Record<string, unknown>) =>
-    (await connection.client.callTool({ name: tool, arguments: args })) as CallToolResult;
+  await until(`${name} comes online`, () => core.org.registry.get(actor.id)?.online === true);
+  const call = (tool: string, args: Record<string, unknown>) => connection.call(tool, args);
   return {
     id: actor.id as string,
     received: reviews.received,
     /** Call one of the human's tools, as its manager's; returns the call's id. */
     async ask(tool: string, input: Record<string, unknown>) {
-      const result = await call(`manager.${tool}`, input);
-      return (result._meta as Record<string, CallReceipt>)[CALL_META]?.id as string;
+      const answer = await call(`manager.${tool}`, input);
+      return (answer as { call: string }).call;
     },
     /** The call, once settled or after `wait` seconds. */
     async result(id: string, wait = 5): Promise<Call> {
-      return (await call("call_result", { call: id, wait })).structuredContent as Call;
+      return ((await call("call_result", { call: id, wait })) as { value: Call }).value;
     },
     async withdraw(id: string) {
       await call("call_withdraw", { call: id });

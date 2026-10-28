@@ -8,7 +8,7 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { parseArgs } from "node:util";
 import { readCredential, rootCredentialPath } from "../home.ts";
-import { coreUrl } from "../protocol/index.ts";
+import { coreUrl } from "../network/index.ts";
 import { DEFAULT_PORT, startHuman } from "./index.ts";
 
 const note = (text: string) => process.stderr.write(`agentorg: ${text}\n`);

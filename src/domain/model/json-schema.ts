@@ -1,4 +1,4 @@
-/** JSON Schema for the contract's schemas, in the shape tools and commands read it. */
+/** JSON Schema for the model's Zod schemas, in the shape interfaces and commands read it. */
 
 import { z } from "zod";
 
@@ -6,7 +6,7 @@ export type JsonSchema = { [key: string]: unknown };
 
 /**
  * A schema as an object at the top, with the named schemas it refers to in `$defs`. Zod puts a
- * named schema itself in `$defs` and refers to it from the top, which MCP clients do not accept.
+ * named schema itself in `$defs` and refers to it from the top, which some clients do not accept.
  */
 export function objectSchema(schema: z.ZodType, io: "input" | "output"): JsonSchema {
   const {

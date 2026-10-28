@@ -1,6 +1,6 @@
 /**
- * The core's built-in tools, the management surface every actor finds in its `/mcp` tool list:
- * their requests, results and descriptions. `activity` is listed to the root only.
+ * The core's built-ins, the management surface every actor finds among its available interfaces:
+ * their requests, results and descriptions. `activity` is offered to the root only.
  */
 
 import { z } from "zod";
@@ -22,7 +22,7 @@ export const ActorCreated = z
     credential: z
       .string()
       .describe(
-        "The new actor's credential, shown only this once: it dials both endpoints with it.",
+        "The new actor's credential, shown only this once: it connects to the core with it.",
       ),
   })
   .meta({ id: "ActorCreated" });
@@ -119,7 +119,7 @@ export const BUILTINS = {
     response: ActorCreated,
     description: `Create a direct report: a position that you manage.
 
-Returns the actor and its credential, shown only this once. Whatever fills the position dials both of the core's endpoints with it.`,
+Returns the actor and its credential, shown only this once. Whatever fills the position connects to the core with it.`,
   },
   actor_close: {
     writes: true,

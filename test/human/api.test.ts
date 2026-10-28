@@ -14,7 +14,7 @@ test("the user's available tools come from the core, and calling one goes throug
   assert.equal(called.status, 200);
   assert.deepEqual((await json(called)).structuredContent, { verdict: "looked at #41" });
   assert.deepEqual(
-    storage.received.map((params) => [params.name, params.arguments]),
+    storage.received.map((each) => [each.name, each.input]),
     [["review", { change: "#41" }]],
   );
   assert.equal((await json(post("/api/tools/nothing.here", {}))).isError, true);

@@ -91,7 +91,7 @@ test("agentorg core creates the root's credential, and the built-ins run as the 
 
     const refused = await agentorg(["activity"], asProg);
     assert.equal(refused.status, 1);
-    assert.match(refused.stderr, /not_found: there is no tool activity/);
+    assert.match(refused.stderr, /not_found: there is no interface activity/);
     const activity = await agentorg(["activity", "--limit", "5"], asRoot);
     assert.equal(JSON.parse(activity.stdout).entries[0].operation, "actor_create");
 

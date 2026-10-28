@@ -6,7 +6,7 @@
 
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { type CallToolResult, McpError, type Tool } from "@modelcontextprotocol/sdk/types.js";
-import { ActorConnection } from "../protocol/index.ts";
+import { ActorConnection } from "../bindings/mcp/legacy-actor-connection.ts";
 
 /** The core did not answer, or refused the root credential. */
 export class CoreUnreachable extends Error {}

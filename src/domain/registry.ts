@@ -8,33 +8,36 @@
 
 import { createHash, randomBytes } from "node:crypto";
 import type { z } from "zod";
-import type { Actor, Status } from "../protocol/index.ts";
 import { Conflict, NotFound } from "./errors.ts";
-import type { ActorRow } from "./schema.ts";
-import type { Store } from "./store.ts";
+import {
+  type Actor,
+  INTERFACE_NAME,
+  type InterfaceDescriptor,
+  type Status,
+} from "./model/index.ts";
+import type { ActorRow, Store } from "./ports.ts";
 
-export type ActorRecord = z.output<typeof ActorRow>;
-type Tool = ActorRecord["tools"][number];
+export type { ActorRow };
 
 export const newId = (prefix: string) => `${prefix}_${randomBytes(5).toString("hex")}`;
 const digest = (credential: string) => createHash("sha256").update(credential).digest("hex");
 const mintCredential = () => randomBytes(32).toString("base64url");
 
 export class Registry {
-  private readonly store: Store;
+  private readonly actors: Store["actors"];
   private readonly now: () => string;
 
   constructor(store: Store, now: () => string) {
-    this.store = store;
+    this.actors = store.actors;
     this.now = now;
   }
 
-  root(): ActorRecord | undefined {
-    return this.store.select("actors", "manager IS NULL")[0];
+  root(): ActorRow | undefined {
+    return this.actors.root();
   }
 
   /** Create the root, the user's position, and return its credential. */
-  createRoot(): { root: ActorRecord; credential: string } {
+  createRoot(): { root: ActorRow; credential: string } {
     const { actor, credential } = this.insert(
       null,
       "root",
@@ -44,107 +47,108 @@ export class Registry {
   }
 
   /** Create a report of `manager` and return it with its credential. */
-  create(
-    manager: string,
-    name: string,
-    purpose: string,
-  ): { actor: ActorRecord; credential: string } {
-    const taken = this.store.count("actors", "manager = ? AND name = ? AND closed_at IS NULL", [
-      manager,
-      name,
-    ]);
-    if (taken > 0) throw new Conflict(`a report of ${manager} is already named ${name}`);
+  create(manager: string, name: string, purpose: string): { actor: ActorRow; credential: string } {
+    if (this.reports(manager).some((report) => report.name === name)) {
+      throw new Conflict(`a report of ${manager} is already named ${name}`);
+    }
     return this.insert(manager, name, purpose);
   }
 
   private insert(manager: string | null, name: string, purpose: string) {
     const credential = mintCredential();
-    const actor: ActorRecord = {
+    const actor: ActorRow = {
       id: newId("act"),
       name,
       purpose,
       manager,
       credential_hash: digest(credential),
       online: false,
-      tools: [],
+      interfaces: [],
       status: null,
       created_at: this.now(),
       closed_at: null,
     };
-    this.store.insert("actors", actor);
+    this.actors.insert(actor);
     return { actor, credential };
   }
 
   /** Replace an actor's credential, as when the root's file is lost, and return the new one. */
   rotateCredential(id: string): string {
     const credential = mintCredential();
-    this.store.update("actors", { ...this.found(id), credential_hash: digest(credential) });
+    this.actors.update({ ...this.found(id), credential_hash: digest(credential) });
     return credential;
   }
 
-  get(id: string): ActorRecord | undefined {
-    return this.store.get("actors", id);
+  get(id: string): ActorRow | undefined {
+    return this.actors.get(id);
   }
 
-  found(id: string): ActorRecord {
+  found(id: string): ActorRow {
     const actor = this.get(id);
     if (!actor) throw new NotFound(`there is no actor ${id}`);
     return actor;
   }
 
   /** The open actor whose credential this is. */
-  byCredential(credential: string): ActorRecord | undefined {
-    return this.store.select("actors", "credential_hash = ? AND closed_at IS NULL", [
-      digest(credential),
-    ])[0];
+  byCredential(credential: string): ActorRow | undefined {
+    return this.actors.byCredentialHash(digest(credential));
+  }
+
+  /** The id of the open actor whose credential this is: who a connection is. */
+  identify(credential: string): string | undefined {
+    return this.byCredential(credential)?.id;
   }
 
   /** The actor's open direct reports, oldest first. */
-  reports(id: string): ActorRecord[] {
-    return this.store.select("actors", "manager = ? AND closed_at IS NULL", [id]);
+  reports(id: string): ActorRow[] {
+    return this.actors.reports(id);
   }
 
   /** Every open actor, oldest first, so that managers come before their reports. */
-  open(): ActorRecord[] {
-    return this.store.select("actors", "closed_at IS NULL");
+  open(): ActorRow[] {
+    return this.actors.open();
   }
 
-  close(id: string): ActorRecord {
+  close(id: string): ActorRow {
     const actor = { ...this.found(id), online: false, closed_at: this.now() };
-    this.store.update("actors", actor);
+    this.actors.update(actor);
     return actor;
   }
 
   setOnline(id: string, online: boolean): void {
-    this.store.run("UPDATE actors SET online = ? WHERE id = ?", [online ? 1 : 0, id]);
+    this.actors.setOnline(id, online);
   }
 
-  /** Mark every actor offline, as at start, before any reverse connection is open. */
+  /** Mark every actor offline, as at start, before any can be reached. */
   setAllOffline(): void {
-    this.store.run("UPDATE actors SET online = 0");
+    this.actors.setAllOffline();
   }
 
-  setTools(id: string, tools: Tool[]): void {
-    this.store.run("UPDATE actors SET tools = ? WHERE id = ?", [JSON.stringify(tools), id]);
+  /** Keep the interfaces whose names can join a handle, as the actor's exposed ones. */
+  setInterfaces(id: string, interfaces: InterfaceDescriptor[]): void {
+    this.actors.setInterfaces(
+      id,
+      interfaces.filter((each) => INTERFACE_NAME.test(each.name)),
+    );
   }
 
-  setStatus(id: string, status: z.output<typeof Status>): ActorRecord {
+  setStatus(id: string, status: z.output<typeof Status>): ActorRow {
     const actor = { ...this.found(id), status };
-    this.store.update("actors", actor);
+    this.actors.update(actor);
     return actor;
   }
 
   /** The handles from the root's report down to the actor, joined by dots; empty for the root. */
-  path(actor: ActorRecord): string {
+  path(actor: ActorRow): string {
     const handles: string[] = [];
-    for (let at: ActorRecord | undefined = actor; at?.manager; at = this.get(at.manager)) {
+    for (let at: ActorRow | undefined = actor; at?.manager; at = this.get(at.manager)) {
       handles.unshift(at.name);
     }
     return handles.join(".");
   }
 
-  /** The actor as tools return it: with its path, without its credential's hash. */
-  asActor(actor: ActorRecord): z.output<typeof Actor> {
+  /** The actor as built-ins return it: with its path, without its credential's hash. */
+  asActor(actor: ActorRow): z.output<typeof Actor> {
     const { credential_hash: _, ...fields } = actor;
     return { ...fields, path: this.path(actor) };
   }
