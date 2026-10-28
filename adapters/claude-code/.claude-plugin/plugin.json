@@ -10,13 +10,22 @@
   "mcpServers": {
     "org": {
       "command": "agentorg",
-      "args": ["agent", "--client", "claude-code"]
+      "args": [
+        "agent",
+        "--client",
+        "claude-code"
+      ]
     }
   },
   "hooks": {
     "SessionStart": [
       {
         "hooks": [
+          {
+            "type": "command",
+            "command": "agentorg agent context --client claude-code",
+            "timeout": 10
+          },
           {
             "type": "command",
             "command": "agentorg agent wait --client claude-code",

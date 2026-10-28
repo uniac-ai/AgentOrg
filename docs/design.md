@@ -146,7 +146,7 @@ How the domain is encoded:
 
 The agent actor, `agentorg agent` in `src/agent/`, lets a Claude Code or Codex session fill a position. The client starts it over stdio for each session, and it connects to the core as that position with the actor library.
 
-- **What the session sees.** Until the session attaches, its only tool is `attach`, the agent actor's sign-in.
+- **What the session sees.** Until the session attaches, its only tool is `attach`, the agent actor's sign-in. Before its first turn, the client's session-start hook runs `agentorg agent context`, so a session that fills no position reads that it attaches before any other action.
   - `attach {actor}` fills the position the session's brief names.
   - `attach {name, purpose}`, allowed only on a session's first attach, creates its position directly under the root. The agent actor uses the root's credential for that one call.
   - From then on, the session's tools are the position's available interfaces as the core offers them, unchanged. The request endpoint tells no caller when its offers change, so the agent actor lists them again after each call, and sends `tools/list_changed` when they differ.

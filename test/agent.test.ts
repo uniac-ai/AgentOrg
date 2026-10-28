@@ -215,22 +215,35 @@ test("delivered messages read as agentorg's, with each sender's path and each me
   ]);
 });
 
-test("the waiter of a session that fills no position ends at once, writing nothing", async () => {
-  const org = await core();
-  const waited = await new Promise<{ code: number | null; stderr: string }>((resolve) => {
+/** Run a hook's `agentorg agent` command for session `id`, as Claude Code runs it. */
+function hook(org: Core & { home: string }, command: string, id: string) {
+  return new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve) => {
     const child = execFile(
       process.execPath,
-      [BIN, "agent", "wait", "--client", "claude-code"],
+      [BIN, "agent", command, "--client", "claude-code"],
       {
         env: {
           PATH: process.env.PATH ?? "",
           AGENTORG_HOME: org.home,
           AGENTORG_URL: org.url,
-          CLAUDE_CODE_SESSION_ID: "s-unattached",
+          CLAUDE_CODE_SESSION_ID: id,
         },
       },
-      (_error, _stdout, stderr) => resolve({ code: child.exitCode, stderr }),
+      (_error, stdout, stderr) => resolve({ code: child.exitCode, stdout, stderr }),
     );
   });
-  assert.deepEqual(waited, { code: 0, stderr: "" });
+}
+
+test("a session that fills no position is told to attach first, and its waiter ends at once", async () => {
+  const org = await core();
+  assert.deepEqual(await hook(org, "context", "s-new"), {
+    code: 0,
+    stdout: "agentorg: Attach with `attach` before any other action.\n",
+    stderr: "",
+  });
+  assert.deepEqual(await hook(org, "wait", "s-new"), { code: 0, stdout: "", stderr: "" });
+
+  const attached = await session(org, "s-new");
+  await attached.call("attach", { name: "builds", purpose: "Run the builds." });
+  assert.deepEqual(await hook(org, "context", "s-new"), { code: 0, stdout: "", stderr: "" });
 });
