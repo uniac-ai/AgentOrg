@@ -59,8 +59,9 @@ export class Store {
     }
   }
 
-  run(sql: string, parameters: SQLInputValue[] = []): void {
-    this.db.prepare(sql).run(...parameters);
+  /** Run a statement and return how many rows it changed. */
+  run(sql: string, parameters: SQLInputValue[] = []): number {
+    return Number(this.db.prepare(sql).run(...parameters).changes);
   }
 
   all(sql: string, parameters: SQLInputValue[] = []): Record<string, SQLInputValue>[] {
