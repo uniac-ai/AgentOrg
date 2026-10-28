@@ -75,7 +75,7 @@ test("a request breaking the records' rules is refused before it reaches the cor
 
 test("a handle that begins a built-in's name is refused, and one that is a whole built-in's is not", () => {
   const named = (name: string) => issues(ActorCreate.safeParse({ name, purpose: "Work" }));
-  for (const name of ["actor", "call", "status", "progress", "question", "message"]) {
+  for (const name of ["actor", "call", "progress", "question", "message"]) {
     assert.deepEqual(named(name), ["name: begins a built-in's name, as call does"], name);
   }
   for (const name of ["team", "messages", "questions", "activity", "storage"]) {

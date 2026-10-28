@@ -7,7 +7,7 @@ It works the way a company organizes people: you sit at the top, and your agents
 - **Positions with managers.** Each actor is a position: a responsibility with a manager above it, either another actor or you, the root. A manager creates the positions under it, and closes them when their work is done.
 - **Calls up and down.** An actor calls the tools its manager and its direct reports expose, and you can call any actor's. A question that needs a decision goes to the manager.
 - **Standard MCP both ways.** Every actor is both an MCP client and an MCP server to the core, so what an actor exposes is its MCP tool list, and calling it is an MCP tool call. A call that takes hours, such as one waiting on a person, runs as an MCP task.
-- **Nothing subscribes.** Managers read their reports' status and calls when they choose; nothing pings them on every update.
+- **Nothing subscribes.** Managers read their reports' progress, questions and calls when they choose; nothing pings them on every update.
 - **What it isn't.** agentorg doesn't run agents itself. It organizes the actors you already run.
 
 The project has these pieces:

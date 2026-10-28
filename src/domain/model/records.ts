@@ -26,16 +26,6 @@ export const Handle = z
 /** An interface's own name: no dots, since dots join handles and interface names. */
 export const INTERFACE_NAME = /^[A-Za-z0-9_-]{1,64}$/;
 
-export const StatusState = z.enum(["running", "waiting", "blocked", "review"]);
-
-export const Status = z
-  .strictObject({
-    state: StatusState,
-    summary: z.string().trim().max(LIMITS.summary).describe("Plain text; line breaks are kept."),
-    updated_at: Timestamp,
-  })
-  .meta({ id: "Status", description: "The actor's status, set by the actor itself." });
-
 const JsonSchema = z.record(z.string(), z.unknown()).describe("A JSON Schema.");
 
 export const Interface = z
@@ -67,7 +57,6 @@ export const Actor = z
     manager: Id.nullable().describe("The managing actor; null for the root."),
     online: z.boolean().describe("True while the core can deliver calls to it."),
     interfaces: z.array(Interface).describe("Its exposed interfaces, as it last listed them."),
-    status: Status.nullable(),
     created_at_attach: z
       .boolean()
       .describe(

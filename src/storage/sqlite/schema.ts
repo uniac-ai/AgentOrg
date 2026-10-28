@@ -14,7 +14,7 @@ import {
   Question,
 } from "../../domain/model/index.ts";
 
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
 
 export const SCHEMA = `
 CREATE TABLE actors (
@@ -25,7 +25,6 @@ CREATE TABLE actors (
   credential_hash TEXT NOT NULL UNIQUE,
   online BOOLEAN NOT NULL,
   interfaces JSON NOT NULL,
-  status JSON,
   created_at_attach BOOLEAN NOT NULL,
   created_at TEXT NOT NULL,
   closed_at TEXT

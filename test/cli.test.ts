@@ -52,10 +52,13 @@ test("help lists the core and every built-in, and asking for it acts on nothing"
   try {
     const help = await agentorg(["--help"], { AGENTORG_HOME: home });
     assert.equal(help.status, 0);
-    const commands = ["core", "actor create", "actor close", "status set", "view", "progress set"];
-    const communication = ["question ask", "questions", "team", "message send", "claim", "release"];
+    const commands = ["core", "actor create", "actor close", "progress set", "progress", "team"];
+    const communication = ["question ask", "questions", "message send", "claim", "release"];
     for (const command of [...commands, ...communication]) {
       assert.match(help.stdout, new RegExp(`^  ${command} `, "m"));
+    }
+    for (const removed of ["status set", "view"]) {
+      assert.doesNotMatch(help.stdout, new RegExp(`^  ${removed} `, "m"));
     }
     const coreHelp = await agentorg(["core", "--help"], { AGENTORG_HOME: home });
     assert.match(coreHelp.stdout, /^usage: agentorg core/);
@@ -85,11 +88,10 @@ test("agentorg core creates the root's credential, and the built-ins run as the 
     const { actor, credential } = JSON.parse(created.stdout);
     const asProg = { AGENTORG_URL: core.url, AGENTORG_CREDENTIAL: credential };
 
-    const view = await agentorg(["view"], asProg);
-    assert.equal(view.status, 0, view.stderr);
-    const seen = JSON.parse(view.stdout);
-    assert.equal(seen.actor.name, "prog");
-    assert.equal(seen.manager.name, "root");
+    const team = await agentorg(["team", "--depth", "0"], asProg);
+    assert.equal(team.status, 0, team.stderr);
+    const [seen] = JSON.parse(team.stdout).positions;
+    assert.deepEqual([seen.name, seen.manager], [actor.name, JSON.parse(team.stdout).root]);
 
     const refused = await agentorg(["activity"], asProg);
     assert.equal(refused.status, 1);
@@ -105,13 +107,13 @@ test("agentorg core creates the root's credential, and the built-ins run as the 
     const progress = await agentorg(["progress", "--actor", actor.id], asRoot);
     assert.equal(JSON.parse(progress.stdout).progress.summary, "Up");
 
-    const invalid = await agentorg(["status", "set", "--state", "asleep"], asProg);
+    const invalid = await agentorg(["progress", "set", "--state", "asleep"], asProg);
     assert.equal(invalid.status, 1);
     assert.match(invalid.stderr, /invalid: state/);
 
     const closed = await agentorg(["actor", "close", actor.id], asRoot);
     assert.notEqual(JSON.parse(closed.stdout).actor.closed_at, null);
-    const gone = await agentorg(["view"], asProg);
+    const gone = await agentorg(["team"], asProg);
     assert.equal(gone.status, 1);
     assert.match(gone.stderr, /did not accept the connection/);
   } finally {

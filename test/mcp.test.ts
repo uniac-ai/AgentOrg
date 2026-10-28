@@ -79,7 +79,7 @@ test("over MCP, the core lists offers as tools, delivers calls as tasks with the
 
     const { tools } = await prog.listTools();
     const byName = Object.fromEntries(tools.map((tool) => [tool.name, tool]));
-    assert.equal(byName.view?.annotations?.readOnlyHint, true);
+    assert.equal(byName.team?.annotations?.readOnlyHint, true);
     assert.equal(byName.actor_create?.annotations?.readOnlyHint, false);
     assert.equal(byName["manager.decide"]?.execution, undefined, "the core runs no tasks itself");
     const anyOf = byName["manager.decide"]?.outputSchema?.anyOf as unknown[];

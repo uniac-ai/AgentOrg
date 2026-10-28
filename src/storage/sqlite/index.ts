@@ -50,14 +50,6 @@ export class SqliteStore implements Store {
     pendingTo: (actor) => this.database.select("calls", `"to" = ? AND state = 'pending'`, [actor]),
     pendingFrom: (actor) =>
       this.database.select("calls", `"from" = ? AND state = 'pending'`, [actor]),
-    settled: (actor, limit) =>
-      this.database.select(
-        "calls",
-        `("to" = ? OR "from" = ?) AND state != 'pending'`,
-        [actor, actor],
-        "settled_at DESC",
-        limit,
-      ),
     delivered: (id, at) => {
       this.database.run("UPDATE calls SET delivered_at = ?, run = NULL WHERE id = ?", [at, id]);
     },

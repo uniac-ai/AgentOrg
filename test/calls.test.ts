@@ -5,16 +5,7 @@ import { test } from "node:test";
 import type { Actor } from "../src/actor/index.ts";
 import type { Answer } from "../src/domain/model/index.ts";
 import { CLOSE_REVOKED } from "../src/network/index.ts";
-import {
-  type Core,
-  done,
-  type FakeActor,
-  fakeActor,
-  iface,
-  type Json,
-  startCore,
-  until,
-} from "./harness.ts";
+import { type Core, done, type FakeActor, fakeActor, iface, startCore, until } from "./harness.ts";
 
 const DECIDE = iface("decide", {
   input: { type: "object", properties: { question: { type: "string" } }, required: ["question"] },
@@ -72,8 +63,6 @@ const names = async (actor: Actor) => (await actor.available()).map((each) => ea
 const BUILTINS = [
   "actor_create",
   "actor_close",
-  "status_set",
-  "view",
   "progress_set",
   "question_ask",
   "question_answer",
@@ -409,37 +398,14 @@ test("the root alone creates a position as a session attaches, and the position 
   }
 });
 
-test("status and views: what is pending on an actor and from whom, and the activity for the root only", async () => {
+test("the activity holds each write and routed call, for the root only", async () => {
   const { core, root, rootActor, release, storage } = await organization({ waitMs: 100 });
   try {
-    await done(storage.connection.call("status_set", { state: "running", summary: "Reviewing" }));
+    await done(storage.connection.call("progress_set", { state: "running", summary: "Reviewing" }));
     const asked = pendingCall(
       await release.connection.call("manager.decide", { question: "Ship?" }),
     );
     await until("run held", () => rootActor.held.length === 1);
-
-    const own = await done(release.connection.call("view"));
-    assert.deepEqual(
-      own.reports.map((each: Json) => [each.name, each.status.state, each.status.summary]),
-      [["storage", "running", "Reviewing"]],
-    );
-    assert.deepEqual(
-      own.open_calls.map((call: Json) => call.id),
-      [asked],
-    );
-
-    const rootView = await done(root.call("view"));
-    assert.deepEqual(
-      rootView.pending.map((call: Json) => call.id),
-      [asked],
-    );
-    assert.equal(rootView.names[release.id], "release");
-    const ofStorage = await done(root.call("view", { actor: storage.id }));
-    assert.equal(ofStorage.actor.path, "release.storage");
-    const fromRelease = await done(release.connection.call("view", { actor: storage.id }));
-    assert.equal(fromRelease.manager.name, "release");
-    const upward = await storage.connection.call("view", { actor: release.id });
-    assert.equal(upward.state === "refused" && upward.code, "forbidden");
 
     const activity = await done(root.call("activity", { limit: 5 }));
     const entries = activity.entries as { operation: string; outcome: string; target: string }[];
@@ -449,7 +415,9 @@ test("status and views: what is pending on an actor and from whom, and the activ
       target: asked,
       outcome: "pending",
     });
-    assert.ok(entries.some((entry) => entry.operation === "status_set"));
+    assert.ok(
+      entries.some((entry) => entry.operation === "progress_set" && entry.target === storage.id),
+    );
     const hidden = await release.connection.call("activity");
     assert.equal(hidden.state === "refused" && hidden.code, "not_found");
   } finally {

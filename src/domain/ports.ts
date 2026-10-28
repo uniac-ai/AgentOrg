@@ -129,8 +129,6 @@ export interface Store {
     pendingTo(actor: string): CallRow[];
     /** Pending calls the actor made, oldest first. */
     pendingFrom(actor: string): CallRow[];
-    /** Settled calls into or from the actor, newest first. */
-    settled(actor: string, limit: number): CallRow[];
     /** Mark it handed to the actor now, with no run yet. */
     delivered(id: string, at: string): void;
     setRun(id: string, run: string): void;
