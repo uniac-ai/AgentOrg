@@ -1,58 +1,32 @@
 /**
- * What happened to an entity, the user or an agent, as the feed below its pinned items; and the
- * chain of asks an ask carries up.
+ * What happened to an entity, as the feed below what still waits: its settled calls, in and out,
+ * newest first; and the calls that led to a call, through each one's cause.
  */
 
-import type { AskRecord, EntityView, MessageRecord } from "../../../src/page/types.ts";
+import type { CallRecord, ViewRecord } from "../../../src/human/types.ts";
 
-type StatusEntry = EntityView["history"]["status_history"][number];
-
-export type FeedEntry =
-  | { kind: "status"; at: string; status: StatusEntry }
-  | { kind: "asked"; at: string; ask: AskRecord }
-  | { kind: "answered"; at: string; ask: AskRecord }
-  | { kind: "message"; at: string; message: MessageRecord };
-
-/**
- * What happened to an entity, newest first: the statuses its sessions set, each ask it opened or
- * was sent and each answer to one, and each message it sent or received. Its current status,
- * what still waits on it and its own asks still open show above the feed, so they are left out here.
- */
-export function feed(view: EntityView): FeedEntry[] {
-  const pinned = new Set(
-    [
-      ...view.asks_to_answer,
-      ...view.own_asks.filter((ask) => ask.state === "open"),
-      ...view.inbox,
-    ].map((record) => record.id),
-  );
-  const current = view.agent?.status?.updated_at;
-  const { asks, messages, status_history } = view.history;
-  const entries: FeedEntry[] = [
-    ...status_history
-      .filter((status) => status.at !== current)
-      .map((status) => ({ kind: "status" as const, at: status.at, status })),
-    ...asks
-      .filter((ask) => !pinned.has(ask.id))
-      .map((ask) => ({ kind: "asked" as const, at: ask.opened_at, ask })),
-    ...asks.flatMap((ask) =>
-      ask.answer ? [{ kind: "answered" as const, at: ask.answer.answered_at, ask }] : [],
-    ),
-    ...messages
-      .filter((message) => !pinned.has(message.id))
-      .map((message) => ({ kind: "message" as const, at: message.sent_at, message })),
-  ];
-  return entries.sort((a, b) => b.at.localeCompare(a.at));
+export interface FeedEntry {
+  at: string;
+  call: CallRecord;
 }
 
-/** An ask with the asks it carries up, each with the ones it carries. */
-export interface Chain {
-  ask: AskRecord;
-  carries: Chain[];
+export const feed = (view: ViewRecord): FeedEntry[] =>
+  view.history
+    .map((call) => ({ at: call.settled_at ?? call.created_at, call }))
+    .sort((a, b) => b.at.localeCompare(a.at));
+
+/** The calls that led to `call`, nearest first, as far as the calls known go. */
+export function causes(call: CallRecord, known: ReadonlyMap<string, CallRecord>): CallRecord[] {
+  const chain: CallRecord[] = [];
+  for (let next = call.cause; next !== null; ) {
+    const cause = known.get(next);
+    if (cause === undefined || chain.includes(cause)) break;
+    chain.push(cause);
+    next = cause.cause;
+  }
+  return chain;
 }
 
-/** The chain an ask carries up, from the asks known; an ask not among them is left out. */
-export function chain(ask: AskRecord, asks: ReadonlyMap<string, AskRecord>): Chain {
-  const carried = ask.escalates.flatMap((id) => asks.get(id) ?? []);
-  return { ask, carries: carried.map((lower) => chain(lower, asks)) };
-}
+/** A done call's output. The one place that reads the shape of the core's call result. */
+export const outputOf = (call: CallRecord): Record<string, unknown> =>
+  (call.output?.value as Record<string, unknown> | undefined) ?? {};

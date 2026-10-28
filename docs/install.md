@@ -74,7 +74,21 @@ systemd restarts the service whenever it exits and starts it with your user sess
 
 ## 3. Run the human actor
 
-<!-- agentorg human, agentorg ui and the web app. -->
+The human actor is your side of the organization. It connects to the core as the root, with the root's credential, and serves the web app on `http://127.0.0.1:8741`:
+
+```bash
+agentorg human
+```
+
+It finds the core at `AGENTORG_URL` (default `http://127.0.0.1:8740`), and the credential in `AGENTORG_CREDENTIAL` or else in `root-credential` in the agentorg home. `--port` or `AGENTORG_HUMAN_PORT` moves it to another port.
+
+`agentorg ui` signs your browser in to the web app with a one-time link, and opens it:
+
+```bash
+agentorg ui
+```
+
+The link works once, within five minutes. The session it starts lasts seven days, including across restarts of the human actor.
 
 ## 4. Credentials and the command line
 

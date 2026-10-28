@@ -25,7 +25,7 @@
     "skills"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && npm run build:page",
     "build:page": "tsc -p web/tsconfig.json && vite build --config web/vite.config.ts",
     "dev:page": "vite --config web/vite.config.ts",
     "prepack": "npm run build",

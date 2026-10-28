@@ -1,27 +1,34 @@
-// An ask's thread, control: the ask with its chain, the answer being written, and the keys that
-// pick an option (1–9), send (⌘/Ctrl+Enter) and close (Esc).
+// A call's thread, control: the call with the calls that led to it, the answer being written, and
+// the keys that pick an option (1–9), send (⌘/Ctrl+Enter) and close (Esc). Only a decision waiting
+// on the user takes an answer here; a note or a report settles from the list.
 
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { isTyping, useKeys } from "@/lib/keys";
-import type { AgentRecord, AskRecord } from "../../../src/page/types.ts";
-import { ApiError } from "../data/client.ts";
+import type { InputOf } from "../../../src/human/tools.ts";
+import type { CallRecord } from "../../../src/human/types.ts";
 import { useAnswer } from "../data/mutations.ts";
-import { agentsQuery, askQuery, openAsksQuery } from "../data/queries.ts";
-import { type Chain, chain } from "../model/activity.ts";
+import { organizationQuery, viewQuery } from "../data/queries.ts";
+import { causes } from "../model/activity.ts";
+import { calls } from "../model/organization.ts";
+import type { Names } from "../views/calls.tsx";
 import { notices } from "../views/notices.ts";
 import { NotFoundView, PaneSkeleton } from "../views/states.tsx";
 import { ThreadView } from "../views/thread.tsx";
+import { namesOf } from "./entity.tsx";
 
 export interface ThreadModel {
-  ask: AskRecord;
-  chain: Chain;
-  agents: ReadonlyMap<string, AgentRecord>;
+  call: CallRecord;
+  /** The calls that led to it, nearest first. */
+  causes: CallRecord[];
+  names: Names;
+  /** The decision the user answers here: a `decide` call waiting on the user. */
+  decision: InputOf<"decide"> | undefined;
   choice: string | undefined;
   words: string;
   sending: boolean;
-  /** Why the service refused the last answer. */
+  /** Why the last answer was refused. */
   error: string | undefined;
   onChoose: (label: string) => void;
   onWrite: (text: string) => void;
@@ -30,44 +37,58 @@ export interface ThreadModel {
 }
 
 export function ThreadControl() {
-  const { askId = "", agentId } = useParams({ strict: false });
+  const { callId = "", actorId } = useParams({ strict: false });
   const navigate = useNavigate();
-  const ask = useQuery(askQuery(askId));
-  const open = useQuery(openAsksQuery);
-  const agents = useQuery(agentsQuery);
+  const view = useQuery(viewQuery(actorId ?? "root"));
+  const organization = useQuery(organizationQuery);
   const answer = useAnswer();
   const [choice, setChoice] = useState<string>();
   const [words, setWords] = useState("");
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: a new ask starts a new answer.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a new call starts a new answer.
   useEffect(() => {
     setChoice(undefined);
     setWords("");
     answer.reset();
-  }, [askId]);
+  }, [callId]);
+
+  const known = organization.data ? calls(organization.data) : new Map<string, CallRecord>();
+  for (const call of [
+    ...(view.data?.pending ?? []),
+    ...(view.data?.open_calls ?? []),
+    ...(view.data?.history ?? []),
+  ]) {
+    known.set(call.id, call);
+  }
+  const call = known.get(callId);
+  const decision =
+    call?.interface === "decide" && call.state === "pending" && call.to === organization.data?.root
+      ? (call.input as InputOf<"decide">)
+      : undefined;
 
   const close = () =>
-    agentId === undefined
+    actorId === undefined
       ? navigate({ to: "/" })
-      : navigate({ to: "/people/$agentId", params: { agentId } });
+      : navigate({ to: "/people/$actorId", params: { actorId } });
   const send = () => {
-    if (ask.data?.state !== "open" || answer.isPending || (!choice && !words.trim())) return;
+    if (!call || !decision || answer.isPending || (!choice && !words.trim())) return;
+    const output = { choice: choice ?? null, words: words.trim() || null };
     answer.mutate(
-      { ask: askId, choice, words: words.trim() || undefined },
-      { onSuccess: notices.answered, onError: notices.refused },
+      { call: call.id, output },
+      { onSuccess: () => notices.answered(call, output), onError: notices.refused },
     );
   };
 
   useKeys((event) => {
     if (event.key === "Escape") {
-      close();
+      void close();
       return true;
     }
     if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
       send();
       return true;
     }
-    const option = ask.data?.options[Number(event.key) - 1];
+    const option = decision?.options[Number(event.key) - 1];
     if (option && !isTyping(event) && !event.metaKey && !event.ctrlKey && !event.altKey) {
       setChoice(option.label);
       return true;
@@ -75,13 +96,13 @@ export function ThreadControl() {
     return false;
   });
 
-  if (ask.error instanceof ApiError && ask.error.status === 404) return <NotFoundView />;
-  if (!ask.data) return <PaneSkeleton />;
-  const asks = new Map((open.data?.asks ?? []).map((a) => [a.id, a]));
+  if (!view.data || !organization.data) return <PaneSkeleton />;
+  if (!call) return <NotFoundView />;
   const model: ThreadModel = {
-    ask: ask.data,
-    chain: chain(ask.data, asks),
-    agents: new Map(agents.data?.agents.map(({ agent }) => [agent.id, agent])),
+    call,
+    causes: causes(call, known),
+    names: namesOf(organization.data, view.data),
+    decision,
     choice,
     words,
     sending: answer.isPending,
@@ -89,7 +110,7 @@ export function ThreadControl() {
     onChoose: setChoice,
     onWrite: setWords,
     onSend: send,
-    onClose: close,
+    onClose: () => void close(),
   };
   return <ThreadView {...model} />;
 }

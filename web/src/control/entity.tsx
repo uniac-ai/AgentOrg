@@ -1,23 +1,17 @@
-// An entity's view, control, the same for the user and for every agent: what waits on it and from
-// whom, its own asks going up, its reports below it with their progress, its manager, and its
-// feed. Its data is the service's view of that entity, which an attaching agent gets as its facts.
+// An entity's view, control, the same for the user and for every actor: what waits on it and from
+// whom, its own calls going out, its reports with their progress, its manager, and its feed. Its
+// data is the core's `view` of that actor; the user is the root.
 
 import { useQuery } from "@tanstack/react-query";
 import { Outlet, useNavigate, useParams } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { useRowKeys } from "@/lib/keys";
-import type {
-  AgentRecord,
-  AgentSummary,
-  AskRecord,
-  MessageRecord,
-  EntityView as View,
-} from "../../../src/page/types.ts";
+import type { ActorRecord, CallRecord, ViewRecord } from "../../../src/human/types.ts";
 import { ApiError } from "../data/client.ts";
-import { useAcknowledge, useCloseAgent, useMarkRead } from "../data/mutations.ts";
-import { agentsQuery, viewQuery } from "../data/queries.ts";
+import { useAnswer, useCloseActor } from "../data/mutations.ts";
+import { organizationQuery, viewQuery } from "../data/queries.ts";
 import { type FeedEntry, feed } from "../model/activity.ts";
-import { below, flatten, type OrgNode, organization } from "../model/organization.ts";
+import { actors, flatten, type Organization, type OrgNode, tree } from "../model/organization.ts";
 import {
   type Counts,
   isStale,
@@ -26,6 +20,7 @@ import {
   total,
   totals,
 } from "../model/progress.ts";
+import type { Names } from "../views/calls.tsx";
 import { EntityView } from "../views/entity.tsx";
 import { notices } from "../views/notices.ts";
 import { NotFoundView, PaneSkeleton } from "../views/states.tsx";
@@ -34,136 +29,135 @@ const FEED_START = 8;
 const FEED_STEP = 20;
 
 export interface ChartNode {
-  summary: AgentSummary;
-  /** Its subtree by state, when it has agents under it. */
+  actor: ActorRecord;
+  /** Calls waiting on it. */
+  waiting: number;
+  /** Its subtree by state, when it has actors under it. */
   rollup: Counts | undefined;
   stale: boolean;
-  /** Its open asks addressed to the user. */
+  /** Its calls waiting on the user. */
   waitingOnYou: number;
   children: ChartNode[];
 }
 
 export interface EntityModel {
-  /** The agent viewed; null is the user. */
-  entity: AgentRecord | null;
-  /** Its presence and recency, from the organization's list. */
-  summary: AgentSummary | undefined;
-  manager: AgentRecord | null;
-  agents: ReadonlyMap<string, AgentRecord>;
-  /** What waits on it: open asks addressed to it, then its unread notes and unreviewed reports. */
-  pending: { asks: AskRecord[]; messages: MessageRecord[] };
-  /** Its own open asks, going up to its manager. */
-  ownAsks: AskRecord[];
+  /** The actor viewed; null is the user. */
+  entity: ActorRecord | null;
+  /** Its manager; null is the user. */
+  manager: ActorRecord | null;
+  actors: ReadonlyMap<string, ActorRecord>;
+  /** Each actor's name by id, the user's as "you". */
+  names: Names;
+  /** Calls waiting on it, oldest first. */
+  pending: CallRecord[];
+  /** Its own calls still waiting on another actor. */
+  openCalls: CallRecord[];
   /** The organization below it: its totals, what changed lately, and the chart. */
-  reports: { totals: Counts; recent: AgentSummary[]; chart: ChartNode[] };
+  reports: { totals: Counts; recent: ActorRecord[]; chart: ChartNode[] };
   feed: FeedEntry[];
-  /** Every session that attached to it, newest first; none for the user. */
-  sessions: View["history"]["sessions"];
   /** How many older feed entries are not shown yet. */
   more: number;
   onShowMore: () => void;
-  openAsk: string | undefined;
+  openCall: string | undefined;
   thread: React.ReactNode;
-  /** Settling a message: only for messages to the user, who is their recipient. */
-  onAcknowledge: ((message: MessageRecord) => void) | undefined;
-  onMarkRead: ((message: MessageRecord) => void) | undefined;
-  /** Closing it, for an agent that is not closed. */
+  /** Settling a note or a report: only for calls into the user. */
+  onSettle: ((call: CallRecord) => void) | undefined;
+  /** Closing it, for an actor that is not closed. */
   close:
-    | { openChildren: AgentRecord[]; openAsks: number; closing: boolean; onClose: () => void }
+    | { openReports: ActorRecord[]; openCalls: number; closing: boolean; onClose: () => void }
     | undefined;
 }
 
-function chart(nodes: OrgNode[], subtrees: Map<string, Counts>, asksToYou: Map<string, number>) {
+function chart(nodes: OrgNode[], subtrees: Map<string, Counts>, root: ViewRecord | undefined) {
   const now = Date.now();
   const build = (each: OrgNode[]): ChartNode[] =>
     each.map((node) => {
-      const rollup = subtrees.get(node.summary.agent.id);
+      const actor = node.view.actor;
+      const rollup = subtrees.get(actor.id);
       return {
-        summary: node.summary,
+        actor,
+        waiting: node.view.pending.length,
         rollup: rollup && total(rollup) > 0 ? rollup : undefined,
-        stale: isStale(node.summary, now),
-        waitingOnYou: asksToYou.get(node.summary.agent.id) ?? 0,
+        stale: isStale(actor, now),
+        waitingOnYou: root?.pending.filter((call) => call.from === actor.id).length ?? 0,
         children: build(node.children),
       };
     });
   return build(nodes);
 }
 
+/** Each known actor's name, the root's as "you", then the paths the view names. */
+export function namesOf(organization: Organization, view?: ViewRecord): Names {
+  const names = new Map(Object.entries(view?.names ?? {}));
+  for (const actor of actors(organization).values()) names.set(actor.id, actor.name);
+  names.set(organization.root, "you");
+  return names;
+}
+
 export function EntityControl() {
-  const { agentId, askId } = useParams({ strict: false });
-  const entity = agentId ?? "user";
-  const view = useQuery(viewQuery(entity));
-  const user = useQuery(viewQuery("user"));
-  const agents = useQuery(agentsQuery);
-  const acknowledge = useAcknowledge();
-  const markRead = useMarkRead();
-  const close = useCloseAgent();
+  const { actorId, callId } = useParams({ strict: false });
+  const view = useQuery(viewQuery(actorId ?? "root"));
+  const organization = useQuery(organizationQuery);
+  const answer = useAnswer();
+  const close = useCloseActor();
   const navigate = useNavigate();
   const [shown, setShown] = useState(FEED_START);
   useRowKeys();
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: another entity starts its feed short again.
-  useEffect(() => setShown(FEED_START), [entity]);
+  useEffect(() => setShown(FEED_START), [actorId]);
 
-  if (view.error instanceof ApiError && view.error.status === 404) return <NotFoundView />;
-  if (!view.data || !agents.data) return <PaneSkeleton />;
-  const data: View = view.data;
-  const all = agents.data.agents;
-  const tree = below(organization(all), data.agent?.id ?? null);
-  const asksToYou = new Map<string, number>();
-  for (const ask of user.data?.asks_to_answer ?? []) {
-    asksToYou.set(ask.agent, (asksToYou.get(ask.agent) ?? 0) + 1);
-  }
+  if (view.error instanceof ApiError && view.error.status === 400) return <NotFoundView />;
+  if (!view.data || !organization.data) return <PaneSkeleton />;
+  const data = view.data;
+  const org = organization.data;
+  const isYou = data.actor.id === org.root;
+  const known = actors(org);
+  known.set(data.actor.id, data.actor);
+  const all = flatten(tree(org));
+  const below = tree(org, data.actor.id);
   const subtrees = rollups(all);
-  const id = data.agent?.id ?? null;
   const entries = feed(data);
-  const isUser = data.agent === null;
   const model: EntityModel = {
-    entity: data.agent,
-    summary: all.find(({ agent }) => agent.id === data.agent?.id),
-    manager: data.manager,
-    agents: new Map(all.map(({ agent }) => [agent.id, agent])),
-    pending: { asks: data.asks_to_answer, messages: data.inbox },
-    ownAsks: data.own_asks.filter((ask) => ask.state === "open"),
+    entity: isYou ? null : data.actor,
+    manager: data.manager && data.manager.id !== org.root ? data.manager : null,
+    actors: known,
+    names: namesOf(org, data),
+    pending: data.pending,
+    openCalls: data.open_calls,
     reports: {
-      totals: id === null ? totals(all) : (subtrees.get(id) ?? totals([])),
-      recent: recentlyChanged(flatten(tree)),
-      chart: chart(tree, subtrees, asksToYou),
+      totals: isYou ? totals(all) : (subtrees.get(data.actor.id) ?? totals([])),
+      recent: recentlyChanged(flatten(below)),
+      chart: chart(below, subtrees, org.views[org.root]),
     },
     feed: entries.slice(0, shown),
-    sessions: data.history.sessions,
     more: Math.max(0, entries.length - shown),
     onShowMore: () => setShown((count) => count + FEED_STEP),
-    openAsk: askId,
-    thread: askId ? <Outlet /> : null,
-    onAcknowledge: isUser
-      ? (message) =>
-          acknowledge.mutate(message.id, {
-            onSuccess: () => notices.acknowledged(message),
-            onError: notices.refused,
-          })
-      : undefined,
-    onMarkRead: isUser
-      ? (message) =>
-          markRead.mutate(message.id, {
-            onSuccess: () => notices.read(message),
-            onError: notices.refused,
-          })
+    openCall: callId,
+    thread: callId ? <Outlet /> : null,
+    onSettle: isYou
+      ? (call) => {
+          const output = call.interface === "report" ? { acknowledged: true } : {};
+          answer.mutate(
+            { call: call.id, output },
+            { onSuccess: () => notices.answered(call, output), onError: notices.refused },
+          );
+        }
       : undefined,
     close:
-      data.agent && data.agent.state !== "closed"
+      !isYou && data.actor.closed_at === null
         ? {
-            openChildren: data.children,
-            openAsks: data.own_asks.filter((ask) => ask.state === "open").length,
+            openReports: data.reports,
+            openCalls: data.open_calls.length + data.pending.length,
             closing: close.isPending,
             onClose: () =>
-              close.mutate(entity, {
+              close.mutate(data.actor.id, {
                 onSuccess: (closed) => {
                   notices.closed(closed);
-                  const manager = closed.agent.manager;
-                  void (manager === null
+                  const manager = closed.actor.manager;
+                  void (manager === null || manager === org.root
                     ? navigate({ to: "/" })
-                    : navigate({ to: "/people/$agentId", params: { agentId: manager } }));
+                    : navigate({ to: "/people/$actorId", params: { actorId: manager } }));
                 },
                 onError: notices.refused,
               }),

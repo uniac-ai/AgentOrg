@@ -1,5 +1,8 @@
 /** What the human actor's API under `/api` returns; the web app imports these types. */
 
+import type { z } from "zod";
+import type { ActorClosed as ActorClosedResult, View } from "../domain/model/builtins.ts";
+import type { Actor, AuditEntry, Call } from "../domain/model/records.ts";
 import type { InputOf, ToolName } from "./tools.ts";
 
 /** A call waiting on the user, as the core delivered it to one of the human's tools. */
@@ -39,3 +42,10 @@ export interface ApiErrorBody {
   code: string;
   message: string;
 }
+
+/** The core's records, as `view` and `activity` pass them through. */
+export type ActorRecord = z.output<typeof Actor>;
+export type CallRecord = z.output<typeof Call>;
+export type ViewRecord = z.output<typeof View>;
+export type AuditRecord = z.output<typeof AuditEntry>;
+export type ActorClosed = z.output<typeof ActorClosedResult>;

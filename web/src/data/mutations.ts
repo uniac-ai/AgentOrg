@@ -1,71 +1,81 @@
 /**
- * The user's writes. Each updates what the page shows at once, puts it back if the service
- * refuses, and then refetches, so the record has the last word.
+ * The user's writes. Each updates what the app shows at once, puts it back if it is refused, and
+ * then refetches, so the record has the last word.
  */
 
 import { useMutation } from "@tanstack/react-query";
-import type { AskRecord, ClosedAgent, EntityView, MessageRecord } from "../../../src/page/types.ts";
-import { request } from "./client.ts";
-import { queryClient } from "./queries.ts";
+import type { ActorClosed, ViewRecord } from "../../../src/human/types.ts";
+import type { Organization } from "../model/organization.ts";
+import { callTool, path, request } from "./client.ts";
+import { answered, queryClient } from "./queries.ts";
 
-const path = (...parts: string[]) => `/${parts.map(encodeURIComponent).join("/")}`;
+type Snapshot = [readonly unknown[], unknown][];
 
-type Snapshot = [readonly unknown[], EntityView | undefined][];
+const withoutCall = (view: ViewRecord, call: string): ViewRecord => ({
+  ...view,
+  pending: view.pending.filter((pending) => pending.id !== call),
+});
 
-/** Take something out of every view while its write is in flight; the snapshot puts it back. */
-async function without(drop: (view: EntityView) => EntityView): Promise<Snapshot> {
+/** Take a call out of what waits, everywhere it shows, while its answer is in flight. */
+async function without(call: string): Promise<Snapshot> {
   await queryClient.cancelQueries({ queryKey: ["view"] });
-  const before = queryClient.getQueriesData<EntityView>({ queryKey: ["view"] });
-  queryClient.setQueriesData<EntityView>({ queryKey: ["view"] }, (view) => view && drop(view));
+  await queryClient.cancelQueries({ queryKey: ["organization"] });
+  const before = [
+    ...queryClient.getQueriesData({ queryKey: ["view"] }),
+    ...queryClient.getQueriesData({ queryKey: ["organization"] }),
+  ];
+  queryClient.setQueriesData<ViewRecord>(
+    { queryKey: ["view"] },
+    (view) => view && withoutCall(view, call),
+  );
+  queryClient.setQueriesData<Organization>(
+    { queryKey: ["organization"] },
+    (organization) =>
+      organization && {
+        ...organization,
+        views: Object.fromEntries(
+          Object.entries(organization.views).map(([id, view]) => [id, withoutCall(view, call)]),
+        ),
+      },
+  );
   return before;
 }
 
 function restore(before: Snapshot | undefined) {
-  for (const [key, view] of before ?? []) queryClient.setQueryData(key, view);
+  for (const [key, data] of before ?? []) queryClient.setQueryData(key, data);
 }
 
 const refetch = () => queryClient.invalidateQueries();
 
 export interface AnswerInput {
-  ask: string;
-  choice?: string;
-  words?: string;
+  call: string;
+  /** The call's output: a decision's choice and words, `{}` for a note, `{acknowledged: true}` for a report. */
+  output: Record<string, unknown>;
 }
 
+/** Answer a call waiting on the user, which completes it. */
 export function useAnswer() {
   return useMutation({
-    mutationFn: ({ ask, choice, words }: AnswerInput) =>
-      request<AskRecord>(path("asks", ask, "answer"), { body: { choice, words } }),
-    onMutate: ({ ask }) =>
-      without((view) => ({
-        ...view,
-        asks_to_answer: view.asks_to_answer.filter((open) => open.id !== ask),
-      })),
-    onSuccess: (answered) => queryClient.setQueryData(["ask", answered.id], answered),
-    onError: (_error, _input, before) => restore(before),
+    mutationFn: ({ call, output }: AnswerInput) =>
+      request<{ call: string; output: Record<string, unknown> }>(path("pending", call), {
+        body: output,
+      }),
+    onMutate: ({ call }) => {
+      answered.add(call);
+      return without(call);
+    },
+    onError: (_error, { call }, before) => {
+      answered.delete(call);
+      restore(before);
+    },
     onSettled: refetch,
   });
 }
 
-function useMessageWrite(verb: "ack" | "read") {
+/** Close an actor as the root; the core refuses while actors under it are open. */
+export function useCloseActor() {
   return useMutation({
-    mutationFn: (message: string) =>
-      request<MessageRecord>(path("messages", message, verb), { body: {} }),
-    onMutate: (message) =>
-      without((view) => ({ ...view, inbox: view.inbox.filter((m) => m.id !== message) })),
-    onError: (_error, _message, before) => restore(before),
-    onSettled: refetch,
-  });
-}
-
-export const useAcknowledge = () => useMessageWrite("ack");
-export const useMarkRead = () => useMessageWrite("read");
-
-/** Close an agent as the user; the service refuses while agents under it are open. */
-export function useCloseAgent() {
-  return useMutation({
-    mutationFn: (agent: string) =>
-      request<ClosedAgent>(path("agents", agent, "close"), { body: {} }),
+    mutationFn: (actor: string) => callTool<ActorClosed>("actor_close", { actor }),
     onSettled: refetch,
   });
 }

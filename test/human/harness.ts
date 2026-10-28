@@ -93,8 +93,9 @@ export async function program(
   post: (path: string, body: unknown) => Promise<Response>,
   name = "storage",
 ) {
-  const created = await json(post("/api/tools/actor_create", { name, purpose: "Move storage." }));
-  const { actor, credential } = created.structuredContent;
+  const { actor, credential } = await json(
+    post("/api/tools/actor_create", { name, purpose: "Move storage." }),
+  );
   const reviews = fakeActor([REVIEW], async (input) => ({
     value: { verdict: `looked at ${input.change}` },
   }));

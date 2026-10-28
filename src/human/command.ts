@@ -27,7 +27,7 @@ function credential(): string {
 
 export const HUMAN_HELP = `usage: agentorg human [--port <n>]
 
-Run the human actor, the user's side of the organization, on 127.0.0.1 at --port, else AGENTORG_HUMAN_PORT, else ${DEFAULT_PORT}. It connects to the core at AGENTORG_URL with the root credential from AGENTORG_CREDENTIAL or the agentorg home, and serves the web app's API and sign-in. It logs to stderr and stops on SIGINT or SIGTERM.`;
+Run the human actor, the user's side of the organization, on 127.0.0.1 at --port, else AGENTORG_HUMAN_PORT, else ${DEFAULT_PORT}. It connects to the core at AGENTORG_URL with the root credential from AGENTORG_CREDENTIAL or the agentorg home, and serves the web app. It logs to stderr and stops on SIGINT or SIGTERM.`;
 
 export async function humanCommand(args: string[]): Promise<number> {
   const { values } = parseArgs({ args, options: { port: { type: "string" } }, strict: true });

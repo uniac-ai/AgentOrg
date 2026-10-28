@@ -12,12 +12,14 @@ test("the user's available tools come from the core, and calling one goes throug
 
   const called = await post("/api/tools/storage.review", { change: "#41" });
   assert.equal(called.status, 200);
-  assert.deepEqual((await json(called)).structuredContent, { verdict: "looked at #41" });
+  assert.deepEqual(await json(called), { verdict: "looked at #41" });
   assert.deepEqual(
     storage.received.map((each) => [each.name, each.input]),
     [["review", { change: "#41" }]],
   );
-  assert.equal((await json(post("/api/tools/nothing.here", {}))).isError, true);
+  const refused = await post("/api/tools/nothing.here", {});
+  assert.equal(refused.status, 400);
+  assert.equal((await json(refused)).code, "refused");
 });
 
 test("view and activity pass through from the core", async () => {

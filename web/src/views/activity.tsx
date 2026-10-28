@@ -1,66 +1,84 @@
-// Activity: every write on the record, newest first, a line each, grouped by day. Who did it,
-// what they did and to what read left to right; a refused write shows its error code.
+// Activity: every write and every routed call on the record, newest first, a line each, grouped by
+// day. Who did it, what they did and to what read left to right; a refusal shows its error code.
 
 import { Link } from "@tanstack/react-router";
 import { ActivityIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import type { ActivityEntry, ActivityModel } from "../control/activity.tsx";
-import { ClientMark } from "./marks.tsx";
+import type { AuditRecord } from "../../../src/human/types.ts";
+import type { ActivityModel } from "../control/activity.tsx";
+import { callTitle, nameOf } from "./calls.tsx";
 
 const VERBS: Record<string, string> = {
-  agent_create: "created",
-  agent_close: "closed",
-  agent_close_as_user: "closed",
-  session_attach: "attached a session",
+  actor_create: "created",
+  actor_close: "closed",
   status_set: "set its status",
-  ask_open: "asked",
-  ask_withdraw: "withdrew",
-  ask_answer: "answered",
-  ask_record_answer: "recorded your answer to",
-  ask_answer_as_user: "answered",
-  message_send: "sent a message",
-  inbox_read: "read its inbox",
-  message_ack: "acknowledged a report",
-  message_ack_as_user: "acknowledged a report",
-  message_read_as_user: "read a note",
+  call_withdraw: "withdrew",
 };
 
-function Target({ entry, model }: { entry: ActivityEntry; model: ActivityModel }) {
-  // An agent acting on itself, such as setting its status, names no one else.
-  if (entry.target === null || entry.target === entry.agent) return null;
-  const agent = model.agents.get(entry.target);
-  if (agent) {
-    return (
-      <Link
-        to="/people/$agentId"
-        params={{ agentId: agent.id }}
-        className="truncate font-medium hover:underline"
-      >
-        {agent.title}
-      </Link>
-    );
-  }
-  const ask = model.asks.get(entry.target);
-  if (ask) {
-    return (
-      <Link
-        to="/people/$agentId/asks/$askId"
-        params={{ agentId: ask.agent, askId: ask.id }}
-        className="truncate font-medium hover:underline"
-      >
-        {ask.title}
-      </Link>
-    );
-  }
-  return null;
+/** A routed call's line by the state it entered: called by its caller, settled by its callee. */
+const CALL_VERBS: Record<string, string> = {
+  pending: "called",
+  done: "answered",
+  failed: "failed",
+  withdrawn: "withdrew",
+};
+
+/** How the user settles a note or a report: there is nothing to answer. */
+const SETTLED: Record<string, string> = { note: "read", report: "acknowledged" };
+
+function verbOf(entry: AuditRecord, model: ActivityModel): string {
+  if (entry.operation !== "call") return VERBS[entry.operation] ?? entry.operation;
+  const tool = entry.target ? model.calls.get(entry.target)?.interface : undefined;
+  if (entry.outcome === "done" && tool && SETTLED[tool]) return SETTLED[tool];
+  return CALL_VERBS[entry.outcome] ?? "called";
 }
 
-function Line({ entry, model }: { entry: ActivityEntry; model: ActivityModel }) {
-  const actor = entry.agent
-    ? (model.agents.get(entry.agent)?.title ?? entry.agent)
-    : entry.channel === "page"
-      ? "You"
-      : "API";
+/** Whether the entry records a refusal, which shows its error code. */
+const refused = (entry: AuditRecord) =>
+  entry.operation === "call" ? !(entry.outcome in CALL_VERBS) : entry.outcome !== "ok";
+
+function Target({ entry, model }: { entry: AuditRecord; model: ActivityModel }) {
+  // An actor acting on itself, such as setting its status, names no one else.
+  if (entry.target === null || entry.target === entry.actor) return null;
+  const call = model.calls.get(entry.target);
+  if (call) {
+    return call.to === model.root ? (
+      <Link
+        to="/calls/$callId"
+        params={{ callId: call.id }}
+        className="truncate font-medium hover:underline"
+      >
+        {callTitle(call)}
+      </Link>
+    ) : (
+      <Link
+        to="/people/$actorId/calls/$callId"
+        params={{ actorId: call.to, callId: call.id }}
+        className="truncate font-medium hover:underline"
+      >
+        {callTitle(call)}
+      </Link>
+    );
+  }
+  if (!model.names.has(entry.target)) return null;
+  return entry.target === model.root ? null : (
+    <Link
+      to="/people/$actorId"
+      params={{ actorId: entry.target }}
+      className="truncate font-medium hover:underline"
+    >
+      {nameOf(entry.target, model.names)}
+    </Link>
+  );
+}
+
+function Line({ entry, model }: { entry: AuditRecord; model: ActivityModel }) {
+  const actor =
+    entry.actor === null
+      ? "agentorg"
+      : entry.actor === model.root
+        ? "You"
+        : nameOf(entry.actor, model.names);
   return (
     <li className="flex min-w-0 items-baseline gap-3 py-1.5 text-sm">
       <time
@@ -70,25 +88,17 @@ function Line({ entry, model }: { entry: ActivityEntry; model: ActivityModel }) 
         {new Date(entry.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
       </time>
       <span className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-1.5">
-        {entry.client ? <ClientMark client={entry.client} /> : null}
         <span className="font-medium">{actor}</span>
-        <span className="text-muted-foreground">{VERBS[entry.operation] ?? entry.operation}</span>
+        <span className="text-muted-foreground">{verbOf(entry, model)}</span>
         <Target entry={entry} model={model} />
-        {entry.summary ? (
-          <span className="min-w-0 basis-full truncate text-muted-foreground sm:basis-auto">
-            {entry.summary}
-          </span>
-        ) : null}
-        {entry.outcome !== "ok" ? (
-          <span className="text-xs text-destructive">{entry.outcome}</span>
-        ) : null}
+        {refused(entry) ? <span className="text-xs text-destructive">{entry.outcome}</span> : null}
       </span>
     </li>
   );
 }
 
 export function ActivityView(model: ActivityModel) {
-  const days = new Map<string, ActivityEntry[]>();
+  const days = new Map<string, AuditRecord[]>();
   for (const entry of model.entries) {
     const day = new Date(entry.at).toLocaleDateString([], {
       weekday: "short",
