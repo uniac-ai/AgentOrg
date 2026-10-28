@@ -4,10 +4,17 @@
  */
 
 import { z } from "zod";
-import { Actor, AuditEntry, Call, Handle, Id, LIMITS, StatusState, Text } from "./records.ts";
-
-/** The longest `call_result` wait, in seconds. */
-export const MAX_WAIT_SECONDS = 600;
+import {
+  Actor,
+  AuditEntry,
+  Call,
+  Handle,
+  Id,
+  LIMITS,
+  MAX_WAIT_SECONDS,
+  StatusState,
+  Text,
+} from "./records.ts";
 
 export const ActorCreate = z
   .strictObject({

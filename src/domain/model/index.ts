@@ -1,12 +1,14 @@
 /**
  * The domain's vocabulary, which actors may import too: the records, the interface descriptor,
- * the built-ins' schemas, and the shapes of a delivery, its outcome and a caller's answer.
+ * the built-ins' schemas, the communication standard's records and requests, and the shapes of a
+ * delivery, its outcome and a caller's answer.
  */
 
 import type { z } from "zod";
 import type { Interface } from "./records.ts";
 
 export * from "./builtins.ts";
+export * from "./communication.ts";
 export * from "./json-schema.ts";
 export * from "./records.ts";
 

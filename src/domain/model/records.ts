@@ -6,7 +6,10 @@ import { z } from "zod";
 export const MANAGER = "manager";
 
 /** Size caps. The core refuses longer text, which keeps logs out of the record. */
-export const LIMITS = { id: 64, text: 1000, summary: 2000 } as const;
+export const LIMITS = { id: 64, title: 200, text: 1000, summary: 2000, message: 20_000 } as const;
+
+/** The longest a read may wait for what it waits on, in seconds. */
+export const MAX_WAIT_SECONDS = 600;
 
 const text = (max: number) => z.string().trim().min(1).max(max);
 
