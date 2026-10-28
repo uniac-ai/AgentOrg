@@ -49,8 +49,7 @@ export class Organization implements Application, Presence {
       linkOf: (actor) => this.links.get(actor),
     });
     const communication = new Communication(store, this.registry, now);
-    const handlers = builtins(store, this.registry, this.calls, this.audit, communication, {
-      now,
+    const handlers = builtins(this.registry, this.calls, this.audit, communication, {
       disconnect: async (actor) => {
         const link = this.links.get(actor);
         if (link) this.offline(actor, link);

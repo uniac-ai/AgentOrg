@@ -9,12 +9,7 @@
 
 import type { z } from "zod";
 import { Conflict, NotFound } from "./errors.ts";
-import {
-  type Actor,
-  INTERFACE_NAME,
-  type InterfaceDescriptor,
-  type Status,
-} from "./model/index.ts";
+import { type Actor, INTERFACE_NAME, type InterfaceDescriptor } from "./model/index.ts";
 import type { ActorRow, Store } from "./ports.ts";
 
 export type { ActorRow };
@@ -98,7 +93,6 @@ export class Registry {
       credential_hash: hash,
       online: false,
       interfaces: [],
-      status: null,
       created_at_attach: createdAtAttach,
       created_at: this.now(),
       closed_at: null,
@@ -165,12 +159,6 @@ export class Registry {
       id,
       interfaces.filter((each) => INTERFACE_NAME.test(each.name)),
     );
-  }
-
-  setStatus(id: string, status: z.output<typeof Status>): ActorRow {
-    const actor = { ...this.found(id), status };
-    this.actors.update(actor);
-    return actor;
   }
 
   /** The handles from the root's report down to the actor, joined by dots; empty for the root. */

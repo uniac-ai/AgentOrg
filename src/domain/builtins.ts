@@ -8,8 +8,7 @@ import type { Audit } from "./audit.ts";
 import type { Calls } from "./calls.ts";
 import type { Communication } from "./communication.ts";
 import { Conflict, Forbidden, Invalid } from "./errors.ts";
-import { type BuiltinName, HISTORY_MAX, type RequestOf, type ResponseOf } from "./model/index.ts";
-import type { Store } from "./ports.ts";
+import type { BuiltinName, RequestOf, ResponseOf } from "./model/index.ts";
 import type { ActorRow, Registry } from "./registry.ts";
 
 /** What `call_result` needs from the request it serves. */
@@ -28,14 +27,12 @@ export type Handlers = {
 };
 
 export function builtins(
-  store: Store,
   registry: Registry,
   calls: Calls,
   audit: Audit,
   communication: Communication,
-  options: { now: () => string; disconnect: (actor: string) => Promise<void> },
+  options: { disconnect: (actor: string) => Promise<void> },
 ): Handlers {
-  const { now } = options;
   const isRoot = (actor: ActorRow) => actor.manager === null;
 
   return {
@@ -68,37 +65,6 @@ export function builtins(
       const ended = calls.endFor(target, actor.id);
       await options.disconnect(target.id);
       return { actor: registry.asActor(closed), ended_calls: ended };
-    },
-
-    status_set: async (actor, request) =>
-      registry.asActor(
-        registry.setStatus(actor.id, {
-          state: request.state,
-          summary: request.summary,
-          updated_at: now(),
-        }),
-      ),
-
-    view: async (actor, request) => {
-      const target = request.actor === undefined ? actor : registry.found(request.actor);
-      if (target.id !== actor.id && target.manager !== actor.id && !isRoot(actor)) {
-        throw new Forbidden(`you see yourself and your direct reports, not ${target.name}`);
-      }
-      const pending = store.calls.pendingTo(target.id);
-      const openCalls = store.calls.pendingFrom(target.id);
-      const history = store.calls.settled(target.id, HISTORY_MAX);
-      const manager = target.manager === null ? undefined : registry.get(target.manager);
-      return {
-        actor: registry.asActor(target),
-        manager: manager ? registry.asActor(manager) : null,
-        reports: registry.reports(target.id).map((report) => registry.asActor(report)),
-        pending,
-        open_calls: openCalls,
-        history,
-        names: registry.names(
-          [...pending, ...openCalls, ...history].flatMap((call) => [call.from, call.to]),
-        ),
-      };
     },
 
     progress_set: async (actor, request) => communication.setProgress(actor, request),

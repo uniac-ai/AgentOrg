@@ -8,7 +8,7 @@ agentorg organizes AI agents and programs the way a company organizes people.
 - **Actors are positions.** An actor is a position with a manager. The user is the root, the one actor without a manager.
 - **Calls go up and down.** An actor calls the interfaces its manager and its direct reports expose. The root calls any actor's.
 - **Processing a call is the actor's own business.** The core routes and records calls; what an actor does with one is up to it.
-- **Nothing subscribes.** A manager reads its reports' status and calls when it chooses.
+- **Nothing subscribes.** A manager reads its reports' progress, questions and calls when it chooses.
 - **Communication is part of the core.** Each actor publishes its progress and its questions for anyone to read, and actors send each other private messages.
 
 ## Layers
@@ -49,7 +49,7 @@ The domain's interface descriptor is its own: name, title and description, input
 
 | Record | Fields | Rules |
 |---|---|---|
-| **Actor** | id; name, a handle unique among its open siblings; purpose; manager (an actor id, or null for the root); credential hash; online; its exposed interfaces as last listed; status (`running`, `waiting`, `blocked` or `review`, with a plain-text summary); created at attach; created at; closed at | Its manager creates it, and its manager or the root closes it, once its own reports are closed. Its path is its handles from the root's report down, as `release.storage`. An interface name holds letters, digits, `_` and `-`, since dots join handles and names. A handle that begins a built-in's name, as `call` begins `call_result`, is refused, since clients turn a routed name's dot into `_`. |
+| **Actor** | id; name, a handle unique among its open siblings; purpose; manager (an actor id, or null for the root); credential hash; online; its exposed interfaces as last listed; created at attach; created at; closed at | Its manager creates it, and its manager or the root closes it, once its own reports are closed. Its path is its handles from the root's report down, as `release.storage`. An interface name holds letters, digits, `_` and `-`, since dots join handles and names. A handle that begins a built-in's name, as `call` begins `call_result`, is refused, since clients turn a routed name's dot into `_`. |
 | **Call** | id; from; to; interface (the callee's own name for it); input; state (`pending`, `done`, `failed` or `withdrawn`); output, as a structured value and parts, or error; cause (the call that led to this one); run (the callee's handle for it while it runs long); created, delivered and settled at | It is recorded before it is delivered, and settles once. A result that arrives after it settled is dropped. |
 | **Progress** | actor; version; state (`running`, `waiting`, `blocked` or `review`); summary; items, each with a title, a state (`planned`, `running`, `waiting`, `blocked` or `review`) and optionally a summary, links, an owner and what it waits on; links; updated at | Each set adds a version, and reads leave earlier versions out unless asked. Item titles are unique, and done items drop off. A link is an http, https or file URL. |
 | **Question** | id; cursor; from; to; text; links; options and a recommendation; answerer; cause; answer (who answered, the choice, the words, whether the asker recorded them, and when); created at | It is answered once. |
@@ -108,8 +108,6 @@ A human may answer hours later, so a long-running interface may take a call as a
 |---|---|
 | `actor_create {name, purpose, created_at_attach?}` | Creates a report of the caller, and returns it with its credential. The credential is shown only once. The root alone may mark a position created as a session the user started attaches to it. |
 | `actor_close {actor}` | The manager, or the root, closes an actor. It is refused while the actor has open reports of its own. The actor's own pending calls are withdrawn, the calls into it fail, and its connection closes. The root is never closed. |
-| `status_set {state, summary}` | Sets the caller's own status. |
-| `view {actor?}` | The caller's own position, or a direct report's; the root may view anyone. It holds what is pending on that actor and from whom, its own open calls, its reports with their status, its manager, and its 50 most recent settled calls. |
 | `progress_set {state?, summary?, items?, links?}` | Replaces the fields given of the caller's progress. The first set names its state. |
 | `team {actor?, depth?}` | A position and its reports down to a depth, by default the caller and its direct reports: each one's purpose, presence, progress state and summary, open questions, and its interfaces the caller can call, with the root's id. Anyone may read any position. |
 | `progress {actor, history?}` | An actor's full progress, with its open questions and, when asked, earlier versions. Anyone may read it. |

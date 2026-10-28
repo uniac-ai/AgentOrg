@@ -6,17 +6,7 @@
 
 import { z } from "zod";
 import { COMMUNICATION } from "./communication.ts";
-import {
-  Actor,
-  AuditEntry,
-  Call,
-  Handle,
-  Id,
-  LIMITS,
-  MAX_WAIT_SECONDS,
-  StatusState,
-  Text,
-} from "./records.ts";
+import { Actor, AuditEntry, Call, Handle, Id, MAX_WAIT_SECONDS, Text } from "./records.ts";
 
 /**
  * A handle that begins a built-in's name. Clients such as Claude Code and Codex turn the dot of a
@@ -59,44 +49,6 @@ export const ActorClosed = z
       .describe("Its pending calls: those it made are withdrawn, and those into it failed."),
   })
   .meta({ id: "ActorClosed" });
-
-export const StatusSet = z
-  .strictObject({
-    state: StatusState,
-    summary: z
-      .string()
-      .trim()
-      .max(LIMITS.summary)
-      .default("")
-      .describe("Plain text, never a log; line breaks are kept."),
-  })
-  .meta({ id: "StatusSet" });
-
-export const ViewRequest = z
-  .strictObject({
-    actor: Id.optional().describe(
-      "A direct report to view; the root may view anyone. Default: you.",
-    ),
-  })
-  .meta({ id: "ViewRequest" });
-
-export const HISTORY_MAX = 50;
-
-export const View = z
-  .strictObject({
-    actor: Actor,
-    manager: Actor.nullable().describe("Null for the root."),
-    reports: z.array(Actor).describe("Its direct reports that are not closed, with their status."),
-    pending: z.array(Call).describe("Pending calls into it, oldest first."),
-    open_calls: z.array(Call).describe("Its own pending calls, oldest first."),
-    history: z
-      .array(Call)
-      .describe(`Settled calls into it and from it, newest first, at most ${HISTORY_MAX}.`),
-    names: z
-      .record(z.string(), z.string())
-      .describe("The path of each actor the calls name, by id; for the root, its name."),
-  })
-  .meta({ id: "View", description: "What an actor sees of its own position." });
 
 export const CallResult = z
   .strictObject({
@@ -151,24 +103,6 @@ Returns the actor and its credential, shown only this once. Whatever fills the p
     description: `Close a direct report whose work is done; the root may close any actor.
 
 Refused while it has open reports of its own. Its pending calls end and its connections close.`,
-  },
-  status_set: {
-    writes: true,
-    rootOnly: false,
-    request: StatusSet,
-    response: Actor,
-    description: `Set your own status: running, waiting, blocked or review, with a short plain-text summary.
-
-Your manager sees it in its view. It is a status, not a log.`,
-  },
-  view: {
-    writes: false,
-    rootOnly: false,
-    request: ViewRequest,
-    response: View,
-    description: `See your position, or a direct report's: what is pending on it and from whom, its own open calls, its reports with their status, its manager, and recent calls.
-
-The root may view any actor.`,
   },
   ...COMMUNICATION,
   call_result: {
