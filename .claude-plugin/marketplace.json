@@ -8,7 +8,7 @@
     {
       "name": "agentorg",
       "source": "./adapters/claude-code",
-      "description": "The task-execution and reporting skills, and the agentorg MCP server."
+      "description": "Fill a position in an agentorg organization from a Claude Code session: the agent actor, message delivery and waking, and the task-execution and reporting skills."
     }
   ]
 }

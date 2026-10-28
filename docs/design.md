@@ -21,7 +21,7 @@ The code is in layers. Each depends only on the one below it, through a small in
 | **Protocol binding** | `src/bindings/mcp/` | Encoding the domain's operations on the wire, both ways: listing interfaces, calls, runs, cancellation, change notices, metadata. It is the only code that imports MCP. | MCP |
 | **Domain** | `src/domain/` | Actors and their interfaces, calls and their lifecycle, the wiring, progress and messages, the built-ins, the audit trail. | agentorg's own model |
 | **Storage** | `src/storage/sqlite/` | Keeping the domain's records, behind the domain's `Store` port. | SQLite through `node:sqlite` |
-| **Actors** | `src/actor/`, `src/human/`, programs | What a party does with a call. The actor library gives an actor an API that names no protocol or network. | the human actor, programs |
+| **Actors** | `src/actor/`, `src/human/`, `src/agent/`, programs | What a party does with a call. The actor library gives an actor an API that names no protocol or network. | the human actor, the agent actor, programs |
 
 How the layers meet:
 - **The domain's ports** are in `src/domain/ports.ts`:
@@ -30,7 +30,7 @@ How the layers meet:
   - `Application`, which a binding serves to callers: what an actor may call, and calling it.
   - `Store`, the record reads and writes the domain needs. The storage layer implements it.
 - **The composition root**, `src/core/index.ts`, assembles the core from the domain, SQLite storage, the MCP binding and the network listener.
-- **The actor library** (`src/actor/`) assembles the network's connector with the binding on an actor's side.
+- **The actor library** (`src/actor/`) assembles the network's connector with the binding on an actor's side, and the binding's server for the session that fills a position (`occupant.ts`), behind its `Presented` port.
 - **`test/layers.test.ts` enforces the rules:**
   - The domain imports no MCP, web framework, WebSocket, database or Node built-in, and uses no Node globals. Its secrets and hashes come from Web Crypto, so it runs on any JavaScript runtime that has that, and the web app type-checks through its model.
   - The network imports no domain, binding or storage.
@@ -141,6 +141,24 @@ How the domain is encoded:
 - **A call is `tools/call`**, with `_meta["agentorg/call"] = {id, from, cause}`. A caller names its cause with `_meta["agentorg/cause"]`.
 - **A run is an MCP task.** The core sends a long-running call with `params.task`, waits on `tasks/result`, and asks again at once when the actor's `notifications/tasks/status` says the task finished. Cancelling is `tasks/cancel`, and an unknown task is a lost run.
 - **An answer is a `CallToolResult`.** A done call returns B's own result, with `_meta["agentorg/call"] = {id, state}`. A pending one returns `{call, state: "pending"}`. A routed tool's listed `outputSchema` is B's or that pending shape, so that clients checking results accept both.
+
+## The agent actor
+
+The agent actor, `agentorg agent` in `src/agent/`, lets a Claude Code or Codex session fill a position. The client starts it over stdio for each session, and it connects to the core as that position with the actor library.
+
+- **What the session sees.** Until the session attaches, its only tool is `attach`, the agent actor's sign-in.
+  - `attach {actor}` fills the position the session's brief names.
+  - `attach {name, purpose}`, allowed only on a session's first attach, creates its position directly under the root. The agent actor uses the root's credential for that one call.
+  - From then on, the session's tools are the position's available interfaces as the core offers them, unchanged. The request endpoint tells no caller when its offers change, so the agent actor lists them again after each call, and sends `tools/list_changed` when they differ.
+- **Credentials.** The session never sees one.
+  - Each position's credential is kept in the agentorg home's credential store, `actors/<id>`, mode 600.
+  - When the session's `actor_create` creates a report, the agent actor keeps the report's credential there, and the session gets the result with that credential replaced by a note that it was kept.
+  - `actor_close` forgets the closed position's credential.
+- **Resumed sessions.** `sessions/<client>-<session id>/position` names the position a session fills, so a resumed session fills it again without attaching. Claude Code names the session in `CLAUDE_CODE_SESSION_ID`. Codex names none, so a Codex session attaches each time it starts.
+- **Delivery and waking.** The client's hooks run the waiter, `agentorg agent wait`, when the session starts and whenever its turn ends. In Claude Code they are `asyncRewake` hooks.
+  - The waiter waits, as the position, for messages to it that it has not read.
+  - It writes them framed as agentorg's, with each sender's path and each message's id, marks them read, and exits with status 2. Claude Code hands that output to the session as its next input, starting a turn when the session is idle.
+  - A newer waiter replaces an older one, which then ends without writing. Delivery is at least once.
 
 ## The network
 

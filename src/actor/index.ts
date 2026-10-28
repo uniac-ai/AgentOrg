@@ -1,13 +1,15 @@
 /**
- * The client library for actors: connect to the core, expose interfaces with their handlers, and
- * call the interfaces available. `api.ts` is the API; this module assembles it from the network's
- * connector and the protocol binding, which an actor never imports itself.
+ * The client library for actors: connect to the core, expose interfaces with their handlers, call
+ * the interfaces available, and present them to whatever fills the position. `api.ts` is the API;
+ * this module assembles it from the network's connector and the protocol binding, which an actor
+ * never imports itself.
  */
 
 import { McpActor } from "../bindings/mcp/actor.ts";
 import { PATHS, SUBPROTOCOL } from "../bindings/mcp/encoding.ts";
+import { presentToOccupant } from "../bindings/mcp/occupant.ts";
 import { Connector } from "../network/index.ts";
-import type { Actor, Exposed } from "./api.ts";
+import type { Actor, Exposed, Presented } from "./api.ts";
 
 export type * from "./api.ts";
 
@@ -52,4 +54,12 @@ export async function connectActor(
 /** Connect a client that only calls, such as the command line. */
 export async function connectClient(options: ConnectOptions): Promise<Actor> {
   return opened(new McpActor(connector(options), undefined, options.name ?? "agentorg-client"));
+}
+
+/**
+ * Present an actor's offers to the session that fills its position, over this process's stdin and
+ * stdout, as an agent session starts it.
+ */
+export function presentOverStdio(presented: Presented): Promise<{ close(): Promise<void> }> {
+  return presentToOccupant(presented);
 }
