@@ -17,6 +17,9 @@ function port(): number {
   return Number(process.env.AGENTORG_HUMAN_PORT || DEFAULT_PORT);
 }
 
+/** Where the human actor serves the web app: 127.0.0.1 at `AGENTORG_HUMAN_PORT`, else 8741. */
+export const humanUrl = () => `http://127.0.0.1:${port()}`;
+
 function credential(): string {
   const found = readCredential();
   if (found === undefined) {
@@ -51,7 +54,7 @@ Mint a one-time link that signs a browser in to the web app the human actor serv
  * with `BROWSER` or the system's opener. Run from a script or a pipe, it only prints.
  */
 export async function uiCommand(): Promise<number> {
-  const human = `http://127.0.0.1:${port()}`;
+  const human = humanUrl();
   const response = await fetch(`${human}/signin/link`, {
     method: "POST",
     headers: { Authorization: `Bearer ${credential()}` },

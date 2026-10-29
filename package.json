@@ -27,7 +27,6 @@
   "files": [
     "dist/src",
     "dist/page",
-    "service",
     "skills"
   ],
   "scripts": {
