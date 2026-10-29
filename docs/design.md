@@ -146,10 +146,15 @@ How the domain is encoded:
 
 The agent actor, `agentorg agent` in `src/agent/`, lets a Claude Code or Codex session fill a position. The client starts it over stdio for each session, and it connects to the core as that position with the actor library.
 
-- **What the session sees.** Until the session attaches, its only tool is `attach`, the agent actor's sign-in. Before its first turn, the client's session-start hook runs `agentorg agent context`, so a session that fills no position reads that it attaches before any other action.
+- **What the session sees.** Until the session attaches, its only tool is `attach`, the agent actor's sign-in. Before its first turn, the client's session-start hook runs `agentorg agent context`, so a session that fills no position reads that it loads the `agentorg` skill and attaches before any other action. The agent actor's MCP server sends instructions saying the same, for clients without that hook.
   - `attach {actor}` fills the position the session's brief names.
   - `attach {name, purpose}`, allowed only on a session's first attach, creates its position directly under the root. The agent actor uses the root's credential for that one call.
   - From then on, the session's tools are the position's available interfaces as the core offers them, unchanged. The request endpoint tells no caller when its offers change, so the agent actor lists them again after each call, and sends `tools/list_changed` when they differ.
+- **What the session is told.** Each kind of guidance has one place:
+  - the tool descriptions, which every client shows, say what each tool does and takes, and the core enforces who may do what;
+  - the server's instructions, the start hint and the frame around what the waiter delivers say what to do at that moment;
+  - the `agentorg` skill, `skills/agentorg/`, carries the operating model the core can't enforce, such as when to ask rather than decide, at what level to write, and when to delegate and close, with a reference per client and one for connecting a client. It names tools but doesn't restate their descriptions;
+  - an organization's own conventions are a skill of its own, loaded beside it.
 - **Credentials.** The session never sees one.
   - Each position's credential is kept in the agentorg home's credential store, `actors/<id>`, mode 600.
   - When the session's `actor_create` creates a report, the agent actor keeps the report's credential there, and the session gets the result with that credential replaced by a note that it was kept.

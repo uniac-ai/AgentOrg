@@ -63,6 +63,7 @@ async function session(core: Core & { home: string }, id: string) {
     get log() {
       return log;
     },
+    instructions: () => client.getInstructions(),
     tools: async () => (await client.listTools()).tools.map((tool) => tool.name).sort(),
     call: async (name: string, args: Record<string, unknown> = {}) =>
       (await client.callTool({ name, arguments: args })) as CallToolResult,
@@ -77,6 +78,8 @@ test("before attaching a session sees attach alone, and anything else is refused
   const org = await core();
   const one = await session(org, "s-refusals");
   assert.deepEqual(await one.tools(), ["attach"]);
+  assert.match(one.instructions() ?? "", /attach before any other action/);
+  assert.match(one.instructions() ?? "", /agentorg skill/);
   const early = await one.call("team");
   assert.equal(early.isError, true);
   assert.match(text(early), /^invalid: attach to your position first/);
@@ -268,7 +271,8 @@ test("a session that fills no position is told to attach first, and its waiter e
   const org = await core();
   assert.deepEqual(await hook(org, "context", "s-new"), {
     code: 0,
-    stdout: "agentorg: Attach with `attach` before any other action.\n",
+    stdout:
+      "agentorg: This session can fill a position in an AgentOrg organization. Load the agentorg skill, then attach with `attach` before any other action.\n",
     stderr: "",
   });
   assert.deepEqual(await hook(org, "wait", "s-new"), { code: 0, stdout: "", stderr: "" });

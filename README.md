@@ -15,6 +15,7 @@ The project has these pieces:
 - **The core** (`agentorg core`), the system of record and the control point. It holds the actors and their credentials, wires who may call whom, routes and records every call, and keeps the audit trail. It holds no UI.
 - **The actor library** (`src/actor/`), with which a Node program fills a position: it exposes interfaces with their handlers and calls the ones available to it.
 - **The agent actor** (`agentorg agent`), with which a Claude Code or Codex session fills a position. It's installed in Claude Code as a plugin, which also delivers messages to the session and wakes it when idle.
+- **The `agentorg` skill** (`skills/agentorg/`), which tells an agent session how to work in a position: when to set its progress, ask, send a message or claim a resource, how to escalate, delegate and close, and how to connect a client. The Claude Code plugin carries it, and other clients install it from the package. An organization adds its own conventions in a skill of its own, beside it.
 - **Layers** that keep the model apart from its carriers: the domain (`src/domain/`) knows no protocol, network or database, and MCP (`src/bindings/mcp/`), the network (`src/network/`) and SQLite (`src/storage/sqlite/`) each sit behind its ports.
 - **The command line** (`agentorg`), which runs the core and its built-in tools from a terminal.
 

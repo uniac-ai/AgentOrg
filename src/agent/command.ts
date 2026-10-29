@@ -119,7 +119,8 @@ const sessionOf = (name: string, client: Client) => {
 };
 
 /** What a session that fills no position reads before its first turn. */
-export const ATTACH_FIRST = "agentorg: Attach with `attach` before any other action.";
+export const ATTACH_FIRST =
+  "agentorg: This session can fill a position in an AgentOrg organization. Load the agentorg skill, then attach with `attach` before any other action.";
 
 export const AGENT_HELP = `usage: agentorg agent [--client claude-code|codex]
        agentorg agent context [--client claude-code]
@@ -128,7 +129,7 @@ export const AGENT_HELP = `usage: agentorg agent [--client claude-code|codex]
 
 Run the agent actor, which lets a client's session fill a position: the MCP server the client starts over stdio for each session, connected to the core at AGENTORG_URL. Until the session attaches, it offers attach; then the position's interfaces. It keeps the credentials of positions the session creates in the agentorg home, and remembers which position the session fills, so a resumed session fills it again.
 
-context prints, for a session that fills no position yet, the line telling it to attach first, and nothing for one that does. The client's session-start hook runs it.
+context prints, for a session that fills no position yet, the line telling it to load the agentorg skill and attach first, and nothing for one that does. The client's session-start hook runs it.
 
 prompt reads the client's prompt hook input on stdin and, for a session that fills a position, keeps what the user typed, so that the session can record it as the user's answer to its question. It keeps nothing the client delivered instead.
 

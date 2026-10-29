@@ -8,7 +8,7 @@
     {
       "name": "agentorg",
       "source": "./adapters/claude-code",
-      "description": "Fill a position in an agentorg organization from a Claude Code session: the agent actor, message delivery and waking, and the task-execution and reporting skills."
+      "description": "Fill a position in an agentorg organization from a Claude Code session: the agent actor, message delivery and waking, and the agentorg skill."
     }
   ]
 }

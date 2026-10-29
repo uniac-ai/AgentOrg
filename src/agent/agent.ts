@@ -49,6 +49,9 @@ Give actor, the id your brief names. A session the user started with an appointm
   long_running: false,
 };
 
+/** What the session's client may show its model about the agent actor's tools as a whole. */
+export const INSTRUCTIONS = `These tools make this session a position in an AgentOrg organization: a responsibility with a manager, under the user. Until the session attaches, attach is its only tool: attach before any other action, with the actor id the brief names, or with a name and purpose when the user started the session with no position named. The tools are then the position's. How to work in a position is the agentorg skill; without it, read https://github.com/uniac-ai/AgentOrg/blob/main/skills/agentorg/SKILL.md.`;
+
 const refused = (code: string, message: string): Answer => ({ state: "refused", code, message });
 
 /** The SDK's own limit on a request, which a call that waits longer must lift. */
@@ -64,6 +67,7 @@ export interface AgentOptions {
 }
 
 export class Agent implements Presented {
+  readonly instructions = INSTRUCTIONS;
   readonly #options: AgentOptions;
   readonly #listeners: (() => void)[] = [];
   #position: Actor | undefined;
