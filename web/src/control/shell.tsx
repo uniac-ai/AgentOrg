@@ -17,7 +17,7 @@ import { PaletteControl } from "./palette.tsx";
 export type Place =
   | { view: "you" }
   | { view: "activity" }
-  | { view: "actor"; id: string }
+  | { view: "actor"; id: string; name: string | undefined }
   | { view: "other" };
 
 export interface SidebarNode {
@@ -69,7 +69,7 @@ export function ShellControl() {
   }
   const place: Place =
     actorId !== undefined
-      ? { view: "actor", id: actorId }
+      ? { view: "actor", id: actorId, name: org?.members.get(actorId)?.name }
       : pathname === "/activity"
         ? { view: "activity" }
         : pathname === "/"

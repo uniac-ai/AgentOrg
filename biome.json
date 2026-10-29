@@ -11,5 +11,13 @@
     "parser": {
       "tailwindDirectives": true
     }
-  }
+  },
+  "overrides": [
+    {
+      "includes": ["src/**", "test/**"],
+      "linter": {
+        "rules": { "correctness": { "usePlaywrightValidDescribeCallback": "off" } }
+      }
+    }
+  ]
 }

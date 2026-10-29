@@ -4,9 +4,14 @@
 
 import { SendIcon, XIcon } from "lucide-react";
 import { useEffect, useRef } from "react";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
-import { cn } from "@/lib/utils";
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupTextarea,
+} from "@/components/ui/input-group";
 import { SR } from "./marks.tsx";
 import { firstLine, type Names, nameOf } from "./messages.tsx";
 
@@ -57,21 +62,20 @@ export function Composer(model: ComposerModel) {
         {model.targets.length > 0 ? (
           <ul aria-label="Answers" className="flex flex-wrap gap-1.5">
             {model.targets.map((target) => (
-              <li
-                key={target.id}
-                className="inline-flex max-w-full items-center gap-1 rounded-md bg-muted py-0.5 pr-0.5 pl-2 text-xs"
-              >
-                <span className="shrink-0 font-medium">{nameOf(target.from, model.names)}</span>
-                <span className="truncate text-muted-foreground">{firstLine(target.text)}</span>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-xs"
-                  onClick={() => model.onRemove(target.id)}
-                >
-                  <XIcon aria-hidden="true" />
-                  <SR>Leave out</SR>
-                </Button>
+              <li key={target.id} className="min-w-0 max-w-full">
+                <Badge variant="secondary" className="h-auto max-w-full gap-1 pr-0.5">
+                  <span className="shrink-0 font-medium">{nameOf(target.from, model.names)}</span>
+                  <span className="truncate text-muted-foreground">{firstLine(target.text)}</span>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-xs"
+                    onClick={() => model.onRemove(target.id)}
+                  >
+                    <XIcon aria-hidden="true" />
+                    <SR>Leave out</SR>
+                  </Button>
+                </Badge>
               </li>
             ))}
           </ul>
@@ -84,6 +88,7 @@ export function Composer(model: ComposerModel) {
                 key={label}
                 type="button"
                 size="sm"
+                className="h-auto min-h-7 max-w-full wrap-anywhere whitespace-normal"
                 variant={model.choice === label ? "default" : "outline"}
                 aria-pressed={model.choice === label}
                 onClick={() => model.onChoose(model.choice === label ? undefined : label)}
@@ -93,8 +98,8 @@ export function Composer(model: ComposerModel) {
             ))}
           </fieldset>
         ) : null}
-        <div className="flex items-end gap-2">
-          <Textarea
+        <InputGroup className="items-end">
+          <InputGroupTextarea
             ref={field}
             aria-label={model.placeholder}
             placeholder={model.placeholder}
@@ -111,13 +116,20 @@ export function Composer(model: ComposerModel) {
                 model.onLeave();
               }
             }}
-            className={cn("max-h-48 min-h-10 resize-none bg-background", "dark:bg-input/30")}
+            className="max-h-48 min-h-12 text-base sm:text-sm"
           />
-          <Button type="submit" size="icon" disabled={model.sending || empty}>
-            <SendIcon aria-hidden="true" />
-            <SR>Send</SR>
-          </Button>
-        </div>
+          <InputGroupAddon align="inline-end" className="pb-2">
+            <InputGroupButton
+              type="submit"
+              variant="default"
+              size="icon-sm"
+              disabled={model.sending || empty}
+            >
+              <SendIcon aria-hidden="true" />
+              <SR>Send</SR>
+            </InputGroupButton>
+          </InputGroupAddon>
+        </InputGroup>
         {model.error ? (
           <p role="alert" className="text-sm text-destructive">
             {model.error}

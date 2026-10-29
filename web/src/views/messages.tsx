@@ -14,7 +14,9 @@ import {
   ShieldCheckIcon,
   StarIcon,
 } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardFooter, CardHeader } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { cn } from "@/lib/utils";
 import type { LinkRecord, MessageRecord, QuestionRecord } from "../../../src/clients/web/types.ts";
@@ -64,16 +66,15 @@ export function Links({ links, className }: { links: readonly LinkRecord[]; clas
   return (
     <ul className={cn("flex flex-wrap gap-1.5", className)}>
       {links.map((link) => (
-        <li key={link.url}>
-          <a
-            href={link.url}
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex max-w-72 items-center gap-1 rounded-md border bg-background px-2 py-0.5 text-xs hover:bg-muted"
+        <li key={link.url} className="min-w-0 max-w-full">
+          <Badge
+            variant="outline"
+            render={<a href={link.url} target="_blank" rel="noreferrer" />}
+            className="max-w-full min-w-0 sm:max-w-72"
           >
             <ExternalLinkIcon aria-hidden="true" className="size-3 shrink-0" />
             <span className="truncate">{link.title ?? link.url.replace(/^https?:\/\//, "")}</span>
-          </a>
+          </Badge>
         </li>
       ))}
     </ul>
@@ -84,7 +85,7 @@ export function Links({ links, className }: { links: readonly LinkRecord[]; clas
 export function Words({ text }: { text: string }) {
   const [lead, ...rest] = text.split("\n");
   return (
-    <div className="flex flex-col gap-1">
+    <div className="flex min-w-0 flex-col gap-1 wrap-anywhere">
       <p className="font-medium">{lead}</p>
       {rest.join("\n").trim() ? (
         <p className="whitespace-pre-wrap text-sm text-muted-foreground">
@@ -126,10 +127,13 @@ function Options({
             aria-pressed={picking ? filled : undefined}
             disabled={busy}
             onClick={() => onPress(option.label)}
-            className={cn(stacked && "h-auto justify-start py-2 text-left whitespace-normal")}
+            className={cn(
+              "h-auto min-h-8 min-w-0 max-w-full text-left whitespace-normal",
+              stacked && "justify-start py-2",
+            )}
           >
             {recommended ? <StarIcon aria-hidden="true" className="fill-current" /> : null}
-            <span className="flex min-w-0 flex-1 flex-col">
+            <span className="flex min-w-0 flex-1 flex-col wrap-anywhere">
               <span>
                 {option.label}
                 {recommended ? <SR>, recommended</SR> : null}
@@ -151,22 +155,15 @@ function Options({
   );
 }
 
-/** A card in a list: a row the keys move through, with who sent it, to whom, and when. */
-function Card({
-  id,
-  label,
+/** The parties and time of a question or message. */
+function RecordHeader({
   lead,
   from,
   to,
   marks,
   at,
-  selected,
-  approval,
   names,
-  children,
 }: {
-  id: string;
-  label: string;
   /** The mark leading its header: a checkbox where it can join an answer, else its icon. */
   lead: React.ReactNode;
   from: { id: string; member: Member | undefined };
@@ -174,67 +171,27 @@ function Card({
   to: { id: string; member: Member | undefined } | undefined;
   marks: React.ReactNode;
   at: string;
-  selected: boolean;
-  /** An approval only the user gives, which stands out. */
-  approval: boolean;
   names: Names;
-  children: React.ReactNode;
 }) {
   return (
-    <article
-      data-row={id}
-      // biome-ignore lint/a11y/noNoninteractiveTabindex: a card is a row the keys move through.
-      tabIndex={0}
-      aria-label={label}
-      className={cn(
-        "flex flex-col gap-2.5 rounded-lg border bg-card p-3 outline-none focus-visible:ring-2 focus-visible:ring-ring",
-        approval && "border-state-review/50",
-        selected && "border-primary/60 bg-muted/40",
-      )}
-    >
-      <header className="flex min-w-0 items-center gap-2 text-sm text-muted-foreground">
-        {lead}
-        <ActorName
-          id={from.id}
-          names={names}
-          member={from.member}
-          className="font-medium text-foreground"
-        />
-        {to ? (
-          <>
-            <SR>to</SR>
-            <span aria-hidden="true">→</span>
-            <ActorName id={to.id} names={names} member={to.member} />
-          </>
-        ) : null}
-        {marks}
-        <Ago at={at} className="ml-auto shrink-0 text-xs tabular-nums" />
-      </header>
-      {children}
-    </article>
-  );
-}
-
-function Action({
-  onClick,
-  disabled,
-  children,
-}: {
-  onClick: () => void;
-  disabled?: boolean;
-  children: React.ReactNode;
-}) {
-  return (
-    <Button
-      type="button"
-      variant="ghost"
-      size="sm"
-      disabled={disabled}
-      onClick={onClick}
-      className="text-muted-foreground"
-    >
-      {children}
-    </Button>
+    <CardHeader className="flex min-w-0 flex-row items-center gap-2 text-sm text-muted-foreground">
+      {lead}
+      <ActorName
+        id={from.id}
+        names={names}
+        member={from.member}
+        className="font-medium text-foreground"
+      />
+      {to ? (
+        <>
+          <SR>to</SR>
+          <span aria-hidden="true">→</span>
+          <ActorName id={to.id} names={names} member={to.member} />
+        </>
+      ) : null}
+      {marks}
+      <Ago at={at} className="ml-auto shrink-0 text-xs tabular-nums" />
+    </CardHeader>
   );
 }
 
@@ -264,59 +221,70 @@ export function QuestionCard(model: QuestionCardModel) {
   const { question, names } = model;
   return (
     <Card
-      id={question.id}
-      label={`Question from ${nameOf(question.from, names)}: ${firstLine(question.text)}`}
-      lead={
-        model.selected === undefined ? (
-          <MessageCircleQuestionIcon
-            aria-hidden="true"
-            className="size-4 shrink-0 text-state-waiting"
-          />
-        ) : (
-          <Checkbox
-            checked={model.selected}
-            onCheckedChange={(checked) => model.onSelect(checked)}
-            aria-label="In the answer"
-          />
-        )
-      }
-      from={{ id: question.from, member: model.from }}
-      to={model.to && { id: question.to, member: model.to }}
-      marks={
-        <>
-          {question.cause !== null ? (
-            <span title="Carried up" className="inline-flex">
-              <CornerLeftUpIcon aria-hidden="true" className="size-3.5" />
-              <SR>, carried up</SR>
-            </span>
-          ) : null}
-          {model.approver ? (
-            <span
-              title={model.approver === "you" ? "Approval: yours alone" : "Approval"}
-              className={cn("inline-flex", model.approver === "you" && "text-state-review")}
-            >
-              <ShieldCheckIcon aria-hidden="true" className="size-3.5" />
-              <SR>{model.approver === "you" ? ", an approval only you give" : ", an approval"}</SR>
-            </span>
-          ) : null}
-        </>
-      }
-      at={question.created_at}
-      selected={model.selected === true}
-      approval={model.approver === "you"}
-      names={names}
+      data-row={question.id}
+      tabIndex={0}
+      role="article"
+      aria-label={`Question from ${nameOf(question.from, names)}: ${firstLine(question.text)}`}
+      className={cn(
+        "shrink-0 outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        model.approver === "you" && "ring-state-review/50",
+        model.selected && "bg-muted/40 ring-primary/60",
+      )}
     >
-      <Words text={question.text} />
-      <Links links={question.links} />
-      {question.options.length > 0 ? (
-        <Options
-          question={question}
-          picked={model.picked}
-          onPress={model.picked === undefined ? model.onChoose : model.onPick}
-          busy={model.busy}
-        />
-      ) : null}
-      <footer className="-mb-1 flex flex-wrap items-center gap-1">
+      <RecordHeader
+        lead={
+          model.selected === undefined ? (
+            <MessageCircleQuestionIcon
+              aria-hidden="true"
+              className="size-4 shrink-0 text-state-waiting"
+            />
+          ) : (
+            <Checkbox
+              checked={model.selected}
+              onCheckedChange={(checked) => model.onSelect(checked)}
+              aria-label="In the answer"
+            />
+          )
+        }
+        from={{ id: question.from, member: model.from }}
+        to={model.to && { id: question.to, member: model.to }}
+        marks={
+          <>
+            {question.cause !== null ? (
+              <span title="Carried up" className="inline-flex">
+                <CornerLeftUpIcon aria-hidden="true" className="size-3.5" />
+                <SR>, carried up</SR>
+              </span>
+            ) : null}
+            {model.approver ? (
+              <span
+                title={model.approver === "you" ? "Approval: yours alone" : "Approval"}
+                className={cn("inline-flex", model.approver === "you" && "text-state-review")}
+              >
+                <ShieldCheckIcon aria-hidden="true" className="size-3.5" />
+                <SR>
+                  {model.approver === "you" ? ", an approval only you give" : ", an approval"}
+                </SR>
+              </span>
+            ) : null}
+          </>
+        }
+        at={question.created_at}
+        names={names}
+      />
+      <CardContent className="flex flex-col gap-3">
+        <Words text={question.text} />
+        <Links links={question.links} />
+        {question.options.length > 0 ? (
+          <Options
+            question={question}
+            picked={model.picked}
+            onPress={model.picked === undefined ? model.onChoose : model.onPick}
+            busy={model.busy}
+          />
+        ) : null}
+      </CardContent>
+      <CardFooter className="flex-wrap gap-1 py-2">
         {model.picked !== undefined && question.options.length > 0 ? (
           <Button
             type="button"
@@ -329,11 +297,11 @@ export function QuestionCard(model: QuestionCardModel) {
             Send
           </Button>
         ) : null}
-        <Action onClick={model.onAnswer}>
+        <Button variant="ghost" size="sm" onClick={model.onAnswer}>
           <ReplyIcon aria-hidden="true" />
           Answer
-        </Action>
-      </footer>
+        </Button>
+      </CardFooter>
     </Card>
   );
 }
@@ -352,29 +320,34 @@ export function MessageCard(model: MessageCardModel) {
   const { message, names } = model;
   return (
     <Card
-      id={message.id}
-      label={`Message from ${nameOf(message.from, names)}: ${firstLine(message.text)}`}
-      lead={<MessageSquareIcon aria-hidden="true" className="size-4 shrink-0" />}
-      from={{ id: message.from, member: model.from }}
-      to={undefined}
-      marks={null}
-      at={message.created_at}
-      selected={false}
-      approval={false}
-      names={names}
+      data-row={message.id}
+      tabIndex={0}
+      role="article"
+      aria-label={`Message from ${nameOf(message.from, names)}: ${firstLine(message.text)}`}
+      className="shrink-0 outline-none focus-visible:ring-2 focus-visible:ring-ring"
     >
-      <Words text={message.text} />
-      <Links links={message.links} />
-      <footer className="-mb-1 flex flex-wrap gap-1">
-        <Action onClick={model.onReply}>
+      <RecordHeader
+        lead={<MessageSquareIcon aria-hidden="true" className="size-4 shrink-0" />}
+        from={{ id: message.from, member: model.from }}
+        to={undefined}
+        marks={null}
+        at={message.created_at}
+        names={names}
+      />
+      <CardContent className="flex flex-col gap-3">
+        <Words text={message.text} />
+        <Links links={message.links} />
+      </CardContent>
+      <CardFooter className="flex-wrap gap-1 py-2">
+        <Button variant="ghost" size="sm" onClick={model.onReply}>
           <ReplyIcon aria-hidden="true" />
           Reply
-        </Action>
-        <Action onClick={model.onRead} disabled={model.busy}>
+        </Button>
+        <Button variant="ghost" size="sm" onClick={model.onRead} disabled={model.busy}>
           <CheckIcon aria-hidden="true" />
           Mark read
-        </Action>
-      </footer>
+        </Button>
+      </CardFooter>
     </Card>
   );
 }

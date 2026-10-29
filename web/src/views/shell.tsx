@@ -10,6 +10,8 @@ import {
   Sidebar,
   SidebarContent,
   SidebarGroup,
+  SidebarGroupLabel,
+  SidebarHeader,
   SidebarInset,
   SidebarMenu,
   SidebarMenuAction,
@@ -117,9 +119,13 @@ export function ShellView({ organization, waitingOnYou, offline, place, path, pa
   return (
     <SidebarProvider>
       <CloseSheetOn place={selected ?? place.view} />
-      <Sidebar>
+      <Sidebar variant="inset">
+        <SidebarHeader className="px-4 py-5">
+          <Link to="/" className="text-base font-semibold tracking-tight">
+            agentorg
+          </Link>
+        </SidebarHeader>
         <SidebarContent>
-          <h2 className="sr-only">agentorg</h2>
           <SidebarGroup>
             <SidebarMenu>
               <SidebarMenuItem>
@@ -146,6 +152,7 @@ export function ShellView({ organization, waitingOnYou, offline, place, path, pa
             </SidebarMenu>
           </SidebarGroup>
           <SidebarGroup>
+            <SidebarGroupLabel>Organization</SidebarGroupLabel>
             <nav aria-label="Organization">
               <SidebarMenu>
                 {organization === undefined
@@ -162,15 +169,23 @@ export function ShellView({ organization, waitingOnYou, offline, place, path, pa
           </SidebarGroup>
         </SidebarContent>
       </Sidebar>
-      <SidebarInset className="h-svh min-w-0">
-        <header className="flex h-12 shrink-0 items-center gap-2 border-b px-3">
+      <SidebarInset className="h-svh min-w-0 md:h-[calc(100svh-1rem)]">
+        <header className="flex h-14 shrink-0 items-center gap-2 border-b px-4">
           <SidebarTrigger />
+          <Link to="/" className="mr-2 font-semibold tracking-tight md:hidden">
+            agentorg
+          </Link>
           {place.view === "you" ? (
             <UserRoundIcon aria-hidden="true" className="size-4 text-muted-foreground" />
           ) : place.view === "activity" ? (
             <ActivityIcon aria-hidden="true" className="size-4 text-muted-foreground" />
           ) : null}
           <nav aria-label="Managers" className="flex min-w-0 items-center gap-1 text-sm">
+            {place.view === "you" ? (
+              <span className="font-medium">You</span>
+            ) : place.view === "activity" ? (
+              <span className="font-medium">Activity</span>
+            ) : null}
             {path.map((manager) => (
               <span
                 key={manager.id}
@@ -186,6 +201,9 @@ export function ShellView({ organization, waitingOnYou, offline, place, path, pa
                 <ChevronRightIcon aria-hidden="true" className="size-3.5 shrink-0" />
               </span>
             ))}
+            {place.view === "actor" ? (
+              <span className="truncate font-medium">{place.name}</span>
+            ) : null}
           </nav>
           {offline ? (
             <span
@@ -197,7 +215,9 @@ export function ShellView({ organization, waitingOnYou, offline, place, path, pa
             </span>
           ) : null}
         </header>
-        <div className="relative min-h-0 flex-1 overflow-y-auto">{pane}</div>
+        <div className="relative min-h-0 flex-1 overflow-x-hidden overflow-y-auto [&>*]:shrink-0">
+          {pane}
+        </div>
       </SidebarInset>
     </SidebarProvider>
   );

@@ -91,7 +91,7 @@ export function ActivityView(model: ActivityModel) {
   return (
     <section
       aria-labelledby="activity-title"
-      className="mx-auto flex w-full max-w-3xl flex-col gap-4 p-4 sm:p-6"
+      className="mx-auto flex w-full max-w-3xl flex-col gap-6 p-4 sm:p-8 [&>*]:shrink-0"
     >
       <h1 id="activity-title" className="sr-only">
         Activity
