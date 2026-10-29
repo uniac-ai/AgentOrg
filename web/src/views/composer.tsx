@@ -88,6 +88,7 @@ export function Composer(model: ComposerModel) {
                 key={label}
                 type="button"
                 size="sm"
+                className="h-auto min-h-7 max-w-full wrap-anywhere whitespace-normal"
                 variant={model.choice === label ? "default" : "outline"}
                 aria-pressed={model.choice === label}
                 onClick={() => model.onChoose(model.choice === label ? undefined : label)}

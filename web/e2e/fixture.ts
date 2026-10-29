@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { type Actor, connectActor, connectClient } from "@agentorg/cli/actor";
-import { test as base, expect, type Page } from "@playwright/test";
+import { test as base, expect, type Locator, type Page } from "@playwright/test";
 
 const repo = fileURLToPath(new URL("../../", import.meta.url));
 
@@ -289,8 +289,12 @@ export async function fits(page: Page) {
         return (
           element.clientHeight > 1 &&
           !element.classList.contains("sr-only") &&
-          element.scrollHeight > element.clientHeight + 1 &&
-          ["hidden", "clip"].includes(style.overflowY) &&
+          ((element.scrollHeight > element.clientHeight + 1 &&
+            ["hidden", "clip"].includes(style.overflowY)) ||
+            (element.clientWidth > 1 &&
+              element.scrollWidth > element.clientWidth + 1 &&
+              ["hidden", "clip"].includes(style.overflowX) &&
+              style.textOverflow !== "ellipsis")) &&
           element.getBoundingClientRect().height > 0
         );
       })
@@ -300,7 +304,31 @@ export async function fits(page: Page) {
         class: element.className,
         height: element.clientHeight,
         content: element.scrollHeight,
+        width: element.clientWidth,
+        contentWidth: element.scrollWidth,
       })),
   );
   expect(clipped).toEqual([]);
+}
+
+/** Full-content surfaces must fit their text even when an inner element clips it. */
+export async function fullTextFits(surface: Locator) {
+  const overflow = await surface.locator("*").evaluateAll((elements) =>
+    elements
+      .filter(
+        (element) =>
+          element.textContent?.trim() &&
+          element.clientWidth > 1 &&
+          element.scrollWidth > element.clientWidth + 1 &&
+          !element.classList.contains("sr-only"),
+      )
+      .map((element) => ({
+        tag: element.tagName,
+        class: element.className,
+        text: element.textContent?.slice(0, 80),
+        width: element.clientWidth,
+        contentWidth: element.scrollWidth,
+      })),
+  );
+  expect(overflow).toEqual([]);
 }

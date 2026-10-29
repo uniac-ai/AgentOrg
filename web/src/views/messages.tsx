@@ -85,7 +85,7 @@ export function Links({ links, className }: { links: readonly LinkRecord[]; clas
 export function Words({ text }: { text: string }) {
   const [lead, ...rest] = text.split("\n");
   return (
-    <div className="flex flex-col gap-1">
+    <div className="flex min-w-0 flex-col gap-1 wrap-anywhere">
       <p className="font-medium">{lead}</p>
       {rest.join("\n").trim() ? (
         <p className="whitespace-pre-wrap text-sm text-muted-foreground">
@@ -127,10 +127,13 @@ function Options({
             aria-pressed={picking ? filled : undefined}
             disabled={busy}
             onClick={() => onPress(option.label)}
-            className={cn(stacked && "h-auto justify-start py-2 text-left whitespace-normal")}
+            className={cn(
+              "h-auto min-h-8 min-w-0 max-w-full text-left whitespace-normal",
+              stacked && "justify-start py-2",
+            )}
           >
             {recommended ? <StarIcon aria-hidden="true" className="fill-current" /> : null}
-            <span className="flex min-w-0 flex-1 flex-col">
+            <span className="flex min-w-0 flex-1 flex-col wrap-anywhere">
               <span>
                 {option.label}
                 {recommended ? <SR>, recommended</SR> : null}

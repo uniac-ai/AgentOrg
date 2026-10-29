@@ -1,4 +1,4 @@
-import { expect, fits, screenshot, test, value } from "./fixture.ts";
+import { expect, fits, fullTextFits, screenshot, test, value } from "./fixture.ts";
 
 test("sign-in, navigation, keyboard, disclosure and close confirmation", async ({
   app,
@@ -174,6 +174,49 @@ test("actor composer, history and long content remain reachable", async ({ app, 
   await fits(page);
   await long.getByRole("button", { name: "Mark read", exact: true }).click();
   await expect(long).not.toBeVisible();
+});
+
+test("long option labels and artifact filenames wrap within their surfaces", async ({
+  app,
+  page,
+}, info) => {
+  const label = "Keep the verified release candidate available until the next scheduled review";
+  const filename = `artifact_${"W".repeat(140)}.tar.gz`;
+  await value(app.platform.client, "question_ask", {
+    text: "Choose the artifact review policy",
+    options: [{ label }, { label: "W".repeat(80) }],
+    recommendation: label,
+  });
+  await value(app.design.client, "message_send", {
+    to: app.rootId,
+    text: `${filename}\nStored artifact: ${filename}`,
+  });
+  await app.signIn(page);
+  const question = page.getByRole("article", {
+    name: /Question from platform: Choose the artifact/,
+  });
+  await expect(question.getByRole("button", { name: label, exact: false })).toBeVisible();
+  await fullTextFits(question);
+  await fits(page);
+  await question.scrollIntoViewIfNeeded();
+  await screenshot(page, "long-options", info.project.name);
+  const message = page.getByRole("article", { name: /Message from design: artifact_/ });
+  await expect(message).toContainText(`${filename}Stored artifact: ${filename}`);
+  await fullTextFits(message);
+  await message.scrollIntoViewIfNeeded();
+  await screenshot(page, "long-filename", info.project.name);
+  await question.getByRole("button", { name: "Answer", exact: true }).click();
+  const composer = page.getByRole("form", { name: "Reply", exact: true });
+  await expect(composer.getByRole("button", { name: label, exact: true })).toBeVisible();
+  await fullTextFits(composer.getByRole("group", { name: "Choice", exact: true }));
+  await fits(page);
+  await screenshot(page, "long-choice-composer", info.project.name);
+  await composer.getByRole("button", { name: label, exact: true }).click();
+  await composer.getByRole("button", { name: "Send", exact: true }).click();
+  await expect(question).not.toBeVisible();
+  expect((await app.questions()).questions.some(({ answer }) => answer?.choice === label)).toBe(
+    true,
+  );
 });
 
 test("missing actor and unreachable core states", async ({ app, page }, info) => {
