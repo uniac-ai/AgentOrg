@@ -5,6 +5,7 @@ import { existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { fakeActor, iface, startCore, until } from "./harness.ts";
 
 import { command, serving } from "./process.ts";
 
@@ -15,7 +16,15 @@ test("help lists only actor operations, and asking for it acts on nothing", asyn
   try {
     const help = await agentorg(["--help"], { AGENTORG_HOME: home });
     assert.equal(help.status, 0);
-    const commands = ["actor create", "actor close", "progress set", "progress", "team"];
+    const commands = [
+      "interfaces",
+      "call",
+      "actor create",
+      "actor close",
+      "progress set",
+      "progress",
+      "team",
+    ];
     const communication = ["question ask", "questions", "message send", "claim", "release"];
     for (const command of [...commands, ...communication]) {
       assert.match(help.stdout, new RegExp(`^  ${command} `, "m"));
@@ -40,6 +49,90 @@ test("help lists only actor operations, and asking for it acts on nothing", asyn
     assert.equal(unknown.status, 2);
   } finally {
     rmSync(join(home, ".."), { recursive: true, force: true });
+  }
+});
+
+test("generic CLI access lists and invokes routed interfaces with the same actor permissions", async () => {
+  const core = await startCore();
+  try {
+    const root = await core.client(core.root);
+    const answer = await root.call("actor_create", {
+      name: "worker",
+      purpose: "Serve a routed interface.",
+    });
+    assert.equal(answer.state, "done");
+    const created = (answer as { value: { actor: { id: string }; credential: string } }).value;
+    const echo = iface("echo", {
+      input: { type: "object", properties: { text: { type: "string" } }, required: ["text"] },
+      output: { type: "object", properties: { echoed: { type: "string" } }, required: ["echoed"] },
+    });
+    await core.connect(
+      created.credential,
+      fakeActor([echo], async (input) => ({ value: { echoed: input.text } })),
+    );
+    const env = { AGENTORG_URL: core.url, AGENTORG_CREDENTIAL: core.root };
+    const listed = await agentorg(["interfaces"], env);
+    assert.equal(listed.status, 0, listed.stderr);
+    assert.deepEqual(JSON.parse(listed.stdout).interfaces, await root.available());
+    const result = await agentorg(["call", "worker.echo", "--json", '{"text":"hello"}'], env);
+    assert.equal(result.status, 0, result.stderr);
+    const called = JSON.parse(result.stdout);
+    assert.equal(called.state, "done");
+    assert.match(called.call, /^call_/);
+    assert.deepEqual(called.value, { echoed: "hello" });
+    const refused = await agentorg(["call", "activity"], {
+      ...env,
+      AGENTORG_CREDENTIAL: created.credential,
+    });
+    assert.equal(refused.status, 1);
+    assert.equal(JSON.parse(refused.stdout).code, "not_found");
+    for (const input of ["[]", '"sentinel-credential"', '{"secret":"sentinel-credential"']) {
+      const invalid = await agentorg(["call", "worker.echo", "--json", input], env);
+      assert.equal(invalid.status, 1);
+      assert.equal((invalid.stdout + invalid.stderr).includes("sentinel-credential"), false);
+    }
+  } finally {
+    await core.close();
+  }
+});
+
+test("call result and withdraw conveniences coexist with generic call dispatch", async () => {
+  const core = await startCore({ waitMs: 50, stepMs: 10 });
+  try {
+    const root = await core.client(core.root);
+    const created = await root.call("actor_create", { name: "held", purpose: "Hold a call." });
+    const { credential } = (created as { value: { credential: string } }).value;
+    await core.connect(credential, fakeActor([iface("hold", { long_running: true })]));
+    await until("the held interface is available", async () =>
+      (await root.available()).some((offer) => offer.interface.name === "held.hold"),
+    );
+    const pending = await root.call("held.hold");
+    assert.equal(pending.state, "pending");
+    const id = (pending as { call: string }).call;
+    const env = { AGENTORG_URL: core.url, AGENTORG_CREDENTIAL: core.root };
+    for (const args of [["--call", id], [id]]) {
+      const result = await agentorg(["call", "result", ...args], env);
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(JSON.parse(result.stdout).state, "pending");
+    }
+    const withdrawn = await agentorg(["call", "withdraw", "--call", id], env);
+    assert.equal(withdrawn.status, 0, withdrawn.stderr);
+    assert.equal(JSON.parse(withdrawn.stdout).state, "withdrawn");
+    const generic = await agentorg(
+      ["call", "call_result", "--json", JSON.stringify({ call: id })],
+      env,
+    );
+    assert.equal(generic.status, 0, generic.stderr);
+    assert.equal(JSON.parse(generic.stdout).state, "done");
+    assert.equal(JSON.parse(generic.stdout).value.state, "withdrawn");
+    for (const operation of ["result", "withdraw"]) {
+      const help = await agentorg(["call", operation, "--help"], env);
+      assert.equal(help.status, 0);
+      assert.match(help.stdout, new RegExp(`usage: agentorg call ${operation}`));
+      assert.match(help.stdout, /--call <value>/);
+    }
+  } finally {
+    await core.close();
   }
 });
 

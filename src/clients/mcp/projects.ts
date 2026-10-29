@@ -18,6 +18,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
+import { type AST, getStaticTOMLValue, parseTOML } from "toml-eslint-parser";
 import { PACKAGE } from "../../runtime/launcher.ts";
 
 export interface Client {
@@ -104,10 +105,15 @@ const agentArgs = (client: string) => ["--client", client];
 // Claude Code: the server in `.mcp.json`, approved and hooked in `.claude/settings.local.json`, the
 // user's own settings for the project, and the skill in `.claude/skills/`.
 
-const CLAUDE_HOOK = /\/agentorg-mcp' (context|prompt|wait) --client claude-code$/;
+const HOOK_COMMAND = /\/agentorg-mcp' (context|prompt|wait) --client (claude-code|codex)$/;
 
-function claudeHooks(launcher: string): Record<string, Json[]> {
-  const hook = (sub: string) => `${shellWord(launcher)} ${sub} --client claude-code`;
+function clientHooks(client: string, launcher: string): Record<string, Json[]> {
+  const hook = (sub: string) => `${shellWord(launcher)} ${sub} --client ${client}`;
+  const hooks: Record<string, Json[]> = {
+    SessionStart: [{ type: "command", command: hook("context"), timeout: 10 }],
+    UserPromptSubmit: [{ type: "command", command: hook("prompt"), timeout: 10 }],
+  };
+  if (client === "codex") return hooks;
   const waiter = {
     type: "command",
     command: hook("wait"),
@@ -116,18 +122,18 @@ function claudeHooks(launcher: string): Record<string, Json[]> {
     rewakeMessage: "From AgentOrg:",
     rewakeSummary: "AgentOrg message",
   };
-  return {
-    SessionStart: [{ type: "command", command: hook("context"), timeout: 10 }, waiter],
-    UserPromptSubmit: [{ type: "command", command: hook("prompt"), timeout: 10 }],
-    Stop: [waiter],
-  };
+  hooks.SessionStart?.push(waiter);
+  hooks.Stop = [waiter];
+  return hooks;
 }
 
-const ours = (hook: unknown) =>
-  isObject(hook) && typeof hook.command === "string" && CLAUDE_HOOK.test(hook.command);
+const ours = (hook: unknown, client: string) =>
+  isObject(hook) &&
+  typeof hook.command === "string" &&
+  HOOK_COMMAND.exec(hook.command)?.[2] === client;
 
 /** Each event's matcher groups with AgentOrg's hooks taken out, and groups left empty dropped. */
-function withoutOurHooks(hooks: Json): Json {
+function withoutOurHooks(hooks: Json, client: string): Json {
   const kept: Json = {};
   for (const [event, groups] of Object.entries(hooks)) {
     if (!Array.isArray(groups)) {
@@ -136,12 +142,42 @@ function withoutOurHooks(hooks: Json): Json {
     }
     const left = groups.flatMap((group) => {
       if (!isObject(group) || !Array.isArray(group.hooks)) return [group];
-      const remaining = group.hooks.filter((hook) => !ours(hook));
+      const remaining = group.hooks.filter((hook) => !ours(hook, client));
       return remaining.length === 0 ? [] : [{ ...group, hooks: remaining }];
     });
     if (left.length > 0) kept[event] = left;
   }
   return kept;
+}
+
+function withOurHooks(settings: Json, client: string, launcher: string): void {
+  const hooks = withoutOurHooks(isObject(settings.hooks) ? settings.hooks : {}, client);
+  for (const [event, added] of Object.entries(clientHooks(client, launcher))) {
+    const groups = Array.isArray(hooks[event]) ? hooks[event] : [];
+    hooks[event] = [...groups, { hooks: added }];
+  }
+  settings.hooks = hooks;
+}
+
+function removeOurHooks(settings: Json, client: string): void {
+  if (!isObject(settings.hooks)) return;
+  const hooks = withoutOurHooks(settings.hooks, client);
+  if (Object.keys(hooks).length > 0) settings.hooks = hooks;
+  else delete settings.hooks;
+}
+
+function hookProblems(settings: Json, path: string, client: string, launcher: string): string[] {
+  const hooks = isObject(settings.hooks) ? settings.hooks : {};
+  return Object.entries(clientHooks(client, launcher)).flatMap(([event, added]) => {
+    const present = (Array.isArray(hooks[event]) ? hooks[event] : []).flatMap((group) =>
+      isObject(group) && Array.isArray(group.hooks)
+        ? group.hooks.filter((hook) => ours(hook, client))
+        : [],
+    );
+    return JSON.stringify(present) === JSON.stringify(added)
+      ? []
+      : [`${path} lacks AgentOrg's ${event} hooks for this launcher`];
+  });
 }
 
 const claudeFiles = (project: string) => ({
@@ -179,12 +215,7 @@ const claudeCode: Client = {
       ? settings.enabledMcpjsonServers
       : [];
     if (!approved.includes("org")) settings.enabledMcpjsonServers = [...approved, "org"];
-    const hooks = withoutOurHooks(isObject(settings.hooks) ? settings.hooks : {});
-    for (const [event, added] of Object.entries(claudeHooks(launcher))) {
-      const groups = Array.isArray(hooks[event]) ? hooks[event] : [];
-      hooks[event] = [...groups, { hooks: added }];
-    }
-    settings.hooks = hooks;
+    withOurHooks(settings, "claude-code", launcher);
     writeJson(files.settings, settings);
 
     return [files.servers, files.settings, linkSkill(files.skills)];
@@ -209,11 +240,7 @@ const claudeCode: Client = {
         if (approved.length > 0) settings.enabledMcpjsonServers = approved;
         else delete settings.enabledMcpjsonServers;
       }
-      if (isObject(settings.hooks)) {
-        const hooks = withoutOurHooks(settings.hooks);
-        if (Object.keys(hooks).length > 0) settings.hooks = hooks;
-        else delete settings.hooks;
-      }
+      removeOurHooks(settings, "claude-code");
       if (JSON.stringify(settings) !== before) {
         writeJson(files.settings, settings);
         prune(dirname(files.settings), project);
@@ -234,107 +261,137 @@ const claudeCode: Client = {
     if (!Array.isArray(approved) || !approved.includes("org")) {
       found.push(`${files.settings} doesn't approve the org server`);
     }
-    const expected = claudeHooks(launcher);
-    const hooks = isObject(settings.hooks) ? settings.hooks : {};
-    for (const [event, added] of Object.entries(expected)) {
-      const present = (Array.isArray(hooks[event]) ? hooks[event] : []).flatMap((group) =>
-        isObject(group) && Array.isArray(group.hooks) ? group.hooks.filter(ours) : [],
-      );
-      const commands = (list: Json[]) => list.map((hook) => hook.command).join("\n");
-      if (commands(present) !== commands(added)) {
-        found.push(`${files.settings} lacks AgentOrg's ${event} hooks for this launcher`);
-      }
-    }
+    found.push(...hookProblems(settings, files.settings, "claude-code", launcher));
     return [...found, ...skillProblems(files.skills)];
   },
 };
 
-// Codex: the `[mcp_servers.org]` table in `.codex/config.toml`, and the skill in
-// `.agents/skills/`. Codex reads the project's file once the user trusts the project.
+// Codex: the server in `.codex/config.toml`, hooks in `.codex/hooks.json` and the skill in
+// `.agents/skills/`. Project configuration and hook definitions require Codex trust.
 
-const TABLE_HEADER = /^\s*\[{1,2}([^\]]*)\]{1,2}\s*(#.*)?$/;
 const OUR_TABLE = "mcp_servers.org";
 
-/** The line ranges of `[mcp_servers.org]` and its subtables, each up to the next header. */
-function ourTables(lines: string[]): [number, number][] {
-  const ranges: [number, number][] = [];
-  let start: number | undefined;
-  lines.forEach((line, index) => {
-    const header = TABLE_HEADER.exec(line);
-    if (!header) return;
-    if (start !== undefined) ranges.push([start, index]);
-    const key = (header[1] ?? "").replace(/["'\s]/g, "");
-    start = key === OUR_TABLE || key.startsWith(`${OUR_TABLE}.`) ? index : undefined;
-  });
-  if (start !== undefined) ranges.push([start, lines.length]);
-  return ranges;
-}
-
-function codexTable(path: string): string | undefined {
-  if (!existsSync(path)) return undefined;
-  const lines = readFileSync(path, "utf8").split("\n");
-  const ranges = ourTables(lines);
-  if (ranges.length === 0) return undefined;
-  const text = ranges.flatMap(([start, end]) => lines.slice(start, end)).join("\n");
-  const command = /^\s*command\s*=\s*(".*")\s*$/m.exec(text)?.[1];
-  if (command === undefined || basename(JSON.parse(command)) !== "agentorg-mcp") {
+/** The parsed AgentOrg table and its source, with unrelated configuration kept verbatim. */
+function codexConfig(path: string) {
+  const text = existsSync(path) ? readFileSync(path, "utf8") : "";
+  let ast: AST.TOMLProgram;
+  try {
+    ast = parseTOML(text, { tomlVersion: "1.0" });
+  } catch {
+    throw new Error(`${path} is not valid TOML`);
+  }
+  const tables = ast.body[0].body.filter(
+    (node): node is AST.TOMLTable =>
+      node.type === "TOMLTable" &&
+      node.resolvedKey[0] === "mcp_servers" &&
+      node.resolvedKey[1] === "org",
+  );
+  const table = tables.find((node) => node.kind === "standard" && node.resolvedKey.length === 2);
+  const values = getStaticTOMLValue(ast);
+  const configured = isObject(values.mcp_servers) ? values.mcp_servers.org : undefined;
+  const command = isObject(configured) ? configured.command : undefined;
+  if (
+    configured !== undefined &&
+    (typeof command !== "string" || basename(command) !== "agentorg-mcp")
+  ) {
     throw new Error(`${path} already has an MCP server named org that isn't AgentOrg's`);
   }
-  return text;
+  if (configured !== undefined && table === undefined) {
+    throw new Error(`${path} must declare AgentOrg in a [${OUR_TABLE}] table`);
+  }
+  return { text, tables, table, command: typeof command === "string" ? command : undefined };
 }
 
-/** The file's lines with our tables replaced by `table`, where the first of them was. */
-function replaceTables(path: string, table: string[]): string {
-  const lines = existsSync(path) ? readFileSync(path, "utf8").split("\n") : [];
-  const ranges = ourTables(lines);
-  const at = ranges[0]?.[0] ?? lines.length;
-  const kept = lines.filter((_, index) => !ranges.some(([s, e]) => index >= s && index < e));
-  const before = kept.slice(0, at).join("\n").trimEnd();
-  const after = kept.slice(at).join("\n").trim();
-  const body = table.join("\n");
-  return [before, body, after].filter((part) => part !== "").join("\n\n");
+/** Apply parsed source ranges from right to left, preserving text outside the edits. */
+function replaceRanges(text: string, edits: { range: [number, number]; text: string }[]): string {
+  return edits
+    .sort((a, b) => b.range[0] - a.range[0])
+    .reduce(
+      (source, edit) => source.slice(0, edit.range[0]) + edit.text + source.slice(edit.range[1]),
+      text,
+    );
 }
 
 const codexFiles = (project: string) => ({
   config: join(project, ".codex", "config.toml"),
+  hooks: join(project, ".codex", "hooks.json"),
   skills: join(project, ".agents", "skills"),
 });
 
 const codex: Client = {
   connect(project, launcher) {
     const files = codexFiles(project);
-    codexTable(files.config);
-    const table = [
-      `[${OUR_TABLE}]`,
-      `command = ${JSON.stringify(launcher)}`,
-      `args = ${JSON.stringify(agentArgs("codex")).replaceAll(",", ", ")}`,
-    ];
+    const config = codexConfig(files.config);
+    const hooks = readJson(files.hooks);
+    withOurHooks(hooks, "codex", launcher);
+    const settings = {
+      command: JSON.stringify(launcher),
+      args: JSON.stringify(agentArgs("codex")),
+    };
+    let text: string;
+    if (config.table === undefined) {
+      const table = [
+        `[${OUR_TABLE}]`,
+        ...Object.entries(settings).map(([key, value]) => `${key} = ${value}`),
+      ].join("\n");
+      text = `${[config.text.trimEnd(), table].filter(Boolean).join("\n\n")}\n`;
+    } else {
+      const table = config.table;
+      const edits = Object.entries(settings).map(([key, value]) => {
+        const field = table.body.find((entry) => {
+          const names = getStaticTOMLValue(entry.key);
+          return names.length === 1 && names[0] === key;
+        });
+        const afterHeader = config.text.indexOf("\n", table.key.range[1]) + 1;
+        return field === undefined
+          ? { range: [afterHeader, afterHeader] as [number, number], text: `${key} = ${value}\n` }
+          : { range: field.value.range, text: value };
+      });
+      text = replaceRanges(config.text, edits);
+    }
     mkdirSync(dirname(files.config), { recursive: true });
-    writeFileSync(files.config, `${replaceTables(files.config, table)}\n`);
-    return [files.config, linkSkill(files.skills)];
+    writeFileSync(files.config, text);
+    writeJson(files.hooks, hooks);
+    return [files.config, files.hooks, linkSkill(files.skills)];
   },
 
   disconnect(project) {
     const files = codexFiles(project);
     const changed: string[] = [];
-    if (codexTable(files.config) !== undefined) {
-      const left = replaceTables(files.config, []);
+    const config = codexConfig(files.config);
+    if (config.table !== undefined) {
+      const left = replaceRanges(
+        config.text,
+        config.tables.map((table) => ({ range: table.range, text: "" })),
+      ).trimEnd();
       if (left === "") rmSync(files.config);
       else writeFileSync(files.config, `${left}\n`);
       prune(dirname(files.config), project);
       changed.push(files.config);
+    }
+    if (existsSync(files.hooks)) {
+      const hooks = readJson(files.hooks);
+      const before = JSON.stringify(hooks);
+      removeOurHooks(hooks, "codex");
+      if (JSON.stringify(hooks) !== before) {
+        writeJson(files.hooks, hooks);
+        prune(dirname(files.hooks), project);
+        changed.push(files.hooks);
+      }
     }
     return [...changed, ...unlinkSkill(files.skills, project)];
   },
 
   problems(project, launcher) {
     const files = codexFiles(project);
-    const table = codexTable(files.config);
-    if (table === undefined) return undefined;
-    const command = /^\s*command\s*=\s*(".*")\s*$/m.exec(table)?.[1];
-    const named = command === undefined ? undefined : JSON.parse(command);
-    const found = named === launcher ? [] : [`${files.config} names ${named ?? "no command"}`];
-    return [...found, ...skillProblems(files.skills)];
+    const config = codexConfig(files.config);
+    if (config.table === undefined) return undefined;
+    const found = config.command === launcher ? [] : [`${files.config} names ${config.command}`];
+    return [
+      ...found,
+      ...hookProblems(readJson(files.hooks), files.hooks, "codex", launcher),
+      ...skillProblems(files.skills),
+    ];
   },
 };
 

@@ -21,6 +21,12 @@ export interface Typed {
 
 const SESSION = /^[A-Za-z0-9_-]{1,128}$/;
 
+/** A client's conversation id, scoped to that client and safe as a session directory name. */
+export function sessionName(client: string, id: string | undefined): string | undefined {
+  const session = `${client}-${id}`;
+  return id !== undefined && id.length > 0 && SESSION.test(session) ? session : undefined;
+}
+
 function named(session: string): string {
   if (!SESSION.test(session)) throw new Error(`not a session name: ${session}`);
   return join("sessions", session);

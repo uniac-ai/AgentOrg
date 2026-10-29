@@ -18,6 +18,7 @@ import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { getStaticTOMLValue, parseTOML } from "toml-eslint-parser";
 import { nodeSupported, readLauncher } from "../src/runtime/launcher.ts";
 import { service } from "../src/runtime/services.ts";
 import { VERSION } from "../src/version.ts";
@@ -100,6 +101,13 @@ test("connect writes each client's entries beside the user's own, and disconnect
     writeFileSync(join(project, ".claude", "settings.local.json"), settings);
     mkdirSync(join(project, ".codex"));
     writeFileSync(join(project, ".codex", "config.toml"), toml);
+    writeFileSync(
+      join(project, ".codex", "hooks.json"),
+      json({
+        description: "My project hooks",
+        hooks: { SessionStart: [{ matcher: "startup", hooks: [userHook] }] },
+      }),
+    );
     const original = snapshot(project);
 
     for (const client of ["claude-code", "codex"]) {
@@ -135,6 +143,24 @@ test("connect writes each client's entries beside the user's own, and disconnect
       codex,
       /\[mcp_servers\.org\]\ncommand = ".*\/bin\/agentorg-mcp"\nargs = \["--client"/,
     );
+    const codexHooks = JSON.parse(readFileSync(join(project, ".codex", "hooks.json"), "utf8"));
+    assert.equal(codexHooks.description, "My project hooks");
+    assert.deepEqual(codexHooks.hooks.SessionStart[0], { matcher: "startup", hooks: [userHook] });
+    assert.deepEqual(codexHooks.hooks.SessionStart[1].hooks, [
+      {
+        type: "command",
+        command: `'${launcher}' context --client codex`,
+        timeout: 10,
+      },
+    ]);
+    assert.deepEqual(codexHooks.hooks.UserPromptSubmit[0].hooks, [
+      {
+        type: "command",
+        command: `'${launcher}' prompt --client codex`,
+        timeout: 10,
+      },
+    ]);
+    assert.equal(codexHooks.hooks.Stop, undefined);
     for (const skills of [".claude/skills", ".agents/skills"]) {
       assert.equal(readlinkSync(join(project, skills, "agentorg")), SKILL);
     }
@@ -143,6 +169,24 @@ test("connect writes each client's entries beside the user's own, and disconnect
     await command("mcp", ["connect", "claude-code", "--project", project], env);
     await command("mcp", ["connect", "codex", "--project", project], env);
     assert.deepEqual(snapshot(project), connectedOnce, "connecting again changes nothing");
+
+    const codexPath = join(project, ".codex", "config.toml");
+    writeFileSync(
+      codexPath,
+      `${readFileSync(codexPath, "utf8")}\n[mcp_servers.org.tools.call]\napproval_mode = "prompt"\n`,
+    );
+    await command("mcp", ["connect", "codex", "--project", project], env);
+    assert.match(
+      readFileSync(codexPath, "utf8"),
+      /\[mcp_servers.org.tools.call\]\napproval_mode = "prompt"/,
+    );
+    const withPolicy = snapshot(project);
+    await command("mcp", ["connect", "codex", "--project", project], env);
+    assert.deepEqual(
+      snapshot(project),
+      withPolicy,
+      "reconnecting preserves per-tool policy deterministically",
+    );
 
     const status = await command("mcp", ["status", "--project", project], env);
     assert.match(status.stdout, /^ {2}claude-code: connected$/m);
@@ -155,6 +199,60 @@ test("connect writes each client's entries beside the user's own, and disconnect
     assert.deepEqual(snapshot(project), original);
     const again = await command("mcp", ["disconnect", "codex", "--project", project], env);
     assert.match(again.stdout, /codex was not connected/);
+  } finally {
+    done();
+  }
+});
+
+test("Codex reconnect replaces complete multiline values and preserves other settings and comments", async () => {
+  const { project, env, done } = scratch();
+  const prefix = '# Keep my defaults.\nmodel = "o4"\n\n';
+  const suffix =
+    "\n[mcp_servers.docs] # Keep this server.\ncommand = \"docs-server\"\n\n[mcp_servers.docs.env]\nDESCRIPTION = '''\n[mcp_servers.org.not_a_table]\n'''\n";
+  const source = `${prefix}[mcp_servers.org] # Keep this comment.\ncommand = "/previous/bin/agentorg-mcp" # Pinned executable.\nargs = [\n  "--client",\n  "codex",\n] # Adapter arguments.\nrequired = true\n\n[mcp_servers.org.tools.call] # Keep this policy.\napproval_mode = "prompt"\noutput_token_limit = 1000\n${suffix}`;
+  const read = (text: string) =>
+    getStaticTOMLValue(parseTOML(text, { tomlVersion: "1.0" })) as {
+      mcp_servers: Record<string, Record<string, unknown>>;
+    };
+  const original = read(source);
+  try {
+    mkdirSync(join(project, ".codex"));
+    const path = join(project, ".codex", "config.toml");
+    writeFileSync(path, source);
+    await command("mcp", ["connect", "codex", "--project", project], env);
+    const updated = readFileSync(path, "utf8");
+    const parsed = read(updated);
+    assert.deepEqual(parsed.mcp_servers.org, {
+      ...original.mcp_servers.org,
+      command: join(env.AGENTORG_HOME, "bin", "agentorg-mcp"),
+      args: ["--client", "codex"],
+    });
+    assert.deepEqual(parsed.mcp_servers.docs, original.mcp_servers.docs);
+    assert.ok(updated.startsWith(prefix));
+    assert.ok(updated.endsWith(suffix));
+    for (const comment of [
+      "# Keep this comment.",
+      "# Pinned executable.",
+      "# Adapter arguments.",
+      "# Keep this policy.",
+    ]) {
+      assert.ok(updated.includes(comment));
+    }
+    await command("mcp", ["connect", "codex", "--project", project], env);
+    assert.equal(readFileSync(path, "utf8"), updated);
+    const disconnected = await command("mcp", ["disconnect", "codex", "--project", project], env);
+    assert.equal(disconnected.status, 0, disconnected.stderr);
+    const left = read(readFileSync(path, "utf8"));
+    assert.equal(left.mcp_servers.org, undefined);
+    assert.deepEqual(left.mcp_servers.docs, original.mcp_servers.docs);
+    const malformed =
+      '[mcp_servers.org]\ncommand = "/previous/bin/agentorg-mcp"\nargs = ["sentinel-credential"';
+    writeFileSync(path, malformed);
+    const refused = await command("mcp", ["connect", "codex", "--project", project], env);
+    assert.equal(refused.status, 1);
+    assert.match(refused.stderr, /is not valid TOML/);
+    assert.equal((refused.stdout + refused.stderr).includes("sentinel-credential"), false);
+    assert.equal(readFileSync(path, "utf8"), malformed);
   } finally {
     done();
   }

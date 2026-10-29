@@ -1,17 +1,13 @@
 /** Run an organization operation through the actor library. */
 
-import { connectClient } from "../../actor/index.ts";
-import type { BuiltinName } from "../../domain/model/index.ts";
+import { type Actor, connectClient } from "../../actor/index.ts";
 import { readCredential, rootCredentialPath } from "../../home.ts";
 import { coreUrl } from "../../network/index.ts";
 
 const note = (text: string) => process.stderr.write(`agentorg: ${text}\n`);
 
-/** Call as the selected credential and print JSON; a refusal writes stderr and exits 1. */
-export async function builtinCommand(
-  name: BuiltinName,
-  request: Record<string, unknown>,
-): Promise<number> {
+/** Run through the selected actor's client and close the connection when finished. */
+async function asActor(run: (client: Actor) => Promise<number>): Promise<number> {
   const credential = readCredential();
   if (!credential) {
     throw new Error(
@@ -23,15 +19,36 @@ export async function builtinCommand(
     throw new Error(`the core at ${url} did not accept the connection: ${error.message}`);
   });
   try {
-    const wait = typeof request.wait === "number" ? request.wait : 0;
-    const answer = await client.call(name, request, { timeoutMs: (wait + 30) * 1000 });
-    if (answer.state !== "done") {
-      note(answer.state === "refused" ? `${answer.code}: ${answer.message}` : answer.state);
-      return 1;
-    }
-    process.stdout.write(`${JSON.stringify(answer.value, null, 2)}\n`);
-    return 0;
+    return await run(client);
   } finally {
     await client.close();
   }
+}
+
+/** List the selected actor's current capabilities, including routed interfaces. */
+export function interfacesCommand(): Promise<number> {
+  return asActor(async (client) => {
+    process.stdout.write(`${JSON.stringify({ interfaces: await client.available() }, null, 2)}\n`);
+    return 0;
+  });
+}
+
+/** Generic calls print the whole answer; built-in conveniences print the completed value. */
+export function callCommand(
+  name: string,
+  request: Record<string, unknown>,
+  resultOnly = false,
+): Promise<number> {
+  return asActor(async (client) => {
+    const wait = typeof request.wait === "number" ? request.wait : 0;
+    const answer = await client.call(name, request, { timeoutMs: Math.max(60, wait + 30) * 1000 });
+    if (resultOnly && answer.state !== "done") {
+      note(answer.state === "refused" ? `${answer.code}: ${answer.message}` : answer.state);
+      return 1;
+    }
+    process.stdout.write(
+      `${JSON.stringify(resultOnly && answer.state === "done" ? answer.value : answer, null, 2)}\n`,
+    );
+    return answer.state === "done" || answer.state === "pending" ? 0 : 1;
+  });
 }

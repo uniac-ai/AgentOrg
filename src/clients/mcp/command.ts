@@ -7,13 +7,13 @@ import { presentOverStdio } from "../../actor/index.ts";
 import { coreUrl } from "../../network/index.ts";
 import { help } from "../../runtime/command.ts";
 import { Agent } from "./agent.ts";
-import { sessions } from "./sessions.ts";
+import { sessionName, sessions } from "./sessions.ts";
 import { CONNECT_HELP, STATUS_HELP, setupCommand } from "./setup.ts";
 import { waitForNews } from "./waiter.ts";
 
 interface Client {
   /** The client's id for the session, which the agent actor and the waiter both see. */
-  session(): string | undefined;
+  session(input?: string): string | undefined;
   /**
    * The words the user typed, from a prompt hook's input; undefined for input the client delivered
    * instead, such as a waiter's output or another session's message.
@@ -68,23 +68,40 @@ export function claudeTakesInput(line: string): boolean {
   return !printing || /--input-format(=|\s+)stream-json\b/.test(line);
 }
 
-/** Input Claude Code delivers comes wrapped in an element, such as `<task-notification>…`. */
+/** Client-delivered input comes wrapped in an element, such as `<task-notification>…`. */
 const WRAPPED = /^\s*<([A-Za-z][\w-]*)[\s>][\s\S]*<\/\1>/;
+
+function hookInput(input: string): { session_id?: unknown; prompt?: unknown } {
+  try {
+    const value: unknown = JSON.parse(input);
+    if (typeof value === "object" && value !== null && !Array.isArray(value)) return value;
+  } catch {}
+  throw new Error("client hook input must be a JSON object");
+}
+
+function typed(input: string): string | undefined {
+  const { prompt } = hookInput(input);
+  return typeof prompt === "string" && !WRAPPED.test(prompt) ? prompt : undefined;
+}
 
 const CLIENTS: Record<string, Client> = {
   "claude-code": {
     session: () => process.env.CLAUDE_CODE_SESSION_ID,
-    typed(input) {
-      const { prompt } = JSON.parse(input) as { prompt?: unknown };
-      return typeof prompt === "string" && !WRAPPED.test(prompt) ? prompt : undefined;
-    },
+    typed,
     waiter: {
       alive: () => running(claudePid()),
       takesInput: () => claudeTakesInput(commandLine(claudePid()) ?? ""),
       wake: 2,
     },
   },
-  codex: { session: () => undefined },
+  codex: {
+    session(input) {
+      if (input === undefined || input === "") return undefined;
+      const { session_id } = hookInput(input);
+      return typeof session_id === "string" ? session_id : undefined;
+    },
+    typed,
+  },
 };
 
 function client(args: string[]): { name: string; client: Client; rest: string[] } {
@@ -108,10 +125,8 @@ async function text(stream: NodeJS.ReadableStream): Promise<string> {
   return read;
 }
 
-const sessionOf = (name: string, client: Client) => {
-  const id = client.session();
-  return id === undefined ? undefined : `${name}-${id}`;
-};
+const sessionOf = (name: string, client: Client, input?: string) =>
+  sessionName(name, client.session(input));
 
 /** What a session that fills no position reads before its first turn. */
 export const ATTACH_FIRST =
@@ -121,7 +136,7 @@ export const MCP_HELP = `usage: agentorg-mcp [context|prompt|wait] [--client cla
        agentorg-mcp connect|disconnect <claude-code|codex> [--project <dir>]
        agentorg-mcp status [--project <dir>]
 
-Present actor operations over stdio, connected to AGENTORG_URL. Until attachment the only tool is attach; afterwards the actor's interfaces are available.
+Present attach, interfaces and call over stdio, connected to AGENTORG_URL. Listing and invocation require attachment; interfaces reads the actor's permitted operations and call invokes one.
 Client hooks: context emits an attachment hint; prompt keeps typed input; wait delivers pending input on stderr with the client's wake status.`;
 
 export async function mcpCommand(args: string[]): Promise<number> {
@@ -134,7 +149,11 @@ export async function mcpCommand(args: string[]): Promise<number> {
   }
   if (asked) return help(MCP_HELP);
   const { name, client: chosen, rest } = client(args);
-  const session = sessionOf(name, chosen);
+  const input =
+    rest[0] === "prompt" || (name === "codex" && ["context", "wait"].includes(rest[0] ?? ""))
+      ? await text(process.stdin)
+      : undefined;
+  const session = sessionOf(name, chosen, input);
   if (rest[0] === "context") {
     if (session === undefined || sessions.position(session) === undefined) {
       process.stdout.write(`${ATTACH_FIRST}\n`);
@@ -142,8 +161,7 @@ export async function mcpCommand(args: string[]): Promise<number> {
     return 0;
   }
   if (rest[0] === "prompt") {
-    const input = await text(process.stdin);
-    const typed = chosen.typed?.(input);
+    const typed = chosen.typed?.(input ?? "");
     if (session !== undefined && typed !== undefined && sessions.position(session) !== undefined) {
       sessions.keepTyped(session, typed);
     }
@@ -161,7 +179,11 @@ export async function mcpCommand(args: string[]): Promise<number> {
     return delivered ? waiter.wake : 0;
   }
   if (rest.length > 0) throw new Error(`unknown agent command ${rest.join(" ")}`);
-  const agent = new Agent({ coreUrl: coreUrl(), session });
+  const agent = new Agent({
+    coreUrl: coreUrl(),
+    session,
+    ...(name === "codex" ? { client: name } : {}),
+  });
   const server = await presentOverStdio(agent);
   void agent.resume();
   await Promise.race([

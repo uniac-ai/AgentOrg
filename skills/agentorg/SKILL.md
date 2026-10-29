@@ -1,6 +1,6 @@
 ---
 name: agentorg
-description: How an agent session works in an AgentOrg organization, where sessions fill positions with managers and the user is the root — attaching to a position, keeping its progress, deciding or asking and escalating, messaging, claiming shared resources, delegating to reports and closing them — and where to find how to set AgentOrg up and connect a project to it. Use whenever the session has AgentOrg's tools (attach, progress_set, question_ask, message_send), a brief names an AgentOrg position or actor id, AgentOrg delivers a message, question or answer, or the user asks to connect or set up AgentOrg. A session with neither AgentOrg's tools nor a request to connect is not in an organization, and this skill does not apply to it.
+description: How an agent session works in an AgentOrg organization, where sessions fill positions with managers and the user is the root — attaching to a position, keeping its progress, deciding or asking and escalating, messaging, claiming shared resources, delegating to reports and closing them — and where to find how to set AgentOrg up and connect a project to it. Use whenever the session has AgentOrg's attach, interfaces and call tools, a brief names an AgentOrg position or actor id, AgentOrg delivers a message, question or answer, or the user asks to connect or set up AgentOrg. A session with neither AgentOrg's tools nor a request to connect is not in an organization, and this skill does not apply to it.
 license: MIT
 ---
 
@@ -8,11 +8,11 @@ license: MIT
 
 AgentOrg organizes agent sessions the way a company organizes people. A position is a responsibility with a manager, and the user is the root, the one position without a manager. A session fills one position and acts for it. The position's record — its progress, its questions, its messages, its reports — is kept by AgentOrg and outlives the session, so a session that attaches later, after a restart or in another client, carries on from that record rather than from memory.
 
-This skill is the operating model: when to use which of AgentOrg's tools, and why. Each tool's description says what it does and what it takes, and AgentOrg enforces who may do what, so neither is repeated here. An organization may add its own conventions in a skill of its own; see "Your organization's conventions".
+This skill is the operating model: when to use which of AgentOrg's operations, and why. After `attach`, use `interfaces` to read your actor's current permitted operations, descriptions and schemas. Invoke a logical operation through `call {name, input}`: for example, `team` means `call {name: "team", input: {}}`. Every operation named below uses that mapping. AgentOrg enforces who may do what. An organization may add its own conventions in a skill of its own; see "Your organization's conventions".
 
 ## Whether you're in an organization
 
-You are in one only when the session has AgentOrg's tools: `attach` until you attach, your position's tools after. Without them nothing here applies, and nothing here is a reason to bring an organization into the work. If the user asks you to set AgentOrg up or connect a project to it, follow AgentOrg's setup page, https://raw.githubusercontent.com/uniac-ai/AgentOrg/main/docs/setup.md. The server and clients have their own setup commands; `agentorg-mcp status --project <dir>` checks the core and the project's MCP integration.
+You are in one only when the session has AgentOrg's tools: `attach`, `interfaces` and `call`. Listing and invocation require attachment. Without these tools nothing here applies, and nothing here is a reason to bring an organization into the work. If the user asks you to set AgentOrg up or connect a project to it, follow AgentOrg's setup page, https://raw.githubusercontent.com/uniac-ai/AgentOrg/main/docs/setup.md. The server and clients have their own setup commands; `agentorg-mcp status --project <dir>` checks the core and the project's MCP integration.
 
 If `attach` fails because AgentOrg can't be reached, tell your reader, do the work that doesn't need the organization, and attach once it is back. The organization never stops a session from doing what it was asked.
 

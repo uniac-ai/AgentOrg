@@ -5,7 +5,8 @@
  *
  * Each top-level field of the built-in's request becomes a flag (`since` becomes `--since`); a list
  * field takes its flag once per item, and an object field is given as JSON. A required field named
- * after the command's first word, such as `actor` in `agentorg actor close`, is positional.
+ * after the command's first word, such as `actor` in `agentorg actor close`, may be positional
+ * or use its named flag.
  * `--json` gives the whole request as JSON, with any flags overriding its fields. The request is
  * checked against the built-in's schema before it is sent.
  */
@@ -94,22 +95,20 @@ export function requestOf(name: BuiltinName, args: string[]): Record<string, unk
   const fields = fieldsOf(name);
   const options = Object.fromEntries([
     ["json", { type: "string" as const }],
-    ...fields
-      .filter((field) => !field.positional)
-      .map((field) => [
-        field.flag,
-        {
-          type: field.kind === "boolean" ? ("boolean" as const) : ("string" as const),
-          multiple: field.kind === "strings" || field.kind === "objects",
-        },
-      ]),
+    ...fields.map((field) => [
+      field.flag,
+      {
+        type: field.kind === "boolean" ? ("boolean" as const) : ("string" as const),
+        multiple: field.kind === "strings" || field.kind === "objects",
+      },
+    ]),
   ]);
   const parsedArgs = parseArgs({ args, options, allowPositionals: true, strict: true });
   const values = parsedArgs.values as Record<string, string | boolean | string[] | undefined>;
   const { positionals } = parsedArgs;
   const body: Record<string, unknown> = values.json ? json(String(values.json), "json") : {};
   for (const field of fields) {
-    const value = field.positional ? positionals[0] : values[field.flag];
+    const value = field.positional ? (positionals[0] ?? values[field.flag]) : values[field.flag];
     if (value === undefined) continue;
     const convert = (each: string) =>
       field.kind === "number"
@@ -136,18 +135,16 @@ export function helpOf(name: BuiltinName): string {
     "",
     BUILTINS[name].description,
     "",
-    ...fields
-      .filter((field) => !field.positional)
-      .map((field) => {
-        const value =
-          field.kind === "boolean"
-            ? ""
-            : field.kind === "objects" || field.kind === "json"
-              ? " <json>"
-              : " <value>";
-        const repeat = field.kind === "strings" || field.kind === "objects" ? " (repeatable)" : "";
-        return `  --${field.flag}${value}${repeat}  ${field.description}`;
-      }),
+    ...fields.map((field) => {
+      const value =
+        field.kind === "boolean"
+          ? ""
+          : field.kind === "objects" || field.kind === "json"
+            ? " <json>"
+            : " <value>";
+      const repeat = field.kind === "strings" || field.kind === "objects" ? " (repeatable)" : "";
+      return `  --${field.flag}${value}${repeat}  ${field.description}`;
+    }),
     "  --json <json>  the whole request as a JSON object",
   ].join("\n");
 }

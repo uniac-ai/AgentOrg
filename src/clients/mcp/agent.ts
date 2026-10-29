@@ -1,7 +1,6 @@
 /**
- * What the agent actor presents to its session. Until the session fills a position, that is
- * `attach` alone, the actor's sign-in. Once it does, it is the position's available interfaces as
- * the core offers them, passed through unchanged, with two exceptions. A credential that
+ * The session's stable attach, interfaces and call tools. Listing and invocation use the
+ * attached position's actor client, with two exceptions. A credential that
  * `actor_create` returns is kept in the credential store, and the session sees that it was kept,
  * never the credential. And an answer the session records from the user's words, with
  * `question_answer {recorded: true}`, carries the words the user last typed in the session,
@@ -10,11 +9,18 @@
 
 import { existsSync } from "node:fs";
 import { z } from "zod";
-import { type Actor, connectActor, connectClient, type Presented } from "../../actor/index.ts";
+import {
+  type Actor,
+  connectActor,
+  connectClient,
+  type PresentationOptions,
+  type Presented,
+} from "../../actor/index.ts";
 import {
   type Answer,
   Handle,
   Id,
+  Interface,
   type InterfaceDescriptor,
   type Offer,
   objectSchema,
@@ -23,7 +29,7 @@ import {
   Text,
 } from "../../domain/model/index.ts";
 import { credentials, readPrivate, rootCredentialPath } from "../../home.ts";
-import { sessions } from "./sessions.ts";
+import { sessionName, sessions } from "./sessions.ts";
 
 const AttachRequest = z.strictObject({
   actor: Id.optional().describe("The id of the position your brief names."),
@@ -40,7 +46,7 @@ const Attached = z.strictObject({
 
 export const ATTACH: InterfaceDescriptor = {
   name: "attach",
-  description: `Fill your position in the organization. Until you do, this is your only tool; once you do, your tools are the position's interfaces.
+  description: `Fill your position in the organization before listing or calling its interfaces. A resumed session can acknowledge its same actor; an attached session cannot change actors.
 
 Give actor, the id your brief names. A session the user started with an appointment, naming no position, gives name and purpose instead, once: that creates its position directly under the user. Then team shows your position, your manager and your reports.`,
   input: objectSchema(AttachRequest, "input"),
@@ -49,8 +55,45 @@ Give actor, the id your brief names. A session the user started with an appointm
   long_running: false,
 };
 
+const CallRequest = z.strictObject({
+  name: Text.describe("The interface name returned by interfaces, including its routed path."),
+  input: z.record(z.string(), z.unknown()).describe("Input matching that interface's schema."),
+});
+
+const INTERFACES: InterfaceDescriptor = {
+  name: "interfaces",
+  description:
+    "List the attached actor's currently permitted interfaces, with their descriptions and input/output schemas. Read this before calling an operation whose contract you have not read.",
+  input: objectSchema(z.strictObject({}), "input"),
+  output: objectSchema(
+    z
+      .strictObject({
+        interfaces: z.array(
+          z.strictObject({
+            interface: Interface,
+            routed: z.boolean(),
+            read_only: z.boolean().optional(),
+          }),
+        ),
+      })
+      .meta({ id: "InterfacesResult" }),
+    "output",
+  ),
+  one_way: false,
+  long_running: false,
+};
+
+const CALL: InterfaceDescriptor = {
+  name: "call",
+  description:
+    "Invoke an interface as the attached actor. Use its name and input schema from interfaces. The core applies the actor's permissions and validates input and output. A pending routed result names the call to read with the call_result operation.",
+  input: objectSchema(CallRequest, "input"),
+  one_way: false,
+  long_running: false,
+};
+
 /** What the session's client may show its model about the agent actor's tools as a whole. */
-export const INSTRUCTIONS = `These tools make this session a position in an AgentOrg organization: a responsibility with a manager, under the user. Until the session attaches, attach is its only tool: attach before any other action, with the actor id the brief names, or with a name and purpose when the user started the session with no position named. The tools are then the position's. How to work in a position is the agentorg skill; without it, read https://github.com/uniac-ai/AgentOrg/blob/main/skills/agentorg/SKILL.md.`;
+export const INSTRUCTIONS = `These tools make this session a position in an AgentOrg organization: a responsibility with a manager, under the user. Attach before any other action, with the actor id the brief names, or with a name and purpose when the user started the session with no position named. Then use interfaces to read the actor's available operations and call with {name, input} to invoke one. Logical names such as team and progress_set are operations through call. How to work in a position is the agentorg skill; without it, read https://github.com/uniac-ai/AgentOrg/blob/main/skills/agentorg/SKILL.md.`;
 
 const refused = (code: string, message: string): Answer => ({ state: "refused", code, message });
 
@@ -64,21 +107,23 @@ export interface AgentOptions {
   coreUrl: string;
   /** The client session this agent serves, when the client names one; it remembers the position. */
   session: string | undefined;
+  /** A client that identifies its session on each call instead of at process startup. */
+  client?: string;
 }
 
 export class Agent implements Presented {
   readonly instructions = INSTRUCTIONS;
   readonly #options: AgentOptions;
-  readonly #listeners: (() => void)[] = [];
   #position: Actor | undefined;
-  /** The position's offers, as last listed. */
-  #offers: Offer[] = [];
   /** Set once the session has filled a position, which `attach` never changes. */
   #filled: string | undefined;
+  #session: string | undefined;
+  #attaching = false;
 
   constructor(options: AgentOptions) {
     this.#options = options;
-    if (options.session !== undefined) this.#filled = sessions.position(options.session);
+    this.#session = options.session;
+    if (this.#session !== undefined) this.#filled = sessions.position(this.#session);
   }
 
   /** Connect the position this session filled before, if it did; retried until the core answers. */
@@ -97,22 +142,33 @@ export class Agent implements Presented {
   }
 
   async offers(): Promise<Offer[]> {
-    if (this.#filled === undefined) return [{ interface: ATTACH, routed: false }];
-    return this.#offers;
+    return [ATTACH, INTERFACES, CALL].map((descriptor) => ({
+      interface: descriptor,
+      routed: false,
+      read_only: descriptor === INTERFACES,
+    }));
   }
 
-  onChange(listener: () => void): void {
-    this.#listeners.push(listener);
+  onChange(): void {
+    // The adapter's catalog is fixed; interfaces reads the actor's current offers.
   }
 
   async call(
     name: string,
     input: Record<string, unknown>,
-    options: { progress?: (message: string) => void } = {},
+    options: PresentationOptions = {},
   ): Promise<Answer> {
+    const identity = await this.#identify(options.session);
+    if (identity !== undefined) return identity;
     if (this.#filled === undefined) {
       if (name !== ATTACH.name) return refused("invalid", "attach to your position first");
-      return this.#attach(input);
+      if (this.#attaching) return refused("unavailable", "an attachment is already in progress");
+      this.#attaching = true;
+      try {
+        return await this.#attach(input);
+      } finally {
+        this.#attaching = false;
+      }
     }
     const position = this.#position;
     if (position === undefined) {
@@ -121,6 +177,35 @@ export class Agent implements Presented {
       }
       return refused("unavailable", "the core is not reachable yet; try again shortly");
     }
+    if (position.ended !== undefined) {
+      return refused("unavailable", "this position's connection has ended");
+    }
+    if (name === ATTACH.name) {
+      return input.actor === this.#filled && Object.keys(input).length === 1
+        ? { state: "done", value: { actor: this.#filled, created: false } }
+        : refused("forbidden", "this session already fills a position; it cannot change actors");
+    }
+    if (name === INTERFACES.name) {
+      if (Object.keys(input).length > 0) return refused("invalid", "interfaces takes no input");
+      try {
+        return { state: "done", value: { interfaces: await position.available() } };
+      } catch {
+        return refused("unavailable", "the core did not list the actor's interfaces");
+      }
+    }
+    if (name !== CALL.name)
+      return refused("not_found", `there is no adapter tool ${name}; use call`);
+    const parsed = CallRequest.safeParse(input);
+    if (!parsed.success) return refused("invalid", "call requires name and an input object");
+    return this.#invoke(position, parsed.data.name, parsed.data.input, options);
+  }
+
+  async #invoke(
+    position: Actor,
+    name: string,
+    input: Record<string, unknown>,
+    options: PresentationOptions,
+  ): Promise<Answer> {
     const wait = typeof input.wait === "number" ? input.wait : 0;
     const timeout = Math.max(DEFAULT_TIMEOUT_SECONDS, wait + MARGIN_SECONDS);
     try {
@@ -128,11 +213,13 @@ export class Agent implements Presented {
       const typed = recorded ? await this.#typed(position, input.questions) : undefined;
       if (typeof typed === "object") return typed;
       const sent = typed === undefined ? input : { ...input, text: typed };
-      const answer = await position.call(name, sent, { ...options, timeoutMs: timeout * 1000 });
-      if (typed !== undefined && answer.state === "done" && this.#options.session !== undefined) {
-        sessions.forgetTyped(this.#options.session);
+      const answer = await position.call(name, sent, {
+        progress: options.progress,
+        timeoutMs: timeout * 1000,
+      });
+      if (typed !== undefined && answer.state === "done" && this.#session !== undefined) {
+        sessions.forgetTyped(this.#session);
       }
-      await this.#refresh();
       return this.#withheld(name, answer);
     } catch (error) {
       return refused("unavailable", `the core did not answer: ${(error as Error).message}`);
@@ -141,6 +228,32 @@ export class Agent implements Presented {
 
   async close(): Promise<void> {
     await this.#position?.close();
+  }
+
+  /** Bind once from call context, then recover only that conversation's saved position. */
+  async #identify(id: string | undefined): Promise<Answer | undefined> {
+    const client = this.#options.client;
+    if (client === undefined) return undefined;
+    const session = sessionName(client, id);
+    if (session === undefined) {
+      return refused("invalid", "the client must identify its occupant session on every call");
+    }
+    if (this.#session !== undefined) {
+      return this.#session === session
+        ? undefined
+        : refused("forbidden", "this adapter is bound to another occupant session");
+    }
+    this.#session = session;
+    this.#filled = sessions.position(session);
+    const credential = this.#filled === undefined ? undefined : credentials.read(this.#filled);
+    if (credential !== undefined) {
+      try {
+        await this.#connect(credential);
+      } catch {
+        void this.resume();
+      }
+    }
+    return undefined;
   }
 
   async #attach(input: Record<string, unknown>): Promise<Answer> {
@@ -176,8 +289,7 @@ export class Agent implements Presented {
       );
     }
     this.#filled = actor;
-    if (this.#options.session !== undefined) sessions.fill(this.#options.session, actor);
-    this.#changed();
+    if (this.#session !== undefined) sessions.fill(this.#session, actor);
     return { state: "done", value: { actor, created: request.actor === undefined } };
   }
 
@@ -212,8 +324,6 @@ export class Agent implements Presented {
       name: "agentorg-agent",
     });
     this.#position = position;
-    this.#offers = await position.available();
-    this.#changed();
   }
 
   /**
@@ -221,7 +331,7 @@ export class Agent implements Presented {
    * unless they came after every question it answers, which the session asked.
    */
   async #typed(position: Actor, questions: unknown): Promise<string | Answer> {
-    const session = this.#options.session;
+    const session = this.#session;
     const typed = session === undefined ? undefined : sessions.typed(session);
     if (typed === undefined) {
       return refused(
@@ -247,14 +357,6 @@ export class Agent implements Presented {
     return typed.text;
   }
 
-  /** List the offers again, since the core tells no caller when they change. */
-  async #refresh(): Promise<void> {
-    const offers = await this.#position?.available().catch(() => undefined);
-    if (offers === undefined || JSON.stringify(offers) === JSON.stringify(this.#offers)) return;
-    this.#offers = offers;
-    this.#changed();
-  }
-
   /** Keep a created position's credential, and forget a closed one's. */
   #withheld(name: string, answer: Answer): Answer {
     if (answer.state !== "done" || answer.call !== undefined) return answer;
@@ -268,9 +370,5 @@ export class Agent implements Presented {
       credentials.remove((answer.value as ResponseOf<"actor_close">).actor.id);
     }
     return answer;
-  }
-
-  #changed(): void {
-    for (const listener of this.#listeners) listener();
   }
 }

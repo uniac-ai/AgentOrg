@@ -5,6 +5,7 @@ import { test } from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { InMemoryTaskStore } from "@modelcontextprotocol/sdk/experimental/tasks/stores/in-memory.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import type { RequestTaskStore } from "@modelcontextprotocol/sdk/shared/protocol.js";
 import {
@@ -12,11 +13,58 @@ import {
   CallToolRequestSchema,
   type CallToolResult,
   ListToolsRequestSchema,
+  ToolListChangedNotificationSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { CALL_META, PATHS, PENDING_OUTPUT, SUBPROTOCOL } from "../src/bindings/mcp/index.ts";
+import { presentToOccupant } from "../src/bindings/mcp/occupant.ts";
 import { ChannelTransport } from "../src/bindings/mcp/transport.ts";
 import { Connector } from "../src/network/index.ts";
-import { startCore, until } from "./harness.ts";
+import { iface, startCore, until } from "./harness.ts";
+
+test("generic presentation preserves dynamic tool lists and optional occupant session context", async () => {
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  let change = () => {};
+  let descriptor = iface("first");
+  const contexts: unknown[] = [];
+  const server = await presentToOccupant(
+    {
+      offers: async () => [{ interface: descriptor, routed: false }],
+      call: async (_name, _input, options) => {
+        contexts.push(options?.session);
+        return { state: "done", value: {} };
+      },
+      onChange: (listener) => {
+        change = listener;
+      },
+    },
+    serverTransport,
+  );
+  const client = new Client({ name: "dynamic-occupant", version: "0" });
+  let changes = 0;
+  client.setNotificationHandler(ToolListChangedNotificationSchema, async () => {
+    changes += 1;
+  });
+  try {
+    await client.connect(clientTransport);
+    assert.deepEqual(
+      (await client.listTools()).tools.map((tool) => tool.name),
+      ["first"],
+    );
+    await client.callTool({ name: "first", arguments: {} });
+    await client.callTool({ name: "first", arguments: {}, _meta: { threadId: "conversation" } });
+    assert.deepEqual(contexts, [undefined, "conversation"]);
+    descriptor = iface("second");
+    change();
+    await until("the generic presentation signals its changed tools", () => changes > 0);
+    assert.deepEqual(
+      (await client.listTools()).tools.map((tool) => tool.name),
+      ["second"],
+    );
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});
 
 test("over MCP, the core lists offers as tools, delivers calls as tasks with their metadata, and answers with receipts", async () => {
   const core = await startCore({ waitMs: 200, stepMs: 50 });

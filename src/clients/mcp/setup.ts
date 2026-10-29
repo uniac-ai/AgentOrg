@@ -15,7 +15,7 @@ const NAMES = Object.keys(CLIENTS).join("|");
 export const CONNECT_HELP = `usage: agentorg-mcp connect <${NAMES}> [--project <dir>]
        agentorg-mcp disconnect <${NAMES}> [--project <dir>]
 
-connect pins this MCP adapter and Node in <home>/bin/agentorg-mcp, configures the project's org MCP server, and links the package's agentorg skill. Claude Code also gets its approval and hooks. The project's other entries stay as they are. Sessions started afterwards can attach; Codex also requires project trust.
+connect pins this MCP adapter and Node in <home>/bin/agentorg-mcp, configures the project's org MCP server and hooks, and links the package's agentorg skill. Claude Code also gets its MCP approval. The project's other entries stay as they are. Codex requires project trust, enabled hooks (features.hooks), and review and trust of the hook definitions through /hooks.
 
 connect checks through the launcher with a bare PATH. disconnect removes only this adapter's entries.`;
 export const STATUS_HELP = `usage: agentorg-mcp status [--project <dir>]
@@ -76,6 +76,11 @@ export async function setupCommand(command: string, args: string[]): Promise<num
   process.stdout.write(
     `connected ${name} in ${project}:\n${written.map((path) => `  wrote ${path}`).join("\n")}\nchecking through the launcher, with only /usr/bin and /bin on PATH:\n`,
   );
+  if (name === "codex") {
+    process.stdout.write(
+      "Codex: trust this project's configuration, enable features.hooks, and review and trust AgentOrg's definitions through /hooks. These hooks do not wake an idle turn.\n",
+    );
+  }
   const check = spawnSync(launcher, ["status", "--project", project], {
     env: { PATH: "/usr/bin:/bin", HOME: homedir() },
     encoding: "utf8",

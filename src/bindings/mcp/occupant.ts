@@ -29,6 +29,7 @@ export async function presentToOccupant(
     const progressToken = params._meta?.progressToken;
     let progress = 0;
     const answer = await presented.call(params.name, params.arguments ?? {}, {
+      ...(typeof params._meta?.threadId === "string" ? { session: params._meta.threadId } : {}),
       progress: (message) => {
         if (progressToken === undefined) return;
         progress += 1;

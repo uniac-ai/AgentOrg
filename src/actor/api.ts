@@ -38,6 +38,12 @@ export interface CallOptions {
   timeoutMs?: number;
 }
 
+/** Context supplied by the client occupying an actor's position. */
+export interface PresentationOptions extends Pick<CallOptions, "progress"> {
+  /** The client's identity for this conversation, independent of the actor it fills. */
+  session?: string;
+}
+
 /**
  * What an actor presents to whatever fills its position, such as an agent session: the interfaces
  * it offers there, and calling them.
@@ -49,7 +55,7 @@ export interface Presented {
   call(
     name: string,
     input: Record<string, unknown>,
-    options?: Pick<CallOptions, "progress">,
+    options?: PresentationOptions,
   ): Promise<Answer>;
   /** Call `listener` whenever the offers change. */
   onChange(listener: () => void): void;

@@ -40,10 +40,17 @@ It requires the core, with no web-client dependency. Other project entries stay 
 
 - Claude Code gets the `org` server in `.mcp.json`, approval and hooks in
   `.claude/settings.local.json`, and the skill in `.claude/skills/`.
-- Codex gets `[mcp_servers.org]` in `.codex/config.toml` and the skill in `.agents/skills/`.
+- Codex gets `[mcp_servers.org]` in `.codex/config.toml`, `SessionStart` context and
+  `UserPromptSubmit` capture hooks in `.codex/hooks.json`, and the skill in `.agents/skills/`.
 
 These entries name machine-local paths. The user starts a new session to pick them up; Codex also
-requires them to trust the project. Reconnect after upgrading the package or Node.
+requires project trust, enabled hooks (`features.hooks`), and review and trust of the hook
+definitions through `/hooks`. Codex's MCP tool approvals apply to `attach` and actor operations;
+`connect` leaves that approval policy to the user. For authorized noninteractive work, Codex
+supports per-tool `mcp_servers.org.tools.<tool>.approval_mode = "approve"` configuration.
+See the [official MCP configuration](https://learn.chatgpt.com/docs/extend/mcp) and
+[hook documentation](https://learn.chatgpt.com/docs/hooks). Codex's hooks do not wake idle turns.
+Reconnect after upgrading the package or Node.
 `agentorg-mcp status --project <dir>` checks again and exits non-zero on a fault.
 
 For another MCP client, configure a stdio server named `org` using `agentorg-mcp`, and give

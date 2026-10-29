@@ -34,7 +34,14 @@ is independent of an MCP session's attachment. Creation makes a direct report of
 agentorg actor create --name builds --purpose "Run the nightly builds"
 agentorg team
 agentorg activity
+agentorg interfaces
+agentorg call builds.review --json '{"revision":"example"}'
 ```
+
+`interfaces` lists the selected actor's permitted capabilities directly from the core, including
+routed names and their schemas. Generic `call` prints the actor library's complete answer,
+including a routed call's id, state and parts. The generated built-in convenience commands
+continue to print their completed value.
 
 ## Browser client
 

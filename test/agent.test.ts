@@ -1,6 +1,6 @@
 /**
  * The agent actor as a client's session meets it: `agentorg-mcp` started over stdio for a
- * session, against a real core. Before attaching it offers attach alone; after, the position's
+ * session, against a real core. The stable tools attach, list and invoke the position's
  * interfaces. It keeps the credentials of positions it creates, and a resumed session fills its
  * position again.
  */
@@ -13,10 +13,8 @@ import { after, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import {
-  type CallToolResult,
-  ToolListChangedNotificationSchema,
-} from "@modelcontextprotocol/sdk/types.js";
+import type { RequestOptions } from "@modelcontextprotocol/sdk/shared/protocol.js";
+import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { claudeTakesInput } from "../src/clients/mcp/command.ts";
 import { describe } from "../src/clients/mcp/waiter.ts";
 import { type Core, fakeActor, iface, startCore, until } from "./harness.ts";
@@ -32,11 +30,11 @@ async function core(): Promise<Core & { home: string }> {
   return Object.assign(started, { home: join(started.credentialFile, "..") });
 }
 
-/** A session's view of `agentorg-mcp`: its tools, its calls, and each list change it saw. */
-async function session(core: Core & { home: string }, id: string) {
+/** A session's view of `agentorg-mcp`: stable tools, current capabilities and calls. */
+async function session(core: Core & { home: string }, id: string, kind = "claude-code") {
   const transport = new StdioClientTransport({
     command: process.execPath,
-    args: [BIN, "--client", "claude-code"],
+    args: [BIN, "--client", kind],
     env: {
       PATH: process.env.PATH ?? "",
       AGENTORG_HOME: core.home,
@@ -50,23 +48,44 @@ async function session(core: Core & { home: string }, id: string) {
     log += chunk.toString();
   });
   const client = new Client({ name: "a-session", version: "0" });
-  let changes = 0;
-  client.setNotificationHandler(ToolListChangedNotificationSchema, async () => {
-    changes += 1;
-  });
   await client.connect(transport);
   open.push(client);
+  const tool = async (
+    name: string,
+    args: Record<string, unknown> = {},
+    metadata: Record<string, unknown> = kind === "codex" ? { threadId: id } : {},
+    options?: RequestOptions,
+  ) =>
+    (await client.callTool(
+      { name, arguments: args, _meta: metadata },
+      undefined,
+      options,
+    )) as CallToolResult;
   return {
-    get changes() {
-      return changes;
-    },
     get log() {
       return log;
     },
     instructions: () => client.getInstructions(),
     tools: async () => (await client.listTools()).tools.map((tool) => tool.name).sort(),
-    call: async (name: string, args: Record<string, unknown> = {}) =>
-      (await client.callTool({ name, arguments: args })) as CallToolResult,
+    tool,
+    interfaces: async () => {
+      const listed = await tool("interfaces");
+      return (
+        (
+          listed.structuredContent as { interfaces?: { interface: { name: string } }[] }
+        )?.interfaces?.map((offer) => offer.interface.name) ?? []
+      );
+    },
+    call: async (
+      name: string,
+      args: Record<string, unknown> = {},
+      metadata: Record<string, unknown> = kind === "codex" ? { threadId: id } : {},
+    ) =>
+      tool(
+        name === "attach" ? name : "call",
+        name === "attach" ? args : { name, input: args },
+        metadata,
+      ),
     close: () => client.close(),
   };
 }
@@ -74,19 +93,132 @@ async function session(core: Core & { home: string }, id: string) {
 const text = (result: CallToolResult) =>
   result.content.map((part) => (part.type === "text" ? part.text : "")).join("\n");
 
-test("before attaching a session sees attach alone, and anything else is refused", async () => {
+test("Codex binds from each call, resumes the same actor, and gives a fork its own attachment", async () => {
+  const org = await core();
+  const first = await session(org, "codex-thread", "codex");
+  assert.deepEqual(
+    await first.tools(),
+    ["attach", "call", "interfaces"],
+    "initialization and listing need no identity",
+  );
+  for (const metadata of [{}, { threadId: 1 }, { threadId: "../other" }, { threadId: "" }]) {
+    const refused = await first.call("attach", { name: "wrong", purpose: "Wrong" }, metadata);
+    assert.equal(refused.isError, true);
+    assert.match(text(refused), /^invalid: the client must identify its occupant session/);
+  }
+  assert.equal(org.org.registry.reports(org.rootId).length, 0);
+  assert.equal(existsSync(join(org.home, "sessions/codex-")), false);
+  const [attached, competing] = await Promise.all([
+    first.call("attach", { name: "codex", purpose: "Own Codex." }),
+    first.call("attach", { name: "competing", purpose: "Another position." }),
+  ]);
+  assert.equal(competing.isError, true);
+  assert.equal(org.org.registry.reports(org.rootId).length, 1);
+  const { actor } = attached.structuredContent as { actor: string };
+  assert.equal(
+    readFileSync(join(org.home, "sessions/codex-codex-thread/position"), "utf8").trim(),
+    actor,
+  );
+  assert.equal(
+    Array.isArray((await first.call("team", { depth: 0 })).structuredContent?.positions),
+    true,
+  );
+  for (const metadata of [{}, { threadId: "different-thread" }]) {
+    assert.equal(
+      (await first.call("actor_create", { name: "wrong", purpose: "Wrong" }, metadata)).isError,
+      true,
+    );
+  }
+  assert.equal(org.org.registry.reports(actor).length, 0);
+  await first.close();
+
+  const resumed = await session(org, "codex-thread", "codex");
+  assert.deepEqual(await resumed.tools(), ["attach", "call", "interfaces"]);
+  assert.deepEqual((await resumed.call("attach", { actor })).structuredContent, {
+    actor,
+    created: false,
+  });
+  const team = (await resumed.call("team", { depth: 0 })).structuredContent as {
+    positions: { id: string }[];
+  };
+  assert.equal(team.positions[0]?.id, actor);
+  assert.equal(
+    (await resumed.call("attach", { name: "another", purpose: "Another" })).isError,
+    true,
+  );
+  assert.equal((await resumed.call("attach", { actor: org.rootId })).isError, true);
+  const created = (await resumed.call("actor_create", { name: "report", purpose: "A report." }))
+    .structuredContent as { actor: { id: string }; credential: string };
+  const credential = readFileSync(join(org.home, "actors", created.actor.id), "utf8").trim();
+  assert.match(created.credential, /^kept by agentorg/);
+  assert.equal(JSON.stringify(created).includes(credential), false);
+  assert.equal(resumed.log.includes(credential), false);
+
+  const fork = await session(org, "fork-thread", "codex");
+  assert.deepEqual(await fork.tools(), ["attach", "call", "interfaces"]);
+  assert.match(text(await fork.call("team")), /^invalid: attach to your position first/);
+  assert.equal(existsSync(join(org.home, "sessions/codex-fork-thread/position")), false);
+  assert.deepEqual((await fork.call("attach", { actor: created.actor.id })).structuredContent, {
+    actor: created.actor.id,
+    created: false,
+  });
+  assert.equal((await fork.call("activity")).isError, true, "a client never gains root authority");
+  await resumed.call("actor_close", { actor: created.actor.id });
+  await until(
+    "the closed actor's attachment refuses operations",
+    async () => (await fork.call("attach", { actor: created.actor.id })).isError === true,
+  );
+});
+
+test("the stdio catalog is stable and only attachment can act before a position is filled", async () => {
   const org = await core();
   const one = await session(org, "s-refusals");
-  assert.deepEqual(await one.tools(), ["attach"]);
-  assert.match(one.instructions() ?? "", /attach before any other action/);
+  assert.deepEqual(await one.tools(), ["attach", "call", "interfaces"]);
+  assert.match(one.instructions() ?? "", /Attach before any other action/);
   assert.match(one.instructions() ?? "", /agentorg skill/);
+  assert.equal((await one.tool("interfaces")).isError, true);
+  assert.equal((await one.tool("call", { name: "team", input: {} })).isError, true);
   const early = await one.call("team");
   assert.equal(early.isError, true);
   assert.match(text(early), /^invalid: attach to your position first/);
   assert.match(text(await one.call("attach", {})), /^invalid: give actor, or name and purpose/);
   const unknown = await one.call("attach", { actor: "act_0000000000" });
   assert.match(text(unknown), /^not_found: no credential is kept for act_0000000000/);
-  assert.deepEqual(await one.tools(), ["attach"]);
+  assert.deepEqual(await one.tools(), ["attach", "call", "interfaces"]);
+  const attached = await one.call("attach", { name: "gateway", purpose: "Verify the gateway." });
+  const actor = (attached.structuredContent as { actor: string }).actor;
+  assert.deepEqual(await one.tools(), ["attach", "call", "interfaces"]);
+  assert.equal((await one.tool("team")).isError, true, "operations go through call");
+  for (const input of [{}, { name: "team" }, { name: "team", input: [] }]) {
+    assert.equal((await one.tool("call", input)).isError, true);
+  }
+  const listed = (await one.tool("interfaces")).structuredContent as { interfaces: unknown[] };
+  const asActor = await org.client(readFileSync(join(org.home, "actors", actor), "utf8").trim());
+  assert.deepEqual(listed.interfaces, await asActor.available());
+  assert.equal((await one.interfaces()).includes("activity"), false);
+});
+
+test("generic invocation forwards progress and completes a wait beyond the SDK default", {
+  timeout: 100_000,
+}, async () => {
+  const org = await core();
+  const worker = await session(org, "s-long-wait");
+  await worker.call("attach", { name: "waiter", purpose: "Verify long reads." });
+  const progress: number[] = [];
+  const result = await worker.tool(
+    "call",
+    { name: "messages", input: { wait: 61 } },
+    {},
+    {
+      timeout: 90_000,
+      onprogress: (update) => {
+        progress.push(update.progress);
+      },
+    },
+  );
+  assert.notEqual(result.isError, true, text(result));
+  assert.deepEqual(result.structuredContent?.messages, []);
+  assert.ok(progress.length > 0, "waiting progress must reach the stdio caller");
 });
 
 test("an appointed session creates its position under the root, and a resumed one fills it again", async () => {
@@ -97,8 +229,7 @@ test("an appointed session creates its position under the root, and a resumed on
   assert.equal(created, true);
   assert.equal(org.org.registry.get(actor)?.manager, org.rootId);
   assert.equal(org.org.registry.get(actor)?.created_at_attach, true);
-  await until("the session is told its tools changed", () => first.changes > 0);
-  const tools = await first.tools();
+  const tools = await first.interfaces();
   assert.ok(tools.includes("actor_create") && !tools.includes("attach"), tools.join(", "));
   await until("the position is online", () => org.org.registry.get(actor)?.online === true);
   await first.close();
@@ -106,9 +237,9 @@ test("an appointed session creates its position under the root, and a resumed on
   // The same session, resumed: no attach, and the position is filled again on its own.
   const resumed = await session(org, "s-appointed");
   await until("the resumed session gets the position's tools", async () =>
-    (await resumed.tools()).includes("actor_create"),
+    (await resumed.interfaces()).includes("actor_create"),
   );
-  assert.equal((await resumed.tools()).includes("attach"), false);
+  assert.deepEqual(await resumed.tools(), ["attach", "call", "interfaces"]);
   const again = await resumed.call("attach", { name: "other", purpose: "A second position." });
   assert.equal(again.isError, true);
   assert.equal(org.org.registry.reports(org.rootId).length, 1);
@@ -137,13 +268,14 @@ test("a created position's credential is kept for its session, never shown, and 
     assert.equal(shown.includes(credential), false);
   }
 
-  // The report exposes an interface; the manager's next call lists it, and says so.
+  // A new report client advertises its interface to the core.
   await report.close();
   const program = await org.connect(credential, fakeActor([iface("review")]));
-  const before = manager.changes;
-  await manager.call("team");
-  await until("the manager is told its tools changed", () => manager.changes > before);
-  assert.ok((await manager.tools()).includes("db.review"));
+  await until("the core lists the report's current interface", async () =>
+    (await manager.interfaces()).includes("db.review"),
+  );
+  const routed = await manager.call("db.review");
+  assert.equal((routed._meta?.["agentorg/call"] as { state: string } | undefined)?.state, "done");
   await program.close();
 
   await manager.call("actor_close", { actor: id });
@@ -247,11 +379,12 @@ function hook(
   id: string,
   env: Record<string, string> = {},
   input = "",
+  kind = "claude-code",
 ) {
   return new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve) => {
     const child = execFile(
       process.execPath,
-      [BIN, command, "--client", "claude-code"],
+      [BIN, command, "--client", kind],
       {
         env: {
           PATH: process.env.PATH ?? "",
@@ -266,6 +399,66 @@ function hook(
     child.stdin?.end(input);
   });
 }
+
+test("Codex hooks use stdin identity and keep only that attached session's typed words", async () => {
+  const org = await core();
+  const run = (command: string, payload: Record<string, unknown>) =>
+    hook(
+      org,
+      command,
+      "wrong-inherited-id",
+      {
+        CODEX_THREAD_ID: "wrong-inherited-id",
+        CODEX_SESSION_ID: "wrong-inherited-id",
+      },
+      JSON.stringify(payload),
+      "codex",
+    );
+  assert.match(
+    (await run("context", { session_id: "hook-thread" })).stdout,
+    /attach with `attach`/,
+  );
+  assert.equal(existsSync(join(org.home, "sessions/codex-hook-thread")), false);
+  for (const input of ['["sentinel-credential"]', '{"prompt":"sentinel-credential"']) {
+    const malformed = await hook(org, "prompt", "unused", {}, input, "codex");
+    assert.equal(malformed.code, 1);
+    assert.match(malformed.stderr, /client hook input must be a JSON object/);
+    assert.equal((malformed.stdout + malformed.stderr).includes("sentinel-credential"), false);
+  }
+  const worker = await session(org, "hook-thread", "codex");
+  await worker.call("attach", { name: "hooked", purpose: "Ask questions." });
+  assert.deepEqual(await run("context", { session_id: "hook-thread" }), {
+    code: 0,
+    stdout: "",
+    stderr: "",
+  });
+  const question = (await worker.call("question_ask", { text: "Keep the schema?" }))
+    .structuredContent as { id: string };
+  const words = "Keep the schema exactly as it is.";
+  assert.equal((await run("prompt", { session_id: "hook-thread", prompt: words })).code, 0);
+  await run("prompt", {
+    session_id: "hook-thread",
+    prompt: "<task-notification>Automated input</task-notification>",
+  });
+  await run("prompt", { session_id: "unattached-fork", prompt: "Other words." });
+  const answer = (
+    await worker.call("question_answer", {
+      questions: [question.id],
+      recorded: true,
+      text: "Invented words",
+    })
+  ).structuredContent as { questions: { answer: { text: string; recorded: boolean } }[] };
+  assert.equal(answer.questions[0]?.answer.text, words);
+  assert.equal(answer.questions[0]?.answer.recorded, true);
+  for (const id of ["wrong-inherited-id", "unattached-fork"]) {
+    assert.equal(existsSync(join(org.home, `sessions/codex-${id}`)), false);
+  }
+  assert.deepEqual(await run("wait", { session_id: "hook-thread" }), {
+    code: 0,
+    stdout: "",
+    stderr: "",
+  });
+});
 
 test("a session that fills no position is told to attach first, and its waiter ends at once", async () => {
   const org = await core();
