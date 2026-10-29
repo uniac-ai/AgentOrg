@@ -1,7 +1,4 @@
-/**
- * The domain's `Store` over a SQLite database: each read and write the domain needs, as one SQL
- * statement on the tables in `schema.ts`.
- */
+/** Domain storage operations over the SQLite tables in schema.ts. */
 
 import type { SQLInputValue } from "node:sqlite";
 import type { Store } from "../../domain/ports.ts";
@@ -30,16 +27,14 @@ export class SqliteStore implements Store {
     reports: (manager) =>
       this.database.select("actors", "manager = ? AND closed_at IS NULL", [manager]),
     open: () => this.database.select("actors", "closed_at IS NULL"),
-    setOnline: (id, online) => {
-      this.database.run("UPDATE actors SET online = ? WHERE id = ?", [online ? 1 : 0, id]);
-    },
-    setAllOffline: () => {
-      this.database.run("UPDATE actors SET online = 0");
-    },
-    setInterfaces: (id, interfaces) => {
-      this.database.run("UPDATE actors SET interfaces = ? WHERE id = ?", [
-        JSON.stringify(interfaces),
+  };
+
+  readonly exposures: Store["exposures"] = {
+    get: (id) => this.database.get("exposures", id)?.interfaces ?? [],
+    put: (id, interfaces) => {
+      this.database.run("INSERT OR REPLACE INTO exposures (id, interfaces) VALUES (?, ?)", [
         id,
+        JSON.stringify(interfaces),
       ]);
     },
   };

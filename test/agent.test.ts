@@ -231,7 +231,7 @@ test("an appointed session creates its position under the root, and a resumed on
   assert.equal(org.org.registry.get(actor)?.created_at_attach, true);
   const tools = await first.interfaces();
   assert.ok(tools.includes("actor_create") && !tools.includes("attach"), tools.join(", "));
-  await until("the position is online", () => org.org.registry.get(actor)?.online === true);
+  await until("the position is online", () => org.org.connections.link(actor) !== undefined);
   await first.close();
 
   // The same session, resumed: no attach, and the position is filled again on its own.

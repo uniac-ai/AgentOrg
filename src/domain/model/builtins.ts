@@ -6,6 +6,7 @@
 
 import { z } from "zod";
 import { COMMUNICATION } from "./communication.ts";
+import type { BuiltinSpec } from "./json-schema.ts";
 import { Actor, AuditEntry, Call, Handle, Id, MAX_WAIT_SECONDS, Text } from "./records.ts";
 
 /**
@@ -74,16 +75,6 @@ export const Activity = z
 export const ActivityResult = z
   .strictObject({ entries: z.array(AuditEntry).describe("Newest first.") })
   .meta({ id: "ActivityResult" });
-
-export interface BuiltinSpec {
-  /** Writes are recorded in the audit trail. */
-  readonly writes: boolean;
-  readonly rootOnly: boolean;
-  readonly request: z.ZodType;
-  readonly response: z.ZodType;
-  /** The first paragraph is the summary. */
-  readonly description: string;
-}
 
 export const BUILTINS = {
   actor_create: {

@@ -22,7 +22,7 @@ export async function core(): Promise<Core> {
   return started;
 }
 
-export const online = (core: Core) => core.org.registry.get(core.rootId)?.online === true;
+export const online = (core: Core) => core.org.connections.link(core.rootId) !== undefined;
 
 /** A web client on `core`, a new one each time as after a restart, once the root is online. */
 export async function human(core: Core) {
@@ -79,7 +79,7 @@ export async function program(
     value: { verdict: `looked at ${input.change}` },
   }));
   const connection = await core.connect(credential, reviews);
-  await until(`${name} comes online`, () => core.org.registry.get(actor.id)?.online === true);
+  await until(`${name} comes online`, () => core.org.connections.link(actor.id) !== undefined);
   return { id: actor.id as string, received: reviews.received, connection };
 }
 

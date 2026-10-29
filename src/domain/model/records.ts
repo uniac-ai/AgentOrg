@@ -116,5 +116,7 @@ export const AuditEntry = z
   })
   .meta({ id: "AuditEntry" });
 
-/** An actor as the core keeps it: without its path, with its credential's hash. */
-export const ActorRecord = Actor.omit({ path: true }).extend({ credential_hash: z.string() });
+/** Durable identity and lifecycle; connection state is owned separately. */
+export const ActorRecord = Actor.omit({ path: true, online: true, interfaces: true }).extend({
+  credential_hash: z.string(),
+});

@@ -1,27 +1,25 @@
-/**
- * What an actor may do: its available interfaces, and what calling one does. A built-in runs at
- * once. Another actor's interface becomes a routed call: its input is checked against that
- * interface's input schema, the call is recorded and delivered, and the caller waits for a bounded
- * time, with progress, for its result. A call still pending then answers pending, as does a call
- * into a one-way interface at once, and the caller reads it later with `call_result`.
- */
+/** Request validation, dispatch, write audit and bounded waits over the available capabilities. */
 
 import type { Audit } from "./audit.ts";
-import type { Handlers, Waiting } from "./builtins.ts";
 import type { CallRecord, Calls } from "./calls.ts";
-import { Invalid, invalid, NotFound, Refusal } from "./errors.ts";
+import type { Capabilities, Capability } from "./capabilities.ts";
+import type { Claims } from "./claims.ts";
+import type { Communication } from "./communication.ts";
+import type { Connections } from "./connections.ts";
+import { Forbidden, Invalid, invalid, NotFound, Refusal } from "./errors.ts";
 import {
   type Answer,
-  BUILTIN_NAMES,
   BUILTINS,
   type BuiltinName,
   type Offer,
-  objectSchema,
+  type RequestOf,
+  type ResponseOf,
 } from "./model/index.ts";
-import type { Application, Invocation } from "./ports.ts";
+import type { Invocation, Waiting } from "./ports.ts";
+import type { Progress } from "./progress.ts";
 import type { ActorRow, Registry } from "./registry.ts";
 import { violation } from "./validation.ts";
-import { route, routes } from "./wiring.ts";
+import type { Views } from "./views.ts";
 
 export interface Timing {
   /** How long a routed call waits for its result before it answers pending. */
@@ -30,125 +28,145 @@ export interface Timing {
   stepMs: number;
 }
 
-const BUILTIN_OFFERS: Record<BuiltinName, Offer> = Object.fromEntries(
-  BUILTIN_NAMES.map((name) => [
-    name,
-    {
-      interface: {
-        name,
-        description: BUILTINS[name].description,
-        input: objectSchema(BUILTINS[name].request, "input"),
-        output: objectSchema(BUILTINS[name].response, "output"),
-        one_way: false,
-        long_running: false,
-      },
-      routed: false,
-      read_only: !BUILTINS[name].writes,
-    },
-  ]),
-) as Record<BuiltinName, Offer>;
-
-const isBuiltin = (name: string): name is BuiltinName => Object.hasOwn(BUILTINS, name);
-
 type Untyped = (actor: ActorRow, request: unknown, waiting: Waiting) => Promise<unknown>;
 
-export class AvailableInterfaces implements Application {
-  private readonly registry: Registry;
-  private readonly calls: Calls;
-  private readonly handlers: Handlers;
-  private readonly audit: Audit;
-  private readonly timing: Timing;
+type Handlers = {
+  [N in BuiltinName]: (
+    actor: ActorRow,
+    request: RequestOf<N>,
+    waiting: Waiting,
+  ) => Promise<ResponseOf<N>>;
+};
 
-  constructor(registry: Registry, calls: Calls, handlers: Handlers, audit: Audit, timing: Timing) {
-    this.registry = registry;
-    this.calls = calls;
-    this.handlers = handlers;
-    this.audit = audit;
-    this.timing = timing;
+export function application(
+  registry: Registry,
+  capabilities: Capabilities,
+  calls: Calls,
+  communication: Communication,
+  claims: Claims,
+  connections: Connections,
+  progress: Progress,
+  views: Views,
+  audit: Audit,
+  timing: Timing,
+) {
+  const handlers: Handlers = {
+    actor_create: async (actor, request) => {
+      const { actor: created, credential } = await registry.create(
+        actor.id,
+        request.name,
+        request.purpose,
+        request.created_at_attach,
+      );
+      return { actor: views.actor(created), credential };
+    },
+
+    actor_close: async (actor, request) => {
+      const { actor: closed, changed } = registry.close(actor, request.actor);
+      const ended = changed ? calls.endFor(closed, actor.id) : [];
+      if (changed) await connections.disconnect(closed.id);
+      return { actor: views.actor(closed), ended_calls: ended };
+    },
+
+    progress_set: async (actor, request) => progress.set(actor, request),
+    question_ask: async (actor, request) => communication.ask(actor, request),
+    question_answer: async (actor, request) => communication.answer(actor, request),
+    questions: (actor, request, waiting) => communication.questions(actor, request, waiting),
+    team: async (actor, request) => views.team(actor, request),
+    progress: async (_actor, request) => views.progress(request),
+    message_send: async (actor, request) => communication.send(actor, request),
+    messages: (actor, request, waiting) => communication.messages(actor, request, waiting),
+    message_read: async (actor, request) => communication.read(actor, request),
+    claim: async (actor, request) => claims.claim(actor, request),
+    release: async (actor, request) => claims.release(actor, request),
+
+    call_result: async (actor, request, waiting) => {
+      const call = calls.found(request.call);
+      if (call.from !== actor.id) throw new Forbidden(`only its caller reads call ${call.id}`);
+      return calls.wait(call.id, request.wait * 1000, waiting);
+    },
+
+    call_withdraw: async (actor, request) => calls.withdraw(actor, request.call),
+
+    activity: async (_actor, request) => ({ entries: audit.list(request.since, request.limit) }),
+  };
+
+  function available(actorId: string): Offer[] {
+    return capabilities.list(registry.found(actorId)).map((each) => each.offer);
   }
 
-  available(actorId: string): Offer[] {
-    const actor = this.registry.found(actorId);
-    const own = BUILTIN_NAMES.filter((name) => !BUILTINS[name].rootOnly || actor.manager === null);
-    const routed = routes(this.registry, actor).map(({ name, interface: offered }) => ({
-      interface: { ...offered, name },
-      routed: true,
-    }));
-    return [...own.map((name) => BUILTIN_OFFERS[name]), ...routed];
-  }
-
-  async invoke(
+  async function invoke(
     actorId: string,
     name: string,
     input: Record<string, unknown>,
     how: Invocation,
   ): Promise<Answer> {
-    const actor = this.registry.found(actorId);
+    const actor = registry.found(actorId);
     try {
-      return isBuiltin(name)
-        ? await this.builtin(actor, name, input, how)
-        : await this.routed(actor, name, input, how);
+      const found = capabilities.list(actor).find((each) => each.offer.interface.name === name);
+      if (!found) {
+        if (!Object.hasOwn(BUILTINS, name)) audit.record(actor.id, "call", null, "not_found");
+        throw new NotFound(`there is no interface ${name}`);
+      }
+      return "builtin" in found
+        ? await builtin(actor, found.builtin, input, how)
+        : await routed(actor, found, input, how);
     } catch (error) {
       if (!(error instanceof Refusal)) throw error;
       return { state: "refused", code: error.code, message: error.message };
     }
   }
 
-  private async builtin(
+  async function builtin(
     actor: ActorRow,
     name: BuiltinName,
     input: Record<string, unknown>,
     how: Invocation,
   ): Promise<Answer> {
     const spec = BUILTINS[name];
-    if (spec.rootOnly && actor.manager !== null)
-      throw new NotFound(`there is no interface ${name}`);
     const parsed = spec.request.safeParse(input);
     if (!parsed.success) throw invalid(parsed.error.issues);
     const waiting = {
-      stepMs: this.timing.stepMs,
+      stepMs: timing.stepMs,
       signal: how.signal,
       progress: () => how.progress("waiting"),
     };
     let result: Record<string, unknown>;
     try {
-      const handler = this.handlers[name] as Untyped;
+      const handler = handlers[name] as Untyped;
       result = (await handler(actor, parsed.data, waiting)) as Record<string, unknown>;
     } catch (error) {
       if (spec.writes && error instanceof Refusal) {
-        this.audit.record(actor.id, name, targetOf(input), error.code);
+        audit.record(actor.id, name, targetOf(input), error.code);
       }
       throw error;
     }
-    if (spec.writes) this.audit.record(actor.id, name, targetOf(result), "ok");
+    if (spec.writes) audit.record(actor.id, name, targetOf(result), "ok");
     return { state: "done", value: result };
   }
 
-  private async routed(
+  async function routed(
     actor: ActorRow,
-    name: string,
+    found: Capability & { to: string; interface: string },
     input: Record<string, unknown>,
     how: Invocation,
   ): Promise<Answer> {
-    const found = route(this.registry, actor, name);
-    const refuse = (refusal: Refusal) => {
-      this.audit.record(actor.id, "call", null, refusal.code);
-      return refusal;
-    };
-    if (!found) throw refuse(new NotFound(`there is no interface ${name}`));
-    const problem = violation(found.interface.input, input);
+    const { name, input: schema, one_way } = found.offer.interface;
+    const problem = violation(schema, input);
     if (problem !== undefined) {
-      throw refuse(new Invalid(`the input does not match the input schema of ${name}: ${problem}`));
+      audit.record(actor.id, "call", null, "invalid");
+      throw new Invalid(`the input does not match the input schema of ${name}: ${problem}`);
     }
-    const call = this.calls.create(actor, found, input, how.cause);
-    const waitMs = found.interface.one_way ? 0 : this.timing.waitMs;
-    const settled = await this.calls.wait(call.id, waitMs, {
-      stepMs: this.timing.stepMs,
+    const call = calls.create(actor, found.to, found.interface, input, how.cause);
+    const waitMs = one_way ? 0 : timing.waitMs;
+    const settled = await calls.wait(call.id, waitMs, {
+      stepMs: timing.stepMs,
       signal: how.signal,
       progress: () => how.progress(`waiting for ${name}`),
     });
     return answerOf(settled);
   }
+  return { available, invoke };
 }
 
 /** The record a write acted on, as its request or result names it. */

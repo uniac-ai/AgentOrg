@@ -10,7 +10,11 @@
 
 import { existsSync } from "node:fs";
 import { mcpEndpoints, PATHS } from "../bindings/mcp/index.ts";
-import { Organization, type OrganizationOptions } from "../domain/index.ts";
+import {
+  organization as createOrganization,
+  type Organization,
+  type OrganizationOptions,
+} from "../domain/index.ts";
 import type { Store } from "../domain/ports.ts";
 import type { Registry } from "../domain/registry.ts";
 import { readPrivate, writePrivate } from "../home.ts";
@@ -35,7 +39,7 @@ export async function startCore(
   store: Store,
   options: CoreOptions & { port: number; hostname?: string },
 ): Promise<RunningCore> {
-  const organization = new Organization(store, options);
+  const organization = createOrganization(store, options);
   const listening = await listen({
     port: options.port,
     ...(options.hostname === undefined ? {} : { hostname: options.hostname }),

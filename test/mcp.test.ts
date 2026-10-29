@@ -110,7 +110,7 @@ test("over MCP, the core lists offers as tools, delivers calls as tasks with the
   await connector.connect((channel) => server.connect(new ChannelTransport(channel)));
   const prog = new Client({ name: "prog", version: "0" });
   try {
-    await until("root online", () => core.org.registry.get(core.rootId)?.online === true);
+    await until("root online", () => core.org.connections.link(core.rootId) !== undefined);
     const created = (await root.callTool({
       name: "actor_create",
       arguments: { name: "prog", purpose: "A program" },

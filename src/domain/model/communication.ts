@@ -16,7 +16,7 @@
  */
 
 import { z } from "zod";
-import type { BuiltinSpec } from "./builtins.ts";
+import type { BuiltinSpec } from "./json-schema.ts";
 import { Actor, Id, LIMITS, MAX_WAIT_SECONDS, Text, Timestamp } from "./records.ts";
 
 const text = (max: number) => z.string().trim().min(1).max(max);
