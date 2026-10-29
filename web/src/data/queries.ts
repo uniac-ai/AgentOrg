@@ -5,7 +5,7 @@
  */
 
 import { QueryClient, queryOptions } from "@tanstack/react-query";
-import type { SessionBootstrap } from "../../../src/human/types.ts";
+import type { SessionBootstrap } from "../../../src/clients/web/types.ts";
 import { organizationOf } from "../model/organization.ts";
 import { ApiError, call, keepCsrfToken, request } from "./client.ts";
 

@@ -4,7 +4,7 @@
  */
 
 import { useMutation } from "@tanstack/react-query";
-import type { Builtins } from "../../../src/human/types.ts";
+import type { Builtins } from "../../../src/clients/web/types.ts";
 import { call } from "./client.ts";
 import { queryClient } from "./queries.ts";
 

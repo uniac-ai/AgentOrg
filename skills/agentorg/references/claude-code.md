@@ -1,6 +1,6 @@
 # Claude Code
 
-`agentorg connect claude-code` sets a project up so that Claude Code runs AgentOrg's agent actor as the MCP server `org`, delivers what arrives through AgentOrg's hooks, and finds this skill.
+`agentorg-mcp connect claude-code` sets a project up so that Claude Code runs AgentOrg's agent actor as the MCP server `org`, delivers what arrives through AgentOrg's hooks, and finds this skill.
 
 - **Tool names.** AgentOrg's tools appear as `mcp__org__<name>`, with each dot shown as an underscore: a report's `storage.check` is `mcp__org__storage_check`.
 - **Attaching.** Until you attach, `attach` is the only AgentOrg tool, and the hint at the start of the session says to attach. A resumed session is attached again on its own: a session that already has its position's tools doesn't attach.

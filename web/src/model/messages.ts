@@ -4,7 +4,11 @@
  * versions, its questions with their answers, and its messages.
  */
 
-import type { MessageRecord, ProgressRecord, QuestionRecord } from "../../../src/human/types.ts";
+import type {
+  MessageRecord,
+  ProgressRecord,
+  QuestionRecord,
+} from "../../../src/clients/web/types.ts";
 
 /**
  * The questions that wait on the user, oldest first, approvals only the user gives leading: those

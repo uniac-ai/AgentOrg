@@ -7,7 +7,7 @@ import type {
   PositionRecord,
   ProgressRecord,
   QuestionRecord,
-} from "../../src/human/types.ts";
+} from "../../src/clients/web/types.ts";
 import {
   answerOf,
   questionsForYou,

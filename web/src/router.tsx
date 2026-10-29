@@ -1,5 +1,5 @@
-// Every view has a URL. The human actor serves the app's index.html on each of these paths
-// (src/human/web.ts, APP_PATHS), and this router picks the view: the user's page at `/`, every
+// Every view has a URL. The web client serves the app's index.html on each of these paths
+// (src/clients/web/web.ts, APP_PATHS), and this router picks the view: the user's page at `/`, every
 // actor's at `/people/:id`, and the activity.
 
 import { createRootRoute, createRoute, createRouter } from "@tanstack/react-router";

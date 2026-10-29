@@ -2,7 +2,7 @@
 // and closed once its manager closes it. An item's state reads the same way, a planned one as
 // idle. Every mark, count and roll-up in the app uses these words.
 
-import type { ItemRecord, PositionRecord } from "../../../src/human/types.ts";
+import type { ItemRecord, PositionRecord } from "../../../src/clients/web/types.ts";
 
 /** In display order: work moving, work waiting, then actors idle or done. */
 export const PROGRESS_STATES = [

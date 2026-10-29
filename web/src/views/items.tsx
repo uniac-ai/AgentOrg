@@ -3,7 +3,7 @@
 
 import { Link } from "@tanstack/react-router";
 import { ChevronRightIcon, HourglassIcon } from "lucide-react";
-import type { ItemRecord, WaitsOnRecord } from "../../../src/human/types.ts";
+import type { ItemRecord, WaitsOnRecord } from "../../../src/clients/web/types.ts";
 import type { Member } from "../model/organization.ts";
 import { itemState } from "../model/state.ts";
 import { SR, StateMark, StateName, StateShape } from "./marks.tsx";

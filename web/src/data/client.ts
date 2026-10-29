@@ -1,12 +1,12 @@
 /**
- * The typed client of the human actor's API under `/api`: the session bootstrap, and calls into
+ * The typed client of the web client's API under `/api`: the session bootstrap, and calls into
  * the interfaces available to the user, the root. Every call carries the session's CSRF token, so
  * calls wait for the bootstrap to hand it over. The app reaches the core only through it.
  */
 
-import { type ApiErrorBody, type Builtins, CSRF_HEADER } from "../../../src/human/types.ts";
+import { type ApiErrorBody, type Builtins, CSRF_HEADER } from "../../../src/clients/web/types.ts";
 
-/** A refused or failed request. `status` 0 means the human actor could not be reached. */
+/** A refused or failed request. `status` 0 means the web client could not be reached. */
 export class ApiError extends Error {
   readonly status: number;
   readonly code: string;

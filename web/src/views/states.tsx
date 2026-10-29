@@ -17,7 +17,9 @@ export function SignedOutView() {
     <Centered>
       <TerminalIcon aria-hidden="true" className="size-8 text-muted-foreground" />
       <h1 className="text-lg font-medium">Signed out</h1>
-      <code className="rounded-md border bg-muted px-3 py-1.5 font-mono text-sm">agentorg ui</code>
+      <code className="rounded-md border bg-muted px-3 py-1.5 font-mono text-sm">
+        agentorg-web open
+      </code>
     </Centered>
   );
 }

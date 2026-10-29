@@ -1,67 +1,37 @@
-/** The command line, run as its users run it: `agentorg core`, then the built-ins against it. */
+/** The command line, run as its users run it: `agentorg-server`, then the built-ins against it. */
 
 import assert from "node:assert/strict";
-import { type ChildProcess, execFile, spawn } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
 
-const BIN = fileURLToPath(new URL("../src/cli/bin.js", import.meta.url));
+import { command, serving } from "./process.ts";
 
-interface Ran {
-  status: number;
-  stdout: string;
-  stderr: string;
-}
+const agentorg = (args: string[], env: Record<string, string>) => command("cli", args, env);
 
-async function agentorg(args: string[], env: Record<string, string>): Promise<Ran> {
-  try {
-    const { stdout, stderr } = await promisify(execFile)(process.execPath, [BIN, ...args], {
-      env: { PATH: process.env.PATH ?? "", ...env },
-    });
-    return { status: 0, stdout, stderr };
-  } catch (error) {
-    const { code, stdout, stderr } = error as { code: number; stdout: string; stderr: string };
-    return { status: code, stdout, stderr };
-  }
-}
-
-/** Start `agentorg core` on a free port and return its address once it serves. */
-async function startCore(home: string): Promise<{ process: ChildProcess; url: string }> {
-  const child = spawn(process.execPath, [BIN, "core", "--port", "0"], {
-    env: { PATH: process.env.PATH ?? "", AGENTORG_HOME: home },
-    stdio: ["ignore", "ignore", "pipe"],
-  });
-  let log = "";
-  const url = await new Promise<string>((resolve, reject) => {
-    child.stderr?.on("data", (chunk: Buffer) => {
-      log += chunk.toString();
-      const served = /core serving on (http:\/\/[\d.:]+)/.exec(log);
-      if (served?.[1]) resolve(served[1]);
-    });
-    child.once("exit", (status) => reject(new Error(`agentorg core exited ${status}: ${log}`)));
-  });
-  return { process: child, url };
-}
-
-test("help lists the core and every built-in, and asking for it acts on nothing", async () => {
+test("help lists only actor operations, and asking for it acts on nothing", async () => {
   const home = join(mkdtempSync(join(tmpdir(), "agentorg-cli-")), "home");
   try {
     const help = await agentorg(["--help"], { AGENTORG_HOME: home });
     assert.equal(help.status, 0);
-    const commands = ["core", "actor create", "actor close", "progress set", "progress", "team"];
+    const commands = ["actor create", "actor close", "progress set", "progress", "team"];
     const communication = ["question ask", "questions", "message send", "claim", "release"];
     for (const command of [...commands, ...communication]) {
       assert.match(help.stdout, new RegExp(`^  ${command} `, "m"));
     }
-    for (const removed of ["status set", "view"]) {
+    for (const removed of [
+      "core",
+      "server",
+      "human",
+      "agent",
+      "service",
+      "connect",
+      "status",
+      "ui",
+    ]) {
       assert.doesNotMatch(help.stdout, new RegExp(`^  ${removed} `, "m"));
     }
-    const coreHelp = await agentorg(["core", "--help"], { AGENTORG_HOME: home });
-    assert.match(coreHelp.stdout, /^usage: agentorg core/);
     const createHelp = await agentorg(["actor", "create", "--help"], { AGENTORG_HOME: home });
     assert.match(createHelp.stdout, /--name <value>/);
     assert.equal(existsSync(home), false, "help created no home");
@@ -73,9 +43,9 @@ test("help lists the core and every built-in, and asking for it acts on nothing"
   }
 });
 
-test("agentorg core creates the root's credential, and the built-ins run as the root or as an actor", async () => {
+test("agentorg-server creates the root's credential, and the built-ins run as the root or as an actor", async () => {
   const home = mkdtempSync(join(tmpdir(), "agentorg-cli-"));
-  const core = await startCore(home);
+  const core = await serving("server", { AGENTORG_HOME: home }, ["--port", "0"]);
   try {
     assert.equal(statSync(join(home, "root-credential")).mode & 0o777, 0o600);
     const asRoot = { AGENTORG_HOME: home, AGENTORG_URL: core.url };
@@ -117,10 +87,7 @@ test("agentorg core creates the root's credential, and the built-ins run as the 
     assert.equal(gone.status, 1);
     assert.match(gone.stderr, /did not accept the connection/);
   } finally {
-    core.process.kill("SIGTERM");
-    if (core.process.exitCode === null)
-      await new Promise((resolve) => core.process.once("exit", resolve));
-    assert.equal(core.process.exitCode, 0);
+    assert.equal((await core.close()).status, 0);
     rmSync(home, { recursive: true, force: true });
   }
 });

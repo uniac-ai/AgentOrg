@@ -7,7 +7,7 @@
 
 import { useQueries } from "@tanstack/react-query";
 import { focusedRow, isTyping, useKeys, useRowKeys } from "@/lib/keys";
-import type { MessageRecord, QuestionRecord } from "../../../src/human/types.ts";
+import type { MessageRecord, QuestionRecord } from "../../../src/clients/web/types.ts";
 import { useRead } from "../data/mutations.ts";
 import { organizationQuery, questionsToQuery, unreadQuery } from "../data/queries.ts";
 import { questionsForYou } from "../model/messages.ts";

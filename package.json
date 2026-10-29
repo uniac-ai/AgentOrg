@@ -16,7 +16,10 @@
     "node": ">=22.13"
   },
   "bin": {
-    "agentorg": "dist/src/cli/bin.js"
+    "agentorg": "dist/src/clients/cli/bin.js",
+    "agentorg-server": "dist/src/server/bin.js",
+    "agentorg-mcp": "dist/src/clients/mcp/bin.js",
+    "agentorg-web": "dist/src/clients/web/bin.js"
   },
   "exports": {
     "./actor": {

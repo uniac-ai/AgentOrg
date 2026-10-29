@@ -9,7 +9,7 @@ import { useQueries, useQuery } from "@tanstack/react-query";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { focusedRow, isTyping, useKeys, useRowKeys } from "@/lib/keys";
-import type { LinkRecord, MessageRecord } from "../../../src/human/types.ts";
+import type { LinkRecord, MessageRecord } from "../../../src/clients/web/types.ts";
 import { ApiError } from "../data/client.ts";
 import { useCloseActor } from "../data/mutations.ts";
 import { historyQuery, organizationQuery, progressQuery, sentQuery } from "../data/queries.ts";

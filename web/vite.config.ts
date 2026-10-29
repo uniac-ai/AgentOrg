@@ -1,6 +1,6 @@
-// Builds the web app into dist/page, which the human actor serves at `/`.
+// Builds the web app into dist/page, which the web client serves at `/`.
 // `npm run dev:page` serves it with hot reload and forwards its API and sign-in to a running
-// `agentorg human`.
+// `agentorg-web`.
 
 import path from "node:path";
 import tailwindcss from "@tailwindcss/vite";
@@ -22,7 +22,7 @@ export default defineConfig({
     proxy: Object.fromEntries(
       ["/api", "/signin"].map((path) => [
         path,
-        `http://127.0.0.1:${process.env.AGENTORG_HUMAN_PORT ?? 8741}`,
+        `http://127.0.0.1:${process.env.AGENTORG_WEB_PORT ?? 8741}`,
       ]),
     ),
   },

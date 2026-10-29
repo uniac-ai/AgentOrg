@@ -3,7 +3,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
-import type { AuditRecord } from "../../../src/human/types.ts";
+import type { AuditRecord } from "../../../src/clients/web/types.ts";
 import { activityQuery, organizationQuery } from "../data/queries.ts";
 import { ActivityView } from "../views/activity.tsx";
 import type { Names } from "../views/messages.tsx";

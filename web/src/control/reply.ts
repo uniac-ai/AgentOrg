@@ -5,7 +5,7 @@
 // deliberate Send confirms it, since a permission gate's answer cannot be undone.
 
 import { useState } from "react";
-import type { MessageRecord, QuestionRecord } from "../../../src/human/types.ts";
+import type { MessageRecord, QuestionRecord } from "../../../src/clients/web/types.ts";
 import { useAnswer, useSend } from "../data/mutations.ts";
 import { answerOf, sharedOptions } from "../model/messages.ts";
 import type { ComposerModel } from "../views/composer.tsx";

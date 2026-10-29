@@ -17,7 +17,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { cn } from "@/lib/utils";
-import type { LinkRecord, MessageRecord, QuestionRecord } from "../../../src/human/types.ts";
+import type { LinkRecord, MessageRecord, QuestionRecord } from "../../../src/clients/web/types.ts";
 import type { Member } from "../model/organization.ts";
 import { SR, StateMark, StateName } from "./marks.tsx";
 import { Ago } from "./time.tsx";

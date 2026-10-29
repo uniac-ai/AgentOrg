@@ -1,5 +1,5 @@
 /**
- * The agent actor as a client's session meets it: `agentorg agent` started over stdio for a
+ * The agent actor as a client's session meets it: `agentorg-mcp` started over stdio for a
  * session, against a real core. Before attaching it offers attach alone; after, the position's
  * interfaces. It keeps the credentials of positions it creates, and a resumed session fills its
  * position again.
@@ -17,11 +17,11 @@ import {
   type CallToolResult,
   ToolListChangedNotificationSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import { claudeTakesInput } from "../src/agent/command.ts";
-import { describe } from "../src/agent/waiter.ts";
+import { claudeTakesInput } from "../src/clients/mcp/command.ts";
+import { describe } from "../src/clients/mcp/waiter.ts";
 import { type Core, fakeActor, iface, startCore, until } from "./harness.ts";
 
-const BIN = fileURLToPath(new URL("../src/cli/bin.js", import.meta.url));
+const BIN = fileURLToPath(new URL("../src/clients/mcp/bin.js", import.meta.url));
 
 const open: { close(): Promise<void> }[] = [];
 after(() => Promise.allSettled(open.map((each) => each.close())));
@@ -32,11 +32,11 @@ async function core(): Promise<Core & { home: string }> {
   return Object.assign(started, { home: join(started.credentialFile, "..") });
 }
 
-/** A session's view of `agentorg agent`: its tools, its calls, and each list change it saw. */
+/** A session's view of `agentorg-mcp`: its tools, its calls, and each list change it saw. */
 async function session(core: Core & { home: string }, id: string) {
   const transport = new StdioClientTransport({
     command: process.execPath,
-    args: [BIN, "agent", "--client", "claude-code"],
+    args: [BIN, "--client", "claude-code"],
     env: {
       PATH: process.env.PATH ?? "",
       AGENTORG_HOME: core.home,
@@ -240,7 +240,7 @@ function within<T>(ms: number, what: string, promise: Promise<T>): Promise<T> {
   ]);
 }
 
-/** Run a hook's `agentorg agent` command for session `id`, as Claude Code runs it. */
+/** Run a hook's `agentorg-mcp` command for session `id`, as Claude Code runs it. */
 function hook(
   org: Core & { home: string },
   command: string,
@@ -251,7 +251,7 @@ function hook(
   return new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve) => {
     const child = execFile(
       process.execPath,
-      [BIN, "agent", command, "--client", "claude-code"],
+      [BIN, command, "--client", "claude-code"],
       {
         env: {
           PATH: process.env.PATH ?? "",

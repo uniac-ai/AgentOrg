@@ -23,7 +23,7 @@ export function databasePath(): string {
   return join(home(), "core.db");
 }
 
-/** The root's credential, which `agentorg core` writes on first start, mode 600. */
+/** The root's credential, which `agentorg-server` writes on first start, mode 600. */
 export function rootCredentialPath(): string {
   return join(home(), "root-credential");
 }

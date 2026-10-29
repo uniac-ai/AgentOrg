@@ -32,7 +32,7 @@ export interface ShellModel {
   organization: SidebarNode[] | undefined;
   /** What waits on the user, for the user's entry in the sidebar. */
   waitingOnYou: number;
-  /** The human actor stopped answering after the app loaded; what shows may be stale. */
+  /** The web client stopped answering after the app loaded; what shows may be stale. */
   offline: boolean;
   place: Place;
   /** The managers above the actor in view, outermost first. */

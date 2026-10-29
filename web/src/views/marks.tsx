@@ -2,7 +2,7 @@
 
 import { PlugIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { PositionRecord } from "../../../src/human/types.ts";
+import type { PositionRecord } from "../../../src/clients/web/types.ts";
 import { type ProgressState, progressState } from "../model/state.ts";
 
 /** Each state's shape and color; a state is told apart by shape as well as color. */

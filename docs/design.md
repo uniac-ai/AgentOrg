@@ -2,14 +2,31 @@
 
 Status: draft. The code builds toward this design.
 
-## What it is
+## Components and entry points
 
-agentorg organizes AI agents and programs the way a company organizes people.
-- **Actors are positions.** An actor is a position with a manager. The user is the root, the one actor without a manager.
-- **Calls go up and down.** An actor calls the interfaces its manager and its direct reports expose. The root calls any actor's.
-- **Processing a call is the actor's own business.** The core routes and records calls; what an actor does with one is up to it.
-- **Nothing subscribes.** A manager reads its reports' progress, questions and calls when it chooses.
-- **Communication is part of the core.** Each actor publishes its progress and its questions for anyone to read, actors send each other private messages, and an actor claims a shared resource while it uses it.
+AgentOrg's server and clients are separate applications. The server owns the organization;
+clients act through its gateway with the identity and authority of an actor. A human, an agent
+session and a program are ways of operating an actor, rather than kinds of actor.
+
+| Application | Entry point | Responsibility |
+|---|---|---|
+| Server | `agentorg-server [--port <n>]` | Run the core. Its `service install`, `service uninstall` and `status` operate only this service. |
+| Actor CLI | `agentorg <operation>` | Call the organization's built-ins as an actor. |
+| MCP client adapter | `agentorg-mcp [--client <name>]` | Present an actor's operations over stdio. Its `connect`, `disconnect` and `status` own project integrations; `context`, `prompt` and `wait` own client hooks. |
+| Web client | `agentorg-web [--port <n>]` | Serve the existing browser client. `open` signs a browser in; `service install`, `service uninstall` and `status` operate only this service. |
+
+The package distributes all four executables. Their source boundaries are `src/server/` and
+`src/clients/{cli,mcp,web}/`. Each application owns its entry point and setup. Server code imports
+no client application, and clients import neither the server nor sibling applications. Clients
+reach the organization through the actor library. The shared domain model supplies their types.
+
+`src/runtime/` contains host mechanics: pinning an executable and its environment in a launcher,
+managing one user service, reporting launcher and HTTP availability, and reporting command
+errors. It imports no application and performs no organization operation. Executable paths come
+from the package's `bin` map. Each service has its own launcher, service name and lifecycle, and
+MCP project setup checks its own launcher and the core without requiring a web client.
+
+The applications share the actor, credential and attachment contracts described below.
 
 ## Layers
 
@@ -21,7 +38,7 @@ The code is in layers. Each depends only on the one below it, through a small in
 | **Protocol binding** | `src/bindings/mcp/` | Encoding the domain's operations on the wire, both ways: listing interfaces, calls, runs, cancellation, change notices, metadata. It is the only code that imports MCP. | MCP |
 | **Domain** | `src/domain/` | Actors and their interfaces, calls and their lifecycle, the wiring, progress and messages, the built-ins, the audit trail. | agentorg's own model |
 | **Storage** | `src/storage/sqlite/` | Keeping the domain's records, behind the domain's `Store` port. | SQLite through `node:sqlite` |
-| **Actors** | `src/actor/`, `src/human/`, `src/agent/`, programs | What a party does with a call. The actor library gives an actor an API that names no protocol or network. | the human actor, the agent actor, programs |
+| **Actors** | `src/actor/`, `src/clients/web/`, `src/clients/mcp/`, programs | What a party does with a call. The actor library gives an actor an API that names no protocol or network. | the web client, the agent actor, programs |
 
 How the layers meet:
 - **The domain's ports** are in `src/domain/ports.ts`:
@@ -29,7 +46,7 @@ How the layers meet:
   - `Presence`, which a binding tells when an actor can be reached through which link, and what it exposes.
   - `Application`, which a binding serves to callers: what an actor may call, and calling it.
   - `Store`, the record reads and writes the domain needs. The storage layer implements it.
-- **The composition root**, `src/core/index.ts`, assembles the core from the domain, SQLite storage, the MCP binding and the network listener.
+- **The composition root**, `src/server/index.ts`, assembles the core from the domain, SQLite storage, the MCP binding and the network listener.
 - **The actor library** (`src/actor/`) assembles the network's connector with the binding on an actor's side, and the binding's server for the session that fills a position (`occupant.ts`), behind its `Presented` port.
 - **`test/layers.test.ts` enforces the rules:**
   - The domain imports no MCP, web framework, WebSocket, database or Node built-in, and uses no Node globals. Its secrets and hashes come from Web Crypto, so it runs on any JavaScript runtime that has that, and the web app type-checks through its model.
@@ -142,11 +159,11 @@ How the domain is encoded:
 - **A run is an MCP task.** The core sends a long-running call with `params.task`, waits on `tasks/result`, and asks again at once when the actor's `notifications/tasks/status` says the task finished. Cancelling is `tasks/cancel`, and an unknown task is a lost run.
 - **An answer is a `CallToolResult`.** A done call returns B's own result, with `_meta["agentorg/call"] = {id, state}`. A pending one returns `{call, state: "pending"}`. A routed tool's listed `outputSchema` is B's or that pending shape, so that clients checking results accept both.
 
-## The agent actor
+## The MCP adapter
 
-The agent actor, `agentorg agent` in `src/agent/`, lets a Claude Code or Codex session fill a position. The client starts it over stdio for each session, and it connects to the core as that position with the actor library.
+The MCP adapter, `agentorg-mcp` in `src/clients/mcp/`, lets a Claude Code or Codex session fill a position. The client starts it over stdio for each session, and it connects to the core as that position with the actor library. Its project integration and hooks belong to this adapter.
 
-- **What the session sees.** Until the session attaches, its only tool is `attach`, the agent actor's sign-in. Before its first turn, the client's session-start hook runs `agentorg agent context`, so a session that fills no position reads that it loads the `agentorg` skill and attaches before any other action. The agent actor's MCP server sends instructions saying the same, for clients without that hook.
+- **What the session sees.** Until the session attaches, its only tool is `attach`, the agent actor's sign-in. Before its first turn, the client's session-start hook runs `agentorg-mcp context`, so a session that fills no position reads that it loads the `agentorg` skill and attaches before any other action. The agent actor's MCP server sends instructions saying the same, for clients without that hook.
   - `attach {actor}` fills the position the session's brief names.
   - `attach {name, purpose}`, allowed only on a session's first attach, creates its position directly under the root. The agent actor uses the root's credential for that one call.
   - From then on, the session's tools are the position's available interfaces as the core offers them, unchanged. The request endpoint tells no caller when its offers change, so the agent actor lists them again after each call, and sends `tools/list_changed` when they differ.
@@ -160,12 +177,12 @@ The agent actor, `agentorg agent` in `src/agent/`, lets a Claude Code or Codex s
   - When the session's `actor_create` creates a report, the agent actor keeps the report's credential there, and the session gets the result with that credential replaced by a note that it was kept.
   - `actor_close` forgets the closed position's credential.
 - **Resumed sessions.** `sessions/<client>-<session id>/position` names the position a session fills, so a resumed session fills it again without attaching. Claude Code names the session in `CLAUDE_CODE_SESSION_ID`. Codex names none, so a Codex session attaches each time it starts.
-- **Delivery and waking.** The client's hooks run the waiter, `agentorg agent wait`, when the session starts and whenever its turn ends. In Claude Code they are `asyncRewake` hooks.
+- **Delivery and waking.** The client's hooks run the waiter, `agentorg-mcp wait`, when the session starts and whenever its turn ends. In Claude Code they are `asyncRewake` hooks.
   - The waiter waits, as the position, for what the session has not seen: unread messages to the position, questions addressed to it, and answers to its own questions. The session's cursor, a place in the sequence questions and messages share, marks what was delivered.
   - It writes them framed as agentorg's, each with its kind, its sender's path and its id, marks the messages read, and exits with status 2. Claude Code hands that output to the session as its next input, starting a turn when the session is idle.
   - A newer waiter replaces an older one, which then ends without writing. Delivery is at least once.
 - **Answers recorded from the user's words.** When the user answers a question in the asking session itself, the session records the answer with `question_answer {recorded: true}`.
-  - The client's prompt hook, `agentorg agent prompt`, keeps the words the user last typed in the session, in `sessions/<client>-<session id>/prompt`. It doesn't keep what the client delivers wrapped in an element, such as the waiter's output or another session's message.
+  - The client's prompt hook, `agentorg-mcp prompt`, keeps the words the user last typed in the session, in `sessions/<client>-<session id>/prompt`. It doesn't keep what the client delivers wrapped in an element, such as the waiter's output or another session's message.
   - The agent actor passes a recorded answer on only when those words came after every question it answers. It puts the words in the answer's text verbatim, in place of the session's own text, and then forgets them.
   - The core refuses a recorded answer to a question that names an answerer.
 
@@ -175,36 +192,3 @@ The agent actor, `agentorg agent` in `src/agent/`, lets a Claude Code or Codex s
 - **Web pages are refused.** A request with an `Origin` header comes from a web page, so it is refused; that blocks DNS rebinding and cross-site WebSockets.
 - **One channel per party.** A newer channel replaces the older, which closes with code 4000. Closing an actor closes its channel with code 4001.
 - **The party's side, the connector.** It dials the channel again after a drop, but not after 4000 or 4001.
-
-## The core process
-
-- **Process:** `agentorg core`, one local process under launchd or systemd, at `127.0.0.1:8740`. Its home is `~/.local/share/agentorg`, mode 700, holding the database `core.db` and the root's credential.
-- **The root's credential:**
-  - The first start creates the root and writes its credential to `root-credential`, mode 600.
-  - Only hashes of credentials are stored, so when that file is gone the core mints a new credential.
-  - When the file holds something else, the core refuses to start.
-- **The command line:**
-  - `agentorg core` runs the core.
-  - A command for each built-in, generated from its schema, runs it, such as `agentorg actor create`, `agentorg progress set`, `agentorg team`, `agentorg question ask`, `agentorg message send`, `agentorg claim` and `agentorg activity`.
-  - A command acts as the actor whose credential is in `AGENTORG_CREDENTIAL`, else as the root.
-
-## The human actor
-
-- **Process:** `agentorg human`, at `127.0.0.1:8741`. It connects to the core as the root through the actor library, and serves the web app on its own origin.
-- **It exposes nothing of its own.** The user reaches the organization through the root's available interfaces, the core's communication methods among them, so the human actor has no queue and keeps nothing durable.
-- **Its API is sign-in and list-and-call:**
-  - `agentorg ui` presents the root's credential for a one-time link, and the link starts a session in an HttpOnly, SameSite=Strict cookie. Every call carries the session's CSRF token.
-  - `GET /api/interfaces` lists the root's available interfaces, and `POST /api/interfaces/<name>` calls one with the body as its input. A call's value comes back as it is, and a refusal as an error response.
-- **The web app** is built only from that API. It reads `team`, `progress`, `questions` and `messages`, and writes with `question_answer`, `message_send`, `message_read` and `actor_close`. Every page carries a Content-Security-Policy that runs only the app's own scripts and styles.
-
-## Stack
-
-- **Language and runtime:** TypeScript on Node 22.13 or later (an LTS release).
-- **Libraries:**
-  - **MCP, in the binding only:** the official TypeScript SDK, `@modelcontextprotocol/sdk`, including its experimental tasks.
-  - **Records and requests:** Zod schemas, from which the built-ins' JSON Schemas are generated, with Ajv to check JSON Schema.
-  - **HTTP:** Hono on `@hono/node-server`, with `ws` for the WebSocket upgrade.
-  - **SQLite:** `node:sqlite`, built into Node 22.13 and later, so nothing needs a native build.
-  - **CLI parsing and tests:** Node's own `util.parseArgs` and `node:test`.
-  - **Lint and format:** Biome. TypeScript compiles to `dist/` for the package.
-- **Distribution:** npm, as `@agentorg/cli`. The command is `agentorg`. A release workflow publishes on `v*` tags through npm Trusted Publishing, with no token.

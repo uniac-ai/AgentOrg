@@ -1,0 +1,86 @@
+/** Project integration and read-back for the MCP adapter. */
+
+import { spawnSync } from "node:child_process";
+import { statSync } from "node:fs";
+import { homedir } from "node:os";
+import { resolve } from "node:path";
+import { parseArgs } from "node:util";
+import { coreUrl } from "../../network/index.ts";
+import { launcherPath, writeLauncher } from "../../runtime/launcher.ts";
+import { answers, launcherStatus, printReport } from "../../runtime/status.ts";
+import { CLIENTS, clientOf } from "./projects.ts";
+
+const PROGRAM = "agentorg-mcp";
+const NAMES = Object.keys(CLIENTS).join("|");
+export const CONNECT_HELP = `usage: agentorg-mcp connect <${NAMES}> [--project <dir>]
+       agentorg-mcp disconnect <${NAMES}> [--project <dir>]
+
+connect pins this MCP adapter and Node in <home>/bin/agentorg-mcp, configures the project's org MCP server, and links the package's agentorg skill. Claude Code also gets its approval and hooks. The project's other entries stay as they are. Sessions started afterwards can attach; Codex also requires project trust.
+
+connect checks through the launcher with a bare PATH. disconnect removes only this adapter's entries.`;
+export const STATUS_HELP = `usage: agentorg-mcp status [--project <dir>]
+
+Report this adapter, its Node and launcher, core availability, and each client's project connection. Exit 1 on a fault. This adapter needs no web client.`;
+
+const projectOf = (path: string | undefined) => {
+  const project = resolve(path ?? process.cwd());
+  if (!statSync(project, { throwIfNoEntry: false })?.isDirectory())
+    throw new Error(`${project} is not a folder`);
+  return project;
+};
+
+export async function setupCommand(command: string, args: string[]): Promise<number> {
+  const { values, positionals } = parseArgs({
+    args,
+    options: { project: { type: "string" } },
+    allowPositionals: true,
+    strict: true,
+  });
+  const project = projectOf(values.project);
+  if (command === "status") {
+    if (positionals.length) throw new Error(STATUS_HELP);
+    const report = launcherStatus(PROGRAM, "run agentorg-mcp connect <client> again");
+    const up = await answers(coreUrl());
+    report.lines.push(`the core: ${up ? "answering" : "not answering"} at ${coreUrl()}`);
+    report.fault ||= !up;
+    report.lines.push(`project ${project}:`);
+    for (const [name, client] of Object.entries(CLIENTS)) {
+      const problems = client.problems(project, launcherPath(PROGRAM));
+      report.lines.push(
+        `  ${name}: ${problems === undefined ? "not connected" : problems.length ? "connected, but:" : "connected"}`,
+      );
+      if (problems?.length) {
+        report.fault = true;
+        report.lines.push(
+          ...problems.map((problem) => `    ${problem}`),
+          `    run agentorg-mcp connect ${name} --project ${project} again`,
+        );
+      }
+    }
+    return printReport(report);
+  }
+  if (positionals.length !== 1) throw new Error(`name one client: ${NAMES}`);
+  const name = positionals[0];
+  const client = clientOf(name);
+  if (command === "disconnect") {
+    const changed = client.disconnect(project);
+    process.stdout.write(
+      changed.length
+        ? `disconnected ${name} in ${project}:\n${changed.map((path) => `  removed ${path}`).join("\n")}\n`
+        : `${name} was not connected\n`,
+    );
+    return 0;
+  }
+  const launcher = writeLauncher(PROGRAM);
+  const written = client.connect(project, launcher);
+  process.stdout.write(
+    `connected ${name} in ${project}:\n${written.map((path) => `  wrote ${path}`).join("\n")}\nchecking through the launcher, with only /usr/bin and /bin on PATH:\n`,
+  );
+  const check = spawnSync(launcher, ["status", "--project", project], {
+    env: { PATH: "/usr/bin:/bin", HOME: homedir() },
+    encoding: "utf8",
+  });
+  process.stdout.write(`${check.stdout ?? ""}${check.stderr ?? ""}`);
+  if (check.error) throw new Error(`the launcher ${launcher} did not run: ${check.error.message}`);
+  return check.status ?? 1;
+}

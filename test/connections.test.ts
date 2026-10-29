@@ -6,9 +6,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { PATHS, SUBPROTOCOL } from "../src/bindings/mcp/index.ts";
-import { rootCredential } from "../src/core/index.ts";
 import { Organization } from "../src/domain/index.ts";
 import { CLOSE_REPLACED, CLOSE_REVOKED } from "../src/network/index.ts";
+import { rootCredential } from "../src/server/index.ts";
 import { SqliteStore } from "../src/storage/sqlite/index.ts";
 import { fakeActor, iface, startCore, until } from "./harness.ts";
 

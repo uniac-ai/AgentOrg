@@ -3,7 +3,7 @@
  * every member by id, the path from the root down to any actor, and every open question in it.
  */
 
-import type { Builtins, PositionRecord, QuestionRecord } from "../../../src/human/types.ts";
+import type { Builtins, PositionRecord, QuestionRecord } from "../../../src/clients/web/types.ts";
 
 /** A position, with the reports `team` listed after it. */
 export type Member = PositionRecord & { reports: Member[] };

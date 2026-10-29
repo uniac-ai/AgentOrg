@@ -1,7 +1,7 @@
 // How the user reads the organization's questions and messages, control: each actor's name, the
 // user's as "you", and each card's model. The user, the root, may answer any question.
 
-import type { MessageRecord, QuestionRecord } from "../../../src/human/types.ts";
+import type { MessageRecord, QuestionRecord } from "../../../src/clients/web/types.ts";
 import type { Organization } from "../model/organization.ts";
 import type { MessageCardModel, Names, QuestionCardModel } from "../views/messages.tsx";
 

@@ -13,7 +13,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import type { MessageRecord, QuestionRecord } from "../../../src/human/types.ts";
+import type { MessageRecord, QuestionRecord } from "../../../src/clients/web/types.ts";
 import type { HistoryEntry } from "../model/messages.ts";
 import { SR, StateShape } from "./marks.tsx";
 import { firstLine, type Names, nameOf } from "./messages.tsx";

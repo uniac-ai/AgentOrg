@@ -1,46 +1,59 @@
-# Running AgentOrg's parts, and connecting programs
+# Running applications and connecting programs
 
-[setup.md](setup.md) sets AgentOrg up, with the core and the web app as services. This page covers what those services run, the credentials, the command line, and how a program fills a position.
+[setup.md](setup.md) owns service and project setup. `agentorg-server`, `agentorg-mcp` and
+`agentorg-web` also run directly as independent processes.
 
-## The home and the addresses
+## Home and addresses
 
-AgentOrg runs as one local core per user. The core keeps its database and the root's credential in the agentorg home, `~/.local/share/agentorg`, readable only by you, and creates the root and its credential on its first start. These variables change the defaults, for every command:
-- `AGENTORG_HOME`, the home;
-- `AGENTORG_PORT`, the core's port on 127.0.0.1, by default 8740;
-- `AGENTORG_URL`, where actors find the core, by default `http://127.0.0.1:` and that port;
-- `AGENTORG_HUMAN_PORT`, the web app's port, by default 8741.
+| Variable | Default and purpose |
+|---|---|
+| `AGENTORG_HOME` | `~/.local/share/agentorg`, holding the database and credentials, readable only by its owner. |
+| `AGENTORG_PORT` | `8740`, the core's port on 127.0.0.1. |
+| `AGENTORG_URL` | `http://127.0.0.1:<core port>`, where clients find the core. |
+| `AGENTORG_WEB_PORT` | `8741`, the web client's port on 127.0.0.1. |
 
-`agentorg service install` keeps those set when it runs in the launcher, `<home>/bin/agentorg`, which the services and connected projects run.
+The default home's services are `agentorg-server` and `agentorg-web`. An alternate home adds
+its path's hash to each service name. Pinned launchers retain the home and addresses and run with
+only `/usr/bin:/bin` on PATH.
 
-## The core and the human actor
+## Actor credentials and the CLI
 
-`agentorg core` runs the core in the foreground, which is what its service runs. It logs to stderr and stops on SIGINT or SIGTERM.
+Every actor has a random credential; the core stores only its hash. The first server start creates
+root and writes `<home>/root-credential`. Removing that file rotates the credential on the next
+start. A file holding a different credential makes startup fail.
 
-The human actor, `agentorg human`, is your side of the organization. It connects to the core as the root, with the root's credential from `AGENTORG_CREDENTIAL` or else `root-credential` in the home, and serves the web app on `http://127.0.0.1:8741`; `--port` or `AGENTORG_HUMAN_PORT` moves it.
+`actor_create` returns a credential once. MCP adapters keep credentials they create in
+`<home>/actors/<id>` for sessions to attach, without showing them to the model. CLI creation
+prints the credential and keeps no session copy. A program connects with that credential; a
+session attaches through its MCP adapter or creates a position under root on first attachment.
 
-`agentorg ui` signs your browser in to the web app with a one-time link, and opens it. The link works once, within five minutes. The session it starts lasts seven days, including across restarts of the human actor.
+The actor CLI uses `AGENTORG_CREDENTIAL` when set, otherwise root's local credential. Its identity
+is independent of an MCP session's attachment. Creation makes a direct report of the caller:
 
-## Credentials and the command line
-
-Every actor has its own credential, a random secret that only it holds; the core stores only its hash.
-- **The root.** The root's credential is in `<home>/root-credential`. If you delete that file, the core mints a new credential at its next start, and the old one stops working.
-- **Other actors.** An actor's credential comes from `actor_create`, once, when its manager creates it. When the manager is an agent session, the agent actor keeps the credential in `<home>/actors/` for the session that fills the position, and neither session sees it.
-
-From a terminal, the built-in tools run as commands over `/mcp`. Each command acts as the actor whose credential is in `AGENTORG_CREDENTIAL`, else as the root. To create a position under you and get its credential:
-
-```bash
+```sh
 agentorg actor create --name builds --purpose "Run the nightly builds"
+agentorg team
+agentorg activity
 ```
 
-It prints the new actor and its `credential` as JSON. `agentorg team` shows your position and its reports, and `agentorg activity` shows the audit trail. `agentorg --help` lists every command, and `agentorg <command> --help` shows its flags.
+## Browser client
 
-A position created this way is for a program: the agent actor keeps no copy of its credential, so no session can attach to it. Sessions get their positions by appointment, attaching with a name and a purpose, or from a manager session's `actor_create`.
+The web client currently uses `AGENTORG_CREDENTIAL` or root's local credential and presents the
+root view. `agentorg-web open` mints a one-time link valid for five minutes, establishing a
+seven-day cookie session that survives web-process restarts. Writes carry its CSRF token.
+`GET /api/session` bootstraps that token; `GET /api/interfaces` lists offers, and
+`POST /api/interfaces/<name>` calls one. The web process reaches the core through the actor library.
 
-## Connect a program
+## Program clients
 
-A program fills a position by dialing the core's two endpoints with that position's credential, in the header `Authorization: Bearer <credential>`:
+A program connects with `Authorization: Bearer <credential>`:
 
-- `http://127.0.0.1:8740/mcp`, Streamable HTTP, where the program is the MCP client. Its tools are the core's built-ins, its manager's tools as `manager.<tool>`, and each direct report's as `<handle>.<tool>`.
-- `ws://127.0.0.1:8740/mcp/reverse`, a WebSocket with subprotocol `mcp`, where the program is the MCP server. Its tools are the calls into it.
+- `http://127.0.0.1:8740/mcp`: Streamable HTTP, with the program as MCP client. Tools include
+  built-ins, its manager's as `manager.<tool>`, and each report's as `<handle>.<tool>`.
+- `ws://127.0.0.1:8740/mcp/reverse`: WebSocket with subprotocol `mcp`, with the program
+  as MCP server exposing its own interfaces.
 
-The core refuses requests that carry a browser `Origin` header, so connect from a local process, not from a web page. A Node program can use the actor library's `connectActor`, from `@agentorg/cli/actor`, and never meets MCP itself. It exposes interfaces with their handlers, calls the ones available, and reconnects when its connection drops. A long-running handler just returns a promise that settles when it is ready. [design.md](design.md) describes the layers and the protocol.
+The core refuses an `Origin` header, so these endpoints are for local processes. Node programs
+can use `connectActor` from `@agentorg/cli/actor` to expose handlers, call interfaces and
+reconnect after a drop. A long-running handler returns a promise that settles when ready.
+[design.md](design.md) owns the ports and protocol.

@@ -11,8 +11,8 @@ import {
   type Incoming,
   type Reply,
 } from "../src/actor/index.ts";
-import { type CoreOptions, rootCredential, startCore as start } from "../src/core/index.ts";
 import type { Answer, InterfaceDescriptor } from "../src/domain/model/index.ts";
+import { type CoreOptions, rootCredential, startCore as start } from "../src/server/index.ts";
 import { SqliteStore } from "../src/storage/sqlite/index.ts";
 
 export async function startCore(options: CoreOptions = {}) {

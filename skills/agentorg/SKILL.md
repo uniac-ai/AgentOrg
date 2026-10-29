@@ -12,7 +12,7 @@ This skill is the operating model: when to use which of AgentOrg's tools, and wh
 
 ## Whether you're in an organization
 
-You are in one only when the session has AgentOrg's tools: `attach` until you attach, your position's tools after. Without them nothing here applies, and nothing here is a reason to bring an organization into the work. If the user asks you to set AgentOrg up or connect a project to it, follow AgentOrg's setup page, https://raw.githubusercontent.com/uniac-ai/AgentOrg/main/docs/setup.md: the `agentorg` command does each step, and `agentorg status --project <dir>` shows what is set up.
+You are in one only when the session has AgentOrg's tools: `attach` until you attach, your position's tools after. Without them nothing here applies, and nothing here is a reason to bring an organization into the work. If the user asks you to set AgentOrg up or connect a project to it, follow AgentOrg's setup page, https://raw.githubusercontent.com/uniac-ai/AgentOrg/main/docs/setup.md. The server and clients have their own setup commands; `agentorg-mcp status --project <dir>` checks the core and the project's MCP integration.
 
 If `attach` fails because AgentOrg can't be reached, tell your reader, do the work that doesn't need the organization, and attach once it is back. The organization never stops a session from doing what it was asked.
 

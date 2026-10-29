@@ -4,7 +4,7 @@
 import { Link } from "@tanstack/react-router";
 import { ActivityIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import type { AuditRecord } from "../../../src/human/types.ts";
+import type { AuditRecord } from "../../../src/clients/web/types.ts";
 import type { ActivityModel } from "../control/activity.tsx";
 import { nameOf } from "./messages.tsx";
 

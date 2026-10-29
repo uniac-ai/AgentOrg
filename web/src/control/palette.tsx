@@ -5,7 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
 import { useKeys } from "@/lib/keys";
-import type { QuestionRecord } from "../../../src/human/types.ts";
+import type { QuestionRecord } from "../../../src/clients/web/types.ts";
 import { organizationQuery } from "../data/queries.ts";
 import { flatten, type Member, openQuestions } from "../model/organization.ts";
 import type { Names } from "../views/messages.tsx";

@@ -1,7 +1,7 @@
 // What a toast says after each write: the outcome first, its subject second.
 
 import { toasts } from "@/components/ui/toast";
-import type { ActorClosed, QuestionRecord } from "../../../src/human/types.ts";
+import type { ActorClosed, QuestionRecord } from "../../../src/clients/web/types.ts";
 import { firstLine, type Names, nameOf } from "./messages.tsx";
 
 export const notices = {
