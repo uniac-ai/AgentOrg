@@ -1,8 +1,4 @@
-/**
- * The domain's ports: the interfaces through which it meets the layers around it. A protocol
- * binding implements `ActorLink` and drives `Presence` and `Application`; a storage layer
- * implements `Store`. The domain implements `Presence` and `Application` itself.
- */
+/** The domain's protocol, connection and storage boundaries. */
 
 import type { z } from "zod";
 import type {
@@ -94,6 +90,13 @@ export interface Invocation {
   signal: AbortSignal;
 }
 
+/** Context for a request waiting on domain state. */
+export interface Waiting {
+  stepMs: number;
+  progress: () => Promise<void>;
+  signal: AbortSignal;
+}
+
 /** What an actor may do: the interfaces it may call, and calling one. */
 export interface Application {
   available(actor: string): Offer[];
@@ -118,9 +121,10 @@ export interface Store {
     reports(manager: string): ActorRow[];
     /** Every open actor, oldest first, so managers come before their reports. */
     open(): ActorRow[];
-    setOnline(id: string, online: boolean): void;
-    setAllOffline(): void;
-    setInterfaces(id: string, interfaces: InterfaceDescriptor[]): void;
+  };
+  exposures: {
+    get(actor: string): InterfaceDescriptor[];
+    put(actor: string, interfaces: InterfaceDescriptor[]): void;
   };
   calls: {
     insert(call: CallRow): void;

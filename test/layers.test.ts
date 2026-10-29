@@ -55,8 +55,23 @@ const PROTOCOLS = [MCP, "hono", "@hono/", "ws"];
 const APPLICATIONS = ["src/server/", "src/clients/"];
 const ADAPTERS = ["src/network/", "src/bindings/", "src/storage/", "src/actor/"];
 
+const DOMAIN_BOUNDARIES: Record<string, string[]> = {
+  registry: ["connections", "calls", "capabilities", "views", "application"],
+  connections: ["registry", "calls"],
+  capabilities: ["application", "calls", "views"],
+  communication: ["progress", "claims", "capabilities", "views", "application"],
+  progress: ["communication", "claims", "views"],
+  views: ["application"],
+};
+
 // The forbidden dependencies are the architecture's contract, independent of implementation.
 const RULES: Record<string, string[]> = {
+  ...Object.fromEntries(
+    Object.entries(DOMAIN_BOUNDARIES).map(([owner, forbidden]) => [
+      `src/domain/${owner}.ts`,
+      forbidden.map((name) => `src/domain/${name}.ts`),
+    ]),
+  ),
   "src/domain/": [
     ...PROTOCOLS,
     "node:",
@@ -88,6 +103,25 @@ const RULES: Record<string, string[]> = {
     ]),
   ),
 };
+
+test("the domain import graph is acyclic, including types", () => {
+  const domain = new Map(
+    FILES.filter(({ file }) => file.startsWith("src/domain/")).map(({ file, imports }) => [
+      file,
+      imports,
+    ]),
+  );
+  const checked = new Set<string>();
+  function visit(file: string, path: string[]) {
+    assert.ok(!path.includes(file), [...path, file].join(" -> "));
+    if (checked.has(file)) return;
+    for (const imported of domain.get(file) ?? []) {
+      if (domain.has(imported)) visit(imported, [...path, file]);
+    }
+    checked.add(file);
+  }
+  for (const file of domain.keys()) visit(file, []);
+});
 
 for (const [layer, forbidden] of Object.entries(RULES)) {
   test(`${layer} obeys its dependency boundary`, () => {

@@ -4,7 +4,7 @@ import { json, setup } from "./harness.ts";
 
 test("the web client exposes nothing of its own to the core", async () => {
   const { core } = await setup();
-  assert.deepEqual(core.org.registry.get(core.rootId)?.interfaces, []);
+  assert.deepEqual(core.org.connections.interfaces(core.rootId), []);
 });
 
 test("the user's available interfaces are the root's, listed and called through the core", async () => {

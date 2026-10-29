@@ -24,7 +24,12 @@ export class Database {
     this.db.exec(
       "PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = ON;",
     );
-    this.createSchema();
+    try {
+      this.createSchema();
+    } catch (error) {
+      this.db.close();
+      throw error;
+    }
     for (const table of Object.keys(TABLES)) {
       const columns = this.all(`PRAGMA table_info(${table})`) as { name: string; type: string }[];
       this.kinds[table] = Object.fromEntries(columns.map((column) => [column.name, column.type]));

@@ -4,6 +4,16 @@ import { z } from "zod";
 
 export type JsonSchema = { [key: string]: unknown };
 
+/** A built-in's schemas, authority, audit policy and caller-facing description. */
+export interface BuiltinSpec {
+  readonly writes: boolean;
+  readonly rootOnly: boolean;
+  readonly request: z.ZodType;
+  readonly response: z.ZodType;
+  /** The first paragraph is the summary. */
+  readonly description: string;
+}
+
 /**
  * A schema as an object at the top, with the named schemas it refers to in `$defs`. Zod puts a
  * named schema itself in `$defs` and refers to it from the top, which some clients do not accept.

@@ -1,7 +1,5 @@
 # agentorg: design
 
-Status: draft. The code builds toward this design.
-
 ## Components and entry points
 
 AgentOrg's server and clients are separate applications. The server owns the organization;
@@ -30,7 +28,7 @@ The applications share the actor, credential and attachment contracts described 
 
 ## Layers
 
-The code is in layers. Each depends only on the one below it, through a small interface (a port), so any layer can be replaced without touching the others. MCP is today's protocol, not the model: another binding, such as plain HTTP JSON or gRPC, would implement the same ports.
+The domain defines its storage and actor-link ports and exposes Application and Presence. Storage and protocol adapters depend on those contracts, and the network supplies transport without importing the domain. Composition roots wire the concrete adapters and domain owner clients. MCP is today's protocol binding; a replacement implements the same ports.
 
 | Layer | Folder | What it owns | Today's choice |
 |---|---|---|---|
@@ -54,6 +52,29 @@ How the layers meet:
   - Only the MCP binding imports MCP.
 
 ## The domain
+
+`src/domain/index.ts` assembles owner clients and binds the connection-online trigger
+to call redelivery. It contains no connection or call policy. The import graph,
+including types, is acyclic and checked by `test/layers.test.ts`.
+
+| Owner | Inputs and outputs | State |
+|---|---|---|
+| `registry.ts` | Credentials identify open positions; creation returns identity and a one-time credential; closure checks authority and open reports. | Identity, actor tree and lifecycle. |
+| `connections.ts` | Accepts link-specific presence and advertisements; supplies live links and the latest descriptors; disconnects closed actors. Stale-link reports have no effect. | Live links in memory; advertised interfaces in storage. |
+| `capabilities.ts` | Derives built-in or actor destinations and offers from Registry and Connections. Listing, dispatch and team use the same projection. | None. |
+| `calls.ts` | Creates, delivers, cancels, settles and waits on calls through Connections; records audit outcomes. | Durable calls; active delivery attempts and waiters. |
+| `progress.ts` | Validates actor references, versions partial replacements and supplies current/history reads. | Progress versions. |
+| `communication.ts` | Authorizes questions, answers and private messages, and supplies correspondence reads and waits. | Questions/messages with one cursor; waiting reads. |
+| `claims.ts`, `audit.ts` | Manage current resource claims and append/read the audit trail. | Their durable records. |
+| `views.ts` | Combines owner clients into actor, team and progress responses. | None. |
+| `application.ts` | Validates and dispatches requests, audits writes and bounds call waits. Actor closure transitions Registry, ends calls through Calls, then disconnects through Connections. | Request timing policy. |
+
+SQLite schema 7 stores identity in `actors` and the last advertised descriptors in
+`exposures`. Online state is derived from live links, so a fresh core starts offline
+while retaining advertisements. Public actor responses combine identity and
+connection state without exposing credential hashes. A database with another
+nonzero schema version is refused with its version and the required version; its
+records are neither migrated nor deleted.
 
 ### Interfaces
 
@@ -82,15 +103,13 @@ An actor's available interfaces are:
 - each direct report's exposed interfaces, named `<handle>.<name>`, as in `storage.review`;
 - for the root, every actor's exposed interfaces, named by its path, as in `release.storage.review`.
 
-Lateral grants are deferred; they would be one table the root writes.
-
 ### Routing a call
 
 When actor A calls `B.name`:
 1. The core finds the interface among A's and checks the input against its input schema. A refused call is not recorded.
 2. It records the call as `pending`, with the cause A names, which must be a call into A.
 3. It delivers the call through B's link while B is reachable, and again each time B comes back while the call is pending. So delivery is at least once, and a handler must tolerate a repeat. A call to an unreachable actor waits.
-4. It checks B's structured value against the output schema and records the call as `done`. A value that breaks the schema, a missing value where there is a schema, or a failure records it as `failed`.
+4. It checks B's structured value against the latest advertised output schema and records the call as `done`. A value that breaks the schema, a missing value where there is a schema, or a failure records it as `failed`. Delivery likewise uses the latest advertisement's long-running support; calls do not snapshot a descriptor when created.
 5. A waits up to 30 seconds, with progress. If the call is done by then, A gets B's result. Otherwise A's answer is pending, and A reads the call later with `call_result`. A call into a one-way interface answers pending at once.
 
 ### Long-running calls
