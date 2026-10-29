@@ -12,12 +12,12 @@ export function YouView(model: YouModel) {
     <div className="flex min-h-full flex-col">
       <article
         aria-labelledby="you-title"
-        className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-5 p-4 sm:p-6"
+        className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-8 p-4 sm:p-8 [&>*]:shrink-0"
       >
         <h1 id="you-title" className="sr-only">
           You
         </h1>
-        <section aria-label="Waiting on you" className="flex flex-col gap-2">
+        <section aria-label="Waiting on you" className="flex flex-col gap-3">
           {model.waiting.length === 0 ? (
             <p className="flex flex-col items-center gap-2 rounded-lg border border-dashed px-4 py-8 text-center text-sm text-muted-foreground">
               <InboxIcon aria-hidden="true" className="size-5" />

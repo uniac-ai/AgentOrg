@@ -4,7 +4,9 @@
 
 import { Link } from "@tanstack/react-router";
 import { ChevronRightIcon, ClockAlertIcon, HistoryIcon, InboxIcon } from "lucide-react";
-import { useState } from "react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
 import type { BelowModel, ChartNode } from "../control/below.ts";
 import type { Member } from "../model/organization.ts";
@@ -15,11 +17,10 @@ import { RollupBar, StateCounts } from "./progress.tsx";
 import { Ago } from "./time.tsx";
 
 function Node({ node, depth }: { node: ChartNode; depth: number }) {
-  const [open, setOpen] = useState(depth < 1);
   const { member } = node;
   const blocked = progressState(member) === "blocked";
   return (
-    <li className="flex flex-col gap-1.5">
+    <Collapsible defaultOpen={depth < 1} render={<li className="flex flex-col gap-2" />}>
       <div className="flex items-stretch gap-1">
         <Link
           data-row
@@ -38,17 +39,20 @@ function Node({ node, depth }: { node: ChartNode; depth: number }) {
             {member.online ? <OnlineMark /> : null}
             <span className="ml-auto flex shrink-0 items-center gap-2 text-xs">
               {node.waitingOnYou > 0 ? (
-                <span className="inline-flex items-center gap-0.5 rounded-md bg-primary px-1.5 py-0.5 font-medium text-primary-foreground tabular-nums">
+                <Badge className="tabular-nums">
                   <InboxIcon aria-hidden="true" className="size-3" />
                   {node.waitingOnYou}
                   <SR> waiting on you</SR>
-                </span>
+                </Badge>
               ) : null}
               {node.waiting > 0 ? (
-                <span className="rounded-md bg-state-waiting/15 px-1.5 py-0.5 font-medium text-state-waiting tabular-nums">
+                <Badge
+                  variant="secondary"
+                  className="bg-state-waiting/15 text-state-waiting tabular-nums"
+                >
                   {node.waiting}
                   <SR> waiting on it</SR>
-                </span>
+                </Badge>
               ) : null}
               {node.stale ? (
                 <ClockAlertIcon
@@ -75,22 +79,26 @@ function Node({ node, depth }: { node: ChartNode; depth: number }) {
           {node.rollup ? <RollupBar counts={node.rollup} /> : null}
         </Link>
         {node.children.length > 0 ? (
-          <button
-            type="button"
-            aria-expanded={open}
+          <CollapsibleTrigger
+            render={
+              <Button variant="ghost" size="icon-sm" className="h-auto text-muted-foreground" />
+            }
             aria-label={`${member.name}: actors under it`}
-            onClick={() => setOpen(!open)}
-            className="flex w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
+            className="group/disclosure"
           >
             <ChevronRightIcon
               aria-hidden="true"
-              className={cn("size-4 transition-transform", open && "rotate-90")}
+              className="size-4 transition-transform group-data-[panel-open]/disclosure:rotate-90"
             />
-          </button>
+          </CollapsibleTrigger>
         ) : null}
       </div>
-      {open && node.children.length > 0 ? <Nodes nodes={node.children} depth={depth + 1} /> : null}
-    </li>
+      {node.children.length > 0 ? (
+        <CollapsibleContent>
+          <Nodes nodes={node.children} depth={depth + 1} />
+        </CollapsibleContent>
+      ) : null}
+    </Collapsible>
   );
 }
 

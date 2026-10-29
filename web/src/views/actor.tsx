@@ -127,7 +127,7 @@ export function ActorView(model: ActorModel) {
     <div className="flex min-h-full flex-col">
       <article
         aria-labelledby="actor-title"
-        className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-5 p-4 sm:p-6"
+        className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-6 p-4 sm:p-8 [&>*]:shrink-0"
       >
         <Header model={model} />
         {model.summary ? <p className="whitespace-pre-wrap">{model.summary}</p> : null}
