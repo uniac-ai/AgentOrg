@@ -11,7 +11,6 @@ import {
   SidebarContent,
   SidebarGroup,
   SidebarGroupLabel,
-  SidebarHeader,
   SidebarInset,
   SidebarMenu,
   SidebarMenuAction,
@@ -96,7 +95,7 @@ function ActorItem({ node, selected }: { node: SidebarNode; selected: string | u
         <ChevronRightIcon />
       </CollapsibleTrigger>
       <CollapsibleContent>
-        <SidebarMenuSub className="mr-0 pr-0">
+        <SidebarMenuSub>
           {node.children.map((child) => (
             <ActorItem key={child.member.id} node={child} selected={selected} />
           ))}
@@ -120,11 +119,6 @@ export function ShellView({ organization, waitingOnYou, offline, place, path, pa
     <SidebarProvider>
       <CloseSheetOn place={selected ?? place.view} />
       <Sidebar variant="inset">
-        <SidebarHeader className="px-4 py-5">
-          <Link to="/" className="text-base font-semibold tracking-tight">
-            agentorg
-          </Link>
-        </SidebarHeader>
         <SidebarContent>
           <SidebarGroup>
             <SidebarMenu>
@@ -170,11 +164,8 @@ export function ShellView({ organization, waitingOnYou, offline, place, path, pa
         </SidebarContent>
       </Sidebar>
       <SidebarInset className="h-svh min-w-0 md:h-[calc(100svh-1rem)]">
-        <header className="flex h-14 shrink-0 items-center gap-2 border-b px-4">
+        <header className="flex h-12 shrink-0 items-center gap-2 border-b px-4">
           <SidebarTrigger />
-          <Link to="/" className="mr-2 font-semibold tracking-tight md:hidden">
-            agentorg
-          </Link>
           {place.view === "you" ? (
             <UserRoundIcon aria-hidden="true" className="size-4 text-muted-foreground" />
           ) : place.view === "activity" ? (
