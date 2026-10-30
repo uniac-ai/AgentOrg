@@ -42,8 +42,9 @@ agentorg interfaces
 agentorg call builds.review --json '{"revision":"example"}'
 ```
 
-`interfaces` lists the selected actor's permitted capabilities directly from the core, including
-routed names and their schemas. Generic `call` prints the actor library's complete answer,
+`interfaces` returns `{tools: [...]}` from the core: each Tool has a stable `id`, a caller-relative
+`name`, and `interfaces` containing local descriptors and `call` aliases. Use that alias with
+generic `call`, which prints the actor library's complete answer,
 including a routed call's id, state and parts. The generated built-in convenience commands
 continue to print their completed value.
 
@@ -66,8 +67,9 @@ Hub makes one creation request and does not replay it automatically after timeou
 The web client uses the same identity selection as the actor CLI and presents the root view.
 `agentorg-web open` mints a one-time link valid for five minutes, establishing a
 seven-day cookie session that survives web-process restarts. Writes carry its CSRF token.
-`GET /api/session` bootstraps that token; `GET /api/interfaces` lists offers, and
-`POST /api/interfaces/<name>` calls one. The web process reaches the core through the actor library.
+`GET /api/session` bootstraps that token; `GET /api/interfaces` returns `{tools: [...]}`, and
+`POST /api/interfaces/<call>` invokes an interface by its listed alias. The web process reaches
+the core through the actor library.
 
 ## Program clients
 
@@ -80,8 +82,10 @@ connection.connect({actorId, credential?}) -> {connectionId}
 
 The handshake admits identity only; it creates no Actor and returns no service catalog.
 Credentials are required under the default policy. A supplied invalid credential always fails.
-Hub MCP initializes separately on that same socket. It exposes built-ins, the Actor's manager's
-interfaces as `manager.<tool>`, and its reports' as `<handle>.<tool>`. Reverse MCP initialization
+Hub MCP initializes separately on that same socket. It exposes built-in interfaces, the Actor's
+manager's interfaces as `manager.<interface>`, and its reports' as `<handle>.<interface>`. Each
+MCP entry carries `_meta["agentorg/tool"]` with `id`, `name`, local `interface`, `routed`, `one_way`
+and `long_running`, from which the Actor library reconstructs its nested Tool catalog. Reverse MCP initialization
 and tool advertisement establish the connection that owns delivery to the Actor. Caller-only
 connections coexist independently of that delivery owner.
 

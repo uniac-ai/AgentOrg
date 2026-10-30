@@ -3,7 +3,9 @@
  * network, so an actor written against it never meets either.
  */
 
-import type { Answer, InterfaceDescriptor, Offer } from "../domain/model/index.ts";
+import type { Answer, InterfaceDescriptor, ToolDescriptor } from "../domain/model/index.ts";
+
+export type { ToolDescriptor } from "../domain/model/index.ts";
 
 /** A call into one of the actor's interfaces. */
 export interface Incoming {
@@ -45,13 +47,12 @@ export interface PresentationOptions extends Pick<CallOptions, "progress"> {
 }
 
 /**
- * What an actor presents to whatever fills its position, such as an agent session: the interfaces
- * it offers there, and calling them.
+ * What an actor presents to whatever fills its position: its Tools and calling their interfaces.
  */
 export interface Presented {
   /** What the occupant's client may tell its model about the offers as a whole. */
   readonly instructions?: string;
-  offers(): Promise<Offer[]>;
+  offers(): Promise<ToolDescriptor[]>;
   call(
     name: string,
     input: Record<string, unknown>,
@@ -62,8 +63,8 @@ export interface Presented {
 }
 
 export interface Actor {
-  /** The interfaces available to this actor: the core's built-ins and those it is wired to. */
-  available(): Promise<Offer[]>;
+  /** The Tools available to this actor, each with its local interfaces and callable aliases. */
+  available(): Promise<ToolDescriptor[]>;
   call(name: string, input?: Record<string, unknown>, options?: CallOptions): Promise<Answer>;
   /** Replace what this actor exposes; the core reads it again. */
   expose(exposed: Exposed[]): Promise<void>;

@@ -47,9 +47,9 @@ export function views(
               }
             : null,
           questions: communication.openQuestions(at.id),
-          interfaces: callable
-            .filter((each) => "to" in each && each.to === at.id)
-            .map((each) => each.offer.interface.name),
+          interfaces:
+            callable.find((tool) => tool.id === at.id)?.interfaces.map((each) => each.offer.call) ??
+            [],
           claims: claims.heldBy(at.id),
         });
         if (depth > 0) for (const report of registry.reports(at.id)) visit(report, depth - 1);

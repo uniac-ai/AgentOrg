@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import type { ToolDescriptor } from "../../../src/domain/model/index.ts";
 import { json, setup } from "./harness.ts";
 
 test("the web client exposes nothing of its own to the core", async () => {
@@ -7,16 +8,18 @@ test("the web client exposes nothing of its own to the core", async () => {
   assert.deepEqual(core.org.connections.interfaces(core.rootId), []);
 });
 
-test("the user's available interfaces are the root's, listed and called through the core", async () => {
+test("the user's Tool catalog is the root's, with local interfaces and unchanged call aliases", async () => {
   const { core, get, post, storage } = await setup();
-  const { interfaces } = await json(get("/api/interfaces"));
-  const listed = interfaces.map((offer: { interface: { name: string } }) => offer.interface.name);
+  const catalog = await json(get("/api/interfaces"));
+  assert.deepEqual(Object.keys(catalog), ["tools"]);
+  const tools = catalog.tools as ToolDescriptor[];
   const available = await (await core.client(core.root)).available();
-  assert.deepEqual(
-    listed,
-    available.map((offer) => offer.interface.name),
-  );
+  assert.deepEqual(tools, available);
+  const listed = tools.flatMap((tool) => tool.interfaces.map((offer) => offer.call));
   assert.ok(listed.includes("activity") && listed.includes("storage.review"));
+  const advertised = tools.find((tool) => tool.id === storage.id);
+  assert.equal(advertised?.name, "storage");
+  assert.equal(advertised?.interfaces[0]?.interface.name, "review");
 
   const called = await post("/api/interfaces/storage.review", { change: "#41" });
   assert.equal(called.status, 200);

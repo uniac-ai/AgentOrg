@@ -20,6 +20,68 @@ const link = (): ActorLink => ({
   close: async () => {},
 });
 
+test("Tool listing, dispatch and team use the same current exposure through offline, replacement and closure", async (t) => {
+  const store = new SqliteStore(":memory:");
+  t.after(() => store.close());
+  const org = organization(store, { waitMs: 0 });
+  const { root } = await org.registry.createRoot();
+  const { actor: lead } = await org.registry.create(root.id, "lead", "Lead");
+  const { actor: worker } = await org.registry.create(lead.id, "worker", "Work");
+  const { actor: other } = await org.registry.create(root.id, "other", "Other");
+  assert.equal(
+    org.available(root.id).some((tool) => tool.id === lead.id),
+    false,
+  );
+  const empty = link();
+  org.begin(lead.id, empty);
+  org.online(lead.id, empty, []);
+  assert.equal(org.connections.link(lead.id), empty);
+  assert.equal(
+    org.available(root.id).some((tool) => tool.id === lead.id),
+    false,
+  );
+  const channel = link();
+  org.begin(worker.id, channel);
+  org.online(worker.id, channel, [iface("review")]);
+  const otherChannel = link();
+  org.begin(other.id, otherChannel);
+  org.online(other.id, otherChannel, [iface("secret")]);
+  const tool = () => org.available(lead.id).find((each) => each.id === worker.id);
+  assert.equal(tool()?.interfaces[0]?.call, "worker.review");
+  assert.equal(
+    org.available(lead.id).some((each) => each.id === other.id),
+    false,
+  );
+  assert.equal((await org.invoke(lead.id, "other.secret", {}, invocation)).state, "refused");
+  assert.equal((await org.invoke(lead.id, "lead.worker.review", {}, invocation)).state, "refused");
+  org.offline(worker.id, channel);
+  assert.equal(tool()?.interfaces[0]?.interface.name, "review");
+  assert.notEqual((await org.invoke(lead.id, "worker.review", {}, invocation)).state, "refused");
+  const replacement = link();
+  org.begin(worker.id, replacement);
+  org.online(worker.id, replacement, [iface("publish")]);
+  assert.deepEqual(
+    tool()?.interfaces.map((offer) => [offer.interface.name, offer.call]),
+    [["publish", "worker.publish"]],
+  );
+  assert.equal((await org.invoke(lead.id, "worker.review", {}, invocation)).state, "refused");
+  assert.notEqual((await org.invoke(lead.id, "worker.publish", {}, invocation)).state, "refused");
+  const team = await org.invoke(lead.id, "team", {}, invocation);
+  assert.equal(team.state, "done");
+  if (team.state === "done") {
+    const positions = (team.value as { positions: { id: string; interfaces: string[] }[] })
+      .positions;
+    assert.deepEqual(positions.find((each) => each.id === worker.id)?.interfaces, [
+      "worker.publish",
+    ]);
+  }
+  await org.invoke(lead.id, "actor_close", { actor: worker.id }, invocation);
+  assert.equal(tool(), undefined);
+  assert.equal((await org.invoke(lead.id, "worker.publish", {}, invocation)).state, "refused");
+  assert.deepEqual(org.available(worker.id), []);
+  assert.equal((await org.invoke(worker.id, "team", {}, invocation)).state, "refused");
+});
+
 test("delivery and settlement use the latest advertised contract, including changes while a call is in flight", async (t) => {
   const store = new SqliteStore(":memory:");
   t.after(() => store.close());

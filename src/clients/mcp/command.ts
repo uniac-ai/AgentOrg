@@ -136,7 +136,7 @@ export const MCP_HELP = `usage: agentorg-mcp [context|prompt|wait] [--client cla
        agentorg-mcp connect|disconnect <claude-code|codex> [--project <dir>]
        agentorg-mcp status [--project <dir>]
 
-Present attach, interfaces and call over stdio, connected to AGENTORG_URL. Listing and invocation require attachment; interfaces reads the actor's permitted operations and call invokes one.
+Present attach, interfaces and call over stdio, connected to AGENTORG_URL. Listing and invocation require attachment; interfaces reads the actor's permitted Tools and their interfaces, and call invokes an interface by its call alias.
 Client hooks: context emits an attachment hint; prompt keeps typed input; wait delivers pending input on stderr with the client's wake status.`;
 
 export async function mcpCommand(args: string[]): Promise<number> {

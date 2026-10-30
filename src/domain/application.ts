@@ -13,9 +13,9 @@ import {
   type Answer,
   BUILTINS,
   type BuiltinName,
-  type Offer,
   type RequestOf,
   type ResponseOf,
+  type ToolDescriptor,
 } from "./model/index.ts";
 import type { Invocation, Waiting } from "./ports.ts";
 import type { Progress } from "./progress.ts";
@@ -106,9 +106,12 @@ export function application(
     activity: async (_actor, request) => ({ entries: audit.list(request.since, request.limit) }),
   };
 
-  function available(actorId: string): Offer[] {
-    const actor = registry.found(actorId);
-    return actor.closed_at === null ? capabilities.list(actor).map((each) => each.offer) : [];
+  function available(actorId: string): ToolDescriptor[] {
+    return capabilities.list(registry.found(actorId)).map(({ id, name, interfaces }) => ({
+      id,
+      name,
+      interfaces: interfaces.map((each) => each.offer),
+    }));
   }
 
   async function invoke(
@@ -120,7 +123,10 @@ export function application(
     const actor = registry.found(actorId);
     try {
       if (actor.closed_at !== null) throw new Forbidden("the Actor is closed");
-      const found = capabilities.list(actor).find((each) => each.offer.interface.name === name);
+      const found = capabilities
+        .list(actor)
+        .map((tool) => tool.interfaces.find((each) => each.offer.call === name))
+        .find((each) => each !== undefined);
       if (!found) {
         if (!Object.hasOwn(BUILTINS, name)) audit.record(actor.id, "call", null, "not_found");
         throw new NotFound(`there is no interface ${name}`);
@@ -164,17 +170,18 @@ export function application(
 
   async function routed(
     actor: ActorRow,
-    found: Capability & { to: string; interface: string },
+    found: Capability & { to: string },
     input: Record<string, unknown>,
     how: Invocation,
   ): Promise<Answer> {
-    const { name, input: schema, one_way } = found.offer.interface;
+    const { input: schema, one_way } = found.offer.interface;
+    const name = found.offer.call;
     const problem = violation(schema, input);
     if (problem !== undefined) {
       audit.record(actor.id, "call", null, "invalid");
       throw new Invalid(`the input does not match the input schema of ${name}: ${problem}`);
     }
-    const call = calls.create(actor, found.to, found.interface, input, how.cause);
+    const call = calls.create(actor, found.to, found.offer.interface.name, input, how.cause);
     const waitMs = one_way ? 0 : timing.waitMs;
     const settled = await calls.wait(call.id, waitMs, {
       stepMs: timing.stepMs,

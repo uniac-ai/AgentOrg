@@ -8,7 +8,7 @@ license: MIT
 
 AgentOrg organizes agent sessions the way a company organizes people. A position is a responsibility with a manager, and the user is the root, the one position without a manager. A session fills one position and acts for it. The position's record — its progress, its questions, its messages, its reports — is kept by AgentOrg and outlives the session, so a session that attaches later, after a restart or in another client, carries on from that record rather than from memory.
 
-This skill is the operating model: when to use which of AgentOrg's operations, and why. After `attach`, use `interfaces` to read your actor's current permitted operations, descriptions and schemas. Invoke a logical operation through `call {name, input}`: for example, `team` means `call {name: "team", input: {}}`. Every operation named below uses that mapping. AgentOrg enforces who may do what. An organization may add its own conventions in a skill of its own; see "Your organization's conventions".
+This skill is the operating model: when to use which of AgentOrg's operations, and why. After `attach`, use `interfaces` to read `{tools: [...]}`: your actor's permitted Tools, each with its interfaces, descriptions, schemas and `call` aliases. Invoke an interface through `call {name: interface.call, input}`: for example, `team` means `call {name: "team", input: {}}`. Every operation named below uses that mapping. AgentOrg enforces who may do what. An organization may add its own conventions in a skill of its own; see "Your organization's conventions".
 
 ## Whether you're in an organization
 

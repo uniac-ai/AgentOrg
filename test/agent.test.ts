@@ -76,8 +76,8 @@ async function session(core: Core & { home: string }, id: string, kind = "claude
       const listed = await tool("interfaces");
       return (
         (
-          listed.structuredContent as { interfaces?: { interface: { name: string } }[] }
-        )?.interfaces?.map((offer) => offer.interface.name) ?? []
+          listed.structuredContent as { tools?: { interfaces: { call: string }[] }[] }
+        )?.tools?.flatMap((tool) => tool.interfaces.map((offer) => offer.call)) ?? []
       );
     },
     call: async (
@@ -196,9 +196,11 @@ test("the stdio catalog is stable and only attachment can act before a position 
   for (const input of [{}, { name: "team" }, { name: "team", input: [] }]) {
     assert.equal((await one.tool("call", input)).isError, true);
   }
-  const listed = (await one.tool("interfaces")).structuredContent as { interfaces: unknown[] };
+  const listed = (await one.tool("interfaces")).structuredContent as { tools: unknown[] };
   const asActor = await org.client(readFileSync(join(org.home, "actors", actor), "utf8").trim());
-  assert.deepEqual(listed.interfaces, await asActor.available());
+  assert.deepEqual(Object.keys(listed), ["tools"]);
+  assert.deepEqual(listed.tools, await asActor.available());
+  assert.equal(listed.tools.length, 6);
   assert.equal((await one.interfaces()).includes("activity"), false);
 });
 

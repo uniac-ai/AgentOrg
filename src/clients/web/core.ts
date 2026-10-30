@@ -1,7 +1,7 @@
 /** The web client's actor-library connection, retrying initialization until the core answers. */
 
 import { type Actor, connectActor } from "../../actor/index.ts";
-import type { Answer, Offer } from "../../domain/model/index.ts";
+import type { Answer, ToolDescriptor } from "../../domain/model/index.ts";
 
 /** The core did not answer, or refused the root credential. */
 export class CoreUnreachable extends Error {}
@@ -18,8 +18,8 @@ export class Core {
     void this.#open(actorId, credential);
   }
 
-  /** The interfaces available to the root. */
-  async available(): Promise<Offer[]> {
+  /** The Tools available to the root. */
+  async available(): Promise<ToolDescriptor[]> {
     return this.#use((actor) => actor.available());
   }
 

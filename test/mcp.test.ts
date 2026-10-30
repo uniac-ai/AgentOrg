@@ -14,12 +14,87 @@ import {
   ListToolsRequestSchema,
   ToolListChangedNotificationSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import { CALL_META, PENDING_OUTPUT } from "../src/bindings/mcp/index.ts";
+import { CALL_META, catalogOf, offeredToolsOf, PENDING_OUTPUT } from "../src/bindings/mcp/index.ts";
 import { presentToOccupant } from "../src/bindings/mcp/occupant.ts";
 import { mcpTransports } from "../src/bindings/mcp/transport.ts";
 import { CONNECTION_PATH, establish } from "../src/connection/index.ts";
+import type { ToolDescriptor } from "../src/domain/model/index.ts";
 import { dial } from "../src/network/index.ts";
 import { iface, startCore, until } from "./harness.ts";
+
+test("MCP flattens Tool interfaces and roundtrips identity without deriving it from call aliases", () => {
+  const catalog: ToolDescriptor[] = [
+    {
+      id: "act_stable",
+      name: "manager",
+      interfaces: [
+        {
+          interface: iface("review", { long_running: true }),
+          call: "manager.review",
+          routed: true,
+        },
+        {
+          interface: iface("send", { one_way: true }),
+          call: "manager.send",
+          routed: true,
+        },
+      ],
+    },
+    {
+      id: "hub:team",
+      name: "team",
+      interfaces: [{ interface: iface("team"), call: "team", routed: false, read_only: true }],
+    },
+    {
+      id: "act_team",
+      name: "team",
+      interfaces: [{ interface: iface("inspect"), call: "team.inspect", routed: true }],
+    },
+  ];
+  const wire = offeredToolsOf(catalog);
+  assert.deepEqual(
+    wire.map((tool) => tool.name),
+    ["manager.review", "manager.send", "team", "team.inspect"],
+  );
+  assert.deepEqual(wire[0]?._meta?.["agentorg/tool"], {
+    id: "act_stable",
+    name: "manager",
+    interface: "review",
+    routed: true,
+    one_way: false,
+    long_running: true,
+  });
+  assert.deepEqual(catalogOf(wire), catalog);
+  const first = wire[0];
+  assert.ok(first);
+  for (const metadata of [
+    undefined,
+    null,
+    {},
+    "manager",
+    { id: "act_stable", name: "manager", interface: "review" },
+    {
+      id: 1,
+      name: "manager",
+      interface: "review",
+      routed: true,
+      one_way: false,
+      long_running: true,
+    },
+  ]) {
+    assert.throws(() => catalogOf([{ ...first, _meta: { "agentorg/tool": metadata } }]));
+  }
+  assert.throws(() => catalogOf([{ ...first, _meta: undefined }]));
+  const meta = first._meta?.["agentorg/tool"] as Record<string, unknown>;
+  for (const contradiction of [
+    { ...first, name: "other.review", _meta: { "agentorg/tool": { ...meta, name: "other" } } },
+    { ...first, name: "duplicate.review" },
+    { ...first, _meta: { "agentorg/tool": { ...meta, id: "act_another", interface: "other" } } },
+  ]) {
+    assert.throws(() => catalogOf([first, contradiction]));
+  }
+  assert.throws(() => catalogOf([{ ...first, outputSchema: { type: "object" } }]));
+});
 
 test("generic presentation preserves dynamic tool lists and optional occupant session context", async () => {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -28,7 +103,13 @@ test("generic presentation preserves dynamic tool lists and optional occupant se
   const contexts: unknown[] = [];
   const server = await presentToOccupant(
     {
-      offers: async () => [{ interface: descriptor, routed: false }],
+      offers: async () => [
+        {
+          id: "dynamic",
+          name: "dynamic",
+          interfaces: [{ interface: descriptor, call: descriptor.name, routed: false }],
+        },
+      ],
       call: async (_name, _input, options) => {
         contexts.push(options?.session);
         return { state: "done", value: {} };
@@ -88,6 +169,16 @@ test("over MCP, the core lists offers as tools, delivers calls as tasks with the
           required: ["choice"],
         },
         execution: { taskSupport: "optional" },
+        _meta: {
+          "agentorg/tool": {
+            id: "hub:actors",
+            name: "forged",
+            interface: "actor_create",
+            routed: false,
+            one_way: false,
+            long_running: false,
+          },
+        },
       },
     ],
   }));
@@ -127,6 +218,30 @@ test("over MCP, the core lists offers as tools, delivers calls as tasks with the
 
     const { tools } = await prog.listTools();
     const byName = Object.fromEntries(tools.map((tool) => [tool.name, tool]));
+    assert.deepEqual(byName.team?._meta?.["agentorg/tool"], {
+      id: "hub:team",
+      name: "team",
+      interface: "team",
+      routed: false,
+      one_way: false,
+      long_running: false,
+    });
+    assert.deepEqual(byName["manager.decide"]?._meta?.["agentorg/tool"], {
+      id: core.rootId,
+      name: "manager",
+      interface: "decide",
+      routed: true,
+      one_way: false,
+      long_running: true,
+    });
+    assert.equal(byName["forged.actor_create"], undefined);
+    const actorCatalog = await (await core.client(credential)).available();
+    const manager = actorCatalog.find((tool) => tool.id === core.rootId);
+    assert.equal(manager?.name, "manager");
+    assert.deepEqual(
+      manager?.interfaces.map((offer) => [offer.interface.name, offer.call]),
+      [["decide", "manager.decide"]],
+    );
     assert.equal(byName.team?.annotations?.readOnlyHint, true);
     assert.equal(byName.actor_create?.annotations?.readOnlyHint, false);
     assert.equal(byName["manager.decide"]?.execution, undefined, "the core runs no tasks itself");

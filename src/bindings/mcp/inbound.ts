@@ -10,7 +10,7 @@ import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { Application } from "../../domain/ports.ts";
 import { VERSION } from "../../version.ts";
-import { CAUSE_META, offeredToolOf, resultOfAnswer } from "./encoding.ts";
+import { CAUSE_META, offeredToolsOf, resultOfAnswer } from "./encoding.ts";
 
 export async function serveActor(
   application: Application,
@@ -22,7 +22,7 @@ export async function serveActor(
     { capabilities: { tools: {} } },
   );
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: application.available(party).map(offeredToolOf),
+    tools: offeredToolsOf(application.available(party)),
   }));
   server.setRequestHandler(CallToolRequestSchema, async ({ params }, extra) => {
     const progressToken = params._meta?.progressToken;

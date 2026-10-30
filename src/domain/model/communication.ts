@@ -419,6 +419,7 @@ export const ReleaseRequest = z.strictObject({ resource: Resource }).meta({ id: 
 
 export const COMMUNICATION = {
   progress_set: {
+    tool: "team",
     writes: true,
     rootOnly: false,
     request: ProgressSet,
@@ -428,6 +429,7 @@ export const COMMUNICATION = {
 state is running, waiting, blocked or review. summary is a short current paragraph at your own level. items are your open workstreams or steps, each with a title and a state; done ones drop off. links are what you produced. Fields you leave out keep their value, and each set keeps the one before as history. Publish only what you choose: your transcript and reasoning stay with you.`,
   },
   question_ask: {
+    tool: "questions",
     writes: true,
     rootOnly: false,
     request: QuestionAsk,
@@ -437,6 +439,7 @@ state is running, waiting, blocked or review. summary is a short current paragra
 It goes to your manager, or to a direct report; the root may ask anyone. To carry up a question you cannot settle, ask your manager a new one in your own terms, with your recommendation, and cause naming the question; once answered, answer the original. answerer names the only actor besides the root that may answer, as the root for an approval only the user gives. Wait for the answer with questions, from you and since a cursor.`,
   },
   question_answer: {
+    tool: "questions",
     writes: true,
     rootOnly: false,
     request: QuestionAnswerRequest,
@@ -446,6 +449,7 @@ It goes to your manager, or to a direct report; the root may ask anyone. To carr
 A question that names an answerer is answered by that actor or the root alone. choice is optional, and text may reject the options and reframe; either way the question is answered. When the user answers in your own session, answer your own question with recorded and their words quoted in text: it is marked as recorded by you. An approval with an answerer is never recorded: the user answers it through the core.`,
   },
   questions: {
+    tool: "questions",
     writes: false,
     rootOnly: false,
     request: QuestionsRequest,
@@ -455,6 +459,7 @@ A question that names an answerer is answered by that actor or the root alone. c
 What waits on you is to you and open. New answers to yours are from you since a cursor. With wait, hold until a match exists or the seconds run out.`,
   },
   team: {
+    tool: "team",
     writes: false,
     rootOnly: false,
     request: TeamRequest,
@@ -464,6 +469,7 @@ What waits on you is to you and open. New answers to yours are from you since a 
 Default: you and your direct reports. Anyone may explore any position.`,
   },
   progress: {
+    tool: "team",
     writes: false,
     rootOnly: false,
     request: ProgressRequest,
@@ -473,6 +479,7 @@ Default: you and your direct reports. Anyone may explore any position.`,
 history adds that many earlier versions.`,
   },
   message_send: {
+    tool: "messages",
     writes: true,
     rootOnly: false,
     request: MessageSend,
@@ -482,6 +489,7 @@ history adds that many earlier versions.`,
 Its two parties, the manager of either, and the root may read it. It is pending on its addressee until read, and you see when it is. To ask for a decision, ask a question instead.`,
   },
   messages: {
+    tool: "messages",
     writes: false,
     rootOnly: false,
     request: MessagesRequest,
@@ -491,6 +499,7 @@ Its two parties, the manager of either, and the root may read it. It is pending 
 Default: those addressed to you. box out lists those you sent, and actor another actor's box, as far as you may see it. With wait, hold until a match exists or the seconds run out; since a cursor, that is a new message.`,
   },
   message_read: {
+    tool: "messages",
     writes: true,
     rootOnly: false,
     request: MessageRead,
@@ -498,6 +507,7 @@ Default: those addressed to you. box out lists those you sent, and actor another
     description: "Mark messages addressed to you read. Each sender sees when.",
   },
   claim: {
+    tool: "claims",
     writes: true,
     rootOnly: false,
     request: ClaimRequest,
@@ -507,6 +517,7 @@ Default: those addressed to you. box out lists those you sent, and actor another
 Anyone sees current claims in team. Claiming a resource another actor holds is refused, naming the holder; claiming one you hold renews it. until ends the claim by itself, and closing an actor ends its claims.`,
   },
   release: {
+    tool: "claims",
     writes: true,
     rootOnly: false,
     request: ReleaseRequest,

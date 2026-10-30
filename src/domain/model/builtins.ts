@@ -99,6 +99,7 @@ export const ActivityResult = z
 
 export const BUILTINS = {
   actor_create: {
+    tool: "actors",
     writes: true,
     rootOnly: false,
     request: ActorCreate,
@@ -110,6 +111,7 @@ Returns the actor and its credential, shown only this once. Whatever fills the p
 With execution, wait for the Provider and return its separate ready, failed or unknown outcome. The Actor remains created for every execution outcome. Ready confirms Provider creation, independently of Actor connectivity.`,
   },
   actor_close: {
+    tool: "actors",
     writes: true,
     rootOnly: false,
     request: ActorClose,
@@ -120,6 +122,7 @@ Refused while it has open reports of its own. Its pending calls end and its conn
   },
   ...COMMUNICATION,
   call_result: {
+    tool: "calls",
     writes: false,
     rootOnly: false,
     request: CallResult,
@@ -129,6 +132,7 @@ Refused while it has open reports of its own. Its pending calls end and its conn
 With wait, hold until it settles or the wait ends, whichever is first.`,
   },
   call_withdraw: {
+    tool: "calls",
     writes: true,
     rootOnly: false,
     request: CallWithdraw,
@@ -136,6 +140,7 @@ With wait, hold until it settles or the wait ends, whichever is first.`,
     description: "Withdraw a pending call you made that no longer needs an answer.",
   },
   activity: {
+    tool: "activity",
     writes: false,
     rootOnly: true,
     request: Activity,

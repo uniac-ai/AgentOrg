@@ -6,9 +6,9 @@ import { builtinLines, builtinOf, helpOf, requestOf } from "./builtins.ts";
 import { callCommand, interfacesCommand } from "./commands.ts";
 
 const INTERFACES_HELP =
-  "usage: agentorg interfaces\n\nList the selected actor's current permitted interfaces, including descriptions and schemas.";
+  "usage: agentorg interfaces\n\nList the selected actor's permitted Tools, with their interfaces, call aliases, descriptions and schemas.";
 const CALL_HELP =
-  "usage: agentorg call <name> [--json <input>]\n\nInvoke an interface returned by interfaces. Input defaults to an empty object. Prints the actor client's answer, including routed call state, id and parts.";
+  "usage: agentorg call <name> [--json <input>]\n\nInvoke an interface using its call alias returned by interfaces. Input defaults to an empty object. Prints the actor client's answer, including routed call state, id and parts.";
 
 const usage = () =>
   [
@@ -16,7 +16,7 @@ const usage = () =>
     "",
     "Call the organization's operations as an actor.",
     "",
-    "  interfaces              List current permitted interfaces and schemas.",
+    "  interfaces              List permitted Tools, interfaces and schemas.",
     "  call <name> --json <json> Invoke any permitted interface; print its complete answer.",
     ...builtinLines(),
     "",

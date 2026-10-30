@@ -11,10 +11,10 @@ import type {
   Delivery,
   InterfaceDescriptor,
   Message,
-  Offer,
   Outcome,
   Progress,
   Question,
+  ToolDescriptor,
 } from "./model/index.ts";
 
 export type ActorRow = z.output<typeof ActorRecord>;
@@ -99,9 +99,9 @@ export interface Waiting {
   signal: AbortSignal;
 }
 
-/** What an actor may do: the interfaces it may call, and calling one. */
+/** What an actor may do: its Tools and their interfaces, and calling one by its alias. */
 export interface Application {
-  available(actor: string): Offer[];
+  available(actor: string): ToolDescriptor[];
   invoke(
     actor: string,
     name: string,

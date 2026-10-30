@@ -6,6 +6,7 @@ export type JsonSchema = { [key: string]: unknown };
 
 /** A built-in's schemas, authority, audit policy and caller-facing description. */
 export interface BuiltinSpec {
+  readonly tool: string;
   readonly writes: boolean;
   readonly rootOnly: boolean;
   readonly request: z.ZodType;

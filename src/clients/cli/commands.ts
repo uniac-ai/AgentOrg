@@ -25,10 +25,10 @@ async function asActor(run: (client: Actor) => Promise<number>): Promise<number>
   }
 }
 
-/** List the selected actor's current capabilities, including routed interfaces. */
+/** List the selected actor's Tools, with their interfaces and call aliases. */
 export function interfacesCommand(): Promise<number> {
   return asActor(async (client) => {
-    process.stdout.write(`${JSON.stringify({ interfaces: await client.available() }, null, 2)}\n`);
+    process.stdout.write(`${JSON.stringify({ tools: await client.available() }, null, 2)}\n`);
     return 0;
   });
 }

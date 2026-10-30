@@ -64,7 +64,7 @@ including types, is acyclic and checked by `test/layers.test.ts`.
 | `registry.ts` | Credentials identify open positions; creation returns identity and a one-time credential; closure checks authority and open reports. | Identity, actor tree and lifecycle. |
 | `execution.ts` | Accepts an existing Actor identity, private bootstrap credential, Provider and configuration; validates configuration and reports one Provider creation outcome. | None. |
 | `connections.ts` | Accepts link-specific presence and advertisements; supplies live links and the latest descriptors; disconnects closed actors. Stale-link reports have no effect. | Live links in memory; advertised interfaces in storage. |
-| `capabilities.ts` | Derives built-in or actor destinations and offers from Registry and Connections. Listing, dispatch and team use the same projection. | None. |
+| `capabilities.ts` | Derives Actor-relative Tool exposures with private dispatch destinations from Registry and Connections. Listing, dispatch and team use the same projection. | None. |
 | `calls.ts` | Creates, delivers, cancels, settles and waits on calls through Connections; records audit outcomes. | Durable calls; active delivery attempts and waiters. |
 | `progress.ts` | Validates actor references, versions partial replacements and supplies current/history reads. | Progress versions. |
 | `communication.ts` | Authorizes questions, answers and private messages, and supplies correspondence reads and waits. | Questions/messages with one cursor; waiting reads. |
@@ -79,7 +79,46 @@ connection state without exposing credential hashes. A database with another
 nonzero schema version is refused with its version and the required version; its
 records are neither migrated nor deleted.
 
-### Interfaces
+### Tools and interfaces
+
+The Hub gives each Actor a catalog of Tools. A Tool is `{id, name, interfaces}`; each interface
+contains its descriptor, `call` alias, `routed` flag and optional `read_only` hint. The descriptor's
+name is local to the Tool. `(tool.id, interface.name)` identifies an interface independently of
+the caller's alias; `Actor.call(interface.call, input)` invokes it with the existing call names.
+`Actor.available()`, the CLI's `interfaces`, the agent adapter's `interfaces`, and the web catalog
+carry these nested Tools. The latter three return `{tools: [...]}`.
+
+The built-in Tools have IDs `hub:<name>` and these names and interfaces:
+
+| Tool | Interfaces |
+|---|---|
+| `actors` | `actor_create`, `actor_close` |
+| `team` | `team`, `progress`, `progress_set` |
+| `questions` | `question_ask`, `question_answer`, `questions` |
+| `messages` | `message_send`, `messages`, `message_read` |
+| `claims` | `claim`, `release` |
+| `calls` | `call_result`, `call_withdraw` |
+| `activity` | `activity`, offered to the root only |
+
+Each other visible Actor with advertisements supplies one Tool, using its existing Actor ID.
+Its Tool name is `manager`, a direct report's handle, or, for the root, the Actor's full path.
+The interfaces keep their local names, while `call` joins that alias and the local name.
+Advertisements remain visible while offline. A closed Actor receives no Tools.
+
+`capabilities.ts` owns this Actor-relative projection, composing Registry identity and Connections
+advertisements with built-in membership declared beside each schema. Its Tool exposures keep
+dispatch destinations private. Application lists their public descriptors and resolves calls from
+those same exposures; Views derives the callable interface names in team records from them.
+No separate catalog state or storage is needed. Clients depend on the shared domain descriptor
+and Actor API, independently of how an Actor was created or which Provider executes it.
+
+The MCP binding alone flattens a Tool into MCP Tools, one per callable interface. Each carries
+`_meta["agentorg/tool"]` with the semantic Tool's identity and name, the local interface name,
+and existing routing and interface flags. The Actor-side binding reconstructs the nested catalog
+from this metadata and rejects missing or inconsistent metadata. MCP method and call names stay
+the same; admission carries no catalog. Verification covers the concrete catalog payloads,
+visibility and call authorization, identity across aliases, advertisement lifecycle, and metadata
+round-trip through the assembled clients.
 
 The domain's interface descriptor is its own: name, title and description, input schema, output schema, whether it is one-way, and whether it is long-running.
 - **Schemas** are JSON Schema, the domain's schema language. The domain checks inputs and outputs against them with Ajv.
@@ -97,14 +136,6 @@ The domain's interface descriptor is its own: name, title and description, input
 | **Message** | id; cursor; from; to; text; links; reply to; created and read at | |
 | **Claim** | resource; holder; note; until; claimed at | A resource has at most one current claim. It ends when released, when `until` passes, or when its holder is closed. |
 | **Audit entry** | id; at; actor; operation; target; outcome | One line for each write, and for each routed call when it is created, refused and settled. |
-
-### Wiring: who calls what
-
-An actor's available interfaces are:
-- the core's built-ins;
-- its manager's exposed interfaces, named `manager.<name>`, as in `manager.decide`;
-- each direct report's exposed interfaces, named `<handle>.<name>`, as in `storage.review`;
-- for the root, every actor's exposed interfaces, named by its path, as in `release.storage.review`.
 
 ### Routing a call
 
@@ -208,7 +239,7 @@ the current owner. Replacing an advertising connection closes it with 4000; clos
 revokes all its admitted connections with 4001. A caller socket closes independently.
 
 How the domain is encoded:
-- **An interface is an MCP `Tool`.** The core learns an actor's interfaces with `tools/list` over the channel, and lists them again on `notifications/tools/list_changed`.
+- **An interface is one MCP `Tool`.** The Hub's semantic Tools remain grouped in the domain and Actor API; the binding flattens them into `tools/list` entries with explicit semantic metadata. Advertisements from Actors are ordinary MCP interfaces: the Hub assigns their semantic Tool identity from the admitted Actor and ignores advertiser metadata. The core lists an Actor's interfaces again on `notifications/tools/list_changed`.
   - A tool is one-way when its output schema is the empty object.
   - It is long-running when it declares `execution.taskSupport` and its server declares `tasks.requests.tools.call`.
 - **A call is `tools/call`**, with `_meta["agentorg/call"] = {id, from, cause}`. A caller names its cause with `_meta["agentorg/cause"]`.
@@ -219,10 +250,10 @@ How the domain is encoded:
 
 The MCP adapter, `agentorg-mcp` in `src/clients/mcp/`, lets a Claude Code or Codex session fill a position. The client starts it over stdio for each session, and it connects to the core as that position with the actor library. Its project integration and hooks belong to this adapter.
 
-- **What the session sees.** The stdio adapter has three fixed tools: `attach`, `interfaces`, and `call {name, input}`. Before attachment, listing and invocation are refused. `interfaces` returns the attached actor's current permitted offers from the actor library, with the core's descriptions and schemas. `call` invokes one of those interfaces through the same library. The core's own MCP catalog and the actor library's dynamic presentation remain separate contracts. Before its first turn, the client's session-start hook runs `agentorg-mcp context`, so a session that fills no position reads that it loads the `agentorg` skill and attaches before any other action. The adapter's instructions say the same.
+- **What the session sees.** The stdio adapter has three fixed MCP tools: `attach`, `interfaces`, and `call {name, input}`. `interfaces` returns `{tools: [...]}` from the attached actor's library, with stable Tool identities, local interface descriptors and their call aliases. `call` invokes an interface using its `call` alias as `name`. The presentation's fixed controls form one semantic `agentorg` Tool, separate from the Hub catalog. Before its first turn, the client's session-start hook runs `agentorg-mcp context`, so a session that fills no position reads that it loads the `agentorg` skill and attaches before any other action. The adapter's instructions say the same.
   - `attach {actor}` fills the position the session's brief names.
   - `attach {name, purpose}`, allowed only on a session's first attach, creates its position directly under the root. The agent actor uses the root's credential for that one call.
-  - The tool catalog remains fixed across attachment and resuming. Current offers are read on each `interfaces` invocation, with no adapter cache. Logical operations such as `team` are invoked as `call {name: "team", input: {}}`.
+  - The MCP controls remain fixed across attachment and resuming. The current Hub catalog is read on each `interfaces` invocation, with no adapter cache. Logical operations such as `team` are invoked as `call {name: "team", input: {}}`.
 - **What the session is told.** Each kind of guidance has one place:
   - the adapter's tool descriptions say how to attach, list and invoke; the core's interface descriptors define each operation's description and schemas, and the core enforces permissions;
   - the server's instructions, the start hint and the frame around what the waiter delivers say what to do at that moment;

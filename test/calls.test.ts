@@ -59,7 +59,8 @@ async function organization(
   return { core, root, rootActor, release, storage };
 }
 
-const names = async (actor: Actor) => (await actor.available()).map((each) => each.interface.name);
+const names = async (actor: Actor) =>
+  (await actor.available()).flatMap((tool) => tool.interfaces.map((each) => each.call)).sort();
 const BUILTINS = [
   "actor_create",
   "actor_close",
@@ -81,30 +82,76 @@ const BUILTINS = [
 test("each actor is offered the built-ins and the interfaces one step up and down; the root every actor's", async (t) => {
   const { core, root, release, storage } = await organization();
   t.after(() => core.close());
-  assert.deepEqual(await names(release.connection), [
-    ...BUILTINS,
-    "manager.decide",
-    "manager.note",
-    "storage.review",
-  ]);
-  assert.deepEqual(await names(storage.connection), [...BUILTINS, "manager.approve"]);
-  assert.deepEqual(await names(root), [
-    ...BUILTINS,
-    "activity",
-    "release.approve",
-    "release.storage.review",
-  ]);
-  const decide = (await release.connection.available()).find(
-    (each) => each.interface.name === "manager.decide",
+  assert.deepEqual(
+    await names(release.connection),
+    [...BUILTINS, "manager.decide", "manager.note", "storage.review"].sort(),
   );
+  assert.deepEqual(await names(storage.connection), [...BUILTINS, "manager.approve"].sort());
+  assert.deepEqual(
+    await names(root),
+    [...BUILTINS, "activity", "release.approve", "release.storage.review"].sort(),
+  );
+  const available = await release.connection.available();
+  const grouped = (tools: typeof available) =>
+    Object.fromEntries(
+      tools
+        .filter((tool) => tool.id.startsWith("hub:"))
+        .map((tool) => {
+          assert.equal(tool.id, `hub:${tool.name}`);
+          return [tool.name, tool.interfaces.map((offer) => offer.interface.name).sort()];
+        }),
+    );
+  const expected = {
+    actors: ["actor_close", "actor_create"],
+    team: ["progress", "progress_set", "team"],
+    questions: ["question_answer", "question_ask", "questions"],
+    messages: ["message_read", "message_send", "messages"],
+    claims: ["claim", "release"],
+    calls: ["call_result", "call_withdraw"],
+  };
+  assert.deepEqual(grouped(available), expected);
+  const rootTools = await root.available();
+  assert.deepEqual(grouped(rootTools), { ...expected, activity: ["activity"] });
+  assert.equal(
+    available.filter((tool) => tool.id.startsWith("hub:")).flatMap((tool) => tool.interfaces)
+      .length,
+    15,
+  );
+  assert.equal(
+    rootTools.filter((tool) => tool.id.startsWith("hub:")).flatMap((tool) => tool.interfaces)
+      .length,
+    16,
+  );
+  const reportTool = available.find((tool) => tool.id === storage.id);
+  const rootTool = rootTools.find((tool) => tool.id === storage.id);
+  assert.deepEqual([reportTool?.name, rootTool?.name], ["storage", "release.storage"]);
+  assert.deepEqual(
+    reportTool?.interfaces.map((offer) => offer.interface.name),
+    rootTool?.interfaces.map((offer) => offer.interface.name),
+  );
+  assert.deepEqual(
+    [reportTool?.interfaces[0]?.call, rootTool?.interfaces[0]?.call],
+    ["storage.review", "release.storage.review"],
+  );
+  for (const tool of rootTools) {
+    assert.deepEqual(Object.keys(tool).sort(), ["id", "interfaces", "name"]);
+    for (const offer of tool.interfaces) {
+      assert.ok(!("to" in offer) && !("builtin" in offer), "dispatch targets stay private");
+    }
+  }
+  const decide = available
+    .find((tool) => tool.id === core.rootId)
+    ?.interfaces.find((each) => each.interface.name === "decide");
+  assert.equal(decide?.call, "manager.decide");
   assert.equal(decide?.routed, true);
   assert.deepEqual(decide?.interface.output, DECIDE.output);
   const team = await done(release.connection.call("team", { actor: core.rootId, depth: 5 }));
   assert.deepEqual(
     team.positions.flatMap((each: { interfaces: string[] }) => each.interfaces).sort(),
-    (await release.connection.available())
+    available
+      .flatMap((tool) => tool.interfaces)
       .filter((each) => each.routed)
-      .map((each) => each.interface.name)
+      .map((each) => each.call)
       .sort(),
   );
   const listed = core.org.connections
@@ -345,7 +392,10 @@ test("an actor is closed by its manager once its reports are, which ends its cal
     ],
   );
   await until("connection ended", () => reconnected.ended === CLOSE_REVOKED);
-  assert.deepEqual(await names(releaseCaller), [...BUILTINS, "manager.decide", "manager.note"]);
+  assert.deepEqual(
+    await names(releaseCaller),
+    [...BUILTINS, "manager.decide", "manager.note"].sort(),
+  );
   await assert.rejects(
     connectClient({ url: core.url, actorId: storage.id, credential: storage.credential }),
     /admission/,

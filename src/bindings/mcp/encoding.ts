@@ -5,7 +5,25 @@
  */
 
 import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
-import type { Answer, InterfaceDescriptor, Offer, Outcome } from "../../domain/model/index.ts";
+import { z } from "zod";
+import {
+  type Answer,
+  Id,
+  INTERFACE_NAME,
+  type InterfaceDescriptor,
+  type Outcome,
+  type ToolDescriptor,
+} from "../../domain/model/index.ts";
+
+const TOOL_META = "agentorg/tool";
+const ToolMetadata = z.strictObject({
+  id: Id,
+  name: z.string().min(1),
+  interface: z.string().regex(INTERFACE_NAME),
+  routed: z.boolean(),
+  one_way: z.boolean(),
+  long_running: z.boolean(),
+});
 
 /**
  * `_meta` key on a call. On a `tools/call` the core delivers to an actor it holds `DeliveredCall`.
@@ -93,18 +111,89 @@ export function exposedToolOf(exposed: InterfaceDescriptor): Tool {
   };
 }
 
-/** An interface offered to a caller, as its tool. The core answers it itself, with no tasks. */
-export function offeredToolOf(offer: Offer): Tool {
-  const { name, title, description, input, output } = offer.interface;
-  const outputSchema = output && (offer.routed ? routedOutputSchema(output) : output);
-  return {
-    name,
-    ...(title === undefined ? {} : { title }),
-    ...(description === undefined ? {} : { description }),
-    inputSchema: input as Tool["inputSchema"],
-    ...(outputSchema ? { outputSchema: outputSchema as Tool["outputSchema"] } : {}),
-    ...(offer.read_only === undefined ? {} : { annotations: { readOnlyHint: offer.read_only } }),
-  };
+/** Flatten semantic Tools only at the MCP boundary, retaining their identity and local names. */
+export function offeredToolsOf(catalog: ToolDescriptor[]): Tool[] {
+  return catalog.flatMap((tool) =>
+    tool.interfaces.map((offer) => {
+      const { name, title, description, input, output, one_way, long_running } = offer.interface;
+      const outputSchema = output && (offer.routed ? routedOutputSchema(output) : output);
+      return {
+        name: offer.call,
+        ...(title === undefined ? {} : { title }),
+        ...(description === undefined ? {} : { description }),
+        inputSchema: input as Tool["inputSchema"],
+        ...(outputSchema ? { outputSchema: outputSchema as Tool["outputSchema"] } : {}),
+        ...(offer.read_only === undefined
+          ? {}
+          : { annotations: { readOnlyHint: offer.read_only } }),
+        _meta: {
+          [TOOL_META]: {
+            id: tool.id,
+            name: tool.name,
+            interface: name,
+            routed: offer.routed,
+            one_way,
+            long_running,
+          },
+        },
+      };
+    }),
+  );
+}
+
+/** Reconstruct a Hub catalog from explicit metadata; aliases never identify semantic Tools. */
+export function catalogOf(tools: Tool[]): ToolDescriptor[] {
+  const catalog = new Map<string, ToolDescriptor>();
+  const calls = new Set<string>();
+  for (const tool of tools) {
+    const parsed = ToolMetadata.safeParse(tool._meta?.[TOOL_META]);
+    if (!parsed.success) throw new Error("invalid Hub Tool catalog metadata");
+    const meta = parsed.data;
+    const group = catalog.get(meta.id) ?? { id: meta.id, name: meta.name, interfaces: [] };
+    if (
+      group.name !== meta.name ||
+      calls.has(tool.name) ||
+      group.interfaces.some((each) => each.interface.name === meta.interface)
+    ) {
+      throw new Error("inconsistent Hub Tool catalog metadata");
+    }
+    const output = tool.outputSchema as Record<string, unknown> | undefined;
+    const branches = output?.anyOf as Record<string, unknown>[] | undefined;
+    if (
+      meta.routed &&
+      output &&
+      (branches?.length !== 2 || JSON.stringify(branches[1]) !== JSON.stringify(PENDING_OUTPUT))
+    ) {
+      throw new Error("invalid Hub routed interface output schema");
+    }
+    const { $defs, definitions } = output ?? {};
+    const own =
+      meta.routed && branches
+        ? {
+            ...branches[0],
+            ...($defs === undefined ? {} : { $defs }),
+            ...(definitions === undefined ? {} : { definitions }),
+          }
+        : output;
+    const readOnly = tool.annotations?.readOnlyHint;
+    group.interfaces.push({
+      call: tool.name,
+      interface: {
+        name: meta.interface,
+        ...(tool.title === undefined ? {} : { title: tool.title }),
+        ...(tool.description === undefined ? {} : { description: tool.description }),
+        input: tool.inputSchema,
+        ...(own === undefined ? {} : { output: own }),
+        one_way: meta.one_way,
+        long_running: meta.long_running,
+      },
+      routed: meta.routed,
+      ...(readOnly === undefined ? {} : { read_only: readOnly }),
+    });
+    catalog.set(meta.id, group);
+    calls.add(tool.name);
+  }
+  return [...catalog.values()];
 }
 
 export const textOf = (result: CallToolResult) =>

@@ -10,11 +10,11 @@ import type {
   Item,
   Link,
   Message,
-  Offer,
   Position,
   Progress,
   Question,
   QuestionAnswer,
+  ToolDescriptor,
   WaitsOn,
 } from "../../domain/model/index.ts";
 
@@ -24,9 +24,9 @@ export interface SessionBootstrap {
   expires_at: string;
 }
 
-/** `GET /api/interfaces`: the root's available interfaces, as the core offers them. */
+/** `GET /api/interfaces`: the root's available Tools and their callable interfaces. */
 export interface InterfaceList {
-  interfaces: Offer[];
+  tools: ToolDescriptor[];
 }
 
 /** The header every write carries, holding the session's CSRF token. */

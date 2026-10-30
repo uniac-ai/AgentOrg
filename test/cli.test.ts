@@ -78,7 +78,13 @@ test("generic CLI access lists and invokes routed interfaces with the same actor
     };
     const listed = await agentorg(["interfaces"], env);
     assert.equal(listed.status, 0, listed.stderr);
-    assert.deepEqual(JSON.parse(listed.stdout).interfaces, await root.available());
+    const catalog = JSON.parse(listed.stdout);
+    assert.deepEqual(Object.keys(catalog), ["tools"]);
+    assert.deepEqual(catalog.tools, await root.available());
+    const tool = catalog.tools.find((each: { id: string }) => each.id === created.actor.id);
+    assert.equal(tool.name, "worker");
+    assert.equal(tool.interfaces[0].interface.name, "echo");
+    assert.equal(tool.interfaces[0].call, "worker.echo");
     const result = await agentorg(["call", "worker.echo", "--json", '{"text":"hello"}'], env);
     assert.equal(result.status, 0, result.stderr);
     const called = JSON.parse(result.stdout);
@@ -172,7 +178,9 @@ test("call result and withdraw conveniences coexist with generic call dispatch",
     const { credential } = (created as { value: { credential: string } }).value;
     await core.connect(credential, fakeActor([iface("hold", { long_running: true })]));
     await until("the held interface is available", async () =>
-      (await root.available()).some((offer) => offer.interface.name === "held.hold"),
+      (await root.available()).some((tool) =>
+        tool.interfaces.some((offer) => offer.call === "held.hold"),
+      ),
     );
     const pending = await root.call("held.hold");
     assert.equal(pending.state, "pending");

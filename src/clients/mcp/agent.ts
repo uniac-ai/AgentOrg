@@ -20,13 +20,13 @@ import {
   type Answer,
   Handle,
   Id,
-  Interface,
   type InterfaceDescriptor,
-  type Offer,
   objectSchema,
   type QuestionsResult,
   type ResponseOf,
   Text,
+  Tool,
+  type ToolDescriptor,
 } from "../../domain/model/index.ts";
 import { credentials, readPrivate, rootActorPath, rootCredentialPath } from "../../home.ts";
 import { sessionName, sessions } from "./sessions.ts";
@@ -56,27 +56,21 @@ Give actor, the id your brief names. A session the user started with an appointm
 };
 
 const CallRequest = z.strictObject({
-  name: Text.describe("The interface name returned by interfaces, including its routed path."),
+  name: Text.describe("The interface's call alias returned by interfaces."),
   input: z.record(z.string(), z.unknown()).describe("Input matching that interface's schema."),
 });
 
 const INTERFACES: InterfaceDescriptor = {
   name: "interfaces",
   description:
-    "List the attached actor's currently permitted interfaces, with their descriptions and input/output schemas. Read this before calling an operation whose contract you have not read.",
+    "List the attached actor's currently permitted Tools, each with its interfaces, call aliases, descriptions and input/output schemas. Read this before calling an operation whose contract you have not read.",
   input: objectSchema(z.strictObject({}), "input"),
   output: objectSchema(
     z
       .strictObject({
-        interfaces: z.array(
-          z.strictObject({
-            interface: Interface,
-            routed: z.boolean(),
-            read_only: z.boolean().optional(),
-          }),
-        ),
+        tools: z.array(Tool),
       })
-      .meta({ id: "InterfacesResult" }),
+      .meta({ id: "ToolCatalogResult" }),
     "output",
   ),
   one_way: false,
@@ -86,14 +80,14 @@ const INTERFACES: InterfaceDescriptor = {
 const CALL: InterfaceDescriptor = {
   name: "call",
   description:
-    "Invoke an interface as the attached actor. Use its name and input schema from interfaces. The core applies the actor's permissions and validates input and output. A pending routed result names the call to read with the call_result operation.",
+    "Invoke an interface as the attached actor. Use its call alias as name and its input schema from interfaces. The core applies the actor's permissions and validates input and output. A pending routed result names the call to read with the call_result operation.",
   input: objectSchema(CallRequest, "input"),
   one_way: false,
   long_running: false,
 };
 
 /** What the session's client may show its model about the agent actor's tools as a whole. */
-export const INSTRUCTIONS = `These tools make this session a position in an AgentOrg organization: a responsibility with a manager, under the user. Attach before any other action, with the actor id the brief names, or with a name and purpose when the user started the session with no position named. Then use interfaces to read the actor's available operations and call with {name, input} to invoke one. Logical names such as team and progress_set are operations through call. How to work in a position is the agentorg skill; without it, read https://github.com/uniac-ai/AgentOrg/blob/main/skills/agentorg/SKILL.md.`;
+export const INSTRUCTIONS = `These tools make this session a position in an AgentOrg organization: a responsibility with a manager, under the user. Attach before any other action, with the actor id the brief names, or with a name and purpose when the user started the session with no position named. Then use interfaces to read the actor's available Tools and their interfaces, and call with {name: interface.call, input} to invoke one. Logical names such as team and progress_set are operations through call. How to work in a position is the agentorg skill; without it, read https://github.com/uniac-ai/AgentOrg/blob/main/skills/agentorg/SKILL.md.`;
 
 const refused = (code: string, message: string): Answer => ({ state: "refused", code, message });
 
@@ -141,16 +135,23 @@ export class Agent implements Presented {
     }
   }
 
-  async offers(): Promise<Offer[]> {
-    return [ATTACH, INTERFACES, CALL].map((descriptor) => ({
-      interface: descriptor,
-      routed: false,
-      read_only: descriptor === INTERFACES,
-    }));
+  async offers(): Promise<ToolDescriptor[]> {
+    return [
+      {
+        id: "agentorg",
+        name: "agentorg",
+        interfaces: [ATTACH, INTERFACES, CALL].map((descriptor) => ({
+          interface: descriptor,
+          call: descriptor.name,
+          routed: false,
+          read_only: descriptor === INTERFACES,
+        })),
+      },
+    ];
   }
 
   onChange(): void {
-    // The adapter's catalog is fixed; interfaces reads the actor's current offers.
+    // The adapter's catalog is fixed; interfaces reads the actor's current Tools.
   }
 
   async call(
@@ -188,7 +189,7 @@ export class Agent implements Presented {
     if (name === INTERFACES.name) {
       if (Object.keys(input).length > 0) return refused("invalid", "interfaces takes no input");
       try {
-        return { state: "done", value: { interfaces: await position.available() } };
+        return { state: "done", value: { tools: await position.available() } };
       } catch {
         return refused("unavailable", "the core did not list the actor's interfaces");
       }

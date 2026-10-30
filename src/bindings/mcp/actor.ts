@@ -19,16 +19,15 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import type { Actor, CallOptions, Exposed, Reply } from "../../actor/api.ts";
 import type { Connector } from "../../connection/index.ts";
-import type { Answer, InterfaceDescriptor, Offer, Outcome } from "../../domain/model/index.ts";
+import type { Answer, Outcome, ToolDescriptor } from "../../domain/model/index.ts";
 import { VERSION } from "../../version.ts";
 import {
   answerOfResult,
   CALL_META,
   CAUSE_META,
+  catalogOf,
   type DeliveredCall,
   exposedToolOf,
-  isOneWay,
-  PENDING_OUTPUT,
   resultOfOutcome,
 } from "./encoding.ts";
 import { mcpTransports } from "./transport.ts";
@@ -56,33 +55,6 @@ const outcomeOfReply = (reply: Reply): Outcome => ({
   value: reply.value ?? null,
   parts: reply.parts ?? [],
 });
-
-/** A routed tool's offer, with the pending branch of its output schema taken off again. */
-function offerOf(tool: Tool): Offer {
-  const output = tool.outputSchema as Record<string, unknown> | undefined;
-  const branches = output?.anyOf as Record<string, unknown>[] | undefined;
-  const routed =
-    branches?.length === 2 && JSON.stringify(branches[1]) === JSON.stringify(PENDING_OUTPUT);
-  const { $defs, definitions } = output ?? {};
-  const own = routed
-    ? {
-        ...(branches[0] as Record<string, unknown>),
-        ...($defs === undefined ? {} : { $defs }),
-        ...(definitions === undefined ? {} : { definitions }),
-      }
-    : output;
-  const offered: InterfaceDescriptor = {
-    name: tool.name,
-    ...(tool.title === undefined ? {} : { title: tool.title }),
-    ...(tool.description === undefined ? {} : { description: tool.description }),
-    input: tool.inputSchema,
-    ...(own === undefined ? {} : { output: own }),
-    one_way: isOneWay(own),
-    long_running: false,
-  };
-  const readOnly = tool.annotations?.readOnlyHint;
-  return { interface: offered, routed, ...(readOnly === undefined ? {} : { read_only: readOnly }) };
-}
 
 export class McpActor implements Actor {
   private readonly connector: Connector;
@@ -159,15 +131,15 @@ export class McpActor implements Actor {
     this.connected = true;
   }
 
-  async available(): Promise<Offer[]> {
-    const offers: Offer[] = [];
+  async available(): Promise<ToolDescriptor[]> {
+    const tools: Tool[] = [];
     let cursor: string | undefined;
     do {
       const page = await this.client.listTools(cursor === undefined ? {} : { cursor });
-      offers.push(...page.tools.map(offerOf));
+      tools.push(...page.tools);
       cursor = page.nextCursor;
     } while (cursor !== undefined);
-    return offers;
+    return catalogOf(tools);
   }
 
   async call(

@@ -19,7 +19,7 @@ The package `@agentorg/cli` distributes four independent entry points:
 | `agentorg-mcp` | Present an actor's operations over stdio; configure project integrations and hooks. |
 | `agentorg-web` | Serve the web client, sign a browser in, and manage its own user service. |
 
-The Node actor library (`src/actor/`) lets programs expose handlers and call interfaces.
+The Node actor library (`src/actor/`) lets programs expose handlers, list Tools and call their interfaces.
 The `agentorg` skill (`skills/agentorg/`) describes how a session works in a position; an
 organization can add its conventions beside it.
 

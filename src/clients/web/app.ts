@@ -124,7 +124,7 @@ export function webApp(options: { core: Core; signIn: SignIn; credential: string
 
   api.get("/session", (c) => c.json(c.var.session satisfies SessionBootstrap));
 
-  api.get("/interfaces", async (c) => c.json({ interfaces: await core.available() }));
+  api.get("/interfaces", async (c) => c.json({ tools: await core.available() }));
 
   api.post("/interfaces/:name", async (c) =>
     c.json(resultOf(await core.call(c.req.param("name"), await body(c)))),

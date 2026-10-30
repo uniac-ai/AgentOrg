@@ -1,4 +1,4 @@
-/** One projection of built-ins and actor routes, shared by listing, dispatch and team views. */
+/** Actor-relative Tools shared by listing, dispatch and team views, with private destinations. */
 
 import type { Connections } from "./connections.ts";
 import {
@@ -6,56 +6,77 @@ import {
   BUILTINS,
   type BuiltinName,
   MANAGER,
-  type Offer,
   objectSchema,
+  type ToolDescriptor,
 } from "./model/index.ts";
 import type { ActorRow, Registry } from "./registry.ts";
 
-export type Capability = { offer: Offer } & (
+export type Capability = { offer: ToolDescriptor["interfaces"][number] } & (
   | { builtin: BuiltinName }
-  | { to: string; interface: string }
+  | { to: string }
 );
+interface ToolExposure extends Pick<ToolDescriptor, "id" | "name"> {
+  interfaces: Capability[];
+}
 
-const BUILTIN_CAPABILITIES: Capability[] = BUILTIN_NAMES.map((name) => ({
-  builtin: name,
-  offer: {
-    interface: {
-      name,
-      description: BUILTINS[name].description,
-      input: objectSchema(BUILTINS[name].request, "input"),
-      output: objectSchema(BUILTINS[name].response, "output"),
-      one_way: false,
-      long_running: false,
+const builtins = new Map<string, ToolExposure>();
+for (const name of BUILTIN_NAMES) {
+  const spec = BUILTINS[name];
+  const tool = builtins.get(spec.tool) ?? {
+    id: `hub:${spec.tool}`,
+    name: spec.tool,
+    interfaces: [],
+  };
+  tool.interfaces.push({
+    builtin: name,
+    offer: {
+      call: name,
+      interface: {
+        name,
+        description: spec.description,
+        input: objectSchema(spec.request, "input"),
+        output: objectSchema(spec.response, "output"),
+        one_way: false,
+        long_running: false,
+      },
+      routed: false,
+      read_only: !spec.writes,
     },
-    routed: false,
-    read_only: !BUILTINS[name].writes,
-  },
-}));
+  });
+  builtins.set(spec.tool, tool);
+}
 
 export function capabilities(registry: Registry, connections: Pick<Connections, "interfaces">) {
   return {
-    list(actor: ActorRow): Capability[] {
-      const named = (prefix: string, to: ActorRow): Capability[] =>
-        connections.interfaces(to.id).map((each) => ({
+    list(actor: ActorRow): ToolExposure[] {
+      if (actor.closed_at !== null) return [];
+      const named = (name: string, to: ActorRow): ToolExposure => ({
+        id: to.id,
+        name,
+        interfaces: connections.interfaces(to.id).map((each) => ({
           to: to.id,
-          interface: each.name,
-          offer: { interface: { ...each, name: `${prefix}.${each.name}` }, routed: true },
-        }));
+          offer: { interface: each, call: `${name}.${each.name}`, routed: true },
+        })),
+      });
       const manager = actor.manager === null ? undefined : registry.get(actor.manager);
       const routed =
         actor.manager === null
           ? registry
               .open()
               .filter((each) => each.id !== actor.id)
-              .flatMap((each) => named(registry.path(each), each))
+              .map((each) => named(registry.path(each), each))
           : [
-              ...(manager ? named(MANAGER, manager) : []),
-              ...registry.reports(actor.id).flatMap((report) => named(report.name, report)),
+              ...(manager ? [named(MANAGER, manager)] : []),
+              ...registry.reports(actor.id).map((report) => named(report.name, report)),
             ];
-      const own = BUILTIN_CAPABILITIES.filter(
-        (each) => "builtin" in each && (!BUILTINS[each.builtin].rootOnly || actor.manager === null),
-      );
-      return [...own, ...routed];
+      const own = [...builtins.values()].map((tool) => ({
+        ...tool,
+        interfaces: tool.interfaces.filter(
+          (each) =>
+            "builtin" in each && (!BUILTINS[each.builtin].rootOnly || actor.manager === null),
+        ),
+      }));
+      return [...own, ...routed].filter((tool) => tool.interfaces.length > 0);
     },
   };
 }
