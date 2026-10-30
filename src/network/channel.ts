@@ -74,9 +74,18 @@ export async function dial(url: URL): Promise<Channel> {
   });
   socket.onmessage = (event) => channel.receive(String(event.data));
   await new Promise<void>((resolve, reject) => {
-    socket.onopen = () => resolve();
-    socket.onclose = (event) => reject(new Error(`the core refused the channel (${event.code})`));
+    const refused = (message: string) => {
+      socket.onopen = socket.onerror = socket.onclose = socket.onmessage = null;
+      channel.close();
+      reject(new Error(message));
+    };
+    socket.onopen = () => {
+      socket.onopen = socket.onerror = null;
+      socket.onclose = (event) => channel.closed(event.code);
+      resolve();
+    };
+    socket.onerror = () => refused("the core channel failed to open");
+    socket.onclose = (event) => refused(`the core refused the channel (${event.code})`);
   });
-  socket.onclose = (event) => channel.closed(event.code);
   return channel;
 }

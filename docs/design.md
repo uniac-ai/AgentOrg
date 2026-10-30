@@ -297,6 +297,7 @@ The MCP adapter, `agentorg-mcp` in `src/clients/mcp/`, lets a Claude Code or Cod
 
 ## The network
 
+- **Opening.** A WebSocket opening error or closure rejects the initial connection and closes that socket.
 - **Web pages are refused.** An upgrade with an `Origin` header is refused, blocking cross-site WebSockets and DNS rebinding.
 - **Admission.** `src/connection/` checks credentials through the identity owners. The network listener admits no identity itself.
 - **Reconnect.** The connector dials again after a drop, performs fresh admission and initializes MCP again. It stops after 4000 or 4001.
