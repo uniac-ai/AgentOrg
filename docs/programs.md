@@ -47,6 +47,20 @@ routed names and their schemas. Generic `call` prints the actor library's comple
 including a routed call's id, state and parts. The generated built-in convenience commands
 continue to print their completed value.
 
+`actor_create` can also request execution from an enrolled, connected Provider:
+
+```sh
+agentorg actor create --name builds --purpose "Run the nightly builds" --execution '{"providerId":"example","config":{}}'
+```
+
+`execution` is optional; when supplied, `providerId` and the JSON object `config` are required.
+Use `{}` when the Provider needs no configuration. The command first creates the Actor, then asks
+the Provider to create its implementation. Its result retains `actor` and `credential`, adding
+`execution: {providerId, status, error?}`. Status is `ready`, `failed` or `unknown`; an error contains
+`code` and `message`. Provider failure or uncertainty leaves the Actor and credential valid.
+`ready` reports a successful Provider reply independently of the Actor's connection or MCP state.
+Hub makes one creation request and does not replay it automatically after timeout or disconnect.
+
 ## Browser client
 
 The web client uses the same identity selection as the actor CLI and presents the root view.
@@ -77,3 +91,25 @@ agent adapters and programs use the same Actor contract. Node programs use `conn
 interfaces and reconnect after a drop. `connectClient` uses the same admission with no exposure.
 A long-running handler returns a promise that settles when ready.
 [design.md](design.md) owns the ports and protocol.
+
+The Actor library requires `actorId` for both `connectActor` and `connectClient`. Restart the
+server after updating so it writes `root-actor` beside the root credential. Custom clients must
+send `connection.connect` before MCP initialization on `/connection`. Environment-based CLI and
+web setup must supply both `AGENTORG_ACTOR_ID` and `AGENTORG_CREDENTIAL`.
+
+## Provider enrollment
+
+The server administrator enrolls Providers in `<AGENTORG_HOME>/providers.json`, readable only
+by its owner (mode 600). The file contains an array of objects with exactly `providerId` and
+`credentialHash`; the hash is the hexadecimal SHA-256 digest of the Provider's credential.
+The Provider retains the credential privately. Restart the server to load enrollment changes.
+An absent file admits no Providers; malformed or publicly readable configuration prevents startup.
+
+A Provider initiates `/connection` and sends
+`connection.connect({providerId, credential}) -> {connectionId}`. Its ID must already be enrolled.
+The Hub's internal typed client uses `provider.describe({}) -> {configSchema}` and
+`provider.createActor({actorId, credential?, config}) -> {actorId}` on this same socket. The latter
+credential is the separate Actor bootstrap credential; it is never the Provider credential.
+Configuration is a required JSON object, including `{}` when empty. Native execution references
+stay with the Provider. Actor identity and organizational state remain in Hub across executor
+replacement, and the Actor client establishes its own independent Hub connection.

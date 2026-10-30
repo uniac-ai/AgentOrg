@@ -43,6 +43,7 @@ test("help lists only actor operations, and asking for it acts on nothing", asyn
     }
     const createHelp = await agentorg(["actor", "create", "--help"], { AGENTORG_HOME: home });
     assert.match(createHelp.stdout, /--name <value>/);
+    assert.match(createHelp.stdout, /--execution <json>/);
     assert.equal(existsSync(home), false, "help created no home");
 
     const unknown = await agentorg(["frobnicate"], { AGENTORG_HOME: home });
@@ -109,6 +110,58 @@ test("an environment credential requires an explicit Actor identity before conne
   assert.equal(result.status, 1);
   assert.match(result.stderr, /set both AGENTORG_ACTOR_ID and AGENTORG_CREDENTIAL/);
   assert.doesNotMatch(result.stdout + result.stderr, /sentinel-private-credential/);
+});
+
+test("actor create accepts optional execution and retains the Actor when its Provider is unavailable", async (t) => {
+  const core = await startCore();
+  t.after(() => core.close());
+  const env = {
+    AGENTORG_URL: core.url,
+    AGENTORG_ACTOR_ID: core.rootId,
+    AGENTORG_CREDENTIAL: core.root,
+  };
+  const execution = { providerId: "unavailable", config: {} };
+  for (const mode of ["flag", "json"]) {
+    const name = `execution-${mode}`;
+    const input = { name, purpose: "Create execution through a Provider", execution };
+    const args =
+      mode === "flag"
+        ? ["--name", name, "--purpose", input.purpose, "--execution", JSON.stringify(execution)]
+        : ["--json", JSON.stringify(input)];
+    const result = await agentorg(["actor", "create", ...args], env);
+    assert.equal(result.status, 0, result.stderr);
+    const created = JSON.parse(result.stdout);
+    assert.equal(created.execution.providerId, execution.providerId);
+    assert.equal(created.execution.status, "failed");
+    assert.equal(typeof created.execution.error?.code, "string");
+    assert.equal(typeof created.execution.error?.message, "string");
+    assert.equal((await core.org.registry.byCredential(created.credential))?.id, created.actor.id);
+    assert.equal(JSON.stringify(created.execution).includes(created.credential), false);
+    const read = await agentorg(["team", "--depth", "0"], {
+      AGENTORG_URL: core.url,
+      AGENTORG_ACTOR_ID: created.actor.id,
+      AGENTORG_CREDENTIAL: created.credential,
+    });
+    assert.equal(read.status, 0, read.stderr);
+    assert.equal(JSON.parse(read.stdout).positions[0].id, created.actor.id);
+  }
+  const before = core.org.registry.reports(core.rootId).length;
+  const missingConfig = await agentorg(
+    [
+      "actor",
+      "create",
+      "--name",
+      "invalid-execution",
+      "--purpose",
+      "Invalid config",
+      "--execution",
+      JSON.stringify({ providerId: execution.providerId }),
+    ],
+    env,
+  );
+  assert.equal(missingConfig.status, 1);
+  assert.match(missingConfig.stderr, /execution\.config/);
+  assert.equal(core.org.registry.reports(core.rootId).length, before);
 });
 
 test("call result and withdraw conveniences coexist with generic call dispatch", async () => {

@@ -69,6 +69,13 @@ This installs only the web service and pins `<home>/bin/agentorg-web`; it connec
 core. The user runs `agentorg-web open` in their own terminal to sign in. Do not open their
 one-time sign-in link for them.
 
+## External execution
+
+To request execution while creating an Actor, enroll and connect an external Provider as described
+in [programs.md](programs.md#provider-enrollment), then use `actor_create` with optional
+`execution: {providerId, config}`. Configuration is a required JSON object, including `{}` when empty.
+Actor creation remains valid when the execution result is failed or unknown.
+
 ## Remove components
 
 - `agentorg-mcp disconnect <claude-code|codex> --project <dir>` removes its project entries.

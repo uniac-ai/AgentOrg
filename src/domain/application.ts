@@ -1,5 +1,6 @@
 /** Request validation, dispatch, write audit and bounded waits over the available capabilities. */
 
+import { violation } from "../schema.ts";
 import type { Audit } from "./audit.ts";
 import type { CallRecord, Calls } from "./calls.ts";
 import type { Capabilities, Capability } from "./capabilities.ts";
@@ -7,6 +8,7 @@ import type { Claims } from "./claims.ts";
 import type { Communication } from "./communication.ts";
 import type { Connections } from "./connections.ts";
 import { Forbidden, Invalid, invalid, NotFound, Refusal } from "./errors.ts";
+import type { ExecutionClient } from "./execution.ts";
 import {
   type Answer,
   BUILTINS,
@@ -18,7 +20,6 @@ import {
 import type { Invocation, Waiting } from "./ports.ts";
 import type { Progress } from "./progress.ts";
 import type { ActorRow, Registry } from "./registry.ts";
-import { violation } from "./validation.ts";
 import type { Views } from "./views.ts";
 
 export interface Timing {
@@ -48,6 +49,7 @@ export function application(
   progress: Progress,
   views: Views,
   audit: Audit,
+  execution: ExecutionClient,
   timing: Timing,
 ) {
   const handlers: Handlers = {
@@ -58,7 +60,20 @@ export function application(
         request.purpose,
         request.created_at_attach,
       );
-      return { actor: views.actor(created), credential };
+      const outcome =
+        request.execution === undefined
+          ? undefined
+          : await execution.create({
+              actorId: created.id,
+              credential,
+              providerId: request.execution.providerId,
+              config: request.execution.config,
+            });
+      return {
+        actor: views.actor(registry.found(created.id)),
+        credential,
+        ...(outcome === undefined ? {} : { execution: outcome }),
+      };
     },
 
     actor_close: async (actor, request) => {

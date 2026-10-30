@@ -55,6 +55,7 @@ export async function startCore(
   const providerIdentities = providers(options.providers ?? []);
   const organization = createOrganization(store, {
     ...options,
+    provider: (providerId) => providerClients.get(providerId),
     onActorClosed: (actorId) => {
       for (const channel of actorConnections.get(actorId) ?? [])
         channel.close(CLOSE_REVOKED, "the Actor was closed");

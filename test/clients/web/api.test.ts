@@ -47,3 +47,21 @@ test("while the core is down, the API says so, and the session holds", async () 
   }
   assert.equal((await get("/api/session")).status, 200);
 });
+
+test("the web API preserves an Actor and its credential when optional execution fails", async () => {
+  const { core, post } = await setup();
+  const response = await post("/api/interfaces/actor_create", {
+    name: "external-worker",
+    purpose: "Use an external Provider",
+    execution: { providerId: "unavailable", config: {} },
+  });
+  assert.equal(response.status, 200);
+  const created = await json(response);
+  assert.equal(created.execution.providerId, "unavailable");
+  assert.equal(created.execution.status, "failed");
+  assert.equal(typeof created.execution.error?.code, "string");
+  assert.equal((await core.org.registry.byCredential(created.credential))?.id, created.actor.id);
+  const read = await post("/api/interfaces/team", { actor: created.actor.id, depth: 0 });
+  assert.equal(read.status, 200);
+  assert.equal((await json(read)).positions[0].id, created.actor.id);
+});

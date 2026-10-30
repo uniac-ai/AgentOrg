@@ -1,7 +1,7 @@
 /** The Hub's factory client on an admitted Provider's JSON-RPC connection. */
 
-import { Ajv } from "ajv";
 import type { Channel } from "../network/channel.ts";
+import { validSchema } from "../schema.ts";
 
 export interface CreateActorParams {
   actorId: string;
@@ -41,15 +41,6 @@ type Pending = {
 const object = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 const own = (value: object, key: PropertyKey) => Object.hasOwn(value, key);
-const schemaValidator = new Ajv({ strict: false, allErrors: true });
-function validSchema(schema: unknown): schema is Record<string, unknown> {
-  if (!object(schema) || schema.$async === true) return false;
-  try {
-    return schemaValidator.validateSchema(schema) === true;
-  } catch {
-    return false;
-  }
-}
 const CODES = new Set([
   "CREATION_CONFLICT",
   "PROVISIONING_UNKNOWN",
@@ -125,7 +116,12 @@ export class ProviderClient {
 
   async describe(): Promise<ProviderDescription> {
     const result = await this.request("provider.describe", {});
-    if (!object(result) || Object.keys(result).length !== 1 || !validSchema(result.configSchema)) {
+    if (
+      !object(result) ||
+      Object.keys(result).length !== 1 ||
+      !object(result.configSchema) ||
+      !validSchema(result.configSchema)
+    ) {
       throw invalidResponse("provider.describe");
     }
     return { configSchema: result.configSchema };
@@ -156,7 +152,11 @@ export class ProviderClient {
   }
 
   private request(method: Method, params: object): Promise<unknown> {
-    if (this.ended) return Promise.reject(unavailable(method));
+    if (this.ended) {
+      return Promise.reject(
+        new ProviderError("unavailable", -32000, "The Provider connection is unavailable."),
+      );
+    }
     const id = `provider-${++this.sequence}`;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {

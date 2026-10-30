@@ -7,6 +7,7 @@ import { capabilities } from "./capabilities.ts";
 import { claims } from "./claims.ts";
 import { communication } from "./communication.ts";
 import { connections } from "./connections.ts";
+import { type ExecutionProvider, execution } from "./execution.ts";
 import type { Store } from "./ports.ts";
 import { progress } from "./progress.ts";
 import { registry } from "./registry.ts";
@@ -17,6 +18,7 @@ export type { Timing };
 export interface OrganizationOptions extends Partial<Timing> {
   now?: () => Date;
   onActorClosed?: (actorId: string) => void;
+  provider?: (providerId: string) => ExecutionProvider | undefined;
 }
 
 export function organization(store: Store, options: OrganizationOptions = {}) {
@@ -35,6 +37,7 @@ export function organization(store: Store, options: OrganizationOptions = {}) {
   const correspondence = communication(store, actors, now);
   const progressState = progress(store.progress, actors, now);
   const read = views(actors, connected, offered, progressState, correspondence, resources);
+  const creation = execution(options.provider ?? (() => undefined));
   const dispatch = application(
     actors,
     offered,
@@ -45,6 +48,7 @@ export function organization(store: Store, options: OrganizationOptions = {}) {
     progressState,
     read,
     activity,
+    creation,
     {
       waitMs: options.waitMs ?? 30_000,
       stepMs: options.stepMs ?? 10_000,

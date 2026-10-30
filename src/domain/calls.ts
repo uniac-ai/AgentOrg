@@ -1,13 +1,13 @@
 /** Durable calls, delivery attempts, long-running outcomes, settlement, cancellation and waits. */
 
 import type { z } from "zod";
+import { violation } from "../schema.ts";
 import type { Audit } from "./audit.ts";
 import type { Connections } from "./connections.ts";
 import { Conflict, Forbidden, Invalid, NotFound } from "./errors.ts";
 import type { Call, Delivery, InterfaceDescriptor, Outcome } from "./model/index.ts";
 import { type ActorLink, LinkLost, type Store, UnknownRun } from "./ports.ts";
 import { type ActorRow, newId } from "./registry.ts";
-import { violation } from "./validation.ts";
 
 export type CallRecord = z.output<typeof Call>;
 type Settled = Pick<CallRecord, "state"> & Partial<Pick<CallRecord, "output" | "error">>;

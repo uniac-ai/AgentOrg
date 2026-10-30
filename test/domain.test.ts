@@ -8,7 +8,7 @@ import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 import { organization } from "../src/domain/index.ts";
 import type { Delivery, Outcome } from "../src/domain/model/index.ts";
-import type { ActorLink } from "../src/domain/ports.ts";
+import { type ActorLink, UnknownRun } from "../src/domain/ports.ts";
 import { SqliteStore } from "../src/storage/sqlite/index.ts";
 import { iface, until } from "./harness.ts";
 
@@ -93,13 +93,28 @@ test("a former delivery owner's late result cannot settle the current owner's ca
   const currentResult = new Promise<Outcome>((resolve) => {
     finishCurrent = resolve;
   });
-  const former = { ...link(), deliver: async () => oldResult };
-  const current = { ...link(), deliver: async () => currentResult };
+  const former = {
+    ...link(),
+    deliver: async () => ({ run: "former-run" }),
+    outcome: async () => oldResult,
+  };
+  const current = {
+    ...link(),
+    deliver: async () => ({ run: "current-run" }),
+    outcome: async (run: string) => {
+      if (run !== "current-run") throw new UnknownRun();
+      return currentResult;
+    },
+  };
   org.begin(actor.id, former);
   org.online(actor.id, former, [iface("work")]);
   const answer = await org.invoke(root.id, "worker.work", {}, invocation);
   assert.equal(answer.state, "pending");
   if (answer.state !== "pending") return;
+  await until(
+    "former owner starts its run",
+    () => org.calls.found(answer.call).run === "former-run",
+  );
   org.begin(actor.id, current);
   org.online(actor.id, current, [iface("work")]);
   finishOld({ ok: true, value: { owner: "former" }, parts: [] });
@@ -111,4 +126,42 @@ test("a former delivery owner's late result cannot settle the current owner's ca
     () => org.calls.found(answer.call).state === "done",
   );
   assert.deepEqual(org.calls.found(answer.call).output?.value, { owner: "current" });
+});
+
+test("a former owner's late task acceptance cannot overwrite the current run", async (t) => {
+  const store = new SqliteStore(":memory:");
+  t.after(() => store.close());
+  const org = organization(store, { waitMs: 0 });
+  const { root } = await org.registry.createRoot();
+  const { actor } = await org.registry.create(root.id, "worker", "Work");
+  let acceptFormer!: (result: { run: string }) => void;
+  let finishCurrent!: (result: Outcome) => void;
+  const acceptance = new Promise<{ run: string }>((resolve) => {
+    acceptFormer = resolve;
+  });
+  const outcome = new Promise<Outcome>((resolve) => {
+    finishCurrent = resolve;
+  });
+  const former = { ...link(), deliver: async () => acceptance };
+  const current = {
+    ...link(),
+    deliver: async () => ({ run: "current-run" }),
+    outcome: async () => outcome,
+  };
+  org.begin(actor.id, former);
+  org.online(actor.id, former, [iface("work")]);
+  const answer = await org.invoke(root.id, "worker.work", {}, invocation);
+  assert.equal(answer.state, "pending");
+  if (answer.state !== "pending") return;
+  org.begin(actor.id, current);
+  org.online(actor.id, current, [iface("work")]);
+  await until(
+    "current owner accepts its run",
+    () => org.calls.found(answer.call).run === "current-run",
+  );
+  acceptFormer({ run: "former-run" });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(org.calls.found(answer.call).run, "current-run");
+  finishCurrent({ ok: true, value: {}, parts: [] });
+  await until("current run settles", () => org.calls.found(answer.call).state === "done");
 });

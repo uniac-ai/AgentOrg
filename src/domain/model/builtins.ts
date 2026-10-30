@@ -16,10 +16,30 @@ import { Actor, AuditEntry, Call, Handle, Id, MAX_WAIT_SECONDS, Text } from "./r
 const reserved = (handle: string): boolean =>
   Object.keys(BUILTINS).some((name: string) => name.startsWith(`${handle}_`));
 
+export const ExecutionOptions = z.strictObject({
+  providerId: Id.describe("The enrolled Provider to ask for execution."),
+  config: z
+    .record(z.string(), z.json())
+    .describe(
+      "A required JSON object following the Provider's configuration schema; use {} when empty.",
+    ),
+});
+
+export const ExecutionResult = z.strictObject({
+  providerId: Id,
+  status: z
+    .enum(["ready", "failed", "unknown"])
+    .describe("The Provider creation outcome, independent of Actor connectivity."),
+  error: z.strictObject({ code: z.string(), message: z.string() }).optional(),
+});
+
 export const ActorCreate = z
   .strictObject({
     name: Handle.refine((handle) => !reserved(handle), "begins a built-in's name, as call does"),
     purpose: Text.describe("What the actor is for, for a reader outside it."),
+    execution: ExecutionOptions.optional().describe(
+      "Optionally arrange execution through a Provider after creating the Actor.",
+    ),
     created_at_attach: z
       .boolean()
       .default(false)
@@ -32,6 +52,7 @@ export const ActorCreate = z
 export const ActorCreated = z
   .strictObject({
     actor: Actor,
+    execution: ExecutionResult.optional(),
     credential: z
       .string()
       .describe(
@@ -84,7 +105,9 @@ export const BUILTINS = {
     response: ActorCreated,
     description: `Create a direct report: a position that you manage.
 
-Returns the actor and its credential, shown only this once. Whatever fills the position connects to the core with it.`,
+Returns the actor and its credential, shown only this once. Whatever fills the position connects to the core with it.
+
+With execution, wait for the Provider and return its separate ready, failed or unknown outcome. The Actor remains created for every execution outcome. Ready confirms Provider creation, independently of Actor connectivity.`,
   },
   actor_close: {
     writes: true,

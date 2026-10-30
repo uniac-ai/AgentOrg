@@ -62,6 +62,7 @@ including types, is acyclic and checked by `test/layers.test.ts`.
 | Owner | Inputs and outputs | State |
 |---|---|---|
 | `registry.ts` | Credentials identify open positions; creation returns identity and a one-time credential; closure checks authority and open reports. | Identity, actor tree and lifecycle. |
+| `execution.ts` | Accepts an existing Actor identity, private bootstrap credential, Provider and configuration; validates configuration and reports one Provider creation outcome. | None. |
 | `connections.ts` | Accepts link-specific presence and advertisements; supplies live links and the latest descriptors; disconnects closed actors. Stale-link reports have no effect. | Live links in memory; advertised interfaces in storage. |
 | `capabilities.ts` | Derives built-in or actor destinations and offers from Registry and Connections. Listing, dispatch and team use the same projection. | None. |
 | `calls.ts` | Creates, delivers, cancels, settles and waits on calls through Connections; records audit outcomes. | Durable calls; active delivery attempts and waiters. |
@@ -146,7 +147,7 @@ A human may answer hours later, so a long-running interface may take a call as a
 
 | Built-in | What it does |
 |---|---|
-| `actor_create {name, purpose, created_at_attach?}` | Creates a report of the caller, and returns it with its credential. The credential is shown only once. The root alone may mark a position created as a session the user started attaches to it. |
+| `actor_create {name, purpose, execution?, created_at_attach?}` | Creates a report of the caller, returning it with its one-time credential. Optional `execution: {providerId, config}` requests an implementation through that Provider and adds its outcome to the result. The root alone may mark a position created as a session the user started attaches to it. |
 | `actor_close {actor}` | The manager, or the root, closes an actor. It is refused while the actor has open reports of its own. The actor's own pending calls are withdrawn, the calls into it fail, and its connection closes. The root is never closed. |
 | `progress_set {state?, summary?, items?, links?}` | Replaces the fields given of the caller's progress. The first set names its state. |
 | `team {actor?, depth?}` | A position and its reports down to a depth, by default the caller and its direct reports: each one's purpose, presence, progress state and summary, open questions, claims, and its interfaces the caller can call, with the root's id. Anyone may read any position. |
@@ -162,6 +163,20 @@ A human may answer hours later, so a long-running interface may take a call as a
 | `call_result {call, wait?}` | Reads a call the caller made, optionally waiting up to 600 seconds for it to settle, with progress. |
 | `call_withdraw {call}` | The caller withdraws a pending call. |
 | `activity {since?, limit?}` | The audit trail, newest first. Offered to the root only. |
+
+When execution is requested, Application creates the organizational Actor through Registry before
+calling Execution. The execution client uses the selected Provider's configuration schema and
+creation interface; `config` is a required JSON object. Its result is
+`{providerId, status: "ready" | "failed" | "unknown", error?: {code, message}}`. The returned Actor
+view is read after that call, so it includes any connection established while the Provider worked.
+The Actor, credential and independently established connection survive a failed or unknown outcome.
+Without `execution`, creation returns only the Actor and credential.
+
+`ready` means the Provider returned a valid successful creation reply. Provider owns confirmation
+of the native resource, required local initialization, protected bootstrap and durable native
+association before that reply. Hub observes the reply; Actor connectivity, MCP initialization and
+model activity are separate. Hub sends one creation request, retains no retry inputs and performs
+no automatic replay after uncertainty. Native resource management belongs to the external Provider.
 
 ## Today's binding: MCP in both directions
 
@@ -237,7 +252,7 @@ hashes in private `<home>/providers.json` (mode 600), an array of
 `{providerId, credentialHash}`. Missing configuration admits no Providers. Provider credentials and
 Actor bootstrap credentials are independent opaque values.
 
-The Hub calls `provider.describe({}) -> {configSchema}` and
+The Hub's internal typed client calls `provider.describe({}) -> {configSchema}` and
 `provider.createActor({actorId, credential?, config}) -> {actorId}` on the initiating Provider socket.
 Configuration is a required JSON object; the returned Actor ID must match. Provider messages cross
 the client boundary as validated results or sanitized errors, with numeric JSON-RPC codes and stable

@@ -5,11 +5,16 @@ import { once } from "node:events";
 import type { AddressInfo } from "node:net";
 import { type TestContext, test } from "node:test";
 import { WebSocket, WebSocketServer } from "ws";
+import { z } from "zod";
+import { connectClient } from "../src/actor/index.ts";
 import { accept, CONNECTION_PATH, establish, type Identity } from "../src/connection/index.ts";
+import { organization } from "../src/domain/index.ts";
 import { providers } from "../src/domain/providers.ts";
 import { Channel, dial } from "../src/network/channel.ts";
 import { listen } from "../src/network/listener.ts";
 import { ProviderClient, ProviderError } from "../src/provider/index.ts";
+import { startCore } from "../src/server/index.ts";
+import { SqliteStore } from "../src/storage/sqlite/index.ts";
 
 type Request = { jsonrpc: string; id: string; method: string; params: Record<string, unknown> };
 
@@ -144,6 +149,15 @@ test("unsupported schema metadata never exposes the Provider's schema text in di
   });
 });
 
+test("Provider descriptions accept actual Zod 2020-12 configuration schemas", async (t) => {
+  const configSchema = z.toJSONSchema(
+    z.object({ workspace: z.string(), pair: z.tuple([z.string(), z.number()]) }).strict(),
+  );
+  const fake = await provider(t, (request, peer) => result(peer, request, { configSchema }));
+  const client = new ProviderClient(fake.channel);
+  assert.deepEqual(await client.describe(), { configSchema });
+});
+
 test("concurrent requests correlate out of order while opposite-direction IDs stay independent", async (t) => {
   const held: Request[] = [];
   const fake = await provider(t, (request, peer) => {
@@ -220,6 +234,17 @@ test("a lost socket leaves creation unknown and sends no cancellation", async (t
     fake.requests.map((request) => request.method),
     ["provider.createActor"],
   );
+});
+
+test("creation on an already ended connection is known not to have been sent", async (t) => {
+  const fake = await provider(t, () => assert.fail("creation must not reach the Provider"));
+  const client = new ProviderClient(fake.channel);
+  client.close();
+  await assert.rejects(client.createActor({ actorId: "actor-a", config: {} }), {
+    code: "unavailable",
+    rpcCode: -32000,
+  });
+  assert.equal(fake.requests.length, 0);
 });
 
 test("a timed-out creation remains unknown without cancelling the Provider's held operation", async (t) => {
@@ -320,4 +345,74 @@ test("admission keeps identical Actor/Provider IDs separate and invokes Provider
     ["provider.describe", "provider.createActor"],
   );
   assert.doesNotMatch(JSON.stringify(called), /sentinel-provider-admission/);
+});
+
+test("the assembled Hub keeps a same-ID Provider usable after revoking every Actor connection", async (t) => {
+  const store = new SqliteStore(":memory:");
+  t.after(() => store.close());
+  const registry = organization(store).registry;
+  const { root, credential: rootCredential } = await registry.createRoot();
+  const { actor, credential } = await registry.create(root.id, "worker", "Receive work");
+  const providerCredential = "sentinel-independent-provider";
+  const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(providerCredential));
+  const hub = await startCore(store, {
+    port: 0,
+    providers: [
+      {
+        providerId: actor.id,
+        credentialHash: Buffer.from(hash).toString("hex"),
+      },
+    ],
+  });
+  t.after(() => hub.close());
+  const url = new URL(CONNECTION_PATH, hub.url);
+  url.protocol = "ws:";
+  const socket = await dial(url);
+  t.after(() => socket.close());
+  await assert.rejects(establish(socket, { providerId: actor.id, credential }));
+  await assert.rejects(
+    connectClient({ url: hub.url, actorId: actor.id, credential: providerCredential }),
+  );
+  const providerSocket = await dial(url);
+  t.after(() => providerSocket.close());
+  const admitted = await establish(providerSocket, {
+    providerId: actor.id,
+    credential: providerCredential,
+  });
+  const calls: Request[] = [];
+  admitted.channel.listen(
+    (text) => {
+      const request = JSON.parse(text) as Request;
+      calls.push(request);
+      admitted.channel.send(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: request.id,
+          result:
+            request.method === "provider.describe"
+              ? { configSchema: { type: "object" } }
+              : { actorId: request.params.actorId },
+        }),
+      );
+    },
+    () => {},
+  );
+  const rootClient = await connectClient({
+    url: hub.url,
+    actorId: root.id,
+    credential: rootCredential,
+  });
+  t.after(() => rootClient.close());
+  const actorClient = await connectClient({ url: hub.url, actorId: actor.id, credential });
+  t.after(() => actorClient.close());
+  assert.equal((await rootClient.call("actor_close", { actor: actor.id })).state, "done");
+  await assert.rejects(actorClient.call("team"));
+  const factory = hub.provider(actor.id);
+  assert.ok(factory);
+  assert.deepEqual(await factory.describe(), { configSchema: { type: "object" } });
+  assert.deepEqual(await factory.createActor({ actorId: root.id, config: {} }), {
+    actorId: root.id,
+  });
+  assert.equal(calls.length, 2);
+  assert.doesNotMatch(JSON.stringify(calls), /sentinel-independent-provider/);
 });

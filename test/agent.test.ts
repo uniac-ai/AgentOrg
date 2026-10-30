@@ -245,6 +245,34 @@ test("an appointed session creates its position under the root, and a resumed on
   assert.equal(org.org.registry.reports(org.rootId).length, 1);
 });
 
+test("the model receives execution failure while its created Actor credential remains private and usable", async () => {
+  const org = await core();
+  const manager = await session(org, "s-execution-manager");
+  await manager.call("attach", { name: "manager", purpose: "Manage execution" });
+  const result = await manager.call("actor_create", {
+    name: "worker",
+    purpose: "Use an external Provider",
+    execution: { providerId: "unavailable", config: {} },
+  });
+  assert.notEqual(result.isError, true);
+  const created = result.structuredContent as {
+    actor: { id: string };
+    credential: string;
+    execution: { providerId: string; status: string; error?: { code: string } };
+  };
+  assert.equal(created.execution.providerId, "unavailable");
+  assert.equal(created.execution.status, "failed");
+  assert.equal(typeof created.execution.error?.code, "string");
+  assert.match(created.credential, /^kept by agentorg/);
+  const credential = readFileSync(join(org.home, "actors", created.actor.id), "utf8").trim();
+  assert.equal((await org.org.registry.byCredential(credential))?.id, created.actor.id);
+  assert.equal(JSON.stringify(result).includes(credential), false);
+  assert.equal(manager.log.includes(credential), false);
+  const worker = await session(org, "s-execution-worker");
+  const attached = await worker.call("attach", { actor: created.actor.id });
+  assert.deepEqual(attached.structuredContent, { actor: created.actor.id, created: false });
+});
+
 test("a created position's credential is kept for its session, never shown, and forgotten on close", async () => {
   const org = await core();
   const manager = await session(org, "s-manager");
