@@ -1,31 +1,19 @@
-/**
- * The MCP binding: the only code that imports `@modelcontextprotocol/*`. It encodes the domain's
- * operations as MCP, both ways, and nothing else depends on how.
- *
- * - `encoding.ts`: interfaces as tools, calls as `tools/call` with `_meta`, runs as tasks, and
- *   outcomes and answers as tool results.
- * - `inbound.ts`: the core's MCP server on the request endpoint, over the domain's Application.
- * - `outbound.ts`: the core's MCP client on each actor's channel, as that actor's link, telling
- *   the domain's Presence when it can be reached.
- * - `actor.ts`: an actor's side, behind the actor library's API.
- * - `occupant.ts`: an actor's server for the session that fills its position, over stdio.
- * - `transport.ts`: an MCP transport over a network channel.
- */
-
+/** Hub MCP exposure and reverse Actor delivery over one identity-admitted connection. */
 import type { Application, Presence } from "../../domain/ports.ts";
-import type { Endpoints } from "../../network/index.ts";
-import { serveRequest } from "./inbound.ts";
+import type { Channel } from "../../network/index.ts";
+import { serveActor } from "./inbound.ts";
 import { attach } from "./outbound.ts";
+import { mcpTransports } from "./transport.ts";
 
 export * from "./encoding.ts";
 
-/** The core's endpoints, as MCP over the domain's two faces. */
-export function mcpEndpoints(
+export function serveConnection(
   domain: Application & Presence,
+  actorId: string,
+  channel: Channel,
   options: { timeoutMs: number; onError?: (party: string, error: Error) => void },
-): Endpoints {
-  return {
-    request: (party, request) => serveRequest(domain, party, request),
-    channel: (party, channel) => attach(domain, party, channel, options),
-  };
+): void {
+  const transports = mcpTransports(channel);
+  if (transports.server) void serveActor(domain, actorId, transports.server);
+  attach(domain, actorId, channel, transports.client, options);
 }

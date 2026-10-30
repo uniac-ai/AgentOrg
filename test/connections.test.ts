@@ -1,11 +1,13 @@
-/** Credentials, both endpoints, one channel per actor, reachability and exposed interfaces. */
+/** Actor admission, delivery ownership, reachability and exposed interfaces. */
 
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { PATHS, SUBPROTOCOL } from "../src/bindings/mcp/index.ts";
+import { WebSocket } from "ws";
+import { connectClient } from "../src/actor/index.ts";
+import { CONNECTION_PATH } from "../src/connection/index.ts";
 import { organization } from "../src/domain/index.ts";
 import { CLOSE_REPLACED, CLOSE_REVOKED } from "../src/network/index.ts";
 import { rootCredential } from "../src/server/index.ts";
@@ -21,6 +23,9 @@ test("the first start creates the root and its credential file, readable only by
     const credential = await rootCredential(registry, file);
     assert.equal(statSync(file).mode & 0o777, 0o600);
     const root = registry.root();
+    const identity = join(directory, "root-actor");
+    assert.equal(readFileSync(identity, "utf8").trim(), root?.id);
+    assert.equal(statSync(identity).mode & 0o777, 0o600);
     assert.equal(root?.manager, null);
     assert.equal((await registry.byCredential(credential))?.id, root?.id);
     // A later start reads the same credential.
@@ -42,46 +47,28 @@ test("the first start creates the root and its credential file, readable only by
   }
 });
 
-test("both endpoints refuse a missing or wrong credential and any request from a web page", async (t) => {
+test("Actor admission requires the matching credential and refuses a web page's socket", async (t) => {
   const core = await startCore();
   t.after(() => core.close());
-  const post = (headers: Record<string, string>) =>
-    fetch(`${core.url}${PATHS.request}`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json, text/event-stream",
-        ...headers,
-      },
-      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+  for (const identity of [
+    { actorId: core.rootId },
+    { actorId: core.rootId, credential: "sentinel-not-a-credential" },
+    { actorId: "missing-actor", credential: core.root },
+  ]) {
+    await assert.rejects(connectClient({ url: core.url, ...identity }), /admission/);
+  }
+  const fromPage = await new Promise<boolean>((resolve) => {
+    const url = `${core.url.replace("http", "ws")}${CONNECTION_PATH}`;
+    const socket = new WebSocket(url, { headers: { Origin: "http://evil.test" } });
+    socket.on("open", () => {
+      socket.close();
+      resolve(true);
     });
-  assert.equal((await post({})).status, 401);
-  assert.equal((await post({ Authorization: "Bearer sentinel-not-a-credential" })).status, 401);
-  const fromPage = await post({
-    Authorization: `Bearer ${core.root}`,
-    Origin: "http://evil.test",
+    socket.on("error", () => resolve(false));
   });
-  assert.equal(fromPage.status, 403);
-
-  const upgrade = (headers: Record<string, string>) =>
-    new Promise<number>((resolve) => {
-      const url = `${core.url.replace("http", "ws")}${PATHS.channel}`;
-      const socket = new WebSocket(url, {
-        protocols: [SUBPROTOCOL],
-        headers,
-      } as unknown as string[]);
-      socket.onopen = () => {
-        socket.close();
-        resolve(101);
-      };
-      socket.onerror = () => resolve(-1);
-    });
-  assert.equal(await upgrade({ Authorization: "Bearer sentinel-not-a-credential" }), -1);
-  assert.equal(
-    await upgrade({ Authorization: `Bearer ${core.root}`, Origin: "http://evil.test" }),
-    -1,
-  );
-  assert.equal(await upgrade({ Authorization: `Bearer ${core.root}` }), 101);
+  assert.equal(fromPage, false);
+  const client = await core.client(core.root);
+  assert.equal((await client.call("team")).state, "done");
 });
 
 test("the core learns an actor's interfaces when it connects, again when they change, and marks it online", async (t) => {
@@ -147,11 +134,10 @@ test("a closed actor's credential is refused and its connection ends for good", 
   await until("ended", () => connection.ended === CLOSE_REVOKED);
   assert.equal(core.org.connections.link(actor.id), undefined);
   assert.equal(await core.org.identify(credential), undefined);
-  const refused = await fetch(`${core.url}${PATHS.request}`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${credential}` },
-  });
-  assert.equal(refused.status, 401);
+  await assert.rejects(
+    connectClient({ url: core.url, actorId: actor.id, credential }),
+    /admission/,
+  );
 });
 
 test("an actor connects again after its connection drops", async (t) => {
@@ -170,13 +156,15 @@ test("an actor connects again after its connection drops", async (t) => {
   });
 });
 
-test("a caller's first request after the core restarts is answered, though its kept-alive connection closed", async (t) => {
+test("a caller reconnects with fresh admission after the core restarts", async (t) => {
   const core = await startCore();
   t.after(() => core.close());
   const client = await core.client(core.root);
   for (let round = 0; round < 3; round += 1) {
     assert.equal((await client.call("team")).state, "done");
     await core.restart();
-    assert.equal((await client.call("team")).state, "done", `after restart ${round + 1}`);
+    await until(`the caller answers after restart ${round + 1}`, async () => {
+      return (await client.call("team").catch(() => undefined))?.state === "done";
+    });
   }
 });

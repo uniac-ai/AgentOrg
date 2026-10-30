@@ -41,14 +41,17 @@ test("delivery and settlement use the latest advertised contract, including chan
   const initial = iface("work", {
     output: { type: "object", properties: { result: { type: "string" } } },
   });
+  org.begin(actor.id, channel);
   org.online(actor.id, channel, [initial]);
   org.offline(actor.id, channel);
   const answer = await org.invoke(root.id, "worker.work", {}, invocation);
   assert.equal(answer.state, "pending");
   assert.equal(received.length, 0);
-  org.online(actor.id, channel, [{ ...initial, long_running: true }]);
+  const resumed = { ...channel };
+  org.begin(actor.id, resumed);
+  org.online(actor.id, resumed, [{ ...initial, long_running: true }]);
   assert.equal(received[0]?.long_running, true);
-  org.changed(actor.id, channel, [
+  org.changed(actor.id, resumed, [
     iface("work", { output: { type: "object", properties: { result: { type: "integer" } } } }),
   ]);
   finish({ ok: true, value: { result: "ready" }, parts: [] });
@@ -74,4 +77,38 @@ test("a schema mismatch refuses the database without migrating or deleting its r
   t.after(() => unchanged.close());
   assert.equal(unchanged.prepare("PRAGMA user_version").get()?.user_version, 6);
   assert.equal(unchanged.prepare("SELECT value FROM kept").get()?.value, "kept");
+});
+
+test("a former delivery owner's late result cannot settle the current owner's call", async (t) => {
+  const store = new SqliteStore(":memory:");
+  t.after(() => store.close());
+  const org = organization(store, { waitMs: 0 });
+  const { root } = await org.registry.createRoot();
+  const { actor } = await org.registry.create(root.id, "worker", "Work");
+  let finishOld!: (result: Outcome) => void;
+  let finishCurrent!: (result: Outcome) => void;
+  const oldResult = new Promise<Outcome>((resolve) => {
+    finishOld = resolve;
+  });
+  const currentResult = new Promise<Outcome>((resolve) => {
+    finishCurrent = resolve;
+  });
+  const former = { ...link(), deliver: async () => oldResult };
+  const current = { ...link(), deliver: async () => currentResult };
+  org.begin(actor.id, former);
+  org.online(actor.id, former, [iface("work")]);
+  const answer = await org.invoke(root.id, "worker.work", {}, invocation);
+  assert.equal(answer.state, "pending");
+  if (answer.state !== "pending") return;
+  org.begin(actor.id, current);
+  org.online(actor.id, current, [iface("work")]);
+  finishOld({ ok: true, value: { owner: "former" }, parts: [] });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(org.calls.found(answer.call).state, "pending");
+  finishCurrent({ ok: true, value: { owner: "current" }, parts: [] });
+  await until(
+    "current owner settles the call",
+    () => org.calls.found(answer.call).state === "done",
+  );
+  assert.deepEqual(org.calls.found(answer.call).output?.value, { owner: "current" });
 });

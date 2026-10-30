@@ -3,7 +3,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { InMemoryTaskStore } from "@modelcontextprotocol/sdk/experimental/tasks/stores/in-memory.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -15,10 +14,11 @@ import {
   ListToolsRequestSchema,
   ToolListChangedNotificationSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import { CALL_META, PATHS, PENDING_OUTPUT, SUBPROTOCOL } from "../src/bindings/mcp/index.ts";
+import { CALL_META, PENDING_OUTPUT } from "../src/bindings/mcp/index.ts";
 import { presentToOccupant } from "../src/bindings/mcp/occupant.ts";
-import { ChannelTransport } from "../src/bindings/mcp/transport.ts";
-import { Connector } from "../src/network/index.ts";
+import { mcpTransports } from "../src/bindings/mcp/transport.ts";
+import { CONNECTION_PATH, establish } from "../src/connection/index.ts";
+import { dial } from "../src/network/index.ts";
 import { iface, startCore, until } from "./harness.ts";
 
 test("generic presentation preserves dynamic tool lists and optional occupant session context", async () => {
@@ -97,19 +97,19 @@ test("over MCP, the core lists offers as tools, delivers calls as tasks with the
     held.push({ params, taskId: task.taskId, store });
     return { task };
   });
-  const connector = new Connector({
-    url: core.url,
-    credential: core.root,
-    paths: PATHS,
-    subprotocol: SUBPROTOCOL,
-  });
   const root = new Client({ name: "root", version: "0" });
-  await root.connect(
-    new StreamableHTTPClientTransport(connector.requestUrl, { fetch: connector.fetch }),
-  );
-  await connector.connect((channel) => server.connect(new ChannelTransport(channel)));
   const prog = new Client({ name: "prog", version: "0" });
   try {
+    const socketUrl = new URL(CONNECTION_PATH, core.url);
+    socketUrl.protocol = "ws:";
+    const rootConnection = await establish(await dial(socketUrl), {
+      actorId: core.rootId,
+      credential: core.root,
+    });
+    const rootTransports = mcpTransports(rootConnection.channel);
+    assert.ok(rootTransports.server);
+    await server.connect(rootTransports.server);
+    await root.connect(rootTransports.client);
     await until("root online", () => core.org.connections.link(core.rootId) !== undefined);
     const created = (await root.callTool({
       name: "actor_create",
@@ -119,11 +119,11 @@ test("over MCP, the core lists offers as tools, delivers calls as tasks with the
       actor: { id: string };
       credential: string;
     };
-    await prog.connect(
-      new StreamableHTTPClientTransport(new URL(PATHS.request, core.url), {
-        requestInit: { headers: { Authorization: `Bearer ${credential}` } },
-      }),
-    );
+    const programConnection = await establish(await dial(socketUrl), {
+      actorId: actor.id,
+      credential,
+    });
+    await prog.connect(mcpTransports(programConnection.channel, false).client);
 
     const { tools } = await prog.listTools();
     const byName = Object.fromEntries(tools.map((tool) => [tool.name, tool]));
@@ -168,7 +168,7 @@ test("over MCP, the core lists offers as tools, delivers calls as tasks with the
     });
   } finally {
     await prog.close();
-    await Promise.allSettled([root.close(), connector.close()]);
+    await Promise.allSettled([root.close(), server.close()]);
     await core.close();
   }
 });

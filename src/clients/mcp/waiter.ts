@@ -75,7 +75,12 @@ export async function waitForNews(options: WaitOptions): Promise<boolean> {
       const credential = credentials.read(actor);
       if (credential === undefined) return false;
       try {
-        client = await connectClient({ url: options.coreUrl, credential, name: "agentorg-waiter" });
+        client = await connectClient({
+          url: options.coreUrl,
+          actorId: actor,
+          credential,
+          name: "agentorg-waiter",
+        });
         here ??= await whoAmI(client);
         if (await round(client, here, options, current)) return true;
       } catch {

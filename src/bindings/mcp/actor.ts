@@ -1,12 +1,11 @@
 /**
- * An actor's side of MCP, behind the actor library's API. Calls out go from an MCP client on the
- * request endpoint. Calls in come to an MCP server on the channel, which serves the actor's
+ * An actor's side of MCP, behind the actor library's API. Calls out go from an MCP client and
+ * calls in come to an MCP server on the same admitted channel. The server serves the actor's
  * handlers. A long-running handler runs as an MCP task: the task is created at once, and finished
  * when the handler's promise settles. A cancelled task aborts the handler's signal.
  */
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { InMemoryTaskStore } from "@modelcontextprotocol/sdk/experimental/tasks/stores/in-memory.js";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import {
@@ -19,8 +18,8 @@ import {
   type Tool,
 } from "@modelcontextprotocol/sdk/types.js";
 import type { Actor, CallOptions, Exposed, Reply } from "../../actor/api.ts";
+import type { Connector } from "../../connection/index.ts";
 import type { Answer, InterfaceDescriptor, Offer, Outcome } from "../../domain/model/index.ts";
-import type { Connector } from "../../network/index.ts";
 import { VERSION } from "../../version.ts";
 import {
   answerOfResult,
@@ -32,7 +31,7 @@ import {
   PENDING_OUTPUT,
   resultOfOutcome,
 } from "./encoding.ts";
-import { ChannelTransport } from "./transport.ts";
+import { mcpTransports } from "./transport.ts";
 
 /** How often the core's wait on a task's result looks again. */
 const POLL_MS = 500;
@@ -152,13 +151,11 @@ export class McpActor implements Actor {
   }
 
   async open(): Promise<void> {
-    await this.client.connect(
-      new StreamableHTTPClientTransport(this.connector.requestUrl, { fetch: this.connector.fetch }),
-    );
-    const server = this.server;
-    if (server) {
-      await this.connector.connect((channel) => server.connect(new ChannelTransport(channel)));
-    }
+    await this.connector.connect(async (channel) => {
+      const transports = mcpTransports(channel, this.server !== undefined);
+      if (this.server && transports.server) await this.server.connect(transports.server);
+      await this.client.connect(transports.client);
+    });
     this.connected = true;
   }
 

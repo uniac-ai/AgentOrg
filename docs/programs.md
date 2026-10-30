@@ -11,6 +11,8 @@
 | `AGENTORG_PORT` | `8740`, the core's port on 127.0.0.1. |
 | `AGENTORG_URL` | `http://127.0.0.1:<core port>`, where clients find the core. |
 | `AGENTORG_WEB_PORT` | `8741`, the web client's port on 127.0.0.1. |
+| `AGENTORG_ACTOR_ID` | The existing Actor identity to use with `AGENTORG_CREDENTIAL`. |
+| `AGENTORG_CREDENTIAL` | The credential for `AGENTORG_ACTOR_ID`; set both to select an Actor explicitly. |
 
 The default home's services are `agentorg-server` and `agentorg-web`. An alternate home adds
 its path's hash to each service name. Pinned launchers retain the home and addresses and run with
@@ -19,16 +21,18 @@ only `/usr/bin:/bin` on PATH.
 ## Actor credentials and the CLI
 
 Every actor has a random credential; the core stores only its hash. The first server start creates
-root and writes `<home>/root-credential`. Removing that file rotates the credential on the next
-start. A file holding a different credential makes startup fail.
+root and writes its identity to `<home>/root-actor` and credential to `<home>/root-credential`.
+Removing the credential file rotates the credential on the next start. A file holding a different
+credential makes startup fail.
 
 `actor_create` returns a credential once. MCP adapters keep credentials they create in
 `<home>/actors/<id>` for sessions to attach, without showing them to the model. CLI creation
-prints the credential and keeps no session copy. A program connects with that credential; a
+prints the credential and keeps no session copy. A program connects with that Actor's id and credential; a
 session attaches through its MCP adapter or creates a position under root on first attachment.
 
-The actor CLI uses `AGENTORG_CREDENTIAL` when set, otherwise root's local credential. Its identity
-is independent of an MCP session's attachment. Creation makes a direct report of the caller:
+The actor CLI uses `AGENTORG_ACTOR_ID` and `AGENTORG_CREDENTIAL` together when set, otherwise the
+local root's identity and credential files. Its identity is independent of an MCP session's
+attachment. Creation makes a direct report of the caller:
 
 ```sh
 agentorg actor create --name builds --purpose "Run the nightly builds"
@@ -45,22 +49,31 @@ continue to print their completed value.
 
 ## Browser client
 
-The web client currently uses `AGENTORG_CREDENTIAL` or root's local credential and presents the
-root view. `agentorg-web open` mints a one-time link valid for five minutes, establishing a
+The web client uses the same identity selection as the actor CLI and presents the root view.
+`agentorg-web open` mints a one-time link valid for five minutes, establishing a
 seven-day cookie session that survives web-process restarts. Writes carry its CSRF token.
 `GET /api/session` bootstraps that token; `GET /api/interfaces` lists offers, and
 `POST /api/interfaces/<name>` calls one. The web process reaches the core through the actor library.
 
 ## Program clients
 
-A program connects with `Authorization: Bearer <credential>`:
+A program opens one bidirectional JSON-RPC 2.0 WebSocket at
+`ws://127.0.0.1:8740/connection` and establishes its existing Actor identity:
 
-- `http://127.0.0.1:8740/mcp`: Streamable HTTP, with the program as MCP client. Tools include
-  built-ins, its manager's as `manager.<tool>`, and each report's as `<handle>.<tool>`.
-- `ws://127.0.0.1:8740/mcp/reverse`: WebSocket with subprotocol `mcp`, with the program
-  as MCP server exposing its own interfaces.
+```text
+connection.connect({actorId, credential?}) -> {connectionId}
+```
 
-The core refuses an `Origin` header, so these endpoints are for local processes. Node programs
-can use `connectActor` from `@agentorg/cli/actor` to expose handlers, call interfaces and
-reconnect after a drop. A long-running handler returns a promise that settles when ready.
+The handshake admits identity only; it creates no Actor and returns no service catalog.
+Credentials are required under the default policy. A supplied invalid credential always fails.
+Hub MCP initializes separately on that same socket. It exposes built-ins, the Actor's manager's
+interfaces as `manager.<tool>`, and its reports' as `<handle>.<tool>`. Reverse MCP initialization
+and tool advertisement establish the connection that owns delivery to the Actor. Caller-only
+connections coexist independently of that delivery owner.
+
+The core refuses an `Origin` header, so this endpoint is for local processes. Human applications,
+agent adapters and programs use the same Actor contract. Node programs use `connectActor` from
+`@agentorg/cli/actor` with `actorId`, `credential`, `url` and `exposed` to expose handlers, call
+interfaces and reconnect after a drop. `connectClient` uses the same admission with no exposure.
+A long-running handler returns a promise that settles when ready.
 [design.md](design.md) owns the ports and protocol.

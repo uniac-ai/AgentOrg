@@ -1,21 +1,21 @@
 /** Run an organization operation through the actor library. */
 
 import { type Actor, connectClient } from "../../actor/index.ts";
-import { readCredential, rootCredentialPath } from "../../home.ts";
+import { readIdentity, rootCredentialPath } from "../../home.ts";
 import { coreUrl } from "../../network/index.ts";
 
 const note = (text: string) => process.stderr.write(`agentorg: ${text}\n`);
 
 /** Run through the selected actor's client and close the connection when finished. */
 async function asActor(run: (client: Actor) => Promise<number>): Promise<number> {
-  const credential = readCredential();
-  if (!credential) {
+  const identity = readIdentity();
+  if (!identity) {
     throw new Error(
-      `no credential: set AGENTORG_CREDENTIAL, or run \`agentorg-server\`, which writes the root's to ${rootCredentialPath()}`,
+      `no identity: set AGENTORG_ACTOR_ID and AGENTORG_CREDENTIAL, or run \`agentorg-server\`, which writes the root's credential to ${rootCredentialPath()}`,
     );
   }
   const url = coreUrl();
-  const client = await connectClient({ url, credential, name: "agentorg-cli" }).catch((error) => {
+  const client = await connectClient({ url, ...identity, name: "agentorg-cli" }).catch((error) => {
     throw new Error(`the core at ${url} did not accept the connection: ${error.message}`);
   });
   try {

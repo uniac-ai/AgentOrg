@@ -20,7 +20,7 @@ const usage = () =>
     "  call <name> --json <json> Invoke any permitted interface; print its complete answer.",
     ...builtinLines(),
     "",
-    "The actor's credential is AGENTORG_CREDENTIAL, else the root's local credential.",
+    "Set AGENTORG_ACTOR_ID with AGENTORG_CREDENTIAL, else use the root's local identity.",
     "agentorg <operation> --help shows its flags.",
   ].join("\n");
 

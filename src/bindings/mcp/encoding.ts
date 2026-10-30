@@ -7,17 +7,13 @@
 import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
 import type { Answer, InterfaceDescriptor, Offer, Outcome } from "../../domain/model/index.ts";
 
-/** The endpoints' paths, and the channel's WebSocket subprotocol. */
-export const PATHS = { request: "/mcp", channel: "/mcp/reverse" };
-export const SUBPROTOCOL = "mcp";
-
 /**
  * `_meta` key on a call. On a `tools/call` the core delivers to an actor it holds `DeliveredCall`.
- * On the result of a routed `tools/call` on `/mcp` it holds `CallReceipt`.
+ * On a routed Hub `tools/call` result it holds `CallReceipt`.
  */
 export const CALL_META = "agentorg/call";
 
-/** `_meta` key an actor sets on a `tools/call` to `/mcp`: the id of the call it is handling. */
+/** `_meta` key an actor sets on a Hub `tools/call`: the id of the call it is handling. */
 export const CAUSE_META = "agentorg/cause";
 
 export interface DeliveredCall {
@@ -141,7 +137,7 @@ export function resultOfOutcome(outcome: Outcome): CallToolResult {
   };
 }
 
-/** A caller's answer as its tool result on `/mcp`. */
+/** A caller's answer as its Hub tool result. */
 export function resultOfAnswer(answer: Answer): CallToolResult {
   const text = (value: string) => [{ type: "text" as const, text: value }];
   if (answer.state === "refused") {
@@ -176,7 +172,7 @@ export function resultOfAnswer(answer: Answer): CallToolResult {
   }
 }
 
-/** A tool result on `/mcp` as the caller's answer, from an actor's side. */
+/** A Hub tool result as the caller's answer, from an actor's side. */
 export function answerOfResult(result: CallToolResult): Answer {
   const receipt = result._meta?.[CALL_META] as CallReceipt | undefined;
   const text = textOf(result);

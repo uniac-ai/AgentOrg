@@ -1,22 +1,22 @@
 /**
- * The core as every actor's MCP server, on the request endpoint over Streamable HTTP. Each request
- * stands alone, without an MCP session, and acts as the party its credential names: its tool list
+ * The core as each admitted actor's MCP server on its bidirectional channel. Each request
+ * acts as the immutable identity admitted on that connection: its tool list
  * is the domain's offers to it, and a tool call is an invocation, with progress notifications
  * while the domain waits.
  */
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
+import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { Application } from "../../domain/ports.ts";
 import { VERSION } from "../../version.ts";
 import { CAUSE_META, offeredToolOf, resultOfAnswer } from "./encoding.ts";
 
-export async function serveRequest(
+export async function serveActor(
   application: Application,
   party: string,
-  request: Request,
-): Promise<Response> {
+  transport: Transport,
+): Promise<void> {
   const server = new Server(
     { name: "agentorg", version: VERSION },
     { capabilities: { tools: {} } },
@@ -42,7 +42,5 @@ export async function serveRequest(
     });
     return resultOfAnswer(answer);
   });
-  const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined });
   await server.connect(transport);
-  return transport.handleRequest(request);
 }

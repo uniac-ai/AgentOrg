@@ -16,6 +16,7 @@ export type { Timing };
 
 export interface OrganizationOptions extends Partial<Timing> {
   now?: () => Date;
+  onActorClosed?: (actorId: string) => void;
 }
 
 export function organization(store: Store, options: OrganizationOptions = {}) {
@@ -23,7 +24,11 @@ export function organization(store: Store, options: OrganizationOptions = {}) {
   const now = () => clock().toISOString();
   const actors = registry(store.actors, now);
   const activity = audit(store.audit, now);
-  const connected = connections(store.exposures, (actor) => calling.redeliver(actor));
+  const connected = connections(
+    store.exposures,
+    (actor) => calling.redeliver(actor),
+    options.onActorClosed ?? (() => {}),
+  );
   const calling = calls(store.calls, connected, activity, now);
   const offered = capabilities(actors, connected);
   const resources = claims(store.claims, actors, now);
@@ -53,6 +58,7 @@ export function organization(store: Store, options: OrganizationOptions = {}) {
     identify: actors.identify,
     ...dispatch,
     online: connected.online,
+    begin: connected.begin,
     changed: connected.changed,
     offline: connected.offline,
   };

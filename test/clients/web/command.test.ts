@@ -11,6 +11,7 @@ test("agentorg-web serves as the root of the core, and agentorg-web open prints 
   const port = await freePort();
   const env = {
     AGENTORG_URL: core.url,
+    AGENTORG_ACTOR_ID: core.rootId,
     AGENTORG_CREDENTIAL: core.root,
     AGENTORG_WEB_PORT: String(port),
   };
@@ -38,4 +39,14 @@ test("agentorg-web open says when the web client is not running", async () => {
   });
   assert.equal(ui.status, 1);
   assert.match(ui.stderr, /the web client is not running at .*; start it with agentorg-web/);
+});
+
+test("the web process requires an Actor identity with an environment credential", async () => {
+  const result = await agentorg([], {
+    AGENTORG_URL: "http://127.0.0.1:1",
+    AGENTORG_CREDENTIAL: "sentinel-private-credential",
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /set both AGENTORG_ACTOR_ID and AGENTORG_CREDENTIAL/);
+  assert.doesNotMatch(result.stdout + result.stderr, /sentinel-private-credential/);
 });

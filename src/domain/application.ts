@@ -92,7 +92,8 @@ export function application(
   };
 
   function available(actorId: string): Offer[] {
-    return capabilities.list(registry.found(actorId)).map((each) => each.offer);
+    const actor = registry.found(actorId);
+    return actor.closed_at === null ? capabilities.list(actor).map((each) => each.offer) : [];
   }
 
   async function invoke(
@@ -103,6 +104,7 @@ export function application(
   ): Promise<Answer> {
     const actor = registry.found(actorId);
     try {
+      if (actor.closed_at !== null) throw new Forbidden("the Actor is closed");
       const found = capabilities.list(actor).find((each) => each.offer.interface.name === name);
       if (!found) {
         if (!Object.hasOwn(BUILTINS, name)) audit.record(actor.id, "call", null, "not_found");

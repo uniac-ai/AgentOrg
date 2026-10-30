@@ -79,6 +79,7 @@ async function start() {
     AGENTORG_HOME: directory,
     CODEX_HOME: join(directory, "codex"),
     AGENTORG_CREDENTIAL: "",
+    AGENTORG_ACTOR_ID: "",
   };
   const close = async () => {
     await Promise.allSettled(connections.map((actor) => actor.close()));
@@ -90,7 +91,8 @@ async function start() {
     servers.push(core);
     const coreUrl = await core.url;
     const credential = (await readFile(join(directory, "root-credential"), "utf8")).trim();
-    const root = await connectClient({ url: coreUrl, credential });
+    const actorId = (await readFile(join(directory, "root-actor"), "utf8")).trim();
+    const root = await connectClient({ url: coreUrl, actorId, credential });
     connections.push(root);
     const { root: rootId, positions } = await value<{ root: string; positions: unknown[] }>(
       root,
@@ -109,7 +111,12 @@ async function start() {
         "actor_create",
         { name, purpose },
       );
-      const client = await connectActor({ url: coreUrl, credential: made.credential, exposed: [] });
+      const client = await connectActor({
+        url: coreUrl,
+        actorId: made.actor.id,
+        credential: made.credential,
+        exposed: [],
+      });
       connections.push(client);
       await value(client, "progress_set", { state, summary });
       return { id: made.actor.id, client };

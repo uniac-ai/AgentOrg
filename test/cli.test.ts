@@ -70,7 +70,11 @@ test("generic CLI access lists and invokes routed interfaces with the same actor
       created.credential,
       fakeActor([echo], async (input) => ({ value: { echoed: input.text } })),
     );
-    const env = { AGENTORG_URL: core.url, AGENTORG_CREDENTIAL: core.root };
+    const env = {
+      AGENTORG_URL: core.url,
+      AGENTORG_ACTOR_ID: core.rootId,
+      AGENTORG_CREDENTIAL: core.root,
+    };
     const listed = await agentorg(["interfaces"], env);
     assert.equal(listed.status, 0, listed.stderr);
     assert.deepEqual(JSON.parse(listed.stdout).interfaces, await root.available());
@@ -82,6 +86,7 @@ test("generic CLI access lists and invokes routed interfaces with the same actor
     assert.deepEqual(called.value, { echoed: "hello" });
     const refused = await agentorg(["call", "activity"], {
       ...env,
+      AGENTORG_ACTOR_ID: created.actor.id,
       AGENTORG_CREDENTIAL: created.credential,
     });
     assert.equal(refused.status, 1);
@@ -94,6 +99,16 @@ test("generic CLI access lists and invokes routed interfaces with the same actor
   } finally {
     await core.close();
   }
+});
+
+test("an environment credential requires an explicit Actor identity before connecting", async () => {
+  const result = await agentorg(["interfaces"], {
+    AGENTORG_URL: "http://127.0.0.1:1",
+    AGENTORG_CREDENTIAL: "sentinel-private-credential",
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /set both AGENTORG_ACTOR_ID and AGENTORG_CREDENTIAL/);
+  assert.doesNotMatch(result.stdout + result.stderr, /sentinel-private-credential/);
 });
 
 test("call result and withdraw conveniences coexist with generic call dispatch", async () => {
@@ -109,7 +124,11 @@ test("call result and withdraw conveniences coexist with generic call dispatch",
     const pending = await root.call("held.hold");
     assert.equal(pending.state, "pending");
     const id = (pending as { call: string }).call;
-    const env = { AGENTORG_URL: core.url, AGENTORG_CREDENTIAL: core.root };
+    const env = {
+      AGENTORG_URL: core.url,
+      AGENTORG_ACTOR_ID: core.rootId,
+      AGENTORG_CREDENTIAL: core.root,
+    };
     for (const args of [["--call", id], [id]]) {
       const result = await agentorg(["call", "result", ...args], env);
       assert.equal(result.status, 0, result.stderr);
@@ -149,7 +168,11 @@ test("agentorg-server creates the root's credential, and the built-ins run as th
     );
     assert.equal(created.status, 0, created.stderr);
     const { actor, credential } = JSON.parse(created.stdout);
-    const asProg = { AGENTORG_URL: core.url, AGENTORG_CREDENTIAL: credential };
+    const asProg = {
+      AGENTORG_URL: core.url,
+      AGENTORG_ACTOR_ID: actor.id,
+      AGENTORG_CREDENTIAL: credential,
+    };
 
     const team = await agentorg(["team", "--depth", "0"], asProg);
     assert.equal(team.status, 0, team.stderr);

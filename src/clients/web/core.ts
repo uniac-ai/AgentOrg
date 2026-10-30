@@ -13,9 +13,9 @@ export class Core {
   #actor: Actor | undefined;
   #closed = false;
 
-  constructor(url: string, credential: string) {
+  constructor(url: string, actorId: string, credential: string) {
     this.url = url;
-    void this.#open(credential);
+    void this.#open(actorId, credential);
   }
 
   /** The interfaces available to the root. */
@@ -33,11 +33,12 @@ export class Core {
     await this.#actor?.close();
   }
 
-  async #open(credential: string) {
+  async #open(actorId: string, credential: string) {
     for (let pause = 250; !this.#closed; pause = Math.min(pause * 2, MAX_PAUSE_MS)) {
       try {
         const actor = await connectActor({
           url: this.url,
+          actorId,
           credential,
           exposed: [],
           name: "agentorg-web",

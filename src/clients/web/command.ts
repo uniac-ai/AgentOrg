@@ -3,7 +3,7 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { parseArgs } from "node:util";
-import { readCredential, rootCredentialPath } from "../../home.ts";
+import { readCredential, readIdentity, rootCredentialPath } from "../../home.ts";
 import { coreUrl } from "../../network/index.ts";
 import { help } from "../../runtime/command.ts";
 import { serviceCommand, serviceHelp } from "../../runtime/hosting.ts";
@@ -35,7 +35,7 @@ export const WEB_HELP = `usage: agentorg-web [--port <n>]
        agentorg-web service install|uninstall
        agentorg-web status
 
-Serve the web client on 127.0.0.1 at --port, else AGENTORG_WEB_PORT, else ${DEFAULT_PORT}. It connects to the core at AGENTORG_URL with AGENTORG_CREDENTIAL or the root's local credential. open signs a browser in. service manages only this web client's user service; status reports its availability.`;
+Serve the web client on 127.0.0.1 at --port, else AGENTORG_WEB_PORT, else ${DEFAULT_PORT}. It connects to the core at AGENTORG_URL with AGENTORG_ACTOR_ID and AGENTORG_CREDENTIAL or the root's local identity. open signs a browser in. service manages only this web client's user service; status reports its availability.`;
 
 export async function main(args: string[]): Promise<number> {
   const asked = args.includes("--help") || args.includes("-h");
@@ -53,9 +53,11 @@ export async function main(args: string[]): Promise<number> {
     return printReport(await serviceStatus(SERVICE(), webUrl()));
   }
   const { values } = parseArgs({ args, options: { port: { type: "string" } }, strict: true });
+  const identity = readIdentity();
+  if (!identity) throw new Error("no local root identity; run agentorg-server");
   const human = await startWeb({
     coreUrl: coreUrl(),
-    credential: credential(),
+    ...identity,
     port: values.port === undefined ? port() : Number(values.port),
   });
   note(`serving on ${human.url}, as the root of the core at ${coreUrl()}`);

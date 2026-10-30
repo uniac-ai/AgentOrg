@@ -2,7 +2,7 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { Actor } from "../src/actor/index.ts";
+import { type Actor, connectClient } from "../src/actor/index.ts";
 import type { Answer } from "../src/domain/model/index.ts";
 import { CLOSE_REVOKED } from "../src/network/index.ts";
 import { type Core, done, type FakeActor, fakeActor, iface, startCore, until } from "./harness.ts";
@@ -327,14 +327,15 @@ test("an actor is closed by its manager once its reports are, which ends its cal
   // storage has a call pending into its manager, offline for now, and one pending into it.
   await core.org.connections.link(release.id)?.close();
   await until("release offline", () => core.org.connections.link(release.id) === undefined);
+  const releaseCaller = await core.client(release.credential);
   const own = pendingCall(await storage.connection.call("manager.approve"));
   await storage.connection.close();
   const hanging = fakeActor([REVIEW], () => new Promise(() => {}));
   const reconnected = await core.connect(storage.credential, hanging);
-  const into = pendingCall(await release.connection.call("storage.review", { change: "x" }));
+  const into = pendingCall(await releaseCaller.call("storage.review", { change: "x" }));
   await until("delivered", () => hanging.received.length === 1);
 
-  const closed = await done(release.connection.call("actor_close", { actor: storage.id }));
+  const closed = await done(releaseCaller.call("actor_close", { actor: storage.id }));
   const ended = closed.ended_calls as { id: string; state: string; error: string | null }[];
   assert.deepEqual(
     ended.map((call) => [call.id, call.state, call.error]),
@@ -344,16 +345,11 @@ test("an actor is closed by its manager once its reports are, which ends its cal
     ],
   );
   await until("connection ended", () => reconnected.ended === CLOSE_REVOKED);
-  assert.deepEqual(await names(release.connection), [
-    ...BUILTINS,
-    "manager.decide",
-    "manager.note",
-  ]);
-  const login = await fetch(`${core.url}/mcp`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${storage.credential}` },
-  });
-  assert.equal(login.status, 401);
+  assert.deepEqual(await names(releaseCaller), [...BUILTINS, "manager.decide", "manager.note"]);
+  await assert.rejects(
+    connectClient({ url: core.url, actorId: storage.id, credential: storage.credential }),
+    /admission/,
+  );
 });
 
 test("the root alone creates a position as a session attaches, and the position is marked so", async (t) => {

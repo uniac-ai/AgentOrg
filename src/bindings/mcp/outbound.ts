@@ -10,6 +10,7 @@
  */
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import {
   CallToolResultSchema,
   CancelTaskResultSchema,
@@ -22,10 +23,9 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import type { Delivery, InterfaceDescriptor, Outcome } from "../../domain/model/index.ts";
 import { type ActorLink, LinkLost, type Presence, UnknownRun } from "../../domain/ports.ts";
-import { type Channel, CLOSE_REVOKED } from "../../network/index.ts";
+import { type Channel, CLOSE_REPLACED } from "../../network/index.ts";
 import { VERSION } from "../../version.ts";
 import { CALL_META, type DeliveredCall, interfaceOf, outcomeOf } from "./encoding.ts";
-import { ChannelTransport } from "./transport.ts";
 
 /** How long one wait on a task's result may last: as long as a timer allows. */
 const TASK_WAIT_MS = 2 ** 31 - 1;
@@ -126,7 +126,7 @@ class McpLink implements ActorLink {
   }
 
   async close(): Promise<void> {
-    this.channel.close(CLOSE_REVOKED, "the actor was closed");
+    this.channel.close(CLOSE_REPLACED, "replaced by a newer advertisement");
   }
 }
 
@@ -138,10 +138,13 @@ export function attach(
   presence: Presence,
   party: string,
   channel: Channel,
+  transport: Transport,
   options: { timeoutMs: number; onError?: (party: string, error: Error) => void },
 ): void {
   const client = new Client({ name: "agentorg-core", version: VERSION });
   const link = new McpLink(client, channel, options.timeoutMs);
+  presence.begin(party, link);
+  channel.whenClosed(() => presence.offline(party, link));
   let listed = false;
   const list = async (): Promise<InterfaceDescriptor[]> => {
     const takesTasks = client.getServerCapabilities()?.tasks?.requests?.tools?.call !== undefined;
@@ -161,14 +164,15 @@ export function attach(
   });
   void (async () => {
     try {
-      await client.connect(new ChannelTransport(channel));
-      client.onclose = () => presence.offline(party, link);
+      await client.connect(transport);
       const interfaces = await list();
       listed = true;
       presence.online(party, link, interfaces);
     } catch (error) {
-      options.onError?.(party, error as Error);
-      channel.close();
+      // A caller-only peer has no reverse MCP server. Its Hub-facing MCP remains available.
+      if (!(error instanceof McpError && error.code === ErrorCode.MethodNotFound)) {
+        options.onError?.(party, new Error("Actor exposure initialization failed"));
+      }
     }
   })();
 }

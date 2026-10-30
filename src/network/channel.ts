@@ -65,11 +65,9 @@ export class Channel {
   }
 }
 
-/** Dial a channel to `url`, a `ws:` or `wss:` address, presenting `credential`, once it is open. */
-export async function dial(url: URL, credential: string, subprotocol: string): Promise<Channel> {
-  // Node's WebSocket takes headers, which the browser's does not.
-  const init = { protocols: [subprotocol], headers: { Authorization: `Bearer ${credential}` } };
-  const socket = new WebSocket(url, init as unknown as string[]);
+/** Dial a channel to a `ws:` or `wss:` address. Admission follows on the opened channel. */
+export async function dial(url: URL): Promise<Channel> {
+  const socket = new WebSocket(url);
   const channel = new Channel({
     send: (text) => socket.send(text),
     close: (code, reason) => socket.close(code, reason),

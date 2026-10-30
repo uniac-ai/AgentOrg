@@ -6,9 +6,8 @@
  */
 
 import { McpActor } from "../bindings/mcp/actor.ts";
-import { PATHS, SUBPROTOCOL } from "../bindings/mcp/encoding.ts";
 import { presentToOccupant } from "../bindings/mcp/occupant.ts";
-import { Connector } from "../network/index.ts";
+import { Connector } from "../connection/index.ts";
 import type { Actor, Exposed, Presented } from "./api.ts";
 
 export type * from "./api.ts";
@@ -16,7 +15,8 @@ export type * from "./api.ts";
 export interface ConnectOptions {
   /** The core's address, such as `http://127.0.0.1:8740`. */
   url: string;
-  credential: string;
+  actorId: string;
+  credential?: string;
   /** The name this actor gives the core on connecting. */
   name?: string;
   /** The longest pause between attempts to reconnect. */
@@ -26,9 +26,10 @@ export interface ConnectOptions {
 const connector = (options: ConnectOptions) =>
   new Connector({
     url: options.url,
-    credential: options.credential,
-    paths: PATHS,
-    subprotocol: SUBPROTOCOL,
+    identity: {
+      actorId: options.actorId,
+      ...(options.credential === undefined ? {} : { credential: options.credential }),
+    },
     ...(options.maxRetryMs === undefined ? {} : { maxRetryMs: options.maxRetryMs }),
   });
 

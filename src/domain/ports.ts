@@ -74,6 +74,8 @@ export class UnknownRun extends Error {}
 
 /** Whether actors can be reached, as a binding learns it. */
 export interface Presence {
+  /** Reserve this candidate's order before its asynchronous exposure initialization. */
+  begin(actor: string, link: ActorLink): void;
   /** The actor can be called through `link`, and exposes `interfaces`. */
   online(actor: string, link: ActorLink, interfaces: InterfaceDescriptor[]): void;
   /** The actor behind `link` changed what it exposes. */

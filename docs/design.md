@@ -32,8 +32,10 @@ The domain defines its storage and actor-link ports and exposes Application and 
 
 | Layer | Folder | What it owns | Today's choice |
 |---|---|---|---|
-| **Network** | `src/network/` | Moving text between a party and the core: the listener, credential to identity, one channel per party, dialing again. It knows no tools, calls or actors. | HTTP and a WebSocket on 127.0.0.1 |
+| **Network** | `src/network/` | The loopback listener and bidirectional text frames. It knows no identities or application operations. | WebSocket on 127.0.0.1 |
+| **Connection** | `src/connection/` | JSON-RPC admission of an existing Actor or Provider, immutable identity context, and client reconnection. | `connection.connect` on `/connection` |
 | **Protocol binding** | `src/bindings/mcp/` | Encoding the domain's operations on the wire, both ways: listing interfaces, calls, runs, cancellation, change notices, metadata. It is the only code that imports MCP. | MCP |
+| **Provider client** | `src/provider/` | The Hub's typed client for the fixed factory methods on an admitted Provider connection. | JSON-RPC |
 | **Domain** | `src/domain/` | Actors and their interfaces, calls and their lifecycle, the wiring, progress and messages, the built-ins, the audit trail. | agentorg's own model |
 | **Storage** | `src/storage/sqlite/` | Keeping the domain's records, behind the domain's `Store` port. | SQLite through `node:sqlite` |
 | **Actors** | `src/actor/`, `src/clients/web/`, `src/clients/mcp/`, programs | What a party does with a call. The actor library gives an actor an API that names no protocol or network. | the web client, the agent actor, programs |
@@ -163,12 +165,26 @@ A human may answer hours later, so a long-running interface may take a call as a
 
 ## Today's binding: MCP in both directions
 
-The network gives each party two endpoints, and the MCP binding names them:
+Each Actor initiates a WebSocket at `/connection`, then sends
+`connection.connect({actorId, credential?})` and receives `{connectionId}`. The handshake admits
+an existing identity only. The supplied identity is immutable and the reply carries no catalog.
+Credentials are required by default; omission is allowed only by explicit Hub policy, and a
+supplied invalid credential always fails. Actor and Provider IDs occupy distinct namespaces.
 
-| Endpoint | MCP roles | Transport |
-|---|---|---|
-| `/mcp`, the request endpoint | the core is the server, the actor its client | Streamable HTTP. Each request stands alone, without an MCP session. |
-| `/mcp/reverse`, the channel endpoint | the core is the client, the actor its server | A WebSocket the actor opens, with subprotocol `mcp` and one JSON-RPC message per text frame. |
+MCP initializes separately on that same socket, with one JSON-RPC message per text frame. The
+Actor's MCP client calls the Hub's server. An Actor that exposes interfaces also serves reverse
+MCP requests from the Hub's client. Fixed direction dispatch sends incoming requests to the local
+server and replies to the local client; request IDs remain independent in each direction.
+Initialized/cancelled notifications go to the server; tool-list changes, task status and progress
+go to the client. This binding uses no additional envelope or service registry.
+
+Admission does not register Actor exposure. `connectClient` supplies no reverse MCP server and
+coexists with other connections. `connectActor` explicitly advertises its interfaces, including
+an empty list. Only a successful reverse initialization and tool listing replaces the delivery
+owner. Candidate order is reserved before initialization, so a delayed older initialization cannot
+replace a newer advertisement. Stale changes, disconnects and delivery results have no effect on
+the current owner. Replacing an advertising connection closes it with 4000; closing the Actor
+revokes all its admitted connections with 4001. A caller socket closes independently.
 
 How the domain is encoded:
 - **An interface is an MCP `Tool`.** The core learns an actor's interfaces with `tools/list` over the channel, and lists them again on `notifications/tools/list_changed`.
@@ -208,7 +224,26 @@ The MCP adapter, `agentorg-mcp` in `src/clients/mcp/`, lets a Claude Code or Cod
 
 ## The network
 
-- **Access.** Both endpoints take `Authorization: Bearer <credential>`. The domain's registry tells who a credential is.
-- **Web pages are refused.** A request with an `Origin` header comes from a web page, so it is refused; that blocks DNS rebinding and cross-site WebSockets.
-- **One channel per party.** A newer channel replaces the older, which closes with code 4000. Closing an actor closes its channel with code 4001.
-- **The party's side, the connector.** It dials the channel again after a drop, but not after 4000 or 4001.
+- **Web pages are refused.** An upgrade with an `Origin` header is refused, blocking cross-site WebSockets and DNS rebinding.
+- **Admission.** `src/connection/` checks credentials through the identity owners. The network listener admits no identity itself.
+- **Reconnect.** The connector dials again after a drop, performs fresh admission and initializes MCP again. It stops after 4000 or 4001.
+
+## Provider connections
+
+Providers initiate the same `/connection` socket with
+`connection.connect({providerId, credential?})`. Exactly one Actor or Provider identity is required;
+connecting registers neither. The server administrator enrolls Provider IDs and SHA-256 credential
+hashes in private `<home>/providers.json` (mode 600), an array of
+`{providerId, credentialHash}`. Missing configuration admits no Providers. Provider credentials and
+Actor bootstrap credentials are independent opaque values.
+
+The Hub calls `provider.describe({}) -> {configSchema}` and
+`provider.createActor({actorId, credential?, config}) -> {actorId}` on the initiating Provider socket.
+Configuration is a required JSON object; the returned Actor ID must match. Provider messages cross
+the client boundary as validated results or sanitized errors, with numeric JSON-RPC codes and stable
+semantic names in `error.data.code`. A lost creation reply leaves the outcome unknown and sends no
+cancellation. The client performs no automatic replay.
+
+The Provider client owns only wire interaction. Hub owns organizational identity, state and authority;
+an Actor's identity survives executor replacement. Provider owns native execution management, and
+the Actor client owns its separate Hub connection. No Actor routing passes through a Provider.

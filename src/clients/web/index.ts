@@ -13,6 +13,7 @@ export const DEFAULT_PORT = 8741;
 export interface WebOptions {
   /** The core's address, such as http://127.0.0.1:8740. */
   coreUrl: string;
+  actorId: string;
   credential: string;
   /** The port to listen on; 0 picks a free one. */
   port: number;
@@ -24,7 +25,7 @@ export interface WebClient {
 }
 
 export async function startWeb(options: WebOptions): Promise<WebClient> {
-  const core = new Core(options.coreUrl, options.credential);
+  const core = new Core(options.coreUrl, options.actorId, options.credential);
   const app = webApp({
     core,
     signIn: new SignIn(options.credential),

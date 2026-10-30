@@ -53,7 +53,14 @@ const MCP = "@modelcontextprotocol/";
 const CLIENTS = ["src/clients/cli/", "src/clients/mcp/", "src/clients/web/"];
 const PROTOCOLS = [MCP, "hono", "@hono/", "ws"];
 const APPLICATIONS = ["src/server/", "src/clients/"];
-const ADAPTERS = ["src/network/", "src/bindings/", "src/storage/", "src/actor/"];
+const ADAPTERS = [
+  "src/network/",
+  "src/connection/",
+  "src/provider/",
+  "src/bindings/",
+  "src/storage/",
+  "src/actor/",
+];
 
 const DOMAIN_BOUNDARIES: Record<string, string[]> = {
   registry: ["connections", "calls", "capabilities", "views", "application"],
@@ -81,6 +88,26 @@ const RULES: Record<string, string[]> = {
     "src/home.ts",
   ],
   "src/network/": [
+    MCP,
+    "src/connection/",
+    "src/provider/",
+    "src/domain/",
+    "src/bindings/",
+    "src/storage/",
+    "src/actor/",
+    ...APPLICATIONS,
+    "src/runtime/",
+  ],
+  "src/connection/": [
+    MCP,
+    "src/domain/",
+    "src/bindings/",
+    "src/storage/",
+    "src/actor/",
+    ...APPLICATIONS,
+    "src/runtime/",
+  ],
+  "src/provider/": [
     MCP,
     "src/domain/",
     "src/bindings/",

@@ -1,7 +1,7 @@
 /**
  * Commands generated from the core's built-ins: `actor_create` is `agentorg actor create`,
  * and `view` is `agentorg view`. Each runs against the core as the actor whose credential is in
- * `AGENTORG_CREDENTIAL`, else as the root.
+ * `AGENTORG_ACTOR_ID` and `AGENTORG_CREDENTIAL`, else as the local root.
  *
  * Each top-level field of the built-in's request becomes a flag (`since` becomes `--since`); a list
  * field takes its flag once per item, and an object field is given as JSON. A required field named

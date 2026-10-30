@@ -26,7 +26,12 @@ export const online = (core: Core) => core.org.connections.link(core.rootId) !==
 
 /** A web client on `core`, a new one each time as after a restart, once the root is online. */
 export async function human(core: Core) {
-  const actor = await startWeb({ coreUrl: core.url, credential: core.root, port: 0 });
+  const actor = await startWeb({
+    coreUrl: core.url,
+    actorId: core.rootId,
+    credential: core.root,
+    port: 0,
+  });
   open.push(actor);
   await until("the web client comes online", () => online(core));
   return actor;

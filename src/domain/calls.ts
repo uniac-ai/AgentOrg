@@ -77,7 +77,13 @@ export function calls(
     const attempt = { link, controller: new AbortController() };
     attempts.set(id, attempt);
     try {
-      finish(call, await exchange(link, call, attempt.controller.signal));
+      const outcome = await exchange(link, call, attempt.controller.signal);
+      if (
+        attempts.get(id) === attempt &&
+        connections.link(call.to) === link &&
+        !attempt.controller.signal.aborted
+      )
+        finish(call, outcome);
     } catch (error) {
       // A call whose link ended stays pending until the actor is back.
       const ended = error instanceof LinkLost || connections.link(call.to) !== link;
@@ -111,6 +117,8 @@ export function calls(
     };
     callStore.delivered(call.id, now());
     const delivered = await link.deliver(delivery, signal);
+    if (connections.link(call.to) !== link || signal.aborted)
+      throw new LinkLost("delivery owner changed");
     if (!("run" in delivered)) return delivered;
     callStore.setRun(call.id, delivered.run);
     return link.outcome(delivered.run, signal);

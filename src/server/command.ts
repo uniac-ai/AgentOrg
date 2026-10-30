@@ -8,6 +8,7 @@ import { help } from "../runtime/command.ts";
 import { serviceCommand, serviceHelp } from "../runtime/hosting.ts";
 import { service } from "../runtime/services.ts";
 import { printReport, serviceStatus } from "../runtime/status.ts";
+import { loadProviders } from "./config.ts";
 
 const PROGRAM = "agentorg-server";
 const SERVICE = () => service(PROGRAM, "the core");
@@ -47,12 +48,13 @@ export async function main(args: string[]): Promise<number> {
     return printReport(await serviceStatus(SERVICE(), coreUrl()));
   }
   const { values } = parseArgs({ args, options: { port: { type: "string" } }, strict: true });
-  ensureHome();
+  const configured = loadProviders(ensureHome());
   const { SqliteStore } = await storeModule();
   const { rootCredential, startCore } = await import("./index.ts");
   const store = new SqliteStore(databasePath());
   const core = await startCore(store, {
     port: Number(values.port ?? (process.env.AGENTORG_PORT || DEFAULT_CORE_PORT)),
+    providers: configured,
     onError: (actor, error) =>
       process.stderr.write(
         `${PROGRAM}: the channel of ${actor} failed to start: ${error.message}\n`,

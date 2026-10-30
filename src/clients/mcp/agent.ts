@@ -28,7 +28,7 @@ import {
   type ResponseOf,
   Text,
 } from "../../domain/model/index.ts";
-import { credentials, readPrivate, rootCredentialPath } from "../../home.ts";
+import { credentials, readPrivate, rootActorPath, rootCredentialPath } from "../../home.ts";
 import { sessionName, sessions } from "./sessions.ts";
 
 const AttachRequest = z.strictObject({
@@ -134,7 +134,7 @@ export class Agent implements Presented {
     if (credential === undefined) return;
     for (let pause = 250; this.#position === undefined; pause = Math.min(pause * 2, 10_000)) {
       try {
-        await this.#connect(credential);
+        await this.#connect(actor, credential);
       } catch {
         await new Promise((resolve) => setTimeout(resolve, pause).unref());
       }
@@ -245,10 +245,11 @@ export class Agent implements Presented {
     }
     this.#session = session;
     this.#filled = sessions.position(session);
-    const credential = this.#filled === undefined ? undefined : credentials.read(this.#filled);
-    if (credential !== undefined) {
+    const actor = this.#filled;
+    const credential = actor === undefined ? undefined : credentials.read(actor);
+    if (actor !== undefined && credential !== undefined) {
       try {
-        await this.#connect(credential);
+        await this.#connect(actor, credential);
       } catch {
         void this.resume();
       }
@@ -280,7 +281,7 @@ export class Agent implements Presented {
       );
     }
     try {
-      await this.#connect(credential);
+      await this.#connect(actor, credential);
     } catch (error) {
       const again = `attach with actor ${actor} to try again`;
       return refused(
@@ -300,8 +301,11 @@ export class Agent implements Presented {
   async #createUnderRoot(name: string, purpose: string): Promise<Answer> {
     const file = rootCredentialPath();
     if (!existsSync(file)) return refused("not_found", `no root credential in ${file}`);
+    const identity = rootActorPath();
+    if (!existsSync(identity)) return refused("not_found", `no root actor id in ${identity}`);
     const root = await connectClient({
       url: this.#options.coreUrl,
+      actorId: readPrivate(identity),
       credential: readPrivate(file),
       name: "agentorg-agent",
     });
@@ -316,9 +320,10 @@ export class Agent implements Presented {
     }
   }
 
-  async #connect(credential: string): Promise<void> {
+  async #connect(actorId: string, credential: string): Promise<void> {
     const position = await connectActor({
       url: this.#options.coreUrl,
+      actorId,
       credential,
       exposed: [],
       name: "agentorg-agent",

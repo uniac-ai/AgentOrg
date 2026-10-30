@@ -24,6 +24,11 @@ export async function startCore(options: CoreOptions = {}) {
   const url = running.url;
   const port = Number(new URL(url).port);
   const actors: Actor[] = [];
+  const actorId = async (credential: string) => {
+    const actor = await running.organization.registry.byCredential(credential);
+    if (!actor) throw new Error("the test credential has no open Actor");
+    return actor.id;
+  };
   const stop = async () => {
     await running.close();
     store.close();
@@ -46,6 +51,7 @@ export async function startCore(options: CoreOptions = {}) {
     async connect(credential: string, actor: FakeActor = fakeActor()) {
       const connection = await connectActor({
         url,
+        actorId: await actorId(credential),
         credential,
         exposed: actor.exposed,
         maxRetryMs: 100,
@@ -55,7 +61,11 @@ export async function startCore(options: CoreOptions = {}) {
     },
     /** Connect a client that only calls. */
     async client(credential: string) {
-      const connection = await connectClient({ url, credential });
+      const connection = await connectClient({
+        url,
+        actorId: await actorId(credential),
+        credential,
+      });
       actors.push(connection);
       return connection;
     },
