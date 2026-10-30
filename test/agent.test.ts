@@ -166,7 +166,17 @@ test("Codex binds from each call, resumes the same actor, and gives a fork its o
     actor: created.actor.id,
     created: false,
   });
-  assert.equal((await fork.call("activity")).isError, true, "a client never gains root authority");
+  assert.equal(Array.isArray((await fork.call("activity")).structuredContent?.entries), true);
+  assert.equal(
+    (
+      await fork.call("actor_create", {
+        name: "appointment",
+        purpose: "Appointment",
+        created_at_attach: true,
+      })
+    ).isError,
+    true,
+  );
   await resumed.call("actor_close", { actor: created.actor.id });
   await until(
     "the closed actor's attachment refuses operations",
@@ -200,8 +210,8 @@ test("the stdio catalog is stable and only attachment can act before a position 
   const asActor = await org.client(readFileSync(join(org.home, "actors", actor), "utf8").trim());
   assert.deepEqual(Object.keys(listed), ["tools"]);
   assert.deepEqual(listed.tools, await asActor.available());
-  assert.equal(listed.tools.length, 6);
-  assert.equal((await one.interfaces()).includes("activity"), false);
+  assert.equal(listed.tools.length, 7);
+  assert.equal((await one.interfaces()).includes("activity"), true);
   const { actor: report, credential } = await org.org.registry.create(actor, "report", "A report");
   await org.connect(credential, fakeActor([iface("review"), iface("review")]));
   await until(
@@ -214,7 +224,7 @@ test("the stdio catalog is stable and only attachment can act before a position 
     id: string;
     interfaces: { call: string }[];
   }[];
-  assert.equal(tools.length, 7, "the report and all six Hub Tools remain available");
+  assert.equal(tools.length, 8, "the report and all seven Hub Tools remain available");
   assert.deepEqual(
     tools.find((tool) => tool.id === report.id)?.interfaces.map((offer) => offer.call),
     ["report.review"],

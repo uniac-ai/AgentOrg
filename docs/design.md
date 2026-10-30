@@ -90,7 +90,8 @@ the caller's alias; `Actor.call(interface.call, input)` invokes it with the exis
 `Actor.available()`, the CLI's `interfaces`, the agent adapter's `interfaces`, and the web catalog
 carry these nested Tools. The latter three return `{tools: [...]}`.
 
-The built-in Tools have IDs `hub:<name>` and these names and interfaces:
+Every open Actor receives the same seven built-in Tools and sixteen interfaces. Their IDs are
+`hub:<name>`, with these names and interfaces:
 
 | Tool | Interfaces |
 |---|---|
@@ -100,7 +101,7 @@ The built-in Tools have IDs `hub:<name>` and these names and interfaces:
 | `messages` | `message_send`, `messages`, `message_read` |
 | `claims` | `claim`, `release` |
 | `calls` | `call_result`, `call_withdraw` |
-| `activity` | `activity`, offered to the root only |
+| `activity` | `activity` |
 
 Each other visible Actor with advertisements supplies one Tool, using its existing Actor ID.
 Its Tool name is `manager`, a direct report's handle, or, for the root, the Actor's full path.
@@ -203,7 +204,7 @@ A human may answer hours later, so a long-running interface may take a call as a
 | `release {resource}` | Releases a resource the caller holds; the root may release any. |
 | `call_result {call, wait?}` | Reads a call the caller made, optionally waiting up to 600 seconds for it to settle, with progress. |
 | `call_withdraw {call}` | The caller withdraws a pending call. |
-| `activity {since?, limit?}` | The audit trail, newest first. Offered to the root only. |
+| `activity {since?, limit?}` | Audit metadata for every open Actor, newest first: id, time, acting Actor, operation, target and outcome. |
 
 When execution is requested, Application creates the organizational Actor through Registry before
 calling Execution. The execution client uses the selected Provider's configuration schema and

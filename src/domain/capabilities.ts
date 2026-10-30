@@ -70,14 +70,7 @@ export function capabilities(
               ...(manager ? [named(MANAGER, manager)] : []),
               ...registry.reports(actor.id).map((report) => named(report.name, report)),
             ];
-      const own = builtins.map((tool) => ({
-        ...tool,
-        interfaces: tool.interfaces.filter(
-          (each) =>
-            "operation" in each && (!each.operation.definition.rootOnly || actor.manager === null),
-        ),
-      }));
-      return [...own, ...routed].filter((tool) => tool.interfaces.length > 0);
+      return [...builtins, ...routed].filter((tool) => tool.interfaces.length > 0);
     },
   };
 }

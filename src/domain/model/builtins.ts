@@ -1,7 +1,7 @@
 /**
  * The core's built-ins, the surface every actor finds among its available interfaces: their
  * requests, results and descriptions. The communication standard's are in `communication.ts`.
- * `activity` is offered to the root only.
+ * Every open Actor receives the same built-in interfaces, including audit metadata.
  */
 
 import { z } from "zod";
@@ -100,7 +100,6 @@ export const ActivityResult = z
 export const ACTORS = toolDefinition("actors", {
   actor_create: {
     writes: true,
-    rootOnly: false,
     request: ActorCreate,
     response: ActorCreated,
     description: `Create a direct report: a position that you manage.
@@ -111,7 +110,6 @@ With execution, wait for the Provider and return its separate ready, failed or u
   },
   actor_close: {
     writes: true,
-    rootOnly: false,
     request: ActorClose,
     response: ActorClosed,
     description: `Close a direct report whose work is done; the root may close any actor.
@@ -123,7 +121,6 @@ Refused while it has open reports of its own. Its pending calls end and its conn
 export const CALLS = toolDefinition("calls", {
   call_result: {
     writes: false,
-    rootOnly: false,
     request: CallResult,
     response: Call,
     description: `Read a call you made, with its output once done.
@@ -132,7 +129,6 @@ With wait, hold until it settles or the wait ends, whichever is first.`,
   },
   call_withdraw: {
     writes: true,
-    rootOnly: false,
     request: CallWithdraw,
     response: Call,
     description: "Withdraw a pending call you made that no longer needs an answer.",
@@ -142,10 +138,9 @@ With wait, hold until it settles or the wait ends, whichever is first.`,
 export const ACTIVITY = toolDefinition("activity", {
   activity: {
     writes: false,
-    rootOnly: true,
     request: Activity,
     response: ActivityResult,
-    description: "Read the audit trail: every write and every routed call, newest first.",
+    description: "Read audit metadata: every write and every routed call, newest first.",
   },
 });
 

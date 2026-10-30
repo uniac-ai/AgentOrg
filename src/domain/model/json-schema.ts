@@ -4,10 +4,9 @@ import { z } from "zod";
 
 export type JsonSchema = { [key: string]: unknown };
 
-/** A built-in's schemas, authority, audit policy and caller-facing description. */
+/** A built-in's schemas, audit policy and caller-facing description. */
 export interface BuiltinSpec {
   readonly writes: boolean;
-  readonly rootOnly: boolean;
   readonly request: z.ZodType;
   readonly response: z.ZodType;
   /** The first paragraph is the summary. */

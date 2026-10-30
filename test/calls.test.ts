@@ -77,6 +77,7 @@ const BUILTINS = [
   "release",
   "call_result",
   "call_withdraw",
+  "activity",
 ];
 
 test("each actor is offered the built-ins and the interfaces one step up and down; the root every actor's", async (t) => {
@@ -89,7 +90,7 @@ test("each actor is offered the built-ins and the interfaces one step up and dow
   assert.deepEqual(await names(storage.connection), [...BUILTINS, "manager.approve"].sort());
   assert.deepEqual(
     await names(root),
-    [...BUILTINS, "activity", "release.approve", "release.storage.review"].sort(),
+    [...BUILTINS, "release.approve", "release.storage.review"].sort(),
   );
   const available = await release.connection.available();
   const grouped = (tools: typeof available) =>
@@ -108,14 +109,15 @@ test("each actor is offered the built-ins and the interfaces one step up and dow
     messages: ["message_read", "message_send", "messages"],
     claims: ["claim", "release"],
     calls: ["call_result", "call_withdraw"],
+    activity: ["activity"],
   };
   assert.deepEqual(grouped(available), expected);
   const rootTools = await root.available();
-  assert.deepEqual(grouped(rootTools), { ...expected, activity: ["activity"] });
+  assert.deepEqual(grouped(rootTools), expected);
   assert.equal(
     available.filter((tool) => tool.id.startsWith("hub:")).flatMap((tool) => tool.interfaces)
       .length,
-    15,
+    16,
   );
   assert.equal(
     rootTools.filter((tool) => tool.id.startsWith("hub:")).flatMap((tool) => tool.interfaces)
@@ -416,9 +418,11 @@ test("the root alone creates a position as a session attaches, and the position 
   assert.equal(refused.state === "refused" && refused.code, "forbidden");
 });
 
-test("the activity holds each write and routed call, for the root only", async (t) => {
+test("every open Actor reads audit metadata without message bodies, call inputs or credentials", async (t) => {
   const { core, root, rootActor, release, storage } = await organization({ waitMs: 100 });
   t.after(() => core.close());
+  const secret = "private-message-body-sentinel";
+  await done(storage.connection.call("message_send", { to: core.rootId, text: secret }));
   await done(storage.connection.call("progress_set", { state: "running", summary: "Reviewing" }));
   const asked = pendingCall(await release.connection.call("manager.decide", { question: "Ship?" }));
   await until("run held", () => rootActor.held.length === 1);
@@ -434,6 +438,32 @@ test("the activity holds each write and routed call, for the root only", async (
   assert.ok(
     entries.some((entry) => entry.operation === "progress_set" && entry.target === storage.id),
   );
-  const hidden = await release.connection.call("activity");
-  assert.equal(hidden.state === "refused" && hidden.code, "not_found");
+  const observed = await done(release.connection.call("activity", { limit: 5 }));
+  assert.deepEqual(observed, activity);
+  for (const entry of observed.entries) {
+    assert.deepEqual(Object.keys(entry).sort(), [
+      "actor",
+      "at",
+      "id",
+      "operation",
+      "outcome",
+      "target",
+    ]);
+  }
+  for (const privateValue of [secret, "Ship?", core.root, release.credential, storage.credential]) {
+    assert.equal(JSON.stringify(observed).includes(privateValue), false);
+  }
+  await done(release.connection.call("actor_close", { actor: storage.id }));
+  assert.deepEqual(core.org.available(storage.id), []);
+  const closed = await core.org.invoke(
+    storage.id,
+    "activity",
+    {},
+    {
+      cause: null,
+      signal: new AbortController().signal,
+      progress: async () => {},
+    },
+  );
+  assert.equal(closed.state === "refused" && closed.code, "forbidden");
 });

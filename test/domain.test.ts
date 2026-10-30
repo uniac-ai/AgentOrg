@@ -46,7 +46,6 @@ test("core exposure and invocation come only from composed feature operations", 
   const definition = toolDefinition("notes", {
     note: {
       writes: true,
-      rootOnly: true,
       description: "Record a note.",
       request: z.strictObject({ text: z.string() }),
       response: z.strictObject({ id: z.string(), text: z.string() }),
@@ -72,11 +71,8 @@ test("core exposure and invocation come only from composed feature operations", 
     app.available(root.id).map((each) => each.name),
     ["notes"],
   );
-  assert.deepEqual(app.available(child.id), []);
-  assert.equal(
-    (await app.invoke(child.id, "note", { text: "Private" }, invocation)).state,
-    "refused",
-  );
+  assert.deepEqual(app.available(child.id), app.available(root.id));
+  assert.equal((await app.invoke(child.id, "note", { text: "Shared" }, invocation)).state, "done");
   assert.equal((await app.invoke(root.id, "note", {}, invocation)).state, "refused");
   assert.equal(
     (await app.invoke(root.id, "actor_create", { name: "absent", purpose: "Absent" }, invocation))
@@ -87,7 +83,7 @@ test("core exposure and invocation come only from composed feature operations", 
     state: "done",
     value: { id: "note_1", text: "Saved" },
   });
-  assert.equal(invoked, 1);
+  assert.equal(invoked, 2);
   assert.equal(activity.list(undefined, 1)[0]?.operation, "note");
   const empty = application(actors, capabilities(actors, connected, []), calling, activity, {
     waitMs: 0,
@@ -98,7 +94,7 @@ test("core exposure and invocation come only from composed feature operations", 
     (await empty.invoke(root.id, "note", { text: "Absent" }, invocation)).state,
     "refused",
   );
-  assert.equal(invoked, 1);
+  assert.equal(invoked, 2);
 });
 
 test("Tool listing, dispatch and team use the same current exposure through offline, replacement and closure", async (t) => {

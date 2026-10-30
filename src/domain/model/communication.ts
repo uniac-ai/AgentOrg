@@ -420,7 +420,6 @@ export const ReleaseRequest = z.strictObject({ resource: Resource }).meta({ id: 
 export const TEAM = toolDefinition("team", {
   progress_set: {
     writes: true,
-    rootOnly: false,
     request: ProgressSet,
     response: Progress,
     description: `Set where you stand, for anyone in the organization to read: replace the fields you give of your progress.
@@ -429,7 +428,6 @@ state is running, waiting, blocked or review. summary is a short current paragra
   },
   team: {
     writes: false,
-    rootOnly: false,
     request: TeamRequest,
     response: Team,
     description: `Explore the organization: a position and its reports, each with its purpose, whether it is online, its progress state and summary, its open questions, the shared resources it holds, and its interfaces you can call.
@@ -438,7 +436,6 @@ Default: you and your direct reports. Anyone may explore any position.`,
   },
   progress: {
     writes: false,
-    rootOnly: false,
     request: ProgressRequest,
     response: ProgressResult,
     description: `Read an actor's full progress, with its open questions. Anyone may read anyone's.
@@ -450,7 +447,6 @@ history adds that many earlier versions.`,
 export const QUESTIONS = toolDefinition("questions", {
   question_ask: {
     writes: true,
-    rootOnly: false,
     request: QuestionAsk,
     response: Question,
     description: `Ask a question, published for anyone to read and pending on its addressee until answered.
@@ -459,7 +455,6 @@ It goes to your manager, or to a direct report; the root may ask anyone. To carr
   },
   question_answer: {
     writes: true,
-    rootOnly: false,
     request: QuestionAnswerRequest,
     response: QuestionsResult,
     description: `Answer one or more open questions addressed to you; the root may answer any.
@@ -468,7 +463,6 @@ A question that names an answerer is answered by that actor or the root alone. c
   },
   questions: {
     writes: false,
-    rootOnly: false,
     request: QuestionsRequest,
     response: QuestionsResult,
     description: `List questions, newest first, as anyone may. It changes nothing.
@@ -480,7 +474,6 @@ What waits on you is to you and open. New answers to yours are from you since a 
 export const MESSAGES = toolDefinition("messages", {
   message_send: {
     writes: true,
-    rootOnly: false,
     request: MessageSend,
     response: Message,
     description: `Send a private message to any open position, found with team: findings, evidence, a brief or a handoff.
@@ -489,7 +482,6 @@ Its two parties, the manager of either, and the root may read it. It is pending 
   },
   messages: {
     writes: false,
-    rootOnly: false,
     request: MessagesRequest,
     response: MessagesResult,
     description: `List the messages you may see, newest first. It changes nothing.
@@ -498,7 +490,6 @@ Default: those addressed to you. box out lists those you sent, and actor another
   },
   message_read: {
     writes: true,
-    rootOnly: false,
     request: MessageRead,
     response: MessagesResult,
     description: "Mark messages addressed to you read. Each sender sees when.",
@@ -508,7 +499,6 @@ Default: those addressed to you. box out lists those you sent, and actor another
 export const CLAIMS = toolDefinition("claims", {
   claim: {
     writes: true,
-    rootOnly: false,
     request: ClaimRequest,
     response: Claim,
     description: `Claim a shared resource, such as a release lane or a cluster, while you use it.
@@ -517,7 +507,6 @@ Anyone sees current claims in team. Claiming a resource another actor holds is r
   },
   release: {
     writes: true,
-    rootOnly: false,
     request: ReleaseRequest,
     response: Claim,
     description: "Release a shared resource you hold; the root may release any.",

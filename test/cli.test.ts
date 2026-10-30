@@ -5,6 +5,7 @@ import { existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import type { ToolDescriptor } from "../src/domain/model/index.ts";
 import { fakeActor, iface, startCore, until } from "./harness.ts";
 
 import { command, serving } from "./process.ts";
@@ -93,13 +94,18 @@ test("generic CLI access lists and invokes routed interfaces with the same actor
     assert.equal(called.state, "done");
     assert.match(called.call, /^call_/);
     assert.deepEqual(called.value, { echoed: "hello" });
-    const refused = await agentorg(["call", "activity"], {
+    const asWorker = {
       ...env,
       AGENTORG_ACTOR_ID: created.actor.id,
       AGENTORG_CREDENTIAL: created.credential,
-    });
-    assert.equal(refused.status, 1);
-    assert.equal(JSON.parse(refused.stdout).code, "not_found");
+    };
+    const workerCatalog = JSON.parse((await agentorg(["interfaces"], asWorker)).stdout);
+    assert.equal(workerCatalog.tools.length, 7);
+    assert.equal(workerCatalog.tools.flatMap((tool: ToolDescriptor) => tool.interfaces).length, 16);
+    const activity = await agentorg(["call", "activity"], asWorker);
+    assert.equal(activity.status, 0);
+    assert.equal(JSON.parse(activity.stdout).state, "done");
+    assert.ok(JSON.parse(activity.stdout).value.entries.length > 0);
     for (const input of ["[]", '"sentinel-credential"', '{"secret":"sentinel-credential"']) {
       const invalid = await agentorg(["call", "worker.echo", "--json", input], env);
       assert.equal(invalid.status, 1);
@@ -242,11 +248,11 @@ test("agentorg-server creates the root's credential, and the built-ins run as th
     const [seen] = JSON.parse(team.stdout).positions;
     assert.deepEqual([seen.name, seen.manager], [actor.name, JSON.parse(team.stdout).root]);
 
-    const refused = await agentorg(["activity"], asProg);
-    assert.equal(refused.status, 1);
-    assert.match(refused.stderr, /not_found: there is no interface activity/);
+    const observed = await agentorg(["activity", "--limit", "5"], asProg);
+    assert.equal(observed.status, 0, observed.stderr);
     const activity = await agentorg(["activity", "--limit", "5"], asRoot);
     assert.equal(JSON.parse(activity.stdout).entries[0].operation, "actor_create");
+    assert.deepEqual(JSON.parse(observed.stdout), JSON.parse(activity.stdout));
 
     const set = await agentorg(
       ["progress", "set", "--state", "running", "--summary", "Up"],
