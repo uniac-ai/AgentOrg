@@ -71,7 +71,7 @@ test("Actor admission requires the matching credential and refuses a web page's 
   assert.equal((await client.call("team")).state, "done");
 });
 
-test("the core learns an actor's interfaces when it connects, again when they change, and marks it online", async (t) => {
+test("fresh and replaced Actor advertisements retain the first valid descriptor for each local name", async (t) => {
   const core = await startCore();
   t.after(() => core.close());
   const { actor: storage, credential } = await core.org.registry.create(
@@ -80,16 +80,65 @@ test("the core learns an actor's interfaces when it connects, again when they ch
     "Storage",
   );
   assert.equal(core.org.connections.link(storage.id), undefined);
-  const fake = fakeActor([iface("review"), iface("not.a.handle"), iface("archive")]);
+  const first = iface("review", { description: "First review contract" });
+  const fake = fakeActor([first, iface("review"), iface("not.a.handle"), iface("archive")]);
   const connection = await core.connect(credential, fake);
   await until("storage online", () => core.org.connections.link(storage.id) !== undefined);
   const listed = core.org.connections.interfaces(storage.id).map((each) => each.name);
-  assert.deepEqual(listed, ["review", "archive"], "an interface whose name has a dot is dropped");
+  assert.deepEqual(listed, ["review", "archive"]);
+  assert.deepEqual(core.store.exposures.get(storage.id), [first, iface("archive")]);
   assert.ok(core.org.connections.link(storage.id));
+  const caller = await core.client(core.root);
+  const catalog = await caller.available();
+  assert.equal(catalog.length, 8, "the Actor's Tool and all seven Hub Tools remain available");
+  assert.deepEqual(
+    catalog.find((tool) => tool.id === storage.id)?.interfaces.map((offer) => offer.interface),
+    [first, iface("archive")],
+  );
 
-  await connection.expose([...fake.exposed, ...fakeActor([iface("restore")]).exposed]);
+  const restored = iface("restore", { description: "First restore contract" });
+  await connection.expose(fakeActor([restored, iface("restore"), iface("not.a.handle")]).exposed);
   await until("restore listed", () =>
     core.org.connections.interfaces(storage.id).some((each) => each.name === "restore"),
+  );
+  assert.deepEqual(core.store.exposures.get(storage.id), [restored]);
+  assert.deepEqual(
+    (await caller.available())
+      .find((tool) => tool.id === storage.id)
+      ?.interfaces.map((offer) => offer.interface),
+    [restored],
+  );
+});
+
+test("cached duplicate advertisements remain usable offline and after a core restart", async (t) => {
+  const core = await startCore();
+  t.after(() => core.close());
+  const { actor } = await core.org.registry.create(core.rootId, "cached", "Cached");
+  const first = iface("review", { description: "Cached first contract" });
+  const cached = [first, iface("review"), iface("invalid.name"), iface("archive")];
+  core.store.exposures.put(actor.id, cached);
+  const caller = await core.client(core.root);
+  const check = async () => {
+    assert.equal(core.org.connections.link(actor.id), undefined);
+    assert.deepEqual(core.org.connections.interfaces(actor.id), [first, iface("archive")]);
+    const catalog = await caller.available();
+    assert.equal(catalog.length, 8);
+    assert.deepEqual(
+      catalog.find((tool) => tool.id === actor.id)?.interfaces.map((offer) => offer.interface),
+      [first, iface("archive")],
+    );
+  };
+  await check();
+  await core.restart();
+  await until(
+    "the catalog caller reconnects",
+    async () => (await caller.call("team").catch(() => undefined))?.state === "done",
+  );
+  await check();
+  assert.deepEqual(
+    core.store.exposures.get(actor.id),
+    cached,
+    "reads normalize existing rows without migrating storage",
   );
 });
 

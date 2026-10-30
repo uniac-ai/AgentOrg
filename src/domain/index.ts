@@ -1,5 +1,6 @@
 /** The domain composition: owner clients, their triggers, and its Application/Presence ports. */
 
+import { actors as actorModule } from "./actors.ts";
 import { application, type Timing } from "./application.ts";
 import { audit } from "./audit.ts";
 import { calls } from "./calls.ts";
@@ -11,7 +12,7 @@ import { type ExecutionProvider, execution } from "./execution.ts";
 import type { Store } from "./ports.ts";
 import { progress } from "./progress.ts";
 import { registry } from "./registry.ts";
-import { views } from "./views.ts";
+import { team } from "./team.ts";
 
 export type { Timing };
 
@@ -32,28 +33,24 @@ export function organization(store: Store, options: OrganizationOptions = {}) {
     options.onActorClosed ?? (() => {}),
   );
   const calling = calls(store.calls, connected, activity, now);
-  const offered = capabilities(actors, connected);
   const resources = claims(store.claims, actors, now);
   const correspondence = communication(store, actors, now);
   const progressState = progress(store.progress, actors, now);
-  const read = views(actors, connected, offered, progressState, correspondence, resources);
   const creation = execution(options.provider ?? (() => undefined));
-  const dispatch = application(
-    actors,
-    offered,
-    calling,
-    correspondence,
-    resources,
-    connected,
-    progressState,
-    read,
-    activity,
-    creation,
-    {
-      waitMs: options.waitMs ?? 30_000,
-      stepMs: options.stepMs ?? 10_000,
-    },
-  );
+  const positions = actorModule(actors, calling, connected, creation);
+  const organizationView = team(actors, positions, progressState, correspondence, resources);
+  const offered = capabilities(actors, connected, [
+    positions.tool,
+    organizationView.tool,
+    ...correspondence.tools,
+    resources.tool,
+    calling.tool,
+    activity.tool,
+  ]);
+  const dispatch = application(actors, offered, calling, activity, {
+    waitMs: options.waitMs ?? 30_000,
+    stepMs: options.stepMs ?? 10_000,
+  });
   return {
     registry: actors,
     connections: connected,

@@ -10,6 +10,9 @@ test("the web client exposes nothing of its own to the core", async () => {
 
 test("the user's Tool catalog is the root's, with local interfaces and unchanged call aliases", async () => {
   const { core, get, post, storage } = await setup();
+  const [review] = core.store.exposures.get(storage.id);
+  assert.ok(review);
+  core.store.exposures.put(storage.id, [review, { ...review, description: "Cached duplicate" }]);
   const catalog = await json(get("/api/interfaces"));
   assert.deepEqual(Object.keys(catalog), ["tools"]);
   const tools = catalog.tools as ToolDescriptor[];
@@ -20,6 +23,8 @@ test("the user's Tool catalog is the root's, with local interfaces and unchanged
   const advertised = tools.find((tool) => tool.id === storage.id);
   assert.equal(advertised?.name, "storage");
   assert.equal(advertised?.interfaces[0]?.interface.name, "review");
+  assert.equal(advertised?.interfaces.length, 1);
+  assert.equal(tools.length, 8, "cached duplicate advertisements preserve the full web catalog");
 
   const called = await post("/api/interfaces/storage.review", { change: "#41" });
   assert.equal(called.status, 200);

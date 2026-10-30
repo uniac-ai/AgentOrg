@@ -3,6 +3,16 @@
 import { INTERFACE_NAME, type InterfaceDescriptor } from "./model/index.ts";
 import type { ActorLink, Store } from "./ports.ts";
 
+/** Valid local names, once each; the first descriptor owns its contract. */
+function validInterfaces(interfaces: InterfaceDescriptor[]): InterfaceDescriptor[] {
+  const names = new Set<string>();
+  return interfaces.filter((each) => {
+    if (!INTERFACE_NAME.test(each.name) || names.has(each.name)) return false;
+    names.add(each.name);
+    return true;
+  });
+}
+
 export function connections(
   exposures: Store["exposures"],
   onOnline: (actor: string) => void,
@@ -15,10 +25,7 @@ export function connections(
   let order = 0;
   const changed = (actor: string, link: ActorLink, interfaces: InterfaceDescriptor[]) => {
     if (links.get(actor) === link) {
-      exposures.put(
-        actor,
-        interfaces.filter((each) => INTERFACE_NAME.test(each.name)),
-      );
+      exposures.put(actor, validInterfaces(interfaces));
     }
   };
   return {
@@ -26,7 +33,7 @@ export function connections(
       candidates.set(link, ++order);
     },
     link: (actor: string) => links.get(actor),
-    interfaces: (actor: string) => exposures.get(actor),
+    interfaces: (actor: string) => validInterfaces(exposures.get(actor)),
     online(actor: string, link: ActorLink, interfaces: InterfaceDescriptor[]): void {
       const candidate = candidates.get(link);
       if (ended.has(link) || candidate === undefined || candidate < (owners.get(actor) ?? 0))

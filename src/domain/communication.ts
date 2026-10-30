@@ -1,9 +1,12 @@
 /** Questions, answers and private messages, with a shared cursor, authorization and waiting reads. */
 
 import { Conflict, Forbidden, Invalid, NotFound } from "./errors.ts";
-import type { RequestOf, ResponseOf } from "./model/index.ts";
+import { MESSAGES, QUESTIONS, type RequestOf, type ResponseOf } from "./model/index.ts";
 import type { MessageRow, QuestionRow, Store, Waiting } from "./ports.ts";
 import { type ActorRow, newId, type Registry } from "./registry.ts";
+import { bindTool } from "./tools.ts";
+
+export { MESSAGES, QUESTIONS } from "./model/index.ts";
 
 const isRoot = (actor: ActorRow) => actor.manager === null;
 
@@ -275,7 +278,19 @@ export function communication(
       if (stepped && Date.now() < deadline) await waiting.progress();
     }
   }
-  return { openQuestions, ask, answer, questions, send, messages, read };
+  return {
+    openQuestions,
+    ask,
+    answer,
+    questions,
+    send,
+    messages,
+    read,
+    tools: [
+      bindTool(QUESTIONS, { question_ask: ask, question_answer: answer, questions }),
+      bindTool(MESSAGES, { message_send: send, messages, message_read: read }),
+    ],
+  };
 }
 
 export type Communication = ReturnType<typeof communication>;

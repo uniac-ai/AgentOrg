@@ -6,9 +6,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
+import { z } from "zod";
+import { application } from "../src/domain/application.ts";
+import { audit } from "../src/domain/audit.ts";
+import { calls } from "../src/domain/calls.ts";
+import { capabilities } from "../src/domain/capabilities.ts";
+import { connections } from "../src/domain/connections.ts";
 import { organization } from "../src/domain/index.ts";
 import type { Delivery, Outcome } from "../src/domain/model/index.ts";
+import { toolDefinition } from "../src/domain/model/json-schema.ts";
 import { type ActorLink, UnknownRun } from "../src/domain/ports.ts";
+import { registry } from "../src/domain/registry.ts";
+import { bindTool } from "../src/domain/tools.ts";
 import { SqliteStore } from "../src/storage/sqlite/index.ts";
 import { iface, until } from "./harness.ts";
 
@@ -18,6 +27,78 @@ const link = (): ActorLink => ({
   outcome: async () => ({ ok: true, value: {}, parts: [] }),
   cancel: async () => {},
   close: async () => {},
+});
+
+test("core exposure and invocation come only from composed feature operations", async (t) => {
+  const store = new SqliteStore(":memory:");
+  t.after(() => store.close());
+  const now = () => "2026-10-30T00:00:00Z";
+  const actors = registry(store.actors, now);
+  const { root } = await actors.createRoot();
+  const { actor: child } = await actors.create(root.id, "child", "Child");
+  const activity = audit(store.audit, now);
+  const connected = connections(
+    store.exposures,
+    () => {},
+    () => {},
+  );
+  const calling = calls(store.calls, connected, activity, now);
+  const definition = toolDefinition("notes", {
+    note: {
+      writes: true,
+      rootOnly: true,
+      description: "Record a note.",
+      request: z.strictObject({ text: z.string() }),
+      response: z.strictObject({ id: z.string(), text: z.string() }),
+    },
+  });
+  let invoked = 0;
+  const tool = bindTool(definition, {
+    note: (_actor, request, context) => {
+      invoked++;
+      assert.deepEqual(
+        context.catalog.map((each) => each.id),
+        ["hub:notes"],
+      );
+      return { id: "note_1", text: request.text };
+    },
+  });
+  const offered = capabilities(actors, connected, [tool]);
+  const app = application(actors, offered, calling, activity, { waitMs: 0, stepMs: 1000 });
+  const exposed = offered.list(root)[0]?.interfaces[0];
+  assert.ok(exposed && "operation" in exposed);
+  assert.equal(exposed.operation.definition, definition.interfaces.note);
+  assert.deepEqual(
+    app.available(root.id).map((each) => each.name),
+    ["notes"],
+  );
+  assert.deepEqual(app.available(child.id), []);
+  assert.equal(
+    (await app.invoke(child.id, "note", { text: "Private" }, invocation)).state,
+    "refused",
+  );
+  assert.equal((await app.invoke(root.id, "note", {}, invocation)).state, "refused");
+  assert.equal(
+    (await app.invoke(root.id, "actor_create", { name: "absent", purpose: "Absent" }, invocation))
+      .state,
+    "refused",
+  );
+  assert.deepEqual(await app.invoke(root.id, "note", { text: "Saved" }, invocation), {
+    state: "done",
+    value: { id: "note_1", text: "Saved" },
+  });
+  assert.equal(invoked, 1);
+  assert.equal(activity.list(undefined, 1)[0]?.operation, "note");
+  const empty = application(actors, capabilities(actors, connected, []), calling, activity, {
+    waitMs: 0,
+    stepMs: 1000,
+  });
+  assert.deepEqual(empty.available(root.id), []);
+  assert.equal(
+    (await empty.invoke(root.id, "note", { text: "Absent" }, invocation)).state,
+    "refused",
+  );
+  assert.equal(invoked, 1);
 });
 
 test("Tool listing, dispatch and team use the same current exposure through offline, replacement and closure", async (t) => {

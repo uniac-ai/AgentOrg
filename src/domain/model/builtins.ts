@@ -6,7 +6,7 @@
 
 import { z } from "zod";
 import { COMMUNICATION } from "./communication.ts";
-import type { BuiltinSpec } from "./json-schema.ts";
+import { toolDefinition } from "./json-schema.ts";
 import { Actor, AuditEntry, Call, Handle, Id, MAX_WAIT_SECONDS, Text } from "./records.ts";
 
 /**
@@ -97,9 +97,8 @@ export const ActivityResult = z
   .strictObject({ entries: z.array(AuditEntry).describe("Newest first.") })
   .meta({ id: "ActivityResult" });
 
-export const BUILTINS = {
+export const ACTORS = toolDefinition("actors", {
   actor_create: {
-    tool: "actors",
     writes: true,
     rootOnly: false,
     request: ActorCreate,
@@ -111,7 +110,6 @@ Returns the actor and its credential, shown only this once. Whatever fills the p
 With execution, wait for the Provider and return its separate ready, failed or unknown outcome. The Actor remains created for every execution outcome. Ready confirms Provider creation, independently of Actor connectivity.`,
   },
   actor_close: {
-    tool: "actors",
     writes: true,
     rootOnly: false,
     request: ActorClose,
@@ -120,9 +118,10 @@ With execution, wait for the Provider and return its separate ready, failed or u
 
 Refused while it has open reports of its own. Its pending calls end and its connections close.`,
   },
-  ...COMMUNICATION,
+});
+
+export const CALLS = toolDefinition("calls", {
   call_result: {
-    tool: "calls",
     writes: false,
     rootOnly: false,
     request: CallResult,
@@ -132,22 +131,31 @@ Refused while it has open reports of its own. Its pending calls end and its conn
 With wait, hold until it settles or the wait ends, whichever is first.`,
   },
   call_withdraw: {
-    tool: "calls",
     writes: true,
     rootOnly: false,
     request: CallWithdraw,
     response: Call,
     description: "Withdraw a pending call you made that no longer needs an answer.",
   },
+});
+
+export const ACTIVITY = toolDefinition("activity", {
   activity: {
-    tool: "activity",
     writes: false,
     rootOnly: true,
     request: Activity,
     response: ActivityResult,
     description: "Read the audit trail: every write and every routed call, newest first.",
   },
-} as const satisfies Record<string, BuiltinSpec>;
+});
+
+/** Derived schemas for CLI and typed callers; feature modules supply runtime operations. */
+export const BUILTINS = {
+  ...ACTORS.interfaces,
+  ...COMMUNICATION,
+  ...CALLS.interfaces,
+  ...ACTIVITY.interfaces,
+} as const;
 
 export type BuiltinName = keyof typeof BUILTINS;
 export type RequestOf<N extends BuiltinName> = z.output<(typeof BUILTINS)[N]["request"]>;

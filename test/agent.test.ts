@@ -202,6 +202,23 @@ test("the stdio catalog is stable and only attachment can act before a position 
   assert.deepEqual(listed.tools, await asActor.available());
   assert.equal(listed.tools.length, 6);
   assert.equal((await one.interfaces()).includes("activity"), false);
+  const { actor: report, credential } = await org.org.registry.create(actor, "report", "A report");
+  await org.connect(credential, fakeActor([iface("review"), iface("review")]));
+  await until(
+    "the duplicate advertiser is online",
+    () => org.org.connections.link(report.id) !== undefined,
+  );
+  const refreshed = await one.tool("interfaces");
+  assert.notEqual(refreshed.isError, true);
+  const tools = refreshed.structuredContent?.tools as {
+    id: string;
+    interfaces: { call: string }[];
+  }[];
+  assert.equal(tools.length, 7, "the report and all six Hub Tools remain available");
+  assert.deepEqual(
+    tools.find((tool) => tool.id === report.id)?.interfaces.map((offer) => offer.call),
+    ["report.review"],
+  );
 });
 
 test("generic invocation forwards progress and completes a wait beyond the SDK default", {

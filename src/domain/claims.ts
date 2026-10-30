@@ -7,9 +7,12 @@
  */
 
 import { Conflict, Forbidden, Invalid, NotFound } from "./errors.ts";
-import type { RequestOf } from "./model/index.ts";
+import { CLAIMS, type RequestOf } from "./model/index.ts";
 import type { ClaimRow, Store } from "./ports.ts";
 import type { ActorRow, Registry } from "./registry.ts";
+import { bindTool } from "./tools.ts";
+
+export { CLAIMS as definition } from "./model/index.ts";
 
 export function claims(claimStore: Store["claims"], registry: Registry, now: () => string) {
   /** The claims the actor holds now. */
@@ -59,7 +62,7 @@ export function claims(claimStore: Store["claims"], registry: Registry, now: () 
     const until = claim.until === null ? "" : ` until ${claim.until}`;
     return `${claim.resource} is held by ${holder}${until}: ${claim.note}`;
   }
-  return { heldBy, claim, release };
+  return { heldBy, claim, release, tool: bindTool(CLAIMS, { claim, release }) };
 }
 
 export type Claims = ReturnType<typeof claims>;

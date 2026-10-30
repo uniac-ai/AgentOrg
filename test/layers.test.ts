@@ -63,12 +63,14 @@ const ADAPTERS = [
 ];
 
 const DOMAIN_BOUNDARIES: Record<string, string[]> = {
-  registry: ["connections", "calls", "capabilities", "views", "application"],
+  registry: ["connections", "calls", "capabilities", "actors", "team", "application"],
   connections: ["registry", "calls"],
-  capabilities: ["application", "calls", "views"],
-  communication: ["progress", "claims", "capabilities", "views", "application"],
-  progress: ["communication", "claims", "views"],
-  views: ["application"],
+  capabilities: ["application", "calls", "actors", "team"],
+  communication: ["progress", "claims", "capabilities", "actors", "team", "application"],
+  progress: ["communication", "claims", "actors", "team"],
+  actors: ["capabilities", "team", "application"],
+  team: ["capabilities", "application"],
+  application: ["actors", "team", "communication", "claims", "progress", "execution"],
 };
 
 // The forbidden dependencies are the architecture's contract, independent of implementation.

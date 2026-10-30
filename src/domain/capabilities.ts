@@ -1,53 +1,54 @@
 /** Actor-relative Tools shared by listing, dispatch and team views, with private destinations. */
 
 import type { Connections } from "./connections.ts";
-import {
-  BUILTIN_NAMES,
-  BUILTINS,
-  type BuiltinName,
-  MANAGER,
-  objectSchema,
-  type ToolDescriptor,
-} from "./model/index.ts";
+import { MANAGER, objectSchema, type ToolDescriptor } from "./model/index.ts";
 import type { ActorRow, Registry } from "./registry.ts";
+import type { FeatureTool, Operation } from "./tools.ts";
 
 export type Capability = { offer: ToolDescriptor["interfaces"][number] } & (
-  | { builtin: BuiltinName }
+  | { operation: Operation }
   | { to: string }
 );
 interface ToolExposure extends Pick<ToolDescriptor, "id" | "name"> {
   interfaces: Capability[];
 }
 
-const builtins = new Map<string, ToolExposure>();
-for (const name of BUILTIN_NAMES) {
-  const spec = BUILTINS[name];
-  const tool = builtins.get(spec.tool) ?? {
-    id: `hub:${spec.tool}`,
-    name: spec.tool,
-    interfaces: [],
-  };
-  tool.interfaces.push({
-    builtin: name,
-    offer: {
-      call: name,
-      interface: {
-        name,
-        description: spec.description,
-        input: objectSchema(spec.request, "input"),
-        output: objectSchema(spec.response, "output"),
-        one_way: false,
-        long_running: false,
-      },
-      routed: false,
-      read_only: !spec.writes,
-    },
-  });
-  builtins.set(spec.tool, tool);
+export function descriptorsOf(tools: ToolExposure[]): ToolDescriptor[] {
+  return tools.map(({ id, name, interfaces }) => ({
+    id,
+    name,
+    interfaces: interfaces.map((each) => each.offer),
+  }));
 }
 
-export function capabilities(registry: Registry, connections: Pick<Connections, "interfaces">) {
+export function capabilities(
+  registry: Registry,
+  connections: Pick<Connections, "interfaces">,
+  tools: FeatureTool[],
+) {
+  const builtins: ToolExposure[] = tools.map((tool) => ({
+    id: tool.id,
+    name: tool.name,
+    interfaces: tool.interfaces.map((operation) => ({
+      operation,
+      offer: {
+        call: operation.name,
+        interface: {
+          name: operation.name,
+          description: operation.definition.description,
+          input: objectSchema(operation.definition.request, "input"),
+          output: objectSchema(operation.definition.response, "output"),
+          one_way: false,
+          long_running: false,
+        },
+        routed: false,
+        read_only: !operation.definition.writes,
+      },
+    })),
+  }));
   return {
+    known: (name: string) =>
+      tools.some((tool) => tool.interfaces.some((each) => each.name === name)),
     list(actor: ActorRow): ToolExposure[] {
       if (actor.closed_at !== null) return [];
       const named = (name: string, to: ActorRow): ToolExposure => ({
@@ -69,11 +70,11 @@ export function capabilities(registry: Registry, connections: Pick<Connections, 
               ...(manager ? [named(MANAGER, manager)] : []),
               ...registry.reports(actor.id).map((report) => named(report.name, report)),
             ];
-      const own = [...builtins.values()].map((tool) => ({
+      const own = builtins.map((tool) => ({
         ...tool,
         interfaces: tool.interfaces.filter(
           (each) =>
-            "builtin" in each && (!BUILTINS[each.builtin].rootOnly || actor.manager === null),
+            "operation" in each && (!each.operation.definition.rootOnly || actor.manager === null),
         ),
       }));
       return [...own, ...routed].filter((tool) => tool.interfaces.length > 0);

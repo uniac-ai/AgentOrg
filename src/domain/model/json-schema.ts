@@ -6,13 +6,20 @@ export type JsonSchema = { [key: string]: unknown };
 
 /** A built-in's schemas, authority, audit policy and caller-facing description. */
 export interface BuiltinSpec {
-  readonly tool: string;
   readonly writes: boolean;
   readonly rootOnly: boolean;
   readonly request: z.ZodType;
   readonly response: z.ZodType;
   /** The first paragraph is the summary. */
   readonly description: string;
+}
+
+/** A feature's contract, shared by its bound operations and schema-only consumers. */
+export function toolDefinition<const N extends string, const S extends Record<string, BuiltinSpec>>(
+  name: N,
+  interfaces: S,
+) {
+  return { id: `hub:${name}`, name, interfaces };
 }
 
 /**

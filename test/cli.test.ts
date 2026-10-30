@@ -69,7 +69,7 @@ test("generic CLI access lists and invokes routed interfaces with the same actor
     });
     await core.connect(
       created.credential,
-      fakeActor([echo], async (input) => ({ value: { echoed: input.text } })),
+      fakeActor([echo, iface("echo")], async (input) => ({ value: { echoed: input.text } })),
     );
     const env = {
       AGENTORG_URL: core.url,
@@ -85,6 +85,8 @@ test("generic CLI access lists and invokes routed interfaces with the same actor
     assert.equal(tool.name, "worker");
     assert.equal(tool.interfaces[0].interface.name, "echo");
     assert.equal(tool.interfaces[0].call, "worker.echo");
+    assert.equal(tool.interfaces.length, 1);
+    assert.equal(catalog.tools.length, 8, "duplicate advertisements preserve the full CLI catalog");
     const result = await agentorg(["call", "worker.echo", "--json", '{"text":"hello"}'], env);
     assert.equal(result.status, 0, result.stderr);
     const called = JSON.parse(result.stdout);

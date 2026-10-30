@@ -64,13 +64,15 @@ including types, is acyclic and checked by `test/layers.test.ts`.
 | `registry.ts` | Credentials identify open positions; creation returns identity and a one-time credential; closure checks authority and open reports. | Identity, actor tree and lifecycle. |
 | `execution.ts` | Accepts an existing Actor identity, private bootstrap credential, Provider and configuration; validates configuration and reports one Provider creation outcome. | None. |
 | `connections.ts` | Accepts link-specific presence and advertisements; supplies live links and the latest descriptors; disconnects closed actors. Stale-link reports have no effect. | Live links in memory; advertised interfaces in storage. |
-| `capabilities.ts` | Derives Actor-relative Tool exposures with private dispatch destinations from Registry and Connections. Listing, dispatch and team use the same projection. | None. |
+| `capabilities.ts` | Projects supplied feature Tools and Actor advertisements into caller-relative exposures. Listing, dispatch and team use the same projection. | None. |
 | `calls.ts` | Creates, delivers, cancels, settles and waits on calls through Connections; records audit outcomes. | Durable calls; active delivery attempts and waiters. |
 | `progress.ts` | Validates actor references, versions partial replacements and supplies current/history reads. | Progress versions. |
 | `communication.ts` | Authorizes questions, answers and private messages, and supplies correspondence reads and waits. | Questions/messages with one cursor; waiting reads. |
 | `claims.ts`, `audit.ts` | Manage current resource claims and append/read the audit trail. | Their durable records. |
-| `views.ts` | Combines owner clients into actor, team and progress responses. | None. |
-| `application.ts` | Validates and dispatches requests, audits writes and bounds call waits. Actor closure transitions Registry, ends calls through Calls, then disconnects through Connections. | Request timing policy. |
+| `actors.ts` | Owns the Actors Tool, Actor read projection and lifecycle orchestration over Registry, Execution, Calls and Connections. | None beyond its state-owner clients. |
+| `team.ts` | Owns the Team Tool, progress publication and composed organization/progress views. Receives callable interfaces from core's invocation catalog. | Progress belongs to `progress.ts`. |
+| `tools.ts` | Binds each feature's schema contract to its typed operations; the resulting objects supply exposure and invocation together. | None. |
+| `application.ts` | Validates, audits and dispatches bound feature operations or routes calls through Calls, with bounded waits. | Request timing policy. |
 
 SQLite schema 7 stores identity in `actors` and the last advertised descriptors in
 `exposures`. Online state is derived from live links, so a fresh core starts offline
@@ -105,10 +107,18 @@ Its Tool name is `manager`, a direct report's handle, or, for the root, the Acto
 The interfaces keep their local names, while `call` joins that alias and the local name.
 Advertisements remain visible while offline. A closed Actor receives no Tools.
 
-`capabilities.ts` owns this Actor-relative projection, composing Registry identity and Connections
-advertisements with built-in membership declared beside each schema. Its Tool exposures keep
-dispatch destinations private. Application lists their public descriptors and resolves calls from
-those same exposures; Views derives the callable interface names in team records from them.
+Feature modules own their Tool contracts and bound operations. Actors owns lifecycle orchestration
+and its read projection; Team composes progress and organization views; Questions and Messages
+share communication's cursor and waiting primitive; Claims, Calls and Activity expose their state
+owners. Core composes these peers and supplies their bound Tools to `capabilities.ts`. The combined
+built-in schema export is derived for CLI and type consumers, rather than runtime registration.
+
+`capabilities.ts` owns the Actor-relative projection over those supplied Tools, Registry identity
+and Connections advertisements. Its exposures keep dispatch destinations private. Application
+validates, audits and invokes the selected bound operation without feature handlers of its own.
+Team receives that same projected catalog as invocation input for its callable interface views,
+keeping the dependency graph acyclic. Connections retains the first valid descriptor per local
+interface name on both advertisement writes and cached reads, including offline advertisements.
 No separate catalog state or storage is needed. Clients depend on the shared domain descriptor
 and Actor API, independently of how an Actor was created or which Provider executes it.
 

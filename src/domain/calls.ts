@@ -5,7 +5,17 @@ import { violation } from "../schema.ts";
 import type { Audit } from "./audit.ts";
 import type { Connections } from "./connections.ts";
 import { Conflict, Forbidden, Invalid, NotFound } from "./errors.ts";
-import type { Call, Delivery, InterfaceDescriptor, Outcome } from "./model/index.ts";
+import {
+  CALLS,
+  type Call,
+  type Delivery,
+  type InterfaceDescriptor,
+  type Outcome,
+} from "./model/index.ts";
+import { bindTool } from "./tools.ts";
+
+export { CALLS as definition } from "./model/index.ts";
+
 import { type ActorLink, LinkLost, type Store, UnknownRun } from "./ports.ts";
 import { type ActorRow, newId } from "./registry.ts";
 
@@ -233,7 +243,22 @@ export function calls(
     if (call.run !== null && link) void link.cancel(call.run).catch(() => {});
     attempts.get(call.id)?.controller.abort();
   }
-  return { found, create, redeliver, wait, withdraw, endFor };
+  return {
+    found,
+    create,
+    redeliver,
+    wait,
+    withdraw,
+    endFor,
+    tool: bindTool(CALLS, {
+      call_result: (actor, request, waiting) => {
+        const call = found(request.call);
+        if (call.from !== actor.id) throw new Forbidden(`only its caller reads call ${call.id}`);
+        return wait(call.id, request.wait * 1000, waiting);
+      },
+      call_withdraw: (actor, request) => withdraw(actor, request.call),
+    }),
+  };
 }
 
 export type Calls = ReturnType<typeof calls>;
