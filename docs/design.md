@@ -206,8 +206,8 @@ A human may answer hours later, so a long-running interface may take a call as a
 | `call_withdraw {call}` | The caller withdraws a pending call. |
 | `activity {since?, limit?}` | Audit metadata for every open Actor, newest first: id, time, acting Actor, operation, target and outcome. |
 
-When execution is requested, Application creates the organizational Actor through Registry before
-calling Execution. The execution client uses the selected Provider's configuration schema and
+When execution is requested, the Actors module creates the organizational Actor through Registry
+before calling Execution. The execution client uses the selected Provider's configuration schema and
 creation interface; `config` is a required JSON object. Its result is
 `{providerId, status: "ready" | "failed" | "unknown", error?: {code, message}}`. The returned Actor
 view is read after that call, so it includes any connection established while the Provider worked.
