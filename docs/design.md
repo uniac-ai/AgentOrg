@@ -172,11 +172,17 @@ view is read after that call, so it includes any connection established while th
 The Actor, credential and independently established connection survive a failed or unknown outcome.
 Without `execution`, creation returns only the Actor and credential.
 
-`ready` means the Provider returned a valid successful creation reply. Provider owns confirmation
-of the native resource, required local initialization, protected bootstrap and durable native
-association before that reply. Hub observes the reply; Actor connectivity, MCP initialization and
-model activity are separate. Hub sends one creation request, retains no retry inputs and performs
-no automatic replay after uncertainty. Native resource management belongs to the external Provider.
+`ready` means the Provider returned a valid successful creation reply for execution of the
+Hub-owned Actor. Provider owns local execution readiness and protected bootstrap before that reply;
+native bookkeeping is its implementation detail. Hub observes the reply; Actor connectivity, MCP
+initialization and model activity are separate. Hub sends one creation request, retains no retry
+inputs and performs no automatic replay after uncertainty. Native resource management belongs to
+the external Provider.
+
+The Hub gives configuration description and execution creation one combined 45-second budget,
+within the 60-second default caller budget. Expiry before launch returns `failed` and a late
+description cannot start execution. Expiry after launch may have been sent returns `unknown`;
+the Hub neither cancels nor replays it. Explicit caller timeouts retain their chosen behavior.
 
 ## Today's binding: MCP in both directions
 

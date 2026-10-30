@@ -20,13 +20,14 @@ async function fixture(
     create?: (request: Request, channel: Channel) => void;
     describe?: (request: Request, channel: Channel) => void;
     timeoutMs?: number;
+    defaultTimeouts?: boolean;
   } = {},
 ) {
   const credential = "sentinel-factory-admission";
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(credential));
   const core = await startCore({
     providers: [{ providerId: "factory", credentialHash: Buffer.from(digest).toString("hex") }],
-    timeoutMs: options.timeoutMs ?? 5000,
+    ...(options.defaultTimeouts ? {} : { timeoutMs: options.timeoutMs ?? 5000 }),
   });
   t.after(() => core.close());
   const url = new URL(CONNECTION_PATH, core.url);
@@ -208,3 +209,43 @@ for (const failure of ["refusal", "disconnect", "malformed", "timeout"] as const
     );
   });
 }
+
+test("an explicitly shorter caller timeout is preserved without cancelling or replaying execution", async (t) => {
+  let launched!: (request: Request) => void;
+  const launch = new Promise<Request>((resolve) => {
+    launched = resolve;
+  });
+  const { core, root, requests, reply } = await fixture(t, {
+    defaultTimeouts: true,
+    create: (request) => launched(request),
+  });
+  const realSetTimeout = globalThis.setTimeout;
+  const realClearTimeout = globalThis.clearTimeout;
+  let guard: ReturnType<typeof setTimeout> | undefined;
+  t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: 0 });
+  try {
+    const creating = root.call("actor_create", input("short-budget"), { timeoutMs: 1000 });
+    const refused = assert.rejects(creating, /timed out/i);
+    const request = await Promise.race([
+      launch,
+      new Promise<never>((_resolve, reject) => {
+        guard = realSetTimeout(
+          () => reject(new Error("never happened: execution was launched")),
+          5000,
+        );
+      }),
+    ]);
+    t.mock.timers.tick(1000);
+    await refused;
+    assert.equal(core.org.registry.get(request.params.actorId)?.closed_at, null);
+    reply(request, { actorId: request.params.actorId });
+    assert.equal((await root.call("team")).state, "done");
+    assert.deepEqual(
+      requests.map((request) => request.method),
+      ["provider.describe", "provider.createActor"],
+    );
+  } finally {
+    realClearTimeout(guard);
+    t.mock.timers.reset();
+  }
+});

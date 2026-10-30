@@ -31,6 +31,27 @@ export interface ExecutionClient {
 const object = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
+/** Combined Provider work fits within the default Actor and external MCP client call budgets. */
+const EXECUTION_TIMEOUT_MS = 45_000;
+
+async function within<T>(work: Promise<T>, deadline: number): Promise<T> {
+  const remaining = deadline - Date.now();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      work,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () => reject(new Error("Execution deadline expired")),
+          Math.max(0, remaining),
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** Only explicit refusals establish failure after the creation request was sent. */
 const refusals = new Set([
   "PROVISIONING_FAILED",
@@ -57,6 +78,7 @@ export function execution(
   return {
     async create(request) {
       const { actorId, providerId, config } = request;
+      const deadline = Date.now() + EXECUTION_TIMEOUT_MS;
       let provider: ExecutionProvider | undefined;
       try {
         provider = lookup(providerId);
@@ -78,7 +100,7 @@ export function execution(
         );
       }
       try {
-        const description = await provider.describe();
+        const description = await within(provider.describe(), deadline);
         if (!object(description) || !validSchema(description.configSchema)) {
           return result(
             providerId,
@@ -111,7 +133,15 @@ export function execution(
             : {}),
           config,
         };
-        const created = await provider.createActor(supplied);
+        // No launch starts after the shared budget expired during description or validation.
+        if (Date.now() >= deadline)
+          return result(
+            providerId,
+            "failed",
+            "unavailable",
+            "The execution deadline expired before launch.",
+          );
+        const created = await within(provider.createActor(supplied), deadline);
         if (!object(created) || Object.keys(created).length !== 1 || created.actorId !== actorId) {
           return result(
             providerId,

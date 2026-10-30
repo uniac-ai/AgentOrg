@@ -17,6 +17,8 @@ import type { RequestOptions } from "@modelcontextprotocol/sdk/shared/protocol.j
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { claudeTakesInput } from "../src/clients/mcp/command.ts";
 import { describe } from "../src/clients/mcp/waiter.ts";
+import { CONNECTION_PATH, establish } from "../src/connection/index.ts";
+import { dial } from "../src/network/index.ts";
 import { type Core, fakeActor, iface, startCore, until } from "./harness.ts";
 
 const BIN = fileURLToPath(new URL("../src/clients/mcp/bin.js", import.meta.url));
@@ -24,8 +26,10 @@ const BIN = fileURLToPath(new URL("../src/clients/mcp/bin.js", import.meta.url))
 const open: { close(): Promise<void> }[] = [];
 after(() => Promise.allSettled(open.map((each) => each.close())));
 
-async function core(): Promise<Core & { home: string }> {
-  const started = await startCore();
+async function core(
+  options: Parameters<typeof startCore>[0] = {},
+): Promise<Core & { home: string }> {
+  const started = await startCore(options);
   open.push(started);
   return Object.assign(started, { home: join(started.credentialFile, "..") });
 }
@@ -273,6 +277,116 @@ test("the model receives execution failure while its created Actor credential re
   const attached = await worker.call("attach", { actor: created.actor.id });
   assert.deepEqual(attached.structuredContent, { actor: created.actor.id, created: false });
 });
+
+for (const heldStage of ["describe", "create"] as const) {
+  test(`the aggregate execution deadline returns through external MCP while ${heldStage} is held`, async (t) => {
+    const providerCredential = "sentinel-budget-provider";
+    const hash = await crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(providerCredential),
+    );
+    const org = await core({
+      providers: [{ providerId: "factory", credentialHash: Buffer.from(hash).toString("hex") }],
+    });
+    const model = await session(org, `budget-${heldStage}`);
+    assert.notEqual(
+      (await model.call("attach", { name: "lead", purpose: "Manage work" })).isError,
+      true,
+    );
+    const url = new URL(CONNECTION_PATH, org.url);
+    url.protocol = "ws:";
+    const raw = await dial(url);
+    t.after(() => raw.close());
+    const { channel } = await establish(raw, {
+      providerId: "factory",
+      credential: providerCredential,
+    });
+    type ProviderRequest = {
+      id: string;
+      method: string;
+      params: { actorId: string; credential: string };
+    };
+    let described!: (request: ProviderRequest) => void;
+    let launched!: (request: ProviderRequest) => void;
+    const description = new Promise<ProviderRequest>((resolve) => {
+      described = resolve;
+    });
+    const launch = new Promise<ProviderRequest>((resolve) => {
+      launched = resolve;
+    });
+    const methods: string[] = [];
+    channel.listen(
+      (text) => {
+        const request = JSON.parse(text) as ProviderRequest;
+        methods.push(request.method);
+        if (request.method === "provider.describe") described(request);
+        else launched(request);
+      },
+      () => {},
+    );
+    const reply = (request: ProviderRequest, result: object) =>
+      channel.send(JSON.stringify({ jsonrpc: "2.0", id: request.id, result }));
+    const realSetTimeout = globalThis.setTimeout;
+    const realClearTimeout = globalThis.clearTimeout;
+    async function observed<T>(work: Promise<T>, what: string): Promise<T> {
+      let guard: ReturnType<typeof setTimeout> | undefined;
+      try {
+        return await Promise.race([
+          work,
+          new Promise<never>((_resolve, reject) => {
+            guard = realSetTimeout(() => reject(new Error(`never happened: ${what}`)), 5000);
+          }),
+        ]);
+      } finally {
+        realClearTimeout(guard);
+      }
+    }
+    t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: 0 });
+    try {
+      // Neither the external SDK call nor the child adapter receives a custom timeout.
+      const creating = model.call("actor_create", {
+        name: "worker",
+        purpose: "Work",
+        execution: { providerId: "factory", config: {} },
+      });
+      const request = await observed(description, "the Hub asks Provider for its schema");
+      let native: ProviderRequest | undefined;
+      if (heldStage === "create") {
+        t.mock.timers.tick(30_000);
+        reply(request, { configSchema: { type: "object" } });
+        native = await observed(launch, "the Hub launches after description");
+        t.mock.timers.tick(15_000);
+      } else t.mock.timers.tick(45_000);
+      const answer = await observed(
+        creating,
+        "the external default-budget MCP call returns the created Actor",
+      );
+      assert.notEqual(answer.isError, true);
+      const value = answer.structuredContent as {
+        actor: { id: string };
+        credential: string;
+        execution: { status: string; error: { code: string } };
+      };
+      assert.equal(value.execution.status, heldStage === "create" ? "unknown" : "failed");
+      assert.match(value.credential, /^kept by agentorg/);
+      assert.equal(org.org.registry.get(value.actor.id)?.closed_at, null);
+      if (native) reply(native, { actorId: native.params.actorId });
+      else reply(request, { configSchema: { type: "object" } });
+      assert.notEqual(
+        (await observed(model.call("team"), "the Actor remains callable after expiry")).isError,
+        true,
+      );
+      assert.deepEqual(
+        methods,
+        heldStage === "create"
+          ? ["provider.describe", "provider.createActor"]
+          : ["provider.describe"],
+      );
+    } finally {
+      t.mock.timers.reset();
+    }
+  });
+}
 
 test("a created position's credential is kept for its session, never shown, and forgotten on close", async () => {
   const org = await core();
