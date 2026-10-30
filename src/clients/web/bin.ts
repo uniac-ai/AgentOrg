@@ -1,5 +1,0 @@
-#!/usr/bin/env node
-import { run } from "../../runtime/command.ts";
-import { main } from "./command.ts";
-
-process.exitCode = await run("agentorg-web", process.argv.slice(2), main);

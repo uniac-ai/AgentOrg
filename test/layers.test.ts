@@ -50,7 +50,7 @@ function breaches(layer: string, forbidden: string[]): string[] {
 }
 
 const MCP = "@modelcontextprotocol/";
-const CLIENTS = ["src/clients/cli/", "src/clients/mcp/", "src/clients/web/"];
+const CLIENTS = ["src/clients/cli/", "src/clients/mcp/"];
 const PROTOCOLS = [MCP, "hono", "@hono/", "ws"];
 const APPLICATIONS = ["src/server/", "src/clients/"];
 const ADAPTERS = [
@@ -121,7 +121,7 @@ const RULES: Record<string, string[]> = {
   "src/storage/": [...PROTOCOLS, "src/network/", "src/bindings/", ...APPLICATIONS, "src/runtime/"],
   "src/actor/api.ts": [MCP, "src/bindings/", "src/network/"],
   "src/actor/": ["src/server/", "src/clients/", "src/storage/", "src/runtime/"],
-  "src/server/": ["src/clients/", "web/"],
+  "src/server/": ["src/clients/"],
   "src/runtime/": ["src/domain/", ...ADAPTERS, ...APPLICATIONS],
   "src/bindings/": [...APPLICATIONS, "src/runtime/"],
   "src/home.ts": [...APPLICATIONS],

@@ -1,7 +1,7 @@
 # Running applications and connecting programs
 
-[setup.md](setup.md) owns service and project setup. `agentorg-server`, `agentorg-mcp` and
-`agentorg-web` also run directly as independent processes.
+[setup.md](setup.md) owns service and project setup. `agentorg-server` and `agentorg-mcp`
+also run directly as independent processes; `agentorg` makes individual CLI calls.
 
 ## Home and addresses
 
@@ -10,12 +10,11 @@
 | `AGENTORG_HOME` | `~/.local/share/agentorg`, holding the database and credentials, readable only by its owner. |
 | `AGENTORG_PORT` | `8740`, the core's port on 127.0.0.1. |
 | `AGENTORG_URL` | `http://127.0.0.1:<core port>`, where clients find the core. |
-| `AGENTORG_WEB_PORT` | `8741`, the web client's port on 127.0.0.1. |
 | `AGENTORG_ACTOR_ID` | The existing Actor identity to use with `AGENTORG_CREDENTIAL`. |
 | `AGENTORG_CREDENTIAL` | The credential for `AGENTORG_ACTOR_ID`; set both to select an Actor explicitly. |
 
-The default home's services are `agentorg-server` and `agentorg-web`. An alternate home adds
-its path's hash to each service name. Pinned launchers retain the home and addresses and run with
+The default home's service is `agentorg-server`. An alternate home adds
+its path's hash to the service name. Pinned launchers retain the home and addresses and run with
 only `/usr/bin:/bin` on PATH.
 
 ## Actor credentials and the CLI
@@ -62,14 +61,11 @@ the Provider to create its implementation. Its result retains `actor` and `crede
 `ready` reports a successful Provider reply independently of the Actor's connection or MCP state.
 Hub makes one creation request and does not replay it automatically after timeout or disconnect.
 
-## Browser client
+## Human client
 
-The web client uses the same identity selection as the actor CLI and presents the root view.
-`agentorg-web open` mints a one-time link valid for five minutes, establishing a
-seven-day cookie session that survives web-process restarts. Writes carry its CSRF token.
-`GET /api/session` bootstraps that token; `GET /api/interfaces` returns `{tools: [...]}`, and
-`POST /api/interfaces/<call>` invokes an interface by its listed alias. The web process reaches
-the core through the actor library.
+[OrgActor-Human](https://github.com/uniac-ai/OrgActor-Human) owns the browser application,
+its HTTP API and sign-in contract. It connects to the Hub through the public Actor library
+described below. Its repository owns installation, configuration and service management.
 
 ## Program clients
 
@@ -96,10 +92,17 @@ interfaces and reconnect after a drop. `connectClient` uses the same admission w
 A long-running handler returns a promise that settles when ready.
 [design.md](design.md) owns the ports and protocol.
 
+`@agentorg/cli/contract` supplies `BUILTINS`, the existing derived inventory of built-in request
+and response schemas, plus public record schemas and the `Answer`, `InterfaceDescriptor` and
+`ToolDescriptor` types. For example, `BUILTINS.actor_create.request.parse(input)` validates an
+Actor creation request. Record exports such as `Actor`, `Position` and `Progress` are Zod schemas;
+`z.output<typeof Position>` derives a record's TypeScript type. Import the Actor connection API
+from `./actor` and these wire contracts from `./contract`.
+
 The Actor library requires `actorId` for both `connectActor` and `connectClient`. Restart the
 server after updating so it writes `root-actor` beside the root credential. Custom clients must
-send `connection.connect` before MCP initialization on `/connection`. Environment-based CLI and
-web setup must supply both `AGENTORG_ACTOR_ID` and `AGENTORG_CREDENTIAL`.
+send `connection.connect` before MCP initialization on `/connection`. Environment-based CLI
+setup must supply both `AGENTORG_ACTOR_ID` and `AGENTORG_CREDENTIAL`.
 
 ## Provider enrollment
 

@@ -12,7 +12,7 @@ const manifest = (folder: string) =>
     bin: Record<string, string>;
   };
 
-const KEPT = ["AGENTORG_PORT", "AGENTORG_WEB_PORT", "AGENTORG_URL"];
+const KEPT = ["AGENTORG_PORT", "AGENTORG_URL"];
 export const MINIMUM_NODE_TEXT = "22.13";
 
 export function nodeSupported(version: string): boolean {

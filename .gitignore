@@ -2,8 +2,6 @@
 node_modules/
 dist/
 *.tsbuildinfo
-test-results/
-playwright-report/
 
 # Editors and OS
 .idea/

@@ -26,9 +26,3 @@ jobs:
         run: npx biome check .
       - name: Build and test
         run: npm test
-      - name: Install browser
-        if: matrix.node == 24
-        run: npx playwright install --with-deps chromium
-      - name: Browser tests
-        if: matrix.node == 24
-        run: npm run test:e2e

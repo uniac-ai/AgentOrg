@@ -20,7 +20,7 @@ connect pins this MCP adapter and Node in <home>/bin/agentorg-mcp, configures th
 connect checks through the launcher with a bare PATH. disconnect removes only this adapter's entries.`;
 export const STATUS_HELP = `usage: agentorg-mcp status [--project <dir>]
 
-Report this adapter, its Node and launcher, core availability, and each client's project connection. Exit 1 on a fault. This adapter needs no web client.`;
+Report this adapter, its Node and launcher, core availability, and each client's project connection. Exit 1 on a fault.`;
 
 const projectOf = (path: string | undefined) => {
   const project = resolve(path ?? process.cwd());

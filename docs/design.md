@@ -11,18 +11,28 @@ session and a program are ways of operating an actor, rather than kinds of actor
 | Server | `agentorg-server [--port <n>]` | Run the core. Its `service install`, `service uninstall` and `status` operate only this service. |
 | Actor CLI | `agentorg <operation>` | Call the organization's built-ins as an actor. |
 | MCP client adapter | `agentorg-mcp [--client <name>]` | Present an actor's operations over stdio. Its `connect`, `disconnect` and `status` own project integrations; `context`, `prompt` and `wait` own client hooks. |
-| Web client | `agentorg-web [--port <n>]` | Serve the existing browser client. `open` signs a browser in; `service install`, `service uninstall` and `status` operate only this service. |
 
-The package distributes all four executables. Their source boundaries are `src/server/` and
-`src/clients/{cli,mcp,web}/`. Each application owns its entry point and setup. Server code imports
-no client application, and clients import neither the server nor sibling applications. Clients
-reach the organization through the actor library. The shared domain model supplies their types.
+The package distributes these three executables and the public `@agentorg/cli/actor` library.
+Their source boundaries are `src/server/` and `src/clients/{cli,mcp}/`. Each application owns
+its entry point and setup. Server code imports no client application, and clients import neither
+the server nor sibling applications. Clients reach the organization through the actor library.
+The shared domain model supplies their types.
+
+`@agentorg/cli/contract` exposes an explicit selection of public wire schemas and types from
+`src/domain/model/`. It depends only on that model; external clients use it to validate and type
+requests and responses. `BUILTINS` is the existing derived schema inventory, while feature
+modules continue to own runtime operations. Storage records and bound operations stay internal.
+
+The [Human client](https://github.com/uniac-ai/OrgActor-Human) owns its browser UI, local HTTP API,
+sign-in, launcher and service in a separate repository. It depends on the public Actor library
+and Hub contract; browser users depend on its HTTP interface. The Hub has no dependency on that
+application or its build, and organizational authority stays in the Hub's domain.
 
 `src/runtime/` contains host mechanics: pinning an executable and its environment in a launcher,
 managing one user service, reporting launcher and HTTP availability, and reporting command
 errors. It imports no application and performs no organization operation. Executable paths come
 from the package's `bin` map. Each service has its own launcher, service name and lifecycle, and
-MCP project setup checks its own launcher and the core without requiring a web client.
+MCP project setup checks its own launcher and the core.
 
 The applications share the actor, credential and attachment contracts described below.
 
@@ -38,7 +48,7 @@ The domain defines its storage and actor-link ports and exposes Application and 
 | **Provider client** | `src/provider/` | The Hub's typed client for the fixed factory methods on an admitted Provider connection. | JSON-RPC |
 | **Domain** | `src/domain/` | Actors and their interfaces, calls and their lifecycle, the wiring, progress and messages, the built-ins, the audit trail. | agentorg's own model |
 | **Storage** | `src/storage/sqlite/` | Keeping the domain's records, behind the domain's `Store` port. | SQLite through `node:sqlite` |
-| **Actors** | `src/actor/`, `src/clients/web/`, `src/clients/mcp/`, programs | What a party does with a call. The actor library gives an actor an API that names no protocol or network. | the web client, the agent actor, programs |
+| **Actors** | `src/actor/`, `src/clients/{cli,mcp}/`, external clients | What a party does with a call. The actor library gives an actor an API that names no protocol or network. | CLI, MCP adapter, Human client, programs |
 
 How the layers meet:
 - **The domain's ports** are in `src/domain/ports.ts`:
@@ -49,7 +59,7 @@ How the layers meet:
 - **The composition root**, `src/server/index.ts`, assembles the core from the domain, SQLite storage, the MCP binding and the network listener.
 - **The actor library** (`src/actor/`) assembles the network's connector with the binding on an actor's side, and the binding's server for the session that fills a position (`occupant.ts`), behind its `Presented` port.
 - **`test/layers.test.ts` enforces the rules:**
-  - The domain imports no MCP, web framework, WebSocket, database or Node built-in, and uses no Node globals. Its secrets and hashes come from Web Crypto, so it runs on any JavaScript runtime that has that, and the web app type-checks through its model.
+  - The domain imports no MCP, web framework, WebSocket, database or Node built-in, and uses no Node globals. Its secrets and hashes come from Web Crypto, so it runs on any JavaScript runtime that has that.
   - The network imports no domain, binding or storage.
   - Only the MCP binding imports MCP.
 
@@ -87,8 +97,8 @@ The Hub gives each Actor a catalog of Tools. A Tool is `{id, name, interfaces}`;
 contains its descriptor, `call` alias, `routed` flag and optional `read_only` hint. The descriptor's
 name is local to the Tool. `(tool.id, interface.name)` identifies an interface independently of
 the caller's alias; `Actor.call(interface.call, input)` invokes it with the existing call names.
-`Actor.available()`, the CLI's `interfaces`, the agent adapter's `interfaces`, and the web catalog
-carry these nested Tools. The latter three return `{tools: [...]}`.
+`Actor.available()`, the CLI's `interfaces`, and the agent adapter's `interfaces` carry these
+nested Tools. The CLI and adapter return `{tools: [...]}`.
 
 Every open Actor receives the same seven built-in Tools and sixteen interfaces. Their IDs are
 `hub:<name>`, with these names and interfaces:

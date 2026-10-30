@@ -10,16 +10,17 @@ in both directions, including long-running tasks. Managers read progress when th
 
 ## Applications
 
-The package `@agentorg/cli` distributes four independent entry points:
+The package `@agentorg/cli` distributes three independent entry points:
 
 | Executable | Responsibility |
 |---|---|
 | `agentorg-server` | Run the core and manage its user service. |
 | `agentorg` | Call organization operations from a terminal as an actor. |
 | `agentorg-mcp` | Present an actor's operations over stdio; configure project integrations and hooks. |
-| `agentorg-web` | Serve the web client, sign a browser in, and manage its own user service. |
 
-The Node actor library (`src/actor/`) lets programs expose handlers, list Tools and call their interfaces.
+The public Node actor library (`@agentorg/cli/actor`, in `src/actor/`) lets programs expose handlers,
+list Tools and call their interfaces. The [Human client](https://github.com/uniac-ai/OrgActor-Human)
+owns the browser application and its local HTTP service in a separate repository.
 The `agentorg` skill (`skills/agentorg/`) describes how a session works in a position; an
 organization can add its conventions beside it.
 
@@ -38,6 +39,6 @@ Set up AgentOrg for me in this project, following https://raw.githubusercontent.
 ## Development
 
 Use Node 22.13 or later. Run `npm ci`, `npm run check` and `npm test`; tests build the
-applications and browser app before running. AgentOrg is pre-alpha; its protocol may change.
+server, clients and Actor library before running. AgentOrg is pre-alpha; its protocol may change.
 
 [MIT license](LICENSE).

@@ -1,7 +1,7 @@
-/** Project integration and independent services, with scratch homes and a fake service manager. */
+/** Project integration and the Hub service, with scratch homes and a fake service manager. */
 
 import assert from "node:assert/strict";
-import { type ChildProcess, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import {
   chmodSync,
   existsSync,
@@ -70,14 +70,14 @@ test("the default home's services keep plain names, and any other home's carry i
   try {
     process.env.AGENTORG_HOME = join(userInfo().homedir, ".local", "share", "agentorg");
     assert.deepEqual(
-      [service("agentorg-server", "core").name, service("agentorg-web", "web").name],
-      ["agentorg-server", "agentorg-web"],
+      [service("agentorg-server", "core").name, service("another-service", "another service").name],
+      ["agentorg-server", "another-service"],
     );
     process.env.AGENTORG_HOME = join(tmpdir(), "elsewhere");
     const core = service("agentorg-server", "core").name;
-    const web = service("agentorg-web", "web").name;
+    const another = service("another-service", "another service").name;
     assert.match(core, /^agentorg-server-[0-9a-f]{8}$/);
-    assert.equal(web, core.replace("agentorg-server", "agentorg-web"));
+    assert.equal(another, core.replace("agentorg-server", "another-service"));
   } finally {
     if (before === undefined) delete process.env.AGENTORG_HOME;
     else process.env.AGENTORG_HOME = before;
@@ -286,13 +286,18 @@ test("the launcher pins the home and addresses, quotes its paths, and runs this 
   const { root, project, env, done } = scratch();
   try {
     const home = join(root, "it's a home");
-    const environment = { ...env, AGENTORG_HOME: home, AGENTORG_WEB_PORT: "2" };
+    const environment = {
+      ...env,
+      AGENTORG_HOME: home,
+      AGENTORG_URL: "http://127.0.0.1:1",
+      AGENTORG_CREDENTIAL: "sentinel-credential",
+    };
     await command("mcp", ["connect", "codex", "--project", project], environment);
     const launcher = join(home, "bin", "agentorg-mcp");
     const text = readFileSync(launcher, "utf8");
     assert.match(text, /AGENTORG_PORT='1'/);
-    assert.match(text, /AGENTORG_WEB_PORT='2'/);
-    assert.doesNotMatch(text, /AGENTORG_URL|AGENTORG_CREDENTIAL/);
+    assert.match(text, /AGENTORG_URL='http:\/\/127.0.0.1:1'/);
+    assert.doesNotMatch(text, /AGENTORG_CREDENTIAL|sentinel-credential/);
 
     const previous = process.env.AGENTORG_HOME;
     process.env.AGENTORG_HOME = home;
@@ -340,7 +345,7 @@ esac`;
   return name;
 }
 
-test("each application installs and removes only its own service, and MCP needs no web client", async () => {
+test("the Hub manages only its own service, and MCP setup preserves it", async () => {
   const { root, home, project, done } = scratch();
   const bin = join(root, "bin");
   const state = join(root, "loaded");
@@ -351,7 +356,6 @@ test("each application installs and removes only its own service, and MCP needs 
     XDG_CONFIG_HOME: join(home, ".config"),
     AGENTORG_HOME: join(home, "agentorg"),
     AGENTORG_PORT: String(await freePort()),
-    AGENTORG_WEB_PORT: String(await freePort()),
     PATH: `${bin}:${process.env.PATH ?? ""}`,
   };
   const owned = (program: string) => {
@@ -365,72 +369,71 @@ test("each application installs and removes only its own service, and MCP needs 
     }
   };
   const coreService = owned("agentorg-server");
-  const webService = owned("agentorg-web");
+  const anotherService = owned("another-service");
   const file = (entry: { name: string }) =>
     name === "launchctl"
       ? join(home, "Library", "LaunchAgents", `${entry.name}.plist`)
       : join(env.XDG_CONFIG_HOME, "systemd", "user", `${entry.name}.service`);
   const launcher = (program: string) => join(env.AGENTORG_HOME, "bin", program);
-  const core = (await serving("server", env)).process;
-  let web: ChildProcess | undefined;
+  let core: Awaited<ReturnType<typeof serving>> | undefined;
   try {
+    core = await serving("server", env);
     writeFileSync(join(state, coreService.name), "/usr/local/bin/node\n");
-    const refused = await command("server", ["service", "install"], env);
-    assert.equal(refused.status, 1);
-    assert.match(refused.stderr, /runs \/usr\/local\/bin\/node, not .*; stop and remove it first/);
+    for (const action of ["install", "uninstall"]) {
+      const refused = await command("server", ["service", action], env);
+      assert.equal(refused.status, 1);
+      assert.match(
+        refused.stderr,
+        /runs \/usr\/local\/bin\/node, not .*; stop and remove it first/,
+      );
+    }
     assert.equal(existsSync(launcher("agentorg-server")), false);
+    assert.equal(readFileSync(join(state, coreService.name), "utf8"), "/usr/local/bin/node\n");
     rmSync(join(state, coreService.name));
 
     const installed = await command("server", ["service", "install"], env);
     assert.equal(installed.status, 0, installed.stderr);
     assert.deepEqual(readdirSync(state), [coreService.name]);
-    assert.equal(existsSync(file(webService)), false);
-    assert.equal(existsSync(launcher("agentorg-web")), false);
     assert.match(
       installed.stdout,
       /the core: answering at .*, as service agentorg-server-[0-9a-f]{8}$/m,
     );
 
+    const serverFile = readFileSync(file(coreService), "utf8");
+    const serverLauncher = readFileSync(launcher("agentorg-server"), "utf8");
+    const anotherProgram = "/usr/local/bin/another-service\n";
+    const anotherFile = "Another service's configuration\n";
+    writeFileSync(join(state, anotherService.name), anotherProgram);
+    writeFileSync(file(anotherService), anotherFile);
+    const managerCalls = readFileSync(log, "utf8");
     const connected = await command("mcp", ["connect", "codex", "--project", project], env);
     assert.equal(connected.status, 0, connected.stdout + connected.stderr);
     assert.match(connected.stdout, /^ {2}codex: connected$/m);
-    assert.doesNotMatch(connected.stdout, /^the web/m);
-    assert.equal(existsSync(launcher("agentorg-web")), false);
-
-    const serverFile = readFileSync(file(coreService), "utf8");
-    const serverLauncher = readFileSync(launcher("agentorg-server"), "utf8");
-    web = (await serving("web", env)).process;
-    const installedWeb = await command("web", ["service", "install"], env);
-    assert.equal(installedWeb.status, 0, installedWeb.stderr);
-    assert.deepEqual(readdirSync(state).sort(), [coreService.name, webService.name].sort());
+    assert.equal(
+      readFileSync(log, "utf8"),
+      managerCalls,
+      "MCP setup needs no service-manager calls",
+    );
+    assert.deepEqual(readdirSync(state).sort(), [coreService.name, anotherService.name].sort());
     assert.equal(readFileSync(file(coreService), "utf8"), serverFile);
     assert.equal(readFileSync(launcher("agentorg-server"), "utf8"), serverLauncher);
-    for (const entry of [coreService, webService]) {
-      assert.ok(readFileSync(file(entry), "utf8").includes(launcher(entry.program)));
-      assert.equal(readFileSync(join(state, entry.name), "utf8").trim(), launcher(entry.program));
-    }
-
-    for (const program of ["server", "web"] as const) {
-      const status = await command(program, ["status"], env);
-      assert.equal(status.status, 0, status.stdout + status.stderr);
-      assert.match(status.stdout, /^launcher: .*, on Node at /m);
-    }
+    assert.ok(serverFile.includes(launcher(coreService.program)));
+    assert.equal(
+      readFileSync(join(state, coreService.name), "utf8").trim(),
+      launcher(coreService.program),
+    );
+    const status = await command("server", ["status"], env);
+    assert.equal(status.status, 0, status.stdout + status.stderr);
+    assert.match(status.stdout, /^launcher: .*, on Node at /m);
     const removed = await command("server", ["service", "uninstall"], env);
     assert.equal(removed.status, 0, removed.stderr);
-    assert.deepEqual(readdirSync(state), [webService.name]);
+    assert.deepEqual(readdirSync(state), [anotherService.name]);
     assert.equal(existsSync(file(coreService)), false);
-    assert.equal(existsSync(file(webService)), true);
-    const removedWeb = await command("web", ["service", "uninstall"], env);
-    assert.equal(removedWeb.status, 0, removedWeb.stderr);
-    assert.deepEqual(readdirSync(state), []);
-    assert.equal(existsSync(file(webService)), false);
+    assert.equal(readFileSync(file(anotherService), "utf8"), anotherFile);
+    assert.equal(readFileSync(join(state, anotherService.name), "utf8"), anotherProgram);
     assert.ok(existsSync(env.AGENTORG_HOME), "the home stays");
   } finally {
-    for (const child of [web, core]) {
-      if (!child || child.exitCode !== null) continue;
-      child.kill("SIGTERM");
-      await new Promise((resolve) => child.once("exit", resolve));
-    }
+    await core?.close();
     done();
   }
 });

@@ -8,7 +8,6 @@ const BINS = {
   cli: "../src/clients/cli/bin.js",
   mcp: "../src/clients/mcp/bin.js",
   server: "../src/server/bin.js",
-  web: "../src/clients/web/bin.js",
 };
 type Program = keyof typeof BINS;
 

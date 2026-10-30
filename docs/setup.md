@@ -36,7 +36,7 @@ agentorg-mcp connect codex --project <dir>
 ```
 
 Connect pins `<home>/bin/agentorg-mcp`, configures the project and checks through that launcher.
-It requires the core, with no web-client dependency. Other project entries stay as they are:
+It requires the core. Other project entries stay as they are:
 
 - Claude Code gets the `org` server in `.mcp.json`, approval and hooks in
   `.claude/settings.local.json`, and the skill in `.claude/skills/`.
@@ -56,18 +56,11 @@ Reconnect after upgrading the package or Node.
 For another MCP client, configure a stdio server named `org` using `agentorg-mcp`, and give
 its skill mechanism the package's `skills/agentorg` folder.
 
-## Web client
+## Human client
 
-When the user wants the browser client:
-
-```sh
-agentorg-web service install
-agentorg-web status
-```
-
-This installs only the web service and pins `<home>/bin/agentorg-web`; it connects to the existing
-core. The user runs `agentorg-web open` in their own terminal to sign in. Do not open their
-one-time sign-in link for them.
+The browser application and its local HTTP service are distributed by
+[OrgActor-Human](https://github.com/uniac-ai/OrgActor-Human). Follow that repository's setup
+instructions to connect it to this Hub using an existing Actor's identity and credential.
 
 ## External execution
 
@@ -79,7 +72,6 @@ Actor creation remains valid when the execution result is failed or unknown.
 ## Remove components
 
 - `agentorg-mcp disconnect <claude-code|codex> --project <dir>` removes its project entries.
-- `agentorg-web service uninstall` removes the web service.
 - `agentorg-server service uninstall` removes the core service.
 - `npm uninstall -g @agentorg/cli` removes the package.
 
