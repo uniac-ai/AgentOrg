@@ -248,7 +248,8 @@ test("an appointed session creates its position under the root, and a resumed on
 test("the model receives execution failure while its created Actor credential remains private and usable", async () => {
   const org = await core();
   const manager = await session(org, "s-execution-manager");
-  await manager.call("attach", { name: "manager", purpose: "Manage execution" });
+  const attachment = await manager.call("attach", { name: "lead", purpose: "Manage execution" });
+  assert.notEqual(attachment.isError, true);
   const result = await manager.call("actor_create", {
     name: "worker",
     purpose: "Use an external Provider",

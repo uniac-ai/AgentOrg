@@ -261,4 +261,5 @@ cancellation. The client performs no automatic replay.
 
 The Provider client owns only wire interaction. Hub owns organizational identity, state and authority;
 an Actor's identity survives executor replacement. Provider owns native execution management, and
-the Actor client owns its separate Hub connection. No Actor routing passes through a Provider.
+the Actor client owns its separate Hub connection. The Provider contract does not define Actor
+connection routing.
