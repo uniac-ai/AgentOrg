@@ -7,16 +7,7 @@ import type { Answer, ToolDescriptor } from "./model/index.ts";
 import type { Invocation } from "./ports.ts";
 import type { Registry } from "./registry.ts";
 
-export interface Timing {
-  stepMs: number;
-}
-
-export function application(
-  registry: Registry,
-  capabilities: Capabilities,
-  audit: Audit,
-  timing: Timing,
-) {
+export function application(registry: Registry, capabilities: Capabilities, audit: Audit) {
   function available(actorId: string): ToolDescriptor[] {
     return registry.found(actorId).closed_at === null ? descriptorsOf(capabilities.list()) : [];
   }
@@ -43,11 +34,7 @@ export function application(
       if (!parsed.success) throw invalid(parsed.error.issues);
       let result: Record<string, unknown>;
       try {
-        result = (await operation.invoke(actor, parsed.data, {
-          stepMs: timing.stepMs,
-          signal: how.signal,
-          progress: () => how.progress("waiting"),
-        })) as Record<string, unknown>;
+        result = (await operation.invoke(actor, parsed.data, how)) as Record<string, unknown>;
       } catch (error) {
         if (spec.writes && error instanceof Refusal)
           audit.record(actor.id, name, targetOf(input), error.code);
@@ -56,7 +43,8 @@ export function application(
       if (spec.writes) audit.record(actor.id, name, targetOf(result), "ok");
       return { state: "done", value: result };
     } catch (error) {
-      if (!(error instanceof Refusal)) throw error;
+      if (!(error instanceof Refusal))
+        throw new Error("Hub operation failed; a write outcome may be unknown");
       return { state: "refused", code: error.code, message: error.message };
     }
   }
@@ -64,11 +52,23 @@ export function application(
 }
 
 function targetOf(record: Record<string, unknown>): string | null {
-  const { id, call, resource, actor } = record as {
+  const { id, call, resource, actor, messageID, ticketID, formID } = record as {
     id?: string;
     call?: string;
     resource?: string;
     actor?: string | { id: string };
+    messageID?: string;
+    ticketID?: string;
+    formID?: string;
   };
-  return id ?? call ?? resource ?? (typeof actor === "string" ? actor : actor?.id) ?? null;
+  return (
+    id ??
+    messageID ??
+    ticketID ??
+    formID ??
+    call ??
+    resource ??
+    (typeof actor === "string" ? actor : actor?.id) ??
+    null
+  );
 }

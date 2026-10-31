@@ -1,23 +1,24 @@
 /**
  * Which client session fills which position, kept in the home's `sessions/<session>/` so that a
- * resumed session fills it again: `position` holds the actor id, `waiter` the process id of the
- * session's current waiter, `cursor` the newest message the waiters have delivered, and `prompt`
- * the words the user last typed in the session, until a recorded answer uses them. Each file has
- * one writer: the agent actor writes `position` and uses up `prompt`, a starting waiter writes
- * `waiter`, a delivering waiter `cursor`, and the client's prompt hook `prompt`.
+ * resumed session fills it again. `position` holds the Actor ID, `waiter` the current waiter PID,
+ * and `inbox` the client's incoming Message and requested/designated Form positions. This private
+ * bookkeeping establishes neither public acknowledgements nor user input.
  */
 
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { home, privateDirectory } from "../../home.ts";
 
-type Entry = "position" | "waiter" | "cursor" | "prompt";
+type Entry = "position" | "waiter" | "inbox";
 
-/** Words the user typed in the session, and when. */
-export interface Typed {
-  text: string;
-  at: string;
+export interface InboxPosition {
+  messages: number;
+  forms: { requested: number; designated: number };
 }
+
+const cursor = (value: unknown): value is number =>
+  typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 
 const SESSION = /^[A-Za-z0-9_-]{1,128}$/;
 
@@ -51,13 +52,38 @@ export const sessions = {
   forget: (session: string) => rmSync(directory(session), { recursive: true, force: true }),
   waiter: (session: string) => Number(read(session, "waiter") ?? 0),
   claimWaiter: (session: string, pid: number) => write(session, "waiter", String(pid)),
-  cursor: (session: string) => read(session, "cursor"),
-  advance: (session: string, cursor: string) => write(session, "cursor", cursor),
-  typed(session: string): Typed | undefined {
-    const kept = read(session, "prompt");
-    return kept === undefined ? undefined : (JSON.parse(kept) as Typed);
+  inbox(session: string): InboxPosition {
+    const kept = read(session, "inbox");
+    if (kept === undefined) return { messages: 0, forms: { requested: 0, designated: 0 } };
+    const value = JSON.parse(kept) as {
+      messages?: unknown;
+      forms?: Partial<InboxPosition["forms"]> | number;
+    };
+    if (!cursor(value?.messages)) throw new Error("invalid local inbox position");
+    // A shared Form cursor cannot establish either feed's coverage. Re-read Form IDs only.
+    if (cursor(value.forms))
+      return { messages: value.messages, forms: { requested: 0, designated: 0 } };
+    const forms = value.forms;
+    if (
+      typeof forms !== "object" ||
+      forms === null ||
+      !cursor(forms.requested) ||
+      !cursor(forms.designated)
+    )
+      throw new Error("invalid local inbox position");
+    return {
+      messages: value.messages,
+      forms: { requested: forms.requested, designated: forms.designated },
+    };
   },
-  keepTyped: (session: string, text: string) =>
-    write(session, "prompt", JSON.stringify({ text, at: new Date().toISOString() })),
-  forgetTyped: (session: string) => rmSync(join(directory(session), "prompt"), { force: true }),
+  advanceInbox(session: string, position: InboxPosition): void {
+    const directory = privateDirectory(named(session));
+    const temporary = join(directory, `inbox.${randomUUID()}.tmp`);
+    try {
+      writeFileSync(temporary, `${JSON.stringify(position)}\n`, { flag: "wx", mode: 0o600 });
+      renameSync(temporary, join(directory, "inbox"));
+    } finally {
+      rmSync(temporary, { force: true });
+    }
+  },
 };

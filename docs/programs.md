@@ -91,12 +91,18 @@ after a drop. Actor identity and Team metadata contain no advertised interfaces 
 `@agentorg/cli/contract` supplies `BUILTINS`, the existing derived inventory of built-in request
 and response schemas, plus public record schemas and the `Answer`, `InterfaceDescriptor` and
 `ToolDescriptor` types. For example, `BUILTINS.actor_create.request.parse(input)` validates an
-Actor creation request. Record exports such as `Actor`, `Position` and `Progress` are Zod schemas;
+Actor creation request. Record exports such as `Actor`, `Position`, `DirectoryActor`, `Message`, `Work` and `Form` are Zod schemas;
 `z.output<typeof Position>` derives a record's TypeScript type. Import the Actor connection API
 from `./actor` and these wire contracts from `./contract`.
 
-The Actor library requires `actorId` for `connectClient`. Restart the
-server after updating so it writes `root-actor` beside the root credential. Custom clients must
+Work and Forms are shared records with full retained history for every active admitted Actor;
+Messages remain private to their sender and recipient. Use `work_list` with `ownerID`,
+`requesterID` and `status`, and `form_list` with `workID`, `requesterID`, `respondentID`, `status`
+and `awaitingActorID` for directed queries. All supplied filters AND before pagination. A query
+for another Actor's criteria keeps your authenticated identity and write authority. An empty
+recorded Form response counts as answered for `awaitingActorID`.
+
+The Actor library requires `actorId` for `connectClient`. Custom clients must
 send `connection.connect` before MCP initialization on `/connection`. Environment-based CLI
 setup must supply both `AGENTORG_ACTOR_ID` and `AGENTORG_CREDENTIAL`.
 

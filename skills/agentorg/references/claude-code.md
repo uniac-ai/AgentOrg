@@ -1,12 +1,25 @@
 # Claude Code
 
-`agentorg-mcp connect claude-code` sets a project up so that Claude Code runs AgentOrg's agent actor as the MCP server `org`, delivers what arrives through AgentOrg's hooks, and finds this skill.
+`agentorg-mcp connect claude-code` configures the project's `org` MCP server, context and waiter
+hooks, and this skill.
 
-- **Tool names.** The adapter tools are `mcp__org__attach`, `mcp__org__interfaces` and `mcp__org__call`. Invoke an explicit Hub interface with `mcp__org__call {name: "progress_set", input: {state: "running", summary: "Checking the build"}}`, using the input schema returned by `interfaces`.
-- **Attaching.** The startup hint says to attach. A resumed session recovers its actor on its own; `interfaces` reads its current permitted operations. The stable tools are `attach`, `interfaces` and `call`, with logical operations invoked through `call` as the skill describes.
-- **What arrives.** When your turn ends, AgentOrg's hook waits for what you haven't seen and hands it to you as your next input, waking you if you're idle. It marks delivered messages read. An id you've seen before is the same item again.
-- **Subagents** started with the `Agent` tool share this session's MCP server, and so its position. They are helpers: they don't call AgentOrg's tools.
-- **Starting a report's session.** Where Claude Code offers a tool that starts another session, as the Claude desktop app does, use it with the prompt the skill describes; such a tool may only propose the session for the user to start. Otherwise the user starts it: give them the command to run in the project folder, `claude "Attach with actor <id>, then read your brief in your messages."`, and show the wait in your progress.
-- **Ending a report's session** after `actor_close`: archive it with the client's own tool where there is one, or tell the user it can be closed.
-- **Buttons.** A button the user presses in your session, such as a suggested reply, is their words, as typing is: record it on your question as the skill says.
-- **Relays between sessions,** such as the desktop app's note when a session it started ends a turn, or `SendMessage`, are not AgentOrg's record. Take one as a cue to look, and communicate through AgentOrg.
+- **Tools.** Use `mcp__org__attach`, `mcp__org__interfaces` and `mcp__org__call`. For example, call
+  `{name: "message_send", input: {recipientID: "<actor>", text: "The build passed."}}` using the
+  current schema from `interfaces`.
+- **Attachment.** A resumed session recovers its saved Actor. A new session attaches with the Actor
+  ID in its brief, or creates a position once when the user directly appoints it.
+- **Delivery.** On startup and after a turn, the hook polls incoming Messages and Form changes requested by or designated to the attached
+  Actor. It delivers bounded pages as session input and retains separate private positions for
+  incoming Messages, requested Forms and designated Forms.
+  Delivery is at least once. The same ID/revision can arrive again; no public receipt is written.
+- **Provenance.** Delivered content is an Actor record. A Form response requires a validated client
+  binding before it can authorize a native request. Ordinary text and buttons do not create that
+  binding through the generic adapter.
+- **Helpers.** Subagents sharing this MCP server share its Actor. They do not create an independent
+  position merely by running. Use the user's authorized workflow for separate report sessions.
+- **Lifecycle.** Close an accepted leaf Actor with `actor_close`, then end its session through an
+  authorized client operation. Actor closure does not manage Provider resources.
+
+At an upgrade, existing sessions require deliberate delivery baselining before hooks resume. The
+Hub's private historical import manifest supports this coordination; old shared cursors cannot be
+used as new Message/Form positions.

@@ -29,6 +29,11 @@ export function registry(actors: Store["actors"], now: () => string) {
   const get = (id: string) => actors.get(id);
   const reports = (manager: string) => actors.reports(manager);
   const open = () => actors.open();
+  function directory(after: number, limit: number) {
+    const page = actors.directory(after, limit);
+    if (after > page.head) throw new Invalid("after: beyond the Actor directory cursor");
+    return { items: page.items, after: page.after };
+  }
 
   /** Create the root, the user's position, and return its credential. */
   async function createRoot(): Promise<{ root: ActorRow; credential: string }> {
@@ -142,6 +147,7 @@ export function registry(actors: Store["actors"], now: () => string) {
     identify,
     reports,
     open,
+    directory,
     close,
     path,
     names,

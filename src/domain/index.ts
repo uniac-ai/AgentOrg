@@ -1,22 +1,19 @@
 /** The domain composition: explicit Hub Tools, Actor presence and domain state owners. */
 
 import { actors as actorModule } from "./actors.ts";
-import { application, type Timing } from "./application.ts";
+import { application } from "./application.ts";
 import { audit } from "./audit.ts";
 import { calls } from "./calls.ts";
 import { capabilities } from "./capabilities.ts";
 import { claims } from "./claims.ts";
-import { communication } from "./communication.ts";
 import { connections } from "./connections.ts";
 import { type ExecutionProvider, execution } from "./execution.ts";
 import type { Store } from "./ports.ts";
-import { progress } from "./progress.ts";
 import { registry } from "./registry.ts";
 import { team } from "./team.ts";
+import { workspace } from "./workspace.ts";
 
-export type { Timing };
-
-export interface OrganizationOptions extends Partial<Timing> {
+export interface OrganizationOptions {
   now?: () => Date;
   provider?: (providerId: string) => ExecutionProvider | undefined;
 }
@@ -29,22 +26,18 @@ export function organization(store: Store, options: OrganizationOptions = {}) {
   const connected = connections();
   const calling = calls(store.calls);
   const resources = claims(store.claims, actors, now);
-  const correspondence = communication(store, actors, now);
-  const progressState = progress(store.progress, actors, now);
   const creation = execution(options.provider ?? (() => undefined));
   const positions = actorModule(actors, connected, creation);
-  const organizationView = team(actors, positions, progressState, correspondence, resources);
+  const organizationView = team(actors, positions);
   const offered = capabilities([
     positions.tool,
     organizationView.tool,
-    ...correspondence.tools,
+    ...workspace(actors, store.workspace),
     resources.tool,
     calling.tool,
     activity.tool,
   ]);
-  const dispatch = application(actors, offered, activity, {
-    stepMs: options.stepMs ?? 10_000,
-  });
+  const dispatch = application(actors, offered, activity);
   return {
     registry: actors,
     connections: connected,

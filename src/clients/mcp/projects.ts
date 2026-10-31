@@ -111,7 +111,6 @@ function clientHooks(client: string, launcher: string): Record<string, Json[]> {
   const hook = (sub: string) => `${shellWord(launcher)} ${sub} --client ${client}`;
   const hooks: Record<string, Json[]> = {
     SessionStart: [{ type: "command", command: hook("context"), timeout: 10 }],
-    UserPromptSubmit: [{ type: "command", command: hook("prompt"), timeout: 10 }],
   };
   if (client === "codex") return hooks;
   const waiter = {

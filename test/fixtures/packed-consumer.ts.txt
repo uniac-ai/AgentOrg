@@ -1,0 +1,73 @@
+import { connectClient, type Actor } from "@agentorg/cli/actor";
+import {
+  BUILTINS,
+  DirectoryActor,
+  Message,
+  Work,
+  Form,
+  Position,
+  Team,
+  type Answer,
+  type ToolDescriptor,
+} from "@agentorg/cli/contract";
+import { z } from "zod";
+const message: z.output<typeof Message> = BUILTINS.message_send.response.parse({});
+const sender: string = message.senderID;
+const work: z.output<typeof Work> = BUILTINS.work_create.response.parse({});
+const owner: string = work.ownerID;
+const form: z.output<typeof Form> = BUILTINS.form_create.response.parse({});
+const respondents: string[] = form.respondentIDs;
+const directory: z.output<typeof DirectoryActor> = BUILTINS.actor_get.response.parse({});
+const actorID: string = directory.actorID;
+const team: z.output<typeof Team> = BUILTINS.team.response.parse({});
+const position: z.output<typeof Position> | undefined = team.positions[0];
+const linked = BUILTINS.form_create.request.parse({
+  respondentIDs: ["actor"],
+  fields: [{ name: "answer", label: "Answer", required: true }],
+});
+const optionalWork: string | undefined = linked.workID;
+const client: Promise<Actor> = connectClient({
+  url: "http://127.0.0.1:1",
+  actorId: "actor",
+  credential: "fixture",
+});
+const tools: Promise<ToolDescriptor[]> = client.then((actor) => actor.available());
+const answer: Promise<Answer> = client.then((actor) => actor.call("message_list", { after: 0 }));
+void [sender, owner, respondents, actorID, position, optionalWork, tools, answer];
+
+const workQuery = BUILTINS.work_list.request.parse({
+  ownerID: "owner",
+  requesterID: "requester",
+  status: "submitted",
+});
+const ownerID: string | undefined = workQuery.ownerID;
+const requesterID: string | undefined = workQuery.requesterID;
+const status:
+  | "open"
+  | "active"
+  | "blocked"
+  | "submitted"
+  | "changes_requested"
+  | "accepted"
+  | undefined = workQuery.status;
+const formQuery = BUILTINS.form_list.request.parse({
+  workID: "work",
+  requesterID: "requester",
+  respondentID: "respondent",
+  status: "open",
+  awaitingActorID: "awaiting",
+});
+const formFilters: (string | undefined)[] = [
+  formQuery.workID,
+  formQuery.requesterID,
+  formQuery.respondentID,
+  formQuery.status,
+  formQuery.awaitingActorID,
+];
+const listedMessage: z.output<typeof Message> | undefined = BUILTINS.message_list.response.parse({})
+  .items[0];
+const listedWork: z.output<typeof Work> | undefined = BUILTINS.work_list.response.parse({})
+  .items[0];
+const listedForm: z.output<typeof Form> | undefined = BUILTINS.form_list.response.parse({})
+  .items[0];
+void [ownerID, requesterID, status, formFilters, listedMessage, listedWork, listedForm];

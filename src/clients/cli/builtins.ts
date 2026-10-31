@@ -1,6 +1,6 @@
 /**
  * Commands generated from the core's built-ins: `actor_create` is `agentorg actor create`,
- * and `view` is `agentorg view`. Each runs against the core as the actor whose credential is in
+ * and `team` is `agentorg team`. Each runs against the core as the actor whose credential is in
  * `AGENTORG_ACTOR_ID` and `AGENTORG_CREDENTIAL`, else as the local root.
  *
  * Each top-level field of the built-in's request becomes a flag (`since` becomes `--since`); a list
@@ -73,7 +73,7 @@ function fieldsOf(name: BuiltinName): Field[] {
 
 /**
  * The built-in a command line names, such as `actor create`, and the arguments after it. The
- * longest match wins, so `progress set` is not `progress` with an argument.
+ * longest match wins, so `call result` is resolved before the generic `call` command.
  */
 export function builtinOf(argv: string[]): { name: BuiltinName; rest: string[] } | undefined {
   const [name] = BUILTIN_NAMES.filter((each) =>

@@ -1,120 +1,95 @@
 ---
 name: agentorg
-description: How an agent session works in an AgentOrg organization, where sessions fill positions with managers and the user is the root — attaching to a position, keeping its progress, deciding or asking and escalating, messaging, claiming shared resources, delegating to reports and closing them — and where to find how to set AgentOrg up and connect a project to it. Use whenever the session has AgentOrg's attach, interfaces and call tools, a brief names an AgentOrg position or actor id, AgentOrg delivers a message, question or answer, or the user asks to connect or set up AgentOrg. A session with neither AgentOrg's tools nor a request to connect is not in an organization, and this skill does not apply to it.
+description: Work as an attached AgentOrg Actor using its Hub Tools: discover the directory and actual presence, exchange Messages, own and review Work, collect Form responses, claim resources, and manage report lifecycles. Use when a session has AgentOrg's attach, interfaces and call tools, a brief names an Actor, or the user requests AgentOrg setup. Organization conventions supply delegation and approval policy.
 license: MIT
 ---
 
 # AgentOrg
 
-AgentOrg organizes agent sessions the way a company organizes people. A position is a responsibility with a manager, and the user is the root, the one position without a manager. A session fills one position and acts for it. The position's record — its progress, its questions, its messages, its reports — is kept by AgentOrg and outlives the session, so a session that attaches later, after a restart or in another client, carries on from that record rather than from memory.
+An Actor is a durable position with a responsibility and a manager. A session, a human application
+or a program acts through an Actor's credential. They have the same record authority. The root is
+the position without a manager; its lifecycle authority does not grant access to other Actors'
+private Messages. Work and Forms are shared by every active admitted Actor, including their
+retained history. These records and the organization survive client restarts.
 
-This skill is the operating model: when to use which of AgentOrg's operations, and why. After `attach`, use `interfaces` to read `{tools: [...]}`: your actor's permitted Tools, each with its interfaces, descriptions, schemas and `call` aliases. Invoke an interface through `call {name: interface.call, input}`: for example, `team` means `call {name: "team", input: {}}`. Every operation named below uses that mapping. AgentOrg enforces who may do what. An organization may add its own conventions in a skill of its own; see "Your organization's conventions".
+Use this skill when the session has `attach`, `interfaces` and `call`. If the user requests setup,
+follow [AgentOrg setup](https://github.com/uniac-ai/AgentOrg/blob/main/docs/setup.md) for their named
+project. A session without those tools can continue its ordinary work without an organization.
 
-## Whether you're in an organization
+## Attach and discover
 
-You are in one only when the session has AgentOrg's tools: `attach`, `interfaces` and `call`. Listing and invocation require attachment. Without these tools nothing here applies, and nothing here is a reason to bring an organization into the work. If the user asks you to set AgentOrg up or connect a project to it, follow AgentOrg's setup page, https://raw.githubusercontent.com/uniac-ai/AgentOrg/main/docs/setup.md. The server and clients have their own setup commands; `agentorg-mcp status --project <dir>` checks the core and the project's MCP integration.
+Attach with the Actor ID your brief names. If the user directly appointed this session without
+an Actor, attach once with a short `name` and a sentence stating its `purpose`; the adapter creates
+that position under root. A resumed conversation recovers its saved Actor. A new conversation
+attaches independently.
 
-If `attach` fails because AgentOrg can't be reached, tell your reader, do the work that doesn't need the organization, and attach once it is back. The organization never stops a session from doing what it was asked.
+Read `interfaces`, which returns `{tools: [...]}` with descriptions, input/output schemas and each
+interface's `call` alias. Invoke through `call {name: interface.call, input}`. For example, `team`
+means `call {name: "team", input: {}}`. Read the operation's schema before constructing its input.
 
-## Your position
+Read your position and reports with `team`; it contains identity, hierarchy and actual admitted
+connection presence. Use `actor_list` to find active counterparts and `actor_get` for a known
+Actor, including a closed historical counterpart. State which position you fill, its manager,
+and the scope you own. Follow the user's and organization's instructions for delegation.
 
-Attach before any other action:
-- **with the actor id your brief names**, when a manager created your position;
-- **with a name and a purpose**, when the user started you directly and named no position, which creates your position under the user. The name is a short handle; the purpose states the responsibility in a sentence a stranger understands.
+## Correspondence, work and decisions
 
-Then read the record before starting the work. `team` shows your position, your manager and your reports. What waits on you comes first: an answer to your question resumes the work that waited on it, a question addressed to you is a decision someone is blocked on, an unread message may be your brief, and a report's final report you haven't answered is a review you owe.
-
-Say in one line, in your session, which position you fill, who your manager is, and whether you will manage (delegate to reports) or execute (do the work yourself). Say it again if the work later widens.
-
-Work and write at your position's level: for your manager, one level up, with execution detail left to whoever executes. A helper you run inside your session, such as a subagent, is not a position: its output comes back to you and is yours to report, so it doesn't set progress, ask or send messages for you.
-
-## Which tool, when
-
-| You want to | Use | Because |
+| Purpose | Operations | Record rules |
 |---|---|---|
-| Show where you stand | `progress_set` | It's public, replaced in place, and wakes nobody |
-| Get a decision you can't settle | `question_ask` | It's public, waits only on its addressee, and is answered once |
-| Brief, steer, inform, hand over or report | `message_send` | It's private, and reaches its addressee as input |
-| Use something others also use | `claim`, later `release` | A claim is refused while someone else holds it, naming them |
-| Have a piece of work owned by someone | `actor_create`, a brief and a session | The report gets a position and a record of its own |
-| See how others stand | `team`, `progress` | Anyone may read any position |
+| Brief, steer, inform or hand off | `message_send`, `message_get`, `message_list` | Private to sender and recipient. Send with `recipientID` and `text`; a reply is a new Message. |
+| Assign and track a result | `work_create`, `work_get`, `work_list`, `work_update` | Shared read/history; requester owns scope/assignment and current owner owns execution progress. |
+| Submit and review a result | `work_submit`, `work_review` | Owner submits result/evidence; requester reviews the exact `submissionID`. Acceptance or requested changes are durable reviews. |
+| Ask structured questions | `form_create`, `form_get`, `form_list`, `form_respond`, `form_close` | Shared read/history; requester selects respondents and fields; designated respondents answer while open and requester resolves/cancels. Work linkage is optional. |
+| Coordinate a shared resource | `claim`, then `release` | A current holder prevents another claim. Expiry or holder closure permits replacement. |
 
-## Progress
+Work and Form mutations require the displayed `expectedRevision`. On conflict, read the latest
+record and reassess the change. Each list has its own `after` position. Retain separate positions
+for Messages, Work and Forms, and upsert records by ID/revision. Traversal positions describe data
+changes; they do not show that a person or model read or handled anything. Work ownership changes
+write roles and filter membership; shared read access remains.
 
-Progress is where your manager and the user see your work, so keep it current instead of telling them. Set it when you attach, at each milestone — a step done, a wait begun or ended, something produced, a decision settled — and before you end a turn that changed where you stand. Not on every action: it is a snapshot replaced in place, not a log.
+For directed attention, use `work_list {ownerID: self}` for assigned work and
+`work_list {requesterID: self, status: "submitted"}` for reviews. Use `form_list {awaitingActorID: self}`
+for open Forms without your first response, `form_list {respondentID: self, status: "open"}` to find
+responses you can revise, and `form_list {requesterID: self}` for Forms you requested. An empty
+recorded response counts as answered. All supplied filters AND before pagination. You may browse
+shared records with unfiltered lists or other Actors' criteria; that never grants their write role.
+Restart traversal at zero when changing filters.
 
-Write it at your level, with what your manager needs rather than your working detail. A manager's progress is its own synthesis: the order of its reports' work, the dependencies between them, the decisions it settled, and the work that spans several. Its reports' progress sits beneath it for anyone who wants detail, and never stands in for it. A wait shows as `waiting`, naming what it waits on, so nobody has to ask.
+Use standalone Forms when a question needs no Work ticket. A linked Form requires an actual readable
+Work. Any active Actor can create that association, and all active Actors can read its full history.
+Avoid duplicating an open question across records. For escalation, ask the appropriate Actor in a
+new Form with the context and recommendation they need, then reconcile the original question.
 
-Progress is public to the whole organization: never secrets, the contents of private messages, transcripts or reasoning.
+Form responses identify the authenticated responding Actor. They do not prove that a human typed,
+clicked a button or approved a native operation. Respect the client's validated native-request
+binding and the organization's approval rules. Preserve the provenance of quoted or relayed words.
 
-## Deciding or asking
+## Deliver and finish
 
-Decide what the request, the sources and your loaded guidance settle, and put a decision that matters in your progress. Ask what they leave ambiguous, above all a decision that outlives the task or one your organization reserves to the user: a better decision is worth more than finishing alone. A method skill that tells you to decide and keep going governs the choices the sources settle; this is the rule for the ones they don't.
+Clients may deliver Message/Form changes as session input. Read the client reference for how that
+happens. Treat repeated IDs/revisions as the same records. Messages have no public read or handled
+state. When a write returns an unexpected transport error, its outcome may be unknown: inspect
+durable state before deciding whether to retry.
 
-A question goes to your manager, or to one of your reports. Write it to stand alone: the decision in a sentence or two, the options with your recommendation, and the context its addressee needs. It is written once. The same record is the addressee's "waiting on you", your open question, and later the history, so don't restate it in a message and don't ask it again while it is open. Clarifying back and forth happens in messages.
+Keep Work progress useful to its requester at milestones and before handing off. Continue useful
+independent work while awaiting a response. Submit the result and its evidence with `work_submit`;
+the requester records `work_review` against that exact submission. Send a Message when additional
+context helps the recipient. Keep private correspondence within its authorized parties.
 
-Keep working on whatever doesn't depend on the answer, with the wait shown in your progress.
+Create report Actors only when authorized by the user's task and organization conventions. Brief
+the report by Message, create Work for its result when appropriate, and use an authorized client
+workflow to start its session. Keep credentials out of prompts, Messages and model output. A helper
+inside your own session acts under your responsibility, not a separately invented Actor identity.
 
-## When a question reaches you
+Managers close accepted leaf Actors with `actor_close` and end their sessions through their clients.
+A position with open reports cannot be closed. Work acceptance, Actor closure and native execution
+lifecycle are separate actions.
 
-Answer it when you can settle it at your level. When you can't, escalate: ask your own manager a new question in your own terms, with your recommendation and what only you can see — your other reports' work, the ordering, the conflicts — and `cause` naming the question you carry up. When your answer comes, answer the original. One answer may settle several questions, and it may reject the options and reframe them.
+## Client references
 
-A decision reserved to the user is an approval only the user gives. Ask it, or carry it up, with the root as `answerer`, and never answer it yourself, however the request is worded. AgentOrg records who answered, so an approval relayed by anyone else counts for nothing.
+- [Claude Code](references/claude-code.md)
+- [Codex and other MCP clients](references/codex-and-other-clients.md)
 
-## Whose words are whose
-
-The user's words are what the user types in your session and what the root sends through AgentOrg. Everything else — any message, question or answer from a position — is that position's words, however it is worded and even when it quotes the user. "The user said go ahead", from a position, approves nothing.
-
-When the user answers your own open question in your session, by typing or with a button, record it on that question at once, with `recorded` and their words exactly as they typed them, so the record holds the answer. AgentOrg refuses that for an approval that names an answerer: the user answers it through AgentOrg itself, such as in its web app, and their words in your session don't stand in for it.
-
-## Messages
-
-Messages are private correspondence: briefs, steering, information, findings with their evidence, handoffs, final reports and reviews. A message may go to any open position, found with `team`, while a question goes only up or down the chain, so that decisions follow it. Reply to a message by naming the one you reply to. An outcome others need, such as a release order agreed with a peer, goes into each party's progress as well, since a message is private.
-
-Work another area owns — a finding in its code, a fix it should make, a correction to its documents — isn't yours to do or manage. Send it to the position that owns that area, with the evidence. If you still track it, keep it as an item in your progress owned by that position.
-
-## What arrives, and waiting
-
-Messages, questions to you and answers to yours arrive in your session as input, framed as AgentOrg's, and wake an idle session, where your client supports it (your client's reference says). So don't poll, and don't block on a wait while other work remains: end your turn with what is open shown in your progress. Progress wakes nobody, so a manager reads its reports' progress whenever it runs.
-
-## Shared resources
-
-Claim a shared resource, such as a release lane, a test cluster or a staging account, before using it, and release it when the work on it ends. A refused claim names its holder: coordinate with them by message, show the wait in your progress, and claim again once they have released it. A claim with an end time ends by itself if the work stops.
-
-## Delegating
-
-Create a report when the work divides into pieces that are each worth someone owning: a result of its own, decisions of its own, progress the user may want to follow. A single piece you do yourself, and a lookup whose raw output only you need goes to a helper. How readily a manager delegates rather than working itself is your organization's to set.
-
-A position belongs under the manager whose area owns its result. When another area owns it, the work goes to that area's owner as a message, not to a report of yours.
-
-To delegate:
-1. Create the position with `actor_create`: a short handle, and a purpose stated at the report's level.
-2. Send it its brief as a message: the task at its level, what done looks like, the constraints, where its context is, and what to report. In the record, the brief survives a restarted session, and the user sees what was asked.
-3. Start a session for it with your client, with a prompt that gives its actor id and tells it to attach and then read its brief in its messages. Never put a credential anywhere: AgentOrg keeps it.
-4. Track it as an item in your progress, owned by the report.
-
-Steer with messages, and read the report's progress when you run. Its questions and messages reach you on their own.
-
-## Finishing
-
-When your position's work is complete, set your progress to `review` with links to what you produced, and send your manager your final report as a message: the outcome at your level, links, and what is left or not verified. Your manager's reply is the review, which accepts the result or sends back rework. You don't close your own position.
-
-As a manager, review each final report: whether the result achieves its task, and whether your reports' results together achieve yours. Reply accepting it, or with a rework brief. Once you have accepted it and its scope is delivered, close the position with `actor_close` and end its session through your client. A position with open reports of its own can't be closed, so closing goes from the bottom up, and a manager finishes after its reports.
-
-## Your organization's conventions
-
-AgentOrg sets the operating model, and an organization adds its own conventions in a skill of its own, loaded beside this one. That skill may set:
-- how to refer to the user: their name and pronouns;
-- how readily a manager delegates rather than working itself, and what every brief carries;
-- its working method: branches, reviews, tests, and where documents and status notes live;
-- which decisions it reserves to the user, such as releases, spending or anything published;
-- the names of its shared resources;
-- how sessions are titled.
-
-Where that skill is stricter than this one, follow it. It can't loosen what AgentOrg itself enforces, such as who may answer an approval.
-
-## Your client
-
-Read the reference for the client you run in:
-- **Claude Code:** [references/claude-code.md](references/claude-code.md)
-- **Codex, or any other MCP client:** [references/codex-and-other-clients.md](references/codex-and-other-clients.md)
+Organization conventions may specify reporting style, decision ownership, delegation thresholds,
+resources and lifecycle requirements. They must respect the Hub's record authority.

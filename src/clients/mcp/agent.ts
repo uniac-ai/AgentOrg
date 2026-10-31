@@ -1,10 +1,8 @@
 /**
  * The session's stable attach, interfaces and call tools. Listing and invocation use the
- * attached position's actor client, with two exceptions. A credential that
+ * attached position's actor client. A credential that
  * `actor_create` returns is kept in the credential store, and the session sees that it was kept,
- * never the credential. And an answer the session records from the user's words, with
- * `question_answer {recorded: true}`, carries the words the user last typed in the session,
- * verbatim, and only words typed after every question it answers.
+ * never the credential. Workspace record authority remains with the Hub and package clients.
  */
 
 import { existsSync } from "node:fs";
@@ -21,7 +19,6 @@ import {
   Id,
   type InterfaceDescriptor,
   objectSchema,
-  type QuestionsResult,
   type ResponseOf,
   Text,
   Tool,
@@ -86,15 +83,9 @@ const CALL: InterfaceDescriptor = {
 };
 
 /** What the session's client may show its model about the agent actor's tools as a whole. */
-export const INSTRUCTIONS = `These tools make this session a position in an AgentOrg organization: a responsibility with a manager, under the user. Attach before any other action, with the actor id the brief names, or with a name and purpose when the user started the session with no position named. Then use interfaces to read available Hub Tools and their interfaces, and call with {name: interface.call, input} to invoke one. Logical names such as team and progress_set are operations through call. How to work in a position is the agentorg skill; without it, read https://github.com/uniac-ai/AgentOrg/blob/main/skills/agentorg/SKILL.md.`;
+export const INSTRUCTIONS = `These tools make this session a position in an AgentOrg organization: a responsibility with a manager, under the user. Attach before any other action, with the actor id the brief names, or with a name and purpose when the user started the session with no position named. Then use interfaces to read available Hub Tools and their interfaces, and call with {name: interface.call, input} to invoke one. Logical names such as team, message_send, work_update and form_respond are operations through call. How to work in a position is the agentorg skill; without it, read https://github.com/uniac-ai/AgentOrg/blob/main/skills/agentorg/SKILL.md.`;
 
 const refused = (code: string, message: string): Answer => ({ state: "refused", code, message });
-
-/** The SDK's own limit on a request, which a call that waits longer must lift. */
-const DEFAULT_TIMEOUT_SECONDS = 60;
-
-/** Room for a call to answer after the wait it asked for. */
-const MARGIN_SECONDS = 30;
 
 export interface AgentOptions {
   coreUrl: string;
@@ -205,24 +196,8 @@ export class Agent implements Presented {
     input: Record<string, unknown>,
     options: PresentationOptions,
   ): Promise<Answer> {
-    const wait = typeof input.wait === "number" ? input.wait : 0;
-    const timeout = Math.max(DEFAULT_TIMEOUT_SECONDS, wait + MARGIN_SECONDS);
-    try {
-      const recorded = name === "question_answer" && input.recorded === true;
-      const typed = recorded ? await this.#typed(position, input.questions) : undefined;
-      if (typeof typed === "object") return typed;
-      const sent = typed === undefined ? input : { ...input, text: typed };
-      const answer = await position.call(name, sent, {
-        progress: options.progress,
-        timeoutMs: timeout * 1000,
-      });
-      if (typed !== undefined && answer.state === "done" && this.#session !== undefined) {
-        sessions.forgetTyped(this.#session);
-      }
-      return this.#withheld(name, answer);
-    } catch (error) {
-      return refused("unavailable", `the core did not answer: ${(error as Error).message}`);
-    }
+    const answer = await position.call(name, input, { progress: options.progress });
+    return this.#withheld(name, answer);
   }
 
   async close(): Promise<void> {
@@ -326,37 +301,6 @@ export class Agent implements Presented {
       name: "agentorg-agent",
     });
     this.#position = position;
-  }
-
-  /**
-   * The words the user last typed in this session, for an answer the session records: refused
-   * unless they came after every question it answers, which the session asked.
-   */
-  async #typed(position: Actor, questions: unknown): Promise<string | Answer> {
-    const session = this.#session;
-    const typed = session === undefined ? undefined : sessions.typed(session);
-    if (typed === undefined) {
-      return refused(
-        "forbidden",
-        "the user has typed nothing in this session to record: a recorded answer quotes the words the user typed here, after the question; ask the user, or let them answer in the web app",
-      );
-    }
-    const asked = await position.call("questions", { from: this.#filled, open: true, limit: 200 });
-    if (asked.state !== "done") return asked;
-    const open = (asked.value as z.output<typeof QuestionsResult>).questions;
-    const ids = Array.isArray(questions) ? questions : [];
-    const later = open.filter(
-      (question) =>
-        ids.includes(question.id) && Date.parse(question.created_at) >= Date.parse(typed.at),
-    );
-    if (later.length > 0) {
-      const names = later.map((question) => question.id).join(", ");
-      return refused(
-        "forbidden",
-        `the user last typed in this session before ${names} was asked; ask the user, then record what they type`,
-      );
-    }
-    return typed.text;
   }
 
   /** Keep a created position's credential, and forget a closed one's. */
