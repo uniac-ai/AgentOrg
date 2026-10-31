@@ -35,6 +35,21 @@ export function registry(actors: Store["actors"], now: () => string) {
     return { items: page.items, after: page.after };
   }
 
+  /** Inclusive ancestry through retained positions, including closed Actors. */
+  function within(actorID: string, ancestorID: string): boolean {
+    if (get(ancestorID) === undefined) return false;
+    const visited = new Set<string>();
+    for (
+      let at = get(actorID);
+      at !== undefined && !visited.has(at.id);
+      at = at.manager === null ? undefined : get(at.manager)
+    ) {
+      if (at.id === ancestorID) return true;
+      visited.add(at.id);
+    }
+    return false;
+  }
+
   /** Create the root, the user's position, and return its credential. */
   async function createRoot(): Promise<{ root: ActorRow; credential: string }> {
     const { credential, hash } = await mint();
@@ -148,6 +163,7 @@ export function registry(actors: Store["actors"], now: () => string) {
     reports,
     open,
     directory,
+    within,
     close,
     path,
     names,
