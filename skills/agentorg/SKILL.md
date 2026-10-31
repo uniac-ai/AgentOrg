@@ -65,6 +65,14 @@ These predicates AND with exact/status filters before pagination and grant no ad
 role. Unknown anchors match nothing. Refresh complete current queues from zero: records can
 leave a filter after reassignment, review or an answer without a removal event.
 
+For a private conversation, use `message_list {counterpartyID, before:"latest", limit:20}`. All
+caller/pair/direction predicates apply before the limit, including self pairs and closed-peer history.
+Load older rows with the first returned cursor as exclusive `before`; keep forward polling separate
+at the highest cursor from the recent page. Older loads and own sends never advance that forward
+position across unseen inbound rows. Recent/older queries require normalized `after:0`; their Page
+shape stays `{items,after}`, ascending, with zero when empty. Reset lanes on caller/peer/direction
+changes. Neither lane implies read/handled state.
+
 Use standalone Forms when a question needs no Work ticket. A linked Form requires an actual readable
 Work. Any active Actor can create that association, and all active Actors can read its full history.
 Avoid duplicating an open question across records. For escalation, ask the appropriate Actor in a

@@ -113,3 +113,13 @@ const invalidProviderQuery: z.input<typeof BUILTINS.provider_list.request> = { c
 // @ts-expect-error Detach binds both the exact answering run and connection.
 const invalidDetach: z.input<typeof BUILTINS.connection_disconnect.request> = { connectionId: "connection" };
 void [observations, connection, provider, closed, connectionQuery, providerQuery, invalidProviderQuery, invalidDetach];
+
+const oldMessageQuery: z.input<typeof BUILTINS.message_list.request> = { direction: "incoming", after: 0, limit: 100 };
+const recentMessageQuery: z.input<typeof BUILTINS.message_list.request> = { counterpartyID: "peer", before: "latest" };
+const olderMessageQuery: z.input<typeof BUILTINS.message_list.request> = { counterpartyID: "peer", before: Number.MAX_SAFE_INTEGER, after: 0 };
+const parsedMessageQuery = BUILTINS.message_list.request.parse(recentMessageQuery);
+const counterparty: string | undefined = parsedMessageQuery.counterpartyID;
+const before: number | "latest" | undefined = parsedMessageQuery.before;
+// @ts-expect-error Numeric before and literal latest are the only supported selectors.
+const invalidMessageQuery: z.input<typeof BUILTINS.message_list.request> = { counterpartyID: "peer", before: true };
+void [oldMessageQuery, recentMessageQuery, olderMessageQuery, counterparty, before, invalidMessageQuery];
