@@ -1,5 +1,9 @@
 # agentorg: design
 
+The Hub exposes only the Tools composed from its own feature modules. Every open Actor receives
+that catalog and initiates its own calls to the Hub. Actor presence means an admitted connection;
+it says nothing about a native agent or control endpoint. Provider provisioning is a separate role.
+
 ## Components and entry points
 
 AgentOrg's server and clients are separate applications. The server owns the organization;
@@ -24,7 +28,7 @@ requests and responses. `BUILTINS` is the existing derived schema inventory, whi
 modules continue to own runtime operations. Storage records and bound operations stay internal.
 
 The [Human client](https://github.com/uniac-ai/OrgActor-Human) owns its browser UI, local HTTP API,
-sign-in, launcher and service in a separate repository. It depends on the public Actor library
+configuration, launcher and service in a separate repository. It depends on the public Actor library
 and Hub contract; browser users depend on its HTTP interface. The Hub has no dependency on that
 application or its build, and organizational authority stays in the Hub's domain.
 
@@ -38,70 +42,49 @@ The applications share the actor, credential and attachment contracts described 
 
 ## Layers
 
-The domain defines its storage and actor-link ports and exposes Application and Presence. Storage and protocol adapters depend on those contracts, and the network supplies transport without importing the domain. Composition roots wire the concrete adapters and domain owner clients. MCP is today's protocol binding; a replacement implements the same ports.
+The domain defines its storage and Actor-connection ports. Protocol and storage adapters depend on
+those contracts; the network supplies bidirectional JSON-RPC transport without domain knowledge.
+The server composition root wires the concrete adapters to the domain's clients.
 
-| Layer | Folder | What it owns | Today's choice |
-|---|---|---|---|
-| **Network** | `src/network/` | The loopback listener and bidirectional text frames. It knows no identities or application operations. | WebSocket on 127.0.0.1 |
-| **Connection** | `src/connection/` | JSON-RPC admission of an existing Actor or Provider, immutable identity context, and client reconnection. | `connection.connect` on `/connection` |
-| **Protocol binding** | `src/bindings/mcp/` | Encoding the domain's operations on the wire, both ways: listing interfaces, calls, runs, cancellation, change notices, metadata. It is the only code that imports MCP. | MCP |
-| **Provider client** | `src/provider/` | The Hub's typed client for the fixed factory methods on an admitted Provider connection. | JSON-RPC |
-| **Domain** | `src/domain/` | Actors and their interfaces, calls and their lifecycle, the wiring, progress and messages, the built-ins, the audit trail. | agentorg's own model |
-| **Storage** | `src/storage/sqlite/` | Keeping the domain's records, behind the domain's `Store` port. | SQLite through `node:sqlite` |
-| **Actors** | `src/actor/`, `src/clients/{cli,mcp}/`, external clients | What a party does with a call. The actor library gives an actor an API that names no protocol or network. | CLI, MCP adapter, Human client, programs |
+| Layer | Folder | Responsibility |
+|---|---|---|
+| Network | `src/network/` | Loopback listener, connector and duplex text channels. |
+| Connection | `src/connection/` | Admission of an existing Actor or Provider and immutable identity. |
+| MCP binding | `src/bindings/mcp/` | Actor client, Hub server, Tool metadata and operation results. Only this binding imports MCP. |
+| Provider client | `src/provider/` | Hub's typed factory methods on an admitted Provider connection. |
+| Domain | `src/domain/` | Identity, presence, explicit Hub Tools, organization and communication state. |
+| Storage | `src/storage/sqlite/` | Domain records through the Store port, using `node:sqlite`. |
+| Clients | `src/actor/`, `src/clients/`, external clients | List and invoke the Hub's explicit Tools as an Actor. |
 
-How the layers meet:
-- **The domain's ports** are in `src/domain/ports.ts`:
-  - `ActorLink`, the way to one reachable actor: deliver a call, wait on a run, cancel a run, and close. A binding implements it.
-  - `Presence`, which a binding tells when an actor can be reached through which link, and what it exposes.
-  - `Application`, which a binding serves to callers: what an actor may call, and calling it.
-  - `Store`, the record reads and writes the domain needs. The storage layer implements it.
-- **The composition root**, `src/server/index.ts`, assembles the core from the domain, SQLite storage, the MCP binding and the network listener.
-- **The actor library** (`src/actor/`) assembles the network's connector with the binding on an actor's side, and the binding's server for the session that fills a position (`occupant.ts`), behind its `Presented` port.
-- **`test/layers.test.ts` enforces the rules:**
-  - The domain imports no MCP, web framework, WebSocket, database or Node built-in, and uses no Node globals. Its secrets and hashes come from Web Crypto, so it runs on any JavaScript runtime that has that.
-  - The network imports no domain, binding or storage.
-  - Only the MCP binding imports MCP.
+`src/domain/ports.ts` defines Application, ActorConnection, Invocation, Waiting and Store. An
+ActorConnection exposes only revocation. `test/layers.test.ts` checks module boundaries, the
+acyclic domain import graph and the domain's independence from Node and protocol libraries.
 
 ## The domain
 
-`src/domain/index.ts` assembles owner clients and binds the connection-online trigger
-to call redelivery. It contains no connection or call policy. The import graph,
-including types, is acyclic and checked by `test/layers.test.ts`.
+`src/domain/index.ts` composes peer state owners and their explicit feature Tools:
 
-| Owner | Inputs and outputs | State |
-|---|---|---|
-| `registry.ts` | Credentials identify open positions; creation returns identity and a one-time credential; closure checks authority and open reports. | Identity, actor tree and lifecycle. |
-| `execution.ts` | Accepts an existing Actor identity, private bootstrap credential, Provider and configuration; validates configuration and reports one Provider creation outcome. | None. |
-| `connections.ts` | Accepts link-specific presence and advertisements; supplies live links and the latest descriptors; disconnects closed actors. Stale-link reports have no effect. | Live links in memory; advertised interfaces in storage. |
-| `capabilities.ts` | Projects supplied feature Tools and Actor advertisements into caller-relative exposures. Listing, dispatch and team use the same projection. | None. |
-| `calls.ts` | Creates, delivers, cancels, settles and waits on calls through Connections; records audit outcomes. | Durable calls; active delivery attempts and waiters. |
-| `progress.ts` | Validates actor references, versions partial replacements and supplies current/history reads. | Progress versions. |
-| `communication.ts` | Authorizes questions, answers and private messages, and supplies correspondence reads and waits. | Questions/messages with one cursor; waiting reads. |
-| `claims.ts`, `audit.ts` | Manage current resource claims and append/read the audit trail. | Their durable records. |
-| `actors.ts` | Owns the Actors Tool, Actor read projection and lifecycle orchestration over Registry, Execution, Calls and Connections. | None beyond its state-owner clients. |
-| `team.ts` | Owns the Team Tool, progress publication and composed organization/progress views. Receives callable interfaces from core's invocation catalog. | Progress belongs to `progress.ts`. |
-| `tools.ts` | Binds each feature's schema contract to its typed operations; the resulting objects supply exposure and invocation together. | None. |
-| `application.ts` | Validates, audits and dispatches bound feature operations or routes calls through Calls, with bounded waits. | Request timing policy. |
-
-SQLite schema 7 stores identity in `actors` and the last advertised descriptors in
-`exposures`. Online state is derived from live links, so a fresh core starts offline
-while retaining advertisements. Public actor responses combine identity and
-connection state without exposing credential hashes. A database with another
-nonzero schema version is refused with its version and the required version; its
-records are neither migrated nor deleted.
+| Owner | Responsibility |
+|---|---|
+| `registry.ts` | Actor identity, hierarchy, credentials and lifecycle authority. |
+| `connections.ts` | All admitted Actor connections, presence and revocation. |
+| `execution.ts` | One optional Provider provisioning outcome for an already-created Actor. |
+| `actors.ts` | Actor lifecycle and public projection, using Registry, Connections and Execution. |
+| `progress.ts`, `team.ts` | Progress versions and composed organization views. |
+| `communication.ts` | Questions and private messages, with their shared cursor and waiting reads. |
+| `claims.ts`, `audit.ts` | Shared resource claims and append-only audit metadata. |
+| `calls.ts` | Read-only historical Actor-call results, visible to the original caller. |
+| `tools.ts` | Schema contracts bound to their module-owned typed operations. |
+| `capabilities.ts` | Project supplied Hub Tools into public descriptors and private operations. |
+| `application.ts` | Validate and invoke those operations as the admitted Actor, enforcing domain refusals and write audit. |
 
 ### Tools and interfaces
 
-The Hub gives each Actor a catalog of Tools. A Tool is `{id, name, interfaces}`; each interface
-contains its descriptor, `call` alias, `routed` flag and optional `read_only` hint. The descriptor's
-name is local to the Tool. `(tool.id, interface.name)` identifies an interface independently of
-the caller's alias; `Actor.call(interface.call, input)` invokes it with the existing call names.
-`Actor.available()`, the CLI's `interfaces`, and the agent adapter's `interfaces` carry these
-nested Tools. The CLI and adapter return `{tools: [...]}`.
+A Tool is `{id, name, interfaces}`. Each interface contains its local descriptor, a `call` alias and
+an optional `read_only` hint. `(tool.id, interface.name)` identifies it. `Actor.available()` returns
+these Tools; the CLI and MCP adapter's `interfaces` operation return `{tools: [...]}`.
 
-Every open Actor receives the same seven built-in Tools and sixteen interfaces. Their IDs are
-`hub:<name>`, with these names and interfaces:
+Every open Actor receives the same seven Hub Tools and fifteen interfaces:
 
 | Tool | Interfaces |
 |---|---|
@@ -110,70 +93,59 @@ Every open Actor receives the same seven built-in Tools and sixteen interfaces. 
 | `questions` | `question_ask`, `question_answer`, `questions` |
 | `messages` | `message_send`, `messages`, `message_read` |
 | `claims` | `claim`, `release` |
-| `calls` | `call_result`, `call_withdraw` |
+| `calls` | `call_result` |
 | `activity` | `activity` |
 
-Each other visible Actor with advertisements supplies one Tool, using its existing Actor ID.
-Its Tool name is `manager`, a direct report's handle, or, for the root, the Actor's full path.
-The interfaces keep their local names, while `call` joins that alias and the local name.
-Advertisements remain visible while offline. A closed Actor receives no Tools.
+IDs are `hub:<name>`. Discovery and invocation use the same module-owned operations. The caller's
+hierarchy and the operation's records govern domain authority; they do not add Tools. Actor IDs,
+paths, cached advertisements and guessed aliases cannot introduce callable interfaces. A closed
+Actor receives no Tools. `BUILTINS` is a derived schema inventory for CLI and typed consumers,
+while feature modules own runtime registration.
 
-Feature modules own their Tool contracts and bound operations. Actors owns lifecycle orchestration
-and its read projection; Team composes progress and organization views; Questions and Messages
-share communication's cursor and waiting primitive; Claims, Calls and Activity expose their state
-owners. Core composes these peers and supplies their bound Tools to `capabilities.ts`. The combined
-built-in schema export is derived for CLI and type consumers, rather than runtime registration.
+An interface descriptor contains name, optional title/description, input/output JSON Schemas and
+generic `one_way`/`long_running` flags. The MCP binding flattens the catalog and carries semantic
+identity through `_meta["agentorg/tool"] = {id, name, interface, one_way, long_running}`. The Actor
+client reconstructs the nested catalog from that metadata. Operation results are `done {value}`
+or `refused {code, message}`; they carry no Actor-call receipt or destination.
 
-`capabilities.ts` owns the Actor-relative projection over those supplied Tools, Registry identity
-and Connections advertisements. Its exposures keep dispatch destinations private. Application
-validates, audits and invokes the selected bound operation without feature handlers of its own.
-Team receives that same projected catalog as invocation input for its callable interface views,
-keeping the dependency graph acyclic. Connections retains the first valid descriptor per local
-interface name on both advertisement writes and cached reads, including offline advertisements.
-No separate catalog state or storage is needed. Clients depend on the shared domain descriptor
-and Actor API, independently of how an Actor was created or which Provider executes it.
+### Records and storage
 
-The MCP binding alone flattens a Tool into MCP Tools, one per callable interface. Each carries
-`_meta["agentorg/tool"]` with the semantic Tool's identity and name, the local interface name,
-and existing routing and interface flags. The Actor-side binding reconstructs the nested catalog
-from this metadata and rejects missing or inconsistent metadata. MCP method and call names stay
-the same; admission carries no catalog. Verification covers the concrete catalog payloads,
-visibility and call authorization, identity across aliases, advertisement lifecycle, and metadata
-round-trip through the assembled clients.
+An Actor has id, name, path, purpose, manager, online state and creation/closure timestamps.
+The durable identity also holds a credential hash that public views omit. Online means at least
+one admitted Actor connection; multiple caller connections coexist. Closing an Actor revokes
+all its connections while preserving independent Provider connections.
 
-The domain's interface descriptor is its own: name, title and description, input schema, output schema, whether it is one-way, and whether it is long-running.
-- **Schemas** are JSON Schema, the domain's schema language. The domain checks inputs and outputs against them with Ajv.
-- **A one-way interface's caller** does not wait for its result.
-- **A long-running interface** may take a call as a run, which it finishes hours later.
+SQLite schema 8 stores Actor identity, progress, questions, messages, claims, historical calls
+and audit records. Opening schema 7 performs one transaction: remove cached advertisements and
+the session-creation marker, append failed outcomes for pending Actor calls, mark those calls
+failed with an explicit retirement reason, and advance the version. Their inputs, destinations,
+run references and other records remain. No historical execution is replayed or cancelled at an
+external runtime. Reopening schema 8 does not repeat retirement. Other nonzero versions are
+refused without migration. Fresh databases start directly at schema 8.
 
-### Records
+`call_result {call}` reads an existing receipt only for its original caller. It performs no wait,
+delivery or remote action. Actor handles remain unique among open siblings, and paths describe
+the organization. Actor and Team metadata contain no callable-interface or native-session fields.
 
-| Record | Fields | Rules |
-|---|---|---|
-| **Actor** | id; name, a handle unique among its open siblings; purpose; manager (an actor id, or null for the root); credential hash; online; its exposed interfaces as last listed; created at attach; created at; closed at | Its manager creates it, and its manager or the root closes it, once its own reports are closed. Its path is its handles from the root's report down, as `release.storage`. An interface name holds letters, digits, `_` and `-`, since dots join handles and names. A handle that begins a built-in's name, as `call` begins `call_result`, is refused, since clients turn a routed name's dot into `_`. |
-| **Call** | id; from; to; interface (the callee's own name for it); input; state (`pending`, `done`, `failed` or `withdrawn`); output, as a structured value and parts, or error; cause (the call that led to this one); run (the callee's handle for it while it runs long); created, delivered and settled at | It is recorded before it is delivered, and settles once. A result that arrives after it settled is dropped. |
-| **Progress** | actor; version; state (`running`, `waiting`, `blocked` or `review`); summary; items, each with a title, a state (`planned`, `running`, `waiting`, `blocked` or `review`) and optionally a summary, links, an owner and what it waits on; links; updated at | Each set adds a version, and reads leave earlier versions out unless asked. Item titles are unique, and done items drop off. A link is an http, https or file URL. |
-| **Question** | id; cursor; from; to; text; links; options and a recommendation; answerer; cause; answer (who answered, the choice, the words, whether the asker recorded them, and when); created at | It is answered once. |
-| **Message** | id; cursor; from; to; text; links; reply to; created and read at | |
-| **Claim** | resource; holder; note; until; claimed at | A resource has at most one current claim. It ends when released, when `until` passes, or when its holder is closed. |
-| **Audit entry** | id; at; actor; operation; target; outcome | One line for each write, and for each routed call when it is created, refused and settled. |
+### Built-ins
 
-### Routing a call
-
-When actor A calls `B.name`:
-1. The core finds the interface among A's and checks the input against its input schema. A refused call is not recorded.
-2. It records the call as `pending`, with the cause A names, which must be a call into A.
-3. It delivers the call through B's link while B is reachable, and again each time B comes back while the call is pending. So delivery is at least once, and a handler must tolerate a repeat. A call to an unreachable actor waits.
-4. It checks B's structured value against the latest advertised output schema and records the call as `done`. A value that breaks the schema, a missing value where there is a schema, or a failure records it as `failed`. Delivery likewise uses the latest advertisement's long-running support; calls do not snapshot a descriptor when created.
-5. A waits up to 30 seconds, with progress. If the call is done by then, A gets B's result. Otherwise A's answer is pending, and A reads the call later with `call_result`. A call into a one-way interface answers pending at once.
-
-### Long-running calls
-
-A human may answer hours later, so a long-running interface may take a call as a run:
-- **The wait.** The core records the run and waits on it.
-- **After a reconnect.** The core waits on the same run again. If the actor no longer knows the run, as after a restart, the core delivers the call again and the actor takes it as a new run. So an actor can rebuild its queue from the calls pending on it, and a reconnect alone does not deliver a call twice.
-- **Withdrawal.** A withdrawn call's run is cancelled.
-- **Interfaces that are not long-running** answer within 60 seconds, or the call fails.
+| Built-in | Responsibility |
+|---|---|
+| `actor_create {name, purpose, execution?}` | Create a report, returning its one-time credential and optional separate Provider outcome. |
+| `actor_close {actor}` | The manager or root closes a leaf Actor and revokes its Hub connections. Root cannot be closed. |
+| `team {actor?, depth?}` | Read organization, presence, progress, open questions and claims. Anyone may read any position. |
+| `progress {actor, history?}` | Read current and optional historical progress. |
+| `progress_set {state?, summary?, items?, links?}` | Replace supplied fields of the caller's progress. |
+| `question_ask {to?, text, links?, options?, recommendation?, answerer?, cause?}` | Publish a question under the communication rules below. |
+| `question_answer {questions, choice?, text?, recorded?}` | Answer authorized questions or record the asking session's own user answer. |
+| `questions {to?, from?, open?, since?, limit?, wait?}` | Read questions, optionally waiting for a matching cursor change. |
+| `message_send {to, text, links?, reply_to?}` | Send a private message. |
+| `messages {box?, unread?, actor?, with?, since?, limit?, wait?}` | Read authorized correspondence, optionally waiting for a cursor change. |
+| `message_read {ids}` | Mark messages addressed to the caller read. |
+| `claim {resource, note, until?}` | Hold a shared resource. |
+| `release {resource}` | Release the caller's claim; root may release any. |
+| `call_result {call}` | Read a historical call made by the caller. |
+| `activity {since?, limit?}` | Read audit metadata as any open Actor. |
 
 ### Communication
 
@@ -195,27 +167,6 @@ A human may answer hours later, so a long-running interface may take a call as a
 - **Claims.** An actor claims a shared resource, such as a release lane or a cluster, while it uses it, and anyone sees current claims in `team`. Claiming a resource another actor holds is refused, naming the holder.
 - **The cursor.** Questions and messages share one sequence. A question takes a new cursor when it is answered. So a read since a cursor finds new messages, new questions and new answers. A read with `wait` holds until a match exists, for up to 600 seconds, and every write wakes it.
 
-### Built-ins
-
-| Built-in | What it does |
-|---|---|
-| `actor_create {name, purpose, execution?, created_at_attach?}` | Creates a report of the caller, returning it with its one-time credential. Optional `execution: {providerId, config}` requests an implementation through that Provider and adds its outcome to the result. The root alone may mark a position created as a session the user started attaches to it. |
-| `actor_close {actor}` | The manager, or the root, closes an actor. It is refused while the actor has open reports of its own. The actor's own pending calls are withdrawn, the calls into it fail, and its connection closes. The root is never closed. |
-| `progress_set {state?, summary?, items?, links?}` | Replaces the fields given of the caller's progress. The first set names its state. |
-| `team {actor?, depth?}` | A position and its reports down to a depth, by default the caller and its direct reports: each one's purpose, presence, progress state and summary, open questions, claims, and its interfaces the caller can call, with the root's id. Anyone may read any position. |
-| `progress {actor, history?}` | An actor's full progress, with its open questions and, when asked, earlier versions. Anyone may read it. |
-| `question_ask {to?, text, links?, options?, recommendation?, answerer?, cause?}` | Publishes a question. |
-| `question_answer {questions, choice?, text?, recorded?}` | Answers one or more open questions. |
-| `questions {to?, from?, open?, since?, limit?, wait?}` | Questions, newest first, with the newest cursor. Anyone may read them. |
-| `message_send {to, text, links?, reply_to?}` | Sends a private message. |
-| `messages {box?, unread?, actor?, with?, since?, limit?, wait?}` | The messages the caller may see, newest first, with the newest cursor: by default those addressed to it. It changes nothing. |
-| `message_read {ids}` | Marks messages addressed to the caller read; each sender sees when. |
-| `claim {resource, note, until?}` | Claims a shared resource, or renews the caller's claim. It is refused while another actor holds it. |
-| `release {resource}` | Releases a resource the caller holds; the root may release any. |
-| `call_result {call, wait?}` | Reads a call the caller made, optionally waiting up to 600 seconds for it to settle, with progress. |
-| `call_withdraw {call}` | The caller withdraws a pending call. |
-| `activity {since?, limit?}` | Audit metadata for every open Actor, newest first: id, time, acting Actor, operation, target and outcome. |
-
 When execution is requested, the Actors module creates the organizational Actor through Registry
 before calling Execution. The execution client uses the selected Provider's configuration schema and
 creation interface; `config` is a required JSON object. Its result is
@@ -236,40 +187,24 @@ within the 60-second default caller budget. Expiry before launch returns `failed
 description cannot start execution. Expiry after launch may have been sent returns `unknown`;
 the Hub neither cancels nor replays it. Explicit caller timeouts retain their chosen behavior.
 
-## Today's binding: MCP in both directions
+## Actor-to-Hub MCP
 
-Each Actor initiates a WebSocket at `/connection`, then sends
-`connection.connect({actorId, credential?})` and receives `{connectionId}`. The handshake admits
-an existing identity only. The supplied identity is immutable and the reply carries no catalog.
-Credentials are required by default; omission is allowed only by explicit Hub policy, and a
-supplied invalid credential always fails. Actor and Provider IDs occupy distinct namespaces.
+Each Actor initiates a WebSocket at `/connection`, sends
+`connection.connect({actorId, credential?})`, and receives `{connectionId}`. Admission requires an
+existing open identity and matching credential under the default policy. The admitted principal
+is immutable. Admission creates no Actor and returns no catalog.
 
-MCP initializes separately on that same socket, with one JSON-RPC message per text frame. The
-Actor's MCP client calls the Hub's server. An Actor that exposes interfaces also serves reverse
-MCP requests from the Hub's client. Fixed direction dispatch sends incoming requests to the local
-server and replies to the local client; request IDs remain independent in each direction.
-Initialized/cancelled notifications go to the server; tool-list changes, task status and progress
-go to the client. This binding uses no additional envelope or service registry.
-
-Admission does not register Actor exposure. `connectClient` supplies no reverse MCP server and
-coexists with other connections. `connectActor` explicitly advertises its interfaces, including
-an empty list. Only a successful reverse initialization and tool listing replaces the delivery
-owner. Candidate order is reserved before initialization, so a delayed older initialization cannot
-replace a newer advertisement. Stale changes, disconnects and delivery results have no effect on
-the current owner. Replacing an advertising connection closes it with 4000; closing the Actor
-revokes all its admitted connections with 4001. A caller socket closes independently.
-
-How the domain is encoded:
-- **An interface is one MCP `Tool`.** The Hub's semantic Tools remain grouped in the domain and Actor API; the binding flattens them into `tools/list` entries with explicit semantic metadata. Advertisements from Actors are ordinary MCP interfaces: the Hub assigns their semantic Tool identity from the admitted Actor and ignores advertiser metadata. The core lists an Actor's interfaces again on `notifications/tools/list_changed`.
-  - A tool is one-way when its output schema is the empty object.
-  - It is long-running when it declares `execution.taskSupport` and its server declares `tasks.requests.tools.call`.
-- **A call is `tools/call`**, with `_meta["agentorg/call"] = {id, from, cause}`. A caller names its cause with `_meta["agentorg/cause"]`.
-- **A run is an MCP task.** The core sends a long-running call with `params.task`, waits on `tasks/result`, and asks again at once when the actor's `notifications/tasks/status` says the task finished. Cancelling is `tasks/cancel`, and an unknown task is a lost run.
-- **An answer is a `CallToolResult`.** A done call returns B's own result, with `_meta["agentorg/call"] = {id, state}`. A pending one returns `{call, state: "pending"}`. A routed tool's listed `outputSchema` is B's or that pending shape, so that clients checking results accept both.
+The Actor's MCP client then initializes on that bidirectional JSON-RPC channel and calls the Hub's
+MCP server. The Hub publishes its explicit Tools through `tools/list`; `tools/call` invokes one as
+the admitted principal. Actors need no MCP server. Their messages cannot register advertisements
+or a reverse invocation endpoint. The SDK's `connectClient` requires `url` and `actorId`, with a
+credential under the default policy. It lists Tools, calls their interfaces and reconnects after
+a transport drop. Progress notifications support waiting Hub reads. A request's caller identity
+does not depend on an incoming call, native session or RPC cause.
 
 ## The MCP adapter
 
-The MCP adapter, `agentorg-mcp` in `src/clients/mcp/`, lets a Claude Code or Codex session fill a position. The client starts it over stdio for each session, and it connects to the core as that position with the actor library. Its project integration and hooks belong to this adapter.
+The MCP adapter, `agentorg-mcp` in `src/clients/mcp/`, is an optional client for Claude Code or Codex. Its local attachment records connect a session to an Actor; the Hub stores no native-session marker. The client starts it over stdio and it calls the Hub through the Actor library. Project integration and hooks belong to this adapter.
 
 - **What the session sees.** The stdio adapter has three fixed MCP tools: `attach`, `interfaces`, and `call {name, input}`. `interfaces` returns `{tools: [...]}` from the attached actor's library, with stable Tool identities, local interface descriptors and their call aliases. `call` invokes an interface using its `call` alias as `name`. The presentation's fixed controls form one semantic `agentorg` Tool, separate from the Hub catalog. Before its first turn, the client's session-start hook runs `agentorg-mcp context`, so a session that fills no position reads that it loads the `agentorg` skill and attaches before any other action. The adapter's instructions say the same.
   - `attach {actor}` fills the position the session's brief names.
@@ -297,10 +232,10 @@ The MCP adapter, `agentorg-mcp` in `src/clients/mcp/`, lets a Claude Code or Cod
 
 ## The network
 
-- **Opening.** A WebSocket opening error or closure rejects the initial connection and closes that socket.
-- **Web pages are refused.** An upgrade with an `Origin` header is refused, blocking cross-site WebSockets and DNS rebinding.
-- **Admission.** `src/connection/` checks credentials through the identity owners. The network listener admits no identity itself.
-- **Reconnect.** The connector dials again after a drop, performs fresh admission and initializes MCP again. It stops after 4000 or 4001.
+- **Opening.** A WebSocket opening error or closure rejects the initial connection and closes its socket.
+- **Origin.** Upgrades with an Origin header are refused.
+- **Admission.** Identity owners check credentials; the listener admits no identity itself.
+- **Reconnect.** The client repeats admission and MCP initialization after a drop. Revocation code 4001 ends reconnection.
 
 ## Provider connections
 
@@ -320,5 +255,4 @@ cancellation. The client performs no automatic replay.
 
 The Provider client owns only wire interaction. Hub owns organizational identity, state and authority;
 an Actor's identity survives executor replacement. Provider owns native execution management, and
-the Actor client owns its separate Hub connection. The Provider contract does not define Actor
-connection routing.
+the Actor client initiates its own independent connection to the Hub.

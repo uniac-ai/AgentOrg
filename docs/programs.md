@@ -38,13 +38,12 @@ agentorg actor create --name builds --purpose "Run the nightly builds"
 agentorg team
 agentorg activity
 agentorg interfaces
-agentorg call builds.review --json '{"revision":"example"}'
+agentorg call team --json '{"depth":2}'
 ```
 
-`interfaces` returns `{tools: [...]}` from the core: each Tool has a stable `id`, a caller-relative
+`interfaces` returns `{tools: [...]}` from the core: each explicit Hub Tool has a stable `id`, a
 `name`, and `interfaces` containing local descriptors and `call` aliases. Use that alias with
-generic `call`, which prints the actor library's complete answer,
-including a routed call's id, state and parts. The generated built-in convenience commands
+generic `call`, which prints `done {value}` or `refused {code, message}`. The generated convenience commands
 continue to print their completed value.
 
 `actor_create` can also request execution from an enrolled, connected Provider:
@@ -64,7 +63,7 @@ Hub makes one creation request and does not replay it automatically after timeou
 ## Human client
 
 [OrgActor-Human](https://github.com/uniac-ai/OrgActor-Human) owns the browser application,
-its HTTP API and sign-in contract. It connects to the Hub through the public Actor library
+its HTTP API and configuration. It connects to the Hub through the public Actor library
 described below. Its repository owns installation, configuration and service management.
 
 ## Program clients
@@ -78,18 +77,15 @@ connection.connect({actorId, credential?}) -> {connectionId}
 
 The handshake admits identity only; it creates no Actor and returns no service catalog.
 Credentials are required under the default policy. A supplied invalid credential always fails.
-Hub MCP initializes separately on that same socket. It exposes built-in interfaces, the Actor's
-manager's interfaces as `manager.<interface>`, and its reports' as `<handle>.<interface>`. Each
-MCP entry carries `_meta["agentorg/tool"]` with `id`, `name`, local `interface`, `routed`, `one_way`
-and `long_running`, from which the Actor library reconstructs its nested Tool catalog. Reverse MCP initialization
-and tool advertisement establish the connection that owns delivery to the Actor. Caller-only
-connections coexist independently of that delivery owner.
+Hub MCP initializes separately on that same socket. Every open Actor receives only the explicit
+Hub Tools composed from feature modules. Each MCP entry carries `_meta["agentorg/tool"]` with
+`id`, `name`, local `interface`, `one_way` and `long_running`, from which the Actor library
+reconstructs its nested Tool catalog. Multiple admitted caller connections coexist.
 
 The core refuses an `Origin` header, so this endpoint is for local processes. Human applications,
-agent adapters and programs use the same Actor contract. Node programs use `connectActor` from
-`@agentorg/cli/actor` with `actorId`, `credential`, `url` and `exposed` to expose handlers, call
-interfaces and reconnect after a drop. `connectClient` uses the same admission with no exposure.
-A long-running handler returns a promise that settles when ready.
+agent adapters and programs use the same Actor contract. Node programs use `connectClient` from
+`@agentorg/cli/actor` with `actorId`, `credential` and `url` to list and call Hub Tools and reconnect
+after a drop. Actor identity and Team metadata contain no advertised interfaces or native-session marker.
 [design.md](design.md) owns the ports and protocol.
 
 `@agentorg/cli/contract` supplies `BUILTINS`, the existing derived inventory of built-in request
@@ -99,7 +95,7 @@ Actor creation request. Record exports such as `Actor`, `Position` and `Progress
 `z.output<typeof Position>` derives a record's TypeScript type. Import the Actor connection API
 from `./actor` and these wire contracts from `./contract`.
 
-The Actor library requires `actorId` for both `connectActor` and `connectClient`. Restart the
+The Actor library requires `actorId` for `connectClient`. Restart the
 server after updating so it writes `root-actor` beside the root credential. Custom clients must
 send `connection.connect` before MCP initialization on `/connection`. Environment-based CLI
 setup must supply both `AGENTORG_ACTOR_ID` and `AGENTORG_CREDENTIAL`.

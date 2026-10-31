@@ -2,7 +2,7 @@
 
 `agentorg-mcp connect claude-code` sets a project up so that Claude Code runs AgentOrg's agent actor as the MCP server `org`, delivers what arrives through AgentOrg's hooks, and finds this skill.
 
-- **Tool names.** The adapter tools are `mcp__org__attach`, `mcp__org__interfaces` and `mcp__org__call`. Invoke a report's logical `storage.check` interface with `mcp__org__call {name: "storage.check", input: {...}}`, using the input schema returned by `interfaces`.
+- **Tool names.** The adapter tools are `mcp__org__attach`, `mcp__org__interfaces` and `mcp__org__call`. Invoke an explicit Hub interface with `mcp__org__call {name: "progress_set", input: {state: "running", summary: "Checking the build"}}`, using the input schema returned by `interfaces`.
 - **Attaching.** The startup hint says to attach. A resumed session recovers its actor on its own; `interfaces` reads its current permitted operations. The stable tools are `attach`, `interfaces` and `call`, with logical operations invoked through `call` as the skill describes.
 - **What arrives.** When your turn ends, AgentOrg's hook waits for what you haven't seen and hands it to you as your next input, waking you if you're idle. It marks delivered messages read. An id you've seen before is the same item again.
 - **Subagents** started with the `Agent` tool share this session's MCP server, and so its position. They are helpers: they don't call AgentOrg's tools.

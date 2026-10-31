@@ -7,14 +7,7 @@
 import { z } from "zod";
 import { COMMUNICATION } from "./communication.ts";
 import { toolDefinition } from "./json-schema.ts";
-import { Actor, AuditEntry, Call, Handle, Id, MAX_WAIT_SECONDS, Text } from "./records.ts";
-
-/**
- * A handle that begins a built-in's name. Clients such as Claude Code and Codex turn the dot of a
- * routed name into `_`, so a report named `call` would offer `call_result` beside the built-in.
- */
-const reserved = (handle: string): boolean =>
-  Object.keys(BUILTINS).some((name: string) => name.startsWith(`${handle}_`));
+import { Actor, AuditEntry, Call, Handle, Id, Text } from "./records.ts";
 
 export const ExecutionOptions = z.strictObject({
   providerId: Id.describe("The enrolled Provider to ask for execution."),
@@ -35,17 +28,11 @@ export const ExecutionResult = z.strictObject({
 
 export const ActorCreate = z
   .strictObject({
-    name: Handle.refine((handle) => !reserved(handle), "begins a built-in's name, as call does"),
+    name: Handle,
     purpose: Text.describe("What the actor is for, for a reader outside it."),
     execution: ExecutionOptions.optional().describe(
       "Optionally arrange execution through a Provider after creating the Actor.",
     ),
-    created_at_attach: z
-      .boolean()
-      .default(false)
-      .describe(
-        "For the root only: the position is created as a session the user started attaches to it.",
-      ),
   })
   .meta({ id: "ActorCreate" });
 
@@ -66,25 +53,14 @@ export const ActorClose = z.strictObject({ actor: Id }).meta({ id: "ActorClose" 
 export const ActorClosed = z
   .strictObject({
     actor: Actor,
-    ended_calls: z
-      .array(Call)
-      .describe("Its pending calls: those it made are withdrawn, and those into it failed."),
   })
   .meta({ id: "ActorClosed" });
 
 export const CallResult = z
   .strictObject({
-    call: Id.describe("A call you made."),
-    wait: z
-      .number()
-      .min(0)
-      .max(MAX_WAIT_SECONDS)
-      .default(0)
-      .describe("Seconds to wait for it to settle, with progress notifications."),
+    call: Id.describe("A historical call you made."),
   })
   .meta({ id: "CallResult" });
-
-export const CallWithdraw = z.strictObject({ call: Id }).meta({ id: "CallWithdraw" });
 
 export const Activity = z
   .strictObject({
@@ -114,7 +90,7 @@ With execution, wait for the Provider and return its separate ready, failed or u
     response: ActorClosed,
     description: `Close a direct report whose work is done; the root may close any actor.
 
-Refused while it has open reports of its own. Its pending calls end and its connections close.`,
+Refused while it has open reports of its own. Its Hub connections close.`,
   },
 });
 
@@ -123,15 +99,7 @@ export const CALLS = toolDefinition("calls", {
     writes: false,
     request: CallResult,
     response: Call,
-    description: `Read a call you made, with its output once done.
-
-With wait, hold until it settles or the wait ends, whichever is first.`,
-  },
-  call_withdraw: {
-    writes: true,
-    request: CallWithdraw,
-    response: Call,
-    description: "Withdraw a pending call you made that no longer needs an answer.",
+    description: "Read a historical Actor call you made, with its recorded result.",
   },
 });
 
@@ -140,7 +108,7 @@ export const ACTIVITY = toolDefinition("activity", {
     writes: false,
     request: Activity,
     response: ActivityResult,
-    description: "Read audit metadata: every write and every routed call, newest first.",
+    description: "Read audit metadata, newest first.",
   },
 });
 

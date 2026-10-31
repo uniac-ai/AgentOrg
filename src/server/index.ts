@@ -23,11 +23,11 @@ import type { Store } from "../domain/ports.ts";
 import { type ProviderIdentity, providers } from "../domain/providers.ts";
 import type { Registry } from "../domain/registry.ts";
 import { readPrivate, writePrivate } from "../home.ts";
-import { type Channel, CLOSE_REVOKED, listen } from "../network/index.ts";
+import { CLOSE_REVOKED, listen } from "../network/index.ts";
 import { ProviderClient } from "../provider/index.ts";
 
 export interface CoreOptions extends OrganizationOptions {
-  /** How long a call into an interface that is not long-running may take. */
+  /** How long a Provider factory request may take. */
   timeoutMs?: number;
   onError?: (party: string, error: Error) => void;
   providers?: readonly ProviderIdentity[];
@@ -50,17 +50,11 @@ export async function startCore(
   store: Store,
   options: CoreOptions & { port: number; hostname?: string },
 ): Promise<RunningCore> {
-  const actorConnections = new Map<string, Set<Channel>>();
   const providerClients = new Map<string, ProviderClient>();
   const providerIdentities = providers(options.providers ?? []);
   const organization = createOrganization(store, {
     ...options,
     provider: (providerId) => providerClients.get(providerId),
-    onActorClosed: (actorId) => {
-      for (const channel of actorConnections.get(actorId) ?? [])
-        channel.close(CLOSE_REVOKED, "the Actor was closed");
-      options.onActorClosed?.(actorId);
-    },
   });
   const listening = await listen({
     port: options.port,
@@ -100,18 +94,12 @@ export async function startCore(
               admitted.close(CLOSE_REVOKED, "the Actor was closed");
               return;
             }
-            let connections = actorConnections.get(actorId);
-            if (!connections) {
-              connections = new Set();
-              actorConnections.set(actorId, connections);
-            }
-            connections.add(admitted);
-            admitted.whenClosed(() => {
-              connections.delete(admitted);
-              if (!connections.size) actorConnections.delete(actorId);
-            });
+            const connection = {
+              close: () => admitted.close(CLOSE_REVOKED, "the Actor was closed"),
+            };
+            organization.online(actorId, connection);
+            admitted.whenClosed(() => organization.offline(actorId, connection));
             serveConnection(organization, actorId, admitted, {
-              timeoutMs: options.timeoutMs ?? 60_000,
               ...(options.onError === undefined ? {} : { onError: options.onError }),
             });
           }

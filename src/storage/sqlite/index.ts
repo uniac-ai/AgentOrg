@@ -29,39 +29,8 @@ export class SqliteStore implements Store {
     open: () => this.database.select("actors", "closed_at IS NULL"),
   };
 
-  readonly exposures: Store["exposures"] = {
-    get: (id) => this.database.get("exposures", id)?.interfaces ?? [],
-    put: (id, interfaces) => {
-      this.database.run("INSERT OR REPLACE INTO exposures (id, interfaces) VALUES (?, ?)", [
-        id,
-        JSON.stringify(interfaces),
-      ]);
-    },
-  };
-
   readonly calls: Store["calls"] = {
-    insert: (call) => this.database.insert("calls", call),
     get: (id) => this.database.get("calls", id),
-    pendingTo: (actor) => this.database.select("calls", `"to" = ? AND state = 'pending'`, [actor]),
-    pendingFrom: (actor) =>
-      this.database.select("calls", `"from" = ? AND state = 'pending'`, [actor]),
-    delivered: (id, at) => {
-      this.database.run("UPDATE calls SET delivered_at = ?, run = NULL WHERE id = ?", [at, id]);
-    },
-    setRun: (id, run) => {
-      this.database.run("UPDATE calls SET run = ? WHERE id = ?", [run, id]);
-    },
-    settle: (id, settled) =>
-      this.database.run(
-        "UPDATE calls SET state = ?, output = ?, error = ?, settled_at = ? WHERE id = ? AND state = 'pending'",
-        [
-          settled.state,
-          settled.output ? JSON.stringify(settled.output) : null,
-          settled.error,
-          settled.settled_at,
-          id,
-        ],
-      ) > 0,
   };
 
   readonly progress: Store["progress"] = {

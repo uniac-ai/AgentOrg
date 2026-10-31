@@ -8,10 +8,7 @@ import type {
   AuditEntry,
   Call,
   Claim,
-  Delivery,
-  InterfaceDescriptor,
   Message,
-  Outcome,
   Progress,
   Question,
   ToolDescriptor,
@@ -52,40 +49,12 @@ export interface MessageQuery {
   limit?: number;
 }
 
-/** The way to one reachable actor, for as long as it is reachable. */
-export interface ActorLink {
-  /**
-   * Hand the actor a call. A long-running one may come back as a run, finished later. The signal
-   * aborts when the call is withdrawn before the actor answers.
-   */
-  deliver(delivery: Delivery, signal: AbortSignal): Promise<Outcome | { run: string }>;
-  /** Wait until the actor finishes a run. */
-  outcome(run: string, signal: AbortSignal): Promise<Outcome>;
-  cancel(run: string): Promise<void>;
-  /** End the link for good: the actor was closed. */
-  close(): Promise<void>;
-}
-
-/** The link ended before the actor answered; the call waits for the actor to be back. */
-export class LinkLost extends Error {}
-
-/** The actor no longer knows the run, as after a restart; the call is delivered again. */
-export class UnknownRun extends Error {}
-
-/** Whether actors can be reached, as a binding learns it. */
-export interface Presence {
-  /** Reserve this candidate's order before its asynchronous exposure initialization. */
-  begin(actor: string, link: ActorLink): void;
-  /** The actor can be called through `link`, and exposes `interfaces`. */
-  online(actor: string, link: ActorLink, interfaces: InterfaceDescriptor[]): void;
-  /** The actor behind `link` changed what it exposes. */
-  changed(actor: string, link: ActorLink, interfaces: InterfaceDescriptor[]): void;
-  offline(actor: string, link: ActorLink): void;
+/** Revocation of one admitted Actor connection. */
+export interface ActorConnection {
+  close(): void;
 }
 
 export interface Invocation {
-  /** The call the caller is handling, recorded as the new call's cause. */
-  cause: string | null;
   /** Tell the caller the call is still running. */
   progress(message: string): Promise<void>;
   /** Aborted when the caller goes away. */
@@ -124,25 +93,8 @@ export interface Store {
     /** Every open actor, oldest first, so managers come before their reports. */
     open(): ActorRow[];
   };
-  exposures: {
-    get(actor: string): InterfaceDescriptor[];
-    put(actor: string, interfaces: InterfaceDescriptor[]): void;
-  };
   calls: {
-    insert(call: CallRow): void;
     get(id: string): CallRow | undefined;
-    /** Pending calls into the actor, oldest first. */
-    pendingTo(actor: string): CallRow[];
-    /** Pending calls the actor made, oldest first. */
-    pendingFrom(actor: string): CallRow[];
-    /** Mark it handed to the actor now, with no run yet. */
-    delivered(id: string, at: string): void;
-    setRun(id: string, run: string): void;
-    /** Settle a pending call; false when it was no longer pending. */
-    settle(
-      id: string,
-      settled: Pick<CallRow, "state" | "output" | "error" | "settled_at">,
-    ): boolean;
   };
   progress: {
     insert(progress: ProgressRow): void;

@@ -1,4 +1,4 @@
-/** The domain composition: owner clients, their triggers, and its Application/Presence ports. */
+/** The domain composition: explicit Hub Tools, Actor presence and domain state owners. */
 
 import { actors as actorModule } from "./actors.ts";
 import { application, type Timing } from "./application.ts";
@@ -18,7 +18,6 @@ export type { Timing };
 
 export interface OrganizationOptions extends Partial<Timing> {
   now?: () => Date;
-  onActorClosed?: (actorId: string) => void;
   provider?: (providerId: string) => ExecutionProvider | undefined;
 }
 
@@ -27,19 +26,15 @@ export function organization(store: Store, options: OrganizationOptions = {}) {
   const now = () => clock().toISOString();
   const actors = registry(store.actors, now);
   const activity = audit(store.audit, now);
-  const connected = connections(
-    store.exposures,
-    (actor) => calling.redeliver(actor),
-    options.onActorClosed ?? (() => {}),
-  );
-  const calling = calls(store.calls, connected, activity, now);
+  const connected = connections();
+  const calling = calls(store.calls);
   const resources = claims(store.claims, actors, now);
   const correspondence = communication(store, actors, now);
   const progressState = progress(store.progress, actors, now);
   const creation = execution(options.provider ?? (() => undefined));
-  const positions = actorModule(actors, calling, connected, creation);
+  const positions = actorModule(actors, connected, creation);
   const organizationView = team(actors, positions, progressState, correspondence, resources);
-  const offered = capabilities(actors, connected, [
+  const offered = capabilities([
     positions.tool,
     organizationView.tool,
     ...correspondence.tools,
@@ -47,8 +42,7 @@ export function organization(store: Store, options: OrganizationOptions = {}) {
     calling.tool,
     activity.tool,
   ]);
-  const dispatch = application(actors, offered, calling, activity, {
-    waitMs: options.waitMs ?? 30_000,
+  const dispatch = application(actors, offered, activity, {
     stepMs: options.stepMs ?? 10_000,
   });
   return {
@@ -59,8 +53,6 @@ export function organization(store: Store, options: OrganizationOptions = {}) {
     identify: actors.identify,
     ...dispatch,
     online: connected.online,
-    begin: connected.begin,
-    changed: connected.changed,
     offline: connected.offline,
   };
 }

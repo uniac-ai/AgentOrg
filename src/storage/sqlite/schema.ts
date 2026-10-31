@@ -1,7 +1,6 @@
 /** SQLite tables and their record schemas; times are ISO 8601 UTC and credentials are hashed. */
 
 import {
-  Actor,
   ActorRecord,
   AuditEntry,
   Call,
@@ -11,7 +10,7 @@ import {
   Question,
 } from "../../domain/model/index.ts";
 
-export const SCHEMA_VERSION = 7;
+export const SCHEMA_VERSION = 8;
 
 export const SCHEMA = `
 CREATE TABLE actors (
@@ -20,17 +19,11 @@ CREATE TABLE actors (
   purpose TEXT NOT NULL,
   manager TEXT REFERENCES actors (id),
   credential_hash TEXT NOT NULL UNIQUE,
-  created_at_attach BOOLEAN NOT NULL,
   created_at TEXT NOT NULL,
   closed_at TEXT
 );
 CREATE UNIQUE INDEX one_root ON actors ((manager IS NULL)) WHERE manager IS NULL;
 CREATE UNIQUE INDEX handles_unique_among_siblings ON actors (manager, name) WHERE closed_at IS NULL;
-
-CREATE TABLE exposures (
-  id TEXT PRIMARY KEY REFERENCES actors (id),
-  interfaces JSON NOT NULL
-);
 
 CREATE TABLE calls (
   id TEXT PRIMARY KEY,
@@ -47,8 +40,6 @@ CREATE TABLE calls (
   delivered_at TEXT,
   settled_at TEXT
 );
-CREATE INDEX pending_calls ON calls ("to") WHERE state = 'pending';
-
 CREATE TABLE progress (
   actor TEXT NOT NULL REFERENCES actors (id),
   version INTEGER NOT NULL,
@@ -112,7 +103,6 @@ CREATE TABLE audit (
 
 export const TABLES = {
   actors: ActorRecord,
-  exposures: Actor.pick({ id: true, interfaces: true }),
   calls: Call,
   progress: Progress,
   questions: Question,

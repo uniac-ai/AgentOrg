@@ -1,6 +1,6 @@
 /**
- * The client library for actors: connect to the core, expose interfaces with their handlers, call
- * the interfaces available, and present them to whatever fills the position. `api.ts` is the API;
+ * The client library for Actors: connect to the Hub, list and call its Tools, and present them to
+ * a program using the client. `api.ts` is the API;
  * this module assembles it from the network's connector and the protocol binding, which an actor
  * never imports itself.
  */
@@ -8,7 +8,7 @@
 import { McpActor } from "../bindings/mcp/actor.ts";
 import { presentToOccupant } from "../bindings/mcp/occupant.ts";
 import { Connector } from "../connection/index.ts";
-import type { Actor, Exposed, Presented } from "./api.ts";
+import type { Actor, Presented } from "./api.ts";
 
 export type * from "./api.ts";
 
@@ -43,18 +43,9 @@ async function opened(actor: McpActor): Promise<Actor> {
   return actor;
 }
 
-/** Connect an actor that exposes `exposed`, reconnecting whenever its connection drops. */
-export async function connectActor(
-  options: ConnectOptions & { exposed: Exposed[] },
-): Promise<Actor> {
-  return opened(
-    new McpActor(connector(options), options.exposed, options.name ?? "agentorg-actor"),
-  );
-}
-
-/** Connect a client that only calls, such as the command line. */
+/** Connect an Actor to the Hub, reconnecting whenever its connection drops. */
 export async function connectClient(options: ConnectOptions): Promise<Actor> {
-  return opened(new McpActor(connector(options), undefined, options.name ?? "agentorg-client"));
+  return opened(new McpActor(connector(options), options.name ?? "agentorg-client"));
 }
 
 /**

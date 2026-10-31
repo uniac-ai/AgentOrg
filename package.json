@@ -1,7 +1,7 @@
 {
   "name": "@agentorg/cli",
   "version": "0.0.1",
-  "description": "An organization of AI agents run like a company: actors are positions with managers, and calls go up and down, over MCP in both directions",
+  "description": "A Hub of explicit Tools for Actors with identities, managers and shared organization state",
   "license": "MIT",
   "repository": {
     "type": "git",

@@ -10,7 +10,7 @@ import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { Application } from "../../domain/ports.ts";
 import { VERSION } from "../../version.ts";
-import { CAUSE_META, offeredToolsOf, resultOfAnswer } from "./encoding.ts";
+import { offeredToolsOf, resultOfAnswer } from "./encoding.ts";
 
 export async function serveActor(
   application: Application,
@@ -26,10 +26,8 @@ export async function serveActor(
   }));
   server.setRequestHandler(CallToolRequestSchema, async ({ params }, extra) => {
     const progressToken = params._meta?.progressToken;
-    const cause = params._meta?.[CAUSE_META];
     let progress = 0;
     const answer = await application.invoke(party, params.name, params.arguments ?? {}, {
-      cause: cause === undefined || cause === null ? null : String(cause),
       signal: extra.signal,
       progress: async (message) => {
         if (progressToken === undefined) return;

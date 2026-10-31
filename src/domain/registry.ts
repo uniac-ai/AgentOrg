@@ -39,25 +39,18 @@ export function registry(actors: Store["actors"], now: () => string) {
     };
   }
 
-  /**
-   * Create a report of `manager` and return it with its credential; `createdAtAttach` marks one
-   * created as a session the user started attaches to it.
-   */
+  /** Create a report of `manager` and return it with its credential. */
   async function create(
     manager: string,
     name: string,
     purpose: string,
-    createdAtAttach = false,
   ): Promise<{ actor: ActorRow; credential: string }> {
-    if (createdAtAttach && found(manager).manager !== null) {
-      throw new Forbidden("only the root creates a position as a session attaches");
-    }
     // Hashing waits, so it comes first: the check and the insert then run with nothing between.
     const { credential, hash } = await mint();
     if (reports(manager).some((report) => report.name === name)) {
       throw new Conflict(`a report of ${manager} is already named ${name}`);
     }
-    return { actor: insert(manager, name, purpose, hash, createdAtAttach), credential };
+    return { actor: insert(manager, name, purpose, hash), credential };
   }
 
   async function mint(): Promise<{ credential: string; hash: string }> {
@@ -65,20 +58,13 @@ export function registry(actors: Store["actors"], now: () => string) {
     return { credential, hash: await digest(credential) };
   }
 
-  function insert(
-    manager: string | null,
-    name: string,
-    purpose: string,
-    hash: string,
-    createdAtAttach = false,
-  ): ActorRow {
+  function insert(manager: string | null, name: string, purpose: string, hash: string): ActorRow {
     const actor: ActorRow = {
       id: newId("act"),
       name,
       purpose,
       manager,
       credential_hash: hash,
-      created_at_attach: createdAtAttach,
       created_at: now(),
       closed_at: null,
     };

@@ -1,19 +1,19 @@
-/** Hub MCP exposure and reverse Actor delivery over one identity-admitted connection. */
-import type { Application, Presence } from "../../domain/ports.ts";
+/** Explicit Hub MCP Tools on one Actor-initiated, identity-admitted connection. */
+import type { Application } from "../../domain/ports.ts";
 import type { Channel } from "../../network/index.ts";
 import { serveActor } from "./inbound.ts";
-import { attach } from "./outbound.ts";
-import { mcpTransports } from "./transport.ts";
+import { mcpTransport } from "./transport.ts";
 
 export * from "./encoding.ts";
 
 export function serveConnection(
-  domain: Application & Presence,
+  domain: Application,
   actorId: string,
   channel: Channel,
-  options: { timeoutMs: number; onError?: (party: string, error: Error) => void },
+  options: { onError?: (party: string, error: Error) => void },
 ): void {
-  const transports = mcpTransports(channel);
-  if (transports.server) void serveActor(domain, actorId, transports.server);
-  attach(domain, actorId, channel, transports.client, options);
+  void serveActor(domain, actorId, mcpTransport(channel)).catch(() => {
+    options.onError?.(actorId, new Error("Hub MCP initialization failed"));
+    channel.close();
+  });
 }

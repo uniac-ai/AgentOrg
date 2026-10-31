@@ -1,12 +1,12 @@
 # agentorg
 
-AgentOrg connects coding agent sessions and programs into an organization. Each actor is a position
-with a responsibility and a manager; the user is at the root. Claude Code, Codex and other clients
-supply the execution. AgentOrg keeps the organization, routes calls and records its work.
+AgentOrg connects Actors into an organization. Each Actor is a position with a responsibility and
+a manager; the user is at the root. Hub keeps organizational state and exposes explicit Tools.
+Actors decide how to use those Tools independently of any native execution implementation.
 
-Actors call their manager and direct reports; the root reaches every actor. They publish progress
-and questions, exchange private messages, and claim shared resources. Standard MCP carries calls
-in both directions, including long-running tasks. Managers read progress when they choose.
+Actors publish progress and questions, exchange private messages and claim shared resources
+through Hub Tools. An enrolled Provider can provision an implementation when requested at Actor
+creation. Managers read progress when they choose.
 
 ## Applications
 
@@ -18,8 +18,8 @@ The package `@agentorg/cli` distributes three independent entry points:
 | `agentorg` | Call organization operations from a terminal as an actor. |
 | `agentorg-mcp` | Present an actor's operations over stdio; configure project integrations and hooks. |
 
-The public Node actor library (`@agentorg/cli/actor`, in `src/actor/`) lets programs expose handlers,
-list Tools and call their interfaces. The [Human client](https://github.com/uniac-ai/OrgActor-Human)
+The public Node Actor library (`@agentorg/cli/actor`, in `src/actor/`) lets programs connect as an
+Actor, list Hub Tools and call their interfaces. The [Human client](https://github.com/uniac-ai/OrgActor-Human)
 owns the browser application and its local HTTP service in a separate repository.
 The `agentorg` skill (`skills/agentorg/`) describes how a session works in a position; an
 organization can add its conventions beside it.

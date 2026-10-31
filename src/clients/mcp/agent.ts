@@ -11,7 +11,6 @@ import { existsSync } from "node:fs";
 import { z } from "zod";
 import {
   type Actor,
-  connectActor,
   connectClient,
   type PresentationOptions,
   type Presented,
@@ -80,7 +79,7 @@ const INTERFACES: InterfaceDescriptor = {
 const CALL: InterfaceDescriptor = {
   name: "call",
   description:
-    "Invoke an interface as the attached actor. Use its call alias as name and its input schema from interfaces. The core applies the actor's permissions and validates input and output. A pending routed result names the call to read with the call_result operation.",
+    "Invoke a Hub interface as the attached Actor. Use its call alias as name and its input schema from interfaces. The Hub applies the operation's authority and validates its input.",
   input: objectSchema(CallRequest, "input"),
   one_way: false,
   long_running: false,
@@ -143,7 +142,6 @@ export class Agent implements Presented {
         interfaces: [ATTACH, INTERFACES, CALL].map((descriptor) => ({
           interface: descriptor,
           call: descriptor.name,
-          routed: false,
           read_only: descriptor === INTERFACES,
         })),
       },
@@ -296,8 +294,7 @@ export class Agent implements Presented {
   }
 
   /**
-   * Create the session's position under the root, marked as created at attach, with the root's
-   * credential, used for that only.
+   * Create the session's position under the root with the root's credential, used for that only.
    */
   async #createUnderRoot(name: string, purpose: string): Promise<Answer> {
     const file = rootCredentialPath();
@@ -311,7 +308,7 @@ export class Agent implements Presented {
       name: "agentorg-agent",
     });
     try {
-      const answer = await root.call("actor_create", { name, purpose, created_at_attach: true });
+      const answer = await root.call("actor_create", { name, purpose });
       if (answer.state !== "done") return answer;
       const created = answer.value as ResponseOf<"actor_create">;
       credentials.write(created.actor.id, created.credential);
@@ -322,11 +319,10 @@ export class Agent implements Presented {
   }
 
   async #connect(actorId: string, credential: string): Promise<void> {
-    const position = await connectActor({
+    const position = await connectClient({
       url: this.#options.coreUrl,
       actorId,
       credential,
-      exposed: [],
       name: "agentorg-agent",
     });
     this.#position = position;
@@ -365,7 +361,7 @@ export class Agent implements Presented {
 
   /** Keep a created position's credential, and forget a closed one's. */
   #withheld(name: string, answer: Answer): Answer {
-    if (answer.state !== "done" || answer.call !== undefined) return answer;
+    if (answer.state !== "done") return answer;
     if (name === "actor_create") {
       const created = answer.value as ResponseOf<"actor_create">;
       credentials.write(created.actor.id, created.credential);

@@ -226,7 +226,6 @@ export const Position = Actor.pick({
   purpose: true,
   manager: true,
   online: true,
-  created_at_attach: true,
   created_at: true,
   closed_at: true,
 })
@@ -235,9 +234,6 @@ export const Position = Actor.pick({
       .nullable()
       .describe("Its progress state and summary; null until it sets them."),
     questions: z.array(Question).describe("Its open questions, oldest first."),
-    interfaces: z
-      .array(z.string())
-      .describe("Its exposed interfaces you can call, by the names you call them."),
     claims: z.array(Claim).describe("The shared resources it holds now."),
   })
   .meta({ id: "Position", description: "A position in the organization, as anyone sees it." });

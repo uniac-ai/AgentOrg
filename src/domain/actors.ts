@@ -1,6 +1,5 @@
-/** Actor lifecycle and read projection over identity, execution, calls and connection owners. */
+/** Actor lifecycle and read projection over identity, provisioning and admitted connections. */
 
-import type { Calls } from "./calls.ts";
 import type { Connections } from "./connections.ts";
 import type { ExecutionClient } from "./execution.ts";
 import { ACTORS } from "./model/index.ts";
@@ -10,19 +9,13 @@ import { bindTool } from "./tools.ts";
 
 export { ACTORS as definition } from "./model/index.ts";
 
-export function actors(
-  registry: Registry,
-  calls: Calls,
-  connections: Connections,
-  execution: ExecutionClient,
-) {
+export function actors(registry: Registry, connections: Connections, execution: ExecutionClient) {
   function view(actor: ActorRow): ActorView {
     const { credential_hash: _, ...identity } = actor;
     return {
       ...identity,
       path: registry.path(actor),
-      online: connections.link(actor.id) !== undefined,
-      interfaces: connections.interfaces(actor.id),
+      online: connections.connected(actor.id),
     };
   }
 
@@ -34,7 +27,6 @@ export function actors(
           actor.id,
           request.name,
           request.purpose,
-          request.created_at_attach,
         );
         const outcome =
           request.execution === undefined
@@ -53,9 +45,8 @@ export function actors(
       },
       actor_close: async (actor, request) => {
         const { actor: closed, changed } = registry.close(actor, request.actor);
-        const ended = changed ? calls.endFor(closed, actor.id) : [];
-        if (changed) await connections.disconnect(closed.id);
-        return { actor: view(closed), ended_calls: ended };
+        if (changed) connections.disconnect(closed.id);
+        return { actor: view(closed) };
       },
     }),
   };

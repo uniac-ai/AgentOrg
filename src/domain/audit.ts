@@ -1,4 +1,4 @@
-/** The audit trail: one line per write and per routed call, with who acted, on what, and how. */
+/** The audit trail: writes, interface refusals and preserved historical call outcomes. */
 
 import { ACTIVITY } from "./model/index.ts";
 import type { AuditRow, Store } from "./ports.ts";

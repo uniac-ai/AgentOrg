@@ -19,7 +19,7 @@ import { claudeTakesInput } from "../src/clients/mcp/command.ts";
 import { describe } from "../src/clients/mcp/waiter.ts";
 import { CONNECTION_PATH, establish } from "../src/connection/index.ts";
 import { dial } from "../src/network/index.ts";
-import { type Core, fakeActor, iface, startCore, until } from "./harness.ts";
+import { type Core, startCore, until } from "./harness.ts";
 
 const BIN = fileURLToPath(new URL("../src/clients/mcp/bin.js", import.meta.url));
 
@@ -213,10 +213,9 @@ test("the stdio catalog is stable and only attachment can act before a position 
   assert.equal(listed.tools.length, 7);
   assert.equal((await one.interfaces()).includes("activity"), true);
   const { actor: report, credential } = await org.org.registry.create(actor, "report", "A report");
-  await org.connect(credential, fakeActor([iface("review"), iface("review")]));
-  await until(
-    "the duplicate advertiser is online",
-    () => org.org.connections.link(report.id) !== undefined,
+  await org.client(credential);
+  await until("the report's ordinary client is online", () =>
+    org.org.connections.connected(report.id),
   );
   const refreshed = await one.tool("interfaces");
   assert.notEqual(refreshed.isError, true);
@@ -224,11 +223,12 @@ test("the stdio catalog is stable and only attachment can act before a position 
     id: string;
     interfaces: { call: string }[];
   }[];
-  assert.equal(tools.length, 8, "the report and all seven Hub Tools remain available");
-  assert.deepEqual(
-    tools.find((tool) => tool.id === report.id)?.interfaces.map((offer) => offer.call),
-    ["report.review"],
+  assert.equal(tools.length, 7, "connecting an Actor never adds a Tool");
+  assert.equal(
+    tools.some((tool) => tool.id === report.id),
+    false,
   );
+  assert.deepEqual(tools, listed.tools);
 });
 
 test("generic invocation forwards progress and completes a wait beyond the SDK default", {
@@ -261,10 +261,9 @@ test("an appointed session creates its position under the root, and a resumed on
   const { actor, created } = attached.structuredContent as { actor: string; created: boolean };
   assert.equal(created, true);
   assert.equal(org.org.registry.get(actor)?.manager, org.rootId);
-  assert.equal(org.org.registry.get(actor)?.created_at_attach, true);
   const tools = await first.interfaces();
   assert.ok(tools.includes("actor_create") && !tools.includes("attach"), tools.join(", "));
-  await until("the position is online", () => org.org.connections.link(actor) !== undefined);
+  await until("the position is online", () => org.org.connections.connected(actor));
   await first.close();
 
   // The same session, resumed: no attach, and the position is filled again on its own.
@@ -440,14 +439,14 @@ test("a created position's credential is kept for its session, never shown, and 
     assert.equal(shown.includes(credential), false);
   }
 
-  // A new report client advertises its interface to the core.
+  // The same private credential also operates an ordinary program client.
   await report.close();
-  const program = await org.connect(credential, fakeActor([iface("review")]));
-  await until("the core lists the report's current interface", async () =>
-    (await manager.interfaces()).includes("db.review"),
+  const program = await org.client(credential);
+  assert.equal(
+    (await program.call("progress_set", { state: "running", summary: "Working" })).state,
+    "done",
   );
-  const routed = await manager.call("db.review");
-  assert.equal((routed._meta?.["agentorg/call"] as { state: string } | undefined)?.state, "done");
+  assert.equal((await manager.call("db.review")).isError, true);
   await program.close();
 
   await manager.call("actor_close", { actor: id });
@@ -478,13 +477,11 @@ test("what the waiter delivers reads as agentorg's, each item with its kind, sen
     purpose: "Own the storage.",
     manager: "act_manager",
     online: true,
-    created_at_attach: false,
     created_at: at,
     closed_at: null,
     progress: null,
     questions: [],
     claims: [],
-    interfaces: [],
   };
   const news = {
     messages: [

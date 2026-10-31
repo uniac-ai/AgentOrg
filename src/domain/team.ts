@@ -3,7 +3,7 @@
 import type { Actors } from "./actors.ts";
 import type { Claims } from "./claims.ts";
 import { askersOf, type Communication } from "./communication.ts";
-import { type RequestOf, type ResponseOf, TEAM, type ToolDescriptor } from "./model/index.ts";
+import { type RequestOf, type ResponseOf, TEAM } from "./model/index.ts";
 import type { ActorRow } from "./ports.ts";
 import { actorsIn, type Progress } from "./progress.ts";
 import type { Registry } from "./registry.ts";
@@ -18,15 +18,11 @@ export function team(
   communication: Communication,
   claims: Claims,
 ) {
-  function readTeam(
-    actor: ActorRow,
-    request: RequestOf<"team">,
-    callable: ToolDescriptor[],
-  ): ResponseOf<"team"> {
+  function readTeam(actor: ActorRow, request: RequestOf<"team">): ResponseOf<"team"> {
     const start = request.actor === undefined ? actor : registry.found(request.actor);
     const positions: ResponseOf<"team">["positions"] = [];
     const visit = (at: ActorRow, depth: number) => {
-      const { interfaces: _, ...identity } = actors.view(at);
+      const identity = actors.view(at);
       const [current] = progressState.latest(at.id);
       positions.push({
         ...identity,
@@ -39,8 +35,6 @@ export function team(
             }
           : null,
         questions: communication.openQuestions(at.id),
-        interfaces:
-          callable.find((tool) => tool.id === at.id)?.interfaces.map((each) => each.call) ?? [],
         claims: claims.heldBy(at.id),
       });
       if (depth > 0) for (const report of registry.reports(at.id)) visit(report, depth - 1);
@@ -73,7 +67,7 @@ export function team(
   return {
     tool: bindTool(TEAM, {
       progress_set: (actor, request) => progressState.set(actor, request),
-      team: (actor, request, context) => readTeam(actor, request, context.catalog),
+      team: (actor, request) => readTeam(actor, request),
       progress: (_actor, request) => readProgress(request),
     }),
   };

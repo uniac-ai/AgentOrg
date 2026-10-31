@@ -1,5 +1,5 @@
 /** Reconnect one identity; each socket completes fresh admission before MCP initializes. */
-import { type Channel, CLOSE_REPLACED, CLOSE_REVOKED, dial } from "../network/index.ts";
+import { type Channel, CLOSE_REVOKED, dial } from "../network/index.ts";
 import { CONNECTION_PATH, establish, type Identity } from "./index.ts";
 
 export class Connector {
@@ -27,7 +27,7 @@ export class Connector {
     }
     raw.whenClosed((code) => {
       if (this.channel !== raw || this.closing) return;
-      if (code === CLOSE_REPLACED || code === CLOSE_REVOKED) this.ended = code;
+      if (code === CLOSE_REVOKED) this.ended = code;
       else void this.redial(use);
     });
   }

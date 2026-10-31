@@ -43,12 +43,12 @@ export function callCommand(
     const wait = typeof request.wait === "number" ? request.wait : 0;
     const answer = await client.call(name, request, { timeoutMs: Math.max(60, wait + 30) * 1000 });
     if (resultOnly && answer.state !== "done") {
-      note(answer.state === "refused" ? `${answer.code}: ${answer.message}` : answer.state);
+      note(`${answer.code}: ${answer.message}`);
       return 1;
     }
     process.stdout.write(
       `${JSON.stringify(resultOnly && answer.state === "done" ? answer.value : answer, null, 2)}\n`,
     );
-    return answer.state === "done" || answer.state === "pending" ? 0 : 1;
+    return answer.state === "done" ? 0 : 1;
   });
 }

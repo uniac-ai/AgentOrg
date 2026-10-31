@@ -50,7 +50,7 @@ export interface News {
 
 const value = <T>(answer: Answer): T => {
   if (answer.state === "done") return answer.value as T;
-  throw new Error(answer.state === "refused" ? `${answer.code}: ${answer.message}` : answer.state);
+  throw new Error(`${answer.code}: ${answer.message}`);
 };
 
 const call = async <T>(client: Actor, name: string, input: Record<string, unknown>) =>

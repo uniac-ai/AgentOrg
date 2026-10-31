@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { type TestContext, test } from "node:test";
 import { z } from "zod";
-import { connectActor, connectClient } from "../src/actor/index.ts";
+import { connectClient } from "../src/actor/index.ts";
 import { CONNECTION_PATH, establish } from "../src/connection/index.ts";
 import { type Channel, dial } from "../src/network/index.ts";
 import { done, startCore, until } from "./harness.ts";
@@ -97,7 +97,7 @@ test("Provider ready is returned while the new Actor is offline, with private bo
   assert.ok(!JSON.stringify(value.actor).includes(value.credential));
 });
 
-test("the Actor connects and serves Hub MCP before a held Provider reply, without completing the creation request", async (t) => {
+test("the provisioned Actor uses Hub MCP without a reverse server while its Provider reply is held", async (t) => {
   let launched!: (request: Request) => void;
   const launch = new Promise<Request>((resolve) => {
     launched = resolve;
@@ -110,17 +110,20 @@ test("the Actor connects and serves Hub MCP before a held Provider reply, withou
   });
   const request = await launch;
   assert.equal(core.org.registry.get(request.params.actorId)?.manager, core.rootId);
-  const actor = await connectActor({
+  const actor = await connectClient({
     url: core.url,
     actorId: request.params.actorId,
     credential: request.params.credential,
-    exposed: [],
   });
   t.after(() => actor.close());
   assert.equal((await actor.call("team", { depth: 0 })).state, "done");
-  await until(
-    "the new Actor advertises before the Provider replies",
-    () => core.org.connections.link(request.params.actorId) !== undefined,
+  assert.equal(
+    (await actor.available()).length,
+    7,
+    "the Provider connection adds no Actor-facing Tool",
+  );
+  await until("the new Actor is connected before the Provider replies", () =>
+    core.org.connections.connected(request.params.actorId),
   );
   assert.equal(returned, false);
   reply(request, { actorId: request.params.actorId });

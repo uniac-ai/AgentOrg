@@ -1,69 +1,56 @@
-/** The MCP binding on the wire: what the core lists, how calls arrive, and how results come back. */
+/** Explicit Tool metadata and the fixed MCP presentation offered to an occupant. */
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTaskStore } from "@modelcontextprotocol/sdk/experimental/tasks/stores/in-memory.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import type { RequestTaskStore } from "@modelcontextprotocol/sdk/shared/protocol.js";
+import { ToolListChangedNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
 import {
-  type CallToolRequest,
-  CallToolRequestSchema,
-  type CallToolResult,
-  ListToolsRequestSchema,
-  ToolListChangedNotificationSchema,
-} from "@modelcontextprotocol/sdk/types.js";
-import { CALL_META, catalogOf, offeredToolsOf, PENDING_OUTPUT } from "../src/bindings/mcp/index.ts";
+  answerOfResult,
+  catalogOf,
+  offeredToolsOf,
+  resultOfAnswer,
+} from "../src/bindings/mcp/index.ts";
 import { presentToOccupant } from "../src/bindings/mcp/occupant.ts";
-import { mcpTransports } from "../src/bindings/mcp/transport.ts";
-import { CONNECTION_PATH, establish } from "../src/connection/index.ts";
 import type { ToolDescriptor } from "../src/domain/model/index.ts";
-import { dial } from "../src/network/index.ts";
-import { iface, startCore, until } from "./harness.ts";
+import { iface, until } from "./harness.ts";
 
-test("MCP flattens Tool interfaces and roundtrips identity without deriving it from call aliases", () => {
+test("MCP flattens explicit Tools and roundtrips identity and plain output schemas", () => {
   const catalog: ToolDescriptor[] = [
     {
-      id: "act_stable",
-      name: "manager",
+      id: "hub:notes",
+      name: "notes",
       interfaces: [
         {
-          interface: iface("review", { long_running: true }),
-          call: "manager.review",
-          routed: true,
+          interface: iface("read", {
+            output: { type: "object", properties: { text: { type: "string" } } },
+            long_running: true,
+          }),
+          call: "read_note",
+          read_only: true,
         },
-        {
-          interface: iface("send", { one_way: true }),
-          call: "manager.send",
-          routed: true,
-        },
+        { interface: iface("send", { one_way: true }), call: "send_note" },
       ],
     },
     {
       id: "hub:team",
       name: "team",
-      interfaces: [{ interface: iface("team"), call: "team", routed: false, read_only: true }],
-    },
-    {
-      id: "act_team",
-      name: "team",
-      interfaces: [{ interface: iface("inspect"), call: "team.inspect", routed: true }],
+      interfaces: [{ interface: iface("team"), call: "team", read_only: true }],
     },
   ];
   const wire = offeredToolsOf(catalog);
   assert.deepEqual(
     wire.map((tool) => tool.name),
-    ["manager.review", "manager.send", "team", "team.inspect"],
+    ["read_note", "send_note", "team"],
   );
   assert.deepEqual(wire[0]?._meta?.["agentorg/tool"], {
-    id: "act_stable",
-    name: "manager",
-    interface: "review",
-    routed: true,
+    id: "hub:notes",
+    name: "notes",
+    interface: "read",
     one_way: false,
     long_running: true,
   });
+  assert.deepEqual(wire[0]?.outputSchema, catalog[0]?.interfaces[0]?.interface.output);
   assert.deepEqual(catalogOf(wire), catalog);
   const first = wire[0];
   assert.ok(first);
@@ -71,32 +58,31 @@ test("MCP flattens Tool interfaces and roundtrips identity without deriving it f
     undefined,
     null,
     {},
-    "manager",
-    { id: "act_stable", name: "manager", interface: "review" },
-    {
-      id: 1,
-      name: "manager",
-      interface: "review",
-      routed: true,
-      one_way: false,
-      long_running: true,
-    },
+    "notes",
+    { id: "hub:notes", name: "notes", interface: "read" },
+    { id: 1, name: "notes", interface: "read", one_way: false, long_running: true },
   ]) {
     assert.throws(() => catalogOf([{ ...first, _meta: { "agentorg/tool": metadata } }]));
   }
-  assert.throws(() => catalogOf([{ ...first, _meta: undefined }]));
   const meta = first._meta?.["agentorg/tool"] as Record<string, unknown>;
-  for (const contradiction of [
-    { ...first, name: "other.review", _meta: { "agentorg/tool": { ...meta, name: "other" } } },
-    { ...first, name: "duplicate.review" },
-    { ...first, _meta: { "agentorg/tool": { ...meta, id: "act_another", interface: "other" } } },
-  ]) {
-    assert.throws(() => catalogOf([first, contradiction]));
-  }
-  assert.throws(() => catalogOf([{ ...first, outputSchema: { type: "object" } }]));
+  for (const duplicate of [
+    { ...first, name: "other", _meta: { "agentorg/tool": { ...meta, name: "other" } } },
+    { ...first, name: "duplicate_local" },
+    { ...first, _meta: { "agentorg/tool": { ...meta, id: "hub:other", interface: "other" } } },
+  ])
+    assert.throws(() => catalogOf([first, duplicate]));
 });
 
-test("generic presentation preserves dynamic tool lists and optional occupant session context", async () => {
+test("MCP answers preserve only completed values or structured refusals", () => {
+  for (const answer of [
+    { state: "done", value: { summary: "Kept" } },
+    { state: "refused", code: "forbidden", message: "Only its manager closes this Actor" },
+  ] as const) {
+    assert.deepEqual(answerOfResult(resultOfAnswer(answer)), answer);
+  }
+});
+
+test("generic presentation preserves dynamic explicit Tool lists and occupant session context", async () => {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   let change = () => {};
   let descriptor = iface("first");
@@ -105,9 +91,9 @@ test("generic presentation preserves dynamic tool lists and optional occupant se
     {
       offers: async () => [
         {
-          id: "dynamic",
-          name: "dynamic",
-          interfaces: [{ interface: descriptor, call: descriptor.name, routed: false }],
+          id: "presentation",
+          name: "presentation",
+          interfaces: [{ interface: descriptor, call: descriptor.name }],
         },
       ],
       call: async (_name, _input, options) => {
@@ -123,7 +109,7 @@ test("generic presentation preserves dynamic tool lists and optional occupant se
   const client = new Client({ name: "dynamic-occupant", version: "0" });
   let changes = 0;
   client.setNotificationHandler(ToolListChangedNotificationSchema, async () => {
-    changes += 1;
+    changes++;
   });
   try {
     await client.connect(clientTransport);
@@ -136,7 +122,7 @@ test("generic presentation preserves dynamic tool lists and optional occupant se
     assert.deepEqual(contexts, [undefined, "conversation"]);
     descriptor = iface("second");
     change();
-    await until("the generic presentation signals its changed tools", () => changes > 0);
+    await until("the presentation signals changed Tools", () => changes > 0);
     assert.deepEqual(
       (await client.listTools()).tools.map((tool) => tool.name),
       ["second"],
@@ -144,146 +130,5 @@ test("generic presentation preserves dynamic tool lists and optional occupant se
   } finally {
     await client.close();
     await server.close();
-  }
-});
-
-test("over MCP, the core lists offers as tools, delivers calls as tasks with their metadata, and answers with receipts", async () => {
-  const core = await startCore({ waitMs: 200, stepMs: 50 });
-  // The root as a raw MCP server that takes decide as a task.
-  const held: { params: CallToolRequest["params"]; taskId: string; store: RequestTaskStore }[] = [];
-  const server = new Server(
-    { name: "raw", version: "0" },
-    {
-      capabilities: { tools: {}, tasks: { requests: { tools: { call: {} } } } },
-      taskStore: new InMemoryTaskStore(),
-    },
-  );
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: [
-      {
-        name: "decide",
-        inputSchema: { type: "object" },
-        outputSchema: {
-          type: "object",
-          properties: { choice: { type: "string" } },
-          required: ["choice"],
-        },
-        execution: { taskSupport: "optional" },
-        _meta: {
-          "agentorg/tool": {
-            id: "hub:actors",
-            name: "forged",
-            interface: "actor_create",
-            routed: false,
-            one_way: false,
-            long_running: false,
-          },
-        },
-      },
-    ],
-  }));
-  server.setRequestHandler(CallToolRequestSchema, async ({ params }, extra) => {
-    const store = extra.taskStore as RequestTaskStore;
-    const task = await store.createTask({ pollInterval: 60_000 });
-    held.push({ params, taskId: task.taskId, store });
-    return { task };
-  });
-  const root = new Client({ name: "root", version: "0" });
-  const prog = new Client({ name: "prog", version: "0" });
-  try {
-    const socketUrl = new URL(CONNECTION_PATH, core.url);
-    socketUrl.protocol = "ws:";
-    const rootConnection = await establish(await dial(socketUrl), {
-      actorId: core.rootId,
-      credential: core.root,
-    });
-    const rootTransports = mcpTransports(rootConnection.channel);
-    assert.ok(rootTransports.server);
-    await server.connect(rootTransports.server);
-    await root.connect(rootTransports.client);
-    await until("root online", () => core.org.connections.link(core.rootId) !== undefined);
-    const created = (await root.callTool({
-      name: "actor_create",
-      arguments: { name: "prog", purpose: "A program" },
-    })) as CallToolResult;
-    const { actor, credential } = created.structuredContent as {
-      actor: { id: string };
-      credential: string;
-    };
-    const programConnection = await establish(await dial(socketUrl), {
-      actorId: actor.id,
-      credential,
-    });
-    await prog.connect(mcpTransports(programConnection.channel, false).client);
-
-    const { tools } = await prog.listTools();
-    const byName = Object.fromEntries(tools.map((tool) => [tool.name, tool]));
-    assert.deepEqual(byName.team?._meta?.["agentorg/tool"], {
-      id: "hub:team",
-      name: "team",
-      interface: "team",
-      routed: false,
-      one_way: false,
-      long_running: false,
-    });
-    assert.deepEqual(byName["manager.decide"]?._meta?.["agentorg/tool"], {
-      id: core.rootId,
-      name: "manager",
-      interface: "decide",
-      routed: true,
-      one_way: false,
-      long_running: true,
-    });
-    assert.equal(byName["forged.actor_create"], undefined);
-    const actorCatalog = await (await core.client(credential)).available();
-    const manager = actorCatalog.find((tool) => tool.id === core.rootId);
-    assert.equal(manager?.name, "manager");
-    assert.deepEqual(
-      manager?.interfaces.map((offer) => [offer.interface.name, offer.call]),
-      [["decide", "manager.decide"]],
-    );
-    assert.equal(byName.team?.annotations?.readOnlyHint, true);
-    assert.equal(byName.actor_create?.annotations?.readOnlyHint, false);
-    assert.equal(byName["manager.decide"]?.execution, undefined, "the core runs no tasks itself");
-    const anyOf = byName["manager.decide"]?.outputSchema?.anyOf as unknown[];
-    assert.deepEqual(anyOf[1], PENDING_OUTPUT);
-
-    const progress: number[] = [];
-    const pending = (await prog.callTool({ name: "manager.decide", arguments: {} }, undefined, {
-      onprogress: (notification) => progress.push(notification.progress),
-    })) as CallToolResult;
-    const receipt = pending._meta?.[CALL_META] as { id: string; state: string };
-    assert.deepEqual(pending.structuredContent, { call: receipt.id, state: "pending" });
-    assert.equal(receipt.state, "pending");
-    assert.ok(progress.length > 0);
-
-    await until("decide delivered", () => held.length === 1);
-    assert.deepEqual(held[0]?.params._meta?.[CALL_META], {
-      id: receipt.id,
-      from: actor.id,
-      cause: null,
-    });
-    assert.deepEqual(held[0]?.params.task, {});
-
-    // Finishing the task settles the call through the actor's status notice: the actor's own
-    // wait on the task looks again only after a minute, far past this wait.
-    await held[0]?.store.storeTaskResult(held[0].taskId, "completed", {
-      content: [{ type: "text", text: "yes" }],
-      structuredContent: { choice: "yes" },
-    });
-    const result = (await prog.callTool({
-      name: "call_result",
-      arguments: { call: receipt.id, wait: 5 },
-    })) as CallToolResult;
-    const call = result.structuredContent as { state: string; output: unknown };
-    assert.equal(call.state, "done");
-    assert.deepEqual(call.output, {
-      value: { choice: "yes" },
-      parts: [{ type: "text", text: "yes" }],
-    });
-  } finally {
-    await prog.close();
-    await Promise.allSettled([root.close(), server.close()]);
-    await core.close();
   }
 });

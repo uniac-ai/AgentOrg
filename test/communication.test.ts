@@ -17,16 +17,7 @@ import {
   QuestionAsk,
 } from "../src/domain/model/index.ts";
 import { progress } from "../src/domain/progress.ts";
-import {
-  type Core,
-  done,
-  fakeActor,
-  iface,
-  type Json,
-  refused,
-  startCore,
-  until,
-} from "./harness.ts";
+import { type Core, done, type Json, refused, startCore, until } from "./harness.ts";
 
 const issues = (result: { error?: { issues: { path: PropertyKey[]; message: string }[] } }) =>
   (result.error?.issues ?? []).map((issue) => `${issue.path.join(".")}: ${issue.message}`);
@@ -75,35 +66,41 @@ test("a request breaking the records' rules is refused before it reaches the cor
   );
 });
 
-test("a handle that begins a built-in's name is refused, and one that is a whole built-in's is not", () => {
+test("Actor handles follow lowercase naming rules independently of Hub interface names", () => {
   const named = (name: string) => issues(ActorCreate.safeParse({ name, purpose: "Work" }));
-  for (const name of ["actor", "call", "progress", "question", "message"]) {
-    assert.deepEqual(named(name), ["name: begins a built-in's name, as call does"], name);
-  }
-  for (const name of ["team", "messages", "questions", "activity", "storage"]) {
+  for (const name of [
+    "actor",
+    "call",
+    "progress",
+    "question",
+    "message",
+    "manager",
+    "team",
+    "storage",
+  ]) {
     assert.deepEqual(named(name), [], name);
   }
+  for (const name of ["", "Not-Lowercase", "name.with.dots", "name_with_underscores"])
+    assert.ok(named(name).length > 0, name);
 });
-
-const REVIEW = iface("review", { output: { type: "object" } });
 
 interface Member {
   id: string;
   actor: Actor;
 }
 
-async function member(core: Core, manager: Actor, name: string, exposed = fakeActor()) {
+async function member(core: Core, manager: Actor, name: string) {
   const created = await done(manager.call("actor_create", { name, purpose: `The ${name} work` }));
-  const actor = await core.connect(created.credential as string, exposed);
+  const actor = await core.client(created.credential as string);
   return { id: created.actor.id as string, actor };
 }
 
 /** The root; release, its report, and storage, release's; and web, another report of the root. */
 async function organization(options: Parameters<typeof startCore>[0] = {}) {
-  const core = await startCore({ waitMs: 2000, stepMs: 50, timeoutMs: 2000, ...options });
+  const core = await startCore({ stepMs: 50, timeoutMs: 2000, ...options });
   const root: Member = { id: core.rootId, actor: await core.client(core.root) };
   const release = await member(core, root.actor, "release");
-  const storage = await member(core, release.actor, "storage", fakeActor([REVIEW]));
+  const storage = await member(core, release.actor, "storage");
   const web = await member(core, root.actor, "web");
   return { core, root, release, storage, web };
 }
@@ -165,7 +162,10 @@ test("progress is replaced field by field, read by anyone, and kept as history o
   assert.equal(await refused(unknown), "invalid");
 
   await core.restart();
-  await until("web connected again", () => core.org.connections.link(web.id) !== undefined);
+  await until(
+    "web resumes Hub calls after restart",
+    async () => (await web.actor.call("team").catch(() => undefined))?.state === "done",
+  );
   const kept = await call(web, "progress", { actor: storage.id, history: 1 });
   assert.deepEqual([kept.progress.version, kept.history.length], [2, 1]);
   const actor = core.org.registry.found(storage.id);
@@ -188,7 +188,7 @@ test("progress is replaced field by field, read by anyone, and kept as history o
   assert.deepEqual(notes.openQuestions(actor.id), questions);
 });
 
-test("team shows each position's purpose, presence, progress and open questions, and the interfaces the caller can call", async (t) => {
+test("team shows each position's purpose, presence, progress and open questions", async (t) => {
   const { core, root, release, storage, web } = await organization();
   t.after(() => core.close());
   await call(storage, "progress_set", { state: "blocked", summary: "Needs a call" });
@@ -202,30 +202,24 @@ test("team shows each position's purpose, presence, progress and open questions,
       position.online,
       position.progress?.state ?? null,
       ids(position.questions),
-      position.interfaces,
     ]),
     [
-      ["release", true, null, [], []],
-      ["release.storage", true, "blocked", [question.id], ["storage.review"]],
+      ["release", true, null, []],
+      ["release.storage", true, "blocked", [question.id]],
     ],
   );
 
   const whole = await call(web, "team", { actor: root.id, depth: 5 });
   assert.deepEqual(
-    whole.positions.map((position: Json) => [position.path, position.interfaces]),
-    [
-      ["", []],
-      ["release", []],
-      ["release.storage", []],
-      ["web", []],
-    ],
+    whole.positions.map((position: Json) => position.path),
+    ["", "release", "release.storage", "web"],
   );
   const fromRoot = await call(root, "team", { actor: storage.id, depth: 0 });
-  assert.deepEqual(fromRoot.positions[0].interfaces, ["release.storage.review"]);
-  assert.deepEqual(
-    [fromRoot.positions[0].purpose, fromRoot.positions[0].created_at_attach],
-    ["The storage work", false],
-  );
+  assert.equal(fromRoot.positions[0].purpose, "The storage work");
+  for (const position of whole.positions) {
+    assert.equal("interfaces" in position, false);
+    assert.equal("created_at_attach" in position, false);
+  }
 });
 
 test("a message goes to any position, is private to its parties, the manager of either and the root, and unread until read", async (t) => {

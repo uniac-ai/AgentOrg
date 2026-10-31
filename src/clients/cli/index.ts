@@ -8,7 +8,7 @@ import { callCommand, interfacesCommand } from "./commands.ts";
 const INTERFACES_HELP =
   "usage: agentorg interfaces\n\nList the selected actor's permitted Tools, with their interfaces, call aliases, descriptions and schemas.";
 const CALL_HELP =
-  "usage: agentorg call <name> [--json <input>]\n\nInvoke an interface using its call alias returned by interfaces. Input defaults to an empty object. Prints the actor client's answer, including routed call state, id and parts.";
+  "usage: agentorg call <name> [--json <input>]\n\nInvoke an explicit Hub interface using its call alias returned by interfaces. Input defaults to an empty object. Prints the Actor client's result or domain refusal.";
 
 const usage = () =>
   [
