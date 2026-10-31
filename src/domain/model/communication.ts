@@ -426,7 +426,7 @@ state is running, waiting, blocked or review. summary is a short current paragra
     writes: false,
     request: TeamRequest,
     response: Team,
-    description: `Explore the organization: a position and its reports, each with its purpose, whether it is online, its progress state and summary, its open questions, the shared resources it holds, and its interfaces you can call.
+    description: `Explore the organization: a position and its reports, each with its purpose, whether it is online, its progress state and summary, its open questions, and the shared resources it holds.
 
 Default: you and your direct reports. Anyone may explore any position.`,
   },

@@ -45,7 +45,7 @@ const Attached = z.strictObject({
 
 export const ATTACH: InterfaceDescriptor = {
   name: "attach",
-  description: `Fill your position in the organization before listing or calling its interfaces. A resumed session can acknowledge its same actor; an attached session cannot change actors.
+  description: `Fill your position in the organization before listing or calling Hub Tools. A resumed session can acknowledge its same actor; an attached session cannot change actors.
 
 Give actor, the id your brief names. A session the user started with an appointment, naming no position, gives name and purpose instead, once: that creates its position directly under the user. Then team shows your position, your manager and your reports.`,
   input: objectSchema(AttachRequest, "input"),
@@ -62,7 +62,7 @@ const CallRequest = z.strictObject({
 const INTERFACES: InterfaceDescriptor = {
   name: "interfaces",
   description:
-    "List the attached actor's currently permitted Tools, each with its interfaces, call aliases, descriptions and input/output schemas. Read this before calling an operation whose contract you have not read.",
+    "List Hub Tools available to the attached Actor, each with its interfaces, call aliases, descriptions and input/output schemas. Read this before calling an operation whose contract you have not read.",
   input: objectSchema(z.strictObject({}), "input"),
   output: objectSchema(
     z
@@ -86,7 +86,7 @@ const CALL: InterfaceDescriptor = {
 };
 
 /** What the session's client may show its model about the agent actor's tools as a whole. */
-export const INSTRUCTIONS = `These tools make this session a position in an AgentOrg organization: a responsibility with a manager, under the user. Attach before any other action, with the actor id the brief names, or with a name and purpose when the user started the session with no position named. Then use interfaces to read the actor's available Tools and their interfaces, and call with {name: interface.call, input} to invoke one. Logical names such as team and progress_set are operations through call. How to work in a position is the agentorg skill; without it, read https://github.com/uniac-ai/AgentOrg/blob/main/skills/agentorg/SKILL.md.`;
+export const INSTRUCTIONS = `These tools make this session a position in an AgentOrg organization: a responsibility with a manager, under the user. Attach before any other action, with the actor id the brief names, or with a name and purpose when the user started the session with no position named. Then use interfaces to read available Hub Tools and their interfaces, and call with {name: interface.call, input} to invoke one. Logical names such as team and progress_set are operations through call. How to work in a position is the agentorg skill; without it, read https://github.com/uniac-ai/AgentOrg/blob/main/skills/agentorg/SKILL.md.`;
 
 const refused = (code: string, message: string): Answer => ({ state: "refused", code, message });
 
@@ -149,7 +149,7 @@ export class Agent implements Presented {
   }
 
   onChange(): void {
-    // The adapter's catalog is fixed; interfaces reads the actor's current Tools.
+    // The adapter's catalog is fixed; interfaces reads the current Hub Tools.
   }
 
   async call(
@@ -189,7 +189,7 @@ export class Agent implements Presented {
       try {
         return { state: "done", value: { tools: await position.available() } };
       } catch {
-        return refused("unavailable", "the core did not list the actor's interfaces");
+        return refused("unavailable", "the Hub did not list available Tools");
       }
     }
     if (name !== CALL.name)

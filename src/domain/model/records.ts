@@ -1,4 +1,4 @@
-/** The records the core keeps and returns: actors, their interfaces, calls and the audit trail. */
+/** Actor identities, Hub interface schemas, historical calls and audit entries. */
 
 import { z } from "zod";
 
