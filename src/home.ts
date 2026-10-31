@@ -23,9 +23,14 @@ export function databasePath(): string {
   return join(home(), "core.db");
 }
 
-/** The root's credential, which `agentorg core` writes on first start, mode 600. */
+/** The root's credential, which `agentorg-server` writes on first start, mode 600. */
 export function rootCredentialPath(): string {
   return join(home(), "root-credential");
+}
+
+/** The root's Actor identity, written beside its credential by `agentorg-server`. */
+export function rootActorPath(): string {
+  return join(home(), "root-actor");
 }
 
 /** A file's trimmed contents, refused when other users can read it. */
@@ -75,4 +80,21 @@ export const credentials = {
 export function readCredential(): string | undefined {
   if (process.env.AGENTORG_CREDENTIAL) return process.env.AGENTORG_CREDENTIAL;
   return existsSync(rootCredentialPath()) ? readPrivate(rootCredentialPath()) : undefined;
+}
+
+/** Select an explicit Actor identity and its credential from the environment or local root files. */
+export function readIdentity(): { actorId: string; credential: string } | undefined {
+  const actorId = process.env.AGENTORG_ACTOR_ID;
+  const credential = process.env.AGENTORG_CREDENTIAL;
+  if (actorId || credential) {
+    if (!actorId || !credential) {
+      throw new Error("set both AGENTORG_ACTOR_ID and AGENTORG_CREDENTIAL");
+    }
+    return { actorId, credential };
+  }
+  if (!existsSync(rootCredentialPath())) return undefined;
+  if (!existsSync(rootActorPath())) {
+    throw new Error(`no root actor id in ${rootActorPath()}; restart agentorg-server`);
+  }
+  return { actorId: readPrivate(rootActorPath()), credential: readPrivate(rootCredentialPath()) };
 }

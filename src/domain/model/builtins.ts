@@ -1,36 +1,45 @@
 /**
  * The core's built-ins, the surface every actor finds among its available interfaces: their
  * requests, results and descriptions. The communication standard's are in `communication.ts`.
- * `activity` is offered to the root only.
+ * Every open Actor receives the same built-in interfaces, including audit metadata.
  */
 
 import { z } from "zod";
 import { COMMUNICATION } from "./communication.ts";
-import { Actor, AuditEntry, Call, Handle, Id, MAX_WAIT_SECONDS, Text } from "./records.ts";
+import { toolDefinition } from "./json-schema.ts";
+import { Actor, AuditEntry, Call, Handle, Id, Text } from "./records.ts";
 
-/**
- * A handle that begins a built-in's name. Clients such as Claude Code and Codex turn the dot of a
- * routed name into `_`, so a report named `call` would offer `call_result` beside the built-in.
- */
-const reserved = (handle: string): boolean =>
-  Object.keys(BUILTINS).some((name: string) => name.startsWith(`${handle}_`));
+export const ExecutionOptions = z.strictObject({
+  providerId: Id.describe("The enrolled Provider to ask for execution."),
+  config: z
+    .record(z.string(), z.json())
+    .describe(
+      "A required JSON object following the Provider's configuration schema; use {} when empty.",
+    ),
+});
+
+export const ExecutionResult = z.strictObject({
+  providerId: Id,
+  status: z
+    .enum(["ready", "failed", "unknown"])
+    .describe("The Provider creation outcome, independent of Actor connectivity."),
+  error: z.strictObject({ code: z.string(), message: z.string() }).optional(),
+});
 
 export const ActorCreate = z
   .strictObject({
-    name: Handle.refine((handle) => !reserved(handle), "begins a built-in's name, as call does"),
+    name: Handle,
     purpose: Text.describe("What the actor is for, for a reader outside it."),
-    created_at_attach: z
-      .boolean()
-      .default(false)
-      .describe(
-        "For the root only: the position is created as a session the user started attaches to it.",
-      ),
+    execution: ExecutionOptions.optional().describe(
+      "Optionally arrange execution through a Provider after creating the Actor.",
+    ),
   })
   .meta({ id: "ActorCreate" });
 
 export const ActorCreated = z
   .strictObject({
     actor: Actor,
+    execution: ExecutionResult.optional(),
     credential: z
       .string()
       .describe(
@@ -44,25 +53,14 @@ export const ActorClose = z.strictObject({ actor: Id }).meta({ id: "ActorClose" 
 export const ActorClosed = z
   .strictObject({
     actor: Actor,
-    ended_calls: z
-      .array(Call)
-      .describe("Its pending calls: those it made are withdrawn, and those into it failed."),
   })
   .meta({ id: "ActorClosed" });
 
 export const CallResult = z
   .strictObject({
-    call: Id.describe("A call you made."),
-    wait: z
-      .number()
-      .min(0)
-      .max(MAX_WAIT_SECONDS)
-      .default(0)
-      .describe("Seconds to wait for it to settle, with progress notifications."),
+    call: Id.describe("A historical call you made."),
   })
   .meta({ id: "CallResult" });
-
-export const CallWithdraw = z.strictObject({ call: Id }).meta({ id: "CallWithdraw" });
 
 export const Activity = z
   .strictObject({
@@ -75,60 +73,52 @@ export const ActivityResult = z
   .strictObject({ entries: z.array(AuditEntry).describe("Newest first.") })
   .meta({ id: "ActivityResult" });
 
-export interface BuiltinSpec {
-  /** Writes are recorded in the audit trail. */
-  readonly writes: boolean;
-  readonly rootOnly: boolean;
-  readonly request: z.ZodType;
-  readonly response: z.ZodType;
-  /** The first paragraph is the summary. */
-  readonly description: string;
-}
-
-export const BUILTINS = {
+export const ACTORS = toolDefinition("actors", {
   actor_create: {
     writes: true,
-    rootOnly: false,
     request: ActorCreate,
     response: ActorCreated,
     description: `Create a direct report: a position that you manage.
 
-Returns the actor and its credential, shown only this once. Whatever fills the position connects to the core with it.`,
+Returns the actor and its credential, shown only this once. Whatever fills the position connects to the core with it.
+
+With execution, wait for the Provider and return its separate ready, failed or unknown outcome. The Actor remains created for every execution outcome. Ready confirms Provider creation, independently of Actor connectivity.`,
   },
   actor_close: {
     writes: true,
-    rootOnly: false,
     request: ActorClose,
     response: ActorClosed,
     description: `Close a direct report whose work is done; the root may close any actor.
 
-Refused while it has open reports of its own. Its pending calls end and its connections close.`,
+Refused while it has open reports of its own. Its Hub connections close.`,
   },
-  ...COMMUNICATION,
+});
+
+export const CALLS = toolDefinition("calls", {
   call_result: {
     writes: false,
-    rootOnly: false,
     request: CallResult,
     response: Call,
-    description: `Read a call you made, with its output once done.
+    description: "Read a historical Actor call you made, with its recorded result.",
+  },
+});
 
-With wait, hold until it settles or the wait ends, whichever is first.`,
-  },
-  call_withdraw: {
-    writes: true,
-    rootOnly: false,
-    request: CallWithdraw,
-    response: Call,
-    description: "Withdraw a pending call you made that no longer needs an answer.",
-  },
+export const ACTIVITY = toolDefinition("activity", {
   activity: {
     writes: false,
-    rootOnly: true,
     request: Activity,
     response: ActivityResult,
-    description: "Read the audit trail: every write and every routed call, newest first.",
+    description: "Read audit metadata, newest first.",
   },
-} as const satisfies Record<string, BuiltinSpec>;
+});
+
+/** Derived schemas for CLI and typed callers; feature modules supply runtime operations. */
+export const BUILTINS = {
+  ...ACTORS.interfaces,
+  ...COMMUNICATION,
+  ...CALLS.interfaces,
+  ...ACTIVITY.interfaces,
+} as const;
 
 export type BuiltinName = keyof typeof BUILTINS;
 export type RequestOf<N extends BuiltinName> = z.output<(typeof BUILTINS)[N]["request"]>;

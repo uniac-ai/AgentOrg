@@ -1,43 +1,28 @@
-/**
- * An MCP transport over a network channel: one JSON-RPC message per text frame. Either end uses
- * it, since the SDK has a WebSocket transport for clients only.
- */
-
+/** One MCP endpoint over an admitted bidirectional JSON-RPC channel. */
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import { type JSONRPCMessage, JSONRPCMessageSchema } from "@modelcontextprotocol/sdk/types.js";
+import { JSONRPCMessageSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { Channel } from "../../network/index.ts";
 
-export class ChannelTransport implements Transport {
-  onclose?: () => void;
-  onerror?: (error: Error) => void;
-  onmessage?: (message: JSONRPCMessage) => void;
-  readonly channel: Channel;
-
-  constructor(channel: Channel) {
-    this.channel = channel;
-  }
-
-  async start(): Promise<void> {
-    this.channel.listen(
-      (text) => {
-        let message: JSONRPCMessage;
-        try {
-          message = JSONRPCMessageSchema.parse(JSON.parse(text));
-        } catch (error) {
-          this.onerror?.(error as Error);
-          return;
-        }
-        this.onmessage?.(message);
-      },
-      () => this.onclose?.(),
-    );
-  }
-
-  async send(message: JSONRPCMessage): Promise<void> {
-    this.channel.send(JSON.stringify(message));
-  }
-
-  async close(): Promise<void> {
-    this.channel.close();
-  }
+export function mcpTransport(channel: Channel): Transport {
+  const transport: Transport = {
+    async start() {
+      channel.listen(
+        (text) => {
+          try {
+            transport.onmessage?.(JSONRPCMessageSchema.parse(JSON.parse(text)));
+          } catch {
+            transport.onerror?.(new Error("Invalid MCP JSON-RPC message"));
+          }
+        },
+        () => transport.onclose?.(),
+      );
+    },
+    async send(message) {
+      channel.send(JSON.stringify(message));
+    },
+    async close() {
+      channel.close();
+    },
+  };
+  return transport;
 }

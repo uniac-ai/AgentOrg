@@ -1,11 +1,7 @@
-/**
- * Setting AgentOrg up, run as its users run it: `agentorg connect` and `disconnect` against project
- * folders that already hold the user's own entries, and `agentorg service` against a fake service
- * manager on PATH, so that no test loads a real service.
- */
+/** Project integration and the Hub service, with scratch homes and a fake service manager. */
 
 import assert from "node:assert/strict";
-import { type ChildProcess, execFile, spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import {
   chmodSync,
   existsSync,
@@ -18,36 +14,18 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { createServer } from "node:net";
 import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
-import { nodeSupported, readLauncher } from "../src/setup/launcher.ts";
-import { services } from "../src/setup/services.ts";
+import { getStaticTOMLValue, parseTOML } from "toml-eslint-parser";
+import { nodeSupported, readLauncher } from "../src/runtime/launcher.ts";
+import { service } from "../src/runtime/services.ts";
 import { VERSION } from "../src/version.ts";
 
-const BIN = fileURLToPath(new URL("../src/cli/bin.js", import.meta.url));
+import { command, freePort, serving } from "./process.ts";
+
 const SKILL = fileURLToPath(new URL("../../skills/agentorg", import.meta.url)).replace(/\/$/, "");
-
-interface Ran {
-  status: number;
-  stdout: string;
-  stderr: string;
-}
-
-async function agentorg(args: string[], env: Record<string, string>): Promise<Ran> {
-  try {
-    const { stdout, stderr } = await promisify(execFile)(process.execPath, [BIN, ...args], {
-      env: { PATH: process.env.PATH ?? "", ...env },
-    });
-    return { status: 0, stdout, stderr };
-  } catch (error) {
-    const { code, stdout, stderr } = error as { code: number; stdout: string; stderr: string };
-    return { status: code, stdout, stderr };
-  }
-}
 
 /** A scratch folder holding a HOME and a project, removed by `done`. */
 function scratch() {
@@ -92,13 +70,14 @@ test("the default home's services keep plain names, and any other home's carry i
   try {
     process.env.AGENTORG_HOME = join(userInfo().homedir, ".local", "share", "agentorg");
     assert.deepEqual(
-      services().map((service) => service.name),
-      ["agentorg", "agentorg-human"],
+      [service("agentorg-server", "core").name, service("another-service", "another service").name],
+      ["agentorg-server", "another-service"],
     );
     process.env.AGENTORG_HOME = join(tmpdir(), "elsewhere");
-    const [core, human] = services().map((service) => service.name);
-    assert.match(core ?? "", /^agentorg-[0-9a-f]{8}$/);
-    assert.equal(human, `${core}-human`);
+    const core = service("agentorg-server", "core").name;
+    const another = service("another-service", "another service").name;
+    assert.match(core, /^agentorg-server-[0-9a-f]{8}$/);
+    assert.equal(another, core.replace("agentorg-server", "another-service"));
   } finally {
     if (before === undefined) delete process.env.AGENTORG_HOME;
     else process.env.AGENTORG_HOME = before;
@@ -122,10 +101,17 @@ test("connect writes each client's entries beside the user's own, and disconnect
     writeFileSync(join(project, ".claude", "settings.local.json"), settings);
     mkdirSync(join(project, ".codex"));
     writeFileSync(join(project, ".codex", "config.toml"), toml);
+    writeFileSync(
+      join(project, ".codex", "hooks.json"),
+      json({
+        description: "My project hooks",
+        hooks: { SessionStart: [{ matcher: "startup", hooks: [userHook] }] },
+      }),
+    );
     const original = snapshot(project);
 
     for (const client of ["claude-code", "codex"]) {
-      const connected = await agentorg(["connect", client, "--project", project], env);
+      const connected = await command("mcp", ["connect", client, "--project", project], env);
       assert.match(connected.stdout, new RegExp(`connected ${client} in`));
       // The check runs the launcher with only /usr/bin and /bin on PATH, and finds no core.
       assert.match(connected.stdout, /checking through the launcher/);
@@ -134,46 +120,139 @@ test("connect writes each client's entries beside the user's own, and disconnect
       assert.equal(connected.status, 1);
     }
 
-    const launcher = join(env.AGENTORG_HOME, "bin", "agentorg");
+    const launcher = join(env.AGENTORG_HOME, "bin", "agentorg-mcp");
     const servers = JSON.parse(readFileSync(join(project, ".mcp.json"), "utf8")).mcpServers;
     assert.deepEqual(servers.docs, { command: "docs-server" });
     assert.deepEqual(servers.org, {
       command: launcher,
-      args: ["agent", "--client", "claude-code"],
+      args: ["--client", "claude-code"],
     });
     const local = JSON.parse(readFileSync(join(project, ".claude", "settings.local.json"), "utf8"));
     assert.deepEqual(local.permissions, { allow: ["Bash(ls)"] });
     assert.deepEqual(local.enabledMcpjsonServers, ["docs", "org"]);
     const started = local.hooks.SessionStart.flatMap((group: { hooks: unknown[] }) => group.hooks);
     assert.deepEqual(started[0], userHook);
-    assert.equal(started[1].command, `'${launcher}' agent context --client claude-code`);
-    assert.equal(started[2].command, `'${launcher}' agent wait --client claude-code`);
+    assert.equal(started[1].command, `'${launcher}' context --client claude-code`);
+    assert.equal(started[2].command, `'${launcher}' wait --client claude-code`);
     assert.equal(started[2].asyncRewake, true);
     assert.equal(local.hooks.Stop[0].hooks[0].command, started[2].command);
-    assert.match(local.hooks.UserPromptSubmit[0].hooks[0].command, /agent prompt --client/);
+    assert.match(local.hooks.UserPromptSubmit[0].hooks[0].command, /prompt --client/);
     const codex = readFileSync(join(project, ".codex", "config.toml"), "utf8");
     assert.ok(codex.startsWith(toml.trimEnd()), "the user's tables stay first");
-    assert.match(codex, /\[mcp_servers\.org\]\ncommand = ".*\/bin\/agentorg"\nargs = \["agent"/);
+    assert.match(
+      codex,
+      /\[mcp_servers\.org\]\ncommand = ".*\/bin\/agentorg-mcp"\nargs = \["--client"/,
+    );
+    const codexHooks = JSON.parse(readFileSync(join(project, ".codex", "hooks.json"), "utf8"));
+    assert.equal(codexHooks.description, "My project hooks");
+    assert.deepEqual(codexHooks.hooks.SessionStart[0], { matcher: "startup", hooks: [userHook] });
+    assert.deepEqual(codexHooks.hooks.SessionStart[1].hooks, [
+      {
+        type: "command",
+        command: `'${launcher}' context --client codex`,
+        timeout: 10,
+      },
+    ]);
+    assert.deepEqual(codexHooks.hooks.UserPromptSubmit[0].hooks, [
+      {
+        type: "command",
+        command: `'${launcher}' prompt --client codex`,
+        timeout: 10,
+      },
+    ]);
+    assert.equal(codexHooks.hooks.Stop, undefined);
     for (const skills of [".claude/skills", ".agents/skills"]) {
       assert.equal(readlinkSync(join(project, skills, "agentorg")), SKILL);
     }
 
     const connectedOnce = snapshot(project);
-    await agentorg(["connect", "claude-code", "--project", project], env);
-    await agentorg(["connect", "codex", "--project", project], env);
+    await command("mcp", ["connect", "claude-code", "--project", project], env);
+    await command("mcp", ["connect", "codex", "--project", project], env);
     assert.deepEqual(snapshot(project), connectedOnce, "connecting again changes nothing");
 
-    const status = await agentorg(["status", "--project", project], env);
+    const codexPath = join(project, ".codex", "config.toml");
+    writeFileSync(
+      codexPath,
+      `${readFileSync(codexPath, "utf8")}\n[mcp_servers.org.tools.call]\napproval_mode = "prompt"\n`,
+    );
+    await command("mcp", ["connect", "codex", "--project", project], env);
+    assert.match(
+      readFileSync(codexPath, "utf8"),
+      /\[mcp_servers.org.tools.call\]\napproval_mode = "prompt"/,
+    );
+    const withPolicy = snapshot(project);
+    await command("mcp", ["connect", "codex", "--project", project], env);
+    assert.deepEqual(
+      snapshot(project),
+      withPolicy,
+      "reconnecting preserves per-tool policy deterministically",
+    );
+
+    const status = await command("mcp", ["status", "--project", project], env);
     assert.match(status.stdout, /^ {2}claude-code: connected$/m);
     assert.match(status.stdout, /^ {2}codex: connected$/m);
 
     for (const client of ["claude-code", "codex"]) {
-      const disconnected = await agentorg(["disconnect", client, "--project", project], env);
+      const disconnected = await command("mcp", ["disconnect", client, "--project", project], env);
       assert.equal(disconnected.status, 0, disconnected.stderr);
     }
     assert.deepEqual(snapshot(project), original);
-    const again = await agentorg(["disconnect", "codex", "--project", project], env);
+    const again = await command("mcp", ["disconnect", "codex", "--project", project], env);
     assert.match(again.stdout, /codex was not connected/);
+  } finally {
+    done();
+  }
+});
+
+test("Codex reconnect replaces complete multiline values and preserves other settings and comments", async () => {
+  const { project, env, done } = scratch();
+  const prefix = '# Keep my defaults.\nmodel = "o4"\n\n';
+  const suffix =
+    "\n[mcp_servers.docs] # Keep this server.\ncommand = \"docs-server\"\n\n[mcp_servers.docs.env]\nDESCRIPTION = '''\n[mcp_servers.org.not_a_table]\n'''\n";
+  const source = `${prefix}[mcp_servers.org] # Keep this comment.\ncommand = "/previous/bin/agentorg-mcp" # Pinned executable.\nargs = [\n  "--client",\n  "codex",\n] # Adapter arguments.\nrequired = true\n\n[mcp_servers.org.tools.call] # Keep this policy.\napproval_mode = "prompt"\noutput_token_limit = 1000\n${suffix}`;
+  const read = (text: string) =>
+    getStaticTOMLValue(parseTOML(text, { tomlVersion: "1.0" })) as {
+      mcp_servers: Record<string, Record<string, unknown>>;
+    };
+  const original = read(source);
+  try {
+    mkdirSync(join(project, ".codex"));
+    const path = join(project, ".codex", "config.toml");
+    writeFileSync(path, source);
+    await command("mcp", ["connect", "codex", "--project", project], env);
+    const updated = readFileSync(path, "utf8");
+    const parsed = read(updated);
+    assert.deepEqual(parsed.mcp_servers.org, {
+      ...original.mcp_servers.org,
+      command: join(env.AGENTORG_HOME, "bin", "agentorg-mcp"),
+      args: ["--client", "codex"],
+    });
+    assert.deepEqual(parsed.mcp_servers.docs, original.mcp_servers.docs);
+    assert.ok(updated.startsWith(prefix));
+    assert.ok(updated.endsWith(suffix));
+    for (const comment of [
+      "# Keep this comment.",
+      "# Pinned executable.",
+      "# Adapter arguments.",
+      "# Keep this policy.",
+    ]) {
+      assert.ok(updated.includes(comment));
+    }
+    await command("mcp", ["connect", "codex", "--project", project], env);
+    assert.equal(readFileSync(path, "utf8"), updated);
+    const disconnected = await command("mcp", ["disconnect", "codex", "--project", project], env);
+    assert.equal(disconnected.status, 0, disconnected.stderr);
+    const left = read(readFileSync(path, "utf8"));
+    assert.equal(left.mcp_servers.org, undefined);
+    assert.deepEqual(left.mcp_servers.docs, original.mcp_servers.docs);
+    const malformed =
+      '[mcp_servers.org]\ncommand = "/previous/bin/agentorg-mcp"\nargs = ["sentinel-credential"';
+    writeFileSync(path, malformed);
+    const refused = await command("mcp", ["connect", "codex", "--project", project], env);
+    assert.equal(refused.status, 1);
+    assert.match(refused.stderr, /is not valid TOML/);
+    assert.equal((refused.stdout + refused.stderr).includes("sentinel-credential"), false);
+    assert.equal(readFileSync(path, "utf8"), malformed);
   } finally {
     done();
   }
@@ -182,20 +261,20 @@ test("connect writes each client's entries beside the user's own, and disconnect
 test("connect and disconnect leave an empty project empty, and refuse a server named org that isn't AgentOrg's", async () => {
   const { project, env, done } = scratch();
   try {
-    await agentorg(["connect", "claude-code", "--project", project], env);
-    await agentorg(["connect", "codex", "--project", project], env);
-    await agentorg(["disconnect", "claude-code", "--project", project], env);
-    await agentorg(["disconnect", "codex", "--project", project], env);
+    await command("mcp", ["connect", "claude-code", "--project", project], env);
+    await command("mcp", ["connect", "codex", "--project", project], env);
+    await command("mcp", ["disconnect", "claude-code", "--project", project], env);
+    await command("mcp", ["disconnect", "codex", "--project", project], env);
     assert.deepEqual(readdirSync(project), []);
 
     const theirs = json({ mcpServers: { org: { command: "their-org-server" } } });
     writeFileSync(join(project, ".mcp.json"), theirs);
-    const refused = await agentorg(["connect", "claude-code", "--project", project], env);
+    const refused = await command("mcp", ["connect", "claude-code", "--project", project], env);
     assert.equal(refused.status, 1);
     assert.match(refused.stderr, /already has an MCP server named org that isn't AgentOrg's/);
     assert.deepEqual(snapshot(project), { ".mcp.json": theirs });
 
-    const unknown = await agentorg(["connect", "cursor", "--project", project], env);
+    const unknown = await command("mcp", ["connect", "cursor", "--project", project], env);
     assert.equal(unknown.status, 1);
     assert.match(unknown.stderr, /name a client: claude-code or codex/);
   } finally {
@@ -207,18 +286,23 @@ test("the launcher pins the home and addresses, quotes its paths, and runs this 
   const { root, project, env, done } = scratch();
   try {
     const home = join(root, "it's a home");
-    const environment = { ...env, AGENTORG_HOME: home, AGENTORG_HUMAN_PORT: "2" };
-    await agentorg(["connect", "codex", "--project", project], environment);
-    const launcher = join(home, "bin", "agentorg");
+    const environment = {
+      ...env,
+      AGENTORG_HOME: home,
+      AGENTORG_URL: "http://127.0.0.1:1",
+      AGENTORG_CREDENTIAL: "sentinel-credential",
+    };
+    await command("mcp", ["connect", "codex", "--project", project], environment);
+    const launcher = join(home, "bin", "agentorg-mcp");
     const text = readFileSync(launcher, "utf8");
     assert.match(text, /AGENTORG_PORT='1'/);
-    assert.match(text, /AGENTORG_HUMAN_PORT='2'/);
-    assert.doesNotMatch(text, /AGENTORG_URL|AGENTORG_CREDENTIAL/);
+    assert.match(text, /AGENTORG_URL='http:\/\/127.0.0.1:1'/);
+    assert.doesNotMatch(text, /AGENTORG_CREDENTIAL|sentinel-credential/);
 
     const previous = process.env.AGENTORG_HOME;
     process.env.AGENTORG_HOME = home;
     try {
-      const pinned = readLauncher();
+      const pinned = readLauncher("agentorg-mcp");
       assert.equal(pinned?.version, VERSION);
       assert.equal(realpathSync(pinned?.node ?? ""), realpathSync(process.execPath));
     } finally {
@@ -234,34 +318,6 @@ test("the launcher pins the home and addresses, quotes its paths, and runs this 
     done();
   }
 });
-
-/** A port nothing listens on yet. */
-async function freePort(): Promise<number> {
-  const server = createServer().listen(0, "127.0.0.1");
-  await new Promise((resolve) => server.once("listening", resolve));
-  const { port } = server.address() as { port: number };
-  await new Promise((resolve) => server.close(resolve));
-  return port;
-}
-
-/** Start an agentorg command and wait until its stderr says it serves. */
-async function serving(args: string[], env: Record<string, string>): Promise<ChildProcess> {
-  const child = spawn(process.execPath, [BIN, ...args], {
-    env: { PATH: process.env.PATH ?? "", ...env },
-    stdio: ["ignore", "ignore", "pipe"],
-  });
-  let log = "";
-  await new Promise<void>((resolve, reject) => {
-    child.stderr?.on("data", (chunk: Buffer) => {
-      log += chunk.toString();
-      if (/serving on/.test(log)) resolve();
-    });
-    child.once("exit", (status) =>
-      reject(new Error(`agentorg ${args[0]} exited ${status}: ${log}`)),
-    );
-  });
-  return child;
-}
 
 /**
  * A fake launchctl or systemctl, keeping what is "loaded" as a file per service in `state`, which
@@ -281,7 +337,7 @@ esac`
       : `unit="$3"; [ "$2" = disable ] && unit="$4"; f="${state}/\${unit%.service}"
 case "$2" in
   show) if [ -f "$f" ]; then printf 'LoadState=loaded\\nActiveState=active\\nExecStart={ path=%s ; }\\n' "$(cat "$f")"; else echo LoadState=not-found; fi;;
-  enable) sed -n 's/^ExecStart="\\(.*\\)" .*/\\1/p' "$XDG_CONFIG_HOME/systemd/user/$unit" > "$f";;
+  enable) sed -n 's/^ExecStart="\\(.*\\)"$/\\1/p' "$XDG_CONFIG_HOME/systemd/user/$unit" > "$f";;
   disable) rm -f "$f";;
 esac`;
   writeFileSync(join(bin, name), `#!/bin/sh\necho "$*" >> "${log}"\n${script}\n`);
@@ -289,7 +345,7 @@ esac`;
   return name;
 }
 
-test("service install writes the launcher and both services, waits for them, and uninstall removes them", async () => {
+test("the Hub manages only its own service, and MCP setup preserves it", async () => {
   const { root, home, project, done } = scratch();
   const bin = join(root, "bin");
   const state = join(root, "loaded");
@@ -300,64 +356,84 @@ test("service install writes the launcher and both services, waits for them, and
     XDG_CONFIG_HOME: join(home, ".config"),
     AGENTORG_HOME: join(home, "agentorg"),
     AGENTORG_PORT: String(await freePort()),
-    AGENTORG_HUMAN_PORT: String(await freePort()),
     PATH: `${bin}:${process.env.PATH ?? ""}`,
   };
-  // The fake loads nothing, so the core and the web app it waits for run here.
-  const core = await serving(["core"], env);
-  const human = await serving(["human"], env);
-  try {
-    const [coreService, humanService] = (() => {
-      process.env.AGENTORG_HOME = env.AGENTORG_HOME;
-      try {
-        return services();
-      } finally {
-        delete process.env.AGENTORG_HOME;
-      }
-    })();
-    const launcher = join(env.AGENTORG_HOME, "bin", "agentorg");
-    const file = (service: { name: string }) =>
-      name === "launchctl"
-        ? join(home, "Library", "LaunchAgents", `${service.name}.plist`)
-        : join(env.XDG_CONFIG_HOME, "systemd", "user", `${service.name}.service`);
-
-    // A service of the same name that runs something else is never replaced.
-    writeFileSync(join(state, coreService?.name ?? ""), "/usr/local/bin/node\n");
-    const refused = await agentorg(["service", "install"], env);
-    assert.equal(refused.status, 1);
-    assert.match(refused.stderr, /runs \/usr\/local\/bin\/node, not .*; stop and remove it first/);
-    assert.equal(existsSync(launcher), false);
-    rmSync(join(state, coreService?.name ?? ""));
-
-    const installed = await agentorg(["service", "install"], env);
-    assert.equal(installed.status, 0, installed.stderr);
-    assert.match(installed.stdout, /the core: answering at .*, as service agentorg-[0-9a-f]{8}$/m);
-    assert.match(installed.stdout, /the web app: answering at/);
-    assert.ok(existsSync(launcher));
-    for (const [service, command] of [
-      [coreService, "core"],
-      [humanService, "human"],
-    ] as const) {
-      const text = readFileSync(file(service ?? { name: "" }), "utf8");
-      assert.ok(text.includes(launcher), `${service?.name} runs the launcher`);
-      assert.match(text, new RegExp(`\\b${command}\\b`));
-      assert.equal(readFileSync(join(state, service?.name ?? ""), "utf8").trim(), launcher);
+  const owned = (program: string) => {
+    const previous = process.env.AGENTORG_HOME;
+    process.env.AGENTORG_HOME = env.AGENTORG_HOME;
+    try {
+      return service(program, program);
+    } finally {
+      if (previous === undefined) delete process.env.AGENTORG_HOME;
+      else process.env.AGENTORG_HOME = previous;
     }
+  };
+  const coreService = owned("agentorg-server");
+  const anotherService = owned("another-service");
+  const file = (entry: { name: string }) =>
+    name === "launchctl"
+      ? join(home, "Library", "LaunchAgents", `${entry.name}.plist`)
+      : join(env.XDG_CONFIG_HOME, "systemd", "user", `${entry.name}.service`);
+  const launcher = (program: string) => join(env.AGENTORG_HOME, "bin", program);
+  let core: Awaited<ReturnType<typeof serving>> | undefined;
+  try {
+    core = await serving("server", env);
+    writeFileSync(join(state, coreService.name), "/usr/local/bin/node\n");
+    for (const action of ["install", "uninstall"]) {
+      const refused = await command("server", ["service", action], env);
+      assert.equal(refused.status, 1);
+      assert.match(
+        refused.stderr,
+        /runs \/usr\/local\/bin\/node, not .*; stop and remove it first/,
+      );
+    }
+    assert.equal(existsSync(launcher("agentorg-server")), false);
+    assert.equal(readFileSync(join(state, coreService.name), "utf8"), "/usr/local/bin/node\n");
+    rmSync(join(state, coreService.name));
 
-    const status = await agentorg(["status", "--project", project], env);
-    assert.equal(status.status, 0, status.stdout);
-    assert.match(status.stdout, /^the core: answering at .*; service agentorg-/m);
+    const installed = await command("server", ["service", "install"], env);
+    assert.equal(installed.status, 0, installed.stderr);
+    assert.deepEqual(readdirSync(state), [coreService.name]);
+    assert.match(
+      installed.stdout,
+      /the core: answering at .*, as service agentorg-server-[0-9a-f]{8}$/m,
+    );
+
+    const serverFile = readFileSync(file(coreService), "utf8");
+    const serverLauncher = readFileSync(launcher("agentorg-server"), "utf8");
+    const anotherProgram = "/usr/local/bin/another-service\n";
+    const anotherFile = "Another service's configuration\n";
+    writeFileSync(join(state, anotherService.name), anotherProgram);
+    writeFileSync(file(anotherService), anotherFile);
+    const managerCalls = readFileSync(log, "utf8");
+    const connected = await command("mcp", ["connect", "codex", "--project", project], env);
+    assert.equal(connected.status, 0, connected.stdout + connected.stderr);
+    assert.match(connected.stdout, /^ {2}codex: connected$/m);
+    assert.equal(
+      readFileSync(log, "utf8"),
+      managerCalls,
+      "MCP setup needs no service-manager calls",
+    );
+    assert.deepEqual(readdirSync(state).sort(), [coreService.name, anotherService.name].sort());
+    assert.equal(readFileSync(file(coreService), "utf8"), serverFile);
+    assert.equal(readFileSync(launcher("agentorg-server"), "utf8"), serverLauncher);
+    assert.ok(serverFile.includes(launcher(coreService.program)));
+    assert.equal(
+      readFileSync(join(state, coreService.name), "utf8").trim(),
+      launcher(coreService.program),
+    );
+    const status = await command("server", ["status"], env);
+    assert.equal(status.status, 0, status.stdout + status.stderr);
     assert.match(status.stdout, /^launcher: .*, on Node at /m);
-
-    const removed = await agentorg(["service", "uninstall"], env);
+    const removed = await command("server", ["service", "uninstall"], env);
     assert.equal(removed.status, 0, removed.stderr);
-    assert.match(removed.stdout, /removed service .*-human, the web app\nremoved service/);
-    assert.deepEqual(readdirSync(state), []);
-    assert.equal(existsSync(file(coreService ?? { name: "" })), false);
+    assert.deepEqual(readdirSync(state), [anotherService.name]);
+    assert.equal(existsSync(file(coreService)), false);
+    assert.equal(readFileSync(file(anotherService), "utf8"), anotherFile);
+    assert.equal(readFileSync(join(state, anotherService.name), "utf8"), anotherProgram);
     assert.ok(existsSync(env.AGENTORG_HOME), "the home stays");
   } finally {
-    core.kill();
-    human.kill();
+    await core?.close();
     done();
   }
 });

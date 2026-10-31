@@ -1,11 +1,11 @@
 /**
  * The domain's vocabulary, which actors may import too: the records, the interface descriptor,
  * the built-ins' schemas, the communication standard's records and requests, and the shapes of a
- * delivery, its outcome and a caller's answer.
+ * Hub caller's answer.
  */
 
-import type { z } from "zod";
-import type { Interface } from "./records.ts";
+import { z } from "zod";
+import { Id, Interface } from "./records.ts";
 
 export * from "./builtins.ts";
 export * from "./communication.ts";
@@ -14,36 +14,27 @@ export * from "./records.ts";
 
 export type InterfaceDescriptor = z.output<typeof Interface>;
 
-/** A call as the called actor receives it. */
-export interface Delivery {
-  call: string;
-  from: string;
-  cause: string | null;
-  interface: string;
-  input: Record<string, unknown>;
-  long_running: boolean;
-}
+/** A Hub Tool's stable identity, name and callable interfaces. */
+export const Tool = z
+  .strictObject({
+    id: Id,
+    name: z.string(),
+    interfaces: z.array(
+      z.strictObject({
+        interface: Interface,
+        call: z
+          .string()
+          .describe("The alias to pass to call, independent of the local interface name."),
+        read_only: z.boolean().optional().describe("An interface that only reads."),
+      }),
+    ),
+  })
+  .meta({ id: "Tool" });
 
-/** What a called actor's interface returned. */
-export type Outcome =
-  | { ok: true; value: unknown; parts: Record<string, unknown>[] }
-  | { ok: false; error: string };
+export type ToolDescriptor = z.output<typeof Tool>;
+export type Offer = Omit<ToolDescriptor["interfaces"][number], "call">;
 
-/** An interface offered to an actor: a built-in, or another actor's under its routed name. */
-export interface Offer {
-  interface: InterfaceDescriptor;
-  routed: boolean;
-  /** A built-in that only reads. */
-  read_only?: boolean;
-}
-
-/**
- * What a caller gets back. A built-in's answer has no parts: its value is the whole result. A
- * routed call's names the call.
- */
+/** A Hub operation's result or domain refusal. */
 export type Answer =
-  | { state: "done"; call?: string; value: unknown; parts?: Record<string, unknown>[] }
-  | { state: "pending"; call: string }
-  | { state: "failed"; call?: string; error: string }
-  | { state: "withdrawn"; call: string }
+  | { state: "done"; value: unknown }
   | { state: "refused"; code: string; message: string };

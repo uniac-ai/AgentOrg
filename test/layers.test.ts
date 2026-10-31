@@ -50,41 +50,121 @@ function breaches(layer: string, forbidden: string[]): string[] {
 }
 
 const MCP = "@modelcontextprotocol/";
+const CLIENTS = ["src/clients/cli/", "src/clients/mcp/"];
+const PROTOCOLS = [MCP, "hono", "@hono/", "ws"];
+const APPLICATIONS = ["src/server/", "src/clients/"];
+const ADAPTERS = [
+  "src/network/",
+  "src/connection/",
+  "src/provider/",
+  "src/bindings/",
+  "src/storage/",
+  "src/actor/",
+];
 
-test("the domain imports no protocol, network, web framework, WebSocket, database or Node built-in", (t) => {
-  const forbidden = [MCP, "hono", "@hono/", "ws", "node:"];
-  const outer = ["src/network/", "src/bindings/", "src/storage/", "src/actor/", "src/core/"];
-  assert.deepEqual(breaches("src/domain/", [...forbidden, ...outer, "src/cli/", "src/human/"]), []);
-  t.diagnostic(`${FILES.filter(({ file }) => file.startsWith("src/domain/")).length} files`);
-});
+const DOMAIN_BOUNDARIES: Record<string, string[]> = {
+  registry: ["connections", "calls", "capabilities", "actors", "team", "application"],
+  connections: ["registry", "calls"],
+  capabilities: ["application", "calls", "actors", "team"],
+  communication: ["progress", "claims", "capabilities", "actors", "team", "application"],
+  progress: ["communication", "claims", "actors", "team"],
+  actors: ["capabilities", "team", "application"],
+  team: ["capabilities", "application"],
+  application: ["actors", "team", "communication", "claims", "progress", "execution"],
+};
 
-test("the domain, whose model the web app type-checks through, uses no Node globals", () => {
-  const domain = FILES.filter(({ file }) => file.startsWith("src/domain/"));
-  assert.deepEqual(
-    domain.filter(({ text }) => /\b(process|Buffer)\b/.test(text)).map(({ file }) => file),
-    [],
-  );
-});
-
-test("the network knows no domain, protocol binding, storage or actor", () => {
-  const forbidden = [
+// The forbidden dependencies are the architecture's contract, independent of implementation.
+const RULES: Record<string, string[]> = {
+  ...Object.fromEntries(
+    Object.entries(DOMAIN_BOUNDARIES).map(([owner, forbidden]) => [
+      `src/domain/${owner}.ts`,
+      forbidden.map((name) => `src/domain/${name}.ts`),
+    ]),
+  ),
+  "src/domain/": [
+    ...PROTOCOLS,
+    "node:",
+    ...ADAPTERS,
+    ...APPLICATIONS,
+    "src/runtime/",
+    "src/home.ts",
+  ],
+  "src/network/": [
+    MCP,
+    "src/connection/",
+    "src/provider/",
+    "src/domain/",
+    "src/bindings/",
+    "src/storage/",
+    "src/actor/",
+    ...APPLICATIONS,
+    "src/runtime/",
+  ],
+  "src/connection/": [
     MCP,
     "src/domain/",
     "src/bindings/",
     "src/storage/",
     "src/actor/",
-    "src/core/",
-  ];
-  assert.deepEqual(breaches("src/network/", forbidden), []);
+    ...APPLICATIONS,
+    "src/runtime/",
+  ],
+  "src/provider/": [
+    MCP,
+    "src/domain/",
+    "src/bindings/",
+    "src/storage/",
+    "src/actor/",
+    ...APPLICATIONS,
+    "src/runtime/",
+  ],
+  "src/storage/": [...PROTOCOLS, "src/network/", "src/bindings/", ...APPLICATIONS, "src/runtime/"],
+  "src/actor/api.ts": [MCP, "src/bindings/", "src/network/"],
+  "src/actor/": ["src/server/", "src/clients/", "src/storage/", "src/runtime/"],
+  "src/server/": ["src/clients/"],
+  "src/runtime/": ["src/domain/", ...ADAPTERS, ...APPLICATIONS],
+  "src/bindings/": [...APPLICATIONS, "src/runtime/"],
+  "src/home.ts": [...APPLICATIONS],
+  ...Object.fromEntries(
+    CLIENTS.map((client) => [
+      client,
+      ["src/server/", "src/storage/", ...CLIENTS.filter((sibling) => sibling !== client)],
+    ]),
+  ),
+};
+
+test("the domain import graph is acyclic, including types", () => {
+  const domain = new Map(
+    FILES.filter(({ file }) => file.startsWith("src/domain/")).map(({ file, imports }) => [
+      file,
+      imports,
+    ]),
+  );
+  const checked = new Set<string>();
+  function visit(file: string, path: string[]) {
+    assert.ok(!path.includes(file), [...path, file].join(" -> "));
+    if (checked.has(file)) return;
+    for (const imported of domain.get(file) ?? []) {
+      if (domain.has(imported)) visit(imported, [...path, file]);
+    }
+    checked.add(file);
+  }
+  for (const file of domain.keys()) visit(file, []);
 });
 
-test("storage implements the domain's store, and knows no protocol or network", () => {
-  const forbidden = [MCP, "hono", "@hono/", "ws", "src/network/", "src/bindings/"];
-  assert.deepEqual(breaches("src/storage/", forbidden), []);
-});
+for (const [layer, forbidden] of Object.entries(RULES)) {
+  test(`${layer} obeys its dependency boundary`, () => {
+    assert.deepEqual(breaches(layer, forbidden), []);
+  });
+}
 
-test("the actor library's API names no protocol or network", () => {
-  assert.deepEqual(breaches("src/actor/api.ts", [MCP, "src/bindings/", "src/network/"]), []);
+test("the domain uses no Node globals", () => {
+  assert.deepEqual(
+    FILES.filter(
+      ({ file, text }) => file.startsWith("src/domain/") && /\b(process|Buffer)\b/.test(text),
+    ).map(({ file }) => file),
+    [],
+  );
 });
 
 test("only the MCP binding imports MCP", (t) => {

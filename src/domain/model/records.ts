@@ -1,9 +1,6 @@
-/** The records the core keeps and returns: actors, their interfaces, calls and the audit trail. */
+/** Actor identities, Hub interface schemas, historical calls and audit entries. */
 
 import { z } from "zod";
-
-/** The handle under which an actor sees its manager's interfaces, as in `manager.decide`. */
-export const MANAGER = "manager";
 
 /** Size caps. The core refuses longer text, which keeps logs out of the record. */
 export const LIMITS = { id: 64, title: 200, text: 1000, summary: 2000, message: 20_000 } as const;
@@ -20,10 +17,9 @@ export const Timestamp = z.iso.datetime({ offset: true });
 export const Handle = z
   .string()
   .regex(/^[a-z0-9][a-z0-9-]{0,39}$/, "a lowercase handle such as storage or web-ui")
-  .refine((handle) => handle !== MANAGER, `${MANAGER} names an actor's manager`)
-  .describe("A short handle, unique among its siblings, that names the actor in interface names.");
+  .describe("A short handle, unique among its siblings, that names the Actor in the organization.");
 
-/** An interface's own name: no dots, since dots join handles and interface names. */
+/** The local name of a Hub Tool interface. */
 export const INTERFACE_NAME = /^[A-Za-z0-9_-]{1,64}$/;
 
 const JsonSchema = z.record(z.string(), z.unknown()).describe("A JSON Schema.");
@@ -35,14 +31,12 @@ export const Interface = z
     description: z.string().optional(),
     input: JsonSchema.describe("The JSON Schema its input must match."),
     output: JsonSchema.optional().describe(
-      "The JSON Schema its structured value must match; without it, the result is parts only.",
+      "The JSON Schema of its structured result, when declared.",
     ),
     one_way: z.boolean().describe("Its caller does not wait for its result."),
-    long_running: z
-      .boolean()
-      .describe("It may finish long after the call, so the core waits on it as a run."),
+    long_running: z.boolean().describe("The operation may take an extended time to complete."),
   })
-  .meta({ id: "Interface", description: "Something an actor exposes, which others call." });
+  .meta({ id: "Interface", description: "An interface exposed by a Hub Tool." });
 
 export const Actor = z
   .strictObject({
@@ -55,13 +49,7 @@ export const Actor = z
       ),
     purpose: Text,
     manager: Id.nullable().describe("The managing actor; null for the root."),
-    online: z.boolean().describe("True while the core can deliver calls to it."),
-    interfaces: z.array(Interface).describe("Its exposed interfaces, as it last listed them."),
-    created_at_attach: z
-      .boolean()
-      .describe(
-        "Created when a session the user started attached to it, rather than by a manager's choice.",
-      ),
+    online: z.boolean().describe("True while the Actor has an admitted Hub connection."),
     created_at: Timestamp,
     closed_at: Timestamp.nullable(),
   })
@@ -99,7 +87,7 @@ export const Call = z
     delivered_at: Timestamp.nullable().describe("When the called actor last received it."),
     settled_at: Timestamp.nullable(),
   })
-  .meta({ id: "Call", description: "One call from an actor into another." });
+  .meta({ id: "Call", description: "A historical Actor call and its recorded result." });
 
 export const AuditEntry = z
   .strictObject({
@@ -108,7 +96,7 @@ export const AuditEntry = z
     actor: Id.nullable().describe("The acting actor."),
     operation: z
       .string()
-      .describe("A built-in's name, or call for a routed call, created and settled."),
+      .describe("A Hub operation's name, or call for an interface refusal or historical call."),
     target: Id.nullable().describe("The record it acted on."),
     outcome: z
       .string()
@@ -116,5 +104,7 @@ export const AuditEntry = z
   })
   .meta({ id: "AuditEntry" });
 
-/** An actor as the core keeps it: without its path, with its credential's hash. */
-export const ActorRecord = Actor.omit({ path: true }).extend({ credential_hash: z.string() });
+/** Durable identity and lifecycle; connection state is owned separately. */
+export const ActorRecord = Actor.omit({ path: true, online: true }).extend({
+  credential_hash: z.string(),
+});

@@ -2,9 +2,6 @@
 
 export const DEFAULT_CORE_PORT = 8740;
 
-/** A newer channel of the same party replaced this one. */
-export const CLOSE_REPLACED = 4000;
-
 /** The party's credential stopped identifying it, as when its actor was closed. */
 export const CLOSE_REVOKED = 4001;
 

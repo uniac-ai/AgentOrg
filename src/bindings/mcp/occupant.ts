@@ -11,7 +11,7 @@ import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { Presented } from "../../actor/api.ts";
 import { VERSION } from "../../version.ts";
-import { offeredToolOf, resultOfAnswer } from "./encoding.ts";
+import { offeredToolsOf, resultOfAnswer } from "./encoding.ts";
 
 /** Serve `presented` on `transport`, by default this process's stdin and stdout. */
 export async function presentToOccupant(
@@ -23,12 +23,13 @@ export async function presentToOccupant(
     { capabilities: { tools: { listChanged: true } }, instructions: presented.instructions },
   );
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: (await presented.offers()).map(offeredToolOf),
+    tools: offeredToolsOf(await presented.offers()),
   }));
   server.setRequestHandler(CallToolRequestSchema, async ({ params }, extra) => {
     const progressToken = params._meta?.progressToken;
     let progress = 0;
     const answer = await presented.call(params.name, params.arguments ?? {}, {
+      ...(typeof params._meta?.threadId === "string" ? { session: params._meta.threadId } : {}),
       progress: (message) => {
         if (progressToken === undefined) return;
         progress += 1;

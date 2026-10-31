@@ -1,7 +1,7 @@
 {
   "name": "@agentorg/cli",
   "version": "0.0.1",
-  "description": "An organization of AI agents run like a company: actors are positions with managers, and calls go up and down, over MCP in both directions",
+  "description": "A Hub of explicit Tools for Actors with identities, managers and shared organization state",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -16,23 +16,26 @@
     "node": ">=22.13"
   },
   "bin": {
-    "agentorg": "dist/src/cli/bin.js"
+    "agentorg": "dist/src/clients/cli/bin.js",
+    "agentorg-server": "dist/src/server/bin.js",
+    "agentorg-mcp": "dist/src/clients/mcp/bin.js"
   },
   "exports": {
     "./actor": {
       "types": "./dist/src/actor/index.d.ts",
       "default": "./dist/src/actor/index.js"
+    },
+    "./contract": {
+      "types": "./dist/src/contract/index.d.ts",
+      "default": "./dist/src/contract/index.js"
     }
   },
   "files": [
     "dist/src",
-    "dist/page",
     "skills"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json && npm run build:page",
-    "build:page": "tsc -p web/tsconfig.json && vite build --config web/vite.config.ts",
-    "dev:page": "vite --config web/vite.config.ts",
+    "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.json",
     "prepack": "npm run build",
     "check": "biome check .",
     "test": "npm run build && node --test \"dist/test/**/*.test.js\""
@@ -43,32 +46,14 @@
     "ajv": "^8.20.0",
     "ajv-formats": "^3.0.1",
     "hono": "^4.13.14",
+    "toml-eslint-parser": "^1.0.3",
     "ws": "^8.22.0",
     "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@base-ui/react": "^1.9.0",
     "@biomejs/biome": "^2.6.3",
-    "@fontsource-variable/geist": "^5.3.0",
-    "@tailwindcss/vite": "^4.3.3",
-    "@tanstack/react-query": "^5.105.0",
-    "@tanstack/react-router": "^1.170.46",
     "@types/node": "^22.20.5",
-    "@types/react": "^19.3.0",
-    "@types/react-dom": "^19.3.0",
     "@types/ws": "^8.18.2",
-    "@vitejs/plugin-react": "^6.1.2",
-    "class-variance-authority": "^0.7.1",
-    "clsx": "^2.1.1",
-    "cmdk": "^1.1.1",
-    "lucide-react": "^1.61.0",
-    "react": "^19.3.1",
-    "react-dom": "^19.3.1",
-    "shadcn": "^4.22.1",
-    "tailwind-merge": "^3.7.0",
-    "tailwindcss": "^4.3.3",
-    "tw-animate-css": "^1.4.0",
-    "typescript": "^7.0.2",
-    "vite": "^8.3.5"
+    "typescript": "^7.0.2"
   }
 }

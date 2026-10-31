@@ -1,8 +1,4 @@
-/**
- * The tables. Each holds one record schema, with a column per field; columns declared JSON hold
- * lists and nested objects, and columns declared BOOLEAN hold 0 or 1. Times are ISO 8601 text in
- * UTC. Only the hash of an actor's credential is stored.
- */
+/** SQLite tables and their record schemas; times are ISO 8601 UTC and credentials are hashed. */
 
 import {
   ActorRecord,
@@ -14,7 +10,7 @@ import {
   Question,
 } from "../../domain/model/index.ts";
 
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 8;
 
 export const SCHEMA = `
 CREATE TABLE actors (
@@ -23,9 +19,6 @@ CREATE TABLE actors (
   purpose TEXT NOT NULL,
   manager TEXT REFERENCES actors (id),
   credential_hash TEXT NOT NULL UNIQUE,
-  online BOOLEAN NOT NULL,
-  interfaces JSON NOT NULL,
-  created_at_attach BOOLEAN NOT NULL,
   created_at TEXT NOT NULL,
   closed_at TEXT
 );
@@ -47,8 +40,6 @@ CREATE TABLE calls (
   delivered_at TEXT,
   settled_at TEXT
 );
-CREATE INDEX pending_calls ON calls ("to") WHERE state = 'pending';
-
 CREATE TABLE progress (
   actor TEXT NOT NULL REFERENCES actors (id),
   version INTEGER NOT NULL,

@@ -1,22 +1,31 @@
-/** The audit trail: one line per write and per routed call, with who acted, on what, and how. */
+/** The audit trail: writes, interface refusals and preserved historical call outcomes. */
 
+import { ACTIVITY } from "./model/index.ts";
 import type { AuditRow, Store } from "./ports.ts";
+import { bindTool } from "./tools.ts";
 
-export class Audit {
-  private readonly entries: Store["audit"];
-  private readonly now: () => string;
+export { ACTIVITY as definition } from "./model/index.ts";
 
-  constructor(store: Store, now: () => string) {
-    this.entries = store.audit;
-    this.now = now;
+export function audit(entries: Store["audit"], now: () => string) {
+  function record(
+    actor: string | null,
+    operation: string,
+    target: string | null,
+    outcome: string,
+  ): void {
+    entries.append({ at: now(), actor, operation, target, outcome });
   }
-
-  record(actor: string | null, operation: string, target: string | null, outcome: string): void {
-    this.entries.append({ at: this.now(), actor, operation, target, outcome });
-  }
-
   /** Entries after `since`, newest first. */
-  list(since: number | undefined, limit: number): AuditRow[] {
-    return this.entries.list(since, limit);
+  function list(since: number | undefined, limit: number): AuditRow[] {
+    return entries.list(since, limit);
   }
+  return {
+    record,
+    list,
+    tool: bindTool(ACTIVITY, {
+      activity: (_actor, request) => ({ entries: list(request.since, request.limit) }),
+    }),
+  };
 }
+
+export type Audit = ReturnType<typeof audit>;

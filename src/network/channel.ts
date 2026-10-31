@@ -65,20 +65,27 @@ export class Channel {
   }
 }
 
-/** Dial a channel to `url`, a `ws:` or `wss:` address, presenting `credential`, once it is open. */
-export async function dial(url: URL, credential: string, subprotocol: string): Promise<Channel> {
-  // Node's WebSocket takes headers, which the browser's does not.
-  const init = { protocols: [subprotocol], headers: { Authorization: `Bearer ${credential}` } };
-  const socket = new WebSocket(url, init as unknown as string[]);
+/** Dial a channel to a `ws:` or `wss:` address. Admission follows on the opened channel. */
+export async function dial(url: URL): Promise<Channel> {
+  const socket = new WebSocket(url);
   const channel = new Channel({
     send: (text) => socket.send(text),
     close: (code, reason) => socket.close(code, reason),
   });
   socket.onmessage = (event) => channel.receive(String(event.data));
   await new Promise<void>((resolve, reject) => {
-    socket.onopen = () => resolve();
-    socket.onclose = (event) => reject(new Error(`the core refused the channel (${event.code})`));
+    const refused = (message: string) => {
+      socket.onopen = socket.onerror = socket.onclose = socket.onmessage = null;
+      channel.close();
+      reject(new Error(message));
+    };
+    socket.onopen = () => {
+      socket.onopen = socket.onerror = null;
+      socket.onclose = (event) => channel.closed(event.code);
+      resolve();
+    };
+    socket.onerror = () => refused("the core channel failed to open");
+    socket.onclose = (event) => refused(`the core refused the channel (${event.code})`);
   });
-  socket.onclose = (event) => channel.closed(event.code);
   return channel;
 }

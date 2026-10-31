@@ -24,7 +24,12 @@ export class Database {
     this.db.exec(
       "PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = ON;",
     );
-    this.createSchema();
+    try {
+      this.createSchema();
+    } catch (error) {
+      this.db.close();
+      throw error;
+    }
     for (const table of Object.keys(TABLES)) {
       const columns = this.all(`PRAGMA table_info(${table})`) as { name: string; type: string }[];
       this.kinds[table] = Object.fromEntries(columns.map((column) => [column.name, column.type]));
@@ -36,6 +41,26 @@ export class Database {
       user_version: number;
     };
     if (version === SCHEMA_VERSION) return;
+    if (version === 7) {
+      this.transaction(() => {
+        const at = new Date().toISOString();
+        this.run(
+          `INSERT INTO audit (at, actor, operation, target, outcome)
+           SELECT ?, "to", 'call', id, 'failed' FROM calls WHERE state = 'pending'`,
+          [at],
+        );
+        this.run(
+          "UPDATE calls SET state = 'failed', error = ?, settled_at = ? WHERE state = 'pending'",
+          ["Actor interface execution was retired", at],
+        );
+        this.db.exec(
+          `DROP TABLE exposures; DROP INDEX pending_calls;
+           ALTER TABLE actors DROP COLUMN created_at_attach;
+           PRAGMA user_version = ${SCHEMA_VERSION};`,
+        );
+      });
+      return;
+    }
     if (version !== 0) {
       throw new Error(`the database has schema ${version}; this agentorg reads ${SCHEMA_VERSION}`);
     }

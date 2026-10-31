@@ -1,33 +1,13 @@
-/**
- * The core's listener: an HTTP server on 127.0.0.1 with two endpoints behind access, at the paths
- * its user names. The request endpoint hands each request, with its party, to the user. The
- * channel endpoint upgrades to a WebSocket and hands over the channel; a party has one channel
- * at a time, and a newer one replaces the older, which is closed with `CLOSE_REPLACED`.
- */
-
+/** Loopback WebSocket transport. Identity and protocol establishment belong to its caller. */
 import { once } from "node:events";
 import type { AddressInfo } from "node:net";
 import { serve, upgradeWebSocket } from "@hono/node-server";
 import { Hono } from "hono";
 import { WebSocketServer } from "ws";
-import { access, type Identities, type NetworkEnv } from "./access.ts";
 import { Channel } from "./channel.ts";
-import { CLOSE_REPLACED } from "./codes.ts";
-
-export interface Paths {
-  request: string;
-  channel: string;
-}
-
-/** What arrives on the endpoints, for the listener's user. */
-export interface Endpoints {
-  request(party: string, request: Request): Promise<Response>;
-  channel(party: string, channel: Channel): void;
-}
 
 export interface Listening {
   url: string;
-  /** End every open channel, as a lost network would. */
   drop(): void;
   close(): Promise<void>;
 }
@@ -35,44 +15,39 @@ export interface Listening {
 export async function listen(options: {
   port: number;
   hostname?: string;
-  paths: Paths;
-  identities: Identities;
-  endpoints: Endpoints;
+  path: string;
+  channel(channel: Channel): void;
 }): Promise<Listening> {
-  const { paths, endpoints } = options;
   const hostname = options.hostname ?? "127.0.0.1";
-  const channels = new Map<string, Channel>();
-  const app = new Hono<NetworkEnv>();
-  const guard = access(options.identities);
-  app.use(paths.request, guard);
-  app.use(paths.channel, guard);
+  const channels = new Set<Channel>();
+  const app = new Hono();
+  app.use(options.path, async (c, next) => {
+    if (c.req.header("origin") !== undefined) {
+      return c.json({ code: "forbidden", message: "requests from web pages are refused" }, 403);
+    }
+    await next();
+  });
   app.get(
-    paths.channel,
-    upgradeWebSocket((c) => {
-      const party = c.var.party;
+    options.path,
+    upgradeWebSocket(() => {
       let channel: Channel | undefined;
       return {
         onOpen: (_event, ws) => {
-          const opened = new Channel({
+          channel = new Channel({
             send: (text) => ws.send(text),
             close: (code, reason) => ws.close(code, reason),
           });
-          channel = opened;
-          const previous = channels.get(party);
-          channels.set(party, opened);
-          previous?.close(CLOSE_REPLACED, "replaced by a newer connection");
-          endpoints.channel(party, opened);
+          channels.add(channel);
+          options.channel(channel);
         },
         onMessage: (event) => channel?.receive(String(event.data)),
         onClose: (event) => {
-          if (channel && channels.get(party) === channel) channels.delete(party);
+          if (channel) channels.delete(channel);
           channel?.closed(event.code);
         },
       };
     }),
   );
-  app.all(paths.request, (c) => endpoints.request(c.var.party, c.req.raw));
-
   const websockets = new WebSocketServer({ noServer: true });
   const server = serve({
     fetch: app.fetch,
@@ -86,7 +61,7 @@ export async function listen(options: {
   ]);
   const { port } = server.address() as AddressInfo;
   const drop = () => {
-    for (const channel of channels.values()) channel.close();
+    for (const channel of channels) channel.close();
   };
   return {
     url: `http://${hostname}:${port}`,
