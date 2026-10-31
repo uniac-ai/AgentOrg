@@ -11,6 +11,7 @@ export * from "./builtins.ts";
 export * from "./claims.ts";
 export * from "./json-schema.ts";
 export * from "./records.ts";
+export * from "./system.ts";
 export * from "./team.ts";
 export * from "./workspace.ts";
 

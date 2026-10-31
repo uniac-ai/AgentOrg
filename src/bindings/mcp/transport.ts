@@ -3,15 +3,23 @@ import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { JSONRPCMessageSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { Channel } from "../../network/index.ts";
 
-export function mcpTransport(channel: Channel): Transport {
+export function mcpTransport(channel: Channel, invalidProtocol?: () => void): Transport {
   const transport: Transport = {
     async start() {
       channel.listen(
         (text) => {
+          let parsed: ReturnType<typeof JSONRPCMessageSchema.parse>;
           try {
-            transport.onmessage?.(JSONRPCMessageSchema.parse(JSON.parse(text)));
+            parsed = JSONRPCMessageSchema.parse(JSON.parse(text));
           } catch {
+            invalidProtocol?.();
             transport.onerror?.(new Error("Invalid MCP JSON-RPC message"));
+            return;
+          }
+          try {
+            transport.onmessage?.(parsed);
+          } catch {
+            transport.onerror?.(new Error("MCP dispatch failed"));
           }
         },
         () => transport.onclose?.(),

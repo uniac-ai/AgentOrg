@@ -12,7 +12,7 @@ import { done, HUB_INTERFACES, refused } from "./harness.ts";
 
 const invocation = { signal: new AbortController().signal, progress: async () => {} };
 
-test("all open Actors see exactly the nine Hub Tools and twenty-three interfaces", async (t) => {
+test("all open Actors see exactly ten Hub Tools and twenty-seven interfaces", async (t) => {
   const store = new SqliteStore(":memory:");
   t.after(() => store.close());
   const org = organization(store);
@@ -37,12 +37,12 @@ test("all open Actors see exactly the nine Hub Tools and twenty-three interfaces
       Object.entries(HUB_INTERFACES).map(([name, names]) => [name, [...names].sort()]),
     ),
   );
-  assert.equal(catalog.length, 9);
-  assert.equal(catalog.flatMap((tool) => tool.interfaces).length, 23);
+  assert.equal(catalog.length, 10);
+  assert.equal(catalog.flatMap((tool) => tool.interfaces).length, 27);
   assert.deepEqual(org.available(lead.id), catalog);
   assert.deepEqual(org.available(worker.id), catalog);
-  const connection = { close() {} };
-  org.online(worker.id, connection);
+  const connectionId = crypto.randomUUID();
+  org.connections.admit(connectionId, { actorId: worker.id }, { detach() {}, revoke() {} });
   assert.deepEqual(org.available(worker.id), catalog);
   for (const id of [root.id, lead.id, worker.id]) {
     for (const alias of [
@@ -55,7 +55,7 @@ test("all open Actors see exactly the nine Hub Tools and twenty-three interfaces
     }
   }
   assert.equal(store.database.count("calls", "1"), 0);
-  org.offline(worker.id, connection);
+  org.connections.remove(connectionId);
   assert.deepEqual(org.available(worker.id), catalog);
 });
 

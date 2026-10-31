@@ -17,12 +17,9 @@ export type CallRow = z.output<typeof Call>;
 export type AuditRow = z.output<typeof AuditEntry>;
 export type ClaimRow = z.output<typeof Claim>;
 
-/** Revocation of one admitted Actor connection. */
-export interface ActorConnection {
-  close(): void;
-}
-
 export interface Invocation {
+  /** Trusted immutable admission binding; never supplied by Tool input. */
+  connectionId?: string;
   /** Tell the caller the call is still running. */
   progress(message: string): Promise<void>;
   /** Aborted when the caller goes away. */
@@ -31,7 +28,7 @@ export interface Invocation {
 
 /** What an actor may do: its Tools and their interfaces, and calling one by its alias. */
 export interface Application {
-  available(actor: string): ToolDescriptor[];
+  available(actor: string, connectionId?: string): ToolDescriptor[];
   invoke(
     actor: string,
     name: string,

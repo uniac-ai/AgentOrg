@@ -7,6 +7,13 @@ import {
   Form,
   Position,
   Team,
+  SystemStatus,
+  SystemConnection,
+  SystemProvider,
+  ConnectionPage,
+  ProviderPage,
+  ConnectionDisconnected,
+  Diagnostic,
   type Answer,
   type ToolDescriptor,
 } from "@agentorg/cli/contract";
@@ -89,3 +96,20 @@ const invalidWorkFilter: z.input<typeof BUILTINS.work_list.request> = { ownerWit
 // @ts-expect-error Subtree anchors are Actor IDs, not booleans.
 const invalidFormFilter: z.input<typeof BUILTINS.form_list.request> = { awaitingWithin: true };
 void [typedWorkFilter, typedFormFilter, invalidWorkFilter, invalidFormFilter];
+
+const hub: z.output<typeof SystemStatus> = BUILTINS.system_status.response.parse({});
+const instance: string = hub.instanceId;
+const observations: z.output<typeof Diagnostic>[] = hub.diagnostics.items;
+const connectionPage: z.output<typeof ConnectionPage> = BUILTINS.connection_list.response.parse({});
+const connection: z.output<typeof SystemConnection> | undefined = connectionPage.items[0];
+const providerPage: z.output<typeof ProviderPage> = BUILTINS.provider_list.response.parse({});
+const provider: z.output<typeof SystemProvider> | undefined = providerPage.items[0];
+const detached: z.output<typeof ConnectionDisconnected> = BUILTINS.connection_disconnect.response.parse({});
+const closed: true = detached.closed;
+const connectionQuery: z.input<typeof BUILTINS.connection_list.request> = { actorId: "actor", instanceId: instance, limit: 1 };
+const providerQuery: z.input<typeof BUILTINS.provider_list.request> = { connected: false };
+// @ts-expect-error Provider connected is an explicit boolean.
+const invalidProviderQuery: z.input<typeof BUILTINS.provider_list.request> = { connected: "false" };
+// @ts-expect-error Detach binds both the exact answering run and connection.
+const invalidDetach: z.input<typeof BUILTINS.connection_disconnect.request> = { connectionId: "connection" };
+void [observations, connection, provider, closed, connectionQuery, providerQuery, invalidProviderQuery, invalidDetach];

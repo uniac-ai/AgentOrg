@@ -10,9 +10,19 @@ export function serveConnection(
   domain: Application,
   actorId: string,
   channel: Channel,
-  options: { onError?: (party: string, error: Error) => void },
+  options: {
+    connectionId?: string;
+    observe?: (code: "mcp_initialization_failed" | "protocol_invalid") => void;
+    onError?: (party: string, error: Error) => void;
+  },
 ): void {
-  void serveActor(domain, actorId, mcpTransport(channel)).catch(() => {
+  void serveActor(
+    domain,
+    actorId,
+    mcpTransport(channel, () => options.observe?.("protocol_invalid")),
+    options.connectionId,
+  ).catch(() => {
+    options.observe?.("mcp_initialization_failed");
     options.onError?.(actorId, new Error("Hub MCP initialization failed"));
     channel.close();
   });

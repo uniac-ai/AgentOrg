@@ -76,6 +76,19 @@ binding and the organization's approval rules. Preserve the provenance of quoted
 
 ## Deliver and finish
 
+Use `system_status`, `connection_list` and `provider_list` for the answering Hub run, admitted
+sockets, selected Provider routes and bounded fixed-code observations. Preserve Hub `observedAt`
+and `instanceId`; retain separate page positions per run/caller/filter and refresh from zero for
+current membership. Failed reads leave retained values stale. Presence and local busy counts do
+not prove native health or remote idleness. Private Message operations produce no diagnostic events.
+
+`connection_disconnect` detaches one exact idle Hub socket with transient close 1000. Use only
+when the task authorizes that transport action and the current server-derived `canDisconnect`
+allows it. An Actor controls its own other sockets and direct reports; canonical root also controls
+other Actor and Provider sockets. The carrying socket and observed local work are refused. Clients
+may reconnect under new IDs; do not chase them. Actor closure remains separate revocation. An
+unknown close/audit outcome requires inspection of that exact run and ID before any further action.
+
 Clients may deliver Message/Form changes as session input. Read the client reference for how that
 happens. Treat repeated IDs/revisions as the same records. Messages have no public read or handled
 state. When a write returns an unexpected transport error, its outcome may be unknown: inspect

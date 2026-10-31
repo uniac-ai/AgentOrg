@@ -8,6 +8,7 @@ import { z } from "zod";
 import { CLAIMS } from "./claims.ts";
 import { toolDefinition } from "./json-schema.ts";
 import { Actor, AuditEntry, Call, Handle, Id, Text } from "./records.ts";
+import { SYSTEM } from "./system.ts";
 import { TEAM } from "./team.ts";
 import { DIRECTORY, FORMS, MESSAGES, WORK } from "./workspace.ts";
 
@@ -125,6 +126,7 @@ export const BUILTINS = {
   ...FORMS.interfaces,
   ...CALLS.interfaces,
   ...ACTIVITY.interfaces,
+  ...SYSTEM.interfaces,
 } as const;
 
 export type BuiltinName = keyof typeof BUILTINS;

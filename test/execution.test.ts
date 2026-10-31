@@ -18,7 +18,11 @@ const request = (): ExecutionRequest => ({
 const provider = (
   createActor: ExecutionProvider["createActor"],
   schema: Record<string, unknown> = { type: "object" },
-): ExecutionProvider => ({ describe: async () => ({ configSchema: schema }), createActor });
+): ExecutionProvider => ({
+  holdCreation: () => () => {},
+  describe: async () => ({ configSchema: schema }),
+  createActor,
+});
 
 test("Provider success becomes ready without an Actor connection or another creation call", async () => {
   let arrived!: () => void;
@@ -111,12 +115,14 @@ test("unavailable Providers, descriptor errors and invalid configuration fail be
       throw new Error("sentinel-private-bootstrap");
     }),
     execution(() => ({
+      holdCreation: () => () => {},
       describe: async () => {
         throw new Error("sentinel-private-bootstrap");
       },
       createActor,
     })),
     execution(() => ({
+      holdCreation: () => () => {},
       describe: async () => ({ configSchema: null as unknown as Record<string, unknown> }),
       createActor,
     })),

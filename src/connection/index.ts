@@ -12,6 +12,7 @@ export type Identity = z.output<typeof IdentitySchema>;
 export type Principal = { actorId: string } | { providerId: string };
 export interface Admission {
   admit(identity: Identity): Promise<boolean>;
+  observe?(code: "admission_refused" | "admission_failed"): void;
 }
 export interface Connection {
   connectionId: string;
@@ -51,11 +52,13 @@ export function accept(
       try {
         message = JSON.parse(text);
       } catch {
-        reply(channel, null, -32700, "parse_error");
+        if (admitted) application.receive(text);
+        else reply(channel, null, -32700, "parse_error");
         return;
       }
       if (!message || typeof message !== "object" || Array.isArray(message)) {
-        reply(channel, null, -32600, "invalid_request");
+        if (admitted) application.receive(text);
+        else reply(channel, null, -32600, "invalid_request");
         return;
       }
       if (admitted && message.method !== "connection.connect") {
@@ -87,6 +90,7 @@ export function accept(
         .then((allowed) => {
           if (ended) return;
           if (!allowed) {
+            admission.observe?.("admission_refused");
             reply(channel, id, -32000, "unauthorized");
             channel.close(CLOSE_REVOKED, "admission refused");
             return;
@@ -103,6 +107,7 @@ export function accept(
         })
         .catch(() => {
           if (!ended) {
+            admission.observe?.("admission_failed");
             reply(channel, id, -32603, "admission_failed");
             channel.close();
           }

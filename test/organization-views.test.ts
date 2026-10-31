@@ -68,8 +68,8 @@ test("any active Actor reads deep and closed subtree Work/Form histories through
   const form = await done(leaf.client.call("form_create", { respondentIDs: [leaf.id], fields }));
   for (const client of [root, observer.client]) {
     const catalog = await client.available();
-    assert.equal(catalog.length, 9);
-    assert.equal(catalog.flatMap((tool) => tool.interfaces).length, 23);
+    assert.equal(catalog.length, 10);
+    assert.equal(catalog.flatMap((tool) => tool.interfaces).length, 27);
     const interfaces = catalog.flatMap((tool) => tool.interfaces);
     for (const [name, filters] of [
       ["work_list", ["ownerWithin", "requesterWithin"]],
