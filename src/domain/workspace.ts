@@ -27,6 +27,10 @@ export function workspace(registry: Registry, store: WorkspaceStore) {
       const page = registry.directory(query.after, query.limit);
       return { ...page, items: page.items.map(profile) };
     },
+    within(callerID, actorID, ancestorID) {
+      if (registry.get(callerID)?.closed_at !== null) throw new Forbidden("the Actor is closed");
+      return registry.within(actorID, ancestorID);
+    },
   };
   function run<T>(actor: ActorRow, operation: (clients: ReturnType<typeof bindWorkspace>) => T): T {
     try {

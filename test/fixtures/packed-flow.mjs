@@ -84,6 +84,16 @@ try {
   assert.equal(catalog.length, 9);
   assert.equal(catalog.flatMap((tool) => tool.interfaces).length, 23);
   assert.deepEqual(await owner.available(), catalog);
+  for (const [name, filters] of [
+    ["work_list", ["ownerWithin", "requesterWithin"]],
+    ["form_list", ["requesterWithin", "respondentWithin", "awaitingWithin"]],
+  ]) {
+    const offer = catalog
+      .flatMap((tool) => tool.interfaces)
+      .find((item) => item.interface.name === name);
+    assert.ok(offer);
+    for (const filter of filters) assert.ok(offer.interface.input.properties[filter]);
+  }
   assert.equal((await done(owner.call("actor_get"))).actorID, ownerID);
   assert.equal((await done(root.call("actor_list"))).items.length, 3);
   const sent = Message.parse(
@@ -109,6 +119,22 @@ try {
   assert.deepEqual((await done(root.call("form_list", { awaitingActorID: ownerID }))).items, [
     form,
   ]);
+  assert.deepEqual(
+    (
+      await done(
+        root.call("form_list", {
+          requesterWithin: requesterID,
+          respondentWithin: ownerID,
+          awaitingWithin: ownerID,
+          requesterID,
+          respondentID: ownerID,
+          status: "open",
+          limit: 1,
+        }),
+      )
+    ).items,
+    [form],
+  );
   await deny(
     root.call("form_respond", {
       formID: form.formID,
@@ -132,6 +158,10 @@ try {
     after: 0,
   });
   assert.deepEqual(form.responses[ownerID], {});
+  assert.deepEqual(await done(root.call("form_list", { awaitingWithin: ownerID })), {
+    items: [],
+    after: 0,
+  });
   form = Form.parse(
     await done(
       requester.call("form_close", {
@@ -150,6 +180,30 @@ try {
     (await done(root.call("work_list", { ownerID, requesterID, status: "open" }))).items,
     [work],
   );
+  assert.deepEqual(
+    (
+      await done(
+        root.call("work_list", {
+          ownerWithin: ownerID,
+          requesterWithin: requesterID,
+          ownerID,
+          requesterID,
+          status: "open",
+        }),
+      )
+    ).items,
+    [work],
+  );
+  for (const name of ["ownerWithin", "requesterWithin"])
+    assert.deepEqual(await done(root.call("work_list", { [name]: "unknown" })), {
+      items: [],
+      after: 0,
+    });
+  for (const name of ["requesterWithin", "respondentWithin", "awaitingWithin"])
+    assert.deepEqual(await done(root.call("form_list", { [name]: "unknown" })), {
+      items: [],
+      after: 0,
+    });
   await deny(
     root.call("work_update", {
       ticketID: work.ticketID,
@@ -229,6 +283,19 @@ try {
   await done(root.call("actor_close", { actor: ownerID }));
   assert.equal((await done(requester.call("actor_get", { actorID: ownerID }))).state, "closed");
   assert.equal((await done(root.call("actor_list"))).items.length, 2);
+  assert.deepEqual(
+    (await done(root.call("work_list", { ownerWithin: ownerID, requesterWithin: requesterID })))
+      .items,
+    [work],
+  );
+  assert.deepEqual(
+    (
+      await done(
+        root.call("form_list", { respondentWithin: ownerID, requesterWithin: requesterID }),
+      )
+    ).items,
+    [form],
+  );
   const pin = JSON.parse(
     readFileSync(join(rootDirectory, "node_modules/@agentorg/cli/vendor/workspace.json"), "utf8"),
   );
@@ -257,6 +324,9 @@ try {
     workspaceBundled: true,
     publicWorkFormHistory: true,
     directedFilters: true,
+    subtreeFilters: true,
+    closedSubtreeHistory: true,
+    discoverySubtreeSchemas: true,
     emptyResponseAnswered: true,
     restartPersistence: true,
     allWorkspaceOperations: true,

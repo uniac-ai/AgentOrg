@@ -169,12 +169,21 @@ Workspace modules enforce record roles, equally for human, agent and program cli
 | Work | Every active admitted Actor reads the complete record and retained history. Requester sets scope/owner and reviews the exact submission; current owner updates execution progress and submits. Mutations require `expectedRevision`. |
 | Form | Every active admitted Actor reads the complete record and retained history, whether standalone or linked. Designated respondents answer while open; only the requester resolves or cancels. Optional Work linkage validates a real shared Work when creating the Form. |
 
-`work_list` accepts `ownerID`, `requesterID` and `status`. `form_list` accepts `workID`,
-`requesterID`, `respondentID`, `status` and `awaitingActorID`. Every supplied predicate ANDs before
+`work_list` accepts `ownerID`, `requesterID`, `status`, `ownerWithin` and `requesterWithin`.
+`form_list` accepts `workID`, `requesterID`, `respondentID`, `status`, `awaitingActorID`,
+`requesterWithin`, `respondentWithin` and `awaitingWithin`. Every supplied predicate ANDs before
 pagination. IDs are filter data; querying another Actor's criteria keeps the caller's identity and
 write authority unchanged. Unknown IDs match no records. `awaitingActorID` requires an open Form,
 designated membership and no own entry in `responses`; even an empty recorded answer object counts
 as answered. `respondentID` and `awaitingActorID` can name different designated respondents.
+
+Each `Within` filter selects the named canonical Actor and all descendants through retained
+`manager` edges, including closed members and anchors without Team's depth limit. Unknown IDs
+match nothing. Hub supplies synchronous `ActorAuthority.within` under the admitted active caller;
+Workspace applies it to the current owner, immutable requester, or designated respondents before
+the page limit. `awaitingWithin` requires an open Form with at least one designated member lacking
+their own response entry. Separate respondent/awaiting predicates may select different people.
+Requester scope expresses where a record originated. These shared views add no write role.
 
 Each package module has its own cursor. Lists traverse current upserts in ascending cursor order,
 applying Message visibility or Work/Form predicates before the page limit. Keep returned `after`
