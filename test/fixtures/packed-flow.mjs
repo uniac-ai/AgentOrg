@@ -157,6 +157,7 @@ try {
   assert.equal(otherOwner.ended, undefined);
   await otherOwner.close();
   for (const [name, filters] of [
+    ["message_list", ["counterpartyID", "before"]],
     ["work_list", ["ownerWithin", "requesterWithin"]],
     ["form_list", ["requesterWithin", "respondentWithin", "awaitingWithin"]],
   ]) {
@@ -360,9 +361,74 @@ try {
     items: [],
     after: page.after,
   });
+  // Exercise selected conversations after the unchanged old forward/restart assertions.
+  for (let i = 0; i < 103; i++)
+    await done(owner.call("message_send", { recipientID: ownerID, text: `owned noise ${i}` }));
+  const incomingQuery = Message.parse(
+    await done(requester.call("message_send", { recipientID: ownerID, text: "selected inbound" })),
+  );
+  const outgoingQuery = Message.parse(
+    await done(owner.call("message_send", { recipientID: requesterID, text: "selected outbound" })),
+  );
+  const recentQuery = await done(
+    owner.call("message_list", { counterpartyID: requesterID, before: "latest", limit: 2 }),
+  );
+  assert.deepEqual(recentQuery, {
+    items: [incomingQuery, outgoingQuery],
+    after: outgoingQuery.cursor,
+  });
+  assert.deepEqual(
+    await done(
+      owner.call("message_list", { counterpartyID: requesterID, before: incomingQuery.cursor }),
+    ),
+    { items: [sent], after: sent.cursor },
+  );
+  assert.deepEqual(
+    (
+      await done(
+        owner.call("message_list", {
+          counterpartyID: requesterID,
+          direction: "incoming",
+          before: Number.MAX_SAFE_INTEGER,
+        }),
+      )
+    ).items,
+    [incomingQuery],
+  );
+  await deny(
+    owner.call("message_list", { counterpartyID: requesterID, before: "latest", after: 1 }),
+    "invalid",
+  );
+  await deny(owner.call("message_list", { before: "latest" }), "invalid");
+  assert.deepEqual(
+    await done(root.call("message_list", { counterpartyID: ownerID, before: "latest" })),
+    { items: [], after: 0 },
+  );
+  const unseenQuery = Message.parse(
+    await done(requester.call("message_send", { recipientID: ownerID, text: "unseen inbound" })),
+  );
+  const ownQuery = Message.parse(
+    await done(owner.call("message_send", { recipientID: requesterID, text: "own send gap" })),
+  );
+  assert.deepEqual(
+    (
+      await done(
+        owner.call("message_list", { counterpartyID: requesterID, after: recentQuery.after }),
+      )
+    ).items,
+    [unseenQuery, ownQuery],
+  );
   await owner.close();
   await done(root.call("actor_close", { actor: ownerID }));
   assert.equal((await done(requester.call("actor_get", { actorID: ownerID }))).state, "closed");
+  assert.deepEqual(
+    (
+      await done(
+        requester.call("message_list", { counterpartyID: ownerID, before: "latest", limit: 2 }),
+      )
+    ).items,
+    [unseenQuery, ownQuery],
+  );
   assert.equal((await done(root.call("actor_list"))).items.length, 2);
   assert.deepEqual(
     (await done(root.call("work_list", { ownerWithin: ownerID, requesterWithin: requesterID })))
@@ -417,6 +483,11 @@ try {
     allWorkspaceOperations: true,
     standaloneForms: true,
     p2pPrivacy: true,
+    selectedMessageQueries: true,
+    discoveryMessageQuerySchemas: true,
+    privateRecentAndExclusiveOlder: true,
+    closedPeerConversation: true,
+    ownSendKeepsUnseenInbound: true,
     revisionConflict: true,
     ownedResourcesCleaned: true,
   };

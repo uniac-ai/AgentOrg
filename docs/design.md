@@ -209,6 +209,20 @@ Workspace modules enforce record roles, equally for human, agent and program cli
 | Work | Every active admitted Actor reads the complete record and retained history. Requester sets scope/owner and reviews the exact submission; current owner updates execution progress and submits. Mutations require `expectedRevision`. |
 | Form | Every active admitted Actor reads the complete record and retained history, whether standalone or linked. Designated respondents answer while open; only the requester resolves or cancels. Optional Work linkage validates a real shared Work when creating the Form. |
 
+`message_list` optionally selects `counterpartyID`, intersected with the admitted caller's private
+pair and `direction` before the limit. A self pair appears once; retained closed-peer history is
+readable without a profile lookup. `before:"latest"` selects the newest qualified window and a
+positive safe numeric `before` selects rows strictly older than that cursor, capped by one internal
+head observation. Both modes require a counterparty and normalized `after:0`. They return the
+unchanged ascending `{items,after}` Page, with `after` equal to its highest returned cursor or zero
+when empty. Default and counterparty-only forward traversal keep their original meaning.
+
+For older navigation, prepend/deduplicate by Message ID using the first returned cursor as the next
+exclusive `before`. Keep the initial recent page's highest cursor as a separate forward `after`,
+advancing it only from successful forward polls. An own send must not skip unseen inbound rows.
+Positions belong to the caller/peer/direction; failed reads advance neither positions nor observation
+time. No head/count/token, receipt state or cross-request snapshot is exposed.
+
 `work_list` accepts `ownerID`, `requesterID`, `status`, `ownerWithin` and `requesterWithin`.
 `form_list` accepts `workID`, `requesterID`, `respondentID`, `status`, `awaitingActorID`,
 `requesterWithin`, `respondentWithin` and `awaitingWithin`. Every supplied predicate ANDs before
