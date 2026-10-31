@@ -8,8 +8,9 @@ license: MIT
 
 An Actor is a durable position with a responsibility and a manager. A session, a human application
 or a program acts through an Actor's credential. They have the same record authority. The root is
-the position without a manager; its lifecycle authority does not grant access to private Workspace
-records. Messages, Work, Forms and the organization survive client restarts.
+the position without a manager; its lifecycle authority does not grant access to other Actors'
+private Messages. Work and Forms are shared by every active admitted Actor, including their
+retained history. These records and the organization survive client restarts.
 
 Use this skill when the session has `attach`, `interfaces` and `call`. If the user requests setup,
 follow [AgentOrg setup](https://github.com/uniac-ai/AgentOrg/blob/main/docs/setup.md) for their named
@@ -36,19 +37,27 @@ and the scope you own. Follow the user's and organization's instructions for del
 | Purpose | Operations | Record rules |
 |---|---|---|
 | Brief, steer, inform or hand off | `message_send`, `message_get`, `message_list` | Private to sender and recipient. Send with `recipientID` and `text`; a reply is a new Message. |
-| Assign and track a result | `work_create`, `work_get`, `work_list`, `work_update` | Requester owns scope and assignment; current owner owns execution progress. |
+| Assign and track a result | `work_create`, `work_get`, `work_list`, `work_update` | Shared read/history; requester owns scope/assignment and current owner owns execution progress. |
 | Submit and review a result | `work_submit`, `work_review` | Owner submits result/evidence; requester reviews the exact `submissionID`. Acceptance or requested changes are durable reviews. |
-| Ask structured questions | `form_create`, `form_get`, `form_list`, `form_respond`, `form_close` | Requester selects respondents and fields; respondents answer while open; requester resolves or cancels. Work linkage is optional. |
+| Ask structured questions | `form_create`, `form_get`, `form_list`, `form_respond`, `form_close` | Shared read/history; requester selects respondents and fields; designated respondents answer while open and requester resolves/cancels. Work linkage is optional. |
 | Coordinate a shared resource | `claim`, then `release` | A current holder prevents another claim. Expiry or holder closure permits replacement. |
 
 Work and Form mutations require the displayed `expectedRevision`. On conflict, read the latest
 record and reassess the change. Each list has its own `after` position. Retain separate positions
 for Messages, Work and Forms, and upsert records by ID/revision. Traversal positions describe data
-changes; they do not show that a person or model read or handled anything. Visibility can change
-with current Work ownership; refresh records when authority changes.
+changes; they do not show that a person or model read or handled anything. Work ownership changes
+write roles and filter membership; shared read access remains.
+
+For directed attention, use `work_list {ownerID: self}` for assigned work and
+`work_list {requesterID: self, status: "submitted"}` for reviews. Use `form_list {awaitingActorID: self}`
+for open Forms without your first response, `form_list {respondentID: self, status: "open"}` to find
+responses you can revise, and `form_list {requesterID: self}` for Forms you requested. An empty
+recorded response counts as answered. All supplied filters AND before pagination. You may browse
+shared records with unfiltered lists or other Actors' criteria; that never grants their write role.
+Restart traversal at zero when changing filters.
 
 Use standalone Forms when a question needs no Work ticket. A linked Form requires an actual readable
-Work. The Form requester, designated respondents and current linked Work parties can read it.
+Work. Any active Actor can create that association, and all active Actors can read its full history.
 Avoid duplicating an open question across records. For escalation, ask the appropriate Actor in a
 new Form with the context and recommendation they need, then reconcile the original question.
 

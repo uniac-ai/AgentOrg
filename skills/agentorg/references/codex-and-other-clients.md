@@ -11,7 +11,8 @@ through `/hooks`. `/mcp` lists the three adapter tools.
   installed client when setting up its hooks.
 - **Calls.** Read `interfaces` and invoke logical Hub operations through `call {name, input}`.
 - **Inbox.** Codex's generic hooks supply context and do not wake idle turns. When running, traverse
-  incoming `message_list`, visible `work_list` and `form_list`, retaining separate module positions.
+  incoming `message_list`, assigned/requested `work_list`, and `form_list` with your requester,
+  respondent or awaiting criteria, retaining separate module positions for each stable query.
   Use record IDs/revisions to recognize updates. No public read acknowledgement is needed or available.
 - **Approvals.** Form responses are ordinary Actor records. Native request authorization requires
   a client-owned validated binding, independently of the generic adapter.

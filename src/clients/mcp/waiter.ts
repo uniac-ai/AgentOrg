@@ -69,23 +69,32 @@ export async function waitForNews(options: WaitOptions): Promise<boolean> {
       if (!self) throw new Error("the Hub named no position");
       while (current()) {
         const position = sessions.inbox(options.session);
-        const [messages, forms] = await Promise.all([
+        const [messages, requested, designated] = await Promise.all([
           pages<Message>(client, "message_list", position.messages, { direction: "incoming" }),
-          pages<Form>(client, "form_list", position.forms),
+          pages<Form>(client, "form_list", position.forms, { requesterID: actorID }),
+          pages<Form>(client, "form_list", position.forms, { respondentID: actorID }),
         ]);
+        const byID = new Map<string, Form>();
+        for (const item of [...requested.items, ...designated.items]) {
+          if (item.cursor > (byID.get(item.formID)?.cursor ?? 0)) byID.set(item.formID, item);
+        }
+        const forms = [...byID.values()].sort((left, right) => left.cursor - right.cursor);
         const names: Record<string, string> = {};
         for (const id of new Set([
           ...messages.items.map((item) => item.senderID),
-          ...forms.items.map((item) => item.requesterID),
+          ...forms.map((item) => item.requesterID),
         ])) {
           const profile = await call<{ name: string }>(client, "actor_get", { actorID: id });
           names[id] = profile.name;
         }
         const news: News = {
           messages: messages.items,
-          forms: forms.items,
+          forms,
           names,
-          position: { messages: messages.after, forms: forms.after },
+          position: {
+            messages: messages.after,
+            forms: Math.max(requested.after, designated.after),
+          },
         };
         if (!current()) return false;
         if (news.messages.length || news.forms.length) {

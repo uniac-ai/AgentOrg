@@ -166,14 +166,23 @@ Workspace modules enforce record roles, equally for human, agent and program cli
 | Record | Authority |
 |---|---|
 | Message | Immutable P2P correspondence, readable only by sender and recipient. `message_send` takes `recipientID`, `text` and optional readable `workID`; replies are new Messages. |
-| Work | Requester sets scope/owner and reviews the exact submission; current owner updates execution progress and submits. Mutations require `expectedRevision`. |
-| Form | Requester and designated respondents can read; current linked Work parties also read. Respondents answer while open; the requester resolves or cancels. Work linkage is optional and validates a real readable Work. |
+| Work | Every active admitted Actor reads the complete record and retained history. Requester sets scope/owner and reviews the exact submission; current owner updates execution progress and submits. Mutations require `expectedRevision`. |
+| Form | Every active admitted Actor reads the complete record and retained history, whether standalone or linked. Designated respondents answer while open; only the requester resolves or cancels. Optional Work linkage validates a real shared Work when creating the Form. |
 
-Each package module has its own cursor. Lists traverse currently visible upserts, applying
-visibility before the page limit; callers retain each returned `after` separately. These cursors
-are traversal positions, not delivery acknowledgements. Consumers should upsert records by ID,
-use revisions when mutating, and refresh authority after ownership changes. Lists are not a
-revocation feed. Public Message state, history and operations expose no read/handled status.
+`work_list` accepts `ownerID`, `requesterID` and `status`. `form_list` accepts `workID`,
+`requesterID`, `respondentID`, `status` and `awaitingActorID`. Every supplied predicate ANDs before
+pagination. IDs are filter data; querying another Actor's criteria keeps the caller's identity and
+write authority unchanged. Unknown IDs match no records. `awaitingActorID` requires an open Form,
+designated membership and no own entry in `responses`; even an empty recorded answer object counts
+as answered. `respondentID` and `awaitingActorID` can name different designated respondents.
+
+Each package module has its own cursor. Lists traverse current upserts in ascending cursor order,
+applying Message visibility or Work/Form predicates before the page limit. Keep returned `after`
+positions separately, and restart at zero when changing filters. Updates can repeat an ID or remove
+it from a filter without a tombstone; traversal is not a complete cache synchronization or immutable
+snapshot. Ownership changes affect Work write roles and filter membership, while shared reads stay
+available. Message cursors are traversal positions, not acknowledgements. Public Message state,
+history and operations expose no read/handled status.
 Form responses are ordinary authenticated Actor records. A native approval requires a client-owned
 validated binding to its native request and authorization; an arbitrary Form response is insufficient.
 
@@ -236,7 +245,7 @@ The MCP adapter, `agentorg-mcp` in `src/clients/mcp/`, is an optional client for
 - **Session identity and resuming.** `sessions/<client>-<session id>/position` names the position a conversation fills. Claude Code names the session in `CLAUDE_CODE_SESSION_ID`. Codex identifies it in each tool call's `_meta.threadId`, carried through the presentation boundary as optional occupant-session context. Initialization and listing need no identity; a Codex call requires one, and the adapter refuses a different identity after binding. The first call recovers only that conversation's saved position. `attach {actor}` acknowledges the same actor; a session cannot change actors. A fork with a new thread id attaches independently.
 - **Project hooks.** `connect codex` writes AgentOrg's `SessionStart` context commands to `.codex/hooks.json`, preserving other entries. Launcher command and arguments are edited by their parsed TOML value ranges, preserving surrounding policy and comments. The commands take identity from stdin's `session_id`, not inherited environment variables. Project configuration requires trust, hooks must be enabled with `features.hooks`, and the definitions require review and trust through `/hooks`. Startup, resume and fork identity behavior is verified against the Codex build in use; thread and session-tree identities are not derived from each other.
 - **Delivery and waking.** Claude Code's hooks run the waiter, `agentorg-mcp wait`, when the session starts and whenever its turn ends, as `asyncRewake` hooks. Codex's hooks supply context; its sessions read their inbox when they run, since its background hooks do not wake idle turns.
-  - The waiter polls incoming `message_list` and visible `form_list` pages as the ordinary attached Actor, with separate private positions in `sessions/<session>/inbox`.
+  - The waiter polls incoming `message_list` and `form_list` pages filtered by `requesterID=self` or `respondentID=self`, merging duplicate Form IDs as the ordinary attached Actor, with separate private positions in `sessions/<session>/inbox`.
   - It writes the records with their canonical sender/requester names and IDs, then advances its local positions and exits with status 2. Claude Code hands that output to its session as input. No public receipt is written. A write followed by a crash before saving local positions can redeliver the same records.
   - A newer waiter replaces an older one. Generic delivery is at least once; native approval handling belongs to the client.
   - Existing sessions require deliberate cursor baselining at cutover. Legacy shared cursors cannot be reused as package cursors. The private historical import manifest supports that later client coordination; the Hub does not activate or seed clients.

@@ -95,6 +95,13 @@ Actor creation request. Record exports such as `Actor`, `Position`, `DirectoryAc
 `z.output<typeof Position>` derives a record's TypeScript type. Import the Actor connection API
 from `./actor` and these wire contracts from `./contract`.
 
+Work and Forms are shared records with full retained history for every active admitted Actor;
+Messages remain private to their sender and recipient. Use `work_list` with `ownerID`,
+`requesterID` and `status`, and `form_list` with `workID`, `requesterID`, `respondentID`, `status`
+and `awaitingActorID` for directed queries. All supplied filters AND before pagination. A query
+for another Actor's criteria keeps your authenticated identity and write authority. An empty
+recorded Form response counts as answered for `awaitingActorID`.
+
 The Actor library requires `actorId` for `connectClient`. Custom clients must
 send `connection.connect` before MCP initialization on `/connection`. Environment-based CLI
 setup must supply both `AGENTORG_ACTOR_ID` and `AGENTORG_CREDENTIAL`.

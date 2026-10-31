@@ -642,6 +642,21 @@ test("the waiter delivers Messages and Form changes using private per-module pos
     original,
     "delivery never mutates public messages",
   );
+  const elsewhere = done<{ actor: { id: string } }>(
+    await root.call("actor_create", { name: "elsewhere", purpose: "Unrelated fixture" }),
+  );
+  const unrelated = done<{ formID: string }>(
+    await root.call("form_create", {
+      respondentIDs: [elsewhere.actor.id],
+      fields: [{ name: "other", label: "Other team's question", required: false }],
+    }),
+  );
+  const own = (
+    await worker.call("form_create", {
+      respondentIDs: [actor],
+      fields: [{ name: "self", label: "Self-requested question", required: false }],
+    })
+  ).structuredContent as { formID: string };
   const form = done<{ formID: string }>(
     await root.call("form_create", {
       respondentIDs: [actor],
@@ -651,6 +666,16 @@ test("the waiter delivers Messages and Form changes using private per-module pos
   const delivered = await within(20_000, "the form", hook(org, "wait", "s-waited", alive));
   assert.equal(delivered.code, 2);
   assert.ok(delivered.stderr.includes(`Form ${form.formID}`));
+  assert.equal(
+    delivered.stderr.split(`Form ${own.formID}`).length,
+    2,
+    "a requester/respondent match is delivered once",
+  );
+  assert.equal(
+    delivered.stderr.includes(unrelated.formID),
+    false,
+    "shared browsing is separate from directed delivery",
+  );
   assert.equal(delivered.stderr.includes(next), false);
   assert.deepEqual(Object.keys(JSON.parse(readFileSync(inbox, "utf8"))).sort(), [
     "forms",

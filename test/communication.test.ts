@@ -1,8 +1,10 @@
 /** Workspace records through the real Hub/SDK boundary as ordinary admitted Actors. */
 import assert from "node:assert/strict";
+import { dirname } from "node:path";
 import { test } from "node:test";
 import type { Actor } from "../src/actor/index.ts";
 import { done, refused, startCore, until } from "./harness.ts";
+import { command } from "./process.ts";
 
 async function members() {
   const core = await startCore();
@@ -130,7 +132,7 @@ test("Work retains role authority, revision conflicts, exact submissions and dyn
   t.after(() => core.close());
   let work = await done(peer.client.call("work_create", { ownerID: owner.id, goal: "Build" }));
   assert.equal(work.requesterID, peer.id);
-  assert.equal(await refused(root.call("work_get", { ticketID: work.ticketID })), "not_found");
+  assert.deepEqual(await done(root.call("work_get", { ticketID: work.ticketID })), work);
   assert.equal(
     await refused(
       owner.client.call("work_update", {
@@ -168,6 +170,19 @@ test("Work retains role authority, revision conflicts, exact submissions and dyn
       evidence: ["proof"],
     }),
   );
+  assert.deepEqual(await done(third.client.call("work_get", { ticketID: work.ticketID })), work);
+  assert.equal(
+    await refused(
+      root.call("work_review", {
+        ticketID: work.ticketID,
+        expectedRevision: work.revision,
+        submissionID: work.submission.submissionID,
+        verdict: "accepted",
+        comment: "Not requester",
+      }),
+    ),
+    "forbidden",
+  );
   assert.equal(
     await refused(
       peer.client.call("work_review", {
@@ -196,9 +211,17 @@ test("Work retains role authority, revision conflicts, exact submissions and dyn
       ownerID: third.id,
     }),
   );
+  assert.deepEqual(await done(owner.client.call("work_get", { ticketID: work.ticketID })), work);
   assert.equal(
-    await refused(owner.client.call("work_get", { ticketID: work.ticketID })),
-    "not_found",
+    await refused(
+      owner.client.call("work_submit", {
+        ticketID: work.ticketID,
+        expectedRevision: work.revision,
+        result: "Old owner",
+        evidence: [],
+      }),
+    ),
+    "forbidden",
   );
   assert.deepEqual((await done(third.client.call("work_list", {}))).items, [work]);
   work = await done(
@@ -218,6 +241,8 @@ test("Work retains role authority, revision conflicts, exact submissions and dyn
       comment: "Accepted",
     }),
   );
+  assert.deepEqual(await done(root.call("work_get", { ticketID: work.ticketID })), work);
+  assert.equal(work.history.length, work.revision);
   assert.equal(
     await refused(
       third.client.call("work_update", {
@@ -230,13 +255,24 @@ test("Work retains role authority, revision conflicts, exact submissions and dyn
   );
 });
 
-test("standalone Forms need no Work; linked visibility follows real current Work parties", async (t) => {
+test("standalone and linked Forms have shared full-history reads and role-bound writes", async (t) => {
   const { core, root, owner, peer, third } = await members();
   t.after(() => core.close());
   const fields = [{ name: "choice", label: "Choose", required: true, options: ["yes", "no"] }];
   let form = await done(peer.client.call("form_create", { respondentIDs: [owner.id], fields }));
   assert.equal("workID" in form, false);
-  assert.equal(await refused(root.call("form_get", { formID: form.formID })), "not_found");
+  assert.deepEqual(await done(third.client.call("form_get", { formID: form.formID })), form);
+  assert.equal(
+    await refused(
+      root.call("form_close", {
+        formID: form.formID,
+        expectedRevision: 1,
+        status: "resolved",
+        resolution: "Not requester",
+      }),
+    ),
+    "forbidden",
+  );
   assert.equal(
     await refused(
       peer.client.call("form_respond", {
@@ -292,16 +328,13 @@ test("standalone Forms need no Work; linked visibility follows real current Work
   );
   const work = await done(peer.client.call("work_create", { ownerID: owner.id, goal: "Linked" }));
   const linked = await done(
-    peer.client.call("form_create", { workID: work.ticketID, respondentIDs: [third.id], fields }),
+    third.client.call("form_create", { workID: work.ticketID, respondentIDs: [owner.id], fields }),
   );
   assert.equal(
     (await done(owner.client.call("form_get", { formID: linked.formID }))).formID,
     linked.formID,
   );
-  assert.equal(
-    await refused(third.client.call("work_get", { ticketID: work.ticketID })),
-    "not_found",
-  );
+  assert.deepEqual(await done(third.client.call("work_get", { ticketID: work.ticketID })), work);
   await done(
     peer.client.call("work_update", {
       ticketID: work.ticketID,
@@ -309,10 +342,9 @@ test("standalone Forms need no Work; linked visibility follows real current Work
       ownerID: third.id,
     }),
   );
-  assert.equal(
-    await refused(owner.client.call("form_get", { formID: linked.formID })),
-    "not_found",
-  );
+  assert.deepEqual(await done(owner.client.call("form_get", { formID: linked.formID })), linked);
+  assert.deepEqual(await done(root.call("form_get", { formID: form.formID })), form);
+  assert.equal(form.history.length, form.revision);
 });
 
 test("claims remain Hub-owned and close/expiry release eligibility without Workspace side effects", async (t) => {
@@ -400,4 +432,219 @@ test("unexpected write failures keep unknown outcome over MCP and never become n
   );
   append.mock.restore();
   assert.equal((await done(peer.client.call("message_list", {}))).items.length, 2);
+});
+
+test("Work filters AND before pagination and never select the caller's identity", async (t) => {
+  const { core, root, owner, peer, third } = await members();
+  t.after(() => core.close());
+  const active = async (caller: Actor, ownerID: string, goal: string) => {
+    const work = await done(caller.call("work_create", { ownerID, goal }));
+    return done(
+      (ownerID === owner.id ? owner.client : third.client).call("work_update", {
+        ticketID: work.ticketID,
+        expectedRevision: 1,
+        status: "active",
+      }),
+    );
+  };
+  await active(root, owner.id, "Wrong requester");
+  const first = await active(peer.client, owner.id, "First match");
+  await active(peer.client, third.id, "Wrong owner");
+  await done(peer.client.call("work_create", { ownerID: owner.id, goal: "Wrong status" }));
+  const second = await active(peer.client, owner.id, "Second match");
+  const filter = { ownerID: owner.id, requesterID: peer.id, status: "active", limit: 1 };
+  const page = await done(third.client.call("work_list", filter));
+  assert.deepEqual(page, { items: [first], after: first.cursor });
+  const next = await done(third.client.call("work_list", { ...filter, after: page.after }));
+  assert.deepEqual(next, { items: [second], after: second.cursor });
+  assert.deepEqual(await done(third.client.call("work_list", { ...filter, after: next.after })), {
+    items: [],
+    after: next.after,
+  });
+  assert.equal((await done(third.client.call("actor_get"))).actorID, third.id);
+  assert.equal(
+    await refused(
+      third.client.call("work_update", {
+        ticketID: first.ticketID,
+        expectedRevision: first.revision,
+        progress: "Query is not impersonation",
+      }),
+    ),
+    "forbidden",
+  );
+  for (const unknown of [{ ownerID: "unknown-actor" }, { requesterID: "unknown-actor" }])
+    assert.deepEqual(await done(third.client.call("work_list", unknown)), { items: [], after: 0 });
+  for (const bad of [{ status: "closed" }, { ownerID: "" }, { requesterID: 1 }])
+    assert.equal(await refused(root.call("work_list", bad)), "invalid");
+});
+
+test("Form attention predicates precede pagination and an own empty response counts as answered", async (t) => {
+  const { core, root, owner, peer, third } = await members();
+  t.after(() => core.close());
+  const work = await done(
+    root.call("work_create", { ownerID: third.id, goal: "Shared association" }),
+  );
+  const fields = [{ name: "answer", label: "Optional answer", required: false }];
+  const create = (caller: Actor, respondentIDs: string[], linked = true) =>
+    done(
+      caller.call("form_create", {
+        respondentIDs,
+        fields,
+        ...(linked ? { workID: work.ticketID } : {}),
+      }),
+    );
+  await create(root, [owner.id, third.id]);
+  const answered = await create(peer.client, [owner.id, third.id]);
+  await done(
+    owner.client.call("form_respond", {
+      formID: answered.formID,
+      expectedRevision: 1,
+      answers: {},
+    }),
+  );
+  const closed = await create(peer.client, [owner.id, third.id]);
+  await done(
+    peer.client.call("form_close", {
+      formID: closed.formID,
+      expectedRevision: 1,
+      status: "cancelled",
+      resolution: "No longer needed",
+    }),
+  );
+  await create(peer.client, [third.id]);
+  await create(peer.client, [owner.id, third.id], false);
+  const first = await create(peer.client, [owner.id, third.id]);
+  const second = await create(peer.client, [owner.id, third.id]);
+  const filter = {
+    workID: work.ticketID,
+    requesterID: peer.id,
+    respondentID: third.id,
+    status: "open",
+    awaitingActorID: owner.id,
+    limit: 1,
+  };
+  const page = await done(root.call("form_list", filter));
+  assert.deepEqual(page, { items: [first], after: first.cursor });
+  const next = await done(root.call("form_list", { ...filter, after: page.after }));
+  assert.deepEqual(next, { items: [second], after: second.cursor });
+  assert.deepEqual(await done(root.call("form_list", { ...filter, after: next.after })), {
+    items: [],
+    after: next.after,
+  });
+  const response = await done(root.call("form_get", { formID: answered.formID }));
+  assert.equal(Object.hasOwn(response.responses, owner.id), true);
+  assert.deepEqual(response.responses[owner.id], {});
+  assert.equal(
+    (await done(root.call("form_list", { awaitingActorID: third.id }))).items.some(
+      (item: { formID: string }) => item.formID === answered.formID,
+    ),
+    true,
+    "another respondent still awaits their own response",
+  );
+  assert.equal(
+    (await done(root.call("form_list", { respondentID: owner.id, status: "open" }))).items.some(
+      (item: { formID: string }) => item.formID === answered.formID,
+    ),
+    true,
+    "answered Forms remain available to revise",
+  );
+  assert.equal(
+    (await done(root.call("form_list", { status: "cancelled", awaitingActorID: owner.id }))).items
+      .length,
+    0,
+  );
+  assert.equal(
+    await refused(
+      root.call("form_respond", { formID: first.formID, expectedRevision: 1, answers: {} }),
+    ),
+    "forbidden",
+  );
+  assert.equal((await done(root.call("actor_get"))).actorID, core.rootId);
+  for (const field of ["workID", "requesterID", "respondentID", "awaitingActorID"])
+    assert.deepEqual(await done(root.call("form_list", { [field]: "unknown-id" })), {
+      items: [],
+      after: 0,
+    });
+  for (const bad of [{ status: "active" }, { awaitingActorID: "" }, { respondentID: 1 }])
+    assert.equal(await refused(root.call("form_list", bad)), "invalid");
+});
+
+test("shared Work/Form history and Hub diagnostics do not disclose private linked Message data", async (t) => {
+  const { core, root, owner, peer, third } = await members();
+  t.after(() => core.close());
+  const work = await done(
+    owner.client.call("work_create", { ownerID: peer.id, goal: "Public goal" }),
+  );
+  const secret = "private-p2p-body-sentinel";
+  const message = await done(
+    owner.client.call("message_send", {
+      recipientID: peer.id,
+      workID: work.ticketID,
+      text: secret,
+    }),
+  );
+  let form = await done(
+    owner.client.call("form_create", {
+      workID: work.ticketID,
+      respondentIDs: [peer.id],
+      fields: [{ name: "answer", label: "Public question", required: true }],
+    }),
+  );
+  form = await done(
+    peer.client.call("form_respond", {
+      formID: form.formID,
+      expectedRevision: form.revision,
+      answers: { answer: "Public response" },
+    }),
+  );
+  const changed = await done(
+    peer.client.call("work_update", {
+      ticketID: work.ticketID,
+      expectedRevision: 1,
+      progress: "Public progress",
+      status: "active",
+    }),
+  );
+  const projections: unknown[] = [];
+  for (const observer of [root, third.client]) {
+    assert.deepEqual(await done(observer.call("work_get", { ticketID: work.ticketID })), changed);
+    assert.deepEqual(await done(observer.call("form_get", { formID: form.formID })), form);
+    for (const name of ["work_list", "form_list", "team", "actor_list", "activity"])
+      projections.push(await done(observer.call(name, {})));
+    projections.push(await observer.available());
+    assert.equal(
+      await refused(observer.call("message_get", { messageID: message.messageID })),
+      "not_found",
+    );
+    for (const direction of ["incoming", "outgoing", "all"]) {
+      const inbox = await done(observer.call("message_list", { direction }));
+      assert.deepEqual(inbox, { items: [], after: 0 });
+      projections.push(inbox);
+    }
+  }
+  const status = await command("server", ["status"], {
+    AGENTORG_HOME: dirname(core.credentialFile),
+    AGENTORG_URL: core.url,
+  });
+  projections.push(status.stdout, status.stderr);
+  const injected = t.mock.method(core.store.workspace.messages, "get", () => {
+    throw new Error(`${secret} read_at=private`);
+  });
+  await assert.rejects(
+    third.client.call("message_get", { messageID: message.messageID }),
+    (error) => {
+      projections.push(String(error));
+      return String(error).includes("write outcome may be unknown");
+    },
+  );
+  injected.mock.restore();
+  assert.deepEqual(
+    await done(peer.client.call("message_get", { messageID: message.messageID })),
+    message,
+  );
+  assert.equal(form.history.length, 2);
+  assert.equal(changed.history.length, 2);
+  const output = JSON.stringify(projections);
+  assert.equal(output.includes(secret), false);
+  assert.doesNotMatch(output, /"(?:read_at|readAt|handledAt|unread|deliveryStatus)"/);
 });

@@ -47,7 +47,7 @@
   "dependencies": {
     "@hono/node-server": "^2.1.5",
     "@modelcontextprotocol/sdk": "^1.32.2",
-    "@uniac/agentic-workspace": "file:vendor/uniac-agentic-workspace-0.1.0-3d02979.tgz",
+    "@uniac/agentic-workspace": "file:vendor/uniac-agentic-workspace-0.2.0-b2d40d9.tgz",
     "ajv": "^8.20.0",
     "ajv-formats": "^3.0.1",
     "hono": "^4.13.14",

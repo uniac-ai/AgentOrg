@@ -8,8 +8,8 @@ hooks, and this skill.
   current schema from `interfaces`.
 - **Attachment.** A resumed session recovers its saved Actor. A new session attaches with the Actor
   ID in its brief, or creates a position once when the user directly appoints it.
-- **Delivery.** On startup and after a turn, the hook polls incoming Messages and visible Form
-  changes. It delivers records as session input and retains separate private module positions.
+- **Delivery.** On startup and after a turn, the hook polls incoming Messages and Form changes requested by or designated to the attached
+  Actor. It delivers records as session input and retains separate private module positions.
   Delivery is at least once. The same ID/revision can arrive again; no public receipt is written.
 - **Provenance.** Delivered content is an Actor record. A Form response requires a validated client
   binding before it can authorize a native request. Ordinary text and buttons do not create that
