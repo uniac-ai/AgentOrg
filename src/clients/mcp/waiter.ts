@@ -27,36 +27,28 @@ const value = <T>(answer: Answer): T => {
   throw new Error(`${answer.code}: ${answer.message}`);
 };
 const call = async <T>(client: Actor, name: string, input: Record<string, unknown> = {}) =>
-  value<T>(await client.call(name, input));
+  value<T>(await client.call(name, input, { timeoutMs: 5000 }));
 
-async function pages<T>(
-  client: Actor,
-  name: string,
-  after: number,
-  input: Record<string, unknown> = {},
-) {
-  const items: T[] = [];
-  for (;;) {
-    const page = await call<{ items: T[]; after: number }>(client, name, {
-      ...input,
-      after,
-      limit: 100,
-    });
-    items.push(...page.items);
-    if (page.after === after) return { items, after };
-    after = page.after;
-  }
+function page<T>(client: Actor, name: string, after: number, input: Record<string, unknown> = {}) {
+  return call<{ items: T[]; after: number }>(client, name, { ...input, after, limit: 100 });
 }
 
 export async function waitForNews(options: WaitOptions): Promise<boolean> {
   const actorID = sessions.position(options.session);
   if (actorID === undefined) return false;
   sessions.claimWaiter(options.session, process.pid);
-  const current = () => options.alive() && sessions.waiter(options.session) === process.pid;
+  const current = () => {
+    try {
+      return options.alive() && sessions.waiter(options.session) === process.pid;
+    } catch {
+      return false;
+    }
+  };
   while (current()) {
     const credential = credentials.read(actorID);
     if (credential === undefined) return false;
     let client: Actor | undefined;
+    let watch: ReturnType<typeof setInterval> | undefined;
     try {
       client = await connectClient({
         url: options.coreUrl,
@@ -64,15 +56,23 @@ export async function waitForNews(options: WaitOptions): Promise<boolean> {
         credential,
         name: "agentorg-waiter",
       });
+      if (!current()) return false;
+      const connected = client;
+      watch = setInterval(() => {
+        if (current()) return;
+        clearInterval(watch);
+        void connected.close().catch(() => {});
+      }, 100);
+      watch.unref();
       const team = await call<z.output<typeof Team>>(client, "team", { depth: 0 });
       const self = team.positions[0];
       if (!self) throw new Error("the Hub named no position");
       while (current()) {
         const position = sessions.inbox(options.session);
         const [messages, requested, designated] = await Promise.all([
-          pages<Message>(client, "message_list", position.messages, { direction: "incoming" }),
-          pages<Form>(client, "form_list", position.forms, { requesterID: actorID }),
-          pages<Form>(client, "form_list", position.forms, { respondentID: actorID }),
+          page<Message>(client, "message_list", position.messages, { direction: "incoming" }),
+          page<Form>(client, "form_list", position.forms.requested, { requesterID: actorID }),
+          page<Form>(client, "form_list", position.forms.designated, { respondentID: actorID }),
         ]);
         const byID = new Map<string, Form>();
         for (const item of [...requested.items, ...designated.items]) {
@@ -84,6 +84,7 @@ export async function waitForNews(options: WaitOptions): Promise<boolean> {
           ...messages.items.map((item) => item.senderID),
           ...forms.map((item) => item.requesterID),
         ])) {
+          if (!current()) return false;
           const profile = await call<{ name: string }>(client, "actor_get", { actorID: id });
           names[id] = profile.name;
         }
@@ -93,7 +94,7 @@ export async function waitForNews(options: WaitOptions): Promise<boolean> {
           names,
           position: {
             messages: messages.after,
-            forms: Math.max(requested.after, designated.after),
+            forms: { requested: requested.after, designated: designated.after },
           },
         };
         if (!current()) return false;
@@ -106,8 +107,10 @@ export async function waitForNews(options: WaitOptions): Promise<boolean> {
         await new Promise((resolve) => setTimeout(resolve, 1000));
       }
     } catch {
+      if (!current()) return false;
       await new Promise((resolve) => setTimeout(resolve, 1000));
     } finally {
+      clearInterval(watch);
       await client?.close();
     }
   }

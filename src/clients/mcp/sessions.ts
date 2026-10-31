@@ -1,11 +1,12 @@
 /**
  * Which client session fills which position, kept in the home's `sessions/<session>/` so that a
  * resumed session fills it again. `position` holds the Actor ID, `waiter` the current waiter PID,
- * and `inbox` the client's separate Message/Form delivery positions. These are local delivery
- * bookkeeping, never public acknowledgements or evidence of user input.
+ * and `inbox` the client's incoming Message and requested/designated Form positions. This private
+ * bookkeeping establishes neither public acknowledgements nor user input.
  */
 
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { home, privateDirectory } from "../../home.ts";
 
@@ -13,8 +14,11 @@ type Entry = "position" | "waiter" | "inbox";
 
 export interface InboxPosition {
   messages: number;
-  forms: number;
+  forms: { requested: number; designated: number };
 }
+
+const cursor = (value: unknown): value is number =>
+  typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 
 const SESSION = /^[A-Za-z0-9_-]{1,128}$/;
 
@@ -50,12 +54,36 @@ export const sessions = {
   claimWaiter: (session: string, pid: number) => write(session, "waiter", String(pid)),
   inbox(session: string): InboxPosition {
     const kept = read(session, "inbox");
-    if (kept === undefined) return { messages: 0, forms: 0 };
-    const value = JSON.parse(kept) as InboxPosition;
-    if (![value.messages, value.forms].every((n) => Number.isSafeInteger(n) && n >= 0))
+    if (kept === undefined) return { messages: 0, forms: { requested: 0, designated: 0 } };
+    const value = JSON.parse(kept) as {
+      messages?: unknown;
+      forms?: Partial<InboxPosition["forms"]> | number;
+    };
+    if (!cursor(value?.messages)) throw new Error("invalid local inbox position");
+    // A shared Form cursor cannot establish either feed's coverage. Re-read Form IDs only.
+    if (cursor(value.forms))
+      return { messages: value.messages, forms: { requested: 0, designated: 0 } };
+    const forms = value.forms;
+    if (
+      typeof forms !== "object" ||
+      forms === null ||
+      !cursor(forms.requested) ||
+      !cursor(forms.designated)
+    )
       throw new Error("invalid local inbox position");
-    return value;
+    return {
+      messages: value.messages,
+      forms: { requested: forms.requested, designated: forms.designated },
+    };
   },
-  advanceInbox: (session: string, position: InboxPosition) =>
-    write(session, "inbox", JSON.stringify(position)),
+  advanceInbox(session: string, position: InboxPosition): void {
+    const directory = privateDirectory(named(session));
+    const temporary = join(directory, `inbox.${randomUUID()}.tmp`);
+    try {
+      writeFileSync(temporary, `${JSON.stringify(position)}\n`, { flag: "wx", mode: 0o600 });
+      renameSync(temporary, join(directory, "inbox"));
+    } finally {
+      rmSync(temporary, { force: true });
+    }
+  },
 };

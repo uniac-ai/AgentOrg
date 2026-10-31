@@ -7,7 +7,8 @@
 
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { once } from "node:events";
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { after, test } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -20,7 +21,7 @@ import { describe } from "../src/clients/mcp/waiter.ts";
 import { CONNECTION_PATH, establish } from "../src/connection/index.ts";
 import { Form, Message, Position } from "../src/contract/index.ts";
 import { dial } from "../src/network/index.ts";
-import { type Core, startCore, until } from "./harness.ts";
+import { type Core, done, startCore, until } from "./harness.ts";
 
 const BIN = fileURLToPath(new URL("../src/clients/mcp/bin.js", import.meta.url));
 
@@ -470,7 +471,7 @@ test("the waiter names ordinary Actor records without claiming native user prove
       messages: [message],
       forms: [form],
       names: { manager: "lead", peer: "reviewer" },
-      position: { messages: 1, forms: 1 },
+      position: { messages: 1, forms: { requested: 1, designated: 1 } },
     },
     { self },
   );
@@ -686,4 +687,175 @@ test("the waiter delivers Messages and Form changes using private per-module pos
     stdout: "",
     stderr: "",
   });
+});
+
+test("interleaved Form feeds retain the requested Form created while the designated read is held", async (t) => {
+  const org = await core();
+  const worker = await session(org, "s-interleaved");
+  const { actor } = (await worker.call("attach", { name: "worker", purpose: "Work" }))
+    .structuredContent as { actor: string };
+  const root = await org.client(org.root);
+  await done(
+    root.call("form_create", {
+      respondentIDs: [actor],
+      fields: [{ name: "first", label: "First designation", required: false }],
+    }),
+  );
+  const alive = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+  const exited = once(alive, "exit");
+  let sampled!: () => void;
+  const requestedSnapshot = new Promise<void>((resolve) => {
+    sampled = resolve;
+  });
+  let release!: () => void;
+  const designatedGate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let captured = false;
+  let held = false;
+  const invoke = org.org.invoke.bind(org.org);
+  const intercept = t.mock.method(org.org, "invoke", async (...args: Parameters<typeof invoke>) => {
+    const [caller, name, input] = args;
+    if (caller === actor && name === "form_list") {
+      if (input.requesterID === actor && !captured) {
+        const snapshot = await invoke(...args);
+        captured = true;
+        sampled();
+        return snapshot;
+      }
+      if (input.respondentID === actor && !held) {
+        held = true;
+        await designatedGate;
+      }
+    }
+    return invoke(...args);
+  });
+  const waiters: Promise<unknown>[] = [];
+  try {
+    const first = hook(org, "wait", "s-interleaved", { CLAUDE_PID: String(alive.pid) });
+    waiters.push(first);
+    await within(5000, "the requested feed's empty snapshot", requestedSnapshot);
+    const missed = (
+      await worker.call("form_create", {
+        respondentIDs: [org.rootId],
+        fields: [{ name: "late", label: "Created between feed reads", required: false }],
+      })
+    ).structuredContent as { formID: string };
+    const later = await done(
+      root.call("form_create", {
+        respondentIDs: [actor],
+        fields: [{ name: "later", label: "Later designation", required: false }],
+      }),
+    );
+    release();
+    const delivered = await within(5000, "the first delivery", first);
+    assert.equal(delivered.code, 2);
+    assert.equal(delivered.stderr.includes(missed.formID), false);
+    assert.equal(delivered.stderr.includes(later.formID), true);
+    intercept.mock.restore();
+    await done(root.call("message_send", { recipientID: actor, text: "Finish the next poll" }));
+    const second = hook(org, "wait", "s-interleaved", { CLAUDE_PID: String(alive.pid) });
+    waiters.push(second);
+    const next = await within(5000, "the next delivery", second);
+    assert.equal(next.code, 2);
+    assert.equal(
+      next.stderr.includes(missed.formID),
+      true,
+      "the designated cursor must not skip an unseen requested Form",
+    );
+  } finally {
+    release();
+    intercept.mock.restore();
+    alive.kill();
+    await exited;
+    await Promise.allSettled(waiters);
+  }
+});
+
+test("the waiter returns one page of Form backlog per invocation", async (t) => {
+  const org = await core();
+  const worker = await session(org, "s-bounded");
+  const { actor } = (await worker.call("attach", { name: "worker", purpose: "Work" }))
+    .structuredContent as { actor: string };
+  const root = await org.client(org.root);
+  const forms = [];
+  for (let i = 0; i < 3; i++)
+    forms.push(
+      await done(
+        root.call("form_create", {
+          respondentIDs: [actor],
+          fields: [{ name: "answer", label: `Question ${i}`, required: false }],
+        }),
+      ),
+    );
+  const invoke = org.org.invoke.bind(org.org);
+  let pages = 0;
+  const intercept = t.mock.method(org.org, "invoke", (...args: Parameters<typeof invoke>) => {
+    const [caller, name, input, how] = args;
+    if (caller === actor && name === "form_list" && input.respondentID === actor) {
+      pages++;
+      return invoke(caller, name, { ...input, limit: 1 }, how);
+    }
+    return invoke(...args);
+  });
+  try {
+    for (const form of forms) {
+      const delivered = await within(
+        5000,
+        "one bounded delivery",
+        hook(org, "wait", "s-bounded", { CLAUDE_PID: String(process.pid) }),
+      );
+      assert.equal(delivered.code, 2);
+      assert.equal(delivered.stderr.includes(form.formID), true);
+      assert.equal((delivered.stderr.match(/^Form /gm) ?? []).length, 1);
+    }
+    assert.equal(
+      pages,
+      3,
+      "each waiter fetches one page, leaving later pages for the next invocation",
+    );
+  } finally {
+    intercept.mock.restore();
+  }
+});
+
+test("a replaced waiter cancels a held read without writing or advancing any cursor", async (t) => {
+  const org = await core();
+  const worker = await session(org, "s-cancel-read");
+  const { actor } = (await worker.call("attach", { name: "worker", purpose: "Work" }))
+    .structuredContent as { actor: string };
+  const claim = join(org.home, "sessions/claude-code-s-cancel-read/waiter");
+  const inbox = join(org.home, "sessions/claude-code-s-cancel-read/inbox");
+  let waiting!: () => void;
+  const held = new Promise<void>((resolve) => {
+    waiting = resolve;
+  });
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const invoke = org.org.invoke.bind(org.org);
+  const intercept = t.mock.method(org.org, "invoke", async (...args: Parameters<typeof invoke>) => {
+    if (args[0] === actor && args[1] === "form_list" && args[2].respondentID === actor) {
+      waiting();
+      await gate;
+    }
+    return invoke(...args);
+  });
+  const pending = hook(org, "wait", "s-cancel-read", { CLAUDE_PID: String(process.pid) });
+  try {
+    await within(5000, "the held read", held);
+    // A new owner claims this session while the first waiter's RPC is still pending.
+    writeFileSync(claim, `${process.pid}\n`, { mode: 0o600 });
+    assert.deepEqual(await within(2000, "the cancelled read ends", pending), {
+      code: 0,
+      stdout: "",
+      stderr: "",
+    });
+    assert.equal(existsSync(inbox), false);
+  } finally {
+    release();
+    intercept.mock.restore();
+    await pending;
+  }
 });
