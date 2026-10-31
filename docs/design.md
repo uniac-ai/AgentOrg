@@ -105,7 +105,7 @@ A Tool is `{id, name, interfaces}`. Each interface contains its local descriptor
 an optional `read_only` hint. `(tool.id, interface.name)` identifies it. `Actor.available()` returns
 these Tools; the CLI and MCP adapter's `interfaces` operation return `{tools: [...]}`.
 
-Every open Actor receives the same nine Hub Tools and twenty-three interfaces:
+Every open Actor receives the same ten Hub Tools and twenty-seven interfaces:
 
 | Tool | Interfaces |
 |---|---|
@@ -118,12 +118,52 @@ Every open Actor receives the same nine Hub Tools and twenty-three interfaces:
 | `claims` | `claim`, `release` |
 | `calls` | `call_result` |
 | `activity` | `activity` |
+| `system` | `system_status`, `connection_list`, `provider_list`, `connection_disconnect` |
 
 IDs are `hub:<name>`. Discovery and invocation use the same module-owned operations. The caller's
 hierarchy and the operation's records govern domain authority; they do not add Tools. Actor IDs,
 paths, cached advertisements and guessed aliases cannot introduce callable interfaces. A closed
 Actor receives no Tools. `BUILTINS` is a derived schema inventory for CLI and typed consumers,
 while feature modules own runtime registration.
+
+### System observations and connection controls
+
+`system_status` reports the answering Hub's UUID `instanceId`, authoritative `observedAt`, start
+time, package/Node versions, admitted socket counts and bounded diagnostics. `serving` means that
+this Hub answered. Socket presence and local work counts establish neither native health nor
+remote idleness. `provider_list` reports configured identities, admitted connection counts and the
+exact selected factory socket. The latest admitted socket is selected; closing it does not promote
+an older socket. Configuration and credential hashes remain private.
+
+`connection_list` filters by connection/Actor/Provider ID; `provider_list` filters by Provider ID
+and explicit `connected` boolean. Predicates AND before the bounded limit. Pages carry the Hub's
+instance and observation time, insertion position `after`, and `atEnd` for that observation.
+Continuation requires the matching instance; future positions are invalid. Keep independent
+positions per caller and filter, restarting at zero on changes. Current membership may change
+between pages, so refresh from zero before reconciling removals. Retained values keep their original
+timestamp when a refresh fails.
+
+`connection_disconnect {instanceId,connectionId}` detaches one exact socket with close code 1000.
+An active Actor controls its own other sockets, direct reports' sockets, and all Actor sockets when
+it is canonical root. Only canonical root controls Provider sockets. The carrying socket is refused
+using trusted admission context. The same authority and observed busy/closing guards produce
+`canDisconnect` and govern mutation. Full Tool invocations, complete Provider creation sequences
+including inter-RPC gaps, and pending factory requests block detach. The inventory marks closing
+before dispatch can start new work. Actor lifecycle closure retains revocation code 4001.
+
+`closed:true` means the Hub detached that exact entry and initiated transport close. Clients may
+reconnect under new IDs. This action does not establish worker shutdown or completed remote work.
+A close or post-effect audit failure can leave an unknown outcome; inspect the exact ID in the same
+run and never automatically retry or chase reconnects.
+
+Diagnostics retain at most 100 fixed-code observations in this run, newest first, with explicit
+retained/dropped counts. Coverage is admission, MCP/protocol, nonprivate operation failure, Provider
+creation failure and admitted transport closure; it is not a complete health history. Records select
+only fixed messages/codes/stages/outcomes, known admitted identity/connection, offered nonprivate
+operation alias and observed numeric close code. Unadmitted claims and arbitrary error/body/config
+data are omitted. `message_send`, `message_get` and `message_list` produce no operation-specific
+diagnostic events, including on validation, storage or audit failure. Generic transport facts never
+attribute a close to a private operation. Observation failures do not alter business outcomes.
 
 An interface descriptor contains name, optional title/description, input/output JSON Schemas and
 generic `one_way`/`long_running` flags. The MCP binding flattens the catalog and carries semantic

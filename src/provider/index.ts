@@ -104,14 +104,32 @@ export class ProviderClient {
   private readonly timeoutMs: number;
   private sequence = 0;
   private ended = false;
+  private readonly creation: () => () => void;
+  private readonly observe: () => void;
 
-  constructor(channel: Channel, options: { timeoutMs?: number } = {}) {
+  constructor(
+    channel: Channel,
+    options: {
+      timeoutMs?: number;
+      holdCreation?: () => () => void;
+      invalidProtocol?: () => void;
+    } = {},
+  ) {
     this.channel = channel;
     this.timeoutMs = options.timeoutMs ?? 60_000;
+    this.creation = options.holdCreation ?? (() => () => {});
+    this.observe = options.invalidProtocol ?? (() => {});
     channel.listen(
       (text) => this.receive(text),
       () => this.disconnected(),
     );
+  }
+
+  holdCreation(): () => void {
+    return this.creation();
+  }
+  get pendingRequests(): number {
+    return this.pending.size;
   }
 
   async describe(): Promise<ProviderDescription> {
@@ -179,10 +197,12 @@ export class ProviderClient {
     try {
       message = JSON.parse(text);
     } catch {
+      this.observe();
       this.sendError(null, -32700, "Parse error");
       return;
     }
     if (!object(message) || message.jsonrpc !== "2.0") {
+      this.observe();
       this.sendError(null, -32600, "Invalid Request");
       return;
     }

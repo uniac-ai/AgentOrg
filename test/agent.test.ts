@@ -212,7 +212,7 @@ test("the stdio catalog is stable and only attachment can act before a position 
   const asActor = await org.client(readFileSync(join(org.home, "actors", actor), "utf8").trim());
   assert.deepEqual(Object.keys(listed), ["tools"]);
   assert.deepEqual(listed.tools, await asActor.available());
-  assert.equal(listed.tools.length, 9);
+  assert.equal(listed.tools.length, 10);
   assert.equal((await one.interfaces()).includes("activity"), true);
   const { actor: report, credential } = await org.org.registry.create(actor, "report", "A report");
   await org.client(credential);
@@ -225,7 +225,7 @@ test("the stdio catalog is stable and only attachment can act before a position 
     id: string;
     interfaces: { call: string }[];
   }[];
-  assert.equal(tools.length, 9, "connecting an Actor never adds a Tool");
+  assert.equal(tools.length, 10, "connecting an Actor never adds a Tool");
   assert.equal(
     tools.some((tool) => tool.id === report.id),
     false,

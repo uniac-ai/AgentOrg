@@ -6,6 +6,8 @@ import { z } from "zod";
 import { application } from "../src/domain/application.ts";
 import { audit } from "../src/domain/audit.ts";
 import { capabilities } from "../src/domain/capabilities.ts";
+import { connections } from "../src/domain/connections.ts";
+import { diagnostics } from "../src/domain/diagnostics.ts";
 import { Forbidden } from "../src/domain/errors.ts";
 import { toolDefinition } from "../src/domain/model/json-schema.ts";
 import { registry } from "../src/domain/registry.ts";
@@ -36,7 +38,13 @@ test("an explicitly composed module binds discovery and dispatch to its own prin
       return { actor: actor.id, value: request.value };
     },
   });
-  const hub = application(actors, capabilities([tool]), audit(store.audit, now));
+  const hub = application(
+    actors,
+    capabilities([tool]),
+    audit(store.audit, now),
+    connections(now),
+    diagnostics(now),
+  );
   const invocation = { signal: new AbortController().signal, progress: async () => {} };
   const invoke = (actor: string, name: string, input: Record<string, unknown>) =>
     hub.invoke(actor, name, input, invocation);

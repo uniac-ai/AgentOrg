@@ -25,6 +25,7 @@ import type { Registry } from "../domain/registry.ts";
 import { readPrivate, writePrivate } from "../home.ts";
 import { CLOSE_REVOKED, listen } from "../network/index.ts";
 import { ProviderClient } from "../provider/index.ts";
+import { VERSION } from "../version.ts";
 
 export interface CoreOptions extends OrganizationOptions {
   /** How long a Provider factory request may take. */
@@ -55,6 +56,11 @@ export async function startCore(
   const organization = createOrganization(store, {
     ...options,
     provider: (providerId) => providerClients.get(providerId),
+    runtime: {
+      version: VERSION,
+      nodeVersion: process.version,
+      providerIds: providerIdentities.ids(),
+    },
   });
   const listening = await listen({
     port: options.port,
@@ -64,6 +70,12 @@ export async function startCore(
       accept(
         channel,
         {
+          observe: (code) =>
+            organization.diagnostics.record({
+              code,
+              stage: "admission",
+              outcome: code === "admission_refused" ? "refused" : "unknown",
+            }),
           admit: async (identity) => {
             if ("providerId" in identity) {
               return identity.credential === undefined
@@ -80,11 +92,41 @@ export async function startCore(
             return authenticated && actor !== undefined && actor.closed_at === null;
           },
         },
-        ({ principal, channel: admitted }) => {
+        ({ connectionId, principal, channel: admitted }) => {
+          const observe = (code: "mcp_initialization_failed" | "protocol_invalid") =>
+            organization.diagnostics.record({
+              code,
+              stage: "providerId" in principal ? "transport" : "mcp",
+              outcome: "observed",
+              connectionId,
+              ...principal,
+            });
+          const ended = (code: number | undefined) => {
+            organization.connections.remove(connectionId);
+            organization.diagnostics.record({
+              code: "connection_closed",
+              stage: "transport",
+              outcome: "observed",
+              connectionId,
+              ...principal,
+              ...(code === undefined ? {} : { closeCode: code }),
+            });
+          };
           if ("providerId" in principal) {
-            const client = new ProviderClient(admitted, { timeoutMs: options.timeoutMs ?? 60_000 });
+            const client = new ProviderClient(admitted, {
+              timeoutMs: options.timeoutMs ?? 60_000,
+              holdCreation: () => organization.connections.beginCreation(connectionId),
+              invalidProtocol: () => observe("protocol_invalid"),
+            });
             providerClients.set(principal.providerId, client);
-            admitted.whenClosed(() => {
+            organization.connections.admit(connectionId, principal, {
+              detach: () => admitted.close(1000, "connection detached"),
+              revoke: () => admitted.close(CLOSE_REVOKED, "connection revoked"),
+              pendingFactoryRequests: () => client.pendingRequests,
+              selectedForCreation: () => providerClients.get(principal.providerId) === client,
+            });
+            admitted.whenClosed((code) => {
+              ended(code);
               if (providerClients.get(principal.providerId) === client)
                 providerClients.delete(principal.providerId);
             });
@@ -94,12 +136,14 @@ export async function startCore(
               admitted.close(CLOSE_REVOKED, "the Actor was closed");
               return;
             }
-            const connection = {
-              close: () => admitted.close(CLOSE_REVOKED, "the Actor was closed"),
-            };
-            organization.online(actorId, connection);
-            admitted.whenClosed(() => organization.offline(actorId, connection));
+            organization.connections.admit(connectionId, principal, {
+              detach: () => admitted.close(1000, "connection detached"),
+              revoke: () => admitted.close(CLOSE_REVOKED, "the Actor was closed"),
+            });
+            admitted.whenClosed(ended);
             serveConnection(organization, actorId, admitted, {
+              connectionId,
+              observe,
               ...(options.onError === undefined ? {} : { onError: options.onError }),
             });
           }
