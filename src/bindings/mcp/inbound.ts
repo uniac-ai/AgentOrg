@@ -16,18 +16,20 @@ export async function serveActor(
   application: Application,
   party: string,
   transport: Transport,
+  connectionId?: string,
 ): Promise<void> {
   const server = new Server(
     { name: "agentorg", version: VERSION },
     { capabilities: { tools: {} } },
   );
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: offeredToolsOf(application.available(party)),
+    tools: offeredToolsOf(application.available(party, connectionId)),
   }));
   server.setRequestHandler(CallToolRequestSchema, async ({ params }, extra) => {
     const progressToken = params._meta?.progressToken;
     let progress = 0;
     const answer = await application.invoke(party, params.name, params.arguments ?? {}, {
+      ...(connectionId === undefined ? {} : { connectionId }),
       signal: extra.signal,
       progress: async (message) => {
         if (progressToken === undefined) return;

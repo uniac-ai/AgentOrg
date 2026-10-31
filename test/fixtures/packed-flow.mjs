@@ -6,7 +6,14 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { connectClient } from "@agentorg/cli/actor";
-import { Form, Message, Work } from "@agentorg/cli/contract";
+import {
+  ConnectionPage,
+  Form,
+  Message,
+  ProviderPage,
+  SystemStatus,
+  Work,
+} from "@agentorg/cli/contract";
 
 const rootDirectory = process.cwd();
 const home = mkdtempSync(join(tmpdir(), "agentorg-packed-home-"));
@@ -81,9 +88,74 @@ try {
   let owner = await client(url, ownerID, ownerRecord.credential);
   let requester = await client(url, requesterID, requesterRecord.credential);
   const catalog = await root.available();
-  assert.equal(catalog.length, 9);
-  assert.equal(catalog.flatMap((tool) => tool.interfaces).length, 23);
+  assert.equal(catalog.length, 10);
+  assert.equal(catalog.flatMap((tool) => tool.interfaces).length, 27);
   assert.deepEqual(await owner.available(), catalog);
+  const system = catalog.find((tool) => tool.id === "hub:system");
+  assert.deepEqual(
+    system.interfaces.map((offer) => [offer.call, offer.read_only]),
+    [
+      ["system_status", true],
+      ["connection_list", true],
+      ["provider_list", true],
+      ["connection_disconnect", false],
+    ],
+  );
+  const systemStatus = SystemStatus.parse(await done(root.call("system_status")));
+  assert.equal(systemStatus.nodeVersion, process.version);
+  assert.equal(systemStatus.state, "serving");
+  assert.equal(systemStatus.actorConnections, 3);
+  assert.deepEqual(
+    ProviderPage.parse(await done(owner.call("provider_list", { connected: false }))).items,
+    [],
+  );
+  const rootConnection = ConnectionPage.parse(
+    await done(root.call("connection_list", { actorId: rootID })),
+  ).items[0];
+  assert.equal(rootConnection.blockedBy, "current_connection");
+  await deny(
+    root.call("connection_disconnect", {
+      instanceId: systemStatus.instanceId,
+      connectionId: rootConnection.connectionId,
+    }),
+    "conflict",
+  );
+  await deny(
+    owner.call("connection_disconnect", {
+      instanceId: systemStatus.instanceId,
+      connectionId: rootConnection.connectionId,
+    }),
+    "forbidden",
+  );
+  const otherOwner = await client(url, ownerID, ownerRecord.credential);
+  const beforeDetach = ConnectionPage.parse(
+    await done(otherOwner.call("connection_list", { actorId: ownerID })),
+  );
+  const target = beforeDetach.items.find((entry) => entry.blockedBy === "current_connection");
+  const detached = await done(
+    root.call("connection_disconnect", {
+      instanceId: systemStatus.instanceId,
+      connectionId: target.connectionId,
+    }),
+  );
+  assert.equal(detached.closed, true);
+  const deadline = Date.now() + 15000;
+  let reconnected = false;
+  while (!reconnected) {
+    try {
+      const rows = ConnectionPage.parse(
+        await done(otherOwner.call("connection_list", { actorId: ownerID })),
+      );
+      reconnected = rows.items.some(
+        (entry) =>
+          entry.blockedBy === "current_connection" && entry.connectionId !== target.connectionId,
+      );
+    } catch {}
+    assert.ok(Date.now() < deadline, "detached packed SDK reconnects with a new connection ID");
+    if (!reconnected) await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  assert.equal(otherOwner.ended, undefined);
+  await otherOwner.close();
   for (const [name, filters] of [
     ["work_list", ["ownerWithin", "requesterWithin"]],
     ["form_list", ["requesterWithin", "respondentWithin", "awaitingWithin"]],
@@ -270,6 +342,15 @@ try {
   await stop();
   url = await launch();
   root = await client(url, rootID, rootCredential);
+  const restartedSystem = SystemStatus.parse(await done(root.call("system_status")));
+  assert.notEqual(restartedSystem.instanceId, systemStatus.instanceId);
+  await deny(
+    root.call("connection_list", {
+      instanceId: systemStatus.instanceId,
+      after: beforeDetach.after,
+    }),
+    "conflict",
+  );
   owner = await client(url, ownerID, ownerRecord.credential);
   requester = await client(url, requesterID, requesterRecord.credential);
   assert.deepEqual(await done(requester.call("message_get", { messageID: sent.messageID })), sent);
@@ -316,8 +397,8 @@ try {
   const result = {
     ok: true,
     node: process.version,
-    toolCount: 9,
-    interfaceCount: 23,
+    toolCount: 10,
+    interfaceCount: 27,
     workspaceSource: pin.source,
     workspaceSha256: digest,
     workspaceVersion: pin.version,
@@ -329,6 +410,10 @@ try {
     discoverySubtreeSchemas: true,
     emptyResponseAnswered: true,
     restartPersistence: true,
+    systemStatusAndSchemas: true,
+    systemConnectionAuthority: true,
+    transientDetachAndReconnect: true,
+    staleRunCursorRefused: true,
     allWorkspaceOperations: true,
     standaloneForms: true,
     p2pPrivacy: true,

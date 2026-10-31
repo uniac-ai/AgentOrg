@@ -18,6 +18,7 @@ export const HUB_INTERFACES = {
   claims: ["claim", "release"],
   calls: ["call_result"],
   activity: ["activity"],
+  system: ["system_status", "connection_list", "provider_list", "connection_disconnect"],
 };
 
 export async function startCore(options: CoreOptions = {}) {
@@ -40,6 +41,7 @@ export async function startCore(options: CoreOptions = {}) {
     get store() {
       return store;
     },
+    provider: (id: string) => running.provider(id),
     url,
     root,
     rootId: running.organization.registry.root()?.id as string,

@@ -15,6 +15,7 @@ export function providers(configured: readonly ProviderIdentity[]) {
     identities.set(identity.providerId, identity.credentialHash.toLowerCase());
   }
   return {
+    ids: () => [...identities.keys()],
     has: (providerId: string): boolean => identities.has(providerId),
     async admit(providerId: string, credential?: string): Promise<boolean> {
       const expected = identities.get(providerId);
