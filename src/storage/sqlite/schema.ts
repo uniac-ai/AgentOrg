@@ -1,16 +1,8 @@
 /** SQLite tables and their record schemas; times are ISO 8601 UTC and credentials are hashed. */
 
-import {
-  ActorRecord,
-  AuditEntry,
-  Call,
-  Claim,
-  Message,
-  Progress,
-  Question,
-} from "../../domain/model/index.ts";
+import { ActorRecord, AuditEntry, Call, Claim } from "../../domain/model/index.ts";
 
-export const SCHEMA_VERSION = 8;
+export const SCHEMA_VERSION = 9;
 
 export const SCHEMA = `
 CREATE TABLE actors (
@@ -40,48 +32,6 @@ CREATE TABLE calls (
   delivered_at TEXT,
   settled_at TEXT
 );
-CREATE TABLE progress (
-  actor TEXT NOT NULL REFERENCES actors (id),
-  version INTEGER NOT NULL,
-  state TEXT NOT NULL,
-  summary TEXT NOT NULL,
-  items JSON NOT NULL,
-  links JSON NOT NULL,
-  updated_at TEXT NOT NULL,
-  PRIMARY KEY (actor, version)
-);
-
-CREATE TABLE questions (
-  id TEXT PRIMARY KEY,
-  cursor INTEGER NOT NULL UNIQUE,
-  "from" TEXT NOT NULL REFERENCES actors (id),
-  "to" TEXT NOT NULL REFERENCES actors (id),
-  text TEXT NOT NULL,
-  links JSON NOT NULL,
-  options JSON NOT NULL,
-  recommendation TEXT,
-  answerer TEXT REFERENCES actors (id),
-  cause TEXT REFERENCES questions (id),
-  answer JSON,
-  created_at TEXT NOT NULL
-);
-CREATE INDEX questions_to ON questions ("to");
-CREATE INDEX questions_from ON questions ("from");
-
-CREATE TABLE messages (
-  id TEXT PRIMARY KEY,
-  cursor INTEGER NOT NULL UNIQUE,
-  "from" TEXT NOT NULL REFERENCES actors (id),
-  "to" TEXT NOT NULL REFERENCES actors (id),
-  text TEXT NOT NULL,
-  links JSON NOT NULL,
-  reply_to TEXT REFERENCES messages (id),
-  created_at TEXT NOT NULL,
-  read_at TEXT
-);
-CREATE INDEX messages_to ON messages ("to");
-CREATE INDEX messages_from ON messages ("from");
-
 CREATE TABLE claims (
   resource TEXT PRIMARY KEY,
   holder TEXT NOT NULL REFERENCES actors (id),
@@ -90,6 +40,13 @@ CREATE TABLE claims (
   claimed_at TEXT NOT NULL
 );
 CREATE INDEX claims_holder ON claims (holder);
+
+CREATE TABLE workspace_imports (
+  message_id TEXT PRIMARY KEY,
+  source_hash TEXT NOT NULL,
+  recipient_id TEXT NOT NULL REFERENCES actors(id),
+  workspace_cursor INTEGER NOT NULL
+);
 
 CREATE TABLE audit (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -104,9 +61,6 @@ CREATE TABLE audit (
 export const TABLES = {
   actors: ActorRecord,
   calls: Call,
-  progress: Progress,
-  questions: Question,
-  messages: Message,
   claims: Claim,
   audit: AuditEntry,
 } as const;

@@ -4,9 +4,10 @@ AgentOrg connects Actors into an organization. Each Actor is a position with a r
 a manager; the user is at the root. Hub keeps organizational state and exposes explicit Tools.
 Actors decide how to use those Tools independently of any native execution implementation.
 
-Actors publish progress and questions, exchange private messages and claim shared resources
-through Hub Tools. An enrolled Provider can provision an implementation when requested at Actor
-creation. Managers read progress when they choose.
+Actors exchange private Messages, track Work and collect structured Form responses through Hub
+Tools backed by `@uniac/agentic-workspace`. Hub supplies the canonical Actor directory, actual
+connection presence and shared resource claims. An enrolled Provider can provision an implementation
+when requested at Actor creation. Human applications, agent sessions and programs share the same authority.
 
 ## Applications
 
@@ -35,6 +36,7 @@ Set up AgentOrg for me in this project, following https://raw.githubusercontent.
 [Setup](docs/setup.md) covers services and project integrations.
 [Programs](docs/programs.md) covers credentials and client connections.
 [Design](docs/design.md) covers the component and layer boundaries.
+[Workspace storage](docs/workspace-storage.md) covers the dependency pin, retained history and coordinated backups.
 
 ## Development
 

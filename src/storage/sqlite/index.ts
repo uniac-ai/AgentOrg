@@ -1,20 +1,43 @@
-/** Domain storage operations over the SQLite tables in schema.ts. */
+/** Hub state and one package-owned Workspace store for the same private Hub home. */
 
-import type { SQLInputValue } from "node:sqlite";
+import { chmodSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
+import { openSqlite, type WorkspaceStore } from "@uniac/agentic-workspace/persistence";
+import { ActorRecord } from "../../domain/model/records.ts";
 import type { Store } from "../../domain/ports.ts";
 import { Database } from "./database.ts";
+import { importLegacyMessages, writeImportBaseline } from "./workspace-import.ts";
 
 export { Database };
 
 export class SqliteStore implements Store {
   readonly database: Database;
+  readonly workspace: WorkspaceStore;
 
   constructor(path: string) {
     this.database = new Database(path);
+    const workspacePath =
+      path === ":memory:" ? path : join(dirname(path), `${basename(path, ".db")}.workspace.db`);
+    let workspace: WorkspaceStore | undefined;
+    try {
+      workspace = openSqlite(workspacePath);
+      if (workspacePath !== ":memory:") chmodSync(workspacePath, 0o600);
+      const baseline = importLegacyMessages(this.database, workspace);
+      if (path !== ":memory:") writeImportBaseline(`${workspacePath}.import.json`, baseline);
+      this.workspace = workspace;
+    } catch (error) {
+      workspace?.close();
+      this.database.close();
+      throw error;
+    }
   }
 
   close(): void {
-    this.database.close();
+    try {
+      this.workspace.close();
+    } finally {
+      this.database.close();
+    }
   }
 
   readonly actors: Store["actors"] = {
@@ -27,107 +50,50 @@ export class SqliteStore implements Store {
     reports: (manager) =>
       this.database.select("actors", "manager = ? AND closed_at IS NULL", [manager]),
     open: () => this.database.select("actors", "closed_at IS NULL"),
-  };
-
-  readonly calls: Store["calls"] = {
-    get: (id) => this.database.get("calls", id),
-  };
-
-  readonly progress: Store["progress"] = {
-    insert: (progress) => this.database.insert("progress", progress),
-    latest: (actor, limit) =>
-      this.database.select("progress", "actor = ?", [actor], "version DESC", limit),
-  };
-
-  readonly questions: Store["questions"] = {
-    insert: (question) => this.database.insert("questions", question),
-    get: (id) => this.database.get("questions", id),
-    list: (query) => {
-      const { where, parameters } = conditions([
-        query.to !== undefined && [`"to" = ?`, query.to],
-        query.from !== undefined && [`"from" = ?`, query.from],
-        query.open === true && ["answer IS NULL"],
-        query.since !== undefined && ["cursor > ?", query.since],
-      ]);
-      return this.database.select("questions", where, parameters, "cursor DESC", query.limit ?? -1);
-    },
-    answer: (id, answer, cursor) => {
-      this.database.run(
-        "UPDATE questions SET answer = ?, cursor = ? WHERE id = ? AND answer IS NULL",
-        [JSON.stringify(answer), cursor, id],
+    directory: (after, limit) => {
+      const rows = this.database.all(
+        "SELECT rowid AS ordinal, * FROM actors WHERE closed_at IS NULL AND rowid > ? ORDER BY rowid LIMIT ?",
+        [after, limit],
       );
+      return {
+        items: rows.map(({ ordinal: _, ...actor }) => ActorRecord.parse(actor)),
+        after: Number(rows.at(-1)?.ordinal ?? after),
+        head: Number(
+          this.database.all("SELECT coalesce(max(rowid),0) AS head FROM actors")[0]?.head ?? 0,
+        ),
+      };
     },
   };
-
-  readonly messages: Store["messages"] = {
-    insert: (message) => this.database.insert("messages", message),
-    get: (id) => this.database.get("messages", id),
-    list: (query) => {
-      const { where, parameters } = conditions([
-        query.viewer !== null && [
-          `EXISTS (SELECT 1 FROM actors WHERE actors.id IN (messages."from", messages."to") AND (actors.id = ? OR actors.manager = ?))`,
-          query.viewer,
-          query.viewer,
-        ],
-        query.to !== undefined && [`"to" = ?`, query.to],
-        query.from !== undefined && [`"from" = ?`, query.from],
-        query.unread === true && ["read_at IS NULL"],
-        query.since !== undefined && ["cursor > ?", query.since],
-      ]);
-      return this.database.select("messages", where, parameters, "cursor DESC", query.limit ?? -1);
-    },
-    read: (ids, at) => {
-      this.database.run(
-        `UPDATE messages SET read_at = ? WHERE read_at IS NULL AND id IN (${ids.map(() => "?").join(", ")})`,
-        [at, ...ids],
-      );
-    },
-  };
-
+  readonly calls: Store["calls"] = { get: (id) => this.database.get("calls", id) };
   readonly claims: Store["claims"] = {
     get: (resource) => this.database.select("claims", "resource = ?", [resource])[0],
     put: (claim) => {
       this.database.run(
-        "INSERT OR REPLACE INTO claims (resource, holder, note, until, claimed_at) VALUES (?, ?, ?, ?, ?)",
+        "INSERT OR REPLACE INTO claims (resource,holder,note,until,claimed_at) VALUES (?,?,?,?,?)",
         [claim.resource, claim.holder, claim.note, claim.until, claim.claimed_at],
       );
     },
     remove: (resource) => {
       this.database.run("DELETE FROM claims WHERE resource = ?", [resource]);
     },
-    heldBy: (actor) => this.database.select("claims", "holder = ?", [actor]),
   };
-
-  head(): number {
-    const [row] = this.database.all(
-      "SELECT max(cursor) AS head FROM (SELECT cursor FROM questions UNION ALL SELECT cursor FROM messages)",
-    );
-    return Number(row?.head ?? 0);
-  }
-
-  transaction<T>(work: () => T): T {
-    return this.database.transaction(work);
-  }
-
   readonly audit: Store["audit"] = {
     append: (entry) => {
       this.database.run(
-        "INSERT INTO audit (at, actor, operation, target, outcome) VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO audit (at,actor,operation,target,outcome) VALUES (?,?,?,?,?)",
         [entry.at, entry.actor, entry.operation, entry.target, entry.outcome],
       );
     },
-    list: (since, limit) => this.database.select("audit", "id > ?", [since ?? 0], "id DESC", limit),
+    list: (since, limit) =>
+      this.database.select(
+        "audit",
+        "id > ? AND operation NOT IN ('message_read','message_acknowledge','message_handle')",
+        [since ?? 0],
+        "id DESC",
+        limit,
+      ),
   };
-}
-
-/** The conditions that apply, each with its parameters, joined into one SQL condition. */
-function conditions(given: (false | [string, ...SQLInputValue[]])[]): {
-  where: string;
-  parameters: SQLInputValue[];
-} {
-  const applying = given.filter((each) => each !== false);
-  return {
-    where: applying.map(([condition]) => condition).join(" AND ") || "1",
-    parameters: applying.flatMap(([, ...values]) => values),
-  };
+  transaction<T>(work: () => T): T {
+    return this.database.transaction(work);
+  }
 }

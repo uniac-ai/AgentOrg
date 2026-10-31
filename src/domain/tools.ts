@@ -2,12 +2,12 @@
 
 import type { z } from "zod";
 import type { BuiltinSpec, ToolDescriptor } from "./model/index.ts";
-import type { ActorRow, Waiting } from "./ports.ts";
+import type { ActorRow, Invocation } from "./ports.ts";
 
 export interface Operation {
   name: string;
   definition: BuiltinSpec;
-  invoke(actor: ActorRow, input: unknown, context: Waiting): unknown;
+  invoke(actor: ActorRow, input: unknown, context: Invocation): unknown;
 }
 
 export interface FeatureTool extends Pick<ToolDescriptor, "id" | "name"> {
@@ -18,7 +18,7 @@ type Handlers<S extends Record<string, BuiltinSpec>> = {
   [N in keyof S]: (
     actor: ActorRow,
     request: z.output<S[N]["request"]>,
-    context: Waiting,
+    context: Invocation,
   ) => z.output<S[N]["response"]> | Promise<z.output<S[N]["response"]>>;
 };
 

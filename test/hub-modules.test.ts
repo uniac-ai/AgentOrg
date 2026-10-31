@@ -36,7 +36,7 @@ test("an explicitly composed module binds discovery and dispatch to its own prin
       return { actor: actor.id, value: request.value };
     },
   });
-  const hub = application(actors, capabilities([tool]), audit(store.audit, now), { stepMs: 1 });
+  const hub = application(actors, capabilities([tool]), audit(store.audit, now));
   const invocation = { signal: new AbortController().signal, progress: async () => {} };
   const invoke = (actor: string, name: string, input: Record<string, unknown>) =>
     hub.invoke(actor, name, input, invocation);

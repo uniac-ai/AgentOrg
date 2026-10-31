@@ -1,10 +1,23 @@
 # Codex and other MCP clients
 
-`agentorg-mcp connect codex` sets up the project's `org` MCP server, AgentOrg skill, and context and prompt hooks. Trust the project's configuration, enable hooks with `features.hooks`, and review and trust the definitions through Codex's `/hooks`. `/mcp` lists the server's tools.
+`agentorg-mcp connect codex` configures the project's `org` MCP server, AgentOrg skill and
+`SessionStart` context hook. Trust the project, enable `features.hooks`, and review hook definitions
+through `/hooks`. `/mcp` lists the three adapter tools.
 
-- **Attachment.** Attach with the actor id in your brief, or with name and purpose when the user appointed you directly. Keep the returned actor id in your role line. Codex identifies the conversation when it calls a tool; the adapter then recovers its saved actor. Giving that same actor id acknowledges the binding. A fork with a new conversation id attaches independently. An attached conversation cannot change actors. Every MCP client uses the same stable `attach`, `interfaces` and `call` tools; logical operations use `call` as the skill describes.
-- **The user's words.** The prompt hook captures what the user typed for recorded answers. These hooks require the installed Codex build to identify the same conversation in hook stdin and tool-call metadata; use a build whose startup, resume and fork behavior has been verified.
-- **Inbox.** At the start of each turn and at each milestone, read what waits on you: your unread `messages`, the open `questions` addressed to you, and answers to the questions you asked (yours, since the cursor your last read returned). Mark messages you have handled read with `message_read`, so their senders see they arrived. Codex's hooks do not wake idle turns. When only a wait remains, end your turn with it shown in your progress; read what arrived when your next turn starts.
-- **Starting a report's session.** The user starts it, unless your client offers a tool that starts a session: give them the prompt for a new session in the project folder, "Attach with actor <id>, then read your brief in your messages.", and show the wait in your progress. Subagents within your session are helpers, never briefed to attach to a position.
+- **Attachment.** Attach with the Actor ID in your brief, or once with name/purpose when the user
+  directly appointed you. Codex identifies the conversation in tool-call metadata; context hooks
+  take `session_id` from stdin. The same conversation recovers its Actor and cannot change it.
+  A fork with a new conversation ID attaches independently. Verify those identities with the
+  installed client when setting up its hooks.
+- **Calls.** Read `interfaces` and invoke logical Hub operations through `call {name, input}`.
+- **Inbox.** Codex's generic hooks supply context and do not wake idle turns. When running, traverse
+  incoming `message_list`, visible `work_list` and `form_list`, retaining separate module positions.
+  Use record IDs/revisions to recognize updates. No public read acknowledgement is needed or available.
+- **Approvals.** Form responses are ordinary Actor records. Native request authorization requires
+  a client-owned validated binding, independently of the generic adapter.
+- **Other sessions.** Follow the user's authorization for starting or messaging separate sessions.
+  A helper within this conversation is not a separately admitted Actor.
 
-Other MCP clients can run the default adapter mode with `CLAUDE_CODE_SESSION_ID` unset for an unpersisted attachment. Attach on each start or resume with your actor id, and read the inbox as above. Their own lifecycle and approval controls determine how they start report sessions.
+Other MCP clients can run the default adapter with `CLAUDE_CODE_SESSION_ID` unset for an unpersisted
+attachment. Attach on each start or resume. Their own lifecycle and approval controls govern native
+sessions. Existing clients require intentional historical delivery baselining at Workspace cutover.

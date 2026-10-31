@@ -37,7 +37,7 @@ export class Database {
   }
 
   private createSchema(): void {
-    const { user_version: version } = this.db.prepare("PRAGMA user_version").get() as {
+    let { user_version: version } = this.db.prepare("PRAGMA user_version").get() as {
       user_version: number;
     };
     if (version === SCHEMA_VERSION) return;
@@ -56,9 +56,24 @@ export class Database {
         this.db.exec(
           `DROP TABLE exposures; DROP INDEX pending_calls;
            ALTER TABLE actors DROP COLUMN created_at_attach;
-           PRAGMA user_version = ${SCHEMA_VERSION};`,
+           PRAGMA user_version = 8;`,
         );
       });
+      version = 8;
+    }
+    if (version === 8) {
+      this.transaction(() =>
+        this.db.exec(`
+        ALTER TABLE progress RENAME TO legacy_progress;
+        ALTER TABLE questions RENAME TO legacy_questions;
+        ALTER TABLE messages RENAME TO legacy_messages;
+        CREATE TABLE workspace_imports (
+          message_id TEXT PRIMARY KEY, source_hash TEXT NOT NULL,
+          recipient_id TEXT NOT NULL REFERENCES actors(id), workspace_cursor INTEGER NOT NULL
+        );
+        PRAGMA user_version = ${SCHEMA_VERSION};
+      `),
+      );
       return;
     }
     if (version !== 0) {

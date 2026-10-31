@@ -14,11 +14,6 @@ import { waitForNews } from "./waiter.ts";
 interface Client {
   /** The client's id for the session, which the agent actor and the waiter both see. */
   session(input?: string): string | undefined;
-  /**
-   * The words the user typed, from a prompt hook's input; undefined for input the client delivered
-   * instead, such as a waiter's output or another session's message.
-   */
-  typed?(input: string): string | undefined;
   /** For a client whose hooks run the waiter. */
   waiter?: {
     /** True while the session's client process runs. */
@@ -68,10 +63,7 @@ export function claudeTakesInput(line: string): boolean {
   return !printing || /--input-format(=|\s+)stream-json\b/.test(line);
 }
 
-/** Client-delivered input comes wrapped in an element, such as `<task-notification>…`. */
-const WRAPPED = /^\s*<([A-Za-z][\w-]*)[\s>][\s\S]*<\/\1>/;
-
-function hookInput(input: string): { session_id?: unknown; prompt?: unknown } {
+function hookInput(input: string): { session_id?: unknown } {
   try {
     const value: unknown = JSON.parse(input);
     if (typeof value === "object" && value !== null && !Array.isArray(value)) return value;
@@ -79,15 +71,9 @@ function hookInput(input: string): { session_id?: unknown; prompt?: unknown } {
   throw new Error("client hook input must be a JSON object");
 }
 
-function typed(input: string): string | undefined {
-  const { prompt } = hookInput(input);
-  return typeof prompt === "string" && !WRAPPED.test(prompt) ? prompt : undefined;
-}
-
 const CLIENTS: Record<string, Client> = {
   "claude-code": {
     session: () => process.env.CLAUDE_CODE_SESSION_ID,
-    typed,
     waiter: {
       alive: () => running(claudePid()),
       takesInput: () => claudeTakesInput(commandLine(claudePid()) ?? ""),
@@ -100,7 +86,6 @@ const CLIENTS: Record<string, Client> = {
       const { session_id } = hookInput(input);
       return typeof session_id === "string" ? session_id : undefined;
     },
-    typed,
   },
 };
 
@@ -132,12 +117,12 @@ const sessionOf = (name: string, client: Client, input?: string) =>
 export const ATTACH_FIRST =
   "agentorg: This session can fill a position in an AgentOrg organization. Load the agentorg skill, then attach with `attach` before any other action.";
 
-export const MCP_HELP = `usage: agentorg-mcp [context|prompt|wait] [--client claude-code|codex]
+export const MCP_HELP = `usage: agentorg-mcp [context|wait] [--client claude-code|codex]
        agentorg-mcp connect|disconnect <claude-code|codex> [--project <dir>]
        agentorg-mcp status [--project <dir>]
 
 Present attach, interfaces and call over stdio, connected to AGENTORG_URL. Listing and invocation require attachment; interfaces reads the actor's permitted Tools and their interfaces, and call invokes an interface by its call alias.
-Client hooks: context emits an attachment hint; prompt keeps typed input; wait delivers pending input on stderr with the client's wake status.`;
+Client hooks: context emits an attachment hint; wait delivers Message/Form changes on stderr with the client's wake status.`;
 
 export async function mcpCommand(args: string[]): Promise<number> {
   const command = args[0];
@@ -150,20 +135,13 @@ export async function mcpCommand(args: string[]): Promise<number> {
   if (asked) return help(MCP_HELP);
   const { name, client: chosen, rest } = client(args);
   const input =
-    rest[0] === "prompt" || (name === "codex" && ["context", "wait"].includes(rest[0] ?? ""))
+    name === "codex" && ["context", "wait"].includes(rest[0] ?? "")
       ? await text(process.stdin)
       : undefined;
   const session = sessionOf(name, chosen, input);
   if (rest[0] === "context") {
     if (session === undefined || sessions.position(session) === undefined) {
       process.stdout.write(`${ATTACH_FIRST}\n`);
-    }
-    return 0;
-  }
-  if (rest[0] === "prompt") {
-    const typed = chosen.typed?.(input ?? "");
-    if (session !== undefined && typed !== undefined && sessions.position(session) !== undefined) {
-      sessions.keepTyped(session, typed);
     }
     return 0;
   }

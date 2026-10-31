@@ -1,13 +1,15 @@
 /**
  * The core's built-ins, the surface every actor finds among its available interfaces: their
- * requests, results and descriptions. The communication standard's are in `communication.ts`.
+ * requests, results and descriptions. Workspace modules own their interaction contracts.
  * Every open Actor receives the same built-in interfaces, including audit metadata.
  */
 
 import { z } from "zod";
-import { COMMUNICATION } from "./communication.ts";
+import { CLAIMS } from "./claims.ts";
 import { toolDefinition } from "./json-schema.ts";
 import { Actor, AuditEntry, Call, Handle, Id, Text } from "./records.ts";
+import { TEAM } from "./team.ts";
+import { DIRECTORY, FORMS, MESSAGES, WORK } from "./workspace.ts";
 
 export const ExecutionOptions = z.strictObject({
   providerId: Id.describe("The enrolled Provider to ask for execution."),
@@ -115,7 +117,12 @@ export const ACTIVITY = toolDefinition("activity", {
 /** Derived schemas for CLI and typed callers; feature modules supply runtime operations. */
 export const BUILTINS = {
   ...ACTORS.interfaces,
-  ...COMMUNICATION,
+  ...TEAM.interfaces,
+  ...CLAIMS.interfaces,
+  ...DIRECTORY.interfaces,
+  ...MESSAGES.interfaces,
+  ...WORK.interfaces,
+  ...FORMS.interfaces,
   ...CALLS.interfaces,
   ...ACTIVITY.interfaces,
 } as const;

@@ -1,22 +1,19 @@
 /**
  * Which client session fills which position, kept in the home's `sessions/<session>/` so that a
- * resumed session fills it again: `position` holds the actor id, `waiter` the process id of the
- * session's current waiter, `cursor` the newest message the waiters have delivered, and `prompt`
- * the words the user last typed in the session, until a recorded answer uses them. Each file has
- * one writer: the agent actor writes `position` and uses up `prompt`, a starting waiter writes
- * `waiter`, a delivering waiter `cursor`, and the client's prompt hook `prompt`.
+ * resumed session fills it again. `position` holds the Actor ID, `waiter` the current waiter PID,
+ * and `inbox` the client's separate Message/Form delivery positions. These are local delivery
+ * bookkeeping, never public acknowledgements or evidence of user input.
  */
 
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { home, privateDirectory } from "../../home.ts";
 
-type Entry = "position" | "waiter" | "cursor" | "prompt";
+type Entry = "position" | "waiter" | "inbox";
 
-/** Words the user typed in the session, and when. */
-export interface Typed {
-  text: string;
-  at: string;
+export interface InboxPosition {
+  messages: number;
+  forms: number;
 }
 
 const SESSION = /^[A-Za-z0-9_-]{1,128}$/;
@@ -51,13 +48,14 @@ export const sessions = {
   forget: (session: string) => rmSync(directory(session), { recursive: true, force: true }),
   waiter: (session: string) => Number(read(session, "waiter") ?? 0),
   claimWaiter: (session: string, pid: number) => write(session, "waiter", String(pid)),
-  cursor: (session: string) => read(session, "cursor"),
-  advance: (session: string, cursor: string) => write(session, "cursor", cursor),
-  typed(session: string): Typed | undefined {
-    const kept = read(session, "prompt");
-    return kept === undefined ? undefined : (JSON.parse(kept) as Typed);
+  inbox(session: string): InboxPosition {
+    const kept = read(session, "inbox");
+    if (kept === undefined) return { messages: 0, forms: 0 };
+    const value = JSON.parse(kept) as InboxPosition;
+    if (![value.messages, value.forms].every((n) => Number.isSafeInteger(n) && n >= 0))
+      throw new Error("invalid local inbox position");
+    return value;
   },
-  keepTyped: (session: string, text: string) =>
-    write(session, "prompt", JSON.stringify({ text, at: new Date().toISOString() })),
-  forgetTyped: (session: string) => rmSync(join(directory(session), "prompt"), { force: true }),
+  advanceInbox: (session: string, position: InboxPosition) =>
+    write(session, "inbox", JSON.stringify(position)),
 };

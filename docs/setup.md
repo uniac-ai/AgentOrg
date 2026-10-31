@@ -24,7 +24,8 @@ agentorg-server status
 
 This keeps only the core running across restarts and logins, through launchd on macOS or systemd
 on Linux. It creates the organization's home, database, root identity and credential, and pins its launcher
-at `<home>/bin/agentorg-server`. Reinstall after upgrading the package or Node.
+at `<home>/bin/agentorg-server`. Reinstall after upgrading the package or Node. Existing homes require the coordinated
+[Workspace storage cutover](workspace-storage.md) before the upgraded Hub starts.
 
 ## MCP clients
 
@@ -40,8 +41,7 @@ It requires the core. Other project entries stay as they are:
 
 - Claude Code gets the `org` server in `.mcp.json`, approval and hooks in
   `.claude/settings.local.json`, and the skill in `.claude/skills/`.
-- Codex gets `[mcp_servers.org]` in `.codex/config.toml`, `SessionStart` context and
-  `UserPromptSubmit` capture hooks in `.codex/hooks.json`, and the skill in `.agents/skills/`.
+- Codex gets `[mcp_servers.org]` in `.codex/config.toml`, `SessionStart` context hooks in `.codex/hooks.json`, and the skill in `.agents/skills/`.
 
 These entries name machine-local paths. The user starts a new session to pick them up; Codex also
 requires project trust, enabled hooks (`features.hooks`), and review and trust of the hook

@@ -8,9 +8,11 @@ import { z } from "zod";
 import { Id, Interface } from "./records.ts";
 
 export * from "./builtins.ts";
-export * from "./communication.ts";
+export * from "./claims.ts";
 export * from "./json-schema.ts";
 export * from "./records.ts";
+export * from "./team.ts";
+export * from "./workspace.ts";
 
 export type InterfaceDescriptor = z.output<typeof Interface>;
 

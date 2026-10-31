@@ -12,7 +12,7 @@ import { done, HUB_INTERFACES, refused } from "./harness.ts";
 
 const invocation = { signal: new AbortController().signal, progress: async () => {} };
 
-test("all open Actors see exactly the seven Hub Tools and fifteen interfaces", async (t) => {
+test("all open Actors see exactly the nine Hub Tools and twenty-three interfaces", async (t) => {
   const store = new SqliteStore(":memory:");
   t.after(() => store.close());
   const org = organization(store);
@@ -37,8 +37,8 @@ test("all open Actors see exactly the seven Hub Tools and fifteen interfaces", a
       Object.entries(HUB_INTERFACES).map(([name, names]) => [name, [...names].sort()]),
     ),
   );
-  assert.equal(catalog.length, 7);
-  assert.equal(catalog.flatMap((tool) => tool.interfaces).length, 15);
+  assert.equal(catalog.length, 9);
+  assert.equal(catalog.flatMap((tool) => tool.interfaces).length, 23);
   assert.deepEqual(org.available(lead.id), catalog);
   assert.deepEqual(org.available(worker.id), catalog);
   const connection = { close() {} };
@@ -106,7 +106,7 @@ test("an unsupported database schema is refused without changing its records", (
     "PRAGMA user_version = 6; CREATE TABLE kept (value TEXT); INSERT INTO kept VALUES ('kept');",
   );
   old.close();
-  assert.throws(() => new SqliteStore(path), /database has schema 6; this agentorg reads 8/);
+  assert.throws(() => new SqliteStore(path), /database has schema 6; this agentorg reads 9/);
   const unchanged = new DatabaseSync(path);
   t.after(() => unchanged.close());
   assert.equal(unchanged.prepare("PRAGMA user_version").get()?.user_version, 6);
@@ -122,14 +122,14 @@ test("audit metadata is shared without disclosing message bodies or Actor creden
   const invoke = (id: string, name: string, input: Record<string, unknown> = {}) =>
     org.invoke(id, name, input, invocation);
   const secret = "private-message-body-sentinel";
-  await done(invoke(actor.id, "message_send", { to: root.id, text: secret }));
-  await done(invoke(actor.id, "progress_set", { state: "running", summary: "Working" }));
+  await done(invoke(actor.id, "message_send", { recipientID: root.id, text: secret }));
+  await done(invoke(actor.id, "work_create", { ownerID: root.id, goal: "Working" }));
   const rootView = await done(invoke(root.id, "activity"));
   const workerView = await done(invoke(actor.id, "activity"));
   assert.deepEqual(workerView, rootView);
   assert.deepEqual(
     rootView.entries.map((entry: { operation: string }) => entry.operation),
-    ["progress_set", "message_send"],
+    ["work_create", "message_send"],
   );
   for (const entry of rootView.entries)
     assert.deepEqual(Object.keys(entry).sort(), [

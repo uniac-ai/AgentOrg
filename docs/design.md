@@ -14,7 +14,7 @@ session and a program are ways of operating an actor, rather than kinds of actor
 |---|---|---|
 | Server | `agentorg-server [--port <n>]` | Run the core. Its `service install`, `service uninstall` and `status` operate only this service. |
 | Actor CLI | `agentorg <operation>` | Call the organization's built-ins as an actor. |
-| MCP client adapter | `agentorg-mcp [--client <name>]` | Present an actor's operations over stdio. Its `connect`, `disconnect` and `status` own project integrations; `context`, `prompt` and `wait` own client hooks. |
+| MCP client adapter | `agentorg-mcp [--client <name>]` | Present an actor's operations over stdio. Its `connect`, `disconnect` and `status` own project integrations; `context` and `wait` own client hooks. |
 
 The package distributes these three executables and the public `@agentorg/cli/actor` library.
 Their source boundaries are `src/server/` and `src/clients/{cli,mcp}/`. Each application owns
@@ -23,7 +23,7 @@ the server nor sibling applications. Clients reach the organization through the 
 The shared domain model supplies their types.
 
 `@agentorg/cli/contract` exposes an explicit selection of public wire schemas and types from
-`src/domain/model/`. It depends only on that model; external clients use it to validate and type
+`src/domain/model/` and the installed Workspace package; external clients use it to validate and type
 requests and responses. `BUILTINS` is the existing derived schema inventory, while feature
 modules continue to own runtime operations. Storage records and bound operations stay internal.
 
@@ -56,7 +56,7 @@ The server composition root wires the concrete adapters to the domain's clients.
 | Storage | `src/storage/sqlite/` | Domain records through the Store port, using `node:sqlite`. |
 | Clients | `src/actor/`, `src/clients/`, external clients | List and invoke the Hub's explicit Tools as an Actor. |
 
-`src/domain/ports.ts` defines Application, ActorConnection, Invocation, Waiting and Store. An
+`src/domain/ports.ts` defines Application, ActorConnection, Invocation and Store. An
 ActorConnection exposes only revocation. `test/layers.test.ts` checks module boundaries, the
 acyclic domain import graph and the domain's independence from Node and protocol libraries.
 
@@ -91,8 +91,8 @@ its own admitted principal and does not turn the created Actor into an invocatio
 | `connections.ts` | All admitted Actor connections, presence and revocation. |
 | `execution.ts` | One optional Provider provisioning outcome for an already-created Actor. |
 | `actors.ts` | Actor lifecycle and public projection, using Registry, Connections and Execution. |
-| `progress.ts`, `team.ts` | Progress versions and composed organization views. |
-| `communication.ts` | Questions and private messages, with their shared cursor and waiting reads. |
+| `team.ts` | Identity, hierarchy and actual admitted connection presence. |
+| `workspace.ts` | Explicit bindings to package-owned directory, Messages, Work and Forms under the admitted Actor. |
 | `claims.ts`, `audit.ts` | Shared resource claims and append-only audit metadata. |
 | `calls.ts` | Read-only historical Actor-call results, visible to the original caller. |
 | `tools.ts` | Schema contracts bound to their module-owned typed operations. |
@@ -105,14 +105,16 @@ A Tool is `{id, name, interfaces}`. Each interface contains its local descriptor
 an optional `read_only` hint. `(tool.id, interface.name)` identifies it. `Actor.available()` returns
 these Tools; the CLI and MCP adapter's `interfaces` operation return `{tools: [...]}`.
 
-Every open Actor receives the same seven Hub Tools and fifteen interfaces:
+Every open Actor receives the same nine Hub Tools and twenty-three interfaces:
 
 | Tool | Interfaces |
 |---|---|
 | `actors` | `actor_create`, `actor_close` |
-| `team` | `team`, `progress`, `progress_set` |
-| `questions` | `question_ask`, `question_answer`, `questions` |
-| `messages` | `message_send`, `messages`, `message_read` |
+| `team` | `team` |
+| `directory` | `actor_get`, `actor_list` |
+| `messages` | `message_send`, `message_get`, `message_list` |
+| `work` | `work_create`, `work_get`, `work_list`, `work_update`, `work_submit`, `work_review` |
+| `forms` | `form_create`, `form_get`, `form_list`, `form_respond`, `form_close` |
 | `claims` | `claim`, `release` |
 | `calls` | `call_result` |
 | `activity` | `activity` |
@@ -136,57 +138,48 @@ The durable identity also holds a credential hash that public views omit. Online
 one admitted Actor connection; multiple caller connections coexist. Closing an Actor revokes
 all its connections while preserving independent Provider connections.
 
-SQLite schema 8 stores Actor identity, progress, questions, messages, claims, historical calls
-and audit records. Opening schema 7 performs one transaction: remove cached advertisements and
-the session-creation marker, append failed outcomes for pending Actor calls, mark those calls
-failed with an explicit retirement reason, and advance the version. Their inputs, destinations,
-run references and other records remain. No historical execution is replayed or cancelled at an
-external runtime. Reopening schema 8 does not repeat retirement. Other nonzero versions are
-refused without migration. Fresh databases start directly at schema 8.
+Hub SQLite schema 9 stores canonical Actors, claims, historical calls, audit metadata and a private
+Workspace import ledger. A separate `core.workspace.db` is opened through the installed package's
+public persistence API. The package owns its schema, transaction rules and record history; Hub
+owns both handles and closes them after the listener. Workspace authority receives the admitted
+Hub Actor ID on every call. The canonical directory returns active Actors in stable insertion order;
+named lookup also resolves closed counterparts. `team` returns only `{root, positions}`, with actual
+connection presence on each position.
+
+The package is vendored and bundled into the distributable SDK at an immutable source/checksum
+pin in `vendor/workspace.json`. No package MCP server or additional network service is started.
+[Workspace storage](workspace-storage.md) describes startup import, retained originals and backups.
 
 `call_result {call}` reads an existing receipt only for its original caller. It performs no wait,
 delivery or remote action. Actor handles remain unique among open siblings, and paths describe
 the organization. Actor and Team metadata contain no callable-interface or native-session fields.
 
-### Built-ins
+### Record authority
 
-| Built-in | Responsibility |
+The Hub's Actors Tool creates direct reports and closes leaves under the existing manager/root
+lifecycle policy. Shared resource claims remain Hub-owned: a live holder prevents another claim,
+expiry or holder closure permits replacement, and a holder or root may release it. Historical
+`call_result` remains restricted to the original caller. Audit exposes operation metadata only.
+
+Workspace modules enforce record roles, equally for human, agent and program clients:
+
+| Record | Authority |
 |---|---|
-| `actor_create {name, purpose, execution?}` | Create a report, returning its one-time credential and optional separate Provider outcome. |
-| `actor_close {actor}` | The manager or root closes a leaf Actor and revokes its Hub connections. Root cannot be closed. |
-| `team {actor?, depth?}` | Read organization, presence, progress, open questions and claims. Anyone may read any position. |
-| `progress {actor, history?}` | Read current and optional historical progress. |
-| `progress_set {state?, summary?, items?, links?}` | Replace supplied fields of the caller's progress. |
-| `question_ask {to?, text, links?, options?, recommendation?, answerer?, cause?}` | Publish a question under the communication rules below. |
-| `question_answer {questions, choice?, text?, recorded?}` | Answer authorized questions or record the asking session's own user answer. |
-| `questions {to?, from?, open?, since?, limit?, wait?}` | Read questions, optionally waiting for a matching cursor change. |
-| `message_send {to, text, links?, reply_to?}` | Send a private message. |
-| `messages {box?, unread?, actor?, with?, since?, limit?, wait?}` | Read authorized correspondence, optionally waiting for a cursor change. |
-| `message_read {ids}` | Mark messages addressed to the caller read. |
-| `claim {resource, note, until?}` | Hold a shared resource. |
-| `release {resource}` | Release the caller's claim; root may release any. |
-| `call_result {call}` | Read a historical call made by the caller. |
-| `activity {since?, limit?}` | Read audit metadata as any open Actor. |
+| Message | Immutable P2P correspondence, readable only by sender and recipient. `message_send` takes `recipientID`, `text` and optional readable `workID`; replies are new Messages. |
+| Work | Requester sets scope/owner and reviews the exact submission; current owner updates execution progress and submits. Mutations require `expectedRevision`. |
+| Form | Requester and designated respondents can read; current linked Work parties also read. Respondents answer while open; the requester resolves or cancels. Work linkage is optional and validates a real readable Work. |
 
-### Communication
+Each package module has its own cursor. Lists traverse currently visible upserts, applying
+visibility before the page limit; callers retain each returned `after` separately. These cursors
+are traversal positions, not delivery acknowledgements. Consumers should upsert records by ID,
+use revisions when mutating, and refresh authority after ownership changes. Lists are not a
+revocation feed. Public Message state, history and operations expose no read/handled status.
+Form responses are ordinary authenticated Actor records. A native approval requires a client-owned
+validated binding to its native request and authorization; an arbitrary Form response is insufficient.
 
-| Kind | Who reads it | Who it waits on |
-|---|---|---|
-| **Progress** | anyone in the organization | nobody |
-| **Question** | anyone, with its answer | its addressee, until answered |
-| **Message** | its two parties, the manager of either, and the root | its addressee, until read |
-
-- **Progress** is where an actor stands: its state, a short summary at its own level, its open workstreams or steps, and links to what it produced. An actor publishes only what it chooses; its transcript and reasoning stay in its client.
-- **Asking.** A question goes to the asker's manager by default, or to a direct report, so decisions follow the chain. The root asks anyone.
-- **Escalation** is a new question. A manager asks its own manager in its own terms, with `cause` naming the question it carries up, and answers the original once it has the answer.
-- **Answering:**
-  - A question's addressee answers it, or the answerer it names, as the root for an approval only the user gives. The root may answer any question.
-  - The answer records the actor whose credential gave it, so a relayed approval does not count.
-  - When the user answers inside the asking session, the asker records their words for its own question, and the answer is marked as recorded. A question with an answerer refuses that: the user answers it through the core.
-  - One answer may resolve several questions. Its choice is optional, and its words may reject the options.
-- **Messaging.** A message goes to any open position. A reply names the message it replies to, between the same two actors, and marks it read. A message the caller may not read is not found, so a private message's existence stays private.
-- **Claims.** An actor claims a shared resource, such as a release lane or a cluster, while it uses it, and anyone sees current claims in `team`. Claiming a resource another actor holds is refused, naming the holder.
-- **The cursor.** Questions and messages share one sequence. A question takes a new cursor when it is answered. So a read since a cursor finds new messages, new questions and new answers. A read with `wait` holds until a match exists, for up to 600 seconds, and every write wakes it.
+Known package errors map to Hub refusals (`invalid_input` becomes `invalid`). Unexpected errors,
+including errors after a package commit or during Hub audit, remain transport errors with unknown
+write outcome. Clients must inspect durable state before deciding whether to retry a write.
 
 When execution is requested, the Actors module creates the organizational Actor through Registry
 before calling Execution. The execution client uses the selected Provider's configuration schema and
@@ -220,7 +213,7 @@ MCP server. The Hub publishes its explicit Tools through `tools/list`; `tools/ca
 the admitted principal. Actors need no MCP server. Their messages cannot register advertisements
 or a reverse invocation endpoint. The SDK's `connectClient` requires `url` and `actorId`, with a
 credential under the default policy. It lists Tools, calls their interfaces and reconnects after
-a transport drop. Progress notifications support waiting Hub reads. A request's caller identity
+a transport drop. Generic progress notifications remain part of the transport. A request's caller identity
 does not depend on an incoming call, native session or RPC cause.
 
 ## The MCP adapter
@@ -241,15 +234,12 @@ The MCP adapter, `agentorg-mcp` in `src/clients/mcp/`, is an optional client for
   - When the session's `actor_create` creates a report, the agent actor keeps the report's credential there, and the session gets the result with that credential replaced by a note that it was kept.
   - `actor_close` forgets the closed position's credential.
 - **Session identity and resuming.** `sessions/<client>-<session id>/position` names the position a conversation fills. Claude Code names the session in `CLAUDE_CODE_SESSION_ID`. Codex identifies it in each tool call's `_meta.threadId`, carried through the presentation boundary as optional occupant-session context. Initialization and listing need no identity; a Codex call requires one, and the adapter refuses a different identity after binding. The first call recovers only that conversation's saved position. `attach {actor}` acknowledges the same actor; a session cannot change actors. A fork with a new thread id attaches independently.
-- **Project hooks.** `connect codex` writes AgentOrg's `SessionStart` and `UserPromptSubmit` commands to `.codex/hooks.json`, preserving other entries. Launcher command and arguments are edited by their parsed TOML value ranges, preserving surrounding policy and comments. The commands take identity from stdin's `session_id`, not inherited environment variables. Project configuration requires trust, hooks must be enabled with `features.hooks`, and the definitions require review and trust through `/hooks`. Startup, resume and fork identity behavior is verified against the Codex build in use; thread and session-tree identities are not derived from each other.
-- **Delivery and waking.** Claude Code's hooks run the waiter, `agentorg-mcp wait`, when the session starts and whenever its turn ends, as `asyncRewake` hooks. Codex's hooks supply context and capture prompts; its sessions read their inbox when they run, since its background hooks do not wake idle turns.
-  - The waiter waits, as the position, for what the session has not seen: unread messages to the position, questions addressed to it, and answers to its own questions. The session's cursor, a place in the sequence questions and messages share, marks what was delivered.
-  - It writes them framed as agentorg's, each with its kind, its sender's path and its id, marks the messages read, and exits with status 2. Claude Code hands that output to the session as its next input, starting a turn when the session is idle.
-  - A newer waiter replaces an older one, which then ends without writing. Delivery is at least once.
-- **Answers recorded from the user's words.** When the user answers a question in the asking session itself, the session records the answer with `question_answer {recorded: true}`.
-  - The client's prompt hook, `agentorg-mcp prompt`, keeps the words the user last typed in the session, in `sessions/<client>-<session id>/prompt`. It doesn't keep what the client delivers wrapped in an element, such as the waiter's output or another session's message.
-  - The agent actor passes a recorded answer on only when those words came after every question it answers. It puts the words in the answer's text verbatim, in place of the session's own text, and then forgets them.
-  - The core refuses a recorded answer to a question that names an answerer.
+- **Project hooks.** `connect codex` writes AgentOrg's `SessionStart` context commands to `.codex/hooks.json`, preserving other entries. Launcher command and arguments are edited by their parsed TOML value ranges, preserving surrounding policy and comments. The commands take identity from stdin's `session_id`, not inherited environment variables. Project configuration requires trust, hooks must be enabled with `features.hooks`, and the definitions require review and trust through `/hooks`. Startup, resume and fork identity behavior is verified against the Codex build in use; thread and session-tree identities are not derived from each other.
+- **Delivery and waking.** Claude Code's hooks run the waiter, `agentorg-mcp wait`, when the session starts and whenever its turn ends, as `asyncRewake` hooks. Codex's hooks supply context; its sessions read their inbox when they run, since its background hooks do not wake idle turns.
+  - The waiter polls incoming `message_list` and visible `form_list` pages as the ordinary attached Actor, with separate private positions in `sessions/<session>/inbox`.
+  - It writes the records with their canonical sender/requester names and IDs, then advances its local positions and exits with status 2. Claude Code hands that output to its session as input. No public receipt is written. A write followed by a crash before saving local positions can redeliver the same records.
+  - A newer waiter replaces an older one. Generic delivery is at least once; native approval handling belongs to the client.
+  - Existing sessions require deliberate cursor baselining at cutover. Legacy shared cursors cannot be reused as package cursors. The private historical import manifest supports that later client coordination; the Hub does not activate or seed clients.
 
 ## The network
 

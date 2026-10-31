@@ -66,11 +66,10 @@ const DOMAIN_BOUNDARIES: Record<string, string[]> = {
   registry: ["connections", "calls", "capabilities", "actors", "team", "application"],
   connections: ["registry", "calls"],
   capabilities: ["application", "calls", "actors", "team"],
-  communication: ["progress", "claims", "capabilities", "actors", "team", "application"],
-  progress: ["communication", "claims", "actors", "team"],
+  workspace: ["claims", "capabilities", "actors", "team", "application", "execution"],
   actors: ["capabilities", "team", "application"],
   team: ["capabilities", "application"],
-  application: ["actors", "team", "communication", "claims", "progress", "execution"],
+  application: ["actors", "team", "workspace", "claims", "execution"],
 };
 
 // The forbidden dependencies are the architecture's contract, independent of implementation.

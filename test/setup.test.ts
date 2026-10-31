@@ -136,7 +136,7 @@ test("connect writes each client's entries beside the user's own, and disconnect
     assert.equal(started[2].command, `'${launcher}' wait --client claude-code`);
     assert.equal(started[2].asyncRewake, true);
     assert.equal(local.hooks.Stop[0].hooks[0].command, started[2].command);
-    assert.match(local.hooks.UserPromptSubmit[0].hooks[0].command, /prompt --client/);
+    assert.equal(local.hooks.UserPromptSubmit, undefined);
     const codex = readFileSync(join(project, ".codex", "config.toml"), "utf8");
     assert.ok(codex.startsWith(toml.trimEnd()), "the user's tables stay first");
     assert.match(
@@ -153,13 +153,8 @@ test("connect writes each client's entries beside the user's own, and disconnect
         timeout: 10,
       },
     ]);
-    assert.deepEqual(codexHooks.hooks.UserPromptSubmit[0].hooks, [
-      {
-        type: "command",
-        command: `'${launcher}' prompt --client codex`,
-        timeout: 10,
-      },
-    ]);
+    assert.equal(codexHooks.hooks.UserPromptSubmit, undefined);
+
     assert.equal(codexHooks.hooks.Stop, undefined);
     for (const skills of [".claude/skills", ".agents/skills"]) {
       assert.equal(readlinkSync(join(project, skills, "agentorg")), SKILL);

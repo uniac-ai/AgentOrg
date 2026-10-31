@@ -119,7 +119,7 @@ test("the provisioned Actor uses Hub MCP without a reverse server while its Prov
   assert.equal((await actor.call("team", { depth: 0 })).state, "done");
   assert.equal(
     (await actor.available()).length,
-    7,
+    9,
     "the Provider connection adds no Actor-facing Tool",
   );
   await until("the new Actor is connected before the Provider replies", () =>
@@ -149,7 +149,7 @@ test("schema or descriptor failures retain the Actor and its valid credential wi
   });
   t.after(() => actor.close());
   assert.equal(
-    (await actor.call("progress_set", { state: "running", summary: "Independent Actor" })).state,
+    (await actor.call("work_create", { ownerID: core.rootId, goal: "Independent Actor" })).state,
     "done",
   );
   assert.equal(core.org.registry.get(value.actor.id)?.closed_at, null);

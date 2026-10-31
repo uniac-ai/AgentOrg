@@ -1,15 +1,17 @@
 /** Public wire schemas and types for clients; definitions belong to the domain model. */
 
-export { ActorClosed, BUILTINS } from "../domain/model/builtins.ts";
 export {
-  Item,
-  Link,
+  Actor as DirectoryActor,
+  Field,
+  Form,
   Message,
-  Position,
-  Progress,
-  Question,
-  QuestionAnswer,
-  WaitsOn,
-} from "../domain/model/communication.ts";
+  Review,
+  Submission,
+  Work,
+  WorkStatus,
+} from "@uniac/agentic-workspace/contracts";
+export { ActorClosed, BUILTINS } from "../domain/model/builtins.ts";
+export { Claim } from "../domain/model/claims.ts";
 export type { Answer, InterfaceDescriptor, ToolDescriptor } from "../domain/model/index.ts";
 export { Actor, AuditEntry } from "../domain/model/records.ts";
+export { Position, Team } from "../domain/model/team.ts";

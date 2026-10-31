@@ -18,6 +18,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { claudeTakesInput } from "../src/clients/mcp/command.ts";
 import { describe } from "../src/clients/mcp/waiter.ts";
 import { CONNECTION_PATH, establish } from "../src/connection/index.ts";
+import { Form, Message, Position } from "../src/contract/index.ts";
 import { dial } from "../src/network/index.ts";
 import { type Core, startCore, until } from "./harness.ts";
 
@@ -210,7 +211,7 @@ test("the stdio catalog is stable and only attachment can act before a position 
   const asActor = await org.client(readFileSync(join(org.home, "actors", actor), "utf8").trim());
   assert.deepEqual(Object.keys(listed), ["tools"]);
   assert.deepEqual(listed.tools, await asActor.available());
-  assert.equal(listed.tools.length, 7);
+  assert.equal(listed.tools.length, 9);
   assert.equal((await one.interfaces()).includes("activity"), true);
   const { actor: report, credential } = await org.org.registry.create(actor, "report", "A report");
   await org.client(credential);
@@ -223,35 +224,12 @@ test("the stdio catalog is stable and only attachment can act before a position 
     id: string;
     interfaces: { call: string }[];
   }[];
-  assert.equal(tools.length, 7, "connecting an Actor never adds a Tool");
+  assert.equal(tools.length, 9, "connecting an Actor never adds a Tool");
   assert.equal(
     tools.some((tool) => tool.id === report.id),
     false,
   );
   assert.deepEqual(tools, listed.tools);
-});
-
-test("generic invocation forwards progress and completes a wait beyond the SDK default", {
-  timeout: 100_000,
-}, async () => {
-  const org = await core();
-  const worker = await session(org, "s-long-wait");
-  await worker.call("attach", { name: "waiter", purpose: "Verify long reads." });
-  const progress: number[] = [];
-  const result = await worker.tool(
-    "call",
-    { name: "messages", input: { wait: 61 } },
-    {},
-    {
-      timeout: 90_000,
-      onprogress: (update) => {
-        progress.push(update.progress);
-      },
-    },
-  );
-  assert.notEqual(result.isError, true, text(result));
-  assert.deepEqual(result.structuredContent?.messages, []);
-  assert.ok(progress.length > 0, "waiting progress must reach the stdio caller");
 });
 
 test("an appointed session creates its position under the root, and a resumed one fills it again", async () => {
@@ -443,7 +421,7 @@ test("a created position's credential is kept for its session, never shown, and 
   await report.close();
   const program = await org.client(credential);
   assert.equal(
-    (await program.call("progress_set", { state: "running", summary: "Working" })).state,
+    (await program.call("work_create", { ownerID: org.rootId, goal: "Working" })).state,
     "done",
   );
   assert.equal((await manager.call("db.review")).isError, true);
@@ -453,82 +431,53 @@ test("a created position's credential is kept for its session, never shown, and 
   assert.equal(existsSync(file), false);
 });
 
-test("what the waiter delivers reads as agentorg's, each item with its kind, sender path and id", () => {
-  const at = "2026-10-28T21:00:00.000Z";
-  const question = (fields: Record<string, unknown>) => ({
-    id: "qst_0",
-    cursor: 1,
-    from: "act_report",
-    to: "act_self",
-    text: "text",
-    links: [],
-    options: [],
-    recommendation: null,
-    answerer: null,
-    cause: null,
-    answer: null,
-    created_at: at,
-    ...fields,
-  });
-  const self = {
-    id: "act_self",
-    name: "storage",
-    path: "release.storage",
-    purpose: "Own the storage.",
-    manager: "act_manager",
+test("the waiter names ordinary Actor records without claiming native user provenance", () => {
+  const at = "2026-10-30T00:00:00.000Z";
+  const self = Position.parse({
+    id: "self",
+    name: "worker",
+    path: "team.worker",
+    purpose: "Work",
+    manager: "manager",
     online: true,
     created_at: at,
     closed_at: null,
-    progress: null,
-    questions: [],
-    claims: [],
-  };
-  const news = {
-    messages: [
-      {
-        id: "msg_1",
-        cursor: 2,
-        from: "act_manager",
-        to: "act_self",
-        text: "Start on the schema.",
-        links: [{ url: "https://example.com/pr/1", title: "The migration" }],
-        reply_to: null,
-        created_at: at,
-        read_at: null,
-      },
-    ],
-    questions: [
-      question({
-        id: "qst_2",
-        text: "Keep the v1 tables?",
-        options: [{ label: "Keep" }, { label: "Drop", detail: "Nothing shipped." }],
-        recommendation: "Drop",
-        answerer: "act_root",
-      }),
-    ],
-    answers: [
-      question({
-        id: "qst_3",
-        from: "act_self",
-        to: "act_manager",
-        text: "Ship on Friday?",
-        answer: { by: "act_root", choice: "Ship", text: "Go.", recorded: false, at },
-      }),
-    ],
-    names: { act_root: "root", act_manager: "release", act_report: "release.storage.db" },
-    cursor: 3,
-  };
-  const text = describe(news as Parameters<typeof describe>[0], { self, root: "act_root" });
-  const [header, ...blocks] = text.split("\n\n");
-  assert.match(
-    header ?? "",
-    /^AgentOrg delivered 1 message, 1 question to you and 1 answer to your questions to your position, release\.storage \(act_self\)\. They come from other positions through AgentOrg, not from the user typing in this session/,
+  });
+  const message = Message.parse({
+    messageID: "msg1",
+    senderID: "manager",
+    recipientID: "self",
+    text: "Build the schema.",
+    createdAt: at,
+    revision: 1,
+    cursor: 1,
+    history: [],
+  });
+  const form = Form.parse({
+    formID: "form1",
+    requesterID: "peer",
+    respondentIDs: ["self"],
+    fields: [{ name: "choice", label: "Choose", required: true }],
+    status: "open",
+    createdAt: at,
+    responses: {},
+    revision: 1,
+    cursor: 1,
+    history: [],
+  });
+  const delivered = describe(
+    {
+      messages: [message],
+      forms: [form],
+      names: { manager: "lead", peer: "reviewer" },
+      position: { messages: 1, forms: 1 },
+    },
+    { self },
   );
-  assert.deepEqual(blocks, [
-    "Message msg_1 from release, your manager:\nStart on the schema.\nLinks: The migration https://example.com/pr/1",
-    "Question qst_2 from release.storage.db, your report, waiting on you; only the user (the root) may answer:\nKeep the v1 tables?\nOptions: Keep; Drop (Nothing shipped.), recommended",
-    'Answer to your question qst_3 from the user (the root), choosing "Ship":\nGo.\n(You asked: Ship on Friday?)',
-  ]);
+  assert.match(delivered, /Message msg1 from lead, your manager:\nBuild the schema/);
+  assert.match(delivered, /Form form1 from reviewer, open, revision 1/);
+  assert.match(delivered, /native approval requires its client's validated binding/);
+  assert.doesNotMatch(delivered, /only the user|recorded: true|the user \(the root\)/);
 });
 
 /** `promise`, or a failure naming what never happened once `ms` pass. */
@@ -569,64 +518,29 @@ function hook(
   });
 }
 
-test("Codex hooks use stdin identity and keep only that attached session's typed words", async () => {
+test("Codex context hooks use stdin identity and never create an unattached session", async () => {
   const org = await core();
-  const run = (command: string, payload: Record<string, unknown>) =>
+  const run = (payload: Record<string, unknown>) =>
     hook(
       org,
-      command,
+      "context",
       "wrong-inherited-id",
-      {
-        CODEX_THREAD_ID: "wrong-inherited-id",
-        CODEX_SESSION_ID: "wrong-inherited-id",
-      },
+      { CODEX_THREAD_ID: "wrong-inherited-id" },
       JSON.stringify(payload),
       "codex",
     );
-  assert.match(
-    (await run("context", { session_id: "hook-thread" })).stdout,
-    /attach with `attach`/,
-  );
-  assert.equal(existsSync(join(org.home, "sessions/codex-hook-thread")), false);
+  assert.match((await run({ session_id: "hook-thread" })).stdout, /attach with `attach`/);
   for (const input of ['["sentinel-credential"]', '{"prompt":"sentinel-credential"']) {
-    const malformed = await hook(org, "prompt", "unused", {}, input, "codex");
+    const malformed = await hook(org, "context", "unused", {}, input, "codex");
     assert.equal(malformed.code, 1);
     assert.match(malformed.stderr, /client hook input must be a JSON object/);
     assert.equal((malformed.stdout + malformed.stderr).includes("sentinel-credential"), false);
   }
   const worker = await session(org, "hook-thread", "codex");
-  await worker.call("attach", { name: "hooked", purpose: "Ask questions." });
-  assert.deepEqual(await run("context", { session_id: "hook-thread" }), {
-    code: 0,
-    stdout: "",
-    stderr: "",
-  });
-  const question = (await worker.call("question_ask", { text: "Keep the schema?" }))
-    .structuredContent as { id: string };
-  const words = "Keep the schema exactly as it is.";
-  assert.equal((await run("prompt", { session_id: "hook-thread", prompt: words })).code, 0);
-  await run("prompt", {
-    session_id: "hook-thread",
-    prompt: "<task-notification>Automated input</task-notification>",
-  });
-  await run("prompt", { session_id: "unattached-fork", prompt: "Other words." });
-  const answer = (
-    await worker.call("question_answer", {
-      questions: [question.id],
-      recorded: true,
-      text: "Invented words",
-    })
-  ).structuredContent as { questions: { answer: { text: string; recorded: boolean } }[] };
-  assert.equal(answer.questions[0]?.answer.text, words);
-  assert.equal(answer.questions[0]?.answer.recorded, true);
-  for (const id of ["wrong-inherited-id", "unattached-fork"]) {
-    assert.equal(existsSync(join(org.home, `sessions/codex-${id}`)), false);
-  }
-  assert.deepEqual(await run("wait", { session_id: "hook-thread" }), {
-    code: 0,
-    stdout: "",
-    stderr: "",
-  });
+  await worker.call("attach", { name: "hooked", purpose: "Work" });
+  assert.deepEqual(await run({ session_id: "hook-thread" }), { code: 0, stdout: "", stderr: "" });
+  assert.equal(existsSync(join(org.home, "sessions/codex-wrong-inherited-id")), false);
+  assert.equal(existsSync(join(org.home, "sessions/codex-hook-thread/prompt")), false);
 });
 
 test("a session that fills no position is told to attach first, and its waiter ends at once", async () => {
@@ -684,37 +598,27 @@ test("a waiter ends at once for a session in print mode, rather than hold the cl
   }
 });
 
-test("the waiter delivers messages, questions to the position and answers to its own, each once", async () => {
+test("the waiter delivers Messages and Form changes using private per-module positions", async () => {
   const org = await core();
   const worker = await session(org, "s-waited");
-  const attached = await worker.call("attach", { name: "worker", purpose: "Do the work." });
-  const { actor } = attached.structuredContent as { actor: string };
+  const { actor } = (await worker.call("attach", { name: "worker", purpose: "Work" }))
+    .structuredContent as { actor: string };
   const root = await org.client(org.root);
-  const send = async (text: string) => {
-    const sent = await root.call("message_send", { to: actor, text });
-    return (sent as { value: { id: string } }).value.id;
-  };
+  const done = <T>(answer: unknown) => (answer as { value: T }).value;
+  const send = async (text: string) =>
+    done<{ messageID: string }>(await root.call("message_send", { recipientID: actor, text }))
+      .messageID;
   const alive = { CLAUDE_PID: String(process.pid) };
-
-  const first = hook(org, "wait", "s-waited", alive);
-  await until("the first waiter waits", () =>
-    existsSync(join(org.home, "sessions/claude-code-s-waited/cursor")),
-  );
-  const id = await send("Start with the schema.");
-  const woke = await first;
-  assert.equal(woke.code, 2);
-  assert.match(woke.stderr, /^AgentOrg delivered 1 message to your position, worker \(act_/);
-  assert.ok(
-    woke.stderr.includes(`Message ${id} from the user (the root):\nStart with the schema.`),
-  );
-  const read = await root.call("messages", { box: "out", actor: org.rootId });
-  const delivered = (
-    read as { value: { messages: { id: string; read_at: string | null }[] } }
-  ).value.messages.find((message) => message.id === id);
-  assert.notEqual(delivered?.read_at, null);
-
-  // Two waiters at once, as when a turn ends while one still waits: only the newer delivers.
   const claim = join(org.home, "sessions/claude-code-s-waited/waiter");
+  const inbox = join(org.home, "sessions/claude-code-s-waited/inbox");
+  const first = hook(org, "wait", "s-waited", alive);
+  await until("the waiter polls", () => existsSync(inbox));
+  const id = await send("Start with the schema.");
+  const woke = await within(20_000, "the first message", first);
+  assert.equal(woke.code, 2);
+  assert.ok(woke.stderr.includes(`Message ${id} from root, your manager:\nStart with the schema.`));
+  const original = done(await root.call("message_get", { messageID: id }));
+  assert.equal(JSON.stringify(original).includes("read_at"), false);
   const claimed = (before: string) =>
     until("a waiter claims the session", () => readFileSync(claim, "utf8") !== before);
   let before = readFileSync(claim, "utf8");
@@ -723,106 +627,38 @@ test("the waiter delivers messages, questions to the position and answers to its
   before = readFileSync(claim, "utf8");
   const newer = hook(org, "wait", "s-waited", alive);
   await claimed(before);
-  // The replaced waiter stops on its own, long before its read would end.
   assert.deepEqual(await within(5000, "the replaced waiter stops", older), {
     code: 0,
     stdout: "",
     stderr: "",
   });
   const next = await send("Then the data.");
-  const latest = await within(20_000, "the newer waiter delivers", newer);
+  const latest = await within(20_000, "the newer waiter", newer);
   assert.equal(latest.code, 2);
-  assert.ok(latest.stderr.includes(`Message ${next} from the user (the root)`));
+  assert.ok(latest.stderr.includes(next));
   assert.equal(latest.stderr.includes(id), false);
-
-  // A question to the position, and an answer to the position's own question, come together.
-  const done = <T>(answer: unknown) => (answer as { value: T }).value;
-  const asked = done<{ id: string }>(
-    await root.call("question_ask", {
-      to: actor,
-      text: "Which schema first?",
-      options: [{ label: "Orders" }, { label: "Users" }],
-      recommendation: "Orders",
+  assert.deepEqual(
+    done(await root.call("message_get", { messageID: id })),
+    original,
+    "delivery never mutates public messages",
+  );
+  const form = done<{ formID: string }>(
+    await root.call("form_create", {
+      respondentIDs: [actor],
+      fields: [{ name: "choice", label: "Choose", required: true }],
     }),
   );
-  const own = (await worker.call("question_ask", { text: "May I drop the v1 tables?" }))
-    .structuredContent as { id: string };
-  await root.call("question_answer", { questions: [own.id], text: "Drop them." });
-  const both = await within(20_000, "the waiter delivers", hook(org, "wait", "s-waited", alive));
-  assert.equal(both.code, 2);
-  assert.match(both.stderr, /^AgentOrg delivered 1 question to you and 1 answer to your questions/);
-  assert.ok(
-    both.stderr.includes(
-      `Question ${asked.id} from the user (the root), waiting on you:\nWhich schema first?\nOptions: Orders, recommended; Users`,
-    ),
-  );
-  assert.ok(
-    both.stderr.includes(
-      `Answer to your question ${own.id} from the user (the root):\nDrop them.\n(You asked: May I drop the v1 tables?)`,
-    ),
-  );
-  assert.equal(both.stderr.includes(next), false);
-
-  // A waiter whose client is gone ends at once, writing nothing.
-  const gone = await hook(org, "wait", "s-waited", { CLAUDE_PID: "999999" });
-  assert.deepEqual(gone, { code: 0, stdout: "", stderr: "" });
-});
-
-test("an answer the session records carries the user's words typed after the question, verbatim, once", async () => {
-  const org = await core();
-  const worker = await session(org, "s-recorder");
-  const attached = await worker.call("attach", { name: "recorder", purpose: "Ask and record." });
-  const { actor } = attached.structuredContent as { actor: string };
-  const typed = (prompt: string) =>
-    hook(org, "prompt", "s-recorder", {}, JSON.stringify({ session_id: "s-recorder", prompt }));
-  const ask = async (fields: Record<string, unknown>) =>
-    ((await worker.call("question_ask", fields)).structuredContent as { id: string }).id;
-  const record = (questions: string[]) =>
-    worker.call("question_answer", {
-      questions,
-      choice: "Yes",
-      text: "The user agreed.",
-      recorded: true,
-    });
-  const options = [{ label: "Yes" }, { label: "No" }];
-
-  assert.match(text(await record(["q_none"])), /^forbidden: the user has typed nothing/);
-  assert.deepEqual(await typed("Earlier words."), { code: 0, stdout: "", stderr: "" });
-  const question = await ask({ text: "Drop the v1 tables?", options });
-  assert.match(
-    text(await record([question])),
-    new RegExp(`^forbidden: the user last typed in this session before ${question} was asked`),
-  );
-
-  // What Claude Code delivers, wrapped in an element, is not the user's typing.
-  await typed("<task-notification>\n<summary>agentorg message</summary>\n</task-notification>");
-  await typed('<cross-session-message from="local_1">Yes, drop them.</cross-session-message>');
-  assert.match(text(await record([question])), /^forbidden: the user last typed/);
-
-  const words = "Yes — drop them, nothing shipped.";
-  await typed(words);
-  const answered = (await record([question])).structuredContent as {
-    questions: { answer: { by: string; choice: string; text: string; recorded: boolean } }[];
-  };
-  const answer = answered.questions[0]?.answer;
-  assert.deepEqual(answer && { ...answer, at: undefined }, {
-    by: actor,
-    choice: "Yes",
-    text: words,
-    recorded: true,
-    at: undefined,
+  const delivered = await within(20_000, "the form", hook(org, "wait", "s-waited", alive));
+  assert.equal(delivered.code, 2);
+  assert.ok(delivered.stderr.includes(`Form ${form.formID}`));
+  assert.equal(delivered.stderr.includes(next), false);
+  assert.deepEqual(Object.keys(JSON.parse(readFileSync(inbox, "utf8"))).sort(), [
+    "forms",
+    "messages",
+  ]);
+  assert.deepEqual(await hook(org, "wait", "s-waited", { CLAUDE_PID: "999999" }), {
+    code: 0,
+    stdout: "",
+    stderr: "",
   });
-  const another = await ask({ text: "Ship on Friday?", options });
-  assert.match(text(await record([another])), /^forbidden: the user has typed nothing/);
-
-  // The core still refuses a recorded answer to a question only the root may answer, and the
-  // user's words stay kept.
-  const approval = await ask({ text: "Release to prod?", options, answerer: org.rootId });
-  await typed("Yes, release.");
-  assert.equal((await record([approval])).isError, true);
-  assert.ok(existsSync(join(org.home, "sessions/claude-code-s-recorder/prompt")));
-
-  // A session that fills no position keeps nothing.
-  await hook(org, "prompt", "s-none", {}, JSON.stringify({ prompt: "Hello." }));
-  assert.equal(existsSync(join(org.home, "sessions/claude-code-s-none")), false);
 });

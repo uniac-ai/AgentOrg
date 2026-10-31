@@ -15,11 +15,6 @@ import { bindTool } from "./tools.ts";
 export { CLAIMS as definition } from "./model/index.ts";
 
 export function claims(claimStore: Store["claims"], registry: Registry, now: () => string) {
-  /** The claims the actor holds now. */
-  function heldBy(actor: string): ClaimRow[] {
-    return claimStore.heldBy(actor).filter(current);
-  }
-
   function claim(actor: ActorRow, request: RequestOf<"claim">): ClaimRow {
     const at = now();
     const until = request.until === undefined ? null : new Date(request.until).toISOString();
@@ -62,7 +57,7 @@ export function claims(claimStore: Store["claims"], registry: Registry, now: () 
     const until = claim.until === null ? "" : ` until ${claim.until}`;
     return `${claim.resource} is held by ${holder}${until}: ${claim.note}`;
   }
-  return { heldBy, claim, release, tool: bindTool(CLAIMS, { claim, release }) };
+  return { claim, release, tool: bindTool(CLAIMS, { claim, release }) };
 }
 
 export type Claims = ReturnType<typeof claims>;
