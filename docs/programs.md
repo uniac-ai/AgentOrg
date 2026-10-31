@@ -97,7 +97,8 @@ from `./actor` and these wire contracts from `./contract`.
 
 Work and Forms are shared records with full retained history for every active admitted Actor;
 Messages remain private to their sender and recipient. Use `work_list` with `ownerID`,
-`requesterID` and `status`, and `form_list` with `workID`, `requesterID`, `respondentID`, `status`
+`requesterID`, `status`, `ownerWithin` and `requesterWithin`, and `form_list` with `workID`,
+`requesterID`, `respondentID`, `status`, `requesterWithin`, `respondentWithin`, `awaitingWithin`
 and `awaitingActorID` for directed queries. All supplied filters AND before pagination. A query
 for another Actor's criteria keeps your authenticated identity and write authority. An empty
 recorded Form response counts as answered for `awaitingActorID`.

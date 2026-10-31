@@ -1,8 +1,10 @@
 # Workspace storage and cutover
 
-Hub embeds `@uniac/agentic-workspace` 0.2.0 at source `b2d40d90e26549cacef72a07802df0cf17f7af94`.
+Hub embeds `@uniac/agentic-workspace` 0.3.0 at source `8c5e96078e1c5d53e596ce1b2b91f78b45dff568`,
+merged as `564759fd78fc170bf5ab6d9304f3561ba66e46e9` with tree
+`a0f9c8714af2236527252de4cb4a017aa5ed6b0d`.
 The committed archive has SHA256
-`027edf55bfe005e4079dd5cbb49216c6b2d6490c8ed5ae1763953ca5d235b21a`.
+`fe0395c20bbb9d06d6a9d223fc03ca401b19a455dbeef29ad8a18097f6114592`.
 `vendor/workspace.json`, the dependency and lockfile identify the same archive. `npm pack` bundles
 the installed package so a separate consumer can install the SDK without a sibling checkout or
 registry publication of Workspace. Hub uses public package contracts, clients and persistence;

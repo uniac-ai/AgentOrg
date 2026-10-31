@@ -38,10 +38,14 @@ void [sender, owner, respondents, actorID, position, optionalWork, tools, answer
 const workQuery = BUILTINS.work_list.request.parse({
   ownerID: "owner",
   requesterID: "requester",
+  ownerWithin: "owner-branch",
+  requesterWithin: "requester-branch",
   status: "submitted",
 });
 const ownerID: string | undefined = workQuery.ownerID;
 const requesterID: string | undefined = workQuery.requesterID;
+const ownerWithin: string | undefined = workQuery.ownerWithin;
+const requesterWithin: string | undefined = workQuery.requesterWithin;
 const status:
   | "open"
   | "active"
@@ -56,6 +60,9 @@ const formQuery = BUILTINS.form_list.request.parse({
   respondentID: "respondent",
   status: "open",
   awaitingActorID: "awaiting",
+  requesterWithin: "requester-branch",
+  respondentWithin: "respondent-branch",
+  awaitingWithin: "awaiting-branch",
 });
 const formFilters: (string | undefined)[] = [
   formQuery.workID,
@@ -63,6 +70,9 @@ const formFilters: (string | undefined)[] = [
   formQuery.respondentID,
   formQuery.status,
   formQuery.awaitingActorID,
+  formQuery.requesterWithin,
+  formQuery.respondentWithin,
+  formQuery.awaitingWithin,
 ];
 const listedMessage: z.output<typeof Message> | undefined = BUILTINS.message_list.response.parse({})
   .items[0];
@@ -70,4 +80,12 @@ const listedWork: z.output<typeof Work> | undefined = BUILTINS.work_list.respons
   .items[0];
 const listedForm: z.output<typeof Form> | undefined = BUILTINS.form_list.response.parse({})
   .items[0];
-void [ownerID, requesterID, status, formFilters, listedMessage, listedWork, listedForm];
+void [ownerID, requesterID, ownerWithin, requesterWithin, status, formFilters, listedMessage, listedWork, listedForm];
+
+const typedWorkFilter: z.input<typeof BUILTINS.work_list.request> = { ownerWithin: "branch" };
+const typedFormFilter: z.input<typeof BUILTINS.form_list.request> = { awaitingWithin: "branch" };
+// @ts-expect-error Subtree anchors are Actor IDs, not numbers.
+const invalidWorkFilter: z.input<typeof BUILTINS.work_list.request> = { ownerWithin: 1 };
+// @ts-expect-error Subtree anchors are Actor IDs, not booleans.
+const invalidFormFilter: z.input<typeof BUILTINS.form_list.request> = { awaitingWithin: true };
+void [typedWorkFilter, typedFormFilter, invalidWorkFilter, invalidFormFilter];

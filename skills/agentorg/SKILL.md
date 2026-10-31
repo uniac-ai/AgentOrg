@@ -56,6 +56,15 @@ recorded response counts as answered. All supplied filters AND before pagination
 shared records with unfiltered lists or other Actors' criteria; that never grants their write role.
 Restart traversal at zero when changing filters.
 
+For organization views, `work_list` accepts `ownerWithin` and `requesterWithin`; `form_list`
+accepts `requesterWithin`, `respondentWithin` and `awaitingWithin`. Each anchor selects that
+canonical Actor and every retained descendant, including closed positions. Requester scope
+expresses where records originated; owner/respondent scope expresses their targets.
+`awaitingWithin` selects open Forms with a designated member who has no response entry.
+These predicates AND with exact/status filters before pagination and grant no additional write
+role. Unknown anchors match nothing. Refresh complete current queues from zero: records can
+leave a filter after reassignment, review or an answer without a removal event.
+
 Use standalone Forms when a question needs no Work ticket. A linked Form requires an actual readable
 Work. Any active Actor can create that association, and all active Actors can read its full history.
 Avoid duplicating an open question across records. For escalation, ask the appropriate Actor in a
