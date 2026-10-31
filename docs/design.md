@@ -60,6 +60,27 @@ The server composition root wires the concrete adapters to the domain's clients.
 ActorConnection exposes only revocation. `test/layers.test.ts` checks module boundaries, the
 acyclic domain import graph and the domain's independence from Node and protocol libraries.
 
+The module dependencies below lead from consumers to their owners. Dashed arrows show protocol
+requests over separately admitted, bidirectional JSON-RPC connections.
+
+```mermaid
+flowchart LR
+  Actor[Actor consumer] --> SDK[Public Actor SDK]
+  SDK -. "Actor-initiated tools/list and tools/call" .-> MCP[Hub MCP server]
+  MCP --> Dispatch[Application and explicit Tool bindings]
+  Dispatch --> Features[Hub feature-module Tools and operations]
+  Dispatch --> Identity[Registry: admitted principal and lifecycle]
+  Features --> Identity
+  Features --> Presence[Connections: generic presence and revocation]
+  Features --> Execution[Optional provisioning orchestration]
+  Execution --> Client[Hub Provider client]
+  Client -. "describe and createActor" .-> Provider[Provider factory on its initiating socket]
+```
+
+Each feature operation owns its authority policy over the admitted Actor and its records.
+Generic identity and presence supply no callable Actor interface. The Provider factory path has
+its own admitted principal and does not turn the created Actor into an invocation endpoint.
+
 ## The domain
 
 `src/domain/index.ts` composes peer state owners and their explicit feature Tools:
