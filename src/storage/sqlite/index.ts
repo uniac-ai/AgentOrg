@@ -84,14 +84,12 @@ export class SqliteStore implements Store {
         [entry.at, entry.actor, entry.operation, entry.target, entry.outcome],
       );
     },
-    list: (since, limit) =>
-      this.database.select(
-        "audit",
-        "id > ? AND operation NOT IN ('message_read','message_acknowledge','message_handle')",
-        [since ?? 0],
-        "id DESC",
-        limit,
-      ),
+    list: (since, limit) => {
+      const shown = "operation NOT IN ('message_read','message_acknowledge','message_handle')";
+      return since === undefined
+        ? this.database.select("audit", shown, [], "id DESC", limit).reverse()
+        : this.database.select("audit", `id > ? AND ${shown}`, [since], "id", limit);
+    },
   };
   transaction<T>(work: () => T): T {
     return this.database.transaction(work);

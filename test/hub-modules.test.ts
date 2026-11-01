@@ -66,6 +66,6 @@ test("an explicitly composed module binds discovery and dispatch to its own prin
   assert.equal(store.database.count("calls", "1"), 0);
   assert.deepEqual(
     store.audit.list(undefined, 10).map((entry) => entry.outcome),
-    ["ok", "not_found", "forbidden"],
+    ["forbidden", "not_found", "ok"],
   );
 });

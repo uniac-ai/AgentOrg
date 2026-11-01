@@ -65,7 +65,7 @@ export interface Store {
   };
   audit: {
     append(entry: Omit<AuditRow, "id">): void;
-    /** Entries after `since`, newest first. */
+    /** The latest `limit` entries, or the earliest `limit` after `since`; oldest first. */
     list(since: number | undefined, limit: number): AuditRow[];
   };
   /** Run `work` so that its writes land together or not at all. */

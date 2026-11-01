@@ -225,10 +225,10 @@ test("agentorg-server creates the root's credential, and the built-ins run as th
     assert.deepEqual([seen.name, seen.manager], [actor.name, JSON.parse(team.stdout).root]);
 
     const observed = await agentorg(["activity", "--limit", "5"], asProg);
-    assert.equal(observed.status, 0, observed.stderr);
+    assert.notEqual(observed.status, 0);
+    assert.match(observed.stderr, /forbidden/);
     const activity = await agentorg(["activity", "--limit", "5"], asRoot);
-    assert.equal(JSON.parse(activity.stdout).entries[0].operation, "actor_create");
-    assert.deepEqual(JSON.parse(observed.stdout), JSON.parse(activity.stdout));
+    assert.equal(JSON.parse(activity.stdout).entries.at(-1).operation, "actor_create");
 
     const sent = await agentorg(
       ["message", "send", "--recipientID", JSON.parse(team.stdout).root, "--text", "Hello"],

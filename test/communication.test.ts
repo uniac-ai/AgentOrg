@@ -609,9 +609,9 @@ test("shared Work/Form history and Hub diagnostics do not disclose private linke
   for (const observer of [root, third.client]) {
     assert.deepEqual(await done(observer.call("work_get", { ticketID: work.ticketID })), changed);
     assert.deepEqual(await done(observer.call("form_get", { formID: form.formID })), form);
-    for (const name of ["work_list", "form_list", "team", "actor_list", "activity"])
+    for (const name of ["work_list", "form_list", "team", "actor_list"])
       projections.push(await done(observer.call(name, {})));
-    projections.push(await observer.available());
+    projections.push(await observer.call("activity", {}), await observer.available());
     assert.equal(
       await refused(observer.call("message_get", { messageID: message.messageID })),
       "not_found",

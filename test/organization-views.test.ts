@@ -344,21 +344,29 @@ test("subtree queries retain private Message and audit boundaries for managers a
       "not_found",
     );
     assert.deepEqual(await done(client.call("message_list")), { items: [], after: 0 });
-    const activity = await done(client.call("activity"));
-    for (const entry of activity.entries)
-      assert.deepEqual(Object.keys(entry).sort(), [
-        "actor",
-        "at",
-        "id",
-        "operation",
-        "outcome",
-        "target",
-      ]);
-    assert.equal(JSON.stringify(activity).includes(privateText), false);
+    if (client !== root) assert.equal(await refused(client.call("activity")), "forbidden");
     assert.equal(
       (await done(client.call("actor_get"))).actorID,
       client === root ? core.rootId : client === lead.client ? lead.id : observer.id,
     );
     assert.equal(await refused(client.call("message_list", { ownerWithin: lead.id })), "invalid");
   }
+  const activity = await done(root.call("activity"));
+  assert.equal(
+    activity.entries.some(
+      (entry: { operation: string; target: string }) =>
+        entry.operation === "message_send" && entry.target === sent.messageID,
+    ),
+    true,
+  );
+  for (const entry of activity.entries)
+    assert.deepEqual(Object.keys(entry).sort(), [
+      "actor",
+      "at",
+      "id",
+      "operation",
+      "outcome",
+      "target",
+    ]);
+  assert.equal(JSON.stringify(activity).includes(privateText), false);
 });
