@@ -119,7 +119,7 @@ test("the provisioned Actor uses Hub MCP without a reverse server while its Prov
   assert.equal((await actor.call("team", { depth: 0 })).state, "done");
   assert.equal(
     (await actor.available()).length,
-    10,
+    11,
     "the Provider connection adds no Actor-facing Tool",
   );
   await until("the new Actor is connected before the Provider replies", () =>

@@ -86,8 +86,8 @@ test("any active Actor reads deep and closed subtree Work/ask histories through 
   assert.deepEqual(Object.keys(approval.responses), [lead.id]);
   for (const client of [root, observer.client]) {
     const catalog = await client.available();
-    assert.equal(catalog.length, 10);
-    assert.equal(catalog.flatMap((tool) => tool.interfaces).length, 28);
+    assert.equal(catalog.length, 11);
+    assert.equal(catalog.flatMap((tool) => tool.interfaces).length, 30);
     const interfaces = catalog.flatMap((tool) => tool.interfaces);
     for (const [name, filters, removed] of [
       ["work_list", ["ownerWithin", "requesterWithin"], []],

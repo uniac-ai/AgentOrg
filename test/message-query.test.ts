@@ -38,8 +38,8 @@ const send = async (client: Actor, recipientID: string, text: string) =>
 test("private pair/direction qualify before pagination; newest windows and older positions retain chronological history", async (t) => {
   const { core, root, owner, peer, other } = await fixture(t);
   const catalog = await owner.client.available();
-  assert.equal(catalog.length, 10);
-  assert.equal(catalog.flatMap((tool) => tool.interfaces).length, 28);
+  assert.equal(catalog.length, 11);
+  assert.equal(catalog.flatMap((tool) => tool.interfaces).length, 30);
   assert.deepEqual(await peer.client.available(), catalog);
   const offered = catalog
     .flatMap((tool) => tool.interfaces)

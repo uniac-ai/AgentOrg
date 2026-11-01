@@ -91,7 +91,8 @@ its own admitted principal and does not turn the created Actor into an invocatio
 | `connections.ts` | All admitted Actor connections, presence and revocation. |
 | `execution.ts` | One optional Provider provisioning outcome for an already-created Actor. |
 | `actors.ts` | Actor lifecycle and public projection, using Registry, Connections and Execution. |
-| `team.ts` | Identity, hierarchy and actual admitted connection presence. |
+| `team.ts` | Identity, hierarchy, actual admitted connection presence, and each Actor's report as one view. |
+| `attention.ts` | The one read that waits: what concerns its caller, and which public records changed. |
 | `workspace.ts` | Explicit bindings to package-owned directory, Messages, Work, Forms and Status under the admitted Actor. |
 | `claims.ts`, `audit.ts` | Shared resource claims and append-only audit metadata. |
 | `tools.ts` | Schema contracts bound to their module-owned typed operations. |
@@ -111,18 +112,19 @@ level contains the one before it. Workspace contracts carry their own tag, which
 definitions keep; the Hub tags its own Tools. The tag selects what a client presents and grants or
 refuses nothing.
 
-Every open Actor receives the same ten Hub Tools and twenty-eight interfaces:
+Every open Actor receives the same eleven Hub Tools and thirty interfaces:
 
 | Tool | Report | Team | Organization |
 |---|---|---|---|
 | `actors` | | | `actor_create`, `actor_close` |
-| `team` | | `team` | |
+| `team` | | `team`, `actor_view` | |
 | `directory` | | `actor_get`, `actor_list` | |
 | `messages` | | `message_send`, `message_get`, `message_list` | |
 | `work` | `work_create`, `work_get`, `work_list`, `work_update`, `work_submit` | `work_review` | |
 | `forms` | `form_create`, `form_get`, `form_list`, `form_close` | `form_respond` | |
 | `status` | `status_set`, `status_get` | | |
 | `claims` | | | `claim`, `release` |
+| `attention` | `attention` | | |
 | `activity` | | | `activity` |
 | `system` | | | `system_status`, `connection_list`, `provider_list`, `connection_disconnect` |
 
@@ -131,6 +133,34 @@ hierarchy and the operation's records govern domain authority; they do not add T
 paths, cached advertisements and guessed aliases cannot introduce callable interfaces. A closed
 Actor receives no Tools. `BUILTINS` is a derived schema inventory for CLI and typed consumers,
 while feature modules own runtime registration.
+
+### Attention and Actor views
+
+`attention {since?, wait?}` reads the audited writes after `since` and returns what concerns its
+caller and was done by someone else:
+- `answer`: an answer to its ask;
+- `ask`: a new ask from one of its direct reports;
+- `assigned`: Work created for it, or reassigned to it by the Work's requester;
+- `review_due`: a submission of Work it requested;
+- `reviewed`: a review of Work it owns;
+- `message`: a Message to it.
+
+Each item names its record, who did it, a title and when. `changed` names the Actors whose status,
+and the Work and asks whose records, anyone changed, the caller included, so a view stays current;
+Messages appear only as their recipient's items. `next` is the audit position read through; passing it
+back as `since` continues without gaps. Without `since` the read returns at once with the current
+position. With nothing to return it waits up to `wait` seconds (at most 600): every audited write wakes
+waiting reads, which read again. It is a read, not a subscription; callers set a request timeout above
+`wait`.
+
+`actor_view {actorID?, completed?}` joins an Actor's report at read time, from the registry,
+connections, audit and the Workspace records it can read: the Actor with its presence and last write;
+its status; its workstreams (Work it owns that is active, blocked, submitted or has changes requested,
+and such Work it requested of its direct reports), each with its open asks linked to it; its other open
+asks; its reports' open asks (`needs`); submitted Work it reviews; open Work assigned to it and its own
+follow-ups; its latest completed Work; its direct reports; and a name map. Its `state` is derived:
+the most urgent of `blocked`, `waiting` (active Work with an open ask), `review` (submitted) and
+`active` among its workstreams, else `idle`. Each list holds at most 100 records.
 
 ### System observations and connection controls
 
@@ -153,8 +183,9 @@ timestamp when a refresh fails.
 An active Actor controls its own other sockets, direct reports' sockets, and all Actor sockets when
 it is canonical root. Only canonical root controls Provider sockets. The carrying socket is refused
 using trusted admission context. The same authority and observed busy/closing guards produce
-`canDisconnect` and govern mutation. Full Tool invocations, complete Provider creation sequences
-including inter-RPC gaps, and pending factory requests block detach. The inventory marks closing
+`canDisconnect` and govern mutation. Write invocations, complete Provider creation sequences
+including inter-RPC gaps, and pending factory requests block detach; a read, including a waiting
+`attention`, ends with its socket. The inventory marks closing
 before dispatch can start new work. Actor lifecycle closure retains revocation code 4001.
 
 `closed:true` means the Hub detached that exact entry and initiated transport close. Clients may

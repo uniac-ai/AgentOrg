@@ -89,6 +89,8 @@ export class SqliteStore implements Store {
         ? this.database.select("audit", shown, [], "id DESC", limit).reverse()
         : this.database.select("audit", `id > ? AND ${shown}`, [since], "id", limit);
     },
+    lastWrite: (actor) =>
+      this.database.select("audit", "actor = ? AND outcome = 'ok'", [actor], "id DESC", 1)[0]?.at,
   };
   transaction<T>(work: () => T): T {
     return this.database.transaction(work);

@@ -62,6 +62,8 @@ export interface Store {
     append(entry: Omit<AuditRow, "id">): void;
     /** The latest `limit` entries, or the earliest `limit` after `since`; oldest first. */
     list(since: number | undefined, limit: number): AuditRow[];
+    /** The time of the actor's latest successful write. */
+    lastWrite(actor: string): string | undefined;
   };
   /** Run `work` so that its writes land together or not at all. */
   transaction<T>(work: () => T): T;

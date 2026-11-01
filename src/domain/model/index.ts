@@ -8,6 +8,7 @@ import { Level } from "@uniac/agentic-workspace/contracts";
 import { z } from "zod";
 import { Id, Interface } from "./records.ts";
 
+export * from "./attention.ts";
 export * from "./builtins.ts";
 export * from "./claims.ts";
 export * from "./json-schema.ts";

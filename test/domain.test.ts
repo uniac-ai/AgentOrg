@@ -12,7 +12,7 @@ import { done, HUB_INTERFACES, refused } from "./harness.ts";
 
 const invocation = { signal: new AbortController().signal, progress: async () => {} };
 
-test("all open Actors see exactly ten Hub Tools and twenty-eight interfaces, each tagged with its level", async (t) => {
+test("all open Actors see exactly eleven Hub Tools and thirty interfaces, each tagged with its level", async (t) => {
   const store = new SqliteStore(":memory:");
   t.after(() => store.close());
   const org = organization(store);
@@ -37,8 +37,8 @@ test("all open Actors see exactly ten Hub Tools and twenty-eight interfaces, eac
       Object.entries(HUB_INTERFACES).map(([name, names]) => [name, [...names].sort()]),
     ),
   );
-  assert.equal(catalog.length, 10);
-  assert.equal(catalog.flatMap((tool) => tool.interfaces).length, 28);
+  assert.equal(catalog.length, 11);
+  assert.equal(catalog.flatMap((tool) => tool.interfaces).length, 30);
   assert.deepEqual(org.available(lead.id), catalog);
   assert.deepEqual(org.available(worker.id), catalog);
   const connectionId = crypto.randomUUID();

@@ -32,8 +32,7 @@ export function application(
     let operationName: string | undefined;
     try {
       if (actor.closed_at !== null) throw new Forbidden("the Actor is closed");
-      if (how.connectionId !== undefined)
-        release = connections.beginInvocation(how.connectionId, actorId);
+      if (how.connectionId !== undefined) connections.assertActor(how.connectionId, actorId);
       const found = capabilities
         .list()
         .flatMap((tool) => tool.interfaces)
@@ -45,6 +44,9 @@ export function application(
       const operation = found.operation;
       operationName = operation.name;
       const spec = operation.definition;
+      // A write holds its connection until it settles; a read, which may wait, ends with it.
+      if (how.connectionId !== undefined && spec.writes)
+        release = connections.beginInvocation(how.connectionId, actorId);
       const parsed = spec.request.safeParse(input);
       if (!parsed.success) throw invalid(parsed.error.issues);
       let result: Record<string, unknown>;
@@ -78,22 +80,25 @@ export function application(
 }
 
 function targetOf(record: Record<string, unknown>): string | null {
-  const { id, call, resource, actor, messageID, ticketID, formID, connectionId } = record as {
-    id?: string;
-    call?: string;
-    resource?: string;
-    actor?: string | { id: string };
-    messageID?: string;
-    ticketID?: string;
-    formID?: string;
-    connectionId?: string;
-  };
+  const { id, call, resource, actor, actorID, messageID, ticketID, formID, connectionId } =
+    record as {
+      id?: string;
+      call?: string;
+      resource?: string;
+      actor?: string | { id: string };
+      messageID?: string;
+      ticketID?: string;
+      formID?: string;
+      actorID?: string;
+      connectionId?: string;
+    };
   return (
     id ??
     connectionId ??
     messageID ??
     ticketID ??
     formID ??
+    actorID ??
     call ??
     resource ??
     (typeof actor === "string" ? actor : actor?.id) ??

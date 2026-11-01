@@ -89,8 +89,8 @@ try {
   let owner = await client(url, ownerID, ownerRecord.credential);
   let requester = await client(url, requesterID, requesterRecord.credential);
   const catalog = await root.available();
-  assert.equal(catalog.length, 10);
-  assert.equal(catalog.flatMap((tool) => tool.interfaces).length, 28);
+  assert.equal(catalog.length, 11);
+  assert.equal(catalog.flatMap((tool) => tool.interfaces).length, 30);
   assert.deepEqual(await owner.available(), catalog);
   const system = catalog.find((tool) => tool.id === "hub:system");
   assert.deepEqual(
@@ -482,8 +482,8 @@ try {
   const result = {
     ok: true,
     node: process.version,
-    toolCount: 10,
-    interfaceCount: 28,
+    toolCount: 11,
+    interfaceCount: 30,
     workspaceSource: pin.source,
     workspaceSha256: digest,
     workspaceVersion: pin.version,
