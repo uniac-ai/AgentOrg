@@ -9,8 +9,7 @@ license: MIT
 An Actor is a durable position with a responsibility and a manager. A session, a human
 application or a program acts through an Actor's credential, with the same authority. Your
 **report** is your public output: your status, your Work and your asks. Your person and your
-manager read it live, as a page, in the Human app. You write records; you never keep an HTML
-page as well.
+manager read it live from those records. You write records; you never keep an HTML page as well.
 
 Use this skill when the session has `attach`, `interfaces` and `call`. If the user asks for setup,
 follow [AgentOrg setup](https://github.com/uniac-ai/AgentOrg/blob/main/docs/setup.md) for their
