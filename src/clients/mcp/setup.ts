@@ -5,6 +5,7 @@ import { statSync } from "node:fs";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
+import { Level } from "../../domain/model/index.ts";
 import { coreUrl } from "../../network/index.ts";
 import { launcherPath, writeLauncher } from "../../runtime/launcher.ts";
 import { answers, launcherStatus, printReport } from "../../runtime/status.ts";
@@ -12,10 +13,10 @@ import { CLIENTS, clientOf } from "./projects.ts";
 
 const PROGRAM = "agentorg-mcp";
 const NAMES = Object.keys(CLIENTS).join("|");
-export const CONNECT_HELP = `usage: agentorg-mcp connect <${NAMES}> [--project <dir>]
+export const CONNECT_HELP = `usage: agentorg-mcp connect <${NAMES}> [--project <dir>] [--level ${Level.options.join("|")}]
        agentorg-mcp disconnect <${NAMES}> [--project <dir>]
 
-connect pins this MCP adapter and Node in <home>/bin/agentorg-mcp, configures the project's org MCP server and hooks, and links the package's agentorg skill. Claude Code also gets its MCP approval. The project's other entries stay as they are. Codex requires project trust, enabled hooks (features.hooks), and review and trust of the hook definitions through /hooks.
+connect pins this MCP adapter and Node in <home>/bin/agentorg-mcp, configures the project's org MCP server and hooks, and links the package's agentorg skill. --level chooses the interfaces the server presents; without it, the whole catalog. Claude Code also gets its MCP approval. The project's other entries stay as they are. Codex requires project trust, enabled hooks (features.hooks), and review and trust of the hook definitions through /hooks.
 
 connect checks through the launcher with a bare PATH. disconnect removes only this adapter's entries.`;
 export const STATUS_HELP = `usage: agentorg-mcp status [--project <dir>]
@@ -32,7 +33,7 @@ const projectOf = (path: string | undefined) => {
 export async function setupCommand(command: string, args: string[]): Promise<number> {
   const { values, positionals } = parseArgs({
     args,
-    options: { project: { type: "string" } },
+    options: { project: { type: "string" }, level: { type: "string" } },
     allowPositionals: true,
     strict: true,
   });
@@ -71,8 +72,11 @@ export async function setupCommand(command: string, args: string[]): Promise<num
     );
     return 0;
   }
+  const level = values.level === undefined ? undefined : Level.safeParse(values.level);
+  if (level?.success === false)
+    throw new Error(`unknown level ${values.level}; known: ${Level.options.join(", ")}`);
   const launcher = writeLauncher(PROGRAM);
-  const written = client.connect(project, launcher);
+  const written = client.connect(project, launcher, level?.data);
   process.stdout.write(
     `connected ${name} in ${project}:\n${written.map((path) => `  wrote ${path}`).join("\n")}\nchecking through the launcher, with only /usr/bin and /bin on PATH:\n`,
   );

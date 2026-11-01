@@ -18,10 +18,10 @@ import {
   Handle,
   Id,
   type InterfaceDescriptor,
+  Level,
   objectSchema,
   type ResponseOf,
   Text,
-  Tool,
   type ToolDescriptor,
 } from "../../domain/model/index.ts";
 import { credentials, readPrivate, rootActorPath, rootCredentialPath } from "../../home.ts";
@@ -56,19 +56,15 @@ const CallRequest = z.strictObject({
   input: z.record(z.string(), z.unknown()).describe("Input matching that interface's schema."),
 });
 
+const InterfacesRequest = z.strictObject({
+  name: Text.optional().describe("An interface's call alias, to read its description and schemas."),
+});
+
 const INTERFACES: InterfaceDescriptor = {
   name: "interfaces",
   description:
-    "List Hub Tools available to the attached Actor, each with its interfaces, call aliases, descriptions and input/output schemas. Read this before calling an operation whose contract you have not read.",
-  input: objectSchema(z.strictObject({}), "input"),
-  output: objectSchema(
-    z
-      .strictObject({
-        tools: z.array(Tool),
-      })
-      .meta({ id: "ToolCatalogResult" }),
-    "output",
-  ),
+    "List the Hub interfaces this session presents, each with its call alias and a one-line summary. Give name to read one interface's description and input/output schemas before calling an operation whose contract you have not read.",
+  input: objectSchema(InterfacesRequest, "input"),
   one_way: false,
   long_running: false,
 };
@@ -83,7 +79,7 @@ const CALL: InterfaceDescriptor = {
 };
 
 /** What the session's client may show its model about the agent actor's tools as a whole. */
-export const INSTRUCTIONS = `These tools make this session a position in an AgentOrg organization: a responsibility with a manager, under the user. Attach before any other action, with the actor id the brief names, or with a name and purpose when the user started the session with no position named. Then use interfaces to read available Hub Tools and their interfaces, and call with {name: interface.call, input} to invoke one. Logical names such as team, message_send, work_update and form_respond are operations through call. How to work in a position is the agentorg skill; without it, read https://github.com/uniac-ai/AgentOrg/blob/main/skills/agentorg/SKILL.md.`;
+export const INSTRUCTIONS = `These tools make this session a position in an AgentOrg organization: a responsibility with a manager, under the user. Attach before any other action, with the actor id the brief names, or with a name and purpose when the user started the session with no position named. Then use interfaces to list the Hub interfaces this session presents, interfaces {name} to read one's schemas, and call with {name, input} to invoke one. Logical names such as status_set, work_update and form_create are operations through call. How to work in a position is the agentorg skill; without it, read https://github.com/uniac-ai/AgentOrg/blob/main/skills/agentorg/SKILL.md.`;
 
 const refused = (code: string, message: string): Answer => ({ state: "refused", code, message });
 
@@ -93,7 +89,14 @@ export interface AgentOptions {
   session: string | undefined;
   /** A client that identifies its session on each call instead of at process startup. */
   client?: string;
+  /** The organization level whose interfaces `interfaces` presents; without one, all of them. */
+  level?: Level;
 }
+
+/** Whether an interface tagged `tag` is presented at `level`; each level contains the one before. */
+const presents = (level: Level | undefined, tag: Level | undefined) =>
+  level === undefined ||
+  (tag !== undefined && Level.options.indexOf(tag) <= Level.options.indexOf(level));
 
 export class Agent implements Presented {
   readonly instructions = INSTRUCTIONS;
@@ -176,12 +179,9 @@ export class Agent implements Presented {
         : refused("forbidden", "this session already fills a position; it cannot change actors");
     }
     if (name === INTERFACES.name) {
-      if (Object.keys(input).length > 0) return refused("invalid", "interfaces takes no input");
-      try {
-        return { state: "done", value: { tools: await position.available() } };
-      } catch {
-        return refused("unavailable", "the Hub did not list available Tools");
-      }
+      const request = InterfacesRequest.safeParse(input);
+      if (!request.success) return refused("invalid", "interfaces takes an optional name");
+      return this.#interfaces(position, request.data.name);
     }
     if (name !== CALL.name)
       return refused("not_found", `there is no adapter tool ${name}; use call`);
@@ -202,6 +202,52 @@ export class Agent implements Presented {
 
   async close(): Promise<void> {
     await this.#position?.close();
+  }
+
+  /** The presented interfaces' aliases and summaries, or one interface's whole descriptor. */
+  async #interfaces(position: Actor, name: string | undefined): Promise<Answer> {
+    let tools: ToolDescriptor[];
+    try {
+      tools = await position.available();
+    } catch {
+      return refused("unavailable", "the Hub did not list available Tools");
+    }
+    const level = this.#options.level;
+    const offers = tools.flatMap((tool) =>
+      tool.interfaces.filter((offer) => presents(level, offer.level)),
+    );
+    if (name === undefined) {
+      const summaryOf = (description = "") => description.split("\n\n")[0] ?? "";
+      return {
+        state: "done",
+        value: {
+          ...(level === undefined ? {} : { level }),
+          interfaces: offers.map((offer) => ({
+            name: offer.call,
+            summary: summaryOf(offer.interface.description),
+          })),
+        },
+      };
+    }
+    const offer = offers.find((each) => each.call === name);
+    if (offer === undefined)
+      return refused(
+        "not_found",
+        level === undefined
+          ? `there is no Hub interface ${name}`
+          : `${name} is not presented at the ${level} level`,
+      );
+    const { description, input, output } = offer.interface;
+    return {
+      state: "done",
+      value: {
+        name,
+        description,
+        input,
+        ...(output === undefined ? {} : { output }),
+        read_only: offer.read_only,
+      },
+    };
   }
 
   /** Bind once from call context, then recover only that conversation's saved position. */
@@ -264,7 +310,14 @@ export class Agent implements Presented {
       );
     }
     this.#filled = actor;
-    if (this.#session !== undefined) sessions.fill(this.#session, actor);
+    if (this.#session !== undefined) {
+      sessions.fill(this.#session, actor);
+      // Delivery starts from now: what happened before the session attached is not its input.
+      // Without it, the waiter starts from whenever it first reads.
+      const now = await this.#position?.call("attention", {}).catch(() => undefined);
+      if (now?.state === "done")
+        sessions.advanceInbox(this.#session, (now.value as { next: string }).next);
+    }
     return { state: "done", value: { actor, created: request.actor === undefined } };
   }
 

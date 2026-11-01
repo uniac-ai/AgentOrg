@@ -19,11 +19,12 @@ import {
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { type AST, getStaticTOMLValue, parseTOML } from "toml-eslint-parser";
+import type { Level } from "../../domain/model/index.ts";
 import { PACKAGE } from "../../runtime/launcher.ts";
 
 export interface Client {
   /** Write the client's configuration and the skill link; return the paths written. */
-  connect(project: string, launcher: string): string[];
+  connect(project: string, launcher: string, level?: Level): string[];
   /** Remove them; return the paths changed. */
   disconnect(project: string): string[];
   /** Undefined when the project isn't connected, else what is wrong with its connection. */
@@ -100,7 +101,11 @@ function skillProblems(folder: string): string[] {
 
 const shellWord = (text: string) => `'${text.replaceAll("'", `'\\''`)}'`;
 
-const agentArgs = (client: string) => ["--client", client];
+const agentArgs = (client: string, level: Level | undefined) => [
+  "--client",
+  client,
+  ...(level === undefined ? [] : ["--level", level]),
+];
 
 // Claude Code: the server in `.mcp.json`, approved and hooked in `.claude/settings.local.json`, the
 // user's own settings for the project, and the skill in `.claude/skills/`.
@@ -201,12 +206,15 @@ function claudeServer(path: string): Json | undefined {
 }
 
 const claudeCode: Client = {
-  connect(project, launcher) {
+  connect(project, launcher, level) {
     const files = claudeFiles(project);
     claudeServer(files.servers);
     const config = readJson(files.servers);
     const servers = isObject(config.mcpServers) ? config.mcpServers : {};
-    config.mcpServers = { ...servers, org: { command: launcher, args: agentArgs("claude-code") } };
+    config.mcpServers = {
+      ...servers,
+      org: { command: launcher, args: agentArgs("claude-code", level) },
+    };
     writeJson(files.servers, config);
 
     const settings = readJson(files.settings);
@@ -318,14 +326,14 @@ const codexFiles = (project: string) => ({
 });
 
 const codex: Client = {
-  connect(project, launcher) {
+  connect(project, launcher, level) {
     const files = codexFiles(project);
     const config = codexConfig(files.config);
     const hooks = readJson(files.hooks);
     withOurHooks(hooks, "codex", launcher);
     const settings = {
       command: JSON.stringify(launcher),
-      args: JSON.stringify(agentArgs("codex")),
+      args: JSON.stringify(agentArgs("codex", level)),
     };
     let text: string;
     if (config.table === undefined) {

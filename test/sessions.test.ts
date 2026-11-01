@@ -1,4 +1,4 @@
-/** Private waiter checkpoints preserve feed coverage across process restarts. */
+/** The private waiter checkpoint is the session's attention position, kept across restarts. */
 import assert from "node:assert/strict";
 import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -19,31 +19,21 @@ function fixture(t: TestContext) {
   return join(directory, "sessions/fixture");
 }
 
-test("Form cursor positions re-read the asks while preserving the incoming Message baseline", (t) => {
+test("the attention position is kept privately and read back after a restart", (t) => {
   const directory = fixture(t);
+  assert.equal(sessions.inbox("fixture"), undefined);
+  sessions.advanceInbox("fixture", "42");
   const file = join(directory, "inbox");
-  for (const forms of ["90", '{"requested":10,"designated":20}']) {
-    writeFileSync(file, `{"messages":40,"forms":${forms}}\n`, { mode: 0o600 });
-    assert.deepEqual(sessions.inbox("fixture"), { messages: 40, forms: null });
-  }
-  const next = { messages: 40, forms: "2026-11-01T00:00:00.000Z" };
-  sessions.advanceInbox("fixture", next);
-  assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), next);
-  assert.deepEqual(sessions.inbox("fixture"), next, "reopening reads each committed feed position");
+  assert.equal(readFileSync(file, "utf8"), "42\n");
+  assert.equal(sessions.inbox("fixture"), "42");
   assert.equal(statSync(file).mode & 0o777, 0o600);
   assert.deepEqual(readdirSync(directory).sort(), ["inbox", "position"]);
 });
 
-test("invalid private positions cannot silently reset or skip incoming Messages", (t) => {
+test("an earlier kind of checkpoint counts as no position, so delivery starts from now", (t) => {
   const file = join(fixture(t), "inbox");
-  for (const value of [
-    { messages: -1, forms: 90 },
-    { messages: "40", forms: 90 },
-    { messages: 40, forms: { requested: 10 } },
-    { messages: 40, forms: { requested: 10, designated: -1 } },
-    { messages: 40, forms: "not a time" },
-  ]) {
-    writeFileSync(file, JSON.stringify(value), { mode: 0o600 });
-    assert.throws(() => sessions.inbox("fixture"), /invalid local inbox position/);
+  for (const kept of ['{"messages":40,"forms":90}', '{"messages":40,"forms":null}', "-1", ""]) {
+    writeFileSync(file, kept, { mode: 0o600 });
+    assert.equal(sessions.inbox("fixture"), undefined);
   }
 });

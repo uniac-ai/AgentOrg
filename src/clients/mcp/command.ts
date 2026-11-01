@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import { once } from "node:events";
 import { parseArgs } from "node:util";
 import { presentOverStdio } from "../../actor/index.ts";
+import { Level } from "../../domain/model/index.ts";
 import { coreUrl } from "../../network/index.ts";
 import { help } from "../../runtime/command.ts";
 import { Agent } from "./agent.ts";
@@ -89,10 +90,18 @@ const CLIENTS: Record<string, Client> = {
   },
 };
 
-function client(args: string[]): { name: string; client: Client; rest: string[] } {
+function client(args: string[]): {
+  name: string;
+  client: Client;
+  level: Level | undefined;
+  rest: string[];
+} {
   const { values, positionals } = parseArgs({
     args,
-    options: { client: { type: "string", default: "claude-code" } },
+    options: {
+      client: { type: "string", default: "claude-code" },
+      level: { type: "string" },
+    },
     allowPositionals: true,
     strict: true,
   });
@@ -101,7 +110,10 @@ function client(args: string[]): { name: string; client: Client; rest: string[] 
   if (found === undefined) {
     throw new Error(`unknown client ${name}; known: ${Object.keys(CLIENTS).join(", ")}`);
   }
-  return { name, client: found, rest: positionals };
+  const level = values.level === undefined ? undefined : Level.safeParse(values.level);
+  if (level?.success === false)
+    throw new Error(`unknown level ${values.level}; known: ${Level.options.join(", ")}`);
+  return { name, client: found, level: level?.data, rest: positionals };
 }
 
 async function text(stream: NodeJS.ReadableStream): Promise<string> {
@@ -117,12 +129,14 @@ const sessionOf = (name: string, client: Client, input?: string) =>
 export const ATTACH_FIRST =
   "agentorg: This session can fill a position in an AgentOrg organization. Load the agentorg skill, then attach with `attach` before any other action.";
 
-export const MCP_HELP = `usage: agentorg-mcp [context|wait] [--client claude-code|codex]
-       agentorg-mcp connect|disconnect <claude-code|codex> [--project <dir>]
+export const MCP_HELP = `usage: agentorg-mcp [--client claude-code|codex] [--level ${Level.options.join("|")}]
+       agentorg-mcp context|wait [--client claude-code|codex]
+       agentorg-mcp connect <claude-code|codex> [--project <dir>] [--level <level>]
+       agentorg-mcp disconnect <claude-code|codex> [--project <dir>]
        agentorg-mcp status [--project <dir>]
 
-Present attach, interfaces and call over stdio, connected to AGENTORG_URL. Listing and invocation require attachment; interfaces reads the actor's permitted Tools and their interfaces, and call invokes an interface by its call alias.
-Client hooks: context emits an attachment hint; wait delivers Message/Form changes on stderr with the client's wake status.`;
+Present attach, interfaces and call over stdio, connected to AGENTORG_URL. Listing and invocation require attachment. interfaces lists the Hub interfaces of the chosen level (without one, the whole catalog) with one-line summaries, and interfaces {name} returns one's schemas; call invokes an interface by its call alias.
+Client hooks: context emits an attachment hint; wait delivers what concerns the attached Actor, read with attention, on stderr with the client's wake status.`;
 
 export async function mcpCommand(args: string[]): Promise<number> {
   const command = args[0];
@@ -133,7 +147,7 @@ export async function mcpCommand(args: string[]): Promise<number> {
       : setupCommand(command, args.slice(1));
   }
   if (asked) return help(MCP_HELP);
-  const { name, client: chosen, rest } = client(args);
+  const { name, client: chosen, level, rest } = client(args);
   const input =
     name === "codex" && ["context", "wait"].includes(rest[0] ?? "")
       ? await text(process.stdin)
@@ -160,6 +174,7 @@ export async function mcpCommand(args: string[]): Promise<number> {
   const agent = new Agent({
     coreUrl: coreUrl(),
     session,
+    ...(level === undefined ? {} : { level }),
     ...(name === "codex" ? { client: name } : {}),
   });
   const server = await presentOverStdio(agent);
