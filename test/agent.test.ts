@@ -18,7 +18,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { claudeTakesInput } from "../src/clients/mcp/command.ts";
 import { describe } from "../src/clients/mcp/waiter.ts";
 import { CONNECTION_PATH, establish } from "../src/connection/index.ts";
-import { Form, Message, Position } from "../src/contract/index.ts";
+import { Form, Message, Position, Work } from "../src/contract/index.ts";
 import { dial } from "../src/network/index.ts";
 import { type Core, startCore, until } from "./harness.ts";
 
@@ -36,10 +36,15 @@ async function core(
 }
 
 /** A session's view of `agentorg-mcp`: stable tools, current capabilities and calls. */
-async function session(core: Core & { home: string }, id: string, kind = "claude-code") {
+async function session(
+  core: Core & { home: string },
+  id: string,
+  kind = "claude-code",
+  level?: string,
+) {
   const transport = new StdioClientTransport({
     command: process.execPath,
-    args: [BIN, "--client", kind],
+    args: [BIN, "--client", kind, ...(level === undefined ? [] : ["--level", level])],
     env: {
       PATH: process.env.PATH ?? "",
       AGENTORG_HOME: core.home,
@@ -76,9 +81,9 @@ async function session(core: Core & { home: string }, id: string, kind = "claude
     interfaces: async () => {
       const listed = await tool("interfaces");
       return (
-        (
-          listed.structuredContent as { tools?: { interfaces: { call: string }[] }[] }
-        )?.tools?.flatMap((tool) => tool.interfaces.map((offer) => offer.call)) ?? []
+        (listed.structuredContent as { interfaces?: { name: string }[] })?.interfaces?.map(
+          (offer) => offer.name,
+        ) ?? []
       );
     },
     call: async (
@@ -207,12 +212,34 @@ test("the stdio catalog is stable and only attachment can act before a position 
   for (const input of [{}, { name: "team" }, { name: "team", input: [] }]) {
     assert.equal((await one.tool("call", input)).isError, true);
   }
-  const listed = (await one.tool("interfaces")).structuredContent as { tools: unknown[] };
+  const listed = (await one.tool("interfaces")).structuredContent as {
+    level: string;
+    interfaces: { name: string; summary: string }[];
+  };
   const asActor = await org.client(readFileSync(join(org.home, "actors", actor), "utf8").trim());
-  assert.deepEqual(Object.keys(listed), ["tools"]);
-  assert.deepEqual(listed.tools, await asActor.available());
-  assert.equal(listed.tools.length, 11);
-  assert.equal((await one.interfaces()).includes("activity"), true);
+  const catalog = await asActor.available();
+  assert.deepEqual(Object.keys(listed), ["level", "interfaces"]);
+  assert.equal(listed.level, "organization", "without --level, the whole catalog");
+  assert.deepEqual(
+    listed.interfaces.map((offer) => offer.name).sort(),
+    catalog.flatMap((tool) => tool.interfaces.map((offer) => offer.call)).sort(),
+  );
+  assert.ok(
+    listed.interfaces.every((offer) => offer.summary.length > 0 && !offer.summary.includes("\n\n")),
+  );
+  assert.ok(JSON.stringify(listed).length < 8000, "the catalog is names and summaries only");
+  const team = (await one.tool("interfaces", { name: "team" })).structuredContent as {
+    name: string;
+    input: object;
+    output: object;
+  };
+  const teamOffer = catalog
+    .flatMap((tool) => tool.interfaces)
+    .find((offer) => offer.call === "team");
+  assert.deepEqual(team.input, teamOffer?.interface.input);
+  assert.deepEqual(team.output, teamOffer?.interface.output);
+  assert.match(text(await one.tool("interfaces", { name: "nope" })), /^not_found:/);
+  assert.equal((await one.tool("interfaces", { name: 1 })).isError, true);
   const { actor: report, credential } = await org.org.registry.create(actor, "report", "A report");
   await org.client(credential);
   await until("the report's ordinary client is online", () =>
@@ -220,16 +247,39 @@ test("the stdio catalog is stable and only attachment can act before a position 
   );
   const refreshed = await one.tool("interfaces");
   assert.notEqual(refreshed.isError, true);
-  const tools = refreshed.structuredContent?.tools as {
-    id: string;
-    interfaces: { call: string }[];
-  }[];
-  assert.equal(tools.length, 11, "connecting an Actor never adds a Tool");
-  assert.equal(
-    tools.some((tool) => tool.id === report.id),
-    false,
+  assert.deepEqual(refreshed.structuredContent, listed, "connecting an Actor never adds a Tool");
+});
+
+test("a session at a level presents that level's interfaces, and the one before it", async () => {
+  const org = await core();
+  const report = await session(org, "s-report", "claude-code", "report");
+  await report.call("attach", { name: "solo", purpose: "One agent and its person." });
+  const catalog = await (await org.client(org.root)).available();
+  const tagged = (levels: string[]) =>
+    catalog
+      .flatMap((tool) => tool.interfaces)
+      .filter((offer) => offer.level !== undefined && levels.includes(offer.level))
+      .map((offer) => offer.call)
+      .sort();
+  const listed = (await report.tool("interfaces")).structuredContent as {
+    level: string;
+    interfaces: { name: string }[];
+  };
+  assert.equal(listed.level, "report");
+  assert.deepEqual(listed.interfaces.map((offer) => offer.name).sort(), tagged(["report"]));
+  for (const name of ["status_set", "work_update", "form_create", "attention"])
+    assert.ok(
+      listed.interfaces.some((offer) => offer.name === name),
+      name,
+    );
+  assert.match(
+    text(await report.tool("interfaces", { name: "team" })),
+    /^not_found: team is not presented at the report level/,
   );
-  assert.deepEqual(tools, listed.tools);
+  const team = await session(org, "s-team", "claude-code", "team");
+  await team.call("attach", { name: "pair", purpose: "Works with others." });
+  assert.deepEqual((await team.interfaces()).sort(), tagged(["report", "team"]));
+  await assert.rejects(session(org, "s-bad", "claude-code", "everything"));
 });
 
 test("an appointed session creates its position under the root, and a resumed one fills it again", async () => {
@@ -431,7 +481,7 @@ test("a created position's credential is kept for its session, never shown, and 
   assert.equal(existsSync(file), false);
 });
 
-test("the waiter names ordinary Actor records without claiming native user provenance", () => {
+test("the waiter frames each item with what to do, without claiming native user provenance", () => {
   const at = "2026-10-30T00:00:00.000Z";
   const self = Position.parse({
     id: "self",
@@ -443,41 +493,72 @@ test("the waiter names ordinary Actor records without claiming native user prove
     created_at: at,
     closed_at: null,
   });
-  const message = Message.parse({
-    messageID: "msg1",
-    conversationID: "conversation1",
-    senderID: "manager",
-    recipientID: "self",
-    text: "Build the schema.",
-    createdAt: at,
-    seq: 1,
-  });
-  const form = Form.parse({
+  const message = (messageID: string, senderID: string, text: string) =>
+    Message.parse({
+      messageID,
+      conversationID: "conversation1",
+      senderID,
+      recipientID: senderID === "self" ? "manager" : "self",
+      text,
+      createdAt: at,
+      seq: 1,
+    });
+  const ask = Form.parse({
     formID: "form1",
     requesterID: "self",
     title: "Which schema?",
     links: [],
+    workID: "work1",
     approval: false,
     collect: false,
     fields: [{ name: "choice", label: "Choose", required: true }],
     status: "resolved",
     createdAt: at,
-    responses: { peer: { answers: { choice: "v2" }, at } },
+    responses: { manager: { answers: { choice: "v2" }, note: "Keep v1 readable", at } },
     revision: 2,
     updatedAt: at,
   });
+  const work = Work.parse({
+    ticketID: "work1",
+    requesterID: "self",
+    ownerID: "self",
+    title: "Migrate the schema",
+    status: "active",
+    links: [],
+    createdAt: at,
+    revision: 1,
+    updatedAt: at,
+  });
+  const lead = { actorID: "manager", name: "lead" };
   const delivered = describe(
-    {
-      messages: [message],
-      forms: [form],
-      names: { manager: { name: "lead" }, self: { name: "worker" } },
-      position: { messages: 1, forms: at },
-    },
+    [
+      { kind: "answer", recordID: "form1", from: lead, title: ask.title, at, ask, work },
+      {
+        kind: "message",
+        recordID: "msg2",
+        from: lead,
+        title: "Then the data.",
+        at,
+        conversation: [
+          message("msg1", "manager", "Build the schema."),
+          message("msg2", "manager", "Then the data."),
+        ],
+      },
+      { kind: "assigned", recordID: "work2", from: lead, title: "Index it", at },
+    ],
     { self },
   );
-  assert.match(delivered, /Message msg1 from lead, your manager:\nBuild the schema/);
-  assert.match(delivered, /Form form1 from worker, resolved, revision 2/);
-  assert.match(delivered, /native approval requires its client's validated binding/);
+  assert.match(
+    delivered,
+    /lead, your manager, answered your ask "Which schema\?" \(form1\): choice: v2\. Note: Keep v1 readable Apply it, then update "Migrate the schema" \(work1\)\. The ask records the answer; it is resolved\./,
+  );
+  assert.match(
+    delivered,
+    /The conversation since you last spoke in it:\nlead \(msg1\): Build the schema\.\nlead \(msg2\): Then the data\./,
+  );
+  assert.match(delivered, /Reply with message_send \{recipientID: manager\}/);
+  assert.match(delivered, /assigned you Work "Index it" \(work2\)\. Read it with work_get/);
+  assert.match(delivered, /a native approval requires its client's validated binding/);
   assert.doesNotMatch(delivered, /only the user|recorded: true|the user \(the root\)/);
 });
 
@@ -599,27 +680,40 @@ test("a waiter ends at once for a session in print mode, rather than hold the cl
   }
 });
 
-test("the waiter delivers Messages and changes to the session's own asks using private positions", async () => {
+test("the waiter delivers what concerns its Actor from where it attached, never its own writes", async () => {
   const org = await core();
-  const worker = await session(org, "s-waited");
-  const { actor } = (await worker.call("attach", { name: "worker", purpose: "Work" }))
-    .structuredContent as { actor: string };
   const root = await org.client(org.root);
   const done = <T>(answer: unknown) => (answer as { value: T }).value;
+  const earlier = done<{ actor: { id: string } }>(
+    await root.call("actor_create", { name: "worker", purpose: "Work" }),
+  );
+  await root.call("message_send", { recipientID: earlier.actor.id, text: "Before you attached." });
+  const worker = await session(org, "s-waited");
+  const { actor } = (await worker.call("attach", { name: "builder", purpose: "Build" }))
+    .structuredContent as { actor: string };
   const send = async (text: string) =>
     done<{ messageID: string }>(await root.call("message_send", { recipientID: actor, text }))
       .messageID;
   const alive = { CLAUDE_PID: String(process.pid) };
   const claim = join(org.home, "sessions/claude-code-s-waited/waiter");
   const inbox = join(org.home, "sessions/claude-code-s-waited/inbox");
+  assert.match(readFileSync(inbox, "utf8"), /^\d+\n$/, "attaching records the current position");
   const first = hook(org, "wait", "s-waited", alive);
-  await until("the waiter polls", () => existsSync(inbox));
+  await worker.call("status_set", { line: "Own write, never delivered" });
+  const own = (await worker.call("work_create", { title: "Own Work" })).structuredContent as {
+    ticketID: string;
+  };
   const id = await send("Start with the schema.");
   const woke = await within(20_000, "the first message", first);
   assert.equal(woke.code, 2);
-  assert.ok(woke.stderr.includes(`Message ${id} from root, your manager:\nStart with the schema.`));
-  const original = done(await root.call("message_get", { messageID: id }));
-  assert.equal(JSON.stringify(original).includes("read_at"), false);
+  assert.match(
+    woke.stderr,
+    /root, your manager, sent you a message\. The conversation since you last spoke in it:/,
+  );
+  assert.ok(woke.stderr.includes(`root (${id}): Start with the schema.`));
+  assert.equal(woke.stderr.includes(own.ticketID), false, "own writes are never items");
+  assert.equal(woke.stderr.includes("Before you attached"), false);
+  await worker.call("message_send", { recipientID: org.rootId, text: "On it." });
   const claimed = (before: string) =>
     until("a waiter claims the session", () => readFileSync(claim, "utf8") !== before);
   let before = readFileSync(claim, "utf8");
@@ -636,43 +730,27 @@ test("the waiter delivers Messages and changes to the session's own asks using p
   const next = await send("Then the data.");
   const latest = await within(20_000, "the newer waiter", newer);
   assert.equal(latest.code, 2);
-  assert.ok(latest.stderr.includes(next));
-  assert.equal(latest.stderr.includes(id), false);
-  assert.deepEqual(
-    done(await root.call("message_get", { messageID: id })),
-    original,
-    "delivery never mutates public messages",
+  assert.ok(latest.stderr.includes(`root (${next}): Then the data.`));
+  assert.equal(
+    latest.stderr.includes(id),
+    false,
+    "the conversation starts after the session spoke",
   );
-  const unrelated = done<{ formID: string }>(
-    await root.call("form_create", {
-      title: "Other question",
-      fields: [{ name: "other", label: "Other team's question", required: false }],
-    }),
-  );
-  const own = (
+  const ask = (
     await worker.call("form_create", {
       title: "Which schema?",
+      workID: own.ticketID,
       fields: [{ name: "choice", label: "Choose", required: true }],
     })
   ).structuredContent as { formID: string };
-  await root.call("form_respond", { formID: own.formID, answers: { choice: "v2" } });
-  const delivered = await within(20_000, "the form", hook(org, "wait", "s-waited", alive));
-  assert.equal(delivered.code, 2);
-  assert.equal(
-    delivered.stderr.split(`Form ${own.formID}`).length,
-    2,
-    "the answered ask is delivered once",
+  const answering = hook(org, "wait", "s-waited", alive);
+  await root.call("form_respond", { formID: ask.formID, answers: { choice: "v2" }, note: "Go" });
+  const answered = await within(20_000, "the answer", answering);
+  assert.equal(answered.code, 2);
+  assert.match(
+    answered.stderr,
+    /root, your manager, answered your ask "Which schema\?" \(.+\): choice: v2\. Note: Go Apply it, then update "Own Work"/,
   );
-  assert.equal(
-    delivered.stderr.includes(unrelated.formID),
-    false,
-    "shared browsing is separate from delivery",
-  );
-  assert.equal(delivered.stderr.includes(next), false);
-  assert.deepEqual(Object.keys(JSON.parse(readFileSync(inbox, "utf8"))).sort(), [
-    "forms",
-    "messages",
-  ]);
   assert.deepEqual(await hook(org, "wait", "s-waited", { CLAUDE_PID: "999999" }), {
     code: 0,
     stdout: "",
@@ -680,92 +758,35 @@ test("the waiter delivers Messages and changes to the session's own asks using p
   });
 });
 
-test("the waiter returns one page of Form backlog per invocation", async (t) => {
-  const org = await core();
-  const worker = await session(org, "s-bounded");
-  const { actor } = (await worker.call("attach", { name: "worker", purpose: "Work" }))
-    .structuredContent as { actor: string };
-  const forms = [];
-  for (let i = 0; i < 3; i++) {
-    forms.push(
-      (
-        await worker.call("form_create", {
-          title: `Question ${i}`,
-          fields: [{ name: "answer", label: `Question ${i}`, required: false }],
-        })
-      ).structuredContent as { formID: string },
-    );
-    // Each ask its own update time: a page continues after the last one delivered.
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  }
-  const invoke = org.org.invoke.bind(org.org);
-  let pages = 0;
-  const intercept = t.mock.method(org.org, "invoke", (...args: Parameters<typeof invoke>) => {
-    const [caller, name, input, how] = args;
-    if (caller === actor && name === "form_list" && input.requesterID === actor) {
-      pages++;
-      return invoke(caller, name, { ...input, limit: 2 }, how);
-    }
-    return invoke(...args);
-  });
-  try {
-    // The first page has two asks; the next starts at the last one delivered, so it adds one.
-    for (const expected of [forms.slice(0, 2), forms.slice(2)]) {
-      const delivered = await within(
-        5000,
-        "one bounded delivery",
-        hook(org, "wait", "s-bounded", { CLAUDE_PID: String(process.pid) }),
-      );
-      assert.equal(delivered.code, 2);
-      for (const form of expected) assert.equal(delivered.stderr.includes(form.formID), true);
-      assert.equal((delivered.stderr.match(/^Form /gm) ?? []).length, expected.length);
-    }
-    assert.equal(
-      pages,
-      2,
-      "each waiter fetches one page, leaving later pages for the next invocation",
-    );
-  } finally {
-    intercept.mock.restore();
-  }
-});
-
-test("a replaced waiter cancels a held read without writing or advancing any cursor", async (t) => {
+test("a replaced waiter ends its waiting read without writing or advancing its position", async (t) => {
   const org = await core();
   const worker = await session(org, "s-cancel-read");
   const { actor } = (await worker.call("attach", { name: "worker", purpose: "Work" }))
     .structuredContent as { actor: string };
   const claim = join(org.home, "sessions/claude-code-s-cancel-read/waiter");
   const inbox = join(org.home, "sessions/claude-code-s-cancel-read/inbox");
+  const position = readFileSync(inbox, "utf8");
   let waiting!: () => void;
   const held = new Promise<void>((resolve) => {
     waiting = resolve;
   });
-  let release!: () => void;
-  const gate = new Promise<void>((resolve) => {
-    release = resolve;
-  });
   const invoke = org.org.invoke.bind(org.org);
-  const intercept = t.mock.method(org.org, "invoke", async (...args: Parameters<typeof invoke>) => {
-    if (args[0] === actor && args[1] === "form_list" && args[2].requesterID === actor) {
-      waiting();
-      await gate;
-    }
+  const intercept = t.mock.method(org.org, "invoke", (...args: Parameters<typeof invoke>) => {
+    if (args[0] === actor && args[1] === "attention" && args[2].wait === 600) waiting();
     return invoke(...args);
   });
   const pending = hook(org, "wait", "s-cancel-read", { CLAUDE_PID: String(process.pid) });
   try {
-    await within(5000, "the held read", held);
-    // A new owner claims this session while the first waiter's RPC is still pending.
+    await within(5000, "the waiting read", held);
+    // A new owner claims this session while the first waiter's read waits.
     writeFileSync(claim, `${process.pid}\n`, { mode: 0o600 });
     assert.deepEqual(await within(2000, "the cancelled read ends", pending), {
       code: 0,
       stdout: "",
       stderr: "",
     });
-    assert.equal(existsSync(inbox), false);
+    assert.equal(readFileSync(inbox, "utf8"), position);
   } finally {
-    release();
     intercept.mock.restore();
     await pending;
   }

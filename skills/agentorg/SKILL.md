@@ -23,9 +23,10 @@ an Actor, attach once with a short `name` and a sentence stating its `purpose`; 
 that position under root. A resumed conversation recovers its saved Actor. A new conversation
 attaches independently.
 
-Read `interfaces`, which returns `{tools: [...]}` with descriptions, input/output schemas and each
-interface's `call` alias. Invoke through `call {name: interface.call, input}`. For example, `team`
-means `call {name: "team", input: {}}`. Read the operation's schema before constructing its input.
+Read `interfaces`, which lists each presented interface's call alias and one-line summary, and
+`interfaces {name}` for one interface's description and input/output schemas. Invoke through
+`call {name, input}`. For example, `team` means `call {name: "team", input: {}}`. Read the
+operation's schema before constructing its input.
 
 Read your position and reports with `team`; it contains identity, hierarchy and actual admitted
 connection presence. Use `actor_list` to find active counterparts and `actor_get` for a known

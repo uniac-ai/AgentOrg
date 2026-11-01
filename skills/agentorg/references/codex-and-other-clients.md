@@ -9,11 +9,12 @@ through `/hooks`. `/mcp` lists the three adapter tools.
   take `session_id` from stdin. The same conversation recovers its Actor and cannot change it.
   A fork with a new conversation ID attaches independently. Verify those identities with the
   installed client when setting up its hooks.
-- **Calls.** Read `interfaces` and invoke logical Hub operations through `call {name, input}`.
-- **Inbox.** Codex's generic hooks supply context and do not wake idle turns. When running, traverse
-  incoming `message_list` after the last `seq` you handled, assigned/requested `work_list`, and
-  `form_list {requesterID: self}` with `updatedSince` the last change you handled.
-  Use record IDs/revisions to recognize updates. No public read acknowledgement is needed or available.
+- **Calls.** List `interfaces`, read one's schemas with `interfaces {name}`, and invoke logical Hub
+  operations through `call {name, input}`.
+- **Inbox.** Codex's generic hooks supply context and do not wake idle turns. When running, read
+  `attention {since}` with the `next` of your previous read; its items are what other Actors did
+  that concerns you. Use record IDs/revisions to recognize updates. No public read acknowledgement
+  is needed or available.
 - **Approvals.** Form responses are ordinary Actor records. Native request authorization requires
   a client-owned validated binding, independently of the generic adapter.
 - **Other sessions.** Follow the user's authorization for starting or messaging separate sessions.

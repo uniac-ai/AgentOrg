@@ -272,6 +272,21 @@ test("connect and disconnect leave an empty project empty, and refuse a server n
     const unknown = await command("mcp", ["connect", "cursor", "--project", project], env);
     assert.equal(unknown.status, 1);
     assert.match(unknown.stderr, /name a client: claude-code or codex/);
+    rmSync(join(project, ".mcp.json"));
+
+    const leveled = ["--project", project, "--level", "report"];
+    await command("mcp", ["connect", "claude-code", ...leveled], env);
+    await command("mcp", ["connect", "codex", ...leveled], env);
+    const servers = JSON.parse(readFileSync(join(project, ".mcp.json"), "utf8")).mcpServers;
+    assert.deepEqual(servers.org.args, ["--client", "claude-code", "--level", "report"]);
+    assert.match(
+      readFileSync(join(project, ".codex", "config.toml"), "utf8"),
+      /args = \["--client","codex","--level","report"\]/,
+    );
+    const badLevel = ["connect", "codex", "--project", project, "--level", "all"];
+    const refusedLevel = await command("mcp", badLevel, env);
+    assert.equal(refusedLevel.status, 1);
+    assert.match(refusedLevel.stderr, /unknown level all; known: report, team, organization/);
   } finally {
     done();
   }
