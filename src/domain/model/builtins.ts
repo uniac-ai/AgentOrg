@@ -1,7 +1,7 @@
 /**
  * The core's built-ins, the surface every actor finds among its available interfaces: their
  * requests, results and descriptions. Workspace modules own their interaction contracts.
- * Every open Actor receives the same built-in interfaces, including audit metadata.
+ * Every open Actor receives the same built-in interfaces; each operation enforces its authority.
  */
 
 import { z } from "zod";
@@ -67,13 +67,13 @@ export const CallResult = z
 
 export const Activity = z
   .strictObject({
-    since: z.number().int().optional().describe("Only entries after this entry id."),
+    since: z.number().int().optional().describe("After this entry id; without it, the latest."),
     limit: z.number().int().min(1).max(1000).default(100),
   })
   .meta({ id: "Activity" });
 
 export const ActivityResult = z
-  .strictObject({ entries: z.array(AuditEntry).describe("Newest first.") })
+  .strictObject({ entries: z.array(AuditEntry).describe("Oldest first.") })
   .meta({ id: "ActivityResult" });
 
 export const ACTORS = toolDefinition("actors", {
@@ -111,7 +111,7 @@ export const ACTIVITY = toolDefinition("activity", {
     writes: false,
     request: Activity,
     response: ActivityResult,
-    description: "Read audit metadata, newest first.",
+    description: "Read the organization's audit metadata, oldest first. Only the root may.",
   },
 });
 

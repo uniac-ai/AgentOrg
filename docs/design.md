@@ -199,7 +199,11 @@ the organization. Actor and Team metadata contain no callable-interface or nativ
 The Hub's Actors Tool creates direct reports and closes leaves under the existing manager/root
 lifecycle policy. Shared resource claims remain Hub-owned: a live holder prevents another claim,
 expiry or holder closure permits replacement, and a holder or root may release it. Historical
-`call_result` remains restricted to the original caller. Audit exposes operation metadata only.
+`call_result` remains restricted to the original caller. `activity` exposes operation metadata only,
+and only to the root: it names every Actor's operations, including who sent each private Message
+and when, so every other caller is refused `forbidden`. Its entries come oldest first: the latest
+`limit` without `since`, or the earliest `limit` after `since`, so passing the last entry's id as
+the next `since` continues a poll without skipping entries.
 
 Workspace modules enforce record roles, equally for human, agent and program clients:
 

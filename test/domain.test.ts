@@ -113,23 +113,24 @@ test("an unsupported database schema is refused without changing its records", (
   assert.equal(unchanged.prepare("SELECT value FROM kept").get()?.value, "kept");
 });
 
-test("audit metadata is shared without disclosing message bodies or Actor credentials", async (t) => {
+test("only the root reads audit metadata, which discloses no message bodies or Actor credentials", async (t) => {
   const store = new SqliteStore(":memory:");
   t.after(() => store.close());
   const org = organization(store);
   const { root, credential: rootCredential } = await org.registry.createRoot();
   const { actor, credential } = await org.registry.create(root.id, "worker", "Work");
+  const { actor: other } = await org.registry.create(root.id, "other", "Other work");
   const invoke = (id: string, name: string, input: Record<string, unknown> = {}) =>
     org.invoke(id, name, input, invocation);
   const secret = "private-message-body-sentinel";
-  await done(invoke(actor.id, "message_send", { recipientID: root.id, text: secret }));
+  await done(invoke(actor.id, "message_send", { recipientID: other.id, text: secret }));
   await done(invoke(actor.id, "work_create", { ownerID: root.id, goal: "Working" }));
+  for (const caller of [actor, other])
+    assert.equal(await refused(invoke(caller.id, "activity")), "forbidden");
   const rootView = await done(invoke(root.id, "activity"));
-  const workerView = await done(invoke(actor.id, "activity"));
-  assert.deepEqual(workerView, rootView);
   assert.deepEqual(
     rootView.entries.map((entry: { operation: string }) => entry.operation),
-    ["work_create", "message_send"],
+    ["message_send", "work_create"],
   );
   for (const entry of rootView.entries)
     assert.deepEqual(Object.keys(entry).sort(), [
@@ -142,4 +143,37 @@ test("audit metadata is shared without disclosing message bodies or Actor creden
     ]);
   for (const privateValue of [secret, rootCredential, credential])
     assert.equal(JSON.stringify(rootView).includes(privateValue), false);
+});
+
+test("polling activity past its limit returns every entry exactly once, oldest first", async (t) => {
+  const store = new SqliteStore(":memory:");
+  t.after(() => store.close());
+  const org = organization(store);
+  const { root } = await org.registry.createRoot();
+  const claim = (resource: string) =>
+    done(org.invoke(root.id, "claim", { resource, note: "Paging" }, invocation));
+  const page = async (input: Record<string, unknown>) =>
+    (await done(org.invoke(root.id, "activity", input, invocation))).entries as {
+      id: number;
+      target: string;
+    }[];
+  for (const resource of ["a", "b", "c"]) await claim(resource);
+  const latest = await page({ limit: 2 });
+  assert.deepEqual(
+    latest.map((entry) => entry.target),
+    ["b", "c"],
+  );
+  for (const resource of ["d", "e", "f", "g", "h"]) await claim(resource);
+  const polled: string[] = [];
+  let since = latest.at(-1)?.id;
+  for (let entries = await page({ since, limit: 2 }); entries.length > 0; ) {
+    polled.push(...entries.map((entry) => entry.target));
+    since = entries.at(-1)?.id;
+    entries = await page({ since, limit: 2 });
+  }
+  assert.deepEqual(polled, ["d", "e", "f", "g", "h"]);
+  assert.deepEqual(
+    (await page({ since: 0, limit: 1000 })).map((entry) => entry.target),
+    ["a", "b", "c", "d", "e", "f", "g", "h"],
+  );
 });
