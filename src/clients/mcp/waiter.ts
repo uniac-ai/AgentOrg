@@ -24,7 +24,7 @@ export type Delivery = Item & {
   /** An answer: the ask, and the Work it blocks. */
   ask?: Form;
   work?: Work;
-  /** A message: its conversation since the session last spoke in it. */
+  /** A message: its conversation from the session's last message in it. */
   conversation?: Message[];
 };
 interface Here {
@@ -70,8 +70,9 @@ async function delivery(client: Actor, self: string, item: Item): Promise<Delive
       before: "latest",
       limit: 20,
     });
+    // From the session's own last message, so a reply arrives with what it answers.
     const spoke = recent.items.findLastIndex((message) => message.senderID === self);
-    return { ...item, conversation: recent.items.slice(spoke + 1) };
+    return { ...item, conversation: recent.items.slice(Math.max(spoke, 0)) };
   }
   return item;
 }
@@ -173,7 +174,7 @@ function frame(item: Delivery, here: Here): string {
         (message) =>
           `${message.senderID === here.self.id ? "you" : item.from.name} (${message.messageID}): ${message.text}`,
       );
-      return `${from} sent you a message. The conversation since you last spoke in it:\n${lines.join("\n")}\nReply with message_send {recipientID: ${item.from.actorID}}.`;
+      return `${from} sent you a message. The conversation from your last message in it:\n${lines.join("\n")}\nReply with message_send {recipientID: ${item.from.actorID}}.`;
     }
   }
 }

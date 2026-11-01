@@ -234,9 +234,11 @@ Actor handles remain unique among open siblings, and paths describe the organiza
 The Hub's Actors Tool creates direct reports and closes leaves under the existing manager/root
 lifecycle policy. Shared resource claims remain Hub-owned: a live holder prevents another claim,
 expiry or holder closure permits replacement, and a holder or root may release it. `activity`
-exposes operation metadata only,
-and only to the root: it names every Actor's operations, including who sent each private Message
-and when, so every other caller is refused `forbidden`. Its entries come oldest first: the latest
+exposes operation metadata only, and only to the root: it names every Actor's operations, including
+who sent each private Message and when, so every other caller is refused `forbidden`. The
+`attention` position any Actor reads is the same audit position, so the distance between two of its
+positions counts every write in between, private Messages included: it shows volume only, never who
+or what. Its entries come oldest first: the latest
 `limit` without `since`, or the earliest `limit` after `since`, so passing the last entry's id as
 the next `since` continues a poll without skipping entries.
 
@@ -327,7 +329,7 @@ The MCP adapter, `agentorg-mcp` in `src/clients/mcp/`, is an optional client for
 - **Delivery and waking.** Claude Code's hooks run the waiter, `agentorg-mcp wait`, when the session starts and whenever its turn ends, as `asyncRewake` hooks. Codex's hooks supply context; its sessions read their inbox when they run, since its background hooks do not wake idle turns.
   - The waiter is one re-arming `attention {since, wait: 600}` read as the ordinary attached Actor, from the position in `sessions/<session>/inbox`. A read that returns only `changed` advances the position and waits again; items are what other Actors did, so the session's own writes never come back to it.
   - Attaching records the current position, so a new session starts from now rather than from the organization's history. A session without a position, such as one kept from before this waiter, or with a position its Hub never issued, also starts from now.
-  - Each item is framed with what to do: an answer quotes the response and names the Work the ask blocks; a Message carries its conversation since the session last spoke in it, from `message_list {counterpartyID, before: "latest"}`.
+  - Each item is framed with what to do: an answer quotes the response and names the Work the ask blocks; a Message carries its conversation from the session's last message in that conversation, so a reply arrives with what it answers, from `message_list {counterpartyID, before: "latest"}`.
   - A replaced waiter or stopped client closes its read connection, ending the waiting read. Reads other than the wait have a five-second timeout. It writes the framed items, then atomically replaces its private position and exits with status 2. Claude Code hands that output to its session as input. No public receipt is written. A write followed by a crash before saving the position can redeliver the same items.
   - A newer waiter replaces an older one. Generic delivery is at least once; native approval handling belongs to the client.
 

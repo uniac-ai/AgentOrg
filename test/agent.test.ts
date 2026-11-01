@@ -213,13 +213,12 @@ test("the stdio catalog is stable and only attachment can act before a position 
     assert.equal((await one.tool("call", input)).isError, true);
   }
   const listed = (await one.tool("interfaces")).structuredContent as {
-    level: string;
+    level?: string;
     interfaces: { name: string; summary: string }[];
   };
   const asActor = await org.client(readFileSync(join(org.home, "actors", actor), "utf8").trim());
   const catalog = await asActor.available();
-  assert.deepEqual(Object.keys(listed), ["level", "interfaces"]);
-  assert.equal(listed.level, "organization", "without --level, the whole catalog");
+  assert.deepEqual(Object.keys(listed), ["interfaces"], "without --level, the whole catalog");
   assert.deepEqual(
     listed.interfaces.map((offer) => offer.name).sort(),
     catalog.flatMap((tool) => tool.interfaces.map((offer) => offer.call)).sort(),
@@ -540,7 +539,8 @@ test("the waiter frames each item with what to do, without claiming native user 
         title: "Then the data.",
         at,
         conversation: [
-          message("msg1", "manager", "Build the schema."),
+          message("msg0", "self", "Merge the schema PR?"),
+          message("msg1", "manager", "Yes, after CI."),
           message("msg2", "manager", "Then the data."),
         ],
       },
@@ -554,7 +554,7 @@ test("the waiter frames each item with what to do, without claiming native user 
   );
   assert.match(
     delivered,
-    /The conversation since you last spoke in it:\nlead \(msg1\): Build the schema\.\nlead \(msg2\): Then the data\./,
+    /The conversation from your last message in it:\nyou \(msg0\): Merge the schema PR\?\nlead \(msg1\): Yes, after CI\.\nlead \(msg2\): Then the data\./,
   );
   assert.match(delivered, /Reply with message_send \{recipientID: manager\}/);
   assert.match(delivered, /assigned you Work "Index it" \(work2\)\. Read it with work_get/);
@@ -708,12 +708,14 @@ test("the waiter delivers what concerns its Actor from where it attached, never 
   assert.equal(woke.code, 2);
   assert.match(
     woke.stderr,
-    /root, your manager, sent you a message\. The conversation since you last spoke in it:/,
+    /root, your manager, sent you a message\. The conversation from your last message in it:/,
   );
   assert.ok(woke.stderr.includes(`root (${id}): Start with the schema.`));
   assert.equal(woke.stderr.includes(own.ticketID), false, "own writes are never items");
   assert.equal(woke.stderr.includes("Before you attached"), false);
-  await worker.call("message_send", { recipientID: org.rootId, text: "On it." });
+  const reply = (
+    await worker.call("message_send", { recipientID: org.rootId, text: "Schema first, then data?" })
+  ).structuredContent as { messageID: string };
   const claimed = (before: string) =>
     until("a waiter claims the session", () => readFileSync(claim, "utf8") !== before);
   let before = readFileSync(claim, "utf8");
@@ -730,12 +732,13 @@ test("the waiter delivers what concerns its Actor from where it attached, never 
   const next = await send("Then the data.");
   const latest = await within(20_000, "the newer waiter", newer);
   assert.equal(latest.code, 2);
-  assert.ok(latest.stderr.includes(`root (${next}): Then the data.`));
-  assert.equal(
-    latest.stderr.includes(id),
-    false,
-    "the conversation starts after the session spoke",
+  assert.ok(
+    latest.stderr.includes(
+      `from your last message in it:\nyou (${reply.messageID}): Schema first, then data?\nroot (${next}): Then the data.`,
+    ),
+    "the session's last message leads, so the reply arrives with what it answers",
   );
+  assert.equal(latest.stderr.includes(id), false, "nothing before the session's last message");
   const ask = (
     await worker.call("form_create", {
       title: "Which schema?",

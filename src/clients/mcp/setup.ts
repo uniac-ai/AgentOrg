@@ -13,7 +13,7 @@ import { CLIENTS, clientOf } from "./projects.ts";
 
 const PROGRAM = "agentorg-mcp";
 const NAMES = Object.keys(CLIENTS).join("|");
-export const CONNECT_HELP = `usage: agentorg-mcp connect <${NAMES}> [--project <dir>] [--level report|team|organization]
+export const CONNECT_HELP = `usage: agentorg-mcp connect <${NAMES}> [--project <dir>] [--level ${Level.options.join("|")}]
        agentorg-mcp disconnect <${NAMES}> [--project <dir>]
 
 connect pins this MCP adapter and Node in <home>/bin/agentorg-mcp, configures the project's org MCP server and hooks, and links the package's agentorg skill. --level chooses the interfaces the server presents; without it, the whole catalog. Claude Code also gets its MCP approval. The project's other entries stay as they are. Codex requires project trust, enabled hooks (features.hooks), and review and trust of the hook definitions through /hooks.

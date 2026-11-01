@@ -89,13 +89,14 @@ export interface AgentOptions {
   session: string | undefined;
   /** A client that identifies its session on each call instead of at process startup. */
   client?: string;
-  /** The organization level whose interfaces `interfaces` presents. */
-  level: Level;
+  /** The organization level whose interfaces `interfaces` presents; without one, all of them. */
+  level?: Level;
 }
 
 /** Whether an interface tagged `tag` is presented at `level`; each level contains the one before. */
-const presents = (level: Level, tag: Level | undefined) =>
-  Level.options.indexOf(tag ?? "organization") <= Level.options.indexOf(level);
+const presents = (level: Level | undefined, tag: Level | undefined) =>
+  level === undefined ||
+  (tag !== undefined && Level.options.indexOf(tag) <= Level.options.indexOf(level));
 
 export class Agent implements Presented {
   readonly instructions = INSTRUCTIONS;
@@ -220,7 +221,7 @@ export class Agent implements Presented {
       return {
         state: "done",
         value: {
-          level,
+          ...(level === undefined ? {} : { level }),
           interfaces: offers.map((offer) => ({
             name: offer.call,
             summary: summaryOf(offer.interface.description),
@@ -230,7 +231,12 @@ export class Agent implements Presented {
     }
     const offer = offers.find((each) => each.call === name);
     if (offer === undefined)
-      return refused("not_found", `${name} is not presented at the ${level} level`);
+      return refused(
+        "not_found",
+        level === undefined
+          ? `there is no Hub interface ${name}`
+          : `${name} is not presented at the ${level} level`,
+      );
     const { description, input, output } = offer.interface;
     return {
       state: "done",
