@@ -64,7 +64,6 @@ export class SqliteStore implements Store {
       };
     },
   };
-  readonly calls: Store["calls"] = { get: (id) => this.database.get("calls", id) };
   readonly claims: Store["claims"] = {
     get: (resource) => this.database.select("claims", "resource = ?", [resource])[0],
     put: (claim) => {

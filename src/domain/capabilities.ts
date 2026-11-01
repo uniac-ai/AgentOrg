@@ -32,6 +32,7 @@ export function capabilities(tools: FeatureTool[]) {
           long_running: false,
         },
         read_only: !operation.definition.writes,
+        level: operation.definition.level,
       },
     })),
   }));

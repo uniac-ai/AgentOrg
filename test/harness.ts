@@ -15,8 +15,8 @@ export const HUB_INTERFACES = {
   messages: ["message_send", "message_get", "message_list"],
   work: ["work_create", "work_get", "work_list", "work_update", "work_submit", "work_review"],
   forms: ["form_create", "form_get", "form_list", "form_respond", "form_close"],
+  status: ["status_set", "status_get"],
   claims: ["claim", "release"],
-  calls: ["call_result"],
   activity: ["activity"],
   system: ["system_status", "connection_list", "provider_list", "connection_disconnect"],
 };
@@ -73,28 +73,6 @@ export async function startCore(options: CoreOptions = {}) {
 }
 
 export type Core = Awaited<ReturnType<typeof startCore>>;
-
-/** A retained call record, independent of the retired Actor interface invocation mechanism. */
-export function historicalCall(core: Core, from: string, to: string) {
-  const at = "2026-10-30T00:00:00.000Z";
-  const call = {
-    id: "call_history",
-    from,
-    to,
-    interface: "review",
-    input: { change: "v1" },
-    state: "done" as const,
-    output: { value: { verdict: "kept" }, parts: [] },
-    error: null,
-    cause: null,
-    run: null,
-    created_at: at,
-    delivered_at: at,
-    settled_at: at,
-  };
-  core.store.database.insert("calls", call);
-  return call;
-}
 
 export const iface = (
   name: string,

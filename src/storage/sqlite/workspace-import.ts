@@ -58,7 +58,7 @@ export function importLegacyMessages(
       if (prior && !existing)
         throw new Error(`Legacy message ${state.messageID}: imported record is missing`);
       if (existing) {
-        const { revision, cursor, ...data } = existing;
+        const { revision, cursor, updatedAt: _updatedAt, ...data } = existing;
         const events = workspace.messages.history(state.messageID);
         const expectedHistory = [{ ...expectedEvent, revision: 1, cursor }];
         const same = (left: unknown, right: unknown) =>

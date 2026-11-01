@@ -112,6 +112,7 @@ export const ConnectionDisconnected = z.strictObject({
 export const SYSTEM = toolDefinition("system", {
   system_status: {
     writes: false,
+    level: "organization",
     request: z.strictObject({ diagnosticLimit: z.number().int().min(1).max(100).default(20) }),
     response: SystemStatus,
     description:
@@ -119,6 +120,7 @@ export const SYSTEM = toolDefinition("system", {
   },
   connection_list: {
     writes: false,
+    level: "organization",
     request: ConnectionQuery,
     response: ConnectionPage,
     description:
@@ -126,6 +128,7 @@ export const SYSTEM = toolDefinition("system", {
   },
   provider_list: {
     writes: false,
+    level: "organization",
     request: ProviderQuery,
     response: ProviderPage,
     description:
@@ -133,6 +136,7 @@ export const SYSTEM = toolDefinition("system", {
   },
   connection_disconnect: {
     writes: true,
+    level: "organization",
     request: z.strictObject({ instanceId: InstanceId, connectionId: InstanceId }),
     response: ConnectionDisconnected,
     description:

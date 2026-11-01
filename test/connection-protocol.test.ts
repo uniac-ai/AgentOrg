@@ -151,7 +151,6 @@ test("root, hierarchy and unsolicited advertisements never expose or invoke Acto
     "forged-call",
   );
   assert.equal(forged.result?.isError, true);
-  assert.equal(core.store.database.count("calls", "1"), 0);
   assert.deepEqual(advertiser.reverseRequests, []);
 });
 

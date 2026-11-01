@@ -11,6 +11,7 @@ import {
   Form,
   Message,
   ProviderPage,
+  Status,
   SystemStatus,
   Work,
 } from "@agentorg/cli/contract";
@@ -89,7 +90,7 @@ try {
   let requester = await client(url, requesterID, requesterRecord.credential);
   const catalog = await root.available();
   assert.equal(catalog.length, 10);
-  assert.equal(catalog.flatMap((tool) => tool.interfaces).length, 27);
+  assert.equal(catalog.flatMap((tool) => tool.interfaces).length, 28);
   assert.deepEqual(await owner.available(), catalog);
   const system = catalog.find((tool) => tool.id === "hub:system");
   assert.deepEqual(
@@ -157,9 +158,9 @@ try {
   assert.equal(otherOwner.ended, undefined);
   await otherOwner.close();
   for (const [name, filters] of [
-    ["message_list", ["counterpartyID", "before"]],
-    ["work_list", ["ownerWithin", "requesterWithin"]],
-    ["form_list", ["requesterWithin", "respondentWithin", "awaitingWithin"]],
+    ["message_list", ["counterpartyID", "before", "after"]],
+    ["work_list", ["ownerWithin", "requesterWithin", "updatedSince", "order"]],
+    ["form_list", ["requesterWithin", "updatedSince", "order"]],
   ]) {
     const offer = catalog
       .flatMap((tool) => tool.interfaces)
@@ -167,6 +168,15 @@ try {
     assert.ok(offer);
     for (const filter of filters) assert.ok(offer.interface.input.properties[filter]);
   }
+  const levels = Object.fromEntries(
+    catalog.flatMap((tool) => tool.interfaces).map((offer) => [offer.call, offer.level]),
+  );
+  assert.deepEqual(
+    ["status_set", "form_create", "form_respond", "message_send", "team", "actor_create"].map(
+      (name) => levels[name],
+    ),
+    ["report", "report", "team", "team", "team", "organization"],
+  );
   assert.equal((await done(owner.call("actor_get"))).actorID, ownerID);
   assert.equal((await done(root.call("actor_list"))).items.length, 3);
   const sent = Message.parse(
@@ -179,78 +189,92 @@ try {
   assert.deepEqual(await done(requester.call("message_get", { messageID: sent.messageID })), sent);
   const page = await done(requester.call("message_list", { direction: "incoming", limit: 1 }));
   assert.deepEqual(page.items, [sent]);
+  const status = Status.parse(
+    await done(owner.call("status_set", { line: "Proving the packed SDK" })),
+  );
+  assert.deepEqual(await done(requester.call("status_get", { actorID: ownerID })), status);
+  await deny(requester.call("status_get"), "not_found");
   let form = Form.parse(
     await done(
       requester.call("form_create", {
-        respondentIDs: [ownerID],
-        fields: [{ name: "answer", label: "Answer", required: false }],
+        title: "Publish the fixture?",
+        approval: true,
+        fields: [
+          {
+            name: "answer",
+            label: "Answer",
+            required: true,
+            options: [{ value: "publish", detail: "After CI" }, { value: "hold" }],
+            recommended: "publish",
+          },
+        ],
       }),
     ),
   );
   assert.equal("workID" in form, false);
   assert.deepEqual(await done(root.call("form_get", { formID: form.formID })), form);
-  assert.deepEqual((await done(root.call("form_list", { awaitingActorID: ownerID }))).items, [
-    form,
-  ]);
-  assert.deepEqual(
-    (
-      await done(
-        root.call("form_list", {
-          requesterWithin: requesterID,
-          respondentWithin: ownerID,
-          awaitingWithin: ownerID,
-          requesterID,
-          respondentID: ownerID,
-          status: "open",
-          limit: 1,
-        }),
-      )
-    ).items,
-    [form],
-  );
-  await deny(
-    root.call("form_respond", {
-      formID: form.formID,
-      expectedRevision: form.revision,
-      answers: { answer: "Not designated" },
+  const listedAsks = await done(
+    root.call("form_list", {
+      requesterWithin: requesterID,
+      requesterID: [requesterID, ownerID],
+      status: ["open"],
+      limit: 1,
     }),
+  );
+  assert.deepEqual(listedAsks.items, [form]);
+  assert.deepEqual(listedAsks.actors, { [requesterID]: { name: "requester" } });
+  await deny(
+    owner.call("form_respond", { formID: form.formID, answers: { answer: "publish" } }),
     "forbidden",
   );
-  assert.equal((await done(owner.call("form_list"))).items[0].formID, form.formID);
+  await deny(
+    requester.call("form_respond", { formID: form.formID, answers: { answer: "publish" } }),
+    "forbidden",
+  );
   form = Form.parse(
     await done(
-      owner.call("form_respond", {
+      root.call("form_respond", {
         formID: form.formID,
-        expectedRevision: form.revision,
-        answers: {},
+        answers: { answer: "publish" },
+        note: "Go",
       }),
     ),
   );
-  assert.deepEqual(await done(root.call("form_list", { awaitingActorID: ownerID })), {
-    items: [],
-    after: 0,
-  });
-  assert.deepEqual(form.responses[ownerID], {});
-  assert.deepEqual(await done(root.call("form_list", { awaitingWithin: ownerID })), {
-    items: [],
-    after: 0,
-  });
-  form = Form.parse(
+  assert.equal(form.status, "resolved");
+  assert.deepEqual(form.responses[rootID].answers, { answer: "publish" });
+  let question = Form.parse(
     await done(
-      requester.call("form_close", {
-        formID: form.formID,
-        expectedRevision: form.revision,
+      owner.call("form_create", {
+        title: "Which lane?",
+        fields: [{ name: "lane", label: "Lane", required: true }],
+      }),
+    ),
+  );
+  await deny(
+    requester.call("form_close", {
+      formID: question.formID,
+      expectedRevision: question.revision,
+      status: "resolved",
+      resolution: "Not the asker",
+    }),
+    "forbidden",
+  );
+  question = Form.parse(
+    await done(
+      owner.call("form_close", {
+        formID: question.formID,
+        expectedRevision: question.revision,
         status: "resolved",
-        resolution: "Fixture decided",
+        resolution: "Answered in the session: the owned lane",
       }),
     ),
   );
   let work = Work.parse(
-    await done(requester.call("work_create", { ownerID, goal: "Prove packed public SDK" })),
+    await done(requester.call("work_create", { ownerID, title: "Prove packed public SDK" })),
   );
   assert.deepEqual(await done(root.call("work_get", { ticketID: work.ticketID })), work);
   assert.deepEqual(
-    (await done(root.call("work_list", { ownerID, requesterID, status: "open" }))).items,
+    (await done(root.call("work_list", { ownerID, requesterID, status: ["open"] }))).items,
     [work],
   );
   assert.deepEqual(
@@ -261,7 +285,7 @@ try {
           requesterWithin: requesterID,
           ownerID,
           requesterID,
-          status: "open",
+          status: ["open"],
         }),
       )
     ).items,
@@ -270,19 +294,16 @@ try {
   for (const name of ["ownerWithin", "requesterWithin"])
     assert.deepEqual(await done(root.call("work_list", { [name]: "unknown" })), {
       items: [],
-      after: 0,
+      next: null,
+      actors: {},
     });
-  for (const name of ["requesterWithin", "respondentWithin", "awaitingWithin"])
-    assert.deepEqual(await done(root.call("form_list", { [name]: "unknown" })), {
-      items: [],
-      after: 0,
-    });
+  assert.deepEqual(await done(root.call("form_list", { requesterWithin: "unknown" })), {
+    items: [],
+    next: null,
+    actors: {},
+  });
   await deny(
-    root.call("work_update", {
-      ticketID: work.ticketID,
-      expectedRevision: work.revision,
-      progress: "Not owner",
-    }),
+    root.call("work_update", { ticketID: work.ticketID, progress: "Not owner" }),
     "forbidden",
   );
   assert.equal((await done(root.call("actor_get"))).actorID, rootID);
@@ -290,9 +311,8 @@ try {
     await done(
       owner.call("work_update", {
         ticketID: work.ticketID,
-        expectedRevision: work.revision,
         status: "active",
-        progress: "Checking",
+        progress: "Checking the packed SDK.\n\n- [x] Install\n- [ ] Verify",
       }),
     ),
   );
@@ -305,23 +325,23 @@ try {
     await done(
       owner.call("work_submit", {
         ticketID: work.ticketID,
-        expectedRevision: work.revision,
         result: "Verified",
         evidence: ["owned fixture"],
       }),
     ),
   );
+  assert.equal(work.status, "submitted");
   work = Work.parse(
     await done(
       requester.call("work_review", {
         ticketID: work.ticketID,
-        expectedRevision: work.revision,
         submissionID: work.submission.submissionID,
         verdict: "accepted",
-        comment: "Accepted fixture",
       }),
     ),
   );
+  assert.equal(work.status, "accepted");
+  assert.ok(work.completedAt);
   await done(owner.call("claim", { resource: "owned-lane", note: "Verification" }));
   await deny(requester.call("claim", { resource: "owned-lane", note: "Competing" }), "conflict");
   await done(owner.call("release", { resource: "owned-lane" }));
@@ -357,11 +377,12 @@ try {
   assert.deepEqual(await done(requester.call("message_get", { messageID: sent.messageID })), sent);
   assert.deepEqual(await done(owner.call("form_get", { formID: form.formID })), form);
   assert.deepEqual(await done(owner.call("work_get", { ticketID: work.ticketID })), work);
-  assert.deepEqual(await done(requester.call("message_list", { after: page.after })), {
-    items: [],
-    after: page.after,
-  });
-  // Exercise selected conversations after the unchanged old forward/restart assertions.
+  assert.deepEqual(await done(requester.call("status_get", { actorID: ownerID })), status);
+  assert.deepEqual(
+    (await done(requester.call("message_list", { after: page.items[0].seq }))).items,
+    [],
+  );
+  // Exercise selected conversations after the forward/restart assertions.
   for (let i = 0; i < 103; i++)
     await done(owner.call("message_send", { recipientID: ownerID, text: `owned noise ${i}` }));
   const incomingQuery = Message.parse(
@@ -370,18 +391,19 @@ try {
   const outgoingQuery = Message.parse(
     await done(owner.call("message_send", { recipientID: requesterID, text: "selected outbound" })),
   );
+  assert.equal(incomingQuery.conversationID, outgoingQuery.conversationID);
+  assert.equal(incomingQuery.conversationID, sent.conversationID);
   const recentQuery = await done(
     owner.call("message_list", { counterpartyID: requesterID, before: "latest", limit: 2 }),
   );
-  assert.deepEqual(recentQuery, {
-    items: [incomingQuery, outgoingQuery],
-    after: outgoingQuery.cursor,
-  });
+  assert.deepEqual(recentQuery.items, [incomingQuery, outgoingQuery]);
   assert.deepEqual(
-    await done(
-      owner.call("message_list", { counterpartyID: requesterID, before: incomingQuery.cursor }),
-    ),
-    { items: [sent], after: sent.cursor },
+    (
+      await done(
+        owner.call("message_list", { counterpartyID: requesterID, before: recentQuery.older }),
+      )
+    ).items,
+    [sent],
   );
   assert.deepEqual(
     (
@@ -389,7 +411,7 @@ try {
         owner.call("message_list", {
           counterpartyID: requesterID,
           direction: "incoming",
-          before: Number.MAX_SAFE_INTEGER,
+          before: "latest",
         }),
       )
     ).items,
@@ -399,10 +421,12 @@ try {
     owner.call("message_list", { counterpartyID: requesterID, before: "latest", after: 1 }),
     "invalid",
   );
-  await deny(owner.call("message_list", { before: "latest" }), "invalid");
+  assert.deepEqual((await done(owner.call("message_list", { before: "latest", limit: 1 }))).items, [
+    outgoingQuery,
+  ]);
   assert.deepEqual(
-    await done(root.call("message_list", { counterpartyID: ownerID, before: "latest" })),
-    { items: [], after: 0 },
+    (await done(root.call("message_list", { counterpartyID: ownerID, before: "latest" }))).items,
+    [],
   );
   const unseenQuery = Message.parse(
     await done(requester.call("message_send", { recipientID: ownerID, text: "unseen inbound" })),
@@ -413,7 +437,7 @@ try {
   assert.deepEqual(
     (
       await done(
-        owner.call("message_list", { counterpartyID: requesterID, after: recentQuery.after }),
+        owner.call("message_list", { counterpartyID: requesterID, after: outgoingQuery.seq }),
       )
     ).items,
     [unseenQuery, ownQuery],
@@ -435,14 +459,9 @@ try {
       .items,
     [work],
   );
-  assert.deepEqual(
-    (
-      await done(
-        root.call("form_list", { respondentWithin: ownerID, requesterWithin: requesterID }),
-      )
-    ).items,
-    [form],
-  );
+  assert.deepEqual((await done(root.call("form_list", { requesterWithin: ownerID }))).items, [
+    question,
+  ]);
   const pin = JSON.parse(
     readFileSync(join(rootDirectory, "node_modules/@agentorg/cli/vendor/workspace.json"), "utf8"),
   );
@@ -464,24 +483,26 @@ try {
     ok: true,
     node: process.version,
     toolCount: 10,
-    interfaceCount: 27,
+    interfaceCount: 28,
     workspaceSource: pin.source,
     workspaceSha256: digest,
     workspaceVersion: pin.version,
     workspaceBundled: true,
     publicWorkFormHistory: true,
-    directedFilters: true,
+    levelTags: true,
+    statusRecord: true,
+    approvalManagerChain: true,
+    askerClose: true,
     subtreeFilters: true,
     closedSubtreeHistory: true,
     discoverySubtreeSchemas: true,
-    emptyResponseAnswered: true,
     restartPersistence: true,
     systemStatusAndSchemas: true,
     systemConnectionAuthority: true,
     transientDetachAndReconnect: true,
     staleRunCursorRefused: true,
     allWorkspaceOperations: true,
-    standaloneForms: true,
+    standaloneAsks: true,
     p2pPrivacy: true,
     selectedMessageQueries: true,
     discoveryMessageQuerySchemas: true,

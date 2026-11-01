@@ -18,6 +18,7 @@ export const Team = z.strictObject({ root: Id, positions: z.array(Position) }).m
 export const TEAM = toolDefinition("team", {
   team: {
     writes: false,
+    level: "team",
     request: TeamRequest,
     response: Team,
     description:

@@ -3,7 +3,6 @@
 import { actors as actorModule } from "./actors.ts";
 import { application } from "./application.ts";
 import { audit } from "./audit.ts";
-import { calls } from "./calls.ts";
 import { capabilities } from "./capabilities.ts";
 import { claims } from "./claims.ts";
 import { connections } from "./connections.ts";
@@ -28,7 +27,6 @@ export function organization(store: Store, options: OrganizationOptions = {}) {
   const activity = audit(store.audit, now);
   const connected = connections(now);
   const observed = diagnostics(now);
-  const calling = calls(store.calls);
   const resources = claims(store.claims, actors, now);
   const creation = execution(options.provider ?? (() => undefined), observed);
   const positions = actorModule(actors, connected, creation);
@@ -38,7 +36,6 @@ export function organization(store: Store, options: OrganizationOptions = {}) {
     organizationView.tool,
     ...workspace(actors, store.workspace),
     resources.tool,
-    calling.tool,
     activity.tool,
     system(
       actors,
@@ -52,7 +49,6 @@ export function organization(store: Store, options: OrganizationOptions = {}) {
   return {
     registry: actors,
     connections: connected,
-    calls: calling,
     audit: activity,
     diagnostics: observed,
     identify: actors.identify,

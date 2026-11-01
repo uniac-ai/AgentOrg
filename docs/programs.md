@@ -91,17 +91,18 @@ after a drop. Actor identity and Team metadata contain no advertised interfaces 
 `@agentorg/cli/contract` supplies `BUILTINS`, the existing derived inventory of built-in request
 and response schemas, plus public record schemas and the `Answer`, `InterfaceDescriptor` and
 `ToolDescriptor` types. For example, `BUILTINS.actor_create.request.parse(input)` validates an
-Actor creation request. Record exports such as `Actor`, `Position`, `DirectoryActor`, `Message`, `Work` and `Form` are Zod schemas;
+Actor creation request. Record exports such as `Actor`, `Position`, `DirectoryActor`, `Message`,
+`Work`, `Form` and `Status` are Zod schemas;
 `z.output<typeof Position>` derives a record's TypeScript type. Import the Actor connection API
 from `./actor` and these wire contracts from `./contract`.
 
-Work and Forms are shared records with full retained history for every active admitted Actor;
-Messages remain private to their sender and recipient. Use `work_list` with `ownerID`,
-`requesterID`, `status`, `ownerWithin` and `requesterWithin`, and `form_list` with `workID`,
-`requesterID`, `respondentID`, `status`, `requesterWithin`, `respondentWithin`, `awaitingWithin`
-and `awaitingActorID` for directed queries. All supplied filters AND before pagination. A query
-for another Actor's criteria keeps your authenticated identity and write authority. An empty
-recorded Form response counts as answered for `awaitingActorID`.
+Work, Forms and each Actor's Status are shared records for every active admitted Actor; Messages
+remain private to their sender and recipient. Use `work_list` with `ownerID`, `requesterID`,
+`waitsOnActorID`, `status`, `ownerWithin`, `requesterWithin`, `updatedSince` and `order`, and
+`form_list` with `workID`, `requesterID`, `status`, `requesterWithin`, `updatedSince` and `order`.
+All supplied filters AND before pagination; pass a page's `next` back as `after` to continue the
+same read. A query for another Actor's criteria keeps your authenticated identity and write
+authority.
 
 The Actor library requires `actorId` for `connectClient`. Custom clients must
 send `connection.connect` before MCP initialization on `/connection`. Environment-based CLI

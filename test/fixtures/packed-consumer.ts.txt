@@ -6,6 +6,7 @@ import {
   Work,
   Form,
   Position,
+  Status,
   Team,
   SystemStatus,
   SystemConnection,
@@ -23,13 +24,15 @@ const sender: string = message.senderID;
 const work: z.output<typeof Work> = BUILTINS.work_create.response.parse({});
 const owner: string = work.ownerID;
 const form: z.output<typeof Form> = BUILTINS.form_create.response.parse({});
-const respondents: string[] = form.respondentIDs;
+const approval: boolean = form.approval;
+const status: z.output<typeof Status> = BUILTINS.status_set.response.parse({});
+const line: string | undefined = status.line;
 const directory: z.output<typeof DirectoryActor> = BUILTINS.actor_get.response.parse({});
 const actorID: string = directory.actorID;
 const team: z.output<typeof Team> = BUILTINS.team.response.parse({});
 const position: z.output<typeof Position> | undefined = team.positions[0];
 const linked = BUILTINS.form_create.request.parse({
-  respondentIDs: ["actor"],
+  title: "Answer?",
   fields: [{ name: "answer", label: "Answer", required: true }],
 });
 const optionalWork: string | undefined = linked.workID;
@@ -40,46 +43,36 @@ const client: Promise<Actor> = connectClient({
 });
 const tools: Promise<ToolDescriptor[]> = client.then((actor) => actor.available());
 const answer: Promise<Answer> = client.then((actor) => actor.call("message_list", { after: 0 }));
-void [sender, owner, respondents, actorID, position, optionalWork, tools, answer];
+void [sender, owner, approval, line, actorID, position, optionalWork, tools, answer];
 
 const workQuery = BUILTINS.work_list.request.parse({
   ownerID: "owner",
   requesterID: "requester",
   ownerWithin: "owner-branch",
   requesterWithin: "requester-branch",
-  status: "submitted",
+  status: ["submitted"],
 });
 const ownerID: string | undefined = workQuery.ownerID;
-const requesterID: string | undefined = workQuery.requesterID;
+const requesterID: string | string[] | undefined = workQuery.requesterID;
 const ownerWithin: string | undefined = workQuery.ownerWithin;
 const requesterWithin: string | undefined = workQuery.requesterWithin;
-const status:
-  | "open"
-  | "active"
-  | "blocked"
-  | "submitted"
-  | "changes_requested"
-  | "accepted"
+const workStatus:
+  | ("open" | "active" | "blocked" | "submitted" | "changes_requested" | "accepted")[]
   | undefined = workQuery.status;
 const formQuery = BUILTINS.form_list.request.parse({
   workID: "work",
-  requesterID: "requester",
-  respondentID: "respondent",
-  status: "open",
-  awaitingActorID: "awaiting",
+  requesterID: ["requester", "other"],
+  status: ["open"],
   requesterWithin: "requester-branch",
-  respondentWithin: "respondent-branch",
-  awaitingWithin: "awaiting-branch",
+  updatedSince: "2026-11-01T00:00:00.000Z",
+  order: "recent",
 });
-const formFilters: (string | undefined)[] = [
+const formFilters: (string | string[] | undefined)[] = [
   formQuery.workID,
   formQuery.requesterID,
-  formQuery.respondentID,
   formQuery.status,
-  formQuery.awaitingActorID,
   formQuery.requesterWithin,
-  formQuery.respondentWithin,
-  formQuery.awaitingWithin,
+  formQuery.updatedSince,
 ];
 const listedMessage: z.output<typeof Message> | undefined = BUILTINS.message_list.response.parse({})
   .items[0];
@@ -87,14 +80,16 @@ const listedWork: z.output<typeof Work> | undefined = BUILTINS.work_list.respons
   .items[0];
 const listedForm: z.output<typeof Form> | undefined = BUILTINS.form_list.response.parse({})
   .items[0];
-void [ownerID, requesterID, ownerWithin, requesterWithin, status, formFilters, listedMessage, listedWork, listedForm];
+const next: string | null = BUILTINS.work_list.response.parse({}).next;
+const named: string | undefined = BUILTINS.form_list.response.parse({}).actors.actor?.name;
+void [ownerID, requesterID, ownerWithin, requesterWithin, workStatus, formFilters, listedMessage, listedWork, listedForm, next, named];
 
 const typedWorkFilter: z.input<typeof BUILTINS.work_list.request> = { ownerWithin: "branch" };
-const typedFormFilter: z.input<typeof BUILTINS.form_list.request> = { awaitingWithin: "branch" };
+const typedFormFilter: z.input<typeof BUILTINS.form_list.request> = { requesterWithin: "branch" };
 // @ts-expect-error Subtree anchors are Actor IDs, not numbers.
 const invalidWorkFilter: z.input<typeof BUILTINS.work_list.request> = { ownerWithin: 1 };
 // @ts-expect-error Subtree anchors are Actor IDs, not booleans.
-const invalidFormFilter: z.input<typeof BUILTINS.form_list.request> = { awaitingWithin: true };
+const invalidFormFilter: z.input<typeof BUILTINS.form_list.request> = { requesterWithin: true };
 void [typedWorkFilter, typedFormFilter, invalidWorkFilter, invalidFormFilter];
 
 const hub: z.output<typeof SystemStatus> = BUILTINS.system_status.response.parse({});
@@ -116,10 +111,11 @@ void [observations, connection, provider, closed, connectionQuery, providerQuery
 
 const oldMessageQuery: z.input<typeof BUILTINS.message_list.request> = { direction: "incoming", after: 0, limit: 100 };
 const recentMessageQuery: z.input<typeof BUILTINS.message_list.request> = { counterpartyID: "peer", before: "latest" };
-const olderMessageQuery: z.input<typeof BUILTINS.message_list.request> = { counterpartyID: "peer", before: Number.MAX_SAFE_INTEGER, after: 0 };
+const olderMessageQuery: z.input<typeof BUILTINS.message_list.request> = { before: "opaque-older-position" };
 const parsedMessageQuery = BUILTINS.message_list.request.parse(recentMessageQuery);
 const counterparty: string | undefined = parsedMessageQuery.counterpartyID;
-const before: number | "latest" | undefined = parsedMessageQuery.before;
-// @ts-expect-error Numeric before and literal latest are the only supported selectors.
+const before: string | undefined = parsedMessageQuery.before;
+const listedSeq: number | undefined = BUILTINS.message_list.response.parse({}).items[0]?.seq;
+// @ts-expect-error An older position is an opaque string or latest.
 const invalidMessageQuery: z.input<typeof BUILTINS.message_list.request> = { counterpartyID: "peer", before: true };
-void [oldMessageQuery, recentMessageQuery, olderMessageQuery, counterparty, before, invalidMessageQuery];
+void [oldMessageQuery, recentMessageQuery, olderMessageQuery, counterparty, before, listedSeq, invalidMessageQuery];

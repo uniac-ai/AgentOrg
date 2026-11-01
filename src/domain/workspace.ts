@@ -4,7 +4,7 @@ import type { ActorAuthority } from "@uniac/agentic-workspace/actors";
 import { WorkspaceError } from "@uniac/agentic-workspace/contracts";
 import type { WorkspaceStore } from "@uniac/agentic-workspace/persistence";
 import { Conflict, Forbidden, Invalid, NotFound } from "./errors.ts";
-import { DIRECTORY, FORMS, MESSAGES, WORK } from "./model/workspace.ts";
+import { DIRECTORY, FORMS, MESSAGES, STATUS, WORK } from "./model/workspace.ts";
 import type { ActorRow } from "./ports.ts";
 import type { Registry } from "./registry.ts";
 import { bindTool } from "./tools.ts";
@@ -72,6 +72,10 @@ export function workspace(registry: Registry, store: WorkspaceStore) {
       form_list: (actor, request) => run(actor, (clients) => clients.forms.list(request)),
       form_respond: (actor, request) => run(actor, (clients) => clients.forms.respond(request)),
       form_close: (actor, request) => run(actor, (clients) => clients.forms.close(request)),
+    }),
+    bindTool(STATUS, {
+      status_set: (actor, request) => run(actor, (clients) => clients.status.set(request)),
+      status_get: (actor, request) => run(actor, (clients) => clients.status.get(request)),
     }),
   ];
 }

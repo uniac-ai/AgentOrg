@@ -1,4 +1,4 @@
-/** Actor identities, Hub interface schemas, historical calls and audit entries. */
+/** Actor identities, Hub interface schemas and audit entries. */
 
 import { z } from "zod";
 
@@ -54,40 +54,6 @@ export const Actor = z
     closed_at: Timestamp.nullable(),
   })
   .meta({ id: "Actor", description: "A position in the organization, with its manager." });
-
-export const CallState = z.enum(["pending", "done", "failed", "withdrawn"]);
-
-export const Output = z
-  .strictObject({
-    value: z
-      .unknown()
-      .describe("The structured value, checked against the output schema; null without one."),
-    parts: z
-      .array(z.looseObject({}))
-      .describe("The rest of the result, such as text, as the called actor gave it."),
-  })
-  .meta({ id: "Output", description: "What a call returned." });
-
-export const Call = z
-  .strictObject({
-    id: Id,
-    from: Id.describe("The calling actor."),
-    to: Id.describe("The called actor."),
-    interface: z.string().describe("The called actor's own name for the interface."),
-    input: z.record(z.string(), z.unknown()),
-    state: CallState,
-    output: Output.nullable().describe("The result, once done."),
-    error: z.string().nullable().describe("Why it failed, once failed."),
-    cause: Id.nullable().describe("The call that led to this one."),
-    run: z
-      .string()
-      .nullable()
-      .describe("The called actor's handle for the call while it runs long."),
-    created_at: Timestamp,
-    delivered_at: Timestamp.nullable().describe("When the called actor last received it."),
-    settled_at: Timestamp.nullable(),
-  })
-  .meta({ id: "Call", description: "A historical Actor call and its recorded result." });
 
 export const AuditEntry = z
   .strictObject({

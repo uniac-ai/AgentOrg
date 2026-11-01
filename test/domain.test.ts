@@ -12,7 +12,7 @@ import { done, HUB_INTERFACES, refused } from "./harness.ts";
 
 const invocation = { signal: new AbortController().signal, progress: async () => {} };
 
-test("all open Actors see exactly ten Hub Tools and twenty-seven interfaces", async (t) => {
+test("all open Actors see exactly ten Hub Tools and twenty-eight interfaces, each tagged with its level", async (t) => {
   const store = new SqliteStore(":memory:");
   t.after(() => store.close());
   const org = organization(store);
@@ -26,7 +26,7 @@ test("all open Actors see exactly ten Hub Tools and twenty-seven interfaces", as
       assert.deepEqual(Object.keys(tool).sort(), ["id", "interfaces", "name"]);
       for (const offer of tool.interfaces) {
         assert.equal(offer.call, offer.interface.name);
-        assert.deepEqual(Object.keys(offer).sort(), ["call", "interface", "read_only"]);
+        assert.deepEqual(Object.keys(offer).sort(), ["call", "interface", "level", "read_only"]);
       }
       return [tool.name, tool.interfaces.map((offer) => offer.interface.name).sort()];
     }),
@@ -38,7 +38,7 @@ test("all open Actors see exactly ten Hub Tools and twenty-seven interfaces", as
     ),
   );
   assert.equal(catalog.length, 10);
-  assert.equal(catalog.flatMap((tool) => tool.interfaces).length, 27);
+  assert.equal(catalog.flatMap((tool) => tool.interfaces).length, 28);
   assert.deepEqual(org.available(lead.id), catalog);
   assert.deepEqual(org.available(worker.id), catalog);
   const connectionId = crypto.randomUUID();
@@ -54,7 +54,6 @@ test("all open Actors see exactly ten Hub Tools and twenty-seven interfaces", as
       assert.equal(await refused(org.invoke(id, alias, {}, invocation)), "not_found");
     }
   }
-  assert.equal(store.database.count("calls", "1"), 0);
   org.connections.remove(connectionId);
   assert.deepEqual(org.available(worker.id), catalog);
 });
@@ -124,7 +123,7 @@ test("only the root reads audit metadata, which discloses no message bodies or A
     org.invoke(id, name, input, invocation);
   const secret = "private-message-body-sentinel";
   await done(invoke(actor.id, "message_send", { recipientID: other.id, text: secret }));
-  await done(invoke(actor.id, "work_create", { ownerID: root.id, goal: "Working" }));
+  await done(invoke(actor.id, "work_create", { ownerID: root.id, title: "Working" }));
   for (const caller of [actor, other])
     assert.equal(await refused(invoke(caller.id, "activity")), "forbidden");
   const rootView = await done(invoke(root.id, "activity"));

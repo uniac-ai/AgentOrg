@@ -89,7 +89,7 @@ test("System is equally offered to active Actors; observations and sparse pages 
   assert.deepEqual(await root.available(), await worker.client.available());
   const tools = await root.available();
   assert.equal(tools.length, 10);
-  assert.equal(tools.flatMap((tool) => tool.interfaces).length, 27);
+  assert.equal(tools.flatMap((tool) => tool.interfaces).length, 28);
   const system = tools.find((tool) => tool.id === "hub:system");
   assert.ok(system);
   assert.deepEqual(
@@ -606,18 +606,18 @@ test("diagnostics retain only 100 whitelisted fixed observations and cannot brea
   // An observer's failing clock must not turn an already committed write into failure.
   t.mock.method(core.org.diagnostics, "record", observed.record);
   const work = await done(
-    root.call("work_create", { ownerID: worker.id, goal: "Committed fixture" }),
+    root.call("work_create", { ownerID: worker.id, title: "Committed fixture" }),
   );
   const append = t.mock.method(core.store.audit, "append", () => {
     throw new Error("POSTCOMMIT_SECRET");
   });
   await assert.rejects(
-    root.call("work_create", { ownerID: worker.id, goal: "Committed despite audit" }),
+    root.call("work_create", { ownerID: worker.id, title: "Committed despite audit" }),
     /write outcome may be unknown/,
   );
   append.mock.restore();
   assert.equal(
-    (await done(root.call("work_get", { ticketID: work.ticketID }))).goal,
+    (await done(root.call("work_get", { ticketID: work.ticketID }))).title,
     "Committed fixture",
   );
   assert.equal((await done(root.call("work_list"))).items.length, 2);

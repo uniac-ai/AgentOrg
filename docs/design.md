@@ -92,33 +92,39 @@ its own admitted principal and does not turn the created Actor into an invocatio
 | `execution.ts` | One optional Provider provisioning outcome for an already-created Actor. |
 | `actors.ts` | Actor lifecycle and public projection, using Registry, Connections and Execution. |
 | `team.ts` | Identity, hierarchy and actual admitted connection presence. |
-| `workspace.ts` | Explicit bindings to package-owned directory, Messages, Work and Forms under the admitted Actor. |
+| `workspace.ts` | Explicit bindings to package-owned directory, Messages, Work, Forms and Status under the admitted Actor. |
 | `claims.ts`, `audit.ts` | Shared resource claims and append-only audit metadata. |
-| `calls.ts` | Read-only historical Actor-call results, visible to the original caller. |
 | `tools.ts` | Schema contracts bound to their module-owned typed operations. |
 | `capabilities.ts` | Project supplied Hub Tools into public descriptors and private operations. |
 | `application.ts` | Validate and invoke those operations as the admitted Actor, enforcing domain refusals and write audit. |
 
 ### Tools and interfaces
 
-A Tool is `{id, name, interfaces}`. Each interface contains its local descriptor, a `call` alias and
-an optional `read_only` hint. `(tool.id, interface.name)` identifies it. `Actor.available()` returns
-these Tools; the CLI and MCP adapter's `interfaces` operation return `{tools: [...]}`.
+A Tool is `{id, name, interfaces}`. Each interface contains its local descriptor, a `call` alias,
+an optional `read_only` hint and its `level`. `(tool.id, interface.name)` identifies it.
+`Actor.available()` returns these Tools; the CLI and MCP adapter's `interfaces` operation return
+`{tools: [...]}`.
 
-Every open Actor receives the same ten Hub Tools and twenty-seven interfaces:
+`level` is the smallest organization level that presents the interface: `report` (one agent and its
+person), `team` (working with other Actors) or `organization` (the lifecycle and the system). Each
+level contains the one before it. Workspace contracts carry their own tag, which the Hub's
+definitions keep; the Hub tags its own Tools. The tag selects what a client presents and grants or
+refuses nothing.
 
-| Tool | Interfaces |
-|---|---|
-| `actors` | `actor_create`, `actor_close` |
-| `team` | `team` |
-| `directory` | `actor_get`, `actor_list` |
-| `messages` | `message_send`, `message_get`, `message_list` |
-| `work` | `work_create`, `work_get`, `work_list`, `work_update`, `work_submit`, `work_review` |
-| `forms` | `form_create`, `form_get`, `form_list`, `form_respond`, `form_close` |
-| `claims` | `claim`, `release` |
-| `calls` | `call_result` |
-| `activity` | `activity` |
-| `system` | `system_status`, `connection_list`, `provider_list`, `connection_disconnect` |
+Every open Actor receives the same ten Hub Tools and twenty-eight interfaces:
+
+| Tool | Report | Team | Organization |
+|---|---|---|---|
+| `actors` | | | `actor_create`, `actor_close` |
+| `team` | | `team` | |
+| `directory` | | `actor_get`, `actor_list` | |
+| `messages` | | `message_send`, `message_get`, `message_list` | |
+| `work` | `work_create`, `work_get`, `work_list`, `work_update`, `work_submit` | `work_review` | |
+| `forms` | `form_create`, `form_get`, `form_list`, `form_close` | `form_respond` | |
+| `status` | `status_set`, `status_get` | | |
+| `claims` | | | `claim`, `release` |
+| `activity` | | | `activity` |
+| `system` | | | `system_status`, `connection_list`, `provider_list`, `connection_disconnect` |
 
 IDs are `hub:<name>`. Discovery and invocation use the same module-owned operations. The caller's
 hierarchy and the operation's records govern domain authority; they do not add Tools. Actor IDs,
@@ -167,8 +173,8 @@ attribute a close to a private operation. Observation failures do not alter busi
 
 An interface descriptor contains name, optional title/description, input/output JSON Schemas and
 generic `one_way`/`long_running` flags. The MCP binding flattens the catalog and carries semantic
-identity through `_meta["agentorg/tool"] = {id, name, interface, one_way, long_running}`. The Actor
-client reconstructs the nested catalog from that metadata. Operation results are `done {value}`
+identity through `_meta["agentorg/tool"] = {id, name, interface, one_way, long_running, level}`. The
+Actor client reconstructs the nested catalog from that metadata. Operation results are `done {value}`
 or `refused {code, message}`; they carry no Actor-call receipt or destination.
 
 ### Records and storage
@@ -178,9 +184,9 @@ The durable identity also holds a credential hash that public views omit. Online
 one admitted Actor connection; multiple caller connections coexist. Closing an Actor revokes
 all its connections while preserving independent Provider connections.
 
-Hub SQLite schema 9 stores canonical Actors, claims, historical calls, audit metadata and a private
-Workspace import ledger. A separate `core.workspace.db` is opened through the installed package's
-public persistence API. The package owns its schema, transaction rules and record history; Hub
+Hub SQLite schema 9 stores canonical Actors, claims, audit metadata and a private Workspace import
+ledger. The retired Actor calls stay in their table as private history that no operation reads.
+A separate `core.workspace.db` is opened through the installed package's public persistence API. The package owns its schema, transaction rules and record history; Hub
 owns both handles and closes them after the listener. Workspace authority receives the admitted
 Hub Actor ID on every call. The canonical directory returns active Actors in stable insertion order;
 named lookup also resolves closed counterparts. `team` returns only `{root, positions}`, with actual
@@ -190,16 +196,14 @@ The package is vendored and bundled into the distributable SDK at an immutable s
 pin in `vendor/workspace.json`. No package MCP server or additional network service is started.
 [Workspace storage](workspace-storage.md) describes startup import, retained originals and backups.
 
-`call_result {call}` reads an existing receipt only for its original caller. It performs no wait,
-delivery or remote action. Actor handles remain unique among open siblings, and paths describe
-the organization. Actor and Team metadata contain no callable-interface or native-session fields.
+Actor handles remain unique among open siblings, and paths describe the organization. Actor and Team metadata contain no callable-interface or native-session fields.
 
 ### Record authority
 
 The Hub's Actors Tool creates direct reports and closes leaves under the existing manager/root
 lifecycle policy. Shared resource claims remain Hub-owned: a live holder prevents another claim,
-expiry or holder closure permits replacement, and a holder or root may release it. Historical
-`call_result` remains restricted to the original caller. `activity` exposes operation metadata only,
+expiry or holder closure permits replacement, and a holder or root may release it. `activity`
+exposes operation metadata only,
 and only to the root: it names every Actor's operations, including who sent each private Message
 and when, so every other caller is refused `forbidden`. Its entries come oldest first: the latest
 `limit` without `since`, or the earliest `limit` after `since`, so passing the last entry's id as
@@ -209,49 +213,26 @@ Workspace modules enforce record roles, equally for human, agent and program cli
 
 | Record | Authority |
 |---|---|
-| Message | Immutable P2P correspondence, readable only by sender and recipient. `message_send` takes `recipientID`, `text` and optional readable `workID`; replies are new Messages. |
-| Work | Every active admitted Actor reads the complete record and retained history. Requester sets scope/owner and reviews the exact submission; current owner updates execution progress and submits. Mutations require `expectedRevision`. |
-| Form | Every active admitted Actor reads the complete record and retained history, whether standalone or linked. Designated respondents answer while open; only the requester resolves or cancels. Optional Work linkage validates a real shared Work when creating the Form. |
+| Message | Immutable P2P correspondence in its pair's conversation, readable only by sender and recipient. `message_send` takes `recipientID` and `text`; replies are new Messages. |
+| Work | Every active admitted Actor reads the complete record. The requester sets goal and owner and reviews the exact submission; the current owner edits title, progress, status, links and waits-on, and submits. Work the owner requested itself completes on submit. |
+| Form | An ask is its asker's own output and names no respondents. Every active admitted Actor reads it and may answer while it is open, except an `approval` ask, which only the asker's managers up to the root answer. Only the asker resolves or cancels it. |
+| Status | One record per Actor: its line, summary and links. Every active Actor reads it; only the Actor itself sets it. |
 
-`message_list` optionally selects `counterpartyID`, intersected with the admitted caller's private
-pair and `direction` before the limit. A self pair appears once; retained closed-peer history is
-readable without a profile lookup. `before:"latest"` selects the newest qualified window and a
-positive safe numeric `before` selects rows strictly older than that cursor, capped by one internal
-head observation. Both modes require a counterparty and normalized `after:0`. They return the
-unchanged ascending `{items,after}` Page, with `after` equal to its highest returned cursor or zero
-when empty. Default and counterparty-only forward traversal keep their original meaning.
+`work_list`, `form_list` and `message_list` return `{items, next, actors}`; `message_list` adds
+`older`. `next` and `older` are opaque positions for the same read and filter, `next` is null when
+nothing further matched, and `actors` names the Actors the page mentions. Work and Form lists go in
+update order, or newest first with `order: "recent"`, and `updatedSince` keeps records changed at or
+after a time. A Message carries its `conversationID` and its `seq`, its place in one order across
+every conversation; `message_list` accepts a `seq` as `after`, so a reader resumes from the last
+message it handled. The Workspace contracts document every filter.
 
-For older navigation, prepend/deduplicate by Message ID using the first returned cursor as the next
-exclusive `before`. Keep the initial recent page's highest cursor as a separate forward `after`,
-advancing it only from successful forward polls. An own send must not skip unseen inbound rows.
-Positions belong to the caller/peer/direction; failed reads advance neither positions nor observation
-time. No head/count/token, receipt state or cross-request snapshot is exposed.
-
-`work_list` accepts `ownerID`, `requesterID`, `status`, `ownerWithin` and `requesterWithin`.
-`form_list` accepts `workID`, `requesterID`, `respondentID`, `status`, `awaitingActorID`,
-`requesterWithin`, `respondentWithin` and `awaitingWithin`. Every supplied predicate ANDs before
-pagination. IDs are filter data; querying another Actor's criteria keeps the caller's identity and
-write authority unchanged. Unknown IDs match no records. `awaitingActorID` requires an open Form,
-designated membership and no own entry in `responses`; even an empty recorded answer object counts
-as answered. `respondentID` and `awaitingActorID` can name different designated respondents.
-
-Each `Within` filter selects the named canonical Actor and all descendants through retained
-`manager` edges, including closed members and anchors without Team's depth limit. Unknown IDs
-match nothing. Hub supplies synchronous `ActorAuthority.within` under the admitted active caller;
-Workspace applies it to the current owner, immutable requester, or designated respondents before
-the page limit. `awaitingWithin` requires an open Form with at least one designated member lacking
-their own response entry. Separate respondent/awaiting predicates may select different people.
-Requester scope expresses where a record originated. These shared views add no write role.
-
-Each package module has its own cursor. Lists traverse current upserts in ascending cursor order,
-applying Message visibility or Work/Form predicates before the page limit. Keep returned `after`
-positions separately, and restart at zero when changing filters. Updates can repeat an ID or remove
-it from a filter without a tombstone; traversal is not a complete cache synchronization or immutable
-snapshot. Ownership changes affect Work write roles and filter membership, while shared reads stay
-available. Message cursors are traversal positions, not acknowledgements. Public Message state,
-history and operations expose no read/handled status.
-Form responses are ordinary authenticated Actor records. A native approval requires a client-owned
-validated binding to its native request and authorization; an arbitrary Form response is insufficient.
+`requesterWithin` and `ownerWithin` select the named canonical Actor and all descendants through
+retained `manager` edges, including closed members and anchors without Team's depth limit. Unknown
+IDs match nothing. Hub supplies synchronous `ActorAuthority.within` under the admitted active caller;
+the Workspace applies it to filters and to who may answer an approval. Membership adds no write role
+or Message access. Message state, history and operations expose no read/handled status. A native
+approval requires a client-owned validated binding to its native request and authorization; an
+arbitrary Form response is insufficient.
 
 Known package errors map to Hub refusals (`invalid_input` becomes `invalid`). Unexpected errors,
 including errors after a package commit or during Hub audit, remain transport errors with unknown
@@ -312,11 +293,11 @@ The MCP adapter, `agentorg-mcp` in `src/clients/mcp/`, is an optional client for
 - **Session identity and resuming.** `sessions/<client>-<session id>/position` names the position a conversation fills. Claude Code names the session in `CLAUDE_CODE_SESSION_ID`. Codex identifies it in each tool call's `_meta.threadId`, carried through the presentation boundary as optional occupant-session context. Initialization and listing need no identity; a Codex call requires one, and the adapter refuses a different identity after binding. The first call recovers only that conversation's saved position. `attach {actor}` acknowledges the same actor; a session cannot change actors. A fork with a new thread id attaches independently.
 - **Project hooks.** `connect codex` writes AgentOrg's `SessionStart` context commands to `.codex/hooks.json`, preserving other entries. Launcher command and arguments are edited by their parsed TOML value ranges, preserving surrounding policy and comments. The commands take identity from stdin's `session_id`, not inherited environment variables. Project configuration requires trust, hooks must be enabled with `features.hooks`, and the definitions require review and trust through `/hooks`. Startup, resume and fork identity behavior is verified against the Codex build in use; thread and session-tree identities are not derived from each other.
 - **Delivery and waking.** Claude Code's hooks run the waiter, `agentorg-mcp wait`, when the session starts and whenever its turn ends, as `asyncRewake` hooks. Codex's hooks supply context; its sessions read their inbox when they run, since its background hooks do not wake idle turns.
-  - The waiter polls incoming `message_list` and `form_list` pages filtered by `requesterID=self` or `respondentID=self`, merging duplicate Form IDs as the ordinary attached Actor, with separate private positions in `sessions/<session>/inbox`.
-  - Each poll reads at most one page per feed. Incoming Messages, requested Forms and designated Forms retain independent positions; separately read Form snapshots never share a maximum cursor. A later invocation continues each feed from its own position.
+  - The waiter polls incoming `message_list` after its Message position and `form_list {requesterID: self}` for changes to the session's own asks since the last one it delivered, as the ordinary attached Actor, with private positions in `sessions/<session>/inbox`.
+  - Each poll reads at most one page per feed. A later invocation continues each feed from its own position.
   - A replaced waiter or stopped client closes its read connection. Individual reads also have a five-second timeout. It writes the records with their canonical sender/requester names and IDs, then atomically replaces its private checkpoint and exits with status 2. Claude Code hands that output to its session as input. No public receipt is written. A write followed by a crash before saving local positions can redeliver the same records.
   - A newer waiter replaces an older one. Generic delivery is at least once; native approval handling belongs to the client.
-  - The private checkpoint is `{messages, forms: {requested, designated}}`. A prior scalar Form position cannot establish either query's coverage: it preserves the Message position and restarts both Form scans at zero. This can redeliver Form IDs under the at-least-once contract; it reissues no domain write or native request.
+  - The private checkpoint is `{messages, forms}`: the last delivered Message `seq` and the `updatedAt` of the last delivered ask. An older checkpoint with Form cursors keeps its Message position, which is the same `seq`, and re-reads the session's asks from the start. This can redeliver asks under the at-least-once contract; it reissues no domain write or native request.
   - Existing sessions require deliberate cursor baselining at cutover. Legacy shared cursors cannot be reused as package cursors. The private historical import manifest supports that later client coordination; the Hub does not activate or seed clients.
 
 ## The network
