@@ -1,8 +1,8 @@
 /**
  * Which client session fills which position, kept in the home's `sessions/<session>/` so that a
  * resumed session fills it again. `position` holds the Actor ID, `waiter` the current waiter PID,
- * and `inbox` the client's incoming Message and requested/designated Form positions. This private
- * bookkeeping establishes neither public acknowledgements nor user input.
+ * and `inbox` the client's incoming Message `seq` and the `updatedAt` of its latest delivered ask.
+ * This private bookkeeping establishes neither public acknowledgements nor user input.
  */
 
 import { randomUUID } from "node:crypto";
@@ -14,11 +14,17 @@ type Entry = "position" | "waiter" | "inbox";
 
 export interface InboxPosition {
   messages: number;
-  forms: { requested: number; designated: number };
+  forms: string | null;
 }
 
 const cursor = (value: unknown): value is number =>
   typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+
+const isFormCursors = (value: unknown) =>
+  typeof value === "object" &&
+  value !== null &&
+  cursor((value as Record<string, unknown>).requested) &&
+  cursor((value as Record<string, unknown>).designated);
 
 const SESSION = /^[A-Za-z0-9_-]{1,128}$/;
 
@@ -54,27 +60,15 @@ export const sessions = {
   claimWaiter: (session: string, pid: number) => write(session, "waiter", String(pid)),
   inbox(session: string): InboxPosition {
     const kept = read(session, "inbox");
-    if (kept === undefined) return { messages: 0, forms: { requested: 0, designated: 0 } };
-    const value = JSON.parse(kept) as {
-      messages?: unknown;
-      forms?: Partial<InboxPosition["forms"]> | number;
-    };
+    if (kept === undefined) return { messages: 0, forms: null };
+    const value = JSON.parse(kept) as { messages?: unknown; forms?: unknown };
     if (!cursor(value?.messages)) throw new Error("invalid local inbox position");
-    // A shared Form cursor cannot establish either feed's coverage. Re-read Form IDs only.
-    if (cursor(value.forms))
-      return { messages: value.messages, forms: { requested: 0, designated: 0 } };
-    const forms = value.forms;
-    if (
-      typeof forms !== "object" ||
-      forms === null ||
-      !cursor(forms.requested) ||
-      !cursor(forms.designated)
-    )
-      throw new Error("invalid local inbox position");
-    return {
-      messages: value.messages,
-      forms: { requested: forms.requested, designated: forms.designated },
-    };
+    // A Message cursor is its seq. Form cursors are gone, so an older position re-reads the asks.
+    if (typeof value.forms === "string" && !Number.isNaN(Date.parse(value.forms)))
+      return { messages: value.messages, forms: value.forms };
+    if (value.forms === null || typeof value.forms === "number" || isFormCursors(value.forms))
+      return { messages: value.messages, forms: null };
+    throw new Error("invalid local inbox position");
   },
   advanceInbox(session: string, position: InboxPosition): void {
     const directory = privateDirectory(named(session));

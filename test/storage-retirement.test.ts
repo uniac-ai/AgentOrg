@@ -189,19 +189,20 @@ test("schema7 retirement preserves records, fails pending calls once and exposes
           "hub:messages",
           "hub:work",
           "hub:forms",
+          "hub:status",
           "hub:claims",
-          "hub:calls",
           "hub:activity",
           "hub:system",
         ],
       );
-      assert.equal(org.available(actor).flatMap((tool) => tool.interfaces).length, 27);
+      assert.equal(org.available(actor).flatMap((tool) => tool.interfaces).length, 28);
       for (const alias of [
         "worker.control",
         "manager.control",
         "act_worker.control",
         "control",
         "call_withdraw",
+        "call_result",
       ]) {
         const answer = await org.invoke(actor, alias, {}, invocation());
         assert.equal(answer.state === "refused" && answer.code, "not_found");
@@ -217,21 +218,6 @@ test("schema7 retirement preserves records, fails pending calls once and exposes
         assert.equal("interfaces" in position || "created_at_attach" in position, false);
       }
     }
-    const allowed = await org.invoke(
-      "act_root",
-      "call_result",
-      { call: "pending-running" },
-      invocation(),
-    );
-    assert.ok(allowed.state === "done");
-    assert.equal((allowed.value as { state: string }).state, "failed");
-    const denied = await org.invoke(
-      "act_worker",
-      "call_result",
-      { call: "completed" },
-      invocation(),
-    );
-    assert.equal(denied.state === "refused" && denied.code, "forbidden");
     assert.equal(store.database.all("SELECT count(*) AS n FROM calls")[0]?.n, 4);
     const auditCount = store.database.all("SELECT count(*) AS n FROM audit")[0]?.n;
     store.close();
@@ -300,6 +286,7 @@ test("historical Message import preserves source provenance, private metadata an
       createdAt: at,
       revision: 1,
       cursor: 1,
+      updatedAt: at,
     });
     const history = store.workspace.messages.history("message");
     assert.deepEqual(history, [

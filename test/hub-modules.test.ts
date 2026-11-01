@@ -26,6 +26,7 @@ test("an explicitly composed module binds discovery and dispatch to its own prin
     owned_write: {
       description: "An operation owned by this module.",
       writes: true,
+      level: "organization",
       request: z.strictObject({ value: z.number().int() }),
       response: z.strictObject({ actor: z.string(), value: z.number().int() }),
     },
@@ -63,7 +64,6 @@ test("an explicitly composed module binds discovery and dispatch to its own prin
     value: 7,
   });
   assert.equal(writes, 1);
-  assert.equal(store.database.count("calls", "1"), 0);
   assert.deepEqual(
     store.audit.list(undefined, 10).map((entry) => entry.outcome),
     ["forbidden", "not_found", "ok"],

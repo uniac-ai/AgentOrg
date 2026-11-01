@@ -2,7 +2,7 @@
  * The core process's composition root, the one place the layers meet: the domain over its store,
  * served in MCP through the network's listener.
  *
- * - `src/domain/`: the organization, its calls and its built-ins, behind ports.
+ * - `src/domain/`: the organization and its built-ins, behind ports.
  * - `src/storage/sqlite/`: the domain's store.
  * - `src/bindings/mcp/`: the domain's operations in MCP.
  * - `src/network/`: the listener and its channels.

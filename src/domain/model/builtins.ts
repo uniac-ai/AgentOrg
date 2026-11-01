@@ -7,10 +7,10 @@
 import { z } from "zod";
 import { CLAIMS } from "./claims.ts";
 import { toolDefinition } from "./json-schema.ts";
-import { Actor, AuditEntry, Call, Handle, Id, Text } from "./records.ts";
+import { Actor, AuditEntry, Handle, Id, Text } from "./records.ts";
 import { SYSTEM } from "./system.ts";
 import { TEAM } from "./team.ts";
-import { DIRECTORY, FORMS, MESSAGES, WORK } from "./workspace.ts";
+import { DIRECTORY, FORMS, MESSAGES, STATUS, WORK } from "./workspace.ts";
 
 export const ExecutionOptions = z.strictObject({
   providerId: Id.describe("The enrolled Provider to ask for execution."),
@@ -59,12 +59,6 @@ export const ActorClosed = z
   })
   .meta({ id: "ActorClosed" });
 
-export const CallResult = z
-  .strictObject({
-    call: Id.describe("A historical call you made."),
-  })
-  .meta({ id: "CallResult" });
-
 export const Activity = z
   .strictObject({
     since: z.number().int().optional().describe("After this entry id; without it, the latest."),
@@ -79,6 +73,7 @@ export const ActivityResult = z
 export const ACTORS = toolDefinition("actors", {
   actor_create: {
     writes: true,
+    level: "organization",
     request: ActorCreate,
     response: ActorCreated,
     description: `Create a direct report: a position that you manage.
@@ -89,6 +84,7 @@ With execution, wait for the Provider and return its separate ready, failed or u
   },
   actor_close: {
     writes: true,
+    level: "organization",
     request: ActorClose,
     response: ActorClosed,
     description: `Close a direct report whose work is done; the root may close any actor.
@@ -97,18 +93,10 @@ Refused while it has open reports of its own. Its Hub connections close.`,
   },
 });
 
-export const CALLS = toolDefinition("calls", {
-  call_result: {
-    writes: false,
-    request: CallResult,
-    response: Call,
-    description: "Read a historical Actor call you made, with its recorded result.",
-  },
-});
-
 export const ACTIVITY = toolDefinition("activity", {
   activity: {
     writes: false,
+    level: "organization",
     request: Activity,
     response: ActivityResult,
     description: "Read the organization's audit metadata, oldest first. Only the root may.",
@@ -124,7 +112,7 @@ export const BUILTINS = {
   ...MESSAGES.interfaces,
   ...WORK.interfaces,
   ...FORMS.interfaces,
-  ...CALLS.interfaces,
+  ...STATUS.interfaces,
   ...ACTIVITY.interfaces,
   ...SYSTEM.interfaces,
 } as const;

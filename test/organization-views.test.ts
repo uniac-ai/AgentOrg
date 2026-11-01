@@ -1,4 +1,7 @@
-/** Organization views through ordinary admitted Actor SDK calls. */
+/**
+ * Organization views through ordinary admitted Actor SDK calls: deep and closed subtree filters
+ * and approval asks both use the Hub registry's `within`, and grant no write role or Message access.
+ */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Actor } from "../src/actor/index.ts";
@@ -22,7 +25,7 @@ async function organization() {
 
 const fields = [{ name: "answer", label: "Optional answer", required: false }];
 
-test("any active Actor reads deep and closed subtree Work/Form histories through the discovered schemas", async (t) => {
+test("any active Actor reads deep and closed subtree Work/ask histories through the discovered schemas", async (t) => {
   const { core, root, make, lead, requester, observer } = await organization();
   t.after(() => core.close());
   const chain = [lead];
@@ -39,7 +42,7 @@ test("any active Actor reads deep and closed subtree Work/Form histories through
     false,
   );
   let work = await done(
-    requester.client.call("work_create", { ownerID: leaf.id, goal: "Retained deep work" }),
+    requester.client.call("work_create", { ownerID: leaf.id, title: "Retained deep work" }),
   );
   work = await done(
     leaf.client.call("work_update", {
@@ -65,37 +68,45 @@ test("any active Actor reads deep and closed subtree Work/Form histories through
       comment: "Reviewed by actual requester",
     }),
   );
-  const form = await done(leaf.client.call("form_create", { respondentIDs: [leaf.id], fields }));
+  const form = await done(leaf.client.call("form_create", { title: "Deep ask", fields }));
+  let approval = await done(
+    leaf.client.call("form_create", { title: "Deep approval", approval: true, fields }),
+  );
+  for (const outside of [observer.client, leaf.client])
+    assert.equal(
+      await refused(
+        outside.call("form_respond", { formID: approval.formID, answers: { answer: "No" } }),
+      ),
+      "forbidden",
+    );
+  approval = await done(
+    lead.client.call("form_respond", { formID: approval.formID, answers: { answer: "Approved" } }),
+  );
+  assert.equal(approval.status, "resolved");
+  assert.deepEqual(Object.keys(approval.responses), [lead.id]);
   for (const client of [root, observer.client]) {
     const catalog = await client.available();
     assert.equal(catalog.length, 10);
-    assert.equal(catalog.flatMap((tool) => tool.interfaces).length, 27);
+    assert.equal(catalog.flatMap((tool) => tool.interfaces).length, 28);
     const interfaces = catalog.flatMap((tool) => tool.interfaces);
-    for (const [name, filters] of [
-      ["work_list", ["ownerWithin", "requesterWithin"]],
-      ["form_list", ["requesterWithin", "respondentWithin", "awaitingWithin"]],
+    for (const [name, filters, removed] of [
+      ["work_list", ["ownerWithin", "requesterWithin"], []],
+      ["form_list", ["requesterWithin"], ["respondentWithin", "awaitingWithin"]],
     ] as const) {
       const operation = interfaces.find((offer) => offer.interface.name === name);
       assert.ok(operation);
       const properties = operation.interface.input.properties as Record<string, unknown>;
       for (const filter of filters) assert.ok(properties[filter], `${name} exposes ${filter}`);
+      for (const filter of removed) assert.equal(properties[filter], undefined, filter);
       assert.equal(operation.read_only, true);
     }
     assert.deepEqual((await done(client.call("work_list", { ownerWithin: lead.id }))).items, [
       work,
     ]);
-    assert.deepEqual(
-      (
-        await done(
-          client.call("form_list", {
-            requesterWithin: lead.id,
-            respondentWithin: lead.id,
-            awaitingWithin: lead.id,
-          }),
-        )
-      ).items,
-      [form],
-    );
+    assert.deepEqual((await done(client.call("form_list", { requesterWithin: lead.id }))).items, [
+      form,
+      approval,
+    ]);
   }
   // Close the fixture's other direct report before closing the retained anchor.
   const directReports = await done(root.call("team", { actor: lead.id, depth: 1 }));
@@ -110,20 +121,20 @@ test("any active Actor reads deep and closed subtree Work/Form histories through
     [work],
   );
   assert.deepEqual(
-    (
-      await done(
-        observer.client.call("form_list", { requesterWithin: lead.id, awaitingWithin: lead.id }),
-      )
-    ).items,
-    [form],
+    (await done(observer.client.call("form_list", { requesterWithin: lead.id }))).items,
+    [form, approval],
   );
   assert.deepEqual(await done(observer.client.call("work_get", { ticketID: work.ticketID })), work);
   assert.deepEqual(await done(observer.client.call("form_get", { formID: form.formID })), form);
-  assert.equal(work.history.length, 4);
+  assert.equal(
+    (await done(observer.client.call("work_get", { ticketID: work.ticketID, history: true })))
+      .history.length,
+    4,
+  );
   const closed = await core.org.invoke(
     leaf.id,
     "form_list",
-    { awaitingWithin: lead.id },
+    { requesterWithin: lead.id },
     {
       signal: new AbortController().signal,
       progress: async () => {},
@@ -132,7 +143,7 @@ test("any active Actor reads deep and closed subtree Work/Form histories through
   assert.equal(await refused(closed), "forbidden");
   assert.equal(BUILTINS.work_list.request.parse({ ownerWithin: lead.id }).ownerWithin, lead.id);
   assert.equal(
-    BUILTINS.form_list.request.parse({ awaitingWithin: lead.id }).awaitingWithin,
+    BUILTINS.form_list.request.parse({ requesterWithin: lead.id }).requesterWithin,
     lead.id,
   );
 });
@@ -140,8 +151,8 @@ test("any active Actor reads deep and closed subtree Work/Form histories through
 test("Work subtree and exact predicates intersect before sparse pages without granting review or owner roles", async (t) => {
   const { core, root, lead, worker, remote, requester, observer } = await organization();
   t.after(() => core.close());
-  const create = (caller: Actor, ownerID: string, goal: string) =>
-    done(caller.call("work_create", { ownerID, goal }));
+  const create = (caller: Actor, ownerID: string, title: string) =>
+    done(caller.call("work_create", { ownerID, title }));
   await create(root, worker.id, "Different requester");
   const first = await create(requester.client, worker.id, "First match");
   for (let index = 0; index < 12; index += 1)
@@ -152,20 +163,23 @@ test("Work subtree and exact predicates intersect before sparse pages without gr
     requesterWithin: remote.id,
     ownerID: worker.id,
     requesterID: requester.id,
-    status: "open",
+    status: ["open"],
     limit: 1,
   };
+  const actors = { [requester.id]: { name: "requester" }, [worker.id]: { name: "worker" } };
   const page = await done(observer.client.call("work_list", filter));
-  assert.deepEqual(page, { items: [first], after: first.cursor });
-  const next = await done(observer.client.call("work_list", { ...filter, after: page.after }));
-  assert.deepEqual(next, { items: [second], after: second.cursor });
-  assert.deepEqual(
-    await done(observer.client.call("work_list", { ...filter, after: next.after })),
-    {
-      items: [],
-      after: next.after,
-    },
-  );
+  assert.deepEqual(page.items, [first]);
+  assert.equal(typeof page.next, "string");
+  assert.deepEqual(await done(observer.client.call("work_list", { ...filter, after: page.next })), {
+    items: [second],
+    next: null,
+    actors,
+  });
+  for (const other of [{ ownerWithin: worker.id }, { requesterWithin: requester.id }])
+    assert.equal(
+      await refused(observer.client.call("work_list", { ...filter, ...other, after: page.next })),
+      "invalid",
+    );
   for (const contradictory of [
     { ...filter, ownerID: observer.id },
     { ...filter, requesterWithin: lead.id },
@@ -174,7 +188,8 @@ test("Work subtree and exact predicates intersect before sparse pages without gr
   ])
     assert.deepEqual(await done(observer.client.call("work_list", contradictory)), {
       items: [],
-      after: 0,
+      next: null,
+      actors: {},
     });
   assert.equal(
     await refused(
@@ -199,7 +214,7 @@ test("Work subtree and exact predicates intersect before sparse pages without gr
       await done(
         observer.client.call("work_list", {
           requesterWithin: remote.id,
-          status: "submitted",
+          status: ["submitted"],
         }),
       )
     ).items,
@@ -224,7 +239,11 @@ test("Work subtree and exact predicates intersect before sparse pages without gr
       ownerID: observer.id,
     }),
   );
-  assert.deepEqual(await done(observer.client.call("work_list", filter)), { items: [], after: 0 });
+  assert.deepEqual(await done(observer.client.call("work_list", filter)), {
+    items: [],
+    next: null,
+    actors: {},
+  });
   assert.equal(
     (await done(observer.client.call("work_get", { ticketID: second.ticketID }))).ownerID,
     observer.id,
@@ -234,21 +253,22 @@ test("Work subtree and exact predicates intersect before sparse pages without gr
       assert.equal(await refused(root.call("work_list", { [name]: value })), "invalid");
 });
 
-test("Form subtree attention handles different respondents, empty answers and closed Forms before pagination", async (t) => {
+test("ask subtree and exact predicates intersect before sparse pages; approvals are answered only up the manager chain", async (t) => {
   const { core, root, lead, worker, remote, requester, observer } = await organization();
   t.after(() => core.close());
-  const create = (caller: Actor, respondentIDs: string[]) =>
-    done(caller.call("form_create", { respondentIDs, fields }));
-  await create(root, [worker.id, observer.id]);
-  const answered = await create(requester.client, [worker.id, observer.id]);
-  const response = await done(
+  const create = (caller: Actor, title: string) =>
+    done(caller.call("form_create", { title, fields }));
+  await create(root, "Different requester");
+  await create(remote.client, "Inside scope, different requester");
+  const answered = await create(requester.client, "Answered");
+  await done(
     worker.client.call("form_respond", {
       formID: answered.formID,
       expectedRevision: 1,
       answers: {},
     }),
   );
-  const closed = await create(requester.client, [worker.id, observer.id]);
+  const closed = await create(requester.client, "Closed");
   await done(
     requester.client.call("form_close", {
       formID: closed.formID,
@@ -257,48 +277,50 @@ test("Form subtree attention handles different respondents, empty answers and cl
       resolution: "Decided",
     }),
   );
-  for (let index = 0; index < 12; index += 1) await create(requester.client, [observer.id]);
-  const first = await create(requester.client, [worker.id, observer.id]);
-  const second = await create(requester.client, [worker.id, observer.id]);
+  for (let index = 0; index < 12; index += 1)
+    await create(observer.client, `Outside requester scope ${index}`);
+  const first = await create(requester.client, "First match");
+  const second = await create(requester.client, "Second match");
   const filter = {
     requesterWithin: remote.id,
-    respondentWithin: observer.id,
-    awaitingWithin: lead.id,
     requesterID: requester.id,
-    respondentID: worker.id,
-    awaitingActorID: worker.id,
-    status: "open",
+    status: ["open"],
     limit: 1,
   };
   const page = await done(root.call("form_list", filter));
-  assert.deepEqual(page, { items: [first], after: first.cursor });
-  const next = await done(root.call("form_list", { ...filter, after: page.after }));
-  assert.deepEqual(next, { items: [second], after: second.cursor });
-  assert.deepEqual(await done(root.call("form_list", { ...filter, after: next.after })), {
-    items: [],
-    after: next.after,
+  assert.deepEqual(page.items, [first]);
+  assert.equal(typeof page.next, "string");
+  assert.deepEqual(await done(root.call("form_list", { ...filter, after: page.next })), {
+    items: [second],
+    next: null,
+    actors: { [requester.id]: { name: "requester" } },
   });
-  const differentRespondents = await done(
-    root.call("form_list", {
-      requesterWithin: remote.id,
-      respondentWithin: lead.id,
-      awaitingWithin: observer.id,
-    }),
-  );
-  assert.deepEqual(differentRespondents.items, [response, first, second]);
-  assert.deepEqual(
-    (await done(root.call("form_get", { formID: answered.formID }))).responses[worker.id],
-    {},
-  );
   assert.equal(
     await refused(
-      lead.client.call("form_respond", {
-        formID: first.formID,
-        expectedRevision: first.revision,
-        answers: {},
-      }),
+      root.call("form_list", { ...filter, requesterWithin: requester.id, after: page.next }),
     ),
-    "forbidden",
+    "invalid",
+  );
+  for (const contradictory of [
+    { ...filter, requesterWithin: lead.id },
+    { ...filter, requesterWithin: "unknown" },
+  ])
+    assert.deepEqual(await done(root.call("form_list", contradictory)), {
+      items: [],
+      next: null,
+      actors: {},
+    });
+  assert.deepEqual(
+    (await done(root.call("form_list", { requesterWithin: remote.id, status: ["resolved"] })))
+      .items,
+    [
+      await done(root.call("form_get", { formID: answered.formID })),
+      await done(root.call("form_get", { formID: closed.formID })),
+    ],
+  );
+  assert.deepEqual(
+    (await done(root.call("form_get", { formID: answered.formID }))).responses[worker.id].answers,
+    {},
   );
   assert.equal(
     await refused(
@@ -311,30 +333,55 @@ test("Form subtree attention handles different respondents, empty answers and cl
     ),
     "forbidden",
   );
-  for (const name of ["requesterWithin", "respondentWithin", "awaitingWithin"]) {
-    assert.deepEqual(await done(root.call("form_list", { [name]: "unknown" })), {
-      items: [],
-      after: 0,
-    });
-    for (const value of ["", 7])
-      assert.equal(await refused(root.call("form_list", { [name]: value })), "invalid");
-  }
+  let approval = await done(
+    worker.client.call("form_create", {
+      title: "Approve",
+      approval: true,
+      collect: true,
+      fields,
+    }),
+  );
+  for (const outside of [worker, observer, remote, requester])
+    assert.equal(
+      await refused(
+        outside.client.call("form_respond", {
+          formID: approval.formID,
+          answers: { answer: "Not a manager" },
+        }),
+      ),
+      "forbidden",
+    );
+  for (const manager of [lead.client, root])
+    approval = await done(
+      manager.call("form_respond", { formID: approval.formID, answers: { answer: "Approved" } }),
+    );
+  assert.deepEqual(Object.keys(approval.responses).sort(), [core.rootId, lead.id].sort());
+  approval = await done(
+    worker.client.call("form_close", {
+      formID: approval.formID,
+      expectedRevision: approval.revision,
+      status: "resolved",
+      resolution: "Approved by both managers",
+    }),
+  );
+  assert.equal(approval.status, "resolved");
+  for (const value of ["", 7])
+    assert.equal(await refused(root.call("form_list", { requesterWithin: value })), "invalid");
+  for (const removed of [{ respondentWithin: lead.id }, { awaitingWithin: lead.id }])
+    assert.equal(await refused(root.call("form_list", removed)), "invalid");
 });
 
 test("subtree queries retain private Message and audit boundaries for managers and unrelated observers", async (t) => {
   const { core, root, lead, worker, requester, observer } = await organization();
   t.after(() => core.close());
   const work = await done(
-    requester.client.call("work_create", { ownerID: worker.id, goal: "Public goal" }),
+    requester.client.call("work_create", { ownerID: worker.id, title: "Public goal" }),
   );
   const privateText = "organization-view-private-message-sentinel";
   const sent = await done(
-    worker.client.call("message_send", {
-      recipientID: requester.id,
-      workID: work.ticketID,
-      text: privateText,
-    }),
+    worker.client.call("message_send", { recipientID: requester.id, text: privateText }),
   );
+  const empty = { items: [], next: null, older: null, actors: {} };
   for (const client of [root, lead.client, observer.client]) {
     assert.deepEqual((await done(client.call("work_list", { ownerWithin: lead.id }))).items, [
       work,
@@ -343,7 +390,13 @@ test("subtree queries retain private Message and audit boundaries for managers a
       await refused(client.call("message_get", { messageID: sent.messageID })),
       "not_found",
     );
-    assert.deepEqual(await done(client.call("message_list")), { items: [], after: 0 });
+    assert.deepEqual(await done(client.call("message_list")), empty);
+    assert.deepEqual(await done(client.call("message_list", { before: "latest" })), empty);
+    for (const counterpartyID of [worker.id, requester.id])
+      assert.deepEqual(
+        await done(client.call("message_list", { counterpartyID, before: "latest" })),
+        empty,
+      );
     if (client !== root) assert.equal(await refused(client.call("activity")), "forbidden");
     assert.equal(
       (await done(client.call("actor_get"))).actorID,

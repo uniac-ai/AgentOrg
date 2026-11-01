@@ -7,13 +7,11 @@ import type {
   ActorRecord,
   Answer,
   AuditEntry,
-  Call,
   Claim,
   ToolDescriptor,
 } from "./model/index.ts";
 
 export type ActorRow = z.output<typeof ActorRecord>;
-export type CallRow = z.output<typeof Call>;
 export type AuditRow = z.output<typeof AuditEntry>;
 export type ClaimRow = z.output<typeof Claim>;
 
@@ -53,9 +51,6 @@ export interface Store {
     open(): ActorRow[];
     /** Active directory rows in stable insertion order, with the canonical high-water mark. */
     directory(after: number, limit: number): { items: ActorRow[]; after: number; head: number };
-  };
-  calls: {
-    get(id: string): CallRow | undefined;
   };
   claims: {
     get(resource: string): ClaimRow | undefined;

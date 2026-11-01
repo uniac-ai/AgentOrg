@@ -1,12 +1,15 @@
 /** JSON Schema for the model's Zod schemas, in the shape interfaces and commands read it. */
 
+import type { Level } from "@uniac/agentic-workspace/contracts";
 import { z } from "zod";
 
 export type JsonSchema = { [key: string]: unknown };
 
-/** A built-in's schemas, audit policy and caller-facing description. */
+/** A built-in's schemas, audit policy, caller-facing description and presentation level. */
 export interface BuiltinSpec {
   readonly writes: boolean;
+  /** The smallest organization level that presents it; it grants and refuses nothing. */
+  readonly level: Level;
   readonly request: z.ZodType;
   readonly response: z.ZodType;
   /** The first paragraph is the summary. */

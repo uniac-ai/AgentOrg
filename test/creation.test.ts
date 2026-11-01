@@ -149,7 +149,7 @@ test("schema or descriptor failures retain the Actor and its valid credential wi
   });
   t.after(() => actor.close());
   assert.equal(
-    (await actor.call("work_create", { ownerID: core.rootId, goal: "Independent Actor" })).state,
+    (await actor.call("work_create", { ownerID: core.rootId, title: "Independent Actor" })).state,
     "done",
   );
   assert.equal(core.org.registry.get(value.actor.id)?.closed_at, null);

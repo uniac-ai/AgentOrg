@@ -6,6 +6,7 @@ export {
   Form,
   Message,
   Review,
+  Status,
   Submission,
   Work,
   WorkStatus,

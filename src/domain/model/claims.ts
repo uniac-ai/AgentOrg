@@ -27,6 +27,7 @@ export const ReleaseRequest = z.strictObject({ resource: Resource });
 export const CLAIMS = toolDefinition("claims", {
   claim: {
     writes: true,
+    level: "organization",
     request: ClaimRequest,
     response: Claim,
     description:
@@ -34,6 +35,7 @@ export const CLAIMS = toolDefinition("claims", {
   },
   release: {
     writes: true,
+    level: "organization",
     request: ReleaseRequest,
     response: Claim,
     description: "Release a shared resource you hold; the root may release any.",

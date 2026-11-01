@@ -1,6 +1,6 @@
 /** SQLite tables and their record schemas; times are ISO 8601 UTC and credentials are hashed. */
 
-import { ActorRecord, AuditEntry, Call, Claim } from "../../domain/model/index.ts";
+import { ActorRecord, AuditEntry, Claim } from "../../domain/model/index.ts";
 
 export const SCHEMA_VERSION = 9;
 
@@ -17,6 +17,7 @@ CREATE TABLE actors (
 CREATE UNIQUE INDEX one_root ON actors ((manager IS NULL)) WHERE manager IS NULL;
 CREATE UNIQUE INDEX handles_unique_among_siblings ON actors (manager, name) WHERE closed_at IS NULL;
 
+-- Retired Actor-call history, retained privately; no operation reads it.
 CREATE TABLE calls (
   id TEXT PRIMARY KEY,
   "from" TEXT NOT NULL REFERENCES actors (id),
@@ -60,7 +61,6 @@ CREATE TABLE audit (
 
 export const TABLES = {
   actors: ActorRecord,
-  calls: Call,
   claims: Claim,
   audit: AuditEntry,
 } as const;
