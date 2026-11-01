@@ -17,9 +17,10 @@ named project. A session without those tools does its ordinary work without an o
 
 ## Attach
 
-Attach with the Actor ID your brief names. If the user appointed this session directly, with no
-Actor named, attach once with a short `name` and a sentence of `purpose`; that creates your
-position under the user. A resumed conversation recovers its saved Actor.
+Attach with `attach {actor}`, the Actor ID your brief names. If the user appointed this session
+directly, with no Actor named, attach once with `attach {name, purpose}`: a short handle and a
+sentence; that creates your position under the user. A resumed conversation recovers its saved
+Actor.
 
 `interfaces` lists what this session presents, each call alias with a one-line summary, and
 `interfaces {name}` gives one interface's schemas. Read a schema before you first build its input.
@@ -36,14 +37,17 @@ These are the Report level's operations, everything one agent and its person nee
 | Your asks | `form_create`, `form_close`, `form_get`, `form_list` |
 | What reaches you | `attention` |
 
-**Status.** `line` is where you stand now, in at most 160 characters; `summary` (at most 1,200) is
-for what the line can't hold; `links` are what a reader opens. Status holds no state: your state is
-derived from your Work and asks. Omitted fields keep their value.
+**Status.** `line` is where you stand overall, in at most 160 characters; `summary` (at most 1,200)
+is for what the line can't hold; `links` are what a reader opens. Change it when where you stand
+overall changes, not with every step: steps belong to your Work. Status holds no state: your state
+is derived from your Work and asks. Omitted fields keep their value.
 
 **One Work per workstream.** `work_create {title, goal?, links?, waitsOn?}` makes Work you own and
-requested. Set it `active` with `work_update` when you start and `blocked` when you can't go on.
-Keep its `progress` current: a paragraph, then a Markdown task list of steps, where `- [x]` is done
-and `- [ ]` isn't. The first step not done is the current one.
+requested; its ID is its `ticketID`. It starts `open`. Set it `active` with
+`work_update {ticketID, status, progress?, links?, waitsOn?}` when you start; set `blocked` only
+when something other than your own ask stops you, since active Work with an open ask linked to it
+already shows as waiting. Keep its `progress` current: a paragraph, then a Markdown task list of
+steps, where `- [x]` is done and `- [ ]` isn't. The first step not done is the current one.
 
 ```markdown
 Moving the schema to v2 without downtime. Reads already go through the adapter.
@@ -54,22 +58,35 @@ Moving the schema to v2 without downtime. Reads already go through the adapter.
 - [ ] Drop the v1 columns
 ```
 
-`links` hold PRs, pages and runs; `waitsOn` names what it waits on outside your work: `{actorID}`,
-`{ticketID}` or `{text}` such as `"3 PRs in CI"`, and `null` clears it.
+`links` hold PRs, pages and runs; `waitsOn` names what it waits on besides your asks: `{actorID}`,
+`{ticketID}` or `{text}` such as `"3 PRs in CI"`, and `null` clears it. `expectedRevision` is
+optional on your own Work.
 
 **Follow-ups.** Something to do later is Work you request of yourself and leave `open`.
 
-**Asks.** When a decision or an answer isn't yours to take, ask:
-- `form_create {title, context, links, workID, fields}`. The title is the question; `context` is
-  what the reader needs to decide.
-- A decision is one field with `options`, each `{value, detail}`, and your `recommended` value.
-  Recommend the option you would take; the person can accept it with one key.
-- Link the Work it blocks with `workID`; the page groups the ask under that workstream.
+**Asks.** When a decision or an answer isn't yours to take, ask with
+`form_create {title, context?, links?, workID?, approval?, collect?, fields}`:
+- The title is the question; `context` is what the reader needs to decide.
+- A decision is one field with `options`, each `{value, detail?}`, and your `recommended` value on
+  that field. Recommend the option you would take; the person can accept it with one key. A field
+  without options is a question answered in text.
+- Link the Work it blocks: `workID` is that Work's `ticketID`. The page groups the ask under it.
 - Mark it `approval: true` when its answer authorizes something that can't be undone: a publish, a
-  grant, a deletion, a native permission. Only your managers answer an approval.
+  grant, a deletion, a native permission. Only your managers up to the user answer an approval;
+  give it the options to do or not to do it.
 - Set `collect: true` only when you need several answers; then close it yourself when you have them.
 
-Keep working on what doesn't depend on the answer.
+```json
+{"title": "Freeze writes for the switch, or dual-write?", "workID": "<ticketID>",
+ "context": "Steps 1-2 are done. A freeze takes 10 minutes; dual-writing takes two more days.",
+ "fields": [{"name": "approach", "label": "Approach", "required": true,
+   "options": [{"value": "freeze", "detail": "10 minutes of refused writes"},
+               {"value": "dual-write", "detail": "Two more days, no refused writes"}],
+   "recommended": "freeze"}]}
+```
+
+Keep working on what doesn't depend on the answer. Ask when the question arises, even for a step
+you'll reach later.
 
 **When to write.** Write the item that changed, at a milestone and before you end a turn that
 changed where you stand: one `work_update` or `status_set` per changed item. Each write returns
@@ -80,10 +97,14 @@ unless it collects.
 
 **When the person answers in your session.** Record it on the ask with
 `form_close {formID, expectedRevision, status: "resolved", resolution}`, quoting them, so the page
-stops waiting. Cancel an ask you no longer need with `status: "cancelled"`.
+stops waiting; `expectedRevision` is the ask's revision from your last write of it. An approval is
+closed this way only with the person's own words given in your session; never close one on your
+own judgment. Cancel an ask you no longer need with `status: "cancelled"`.
 
-**When you finish.** `work_submit {ticketID, result, evidence}`. Your own Work completes on submit.
-Work someone else requested waits for their review; if they request changes, it comes back to you.
+**When you finish.** `work_submit {ticketID, result, evidence?}` is the last write: `result` says
+what was done, and `evidence` lists short texts such as links to runs and PRs. Your own Work
+completes on submit. Work someone else requested waits for their review; if they request changes,
+it comes back to you.
 
 **What reaches you.** `attention {since?, wait?}` returns what other Actors did that concerns you:
 an answer to your ask, a new ask from a direct report, Work assigned to you, a review due or done,
