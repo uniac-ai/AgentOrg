@@ -307,7 +307,8 @@ export class Agent implements Presented {
     if (this.#session !== undefined) {
       sessions.fill(this.#session, actor);
       // Delivery starts from now: what happened before the session attached is not its input.
-      const now = await this.#position?.call("attention", {});
+      // Without it, the waiter starts from whenever it first reads.
+      const now = await this.#position?.call("attention", {}).catch(() => undefined);
       if (now?.state === "done")
         sessions.advanceInbox(this.#session, (now.value as { next: string }).next);
     }

@@ -114,8 +114,16 @@ export async function waitForNews(options: WaitOptions): Promise<boolean> {
         const read = await attention(client, sessions.inbox(options.session));
         if (!current()) return false;
         if (read.items.length > 0) {
+          // One conversation per sender: its last message's window holds the earlier ones.
+          const last = new Map(
+            read.items
+              .filter((item) => item.kind === "message")
+              .map((item) => [item.from.actorID, item]),
+          );
           const items: Delivery[] = [];
-          for (const item of read.items) items.push(await delivery(client, actorID, item));
+          for (const item of read.items)
+            if (item.kind !== "message" || last.get(item.from.actorID) === item)
+              items.push(await delivery(client, actorID, item));
           if (!current()) return false;
           options.write(describe(items, { self }));
           sessions.advanceInbox(options.session, read.next);
