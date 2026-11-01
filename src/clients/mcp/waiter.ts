@@ -1,5 +1,5 @@
 /** Client-local Message/Form polling and at-least-once delivery; no public read receipts. */
-import type { Form, Message } from "@uniac/agentic-workspace/contracts";
+import type { Form, List, Message } from "@uniac/agentic-workspace/contracts";
 import type { z } from "zod";
 import { type Actor, connectClient } from "../../actor/index.ts";
 import type { Position, Team } from "../../contract/index.ts";
@@ -28,8 +28,6 @@ const value = <T>(answer: Answer): T => {
 };
 const call = async <T>(client: Actor, name: string, input: Record<string, unknown> = {}) =>
   value<T>(await client.call(name, input, { timeoutMs: 5000 }));
-
-type List<T> = { items: T[]; actors: Record<string, { name: string }> };
 
 export async function waitForNews(options: WaitOptions): Promise<boolean> {
   const actorID = sessions.position(options.session);
