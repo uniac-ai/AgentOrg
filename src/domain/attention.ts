@@ -58,9 +58,9 @@ export function attention(registry: Registry, audit: Audit, workspace: Workspace
       }
       case "work_update": {
         // Only its requester reassigns Work; its latest edit names the owner it gave.
-        const updated = work(true);
+        const updated = work();
         if (updated?.ownerID !== caller.id || updated.requesterID !== entry.actor) return undefined;
-        const edit = updated.history?.findLast((each) => each.actorID === entry.actor);
+        const edit = work(true)?.history?.findLast((each) => each.actorID === entry.actor);
         return edit?.detail.ownerID === caller.id
           ? { kind: "assigned" as const, title: updated.title }
           : undefined;
