@@ -18,7 +18,7 @@ function mcpExport(name) {
     const pkg = existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : {};
     if (pkg.name === "@modelcontextprotocol/sdk") {
       const exported = pkg.exports[`./${name}`] ?? pkg.exports["./*"];
-      return import(pathToFileURL(join(path, exported.import.replace("*", name))).href);
+      return import(pathToFileURL(join(path, exported.import.replaceAll("*", name))).href);
     }
     path = dirname(path);
   }
