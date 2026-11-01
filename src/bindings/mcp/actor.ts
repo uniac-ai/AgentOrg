@@ -2,6 +2,7 @@
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
+import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv";
 import type { Actor, CallOptions } from "../../actor/api.ts";
 import type { Connector } from "../../connection/index.ts";
 import type { Answer, ToolDescriptor } from "../../domain/model/index.ts";
@@ -14,7 +15,15 @@ export class McpActor implements Actor {
   private readonly client: Client;
   constructor(connector: Connector, name: string) {
     this.connector = connector;
-    this.client = new Client({ name, version: VERSION });
+    this.client = new Client(
+      { name, version: VERSION },
+      {
+        // Each current validator owns its compiler/cache; replaced catalogs can be collected.
+        jsonSchemaValidator: {
+          getValidator: (schema) => new AjvJsonSchemaValidator().getValidator(schema),
+        },
+      },
+    );
   }
   get ended(): number | undefined {
     return this.connector.ended;
