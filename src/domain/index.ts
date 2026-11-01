@@ -2,6 +2,7 @@
 
 import { actors as actorModule } from "./actors.ts";
 import { application } from "./application.ts";
+import { attention } from "./attention.ts";
 import { audit } from "./audit.ts";
 import { capabilities } from "./capabilities.ts";
 import { claims } from "./claims.ts";
@@ -30,12 +31,14 @@ export function organization(store: Store, options: OrganizationOptions = {}) {
   const resources = claims(store.claims, actors, now);
   const creation = execution(options.provider ?? (() => undefined), observed);
   const positions = actorModule(actors, connected, creation);
-  const organizationView = team(actors, positions);
+  const shared = workspace(actors, store.workspace);
+  const organizationView = team(actors, positions, activity, shared);
   const offered = capabilities([
     positions.tool,
     organizationView.tool,
-    ...workspace(actors, store.workspace),
+    ...shared.tools,
     resources.tool,
+    attention(actors, activity, shared).tool,
     activity.tool,
     system(
       actors,

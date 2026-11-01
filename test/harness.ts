@@ -10,12 +10,13 @@ import { SqliteStore } from "../src/storage/sqlite/index.ts";
 
 export const HUB_INTERFACES = {
   actors: ["actor_create", "actor_close"],
-  team: ["team"],
+  team: ["team", "actor_view"],
   directory: ["actor_get", "actor_list"],
   messages: ["message_send", "message_get", "message_list"],
   work: ["work_create", "work_get", "work_list", "work_update", "work_submit", "work_review"],
   forms: ["form_create", "form_get", "form_list", "form_respond", "form_close"],
   status: ["status_set", "status_get"],
+  attention: ["attention"],
   claims: ["claim", "release"],
   activity: ["activity"],
   system: ["system_status", "connection_list", "provider_list", "connection_disconnect"],

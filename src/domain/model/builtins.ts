@@ -5,6 +5,7 @@
  */
 
 import { z } from "zod";
+import { ATTENTION } from "./attention.ts";
 import { CLAIMS } from "./claims.ts";
 import { toolDefinition } from "./json-schema.ts";
 import { Actor, AuditEntry, Handle, Id, Text } from "./records.ts";
@@ -113,6 +114,7 @@ export const BUILTINS = {
   ...WORK.interfaces,
   ...FORMS.interfaces,
   ...STATUS.interfaces,
+  ...ATTENTION.interfaces,
   ...ACTIVITY.interfaces,
   ...SYSTEM.interfaces,
 } as const;

@@ -1,5 +1,5 @@
 /** Explicit package-client bindings under the canonical admitted Hub Actor. */
-import { bindWorkspace } from "@uniac/agentic-workspace";
+import { bindWorkspace, type WorkspaceClients } from "@uniac/agentic-workspace";
 import type { ActorAuthority } from "@uniac/agentic-workspace/actors";
 import { WorkspaceError } from "@uniac/agentic-workspace/contracts";
 import type { WorkspaceStore } from "@uniac/agentic-workspace/persistence";
@@ -32,7 +32,8 @@ export function workspace(registry: Registry, store: WorkspaceStore) {
       return registry.within(actorID, ancestorID);
     },
   };
-  function run<T>(actor: ActorRow, operation: (clients: ReturnType<typeof bindWorkspace>) => T): T {
+  /** Run an operation on the package clients bound to the admitted Actor, mapping its refusals. */
+  function run<T>(actor: ActorRow, operation: (clients: WorkspaceClients) => T): T {
     try {
       return operation(bindWorkspace(authority, store, actor.id));
     } catch (error) {
@@ -48,34 +49,39 @@ export function workspace(registry: Registry, store: WorkspaceStore) {
       throw error;
     }
   }
-  return [
-    bindTool(DIRECTORY, {
-      actor_get: (actor, request) => run(actor, (clients) => clients.actors.get(request)),
-      actor_list: (actor, request) => run(actor, (clients) => clients.actors.list(request)),
-    }),
-    bindTool(MESSAGES, {
-      message_send: (actor, request) => run(actor, (clients) => clients.messages.send(request)),
-      message_get: (actor, request) => run(actor, (clients) => clients.messages.get(request)),
-      message_list: (actor, request) => run(actor, (clients) => clients.messages.list(request)),
-    }),
-    bindTool(WORK, {
-      work_create: (actor, request) => run(actor, (clients) => clients.work.create(request)),
-      work_get: (actor, request) => run(actor, (clients) => clients.work.get(request)),
-      work_list: (actor, request) => run(actor, (clients) => clients.work.list(request)),
-      work_update: (actor, request) => run(actor, (clients) => clients.work.update(request)),
-      work_submit: (actor, request) => run(actor, (clients) => clients.work.submit(request)),
-      work_review: (actor, request) => run(actor, (clients) => clients.work.review(request)),
-    }),
-    bindTool(FORMS, {
-      form_create: (actor, request) => run(actor, (clients) => clients.forms.create(request)),
-      form_get: (actor, request) => run(actor, (clients) => clients.forms.get(request)),
-      form_list: (actor, request) => run(actor, (clients) => clients.forms.list(request)),
-      form_respond: (actor, request) => run(actor, (clients) => clients.forms.respond(request)),
-      form_close: (actor, request) => run(actor, (clients) => clients.forms.close(request)),
-    }),
-    bindTool(STATUS, {
-      status_set: (actor, request) => run(actor, (clients) => clients.status.set(request)),
-      status_get: (actor, request) => run(actor, (clients) => clients.status.get(request)),
-    }),
-  ];
+  return {
+    run,
+    tools: [
+      bindTool(DIRECTORY, {
+        actor_get: (actor, request) => run(actor, (clients) => clients.actors.get(request)),
+        actor_list: (actor, request) => run(actor, (clients) => clients.actors.list(request)),
+      }),
+      bindTool(MESSAGES, {
+        message_send: (actor, request) => run(actor, (clients) => clients.messages.send(request)),
+        message_get: (actor, request) => run(actor, (clients) => clients.messages.get(request)),
+        message_list: (actor, request) => run(actor, (clients) => clients.messages.list(request)),
+      }),
+      bindTool(WORK, {
+        work_create: (actor, request) => run(actor, (clients) => clients.work.create(request)),
+        work_get: (actor, request) => run(actor, (clients) => clients.work.get(request)),
+        work_list: (actor, request) => run(actor, (clients) => clients.work.list(request)),
+        work_update: (actor, request) => run(actor, (clients) => clients.work.update(request)),
+        work_submit: (actor, request) => run(actor, (clients) => clients.work.submit(request)),
+        work_review: (actor, request) => run(actor, (clients) => clients.work.review(request)),
+      }),
+      bindTool(FORMS, {
+        form_create: (actor, request) => run(actor, (clients) => clients.forms.create(request)),
+        form_get: (actor, request) => run(actor, (clients) => clients.forms.get(request)),
+        form_list: (actor, request) => run(actor, (clients) => clients.forms.list(request)),
+        form_respond: (actor, request) => run(actor, (clients) => clients.forms.respond(request)),
+        form_close: (actor, request) => run(actor, (clients) => clients.forms.close(request)),
+      }),
+      bindTool(STATUS, {
+        status_set: (actor, request) => run(actor, (clients) => clients.status.set(request)),
+        status_get: (actor, request) => run(actor, (clients) => clients.status.get(request)),
+      }),
+    ],
+  };
 }
+
+export type Workspace = ReturnType<typeof workspace>;
