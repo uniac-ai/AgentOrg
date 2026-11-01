@@ -1,11 +1,12 @@
 # Claude Code
 
 `agentorg-mcp connect claude-code` configures the project's `org` MCP server, context and waiter
-hooks, and this skill.
+hooks, and this skill. `--level report` presents only your own report, for one agent and its
+person; `--level team` adds working with other Actors.
 
 - **Tools.** Use `mcp__org__attach`, `mcp__org__interfaces` and `mcp__org__call`. For example, call
-  `{name: "message_send", input: {recipientID: "<actor>", text: "The build passed."}}` using the
-  current schema from `interfaces`.
+  `{name: "status_set", input: {line: "The build passed; releasing next."}}` using the schema from
+  `interfaces {name}`.
 - **Attachment.** A resumed session recovers its saved Actor. A new session attaches with the Actor
   ID in its brief, or creates a position once when the user directly appoints it.
 - **Delivery.** On startup and after a turn, the hook waits on `attention` from where the session
@@ -20,6 +21,5 @@ hooks, and this skill.
 - **Lifecycle.** Close an accepted leaf Actor with `actor_close`, then end its session through an
   authorized client operation. Actor closure does not manage Provider resources.
 
-At an upgrade, existing sessions require deliberate delivery baselining before hooks resume. The
-Hub's private historical import manifest supports this coordination; old shared cursors cannot be
-used as new Message/Form positions.
+A session kept from before delivery moved to `attention` starts from now: what happened before its
+first wait is in your records, not delivered as input.

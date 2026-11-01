@@ -318,7 +318,7 @@ The MCP adapter, `agentorg-mcp` in `src/clients/mcp/`, is an optional client for
 - **What the session is told.** Each kind of guidance has one place:
   - the adapter's tool descriptions say how to attach, list and invoke; the core's interface descriptors define each operation's description and schemas, and the core enforces permissions;
   - the server's instructions, the start hint and the frame around what the waiter delivers say what to do at that moment;
-  - the `agentorg` skill, `skills/agentorg/`, carries the operating model the core can't enforce, such as when to ask rather than decide, at what level to write, and when to delegate and close, with a reference per client. It maps logical operation names through `call` without restating their descriptions;
+  - the `agentorg` skill, `skills/agentorg/`, carries the operating model the core can't enforce, written Report first: how an agent keeps its report (status, one Work per workstream with its progress steps, follow-ups, asks with a recommended option), when to write, what to do when an answer arrives, and then working with others and the organization, with a reference per client. It maps logical operation names through `call` without restating their descriptions;
   - an organization's own conventions are a skill of its own, loaded beside it.
 - **Credentials.** The session never sees one.
   - Each position's credential is kept in the agentorg home's credential store, `actors/<id>`, mode 600.

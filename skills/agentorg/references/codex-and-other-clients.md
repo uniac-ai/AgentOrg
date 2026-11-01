@@ -21,5 +21,5 @@ through `/hooks`. `/mcp` lists the three adapter tools.
   A helper within this conversation is not a separately admitted Actor.
 
 Other MCP clients can run the default adapter with `CLAUDE_CODE_SESSION_ID` unset for an unpersisted
-attachment. Attach on each start or resume. Their own lifecycle and approval controls govern native
-sessions. Existing clients require intentional historical delivery baselining at Workspace cutover.
+attachment. Attach on each start or resume, and start reading `attention` from the position a read
+without `since` returns. Their own lifecycle and approval controls govern native sessions.

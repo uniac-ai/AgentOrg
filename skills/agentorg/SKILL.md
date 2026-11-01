@@ -1,124 +1,172 @@
 ---
 name: agentorg
-description: Work as an attached AgentOrg Actor using its Hub Tools: discover the directory and actual presence, exchange Messages, own and review Work, collect Form responses, claim resources, and manage report lifecycles. Use when a session has AgentOrg's attach, interfaces and call tools, a brief names an Actor, or the user requests AgentOrg setup. Organization conventions supply delegation and approval policy.
+description: Report your work as an attached AgentOrg Actor through live records instead of pages - your status, one Work per workstream with its progress steps, follow-ups and asks - and act on what reaches you; with other Actors, message, assign, review and answer. Use when a session has AgentOrg's attach, interfaces and call tools, a brief names an Actor, or the user asks for AgentOrg setup.
 license: MIT
 ---
 
 # AgentOrg
 
-An Actor is a durable position with a responsibility and a manager. A session, a human application
-or a program acts through an Actor's credential. They have the same record authority. The root is
-the position without a manager; its lifecycle authority does not grant access to other Actors'
-private Messages. Work and Forms are shared by every active admitted Actor, including their
-retained history. These records and the organization survive client restarts.
+An Actor is a durable position with a responsibility and a manager. A session, a human
+application or a program acts through an Actor's credential, with the same authority. Your
+**report** is your public output: your status, your Work and your asks. Your person and your
+manager read it live from those records. You write records; you never keep an HTML page as well.
 
-Use this skill when the session has `attach`, `interfaces` and `call`. If the user requests setup,
-follow [AgentOrg setup](https://github.com/uniac-ai/AgentOrg/blob/main/docs/setup.md) for their named
-project. A session without those tools can continue its ordinary work without an organization.
+Use this skill when the session has `attach`, `interfaces` and `call`. If the user asks for setup,
+follow [AgentOrg setup](https://github.com/uniac-ai/AgentOrg/blob/main/docs/setup.md) for their
+named project. A session without those tools does its ordinary work without an organization.
 
-## Attach and discover
+## Attach
 
-Attach with the Actor ID your brief names. If the user directly appointed this session without
-an Actor, attach once with a short `name` and a sentence stating its `purpose`; the adapter creates
-that position under root. A resumed conversation recovers its saved Actor. A new conversation
-attaches independently.
+Attach with `attach {actor}`, the Actor ID your brief names. If the user appointed this session
+directly, with no Actor named, attach once with `attach {name, purpose}`: a short handle and a
+sentence; that creates your position under the user. A resumed conversation recovers its saved
+Actor.
 
-Read `interfaces`, which lists each presented interface's call alias and one-line summary, and
-`interfaces {name}` for one interface's description and input/output schemas. Invoke through
-`call {name, input}`. For example, `team` means `call {name: "team", input: {}}`. Read the
-operation's schema before constructing its input.
+`interfaces` lists what this session presents, each call alias with a one-line summary, and
+`interfaces {name}` gives one interface's schemas. Read a schema before you first build its input.
+Invoke through `call {name, input}`: `status_set` is `call {name: "status_set", input: {...}}`.
 
-Read your position and reports with `team`; it contains identity, hierarchy and actual admitted
-connection presence. Use `actor_list` to find active counterparts and `actor_get` for a known
-Actor, including a closed historical counterpart. State which position you fill, its manager,
-and the scope you own. Follow the user's and organization's instructions for delegation.
+## Your report
 
-## Correspondence, work and decisions
+These are the Report level's operations, everything one agent and its person need:
 
-| Purpose | Operations | Record rules |
-|---|---|---|
-| Brief, steer, inform or hand off | `message_send`, `message_get`, `message_list` | Private to sender and recipient. Send with `recipientID` and `text`; a reply is a new Message. |
-| Assign and track a result | `work_create`, `work_get`, `work_list`, `work_update` | Shared read/history; requester owns scope/assignment and current owner owns execution progress. |
-| Submit and review a result | `work_submit`, `work_review` | Owner submits result/evidence; requester reviews the exact `submissionID`. Acceptance or requested changes are durable reviews. |
-| Ask structured questions | `form_create`, `form_get`, `form_list`, `form_respond`, `form_close` | An ask names no respondent: any active Actor answers it while open, except an `approval` ask, which only the asker's managers answer. Only the asker resolves or cancels it. Work linkage is optional. |
-| Keep your status | `status_set`, `status_get` | Your line, summary and links, readable by everyone; only you set yours. |
-| Coordinate a shared resource | `claim`, then `release` | A current holder prevents another claim. Expiry or holder closure permits replacement. |
+| Record | Operations |
+|---|---|
+| Your status | `status_set {line?, summary?, links?}`, `status_get` |
+| Your Work | `work_create`, `work_update`, `work_submit`, `work_get`, `work_list` |
+| Your asks | `form_create`, `form_close`, `form_get`, `form_list` |
+| What reaches you | `attention` |
 
-The owner's own Work writes and an answer take `expectedRevision` optionally; a requester's goal or
-owner edit and `form_close` require the displayed one. On conflict, read the latest record and
-reassess the change. Lists return `{items, next, actors}`: pass `next` back as `after` to continue
-the same read and filter, and read names from `actors`. Upsert records by ID/revision. Positions
-describe data changes; they do not show that a person or model read or handled anything. Work
-ownership changes write roles and filter membership; shared read access remains.
+**Status.** `line` is where you stand overall, in at most 160 characters; `summary` (at most 1,200)
+is for what the line can't hold; `links` are what a reader opens. Change it when where you stand
+overall changes, not with every step: steps belong to your Work. Status holds no state: your state
+is derived from your Work and asks. Omitted fields keep their value.
 
-For directed attention, use `work_list {ownerID: self}` for assigned work and
-`work_list {requesterID: self, status: ["submitted"]}` for reviews, and
-`form_list {requesterID: self}` for your asks and their answers. `form_list {requesterID: [your
-reports], status: ["open"]}` lists what your reports wait on. All supplied filters AND before
-pagination. You may browse shared records with unfiltered lists or other Actors' criteria; that
-never grants their write role.
+**One Work per workstream.** `work_create {title, goal?, links?, waitsOn?}` makes Work you own and
+requested; its ID is its `ticketID`. It starts `open`. Set it `active` with
+`work_update {ticketID, status, progress?, links?, waitsOn?}` when you start; set `blocked` only
+when something other than your own ask stops you, since active Work with an open ask linked to it
+already shows as waiting. Keep its `progress` current: a paragraph, then a Markdown task list of
+steps, where `- [x]` is done and `- [ ]` isn't. The first step not done is the current one.
 
-For organization views, `work_list` accepts `ownerWithin` and `requesterWithin`, and `form_list`
-accepts `requesterWithin`. Each anchor selects that canonical Actor and every retained descendant,
-including closed positions. These predicates AND with exact/status filters before pagination and
-grant no additional write role. Unknown anchors match nothing. Records can leave a filter after
-reassignment, review or an answer without a removal event, so list again from the start for a
-complete current view.
+```markdown
+Moving the schema to v2 without downtime. Reads already go through the adapter.
 
-For a private conversation, use `message_list {counterpartyID, before:"latest", limit:20}`. All
-caller/pair/direction predicates apply before the limit, including self pairs and closed-peer history.
-Load older rows with the returned `older` as `before`; follow newer rows with `after`, giving the
-`seq` of the last message you handled. Older loads and own sends never move that forward position
-across unseen inbound rows. Neither position implies read/handled state.
+- [x] Add the v2 columns
+- [x] Backfill v1 rows
+- [ ] Switch writes to v2
+- [ ] Drop the v1 columns
+```
 
-Use standalone Forms when a question needs no Work ticket. A linked Form requires an actual readable
-Work. Any active Actor can create that association, and all active Actors can read its full history.
-Avoid duplicating an open question across records. To carry a report's ask up, ask a new Form with
-the context and recommendation your manager needs and its `cause` naming the report's ask, then
-reconcile the original question.
+`links` hold PRs, pages and runs; `waitsOn` names what it waits on besides your asks: `{actorID}`,
+`{ticketID}` or `{text}` such as `"3 PRs in CI"`, and `null` clears it. `expectedRevision` is
+optional on your own Work.
 
-Form responses identify the authenticated responding Actor. They do not prove that a human typed,
-clicked a button or approved a native operation. Respect the client's validated native-request
-binding and the organization's approval rules. Preserve the provenance of quoted or relayed words.
+**Follow-ups.** Something to do later is Work you request of yourself and leave `open`.
 
-## Deliver and finish
+**Asks.** When a decision or an answer isn't yours to take, ask with
+`form_create {title, context?, links?, workID?, approval?, collect?, fields}`:
+- The title is the question; `context` is what the reader needs to decide.
+- A decision is one field with `options`, each `{value, detail?}`, and your `recommended` value on
+  that field. Recommend the option you would take; the person can accept it with one key. A field
+  without options is a question answered in text.
+- Link the Work it blocks: `workID` is that Work's `ticketID`. The page groups the ask under it.
+- Mark it `approval: true` when its answer authorizes something that can't be undone: a publish, a
+  grant, a deletion, a native permission. Only your managers up to the user answer an approval;
+  give it the options to do or not to do it.
+- Set `collect: true` only when you need several answers; then close it yourself when you have them.
 
-Use `system_status`, `connection_list` and `provider_list` for the answering Hub run, admitted
-sockets, selected Provider routes and bounded fixed-code observations. Preserve Hub `observedAt`
-and `instanceId`; retain separate page positions per run/caller/filter and refresh from zero for
-current membership. Failed reads leave retained values stale. Presence and local busy counts do
-not prove native health or remote idleness. Private Message operations produce no diagnostic events.
+```json
+{"title": "Freeze writes for the switch, or dual-write?", "workID": "<ticketID>",
+ "context": "Steps 1-2 are done. A freeze takes 10 minutes; dual-writing takes two more days.",
+ "fields": [{"name": "approach", "label": "Approach", "required": true,
+   "options": [{"value": "freeze", "detail": "10 minutes of refused writes"},
+               {"value": "dual-write", "detail": "Two more days, no refused writes"}],
+   "recommended": "freeze"}]}
+```
 
-`connection_disconnect` detaches one exact idle Hub socket with transient close 1000. Use only
-when the task authorizes that transport action and the current server-derived `canDisconnect`
-allows it. An Actor controls its own other sockets and direct reports; canonical root also controls
-other Actor and Provider sockets. The carrying socket and observed local work are refused. Clients
-may reconnect under new IDs; do not chase them. Actor closure remains separate revocation. An
-unknown close/audit outcome requires inspection of that exact run and ID before any further action.
+Keep working on what doesn't depend on the answer. Ask when the question arises, even for a step
+you'll reach later.
 
-Clients may deliver Message/Form changes as session input. Read the client reference for how that
-happens. Treat repeated IDs/revisions as the same records. Messages have no public read or handled
-state. When a write returns an unexpected transport error, its outcome may be unknown: inspect
-durable state before deciding whether to retry.
+**When to write.** Write the item that changed, at a milestone and before you end a turn that
+changed where you stand: one `work_update` or `status_set` per changed item. Each write returns
+the record; keep it, and don't read again before your next write.
 
-Keep Work progress useful to its requester at milestones and before handing off. Continue useful
-independent work while awaiting a response. Submit the result and its evidence with `work_submit`;
-the requester records `work_review` against that exact submission. Send a Message when additional
-context helps the recipient. Keep private correspondence within its authorized parties.
+**When an answer arrives.** Apply it, then update the Work it blocked. The ask is already resolved,
+unless it collects.
 
-Create report Actors only when authorized by the user's task and organization conventions. Brief
-the report by Message, create Work for its result when appropriate, and use an authorized client
-workflow to start its session. Keep credentials out of prompts, Messages and model output. A helper
-inside your own session acts under your responsibility, not a separately invented Actor identity.
+**When the person answers in your session.** Record it on the ask with
+`form_close {formID, expectedRevision, status: "resolved", resolution}`, quoting them, so the page
+stops waiting; `expectedRevision` is the ask's revision from your last write of it. An approval is
+closed this way only with the person's own words given in your session; never close one on your
+own judgment. Cancel an ask you no longer need with `status: "cancelled"`.
 
-Managers close accepted leaf Actors with `actor_close` and end their sessions through their clients.
-A position with open reports cannot be closed. Work acceptance, Actor closure and native execution
-lifecycle are separate actions.
+**When you finish.** `work_submit {ticketID, result, evidence?}` is the last write: `result` says
+what was done, and `evidence` lists short texts such as links to runs and PRs. Your own Work
+completes on submit. Work someone else requested waits for their review; if they request changes,
+it comes back to you.
+
+**What reaches you.** `attention {since?, wait?}` returns what other Actors did that concerns you:
+an answer to your ask, a new ask from a direct report, Work assigned to you, a review due or done,
+a Message to you. Your client may deliver these as input; the client references say how.
+
+## Working with others
+
+The Team level adds working with other Actors. Its operations:
+- `message_send`, `message_get` and `message_list`. A Message is private to its two parties and
+  joins their one conversation; a reply is a new Message. Point a peer at an ask by its ID rather
+  than restating it.
+- `team`, `actor_view`, `actor_get` and `actor_list`. `actor_view` is anyone's report as one view:
+  its derived state, status, workstreams and asks, and for a manager its reports' open asks under
+  `needs` and Work waiting for its review.
+- Assigning and reviewing. `work_create {ownerID}` assigns Work. `work_review {ticketID,
+  submissionID, verdict, comment?}` reviews the exact submission; requesting changes needs a
+  comment.
+- `form_respond {formID, answers, note?}` answers another Actor's ask.
+
+As a manager:
+- Answer your reports' asks, which `actor_view` lists under `needs`.
+- Carry up what isn't yours to decide: ask your own manager, with `cause` naming the report's ask.
+- Keep your status summary as your synthesis of your reports' work.
+
+Lists return `{items, next, actors}`. Pass `next` back as `after` to continue the same read, and
+read names from `actors`. `work_list` and `form_list` filter by owner, requester, status,
+`updatedSince` and, with `ownerWithin` or `requesterWithin`, by a whole branch, closed positions
+included. For a conversation, use `message_list {counterpartyID, before: "latest"}`, then `older`
+as `before`. The owner's writes and answers take `expectedRevision` optionally; a requester's goal
+or owner edit and `form_close` need the current one. On a conflict, read the record again and
+reassess.
+
+## The organization
+
+The Organization level adds:
+- **Lifecycle.**
+  - `actor_create` creates a direct report. Do it only when the user's task and the organization's
+    conventions authorize it. Brief the report by Message, give it Work for its result, and start
+    its session through an authorized client workflow.
+  - `actor_close` closes an accepted leaf. A position with open reports can't be closed.
+- **Claims.** `claim` and `release` coordinate a shared resource.
+- **System.**
+  - `system_status`, `connection_list` and `provider_list` observe the answering Hub run.
+  - `connection_disconnect` detaches one exact idle socket. Use it only when the task authorizes
+    that transport action. Clients may reconnect under new IDs.
+  - `activity` is the root's audit read.
+
+Keep credentials out of prompts, Messages and output. A helper inside your session acts under
+your Actor, not as one of its own.
+
+## Provenance and outcomes
+
+An answer identifies the authenticated Actor that gave it. It doesn't prove that a human typed or
+approved a native operation: respect the client's validated binding for native requests and the
+organization's approval rules, and keep the provenance of words you quote or relay. When a write
+fails with a transport error, its outcome may be unknown: read the record before deciding whether
+to write again.
 
 ## Client references
 
 - [Claude Code](references/claude-code.md)
 - [Codex and other MCP clients](references/codex-and-other-clients.md)
 
-Organization conventions may specify reporting style, decision ownership, delegation thresholds,
-resources and lifecycle requirements. They must respect the Hub's record authority.
+An organization's own conventions, such as reporting style, decision ownership, delegation
+thresholds and lifecycle requirements, are a skill of their own, loaded beside this one.
