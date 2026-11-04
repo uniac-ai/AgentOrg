@@ -1,6 +1,6 @@
 /** Hub state and one package-owned Workspace store for the same private Hub home. */
 
-import { chmodSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, openSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { openSqlite, type WorkspaceStore } from "@uniac/agentic-workspace/persistence";
 import type { Store } from "../../domain/ports.ts";
@@ -9,18 +9,30 @@ import { importLegacyMessages, writeImportBaseline } from "./workspace-import.ts
 
 export { Database };
 
+/**
+ * Make a database file and its WAL files private to the home owner before SQLite opens it, so the
+ * WAL files it creates take the same mode, whatever the home folder's mode.
+ */
+function privateDatabase(path: string): void {
+  if (path === ":memory:") return;
+  closeSync(openSync(path, "a", 0o600));
+  for (const file of [path, `${path}-wal`, `${path}-shm`])
+    if (existsSync(file)) chmodSync(file, 0o600);
+}
+
 export class SqliteStore implements Store {
   readonly database: Database;
   readonly workspace: WorkspaceStore;
 
   constructor(path: string) {
+    privateDatabase(path);
     this.database = new Database(path);
     const workspacePath =
       path === ":memory:" ? path : join(dirname(path), `${basename(path, ".db")}.workspace.db`);
     let workspace: WorkspaceStore | undefined;
     try {
+      privateDatabase(workspacePath);
       workspace = openSqlite(workspacePath);
-      if (workspacePath !== ":memory:") chmodSync(workspacePath, 0o600);
       const baseline = importLegacyMessages(this.database, workspace);
       if (path !== ":memory:") writeImportBaseline(`${workspacePath}.import.json`, baseline);
       this.workspace = workspace;

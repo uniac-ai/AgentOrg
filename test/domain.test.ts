@@ -1,7 +1,7 @@
 /** The assembled Hub exposes explicit feature Tools, independently of Actor hierarchy and presence. */
 
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -122,6 +122,32 @@ test("an unsupported database schema is refused without changing its records", (
   t.after(() => unchanged.close());
   assert.equal(unchanged.prepare("PRAGMA user_version").get()?.user_version, 6);
   assert.equal(unchanged.prepare("SELECT value FROM kept").get()?.value, "kept");
+});
+
+test("both databases and their WAL files are private to the home owner, whatever the home's mode", (t) => {
+  const home = mkdtempSync(join(tmpdir(), "agentorg-modes-"));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  chmodSync(home, 0o755);
+  const files = ["core.db", "core.workspace.db"].flatMap((name) => [
+    name,
+    `${name}-wal`,
+    `${name}-shm`,
+  ]);
+  const modes = () => files.map((file) => [file, statSync(join(home, file)).mode & 0o777]);
+  const opened = new SqliteStore(join(home, "core.db"));
+  assert.deepEqual(
+    modes(),
+    files.map((file) => [file, 0o600]),
+  );
+  opened.close();
+  // A home whose files an earlier build left readable is made private on its next open.
+  for (const file of ["core.db", "core.workspace.db"]) chmodSync(join(home, file), 0o644);
+  const reopened = new SqliteStore(join(home, "core.db"));
+  t.after(() => reopened.close());
+  assert.deepEqual(
+    modes(),
+    files.map((file) => [file, 0o600]),
+  );
 });
 
 test("a home without the audit's index of writes gains it on open, with no schema step", (t) => {
