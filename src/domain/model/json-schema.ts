@@ -38,8 +38,13 @@ export function objectSchema(schema: z.ZodType, io: "input" | "output"): JsonSch
     $ref?: string;
     $defs?: Record<string, JsonSchema>;
   };
-  if (typeof $ref !== "string") return rest;
+  if (typeof $ref !== "string")
+    return objectTop(Object.keys($defs).length > 0 ? { ...rest, $defs } : rest);
   const id = $ref.split("/").pop() as string;
   const { [id]: top, ...others } = $defs;
-  return Object.keys(others).length > 0 ? { ...top, $defs: others } : { ...top };
+  return objectTop(Object.keys(others).length > 0 ? { ...top, $defs: others } : { ...top });
 }
+
+/** MCP clients take only object schemas, so a union of records says it is an object too. */
+const objectTop = (schema: JsonSchema): JsonSchema =>
+  "anyOf" in schema && schema.type === undefined ? { type: "object", ...schema } : schema;

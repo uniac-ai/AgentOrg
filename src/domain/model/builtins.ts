@@ -11,7 +11,7 @@ import { toolDefinition } from "./json-schema.ts";
 import { Actor, AuditEntry, Handle, Id, Text } from "./records.ts";
 import { SYSTEM } from "./system.ts";
 import { TEAM } from "./team.ts";
-import { FORMS, MESSAGES, WORK } from "./workspace.ts";
+import { MESSAGES, WORK } from "./workspace.ts";
 
 export const ExecutionOptions = z.strictObject({
   providerId: Id.describe("The enrolled Provider to ask for execution."),
@@ -111,7 +111,6 @@ export const BUILTINS = {
   ...CLAIMS.interfaces,
   ...MESSAGES.interfaces,
   ...WORK.interfaces,
-  ...FORMS.interfaces,
   ...ATTENTION.interfaces,
   ...ACTIVITY.interfaces,
   ...SYSTEM.interfaces,

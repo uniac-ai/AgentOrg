@@ -80,22 +80,38 @@ export function application(
 }
 
 function targetOf(record: Record<string, unknown>): string | null {
-  const { id, call, resource, actor, actorID, messageID, ticketID, formID, connectionId } =
-    record as {
-      id?: string;
-      call?: string;
-      resource?: string;
-      actor?: string | { id: string };
-      messageID?: string;
-      ticketID?: string;
-      formID?: string;
-      actorID?: string;
-      connectionId?: string;
-    };
+  const {
+    id,
+    call,
+    resource,
+    actor,
+    actorID,
+    messageID,
+    ticketID,
+    formID,
+    askID,
+    close,
+    connectionId,
+  } = record as {
+    id?: string;
+    call?: string;
+    resource?: string;
+    actor?: string | { id: string };
+    messageID?: string;
+    ticketID?: string;
+    formID?: string;
+    askID?: string;
+    close?: { askID?: string };
+    actorID?: string;
+    connectionId?: string;
+  };
+  // A refused ask write names its ask ahead of the Work it is on.
   return (
     id ??
     connectionId ??
     messageID ??
+    askID ??
+    close?.askID ??
     ticketID ??
     formID ??
     actorID ??

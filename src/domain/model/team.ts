@@ -76,9 +76,9 @@ export const ActorViewRequest = z
   .meta({ id: "ActorViewRequest" });
 
 export const ActorState = z
-  .enum(["blocked", "waiting", "review", "active", "idle"])
+  .enum(["waiting", "review", "active", "idle"])
   .describe(
-    "The most urgent among its workstreams: blocked, then waiting (active with an open ask), then review (submitted), then active; idle with none.",
+    "The most urgent among its workstreams: waiting (active with an open ask), then review (submitted), then active; idle with none.",
   );
 
 export const ActorView = z
@@ -97,10 +97,14 @@ export const ActorView = z
     workstreams: z
       .array(Work.extend({ asks: z.array(Form).describe("Its open asks linked to this Work.") }))
       .describe(
-        "Work it owns that is active, blocked, submitted or has changes requested, and such Work it requested of its direct reports, oldest first.",
+        "Work it owns that is active, submitted or has changes requested, and such Work it requested of its direct reports, oldest first.",
       ),
     asks: z.array(Form).describe("Its open asks linked to none of its workstreams."),
-    needs: z.array(Form).describe("Open asks of its direct reports."),
+    needs: z
+      .array(Form)
+      .describe(
+        "Open asks routed to it: its reports' asks it hasn't raised, asks raised to it, and asks passed up past closed managers.",
+      ),
     reviews: z.array(Work).describe("Submitted Work it requested, waiting for its review."),
     assigned: z.array(Work).describe("Open Work others requested of it, not started."),
     followUps: z.array(Work).describe("Open Work it requested of itself."),

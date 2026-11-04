@@ -266,7 +266,7 @@ test("a session at a level presents that level's interfaces, and the one before 
   };
   assert.equal(listed.level, "report");
   assert.deepEqual(listed.interfaces.map((offer) => offer.name).sort(), tagged(["report"]));
-  for (const name of ["message_send", "work_update", "form_create", "attention"])
+  for (const name of ["message_send", "work_update", "attention"])
     assert.ok(
       listed.interfaces.some((offer) => offer.name === name),
       name,
@@ -519,6 +519,7 @@ test("the waiter frames each item with what to do, without claiming native user 
     status: "resolved",
     createdAt: at,
     responses: { manager: { answers: { choice: "v2" }, note: "Keep v1 readable", at } },
+    raises: [],
     revision: 2,
     updatedAt: at,
   });
@@ -534,6 +535,7 @@ test("the waiter frames each item with what to do, without claiming native user 
     updatedAt: at,
   });
   const lead = { actorID: "manager", name: "lead" };
+  const storage = { actorID: "report", name: "storage" };
   const delivered = describe(
     [
       { kind: "answer", recordID: "form1", from: lead, title: ask.title, at, ask, work },
@@ -550,6 +552,8 @@ test("the waiter frames each item with what to do, without claiming native user 
         ],
       },
       { kind: "assigned", recordID: "work2", from: lead, title: "Index it", at },
+      { kind: "ask", recordID: "form2", from: storage, title: "Delete the bucket?", at },
+      { kind: "review_due", recordID: "work3", from: storage, title: "Prove the backups", at },
     ],
     { self },
   );
@@ -563,6 +567,15 @@ test("the waiter frames each item with what to do, without claiming native user 
   );
   assert.match(delivered, /Reply with message_send \{recipientID: manager\}/);
   assert.match(delivered, /assigned you Work "Index it" \(work2\)\. Read it with work_get/);
+  assert.match(
+    delivered,
+    /storage routes you the ask "Delete the bucket\?" \(form2\)\. Read it with work_get \{askID: "form2"\}, then answer it with work_answer \{askID, answers, note\?\}, or raise it one manager up with work_answer \{askID, raise: true\}\./,
+  );
+  assert.match(
+    delivered,
+    /storage submitted "Prove the backups" \(work3\) for your answer\. Read the submission with work_get, then answer it with work_answer \{askID: <its submissionID>, answers: \{verdict: "accepted" or "changes_requested"\}, note\?\}/,
+  );
+  assert.doesNotMatch(delivered, /form_|work_review|cause/, "no removed tool is named");
   assert.match(delivered, /a native approval requires its client's validated binding/);
   assert.doesNotMatch(delivered, /only the user|recorded: true|the user \(the root\)/);
 });
@@ -744,14 +757,16 @@ test("the waiter delivers what concerns its Actor from where it attached, never 
   );
   assert.equal(latest.stderr.includes(id), false, "nothing before the session's last message");
   const ask = (
-    await worker.call("form_create", {
-      title: "Which schema?",
-      workID: own.ticketID,
-      fields: [{ name: "choice", label: "Choose", required: true }],
+    await worker.call("work_update", {
+      ticketID: own.ticketID,
+      ask: {
+        title: "Which schema?",
+        fields: [{ name: "choice", label: "Choose", required: true }],
+      },
     })
   ).structuredContent as { formID: string };
   const answering = hook(org, "wait", "s-waited", alive);
-  await root.call("form_respond", { formID: ask.formID, answers: { choice: "v2" }, note: "Go" });
+  await root.call("work_answer", { askID: ask.formID, answers: { choice: "v2" }, note: "Go" });
   const answered = await within(20_000, "the answer", answering);
   assert.equal(answered.code, 2);
   assert.match(

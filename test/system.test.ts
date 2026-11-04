@@ -88,8 +88,8 @@ test("System is equally offered to active Actors; observations and sparse pages 
   const peer = await provider(t, core);
   assert.deepEqual(await root.available(), await worker.client.available());
   const tools = await root.available();
-  assert.equal(tools.length, 9);
-  assert.equal(tools.flatMap((tool) => tool.interfaces).length, 26);
+  assert.equal(tools.length, 8);
+  assert.equal(tools.flatMap((tool) => tool.interfaces).length, 21);
   const system = tools.find((tool) => tool.id === "hub:system");
   assert.ok(system);
   assert.deepEqual(

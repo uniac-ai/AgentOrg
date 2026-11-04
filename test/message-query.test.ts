@@ -39,8 +39,8 @@ const send = async (client: Actor, recipientID: string, text: string) =>
 test("one pair's conversation qualifies before pagination for any reader; newest windows and older positions keep its order", async (t) => {
   const { core, root, owner, peer, other } = await fixture(t);
   const catalog = await owner.client.available();
-  assert.equal(catalog.length, 9);
-  assert.equal(catalog.flatMap((tool) => tool.interfaces).length, 26);
+  assert.equal(catalog.length, 8);
+  assert.equal(catalog.flatMap((tool) => tool.interfaces).length, 21);
   assert.deepEqual(await peer.client.available(), catalog);
   const offered = catalog
     .flatMap((tool) => tool.interfaces)

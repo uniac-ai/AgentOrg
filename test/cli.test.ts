@@ -23,7 +23,8 @@ test("help lists only actor operations, and asking for it acts on nothing", asyn
       "message get",
       "message list",
       "work create",
-      "form create",
+      "work update",
+      "work answer",
       "claim",
       "release",
     ];
@@ -44,6 +45,8 @@ test("help lists only actor operations, and asking for it acts on nothing", asyn
       "actor list",
       "status set",
       "status get",
+      "form create",
+      "work review",
     ]) {
       assert.doesNotMatch(help.stdout, new RegExp(`^  ${removed}  `, "m"));
     }

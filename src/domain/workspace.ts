@@ -4,7 +4,7 @@ import type { ActorAuthority } from "@uniac/agentic-workspace/actors";
 import { WorkspaceError } from "@uniac/agentic-workspace/contracts";
 import type { WorkspaceStore } from "@uniac/agentic-workspace/persistence";
 import { Conflict, Forbidden, Invalid, NotFound } from "./errors.ts";
-import { FORMS, MESSAGES, WORK } from "./model/workspace.ts";
+import { MESSAGES, WORK } from "./model/workspace.ts";
 import type { ActorRow } from "./ports.ts";
 import type { Registry } from "./registry.ts";
 import { bindTool } from "./tools.ts";
@@ -25,6 +25,10 @@ export function workspace(registry: Registry, store: WorkspaceStore) {
     within(callerID, actorID, ancestorID) {
       if (registry.get(callerID)?.closed_at !== null) throw new Forbidden("the Actor is closed");
       return registry.within(actorID, ancestorID);
+    },
+    manager(callerID, actorID) {
+      if (registry.get(callerID)?.closed_at !== null) throw new Forbidden("the Actor is closed");
+      return registry.get(actorID)?.manager ?? null;
     },
   };
   /** Run an operation on the package clients bound to the admitted Actor, mapping its refusals. */
@@ -58,14 +62,7 @@ export function workspace(registry: Registry, store: WorkspaceStore) {
         work_list: (actor, request) => run(actor, (clients) => clients.work.list(request)),
         work_update: (actor, request) => run(actor, (clients) => clients.work.update(request)),
         work_submit: (actor, request) => run(actor, (clients) => clients.work.submit(request)),
-        work_review: (actor, request) => run(actor, (clients) => clients.work.review(request)),
-      }),
-      bindTool(FORMS, {
-        form_create: (actor, request) => run(actor, (clients) => clients.forms.create(request)),
-        form_get: (actor, request) => run(actor, (clients) => clients.forms.get(request)),
-        form_list: (actor, request) => run(actor, (clients) => clients.forms.list(request)),
-        form_respond: (actor, request) => run(actor, (clients) => clients.forms.respond(request)),
-        form_close: (actor, request) => run(actor, (clients) => clients.forms.close(request)),
+        work_answer: (actor, request) => run(actor, (clients) => clients.work.answer(request)),
       }),
     ],
   };

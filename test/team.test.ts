@@ -3,10 +3,11 @@
  * and the open asks under it; `actor_view.actor` names its manager and when it was closed.
  */
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { test } from "node:test";
 import type { Actor } from "../src/actor/index.ts";
 import { Team } from "../src/contract/index.ts";
-import { done, type Json, startCore } from "./harness.ts";
+import { type Core, done, type Json, refused, startCore } from "./harness.ts";
 
 async function organization() {
   const core = await startCore();
@@ -29,17 +30,60 @@ const create = (client: Actor, title: string, input: Json = {}) =>
   done(client.call("work_create", { title, ...input }));
 const update = (client: Actor, work: Json, input: Json) =>
   done(client.call("work_update", { ticketID: work.ticketID, ...input }));
-const ask = (client: Actor, title: string, input: Json = {}) =>
-  done(client.call("form_create", { title, fields, ...input }));
+const ask = (client: Actor, work: Json, title: string, input: Json = {}) =>
+  done(client.call("work_update", { ticketID: work.ticketID, ask: { title, fields, ...input } }));
 const close = (client: Actor, form: Json) =>
   done(
-    client.call("form_close", {
-      formID: form.formID,
-      expectedRevision: form.revision,
-      status: "cancelled",
-      resolution: "Withdrawn",
+    client.call("work_update", {
+      close: { askID: form.formID, status: "cancelled", resolution: "Withdrawn" },
     }),
   );
+/** An ask as 0.5.0 stored it, written raw: by any Actor, on any Work or on none. */
+function stored(core: Core, requesterID: string, title: string, input: Json = {}) {
+  const { workspace } = core.store;
+  const at = new Date().toISOString();
+  const formID = randomUUID();
+  const row = {
+    formID,
+    requesterID,
+    title,
+    links: [],
+    approval: false,
+    collect: false,
+    fields,
+    status: "open",
+    createdAt: at,
+    responses: {},
+    ...input,
+  };
+  workspace.transaction(() =>
+    workspace.forms.save(formID, row as never, {
+      actorID: requesterID,
+      at,
+      action: "created",
+      detail: row,
+    }),
+  );
+}
+/** Work as 0.5.0 stored it once its owner set it blocked, written raw. */
+function blocked(core: Core, work: Json) {
+  const { workspace } = core.store;
+  const {
+    revision,
+    cursor: _cursor,
+    updatedAt: _updatedAt,
+    ...row
+  }: Json = workspace.work.get(work.ticketID);
+  const detail = { status: "blocked" };
+  workspace.transaction(() =>
+    workspace.work.save(
+      work.ticketID,
+      { ...row, ...detail },
+      { actorID: row.ownerID, at: new Date().toISOString(), action: "updated", detail },
+      revision,
+    ),
+  );
+}
 /** Lets the next write's time follow the last one's: ties in time go to the earlier write. */
 const later = () => new Promise((resolve) => setTimeout(resolve, 2));
 const subject = (work: Json, state: string) => ({
@@ -57,7 +101,7 @@ test("a Work's state, and an Actor's from the Work on it only", async (t) => {
     [await state(worker.id), (await position(peer.client, worker.id)).headline.notStarted],
     ["idle", 1],
   );
-  const early = await ask(worker.client, "Before starting?", { workID: stream.ticketID });
+  const early = await ask(worker.client, stream, "Before starting?");
   const waiting = await position(peer.client, worker.id);
   assert.deepEqual(
     [waiting.state, waiting.headline.notStarted],
@@ -72,20 +116,27 @@ test("a Work's state, and an Actor's from the Work on it only", async (t) => {
   );
   await close(worker.client, early);
   await update(worker.client, stream, { status: "active" });
-  await ask(peer.client, "Not the owner's", { workID: stream.ticketID });
-  await ask(worker.client, "On no Work");
+  // Asks 0.5.0 stored: one by another Actor on the Work, and one on no Work.
+  stored(core, peer.id, "Not the owner's", { workID: stream.ticketID });
+  stored(core, worker.id, "On no Work");
   assert.equal(
     await state(worker.id),
     "active",
     "an ask by another Actor, or on no Work, never makes Work waiting",
   );
-  await update(worker.client, stream, { status: "blocked" });
+  assert.equal(
+    await refused(
+      worker.client.call("work_update", { ticketID: stream.ticketID, status: "blocked" }),
+    ),
+    "invalid",
+  );
+  blocked(core, stream);
   assert.equal(await state(worker.id), "active", "a stored blocked reads as active");
 
   const temp = await make("temp", lead.client);
   const handover = await create(lead.client, "Handover", { ownerID: temp.id });
   await update(temp.client, handover, { status: "active" });
-  await ask(temp.client, "Left open");
+  stored(core, temp.id, "Left open");
   await done(lead.client.call("actor_close", { actor: temp.id }));
   const closed = await position(root, temp.id);
   assert.ok(closed.closed_at);
@@ -126,7 +177,7 @@ test("the headline's subject: waiting, review, changes requested, active, then t
   assert.deepEqual([review.state, review.headline.subject], ["review", subject(redo, "review")]);
   assert.equal(review.headline.more, 2);
 
-  const question = await ask(worker.client, "Which one?", { workID: second.ticketID });
+  const question = await ask(worker.client, second, "Which one?");
   const waiting = await position(peer.client, worker.id);
   assert.deepEqual(
     [waiting.state, waiting.headline.subject],
@@ -136,12 +187,11 @@ test("the headline's subject: waiting, review, changes requested, active, then t
   await close(worker.client, question);
 
   await done(
-    lead.client.call("work_review", {
+    lead.client.call("work_answer", {
       ticketID: redo.ticketID,
-      expectedRevision: submitted.revision,
-      submissionID: submitted.submission.submissionID,
-      verdict: "changes_requested",
-      comment: "Again",
+      askID: submitted.submission.submissionID,
+      answers: { verdict: "changes_requested" },
+      note: "Again",
     }),
   );
   await later();
@@ -172,8 +222,8 @@ test("the clause, first that applies: the owner's oldest ask, review, what it wa
     (await position(by, actorID)).headline.clause;
   const work = await create(worker.client, "Work");
   await update(worker.client, work, { status: "active" });
-  const older = await ask(worker.client, "Which region?", { workID: work.ticketID });
-  await ask(worker.client, "Delete the bucket?", { workID: work.ticketID, approval: true });
+  const older = await ask(worker.client, work, "Which region?");
+  await ask(worker.client, work, "Delete the bucket?", { approval: true });
   assert.deepEqual(await clause(), { kind: "ask", text: "Which region?" }, "the oldest ask");
   await close(worker.client, older);
   assert.deepEqual(await clause(), { kind: "approval", text: "Delete the bucket?" });
@@ -181,8 +231,9 @@ test("the clause, first that applies: the owner's oldest ask, review, what it wa
   const reviewer = await make("reviewer", lead.client);
   const leftover = await create(lead.client, "Leftover", { ownerID: reviewer.id });
   await update(reviewer.client, leftover, { status: "active" });
-  await ask(reviewer.client, "Ship it?", { workID: leftover.ticketID, approval: true });
   await done(reviewer.client.call("work_submit", { ticketID: leftover.ticketID, result: "Done" }));
+  // Submitting cancels the Work's open asks, so one left open is a 0.5.0 row.
+  stored(core, reviewer.id, "Ship it?", { workID: leftover.ticketID, approval: true });
   const kept = await position(peer.client, reviewer.id);
   assert.deepEqual(
     [kept.state, kept.headline.clause],
@@ -294,13 +345,13 @@ test("ask counts, paging past one page, recency, and the schema", async (t) => {
   for (let n = 0; n < 101; n += 1) {
     const other = await create(peer.client, `Other ${n}`);
     await update(peer.client, other, { status: "active" });
-    await ask(peer.client, `Question ${n}`);
+    stored(core, peer.id, `Question ${n}`);
   }
   const stream = await create(worker.client, "Stream");
   await update(worker.client, stream, { status: "active" });
-  await ask(worker.client, "Mine", { workID: stream.ticketID });
+  await ask(worker.client, stream, "Mine");
   const temp = await make("temp", worker.client);
-  await ask(temp.client, "Left open");
+  stored(core, temp.id, "Left open");
   await done(worker.client.call("actor_close", { actor: temp.id }));
 
   const team = await done(lead.client.call("team", { actor: core.rootId, depth: 20 }));
@@ -338,7 +389,7 @@ test("a few positions read their own Work, and give what a read of the whole tre
     const work = await create(member.client, `Work ${n}`);
     if (n % 3 !== 0)
       await update(member.client, work, { status: "active", progress: `Step ${n}.` });
-    if (n % 4 === 1) await ask(member.client, `Question ${n}`, { workID: work.ticketID });
+    if (n % 4 === 1) await ask(member.client, work, `Question ${n}`);
     if (n % 6 === 3) await update(member.client, work, { waitsOn: { actorID: peer.id } });
     if (n % 5 === 2) {
       const finished = await create(member.client, `Done ${n}`);

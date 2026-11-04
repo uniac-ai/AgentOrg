@@ -187,14 +187,13 @@ test("schema7 retirement preserves records, fails pending calls once and exposes
           "hub:team",
           "hub:messages",
           "hub:work",
-          "hub:forms",
           "hub:claims",
           "hub:attention",
           "hub:activity",
           "hub:system",
         ],
       );
-      assert.equal(org.available(actor).flatMap((tool) => tool.interfaces).length, 26);
+      assert.equal(org.available(actor).flatMap((tool) => tool.interfaces).length, 21);
       for (const alias of [
         "worker.control",
         "manager.control",
