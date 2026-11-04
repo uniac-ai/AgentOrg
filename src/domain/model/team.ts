@@ -2,7 +2,7 @@
 import { Form, Status, Work } from "@uniac/agentic-workspace/contracts";
 import { z } from "zod";
 import { toolDefinition } from "./json-schema.ts";
-import { Actor, Id, Timestamp } from "./records.ts";
+import { Actor, Count, Id, Timestamp } from "./records.ts";
 
 export const TeamRequest = z
   .strictObject({
@@ -14,10 +14,10 @@ export const TeamRequest = z
 export const PositionState = z
   .enum(["waiting", "review", "active", "idle"])
   .describe(
-    "The most urgent among the Work on it: waiting (its open ask on it), then review (submitted), then active; idle with none. A stored blocked reads as active.",
+    "The most urgent among the Work on it: waiting (its owner's open ask on Work not submitted), then review (submitted), then active; idle with none. A stored blocked reads as active.",
   );
 
-const Count = z.number().int().min(0);
+const LastActiveAt = Timestamp.nullable().describe("The time of its last recorded write.");
 
 export const Headline = z
   .strictObject({
@@ -34,10 +34,10 @@ export const Headline = z
       })
       .nullable()
       .describe(
-        'The first that applies to the subject: its owner\'s oldest open ask on it, by title; "with <requester> for review"; what it waits on; its current step, else the first sentence of its progress. The caller is "you".',
+        'The first that applies to the subject: its owner\'s oldest open ask on it, by title, as ask or approval; "with <requester> for review"; what it waits on; its current step, else the first sentence of its progress. The caller is "you".',
       ),
     more: Count.describe("Its other live Work."),
-    notStarted: Count.describe("Work on it not started."),
+    notStarted: Count.describe("Open Work on it with no open ask by its owner."),
     finished: z
       .strictObject({ ticketID: Id, title: z.string(), at: Timestamp })
       .nullable()
@@ -54,7 +54,7 @@ export const Position = Actor.extend({
   headline: Headline,
   asks: Count.describe("Its own open asks."),
   branchAsks: Count.describe("Open asks of every Actor below it, closed ones included."),
-  lastActiveAt: Timestamp.nullable().describe("The time of its last recorded write."),
+  lastActiveAt: LastActiveAt,
 }).meta({
   id: "Position",
   description:
@@ -88,10 +88,10 @@ export const ActorView = z
       name: z.string(),
       path: z.string(),
       purpose: z.string(),
-      managerID: Id.nullable().describe("The managing actor; null for the root."),
+      managerID: Actor.shape.manager,
       online: z.boolean(),
-      lastActiveAt: Timestamp.nullable().describe("The time of its last recorded write."),
-      closed_at: Timestamp.nullable(),
+      lastActiveAt: LastActiveAt,
+      closed_at: Actor.shape.closed_at,
     }),
     state: ActorState,
     status: Status.nullable().describe("Null until it first sets one."),
@@ -119,7 +119,7 @@ export const TEAM = toolDefinition("team", {
     request: TeamRequest,
     response: Team,
     description:
-      "Read a position and its open reports: identity, purpose, hierarchy, timestamps, actual Hub connection presence, and from the Work on each its state, headline, open asks and last write. Anyone may explore any position. Default: you and your direct reports.",
+      "Read a position and its open reports: identity, purpose, hierarchy, timestamps, actual Hub connection presence, its last write, its own and its branch's open asks, and from the Work on it its state and headline. Anyone may explore any position. Default: you and your direct reports.",
   },
   actor_view: {
     writes: false,

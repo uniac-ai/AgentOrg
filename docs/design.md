@@ -153,27 +153,51 @@ position. With nothing to return it waits up to `wait` seconds (at most 600): ev
 waiting reads, which read again. It is a read, not a subscription; callers set a request timeout above
 `wait`.
 
-`team {actor?, depth?}` reads a position and its open reports to `depth`, in pre-order. Each
-position carries, from the Work on it only, its `state`: the most urgent of `waiting` (an open ask
-by its owner on it), `review` (submitted) and `active` (a stored `blocked` reads as active), else
-`idle`. Its `headline` is its subject, the most urgent such Work, ranking changes requested above
-other active Work, with ties going to the latest update. Then comes the first clause that applies:
-its owner's open ask, "with <requester> for review", what it waits on, its current step, else the
-first sentence of its progress. The caller is "you". `more` counts its other such Work,
-`notStarted` its Work not started, and `finished` names the last Work it finished. `asks` counts
-its own open asks, and `branchAsks` the open asks of every Actor below it, closed ones included.
-`lastActiveAt` is its last recorded write. One pass over the Work owned under the start and one
-over the open asks asked under it feed every position.
+`team {actor?, depth?}` reads a position and its open reports to `depth`, in pre-order.
+- **`state`** comes from the Work on the position only. It is the most urgent of:
+  - `waiting`: an open ask by its owner on Work not submitted;
+  - `review`: submitted, even with such an ask;
+  - `active`: a stored `blocked` reads as active.
+
+  With none of these, it is `idle`. It can differ from `actor_view`'s `state`, which still counts
+  `blocked` and the Work an Actor requested of its reports.
+- **`headline`:**
+  - **`subject`:** the most urgent such Work. Changes requested rank above other active Work, and
+    ties go to the latest update.
+  - **`clause`:** the first that applies:
+    - its owner's oldest open ask (`ask` or `approval`);
+    - "with <requester> for review";
+    - what it waits on;
+    - its current step, else the first sentence of its progress.
+
+    The caller is "you".
+  - **`more`:** its other such Work.
+  - **`notStarted`:** its open Work with no open ask by its owner.
+  - **`finished`:** the last Work it finished.
+- **`asks`:** its own open asks. **`branchAsks`:** the open asks of every Actor below it, closed
+  ones included.
+- **`lastActiveAt`:** its last recorded write.
+
+One pass over live Work and one over open asks feed every position, and the most recent page of
+finished Work names each position's last. A position that page misses is read on its own, and so
+is Work waited on that the pass doesn't hold. For a single position, the Work read is its own.
 
 `actor_view {actorID?, completed?}` joins an Actor's report at read time, from the registry,
-connections, audit and the Workspace records it can read: the Actor with its manager, closure,
-presence and last write;
-its status; its workstreams (Work it owns that is active, blocked, submitted or has changes requested,
-and such Work it requested of its direct reports), each with its open asks linked to it; its other open
-asks; its reports' open asks (`needs`); submitted Work it reviews; open Work assigned to it and its own
-follow-ups; its latest completed Work; its direct reports; and a name map. Its `state` is derived:
-the most urgent of `blocked`, `waiting` (active Work with an open ask), `review` (submitted) and
-`active` among its workstreams, else `idle`. Each list holds at most 100 records.
+connections, audit and the Workspace records it can read:
+- the Actor, with its manager, closure, presence and last write;
+- its status;
+- its workstreams: Work it owns that is active, blocked, submitted or has changes requested, and
+  such Work it requested of its direct reports, each with its open asks linked to it;
+- its other open asks;
+- its reports' open asks (`needs`);
+- submitted Work it reviews;
+- open Work assigned to it, and its own follow-ups;
+- its latest completed Work;
+- its direct reports;
+- a name map.
+
+Its `state` is the most urgent of `blocked`, `waiting` (active Work with an open ask), `review`
+(submitted) and `active` among its workstreams, else `idle`. Each list holds at most 100 records.
 
 ### System observations and connection controls
 

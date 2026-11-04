@@ -1,14 +1,13 @@
 /** Shared operational observations and exact transient socket controls. */
 import { z } from "zod";
 import { toolDefinition } from "./json-schema.ts";
-import { Id, Timestamp } from "./records.ts";
+import { Count, Id, Timestamp } from "./records.ts";
 
 export const InstanceId = z.uuid();
 export const privateOperation = (name: string) =>
   name === "message_send" || name === "message_get" || name === "message_list";
 const ProviderId = z.string().min(1);
 const Position = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
-const Count = z.number().int().min(0);
 export const ConnectionPrincipal = z.union([
   z.strictObject({ actorId: Id }),
   z.strictObject({ providerId: ProviderId }),
