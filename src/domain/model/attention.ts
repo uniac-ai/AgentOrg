@@ -25,12 +25,16 @@ export const AttentionRequest = z
 export const AttentionItem = z
   .strictObject({
     kind: z
-      .enum(["answer", "ask", "assigned", "review_due", "reviewed", "message"])
+      .enum(["assigned", "updated", "reviewed", "answer", "raised", "message", "ask", "review_due"])
       .describe(
-        "answer: to your ask. ask: a new one from a direct report. assigned: Work you now own. review_due: a submission for you to review. reviewed: a review of your submission. message: one to you.",
+        "On your records: assigned (Work given to you), updated (Work you own, changed or cancelled by its requester), reviewed (your submission answered), answer (your ask answered, one per responder), raised (your ask passed one manager up), message (one to you). Routed to you: ask (from a report, or raised to you, while it is open and still routed to you), review_due (a submission of Work you requested, or that a closed requester you stand in for requested, while it waits).",
       ),
-    recordID: z.string().describe("The formID, ticketID or messageID."),
-    from: z.strictObject({ actorID: Id, name: z.string() }).describe("Who did it."),
+    recordID: z
+      .string()
+      .describe(
+        "The ticketID for assigned, updated, reviewed and review_due; the askID for answer, raised and ask; the messageID for message.",
+      ),
+    from: z.strictObject({ actorID: Id, name: z.string() }).describe("Who wrote it."),
     title: z.string().describe("The ask's or the Work's title, or the message's first line."),
     at: Timestamp,
   })
@@ -43,11 +47,15 @@ export const Attention = z
       .describe("What concerns you and was done by someone else, oldest first."),
     changed: z
       .strictObject({
-        actorIDs: z.array(Id).describe("Empty: no write names an Actor here since Status left."),
-        workIDs: z.array(z.string()),
-        formIDs: z.array(z.string()),
+        actorIDs: z
+          .array(Id)
+          .describe(
+            "The parties of each write: a Work's owner, requester and previous owner, an ask's asker, a message's two Actors, and an Actor created or closed with its manager.",
+          ),
+        workIDs: z.array(z.string()).describe("Work written, and the Work each written ask is on."),
+        conversationIDs: z.array(z.string()).describe("Conversations a message was sent in."),
       })
-      .describe("Work and asks anyone changed, so a view can stay current."),
+      .describe("What anyone's writes touched, so a view can stay current."),
     next: z.string().describe("Pass it as since to continue after this read."),
   })
   .meta({ id: "Attention" });
@@ -58,7 +66,7 @@ export const ATTENTION = toolDefinition("attention", {
     level: "report",
     request: AttentionRequest,
     response: Attention,
-    description: `Read what concerns you since your last read: answers to your asks, new asks from your direct reports, Work assigned to you, reviews due and done, and Messages to you. Your own writes are not items. changed names the Work and asks anyone changed.
+    description: `Read what concerns you since your last read. On your records: Work given to you or changed by its requester, an answer to your submission, an answer to your ask or its raise, and a message to you. Routed to you: an ask from a report or raised to you, and a submission of Work you requested. Your own writes are not items. changed names the Actors, Work and conversations anyone's writes touched.
 
 Returns at once when there is something; otherwise it waits up to wait seconds. Pass the returned next as since to continue, and give the call a timeout longer than wait.`,
   },

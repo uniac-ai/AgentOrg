@@ -309,7 +309,7 @@ test("approvals are answered only up the manager chain, and only the asker close
   assert.equal(approval.status, "resolved");
 });
 
-test("subtree queries retain audit boundaries, and managers and unrelated observers read Messages openly", async (t) => {
+test("subtree queries keep their boundaries, and managers and unrelated observers read Messages and activity openly", async (t) => {
   const { core, root, lead, worker, requester, observer } = await organization();
   t.after(() => core.close());
   const work = await done(
@@ -343,7 +343,24 @@ test("subtree queries retain audit boundaries, and managers and unrelated observ
         await done(client.call("message_list", { counterpartyID, before: "latest" })),
         empty,
       );
-    if (client !== root) assert.equal(await refused(client.call("activity")), "forbidden");
+    const activity = await done(client.call("activity"));
+    assert.equal(
+      activity.entries.some(
+        (entry: { operation: string; target: string }) =>
+          entry.operation === "message_send" && entry.target === sent.messageID,
+      ),
+      true,
+    );
+    for (const entry of activity.entries)
+      assert.deepEqual(Object.keys(entry).sort(), [
+        "actor",
+        "at",
+        "id",
+        "operation",
+        "outcome",
+        "target",
+      ]);
+    assert.equal(JSON.stringify(activity).includes(messageText), false);
     assert.equal(
       (await done(client.call("team", { depth: 0 }))).positions[0].id,
       client === root ? core.rootId : client === lead.client ? lead.id : observer.id,
@@ -355,22 +372,4 @@ test("subtree queries retain audit boundaries, and managers and unrelated observ
       "invalid",
     );
   }
-  const activity = await done(root.call("activity"));
-  assert.equal(
-    activity.entries.some(
-      (entry: { operation: string; target: string }) =>
-        entry.operation === "message_send" && entry.target === sent.messageID,
-    ),
-    true,
-  );
-  for (const entry of activity.entries)
-    assert.deepEqual(Object.keys(entry).sort(), [
-      "actor",
-      "at",
-      "id",
-      "operation",
-      "outcome",
-      "target",
-    ]);
-  assert.equal(JSON.stringify(activity).includes(messageText), false);
 });
