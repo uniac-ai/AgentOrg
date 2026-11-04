@@ -61,7 +61,7 @@ async function attention(client: Actor, since: string | undefined): Promise<Atte
 /** The records an item's frame quotes, read as the session's Actor. */
 async function delivery(client: Actor, self: string, item: Item): Promise<Delivery> {
   if (item.kind === "answer") {
-    // An ask on Work comes with its Work; a 0.5 ask with no Work comes alone.
+    // An ask on Work comes with its Work; an older ask with no Work comes alone.
     const found = await call<Work | Form>(client, "work_get", { askID: item.recordID });
     const work = "formID" in found ? undefined : found;
     const ask =

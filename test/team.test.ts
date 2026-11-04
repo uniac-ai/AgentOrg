@@ -39,7 +39,7 @@ const close = (client: Actor, form: Json) =>
       close: { askID: form.formID, status: "cancelled", resolution: "Withdrawn" },
     }),
   );
-/** An ask as 0.5.0 stored it, written raw: by any Actor, on any Work or on none. */
+/** An older ask, written raw: by any Actor, on any Work or on none. */
 function stored(core: Core, requesterID: string, title: string, input: Json = {}) {
   const { workspace } = core.store;
   const at = new Date().toISOString();
@@ -67,7 +67,7 @@ function stored(core: Core, requesterID: string, title: string, input: Json = {}
   );
   return formID;
 }
-/** Work as 0.5.0 stored it once its owner set it blocked, written raw. */
+/** Work stored blocked before blocked was refused, written raw. */
 function blocked(core: Core, work: Json) {
   const { workspace } = core.store;
   const {
@@ -121,7 +121,7 @@ test("a Work's state, and an Actor's from the Work on it only", async (t) => {
   );
   await close(worker.client, early);
   await update(worker.client, stream, { status: "active" });
-  // Asks 0.5.0 stored: one by another Actor on the Work, and one on no Work.
+  // Older asks: one by another Actor on the Work, and one on no Work.
   stored(core, peer.id, "Not the owner's", { workID: stream.ticketID });
   stored(core, worker.id, "On no Work");
   assert.equal(
@@ -237,7 +237,7 @@ test("the clause, first that applies: the owner's oldest ask, review, what it wa
   const leftover = await create(lead.client, "Leftover", { ownerID: reviewer.id });
   await update(reviewer.client, leftover, { status: "active" });
   await done(reviewer.client.call("work_submit", { ticketID: leftover.ticketID, result: "Done" }));
-  // Submitting cancels the Work's open asks, so one left open is a 0.5.0 row.
+  // Submitting cancels the Work's open asks, so one left open is an older row.
   stored(core, reviewer.id, "Ship it?", { workID: leftover.ticketID, approval: true });
   const kept = await position(peer.client, reviewer.id);
   assert.deepEqual(

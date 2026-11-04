@@ -61,7 +61,7 @@ its skill mechanism the package's `skills/agentorg` folder.
 ## Human client
 
 The browser application and its local HTTP service are distributed by
-[OrgActor-Human](https://github.com/uniac-ai/OrgActor-Human). Follow that repository's setup
+OrgActor-Human. Follow that repository's setup
 instructions to connect it to this Hub using an existing Actor's identity and credential.
 
 ## External execution

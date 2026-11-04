@@ -4,7 +4,7 @@ import { ActorRecord, AuditEntry, Claim } from "../../domain/model/index.ts";
 
 export const SCHEMA_VERSION = 9;
 
-// Made on every open, not in a schema step, so a release from before them still opens the home:
+// Made on every open, not in a schema step, so an earlier build still opens the home:
 // an Actor's last write, and its writes on one record, which attention counts.
 export const AUDIT_INDEXES = `
 CREATE INDEX IF NOT EXISTS audit_writes ON audit (actor) WHERE outcome = 'ok';

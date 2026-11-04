@@ -162,7 +162,7 @@ test("a home without the audit's index of writes gains it on open, with no schem
   );
 });
 
-test("a 0.5.0 Workspace file is served on open: an ask with no Work alone, and blocked Work as active", async (t) => {
+test("a version 3 Workspace store is served on open: an ask with no Work alone, and blocked Work as active", async (t) => {
   const directory = mkdtempSync(join(tmpdir(), "agentorg-workspace-"));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const path = join(directory, "core.db");
@@ -171,7 +171,7 @@ test("a 0.5.0 Workspace file is served on open: an ask with no Work alone, and b
   const { root } = await registry.createRoot();
   const { actor: worker } = await registry.create(root.id, "worker", "Work");
   first.close();
-  // The Workspace file as 0.5.0 wrote it, written raw: user_version 3, with a Status table.
+  // A version 3 Workspace store, written raw: user_version 3, with a Status table.
   const file = join(directory, "core.workspace.db");
   for (const suffix of ["", "-wal", "-shm"]) rmSync(`${file}${suffix}`, { force: true });
   const old = new DatabaseSync(file);

@@ -30,7 +30,7 @@ export function registry(actors: Store["actors"], now: () => string) {
   const reports = (manager: string) => actors.reports(manager);
   const open = () => actors.open();
 
-  /** The Actor while it is open, else its nearest open manager, who takes its part (Q10). */
+  /** The Actor while it is open, else its nearest open manager, who takes its part. */
   function standIn(actorID: string): string | undefined {
     for (let at = get(actorID); at; at = at.manager === null ? undefined : get(at.manager))
       if (at.closed_at === null) return at.id;

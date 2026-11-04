@@ -27,7 +27,7 @@ The shared domain model supplies their types.
 requests and responses. `BUILTINS` is the existing derived schema inventory, while feature
 modules continue to own runtime operations. Storage records and bound operations stay internal.
 
-The [Human client](https://github.com/uniac-ai/OrgActor-Human) owns its browser UI, local HTTP API,
+The Human client (OrgActor-Human) owns its browser UI, local HTTP API,
 configuration, launcher and service in a separate repository. It depends on the public Actor library
 and Hub contract; browser users depend on its HTTP interface. The Hub has no dependency on that
 application or its build, and organizational authority stays in the Hub's domain.
@@ -156,25 +156,25 @@ that closes the Actor itself gets none, as its own write.
 
 Each audit entry is matched to the history event it wrote: the writer's events on the record,
 counted back from the newest by its later writes on that record, so two writes by one Actor in one
-read are told apart. Entries that 0.5 audited as `form_create`, `form_close`, `form_respond` and
-`work_review` read as the `work_update` and `work_answer` writes that replace them. Each item names
-its record, who wrote it, a title and when. `changed` names what anyone's writes touched, the
-caller's included, so a view stays current: `actorIDs`, the parties of each write (a Work's owner,
-requester and previous owner, an ask's asker, a Message's two Actors, and an Actor created or closed
-with its manager); `workIDs`, the Work written and the Work each written ask is on; and
-`conversationIDs`, the conversations a Message was sent in. `next` is the audit position read
-through; passing it back as `since` continues without gaps. Without `since` the read returns at once
-with the current position. With nothing to return it waits up to `wait` seconds (at most 600): every
-audited write wakes waiting reads, which read again. It is a read, not a subscription; callers set a
-request timeout above `wait`.
+read are told apart. Entries that earlier builds audited as `form_create`, `form_close`,
+`form_respond` and `work_review` read as the `work_update` and `work_answer` writes that replace
+them. Each item names its record, who wrote it, a title and when. `changed` names what anyone's
+writes touched, the caller's included, so a view stays current: `actorIDs`, the parties of each
+write (a Work's owner, requester and previous owner, an ask's asker, a Message's two Actors, and an
+Actor created or closed with its manager); `workIDs`, the Work written and the Work each written ask
+is on; and `conversationIDs`, the conversations a Message was sent in. `next` is the audit position
+read through; passing it back as `since` continues without gaps. Without `since` the read returns at
+once with the current position. With nothing to return it waits up to `wait` seconds (at most 600):
+every audited write wakes waiting reads, which read again. It is a read, not a subscription; callers
+set a request timeout above `wait`.
 
 `team {actor?, depth?}` reads a position and its open reports to `depth`, in pre-order;
 `team {actor, depth: 0}` reads any one Actor, closed ones included.
 - **`state`** comes from the Work on the position only. It is the most urgent of:
   - `waiting`: its owner has an open ask on live Work that is not submitted, started or not;
   - `review`: submitted, even with such an ask;
-  - `active`: started Work (`active` or `changes_requested`) with no such ask; a stored 0.5
-    `blocked` reads as active.
+  - `active`: started Work (`active` or `changes_requested`) with no such ask; a `blocked`
+    stored before it was refused reads as active.
 
   With none of these, it is `idle`. Cancelled Work counts nowhere.
 - **`headline`:**
@@ -314,12 +314,12 @@ and `older` are opaque positions for the same read and filter, `next` is null wh
 matched, and `actors` names the Actors the page mentions. Work lists go in update order, or newest
 first with `order: "recent"`, and `updatedSince` keeps records changed at or after a time; each item
 carries its open asks. `work_get` takes a `ticketID`, or an `askID` for the Work the ask is on, and
-returns the Work with all its asks; a 0.5 ask with no Work comes alone. `message_list` names exactly
-one selector: `between` (two Actors) or `counterpartyID` (the caller and one Actor) reads one
-conversation, and `of` lists an Actor's conversations, newest first, each as its latest message. A
-Message carries its `conversationID` and its `seq`, its place in one order across every
-conversation; `message_list` accepts a `seq` as `after`, so a reader resumes from the last message
-it handled. The Workspace contracts document every filter.
+returns the Work with all its asks; an older ask with no Work comes alone.
+`message_list` names exactly one selector: `between` (two Actors) or `counterpartyID` (the caller
+and one Actor) reads one conversation, and `of` lists an Actor's conversations, newest first, each
+as its latest message. A Message carries its `conversationID` and its `seq`, its place in one order
+across every conversation; `message_list` accepts a `seq` as `after`, so a reader resumes from the
+last message it handled. The Workspace contracts document every filter.
 
 `requesterWithin` and `ownerWithin` select the named canonical Actor and all descendants through
 retained `manager` edges, including closed members and anchors without Team's depth limit. Unknown

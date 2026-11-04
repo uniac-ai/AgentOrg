@@ -20,7 +20,7 @@ The package `@agentorg/cli` distributes three independent entry points:
 | `agentorg-mcp` | Present an actor's operations over stdio; configure project integrations and hooks. |
 
 The public Node Actor library (`@agentorg/cli/actor`, in `src/actor/`) lets programs connect as an
-Actor, list Hub Tools and call their interfaces. The [Human client](https://github.com/uniac-ai/OrgActor-Human)
+Actor, list Hub Tools and call their interfaces. The Human client (OrgActor-Human)
 owns the browser application and its local HTTP service in a separate repository.
 The `agentorg` skill (`skills/agentorg/`) describes how a session reports its work as live records
 and works in a position; an organization can add its conventions beside it.
