@@ -4,7 +4,7 @@ import type { ActorAuthority } from "@uniac/agentic-workspace/actors";
 import { WorkspaceError } from "@uniac/agentic-workspace/contracts";
 import type { WorkspaceStore } from "@uniac/agentic-workspace/persistence";
 import { Conflict, Forbidden, Invalid, NotFound } from "./errors.ts";
-import { DIRECTORY, FORMS, MESSAGES, STATUS, WORK } from "./model/workspace.ts";
+import { FORMS, MESSAGES, WORK } from "./model/workspace.ts";
 import type { ActorRow } from "./ports.ts";
 import type { Registry } from "./registry.ts";
 import { bindTool } from "./tools.ts";
@@ -21,11 +21,6 @@ export function workspace(registry: Registry, store: WorkspaceStore) {
       if (registry.get(callerID)?.closed_at !== null) return undefined;
       const actor = registry.get(actorID);
       return actor === undefined ? undefined : profile(actor);
-    },
-    list(callerID, query) {
-      if (registry.get(callerID)?.closed_at !== null) throw new Forbidden("the Actor is closed");
-      const page = registry.directory(query.after, query.limit);
-      return { ...page, items: page.items.map(profile) };
     },
     within(callerID, actorID, ancestorID) {
       if (registry.get(callerID)?.closed_at !== null) throw new Forbidden("the Actor is closed");
@@ -52,10 +47,6 @@ export function workspace(registry: Registry, store: WorkspaceStore) {
   return {
     run,
     tools: [
-      bindTool(DIRECTORY, {
-        actor_get: (actor, request) => run(actor, (clients) => clients.actors.get(request)),
-        actor_list: (actor, request) => run(actor, (clients) => clients.actors.list(request)),
-      }),
       bindTool(MESSAGES, {
         message_send: (actor, request) => run(actor, (clients) => clients.messages.send(request)),
         message_get: (actor, request) => run(actor, (clients) => clients.messages.get(request)),
@@ -75,10 +66,6 @@ export function workspace(registry: Registry, store: WorkspaceStore) {
         form_list: (actor, request) => run(actor, (clients) => clients.forms.list(request)),
         form_respond: (actor, request) => run(actor, (clients) => clients.forms.respond(request)),
         form_close: (actor, request) => run(actor, (clients) => clients.forms.close(request)),
-      }),
-      bindTool(STATUS, {
-        status_set: (actor, request) => run(actor, (clients) => clients.status.set(request)),
-        status_get: (actor, request) => run(actor, (clients) => clients.status.get(request)),
       }),
     ],
   };

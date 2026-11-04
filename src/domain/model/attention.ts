@@ -43,11 +43,11 @@ export const Attention = z
       .describe("What concerns you and was done by someone else, oldest first."),
     changed: z
       .strictObject({
-        actorIDs: z.array(Id).describe("Actors whose status changed."),
+        actorIDs: z.array(Id).describe("Empty: no write names an Actor here since Status left."),
         workIDs: z.array(z.string()),
         formIDs: z.array(z.string()),
       })
-      .describe("Status, Work and asks anyone changed, so a view can stay current."),
+      .describe("Work and asks anyone changed, so a view can stay current."),
     next: z.string().describe("Pass it as since to continue after this read."),
   })
   .meta({ id: "Attention" });
@@ -58,7 +58,7 @@ export const ATTENTION = toolDefinition("attention", {
     level: "report",
     request: AttentionRequest,
     response: Attention,
-    description: `Read what concerns you since your last read: answers to your asks, new asks from your direct reports, Work assigned to you, reviews due and done, and Messages to you. Your own writes are not items. changed names the status, Work and asks anyone changed.
+    description: `Read what concerns you since your last read: answers to your asks, new asks from your direct reports, Work assigned to you, reviews due and done, and Messages to you. Your own writes are not items. changed names the Work and asks anyone changed.
 
 Returns at once when there is something; otherwise it waits up to wait seconds. Pass the returned next as since to continue, and give the call a timeout longer than wait.`,
   },

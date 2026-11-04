@@ -1,6 +1,7 @@
 /**
  * Organization views through ordinary admitted Actor SDK calls: deep and closed subtree filters
- * and approval asks both use the Hub registry's `within`, and grant no write role or Message access.
+ * and approval asks both use the Hub registry's `within`, and grant no write role; Messages are open
+ * to every Actor.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -86,8 +87,8 @@ test("any active Actor reads deep and closed subtree Work/ask histories through 
   assert.deepEqual(Object.keys(approval.responses), [lead.id]);
   for (const client of [root, observer.client]) {
     const catalog = await client.available();
-    assert.equal(catalog.length, 11);
-    assert.equal(catalog.flatMap((tool) => tool.interfaces).length, 30);
+    assert.equal(catalog.length, 9);
+    assert.equal(catalog.flatMap((tool) => tool.interfaces).length, 26);
     const interfaces = catalog.flatMap((tool) => tool.interfaces);
     for (const [name, filters, removed] of [
       ["work_list", ["ownerWithin", "requesterWithin"], []],
@@ -371,27 +372,35 @@ test("ask subtree and exact predicates intersect before sparse pages; approvals 
     assert.equal(await refused(root.call("form_list", removed)), "invalid");
 });
 
-test("subtree queries retain private Message and audit boundaries for managers and unrelated observers", async (t) => {
+test("subtree queries retain audit boundaries, and managers and unrelated observers read Messages openly", async (t) => {
   const { core, root, lead, worker, requester, observer } = await organization();
   t.after(() => core.close());
   const work = await done(
     requester.client.call("work_create", { ownerID: worker.id, title: "Public goal" }),
   );
-  const privateText = "organization-view-private-message-sentinel";
+  const messageText = "organization-view-private-message-sentinel";
   const sent = await done(
-    worker.client.call("message_send", { recipientID: requester.id, text: privateText }),
+    worker.client.call("message_send", { recipientID: requester.id, text: messageText }),
   );
   const empty = { items: [], next: null, older: null, actors: {} };
+  const conversation = {
+    items: [sent],
+    next: null,
+    older: null,
+    actors: { [worker.id]: { name: "worker" }, [requester.id]: { name: "requester" } },
+  };
   for (const client of [root, lead.client, observer.client]) {
     assert.deepEqual((await done(client.call("work_list", { ownerWithin: lead.id }))).items, [
       work,
     ]);
-    assert.equal(
-      await refused(client.call("message_get", { messageID: sent.messageID })),
-      "not_found",
+    assert.deepEqual(await done(client.call("message_get", { messageID: sent.messageID })), sent);
+    assert.deepEqual(await done(client.call("message_list", { of: worker.id })), conversation);
+    assert.deepEqual(
+      await done(
+        client.call("message_list", { between: [worker.id, requester.id], before: "latest" }),
+      ),
+      conversation,
     );
-    assert.deepEqual(await done(client.call("message_list")), empty);
-    assert.deepEqual(await done(client.call("message_list", { before: "latest" })), empty);
     for (const counterpartyID of [worker.id, requester.id])
       assert.deepEqual(
         await done(client.call("message_list", { counterpartyID, before: "latest" })),
@@ -399,10 +408,15 @@ test("subtree queries retain private Message and audit boundaries for managers a
       );
     if (client !== root) assert.equal(await refused(client.call("activity")), "forbidden");
     assert.equal(
-      (await done(client.call("actor_get"))).actorID,
+      (await done(client.call("team", { depth: 0 }))).positions[0].id,
       client === root ? core.rootId : client === lead.client ? lead.id : observer.id,
     );
-    assert.equal(await refused(client.call("message_list", { ownerWithin: lead.id })), "invalid");
+    assert.equal(
+      await refused(
+        client.call("message_list", { counterpartyID: worker.id, ownerWithin: lead.id }),
+      ),
+      "invalid",
+    );
   }
   const activity = await done(root.call("activity"));
   assert.equal(
@@ -421,5 +435,5 @@ test("subtree queries retain private Message and audit boundaries for managers a
       "outcome",
       "target",
     ]);
-  assert.equal(JSON.stringify(activity).includes(privateText), false);
+  assert.equal(JSON.stringify(activity).includes(messageText), false);
 });

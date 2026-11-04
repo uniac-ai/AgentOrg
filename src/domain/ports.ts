@@ -49,8 +49,6 @@ export interface Store {
     reports(manager: string): ActorRow[];
     /** Every open actor, oldest first, so managers come before their reports. */
     open(): ActorRow[];
-    /** Active directory rows in stable insertion order, with the canonical high-water mark. */
-    directory(after: number, limit: number): { items: ActorRow[]; after: number; head: number };
   };
   claims: {
     get(resource: string): ClaimRow | undefined;

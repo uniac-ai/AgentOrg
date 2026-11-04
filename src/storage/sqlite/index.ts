@@ -3,7 +3,6 @@
 import { chmodSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { openSqlite, type WorkspaceStore } from "@uniac/agentic-workspace/persistence";
-import { ActorRecord } from "../../domain/model/records.ts";
 import type { Store } from "../../domain/ports.ts";
 import { Database } from "./database.ts";
 import { importLegacyMessages, writeImportBaseline } from "./workspace-import.ts";
@@ -50,19 +49,6 @@ export class SqliteStore implements Store {
     reports: (manager) =>
       this.database.select("actors", "manager = ? AND closed_at IS NULL", [manager]),
     open: () => this.database.select("actors", "closed_at IS NULL"),
-    directory: (after, limit) => {
-      const rows = this.database.all(
-        "SELECT rowid AS ordinal, * FROM actors WHERE closed_at IS NULL AND rowid > ? ORDER BY rowid LIMIT ?",
-        [after, limit],
-      );
-      return {
-        items: rows.map(({ ordinal: _, ...actor }) => ActorRecord.parse(actor)),
-        after: Number(rows.at(-1)?.ordinal ?? after),
-        head: Number(
-          this.database.all("SELECT coalesce(max(rowid),0) AS head FROM actors")[0]?.head ?? 0,
-        ),
-      };
-    },
   };
   readonly claims: Store["claims"] = {
     get: (resource) => this.database.select("claims", "resource = ?", [resource])[0],

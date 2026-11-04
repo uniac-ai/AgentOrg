@@ -1,6 +1,6 @@
 /**
  * The audit trail: writes, interface refusals and preserved historical call outcomes. Only the
- * root reads it, since it names every Actor's operations, including who sent each private Message.
+ * root reads it, since it names every Actor's operations.
  * Each entry wakes the reads waiting for the next one.
  */
 

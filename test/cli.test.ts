@@ -19,15 +19,11 @@ test("help lists only actor operations, and asking for it acts on nothing", asyn
     assert.equal(help.status, 0);
     const commands = ["interfaces", "call", "actor create", "actor close", "team"];
     const communication = [
-      "actor get",
-      "actor list",
       "message send",
       "message get",
       "message list",
       "work create",
       "form create",
-      "status set",
-      "status get",
       "claim",
       "release",
     ];
@@ -44,6 +40,10 @@ test("help lists only actor operations, and asking for it acts on nothing", asyn
       "status",
       "ui",
       "call result",
+      "actor get",
+      "actor list",
+      "status set",
+      "status get",
     ]) {
       assert.doesNotMatch(help.stdout, new RegExp(`^  ${removed}  `, "m"));
     }

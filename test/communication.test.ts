@@ -1,7 +1,7 @@
 /**
- * Workspace 0.5 records through the real Hub/SDK boundary as ordinary admitted Actors: the
- * canonical directory, private Message conversations, shared Work and asks with role-bound
- * writes, opaque list positions, restart survival and unknown write outcomes over MCP.
+ * Workspace records through the real Hub/SDK boundary as ordinary admitted Actors: canonical
+ * positions, open Message conversations, shared Work and asks with role-bound writes, opaque list
+ * positions, restart survival and unknown write outcomes over MCP.
  */
 import assert from "node:assert/strict";
 import { dirname } from "node:path";
@@ -23,30 +23,25 @@ async function members() {
   return { core, root, owner, peer, third, make };
 }
 
-test("directory is canonical, stable across closure, and distinct from actual presence", async (t) => {
+test("positions are canonical, resolve after closure, and are distinct from actual presence", async (t) => {
   const { core, root, owner, peer, third } = await members();
   t.after(() => core.close());
-  const profile = await done(owner.client.call("actor_get"));
-  assert.deepEqual(profile, {
-    actorID: owner.id,
-    name: "owner",
-    purpose: "owner",
-    state: "active",
-  });
-  const first = await done(root.call("actor_list", { limit: 2 }));
+  const [profile] = (await done(owner.client.call("team", { depth: 0 }))).positions;
   assert.deepEqual(
-    first.items.map((actor: { actorID: string }) => actor.actorID),
-    [core.rootId, owner.id],
+    [profile.id, profile.name, profile.purpose, profile.closed_at],
+    [owner.id, "owner", "owner", null],
   );
-  await done(root.call("actor_close", { actor: owner.id }));
-  assert.equal((await done(peer.client.call("actor_get", { actorID: owner.id }))).state, "closed");
-  const remaining = await done(root.call("actor_list", { after: first.after }));
-  assert.deepEqual(
-    remaining.items.map((actor: { actorID: string }) => actor.actorID),
-    [peer.id, third.id],
+  const closed = (await done(root.call("actor_close", { actor: owner.id }))).actor;
+  assert.ok(closed.closed_at);
+  assert.equal(
+    (await done(peer.client.call("team", { actor: owner.id, depth: 0 }))).positions[0].closed_at,
+    closed.closed_at,
   );
-  assert.equal(await refused(root.call("actor_list", { after: 999 })), "invalid");
   const team = await done(peer.client.call("team", { actor: core.rootId, depth: 20 }));
+  assert.deepEqual(
+    team.positions.map((position: { id: string }) => position.id),
+    [core.rootId, peer.id, third.id],
+  );
   assert.deepEqual(Object.keys(team).sort(), ["positions", "root"]);
   assert.deepEqual(Object.keys(team.positions[0]).sort(), [
     "asks",
@@ -68,14 +63,11 @@ test("directory is canonical, stable across closure, and distinct from actual pr
     "third loses actual admitted presence",
     () => !core.org.connections.connected(third.id),
   );
-  assert.equal((await done(peer.client.call("actor_get", { actorID: third.id }))).state, "active");
-  assert.equal(
-    (await done(peer.client.call("team", { actor: third.id, depth: 0 }))).positions[0].online,
-    false,
-  );
+  const [offline] = (await done(peer.client.call("team", { actor: third.id, depth: 0 }))).positions;
+  assert.deepEqual([offline.closed_at, offline.online], [null, false]);
 });
 
-test("Messages are immutable P2P conversations with no manager/root bypass or receipt surface", async (t) => {
+test("Messages are immutable P2P conversations that any Actor reads, with no receipt surface", async (t) => {
   const { core, root, owner, peer, third } = await members();
   t.after(() => core.close());
   const sent = await done(
@@ -91,15 +83,10 @@ test("Messages are immutable P2P conversations with no manager/root bypass or re
     "seq",
     "text",
   ]);
-  for (const stranger of [root, third.client])
-    assert.equal(
-      await refused(stranger.call("message_get", { messageID: sent.messageID })),
-      "not_found",
-    );
-  for (const party of [owner.client, peer.client])
-    assert.deepEqual(await done(party.call("message_get", { messageID: sent.messageID })), sent);
+  for (const reader of [owner.client, peer.client, root, third.client])
+    assert.deepEqual(await done(reader.call("message_get", { messageID: sent.messageID })), sent);
   const incoming = await done(
-    peer.client.call("message_list", { direction: "incoming", limit: 1 }),
+    peer.client.call("message_list", { counterpartyID: owner.id, limit: 1 }),
   );
   assert.deepEqual(incoming, {
     items: [sent],
@@ -108,7 +95,7 @@ test("Messages are immutable P2P conversations with no manager/root bypass or re
     actors: { [owner.id]: { name: "owner" }, [peer.id]: { name: "peer" } },
   });
   assert.deepEqual(
-    await done(peer.client.call("message_list", { direction: "incoming", after: sent.seq })),
+    await done(peer.client.call("message_list", { counterpartyID: owner.id, after: sent.seq })),
     { items: [], next: null, older: null, actors: {} },
   );
   const reply = await done(
@@ -137,6 +124,10 @@ test("Messages are immutable P2P conversations with no manager/root bypass or re
     "questions",
     "progress",
     "progress_set",
+    "status_set",
+    "status_get",
+    "actor_get",
+    "actor_list",
   ])
     assert.equal(await refused(root.call(retired, {})), "not_found", retired);
 });
@@ -442,7 +433,7 @@ test("claims remain Hub-owned and close/expiry release eligibility without Works
 test("Workspace state and list positions survive a Hub restart under the same admitted identity", async (t) => {
   const { core, root, owner, peer, third } = await members();
   t.after(() => core.close());
-  await done(root.call("message_send", { recipientID: third.id, text: "Private unrelated" }));
+  await done(root.call("message_send", { recipientID: third.id, text: "Unrelated" }));
   const sent = await done(
     owner.client.call("message_send", { recipientID: peer.id, text: "Kept" }),
   );
@@ -458,8 +449,8 @@ test("Workspace state and list positions survive a Hub restart under the same ad
       fields: [{ name: "answer", label: "Answer", required: true }],
     }),
   );
-  const page = await done(peer.client.call("message_list", { direction: "incoming", limit: 1 }));
-  assert.deepEqual(page.items, [sent], "invisible rows do not exhaust the page limit");
+  const page = await done(peer.client.call("message_list", { counterpartyID: owner.id, limit: 1 }));
+  assert.deepEqual(page.items, [sent], "other pairs' rows do not exhaust the page limit");
   assert.equal(typeof page.next, "string");
   await core.restart();
   await until("the SDK reconnects for read-only checks", async () => {
@@ -478,12 +469,12 @@ test("Workspace state and list positions survive a Hub restart under the same ad
   assert.deepEqual(await done(peer.client.call("work_get", { ticketID: work.ticketID })), work);
   assert.deepEqual(await done(owner.client.call("form_get", { formID: form.formID })), form);
   const resumed = await done(
-    peer.client.call("message_list", { direction: "incoming", after: page.next }),
+    peer.client.call("message_list", { counterpartyID: owner.id, after: page.next }),
   );
   assert.deepEqual(resumed.items, [later]);
   assert.equal(resumed.next, null);
   assert.deepEqual(
-    (await done(peer.client.call("message_list", { direction: "incoming", after: later.seq })))
+    (await done(peer.client.call("message_list", { counterpartyID: owner.id, after: later.seq })))
       .items,
     [],
   );
@@ -503,7 +494,7 @@ test("unexpected write failures keep unknown outcome over MCP and never become n
     /Hub operation failed; a write outcome may be unknown/,
   );
   injected.mock.restore();
-  const received = await done(peer.client.call("message_list", { direction: "incoming" }));
+  const received = await done(peer.client.call("message_list", { counterpartyID: owner.id }));
   assert.equal(received.items.length, 1, "the committed send is stored exactly once");
   assert.equal(received.items[0].text, "Committed once");
   const append = t.mock.method(core.store.audit, "append", () => {
@@ -514,7 +505,10 @@ test("unexpected write failures keep unknown outcome over MCP and never become n
     /write outcome may be unknown/,
   );
   append.mock.restore();
-  assert.equal((await done(peer.client.call("message_list", {}))).items.length, 2);
+  assert.equal(
+    (await done(peer.client.call("message_list", { counterpartyID: owner.id }))).items.length,
+    2,
+  );
 });
 
 test("Work filters AND before pagination, positions continue only their filter, and queries never select the caller's identity", async (t) => {
@@ -551,7 +545,7 @@ test("Work filters AND before pagination, positions continue only their filter, 
       await refused(third.client.call("work_list", { ...filter, ...other, after: page.next })),
       "invalid",
     );
-  assert.equal((await done(third.client.call("actor_get"))).actorID, third.id);
+  assert.equal((await done(third.client.call("team", { depth: 0 }))).positions[0].id, third.id);
   assert.equal(
     await refused(
       third.client.call("work_update", {
@@ -653,7 +647,7 @@ test("Form filters and updatedSince intersect before pagination and an empty ans
   const response = await done(root.call("form_get", { formID: answered.formID }));
   assert.deepEqual(Object.keys(response.responses), [owner.id]);
   assert.deepEqual(response.responses[owner.id].answers, {});
-  assert.equal((await done(root.call("actor_get"))).actorID, core.rootId);
+  assert.equal((await done(root.call("team", { depth: 0 }))).positions[0].id, core.rootId);
   for (const field of ["workID", "requesterID"])
     assert.deepEqual(await done(root.call("form_list", { [field]: "unknown-id" })), {
       items: [],
@@ -671,7 +665,7 @@ test("Form filters and updatedSince intersect before pagination and an empty ans
     assert.equal(await refused(root.call("form_list", bad)), "invalid");
 });
 
-test("shared Work/Form history and Hub diagnostics do not disclose private Message data", async (t) => {
+test("shared Work/Form history and Hub diagnostics do not disclose Message data", async (t) => {
   const { core, root, owner, peer, third } = await members();
   t.after(() => core.close());
   const work = await done(
@@ -716,15 +710,16 @@ test("shared Work/Form history and Hub diagnostics do not disclose private Messa
       [2, 2],
     );
     projections.push(...histories);
-    for (const name of ["work_list", "form_list", "team", "actor_list"])
+    for (const name of ["work_list", "form_list", "team"])
       projections.push(await done(observer.call(name, {})));
     projections.push(await observer.call("activity", {}), await observer.available());
-    assert.equal(
-      await refused(observer.call("message_get", { messageID: message.messageID })),
-      "not_found",
+    assert.deepEqual(
+      await done(observer.call("message_get", { messageID: message.messageID })),
+      message,
     );
+    for (const query of [{ between: [owner.id, peer.id] }, { of: owner.id }, { of: peer.id }])
+      assert.deepEqual((await done(observer.call("message_list", query))).items, [message]);
     for (const query of [
-      ...["incoming", "outgoing", "all"].map((direction) => ({ direction })),
       { counterpartyID: owner.id, before: "latest" },
       { counterpartyID: peer.id, before: "latest" },
     ]) {

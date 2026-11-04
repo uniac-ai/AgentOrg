@@ -266,7 +266,7 @@ test("a session at a level presents that level's interfaces, and the one before 
   };
   assert.equal(listed.level, "report");
   assert.deepEqual(listed.interfaces.map((offer) => offer.name).sort(), tagged(["report"]));
-  for (const name of ["status_set", "work_update", "form_create", "attention"])
+  for (const name of ["message_send", "work_update", "form_create", "attention"])
     assert.ok(
       listed.interfaces.some((offer) => offer.name === name),
       name,
@@ -704,7 +704,6 @@ test("the waiter delivers what concerns its Actor from where it attached, never 
   const inbox = join(org.home, "sessions/claude-code-s-waited/inbox");
   assert.match(readFileSync(inbox, "utf8"), /^\d+\n$/, "attaching records the current position");
   const first = hook(org, "wait", "s-waited", alive);
-  await worker.call("status_set", { line: "Own write, never delivered" });
   const own = (await worker.call("work_create", { title: "Own Work" })).structuredContent as {
     ticketID: string;
   };

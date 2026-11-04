@@ -1,5 +1,5 @@
 /** Organization identity, hierarchy, presence and each Actor's report. */
-import { Form, Status, Work } from "@uniac/agentic-workspace/contracts";
+import { Form, Work } from "@uniac/agentic-workspace/contracts";
 import { z } from "zod";
 import { toolDefinition } from "./json-schema.ts";
 import { Actor, Count, Id, Timestamp } from "./records.ts";
@@ -94,7 +94,6 @@ export const ActorView = z
       closed_at: Actor.shape.closed_at,
     }),
     state: ActorState,
-    status: Status.nullable().describe("Null until it first sets one."),
     workstreams: z
       .array(Work.extend({ asks: z.array(Form).describe("Its open asks linked to this Work.") }))
       .describe(
@@ -127,6 +126,6 @@ export const TEAM = toolDefinition("team", {
     request: ActorViewRequest,
     response: ActorView,
     description:
-      "Read an Actor's report as one view, computed now: its derived state and status, its workstreams with their open asks, its other open asks, its reports' open asks, reviews due, assigned and follow-up Work, recent completions and its direct reports. Anyone may view any Actor. Default: you.",
+      "Read an Actor's report as one view, computed now: its derived state, its workstreams with their open asks, its other open asks, its reports' open asks, reviews due, assigned and follow-up Work, recent completions and its direct reports. Anyone may view any Actor. Default: you.",
   },
 });

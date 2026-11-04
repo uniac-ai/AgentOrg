@@ -1,12 +1,10 @@
 import { connectClient, type Actor } from "@agentorg/cli/actor";
 import {
   BUILTINS,
-  DirectoryActor,
   Message,
   Work,
   Form,
   Position,
-  Status,
   Team,
   SystemStatus,
   SystemConnection,
@@ -25,12 +23,10 @@ const work: z.output<typeof Work> = BUILTINS.work_create.response.parse({});
 const owner: string = work.ownerID;
 const form: z.output<typeof Form> = BUILTINS.form_create.response.parse({});
 const approval: boolean = form.approval;
-const status: z.output<typeof Status> = BUILTINS.status_set.response.parse({});
-const line: string | undefined = status.line;
-const directory: z.output<typeof DirectoryActor> = BUILTINS.actor_get.response.parse({});
-const actorID: string = directory.actorID;
+const teamQuery: z.input<typeof BUILTINS.team.request> = { actor: "actor", depth: 0 };
 const team: z.output<typeof Team> = BUILTINS.team.response.parse({});
 const position: z.output<typeof Position> | undefined = team.positions[0];
+const actorID: string | undefined = position?.id;
 const linked = BUILTINS.form_create.request.parse({
   title: "Answer?",
   fields: [{ name: "answer", label: "Answer", required: true }],
@@ -42,8 +38,8 @@ const client: Promise<Actor> = connectClient({
   credential: "fixture",
 });
 const tools: Promise<ToolDescriptor[]> = client.then((actor) => actor.available());
-const answer: Promise<Answer> = client.then((actor) => actor.call("message_list", { after: 0 }));
-void [sender, owner, approval, line, actorID, position, optionalWork, tools, answer];
+const answer: Promise<Answer> = client.then((actor) => actor.call("message_list", { counterpartyID: "peer", after: 0 }));
+void [sender, owner, approval, teamQuery, actorID, position, optionalWork, tools, answer];
 
 const workQuery = BUILTINS.work_list.request.parse({
   ownerID: "owner",
@@ -109,13 +105,14 @@ const invalidProviderQuery: z.input<typeof BUILTINS.provider_list.request> = { c
 const invalidDetach: z.input<typeof BUILTINS.connection_disconnect.request> = { connectionId: "connection" };
 void [observations, connection, provider, closed, connectionQuery, providerQuery, invalidProviderQuery, invalidDetach];
 
-const oldMessageQuery: z.input<typeof BUILTINS.message_list.request> = { direction: "incoming", after: 0, limit: 100 };
+const pairMessageQuery: z.input<typeof BUILTINS.message_list.request> = { between: ["actor", "peer"], after: 0, limit: 100 };
+const conversationsQuery: z.input<typeof BUILTINS.message_list.request> = { of: "actor", limit: 100 };
 const recentMessageQuery: z.input<typeof BUILTINS.message_list.request> = { counterpartyID: "peer", before: "latest" };
-const olderMessageQuery: z.input<typeof BUILTINS.message_list.request> = { before: "opaque-older-position" };
+const olderMessageQuery: z.input<typeof BUILTINS.message_list.request> = { counterpartyID: "peer", before: "opaque-older-position" };
 const parsedMessageQuery = BUILTINS.message_list.request.parse(recentMessageQuery);
 const counterparty: string | undefined = parsedMessageQuery.counterpartyID;
 const before: string | undefined = parsedMessageQuery.before;
 const listedSeq: number | undefined = BUILTINS.message_list.response.parse({}).items[0]?.seq;
 // @ts-expect-error An older position is an opaque string or latest.
 const invalidMessageQuery: z.input<typeof BUILTINS.message_list.request> = { counterpartyID: "peer", before: true };
-void [oldMessageQuery, recentMessageQuery, olderMessageQuery, counterparty, before, listedSeq, invalidMessageQuery];
+void [pairMessageQuery, conversationsQuery, recentMessageQuery, olderMessageQuery, counterparty, before, listedSeq, invalidMessageQuery];
