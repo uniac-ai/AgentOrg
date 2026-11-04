@@ -99,7 +99,7 @@ export function team(
   workspace: Workspace,
 ) {
   /**
-   * An Actor's state and headline from the Work on it (model §3): its most urgent Work that is
+   * An Actor's state and headline from the Work on it: its most urgent Work that is
    * waiting, in review or active is the subject, with the clause that applies; with none, its
    * Work not started and the last it finished. `known` is Work already read, which names Work
    * waited on without a read of its own.
@@ -128,7 +128,7 @@ export function team(
       if (state === "review")
         return {
           kind: "review",
-          // A closed requester's part passes to its nearest open manager (Q10).
+          // A closed requester's part passes to its nearest open manager.
           text: `with ${named(registry.standIn(item.requesterID) ?? item.requesterID)} for review`,
         };
       const on = item.waitsOn;
@@ -251,7 +251,7 @@ export function team(
       const mine = works({ ownerID: id, status: [...UNFINISHED] });
       const last = work.list({ ownerID: id, status: ["accepted"], order: "recent", limit: 1 })
         .items[0];
-      // Work routed to it as requester: its own, and a closed requester's it stands in for (Q10).
+      // Work routed to it as requester: its own, and a closed requester's it stands in for.
       const requested = oldestFirst(
         all((after) =>
           work.list({ requesterWithin: id, status: [...UNFINISHED], limit: 100, after }),

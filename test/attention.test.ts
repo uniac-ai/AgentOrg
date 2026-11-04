@@ -536,7 +536,7 @@ test("a report reads the organization's activity", async (t) => {
   );
 });
 
-test("audit entries 0.5.0 made under its tool names keep their items", async (t) => {
+test("audit entries earlier builds made under their tool names keep their items", async (t) => {
   const { core, lead, worker } = await organization();
   t.after(() => core.close());
   const workerStart = await position(worker.client);
@@ -563,7 +563,7 @@ test("audit entries 0.5.0 made under its tool names keep their items", async (t)
       close: { askID: closed.formID, status: "resolved", resolution: "Settled" },
     }),
   );
-  // A 0.5.0 Hub audited these writes under the tools they went through then.
+  // An earlier build audited these writes under the tools they went through then.
   const rename = (operation: string, from: string, actor: string, target: string) =>
     core.store.database.run(
       "UPDATE audit SET operation = ? WHERE operation = ? AND actor = ? AND target = ?",
@@ -577,7 +577,7 @@ test("audit entries 0.5.0 made under its tool names keep their items", async (t)
   const legacy = core.store.database.all(
     "SELECT operation FROM audit WHERE operation GLOB 'form_*' OR operation = 'work_review'",
   );
-  assert.ok(legacy.length >= 4, "the reads below cover 0.5.0 names");
+  assert.ok(legacy.length >= 4, "the reads below cover the earlier names");
   const seen = await read(worker.client, workerStart);
   assert.deepEqual(
     kinds(seen).filter(([kind]: string[]) => kind !== "assigned"),

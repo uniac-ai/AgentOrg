@@ -1,9 +1,9 @@
 # Workspace storage and cutover
 
-Hub embeds `@uniac/agentic-workspace` ahead of its 0.6.0 release, at source
+Hub embeds `@uniac/agentic-workspace` ahead of its first release, at source
 `6c8c0a62226b062b2037aa3da031324f7bd69758`, merged as `521a2cf4caca1f7ae6b581a58e281842143f8169`
-with tree `36f5ee6d66c18edd2c2b9a0b27d6811f5a8c38dd`. Its package version still reads 0.5.0. The
-release replaces it with the published 0.6.0 archive.
+with tree `36f5ee6d66c18edd2c2b9a0b27d6811f5a8c38dd`. The release replaces it with the released
+archive.
 The committed archive has SHA256
 `783749be25934bb92443304d9c5a711af79eb9e703ebfe0a1a29bc5737afd7e3`. It is a clean `git archive`
 export of the source, built with `npm ci --engine-strict` and `npm pack` on Node 24.22.1 and
@@ -16,11 +16,11 @@ the package owns its SQLite schema and transactions.
 ## Files and startup
 
 For `<home>/core.db`, Hub opens `<home>/core.workspace.db` for Messages, and Work with its asks.
-The first open by 0.5 upgrades a 0.4 `core.workspace.db` in place, in one transaction; the package
-refuses a database newer than itself. The first open by this build upgrades the store to the
-package's version 4 in the same way, adding indexed columns and changing no record; a 0.5 store's
-Status tables stay in the file, unread. That step is one way: a Hub on 0.5 then refuses the store,
-so back up the home before the first start.
+On its first open, the package upgrades an earlier `core.workspace.db` in place, in one transaction,
+to its storage version 4, and refuses a store newer than itself. From version 3 the step adds
+indexed columns and changes no record, and an earlier store's Status tables stay in the file,
+unread. The upgrade is one way, so back up the home before the first start: restoring that backup
+is the way back.
 The private import manifest is `<home>/core.workspace.db.import.json`. Database and manifest files
 are private to the home owner. `:memory:` uses two independently owned in-memory databases.
 Hub closes both stores after its network listener and clients finish.
@@ -30,7 +30,7 @@ existing schema 8 transaction. Schema 8 then atomically renames `progress`, `que
 `messages` to private `legacy_*` tables and creates `workspace_imports`, advancing to schema 9.
 The original rows and fields remain intact. Other nonzero versions are refused. Every open also
 adds the audit's two indexes, of each Actor's writes and of its writes on each record, if they are
-missing; they take no schema step, so an earlier release still opens the home.
+missing; they take no schema step, so an earlier build still opens the home.
 
 Historical Messages are imported through the package's public persistence interface. Each preserves
 its original ID, sender, recipient, text and timestamp exactly. The sole public history event records

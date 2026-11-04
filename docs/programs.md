@@ -62,7 +62,7 @@ Hub makes one creation request and does not replay it automatically after timeou
 
 ## Human client
 
-[OrgActor-Human](https://github.com/uniac-ai/OrgActor-Human) owns the browser application,
+OrgActor-Human owns the browser application,
 its HTTP API and configuration. It connects to the Hub through the public Actor library
 described below. Its repository owns installation, configuration and service management.
 

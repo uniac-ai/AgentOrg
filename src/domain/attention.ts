@@ -1,6 +1,6 @@
 /**
- * What concerns an Actor, read from the audited writes after its position, by the next mover
- * (model §2). On its records: Work given to it or changed by its requester, an answer to its
+ * What concerns an Actor, read from the audited writes after its position, by the next mover.
+ * On its records: Work given to it or changed by its requester, an answer to its
  * submission, an answer to its ask or the ask's raise, and a message to it. Routed to it, or to a
  * closed Actor it stands in for: an ask from a report or raised to it while the ask is open and
  * with it, and a submission of Work it requested while the submission waits. Closing an Actor gives
@@ -37,7 +37,10 @@ function once<T>(make: () => T): () => T {
 
 /** The audit entries one read examines; a full batch returns at once and the next read goes on. */
 const BATCH = 500;
-/** The operations 0.5.0 audited, as the writes that replace them, so a resumed read keeps them. */
+/**
+ * The operations earlier builds audited, as the writes that replace them, so a resumed read keeps
+ * them.
+ */
 const RENAMED: Record<string, string> = {
   form_create: "work_update",
   form_close: "work_update",
@@ -72,7 +75,7 @@ export function attention(registry: Registry, audit: Audit, workspace: Workspace
     const later = new Map<string, number[]>();
     const writers = new WeakMap<Event[], Map<string, Event[]>>();
     const owners = new WeakMap<Work, Map<Event, string | undefined>>();
-    /** A writer's events on a record, without the asks Q12 cancelled with their Work. */
+    /** A writer's events on a record, without the asks cancelled with their Work. */
     function own(history: Event[], actor: string): Event[] {
       let byWriter = writers.get(history);
       if (!byWriter) {
@@ -90,8 +93,8 @@ export function attention(registry: Registry, audit: Audit, workspace: Workspace
     return {
       /**
        * The history event an entry wrote: the writer's events on its record, counted back from the
-       * newest by the writer's later Work and ask writes on it. Asks cancelled with their Work (Q12)
-       * have an event but no entry of their own, so they are passed over. A counted event later than
+       * newest by the writer's later Work and ask writes on it. Asks cancelled with their Work have
+       * an event but no entry of their own, so they are passed over. A counted event later than
        * the entry, as when an earlier entry was lost, gives way to the writer's last event before it.
        */
       event(entry: Entry, history: Event[] | undefined): Event | undefined {
@@ -220,7 +223,7 @@ export function attention(registry: Registry, audit: Audit, workspace: Workspace
       }
     } else if (entry.operation === "actor_create" || entry.operation === "actor_close") {
       touched.actorIDs.push(id, registry.get(id)?.manager);
-      // A closed Actor's part passes to its nearest open manager (Q10): what was routed to it,
+      // A closed Actor's part passes to its nearest open manager: what was routed to it,
       // or on its way through it, is the caller's now.
       if (entry.operation === "actor_close" && registry.standIn(id) === caller.id) {
         for (const ask of reads.routing())
