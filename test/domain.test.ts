@@ -12,7 +12,7 @@ import { done, HUB_INTERFACES, refused } from "./harness.ts";
 
 const invocation = { signal: new AbortController().signal, progress: async () => {} };
 
-test("all open Actors see exactly nine Hub Tools and twenty-six interfaces, each tagged with its level", async (t) => {
+test("all open Actors see exactly eight Hub Tools and twenty-one interfaces, each tagged with its level", async (t) => {
   const store = new SqliteStore(":memory:");
   t.after(() => store.close());
   const org = organization(store);
@@ -37,8 +37,20 @@ test("all open Actors see exactly nine Hub Tools and twenty-six interfaces, each
       Object.entries(HUB_INTERFACES).map(([name, names]) => [name, [...names].sort()]),
     ),
   );
-  assert.equal(catalog.length, 9);
-  assert.equal(catalog.flatMap((tool) => tool.interfaces).length, 26);
+  assert.equal(catalog.length, 8);
+  const offers = catalog.flatMap((tool) => tool.interfaces);
+  assert.equal(offers.length, 21);
+  // Each level presents its own interfaces and those before it: 8, 12 and 21.
+  const levels = ["report", "team", "organization"];
+  assert.deepEqual(
+    levels.map(
+      (level) =>
+        offers.filter((offer) => levels.indexOf(offer.level ?? "") <= levels.indexOf(level)).length,
+    ),
+    [8, 12, 21],
+  );
+  for (const offer of offers)
+    assert.equal(offer.interface.output?.type, "object", `${offer.call}'s output is an object`);
   assert.deepEqual(org.available(lead.id), catalog);
   assert.deepEqual(org.available(worker.id), catalog);
   const connectionId = crypto.randomUUID();
@@ -137,6 +149,68 @@ test("a home without the audit's index of writes gains it on open, with no schem
       )
       .map((step) => step.detail),
     ["SEARCH audit USING INDEX audit_writes (actor=?)"],
+  );
+});
+
+test("a 0.5.0 Workspace file is served on open: an ask with no Work alone, and blocked Work as active", async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "agentorg-workspace-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const path = join(directory, "core.db");
+  const first = new SqliteStore(path);
+  const { registry } = organization(first);
+  const { root } = await registry.createRoot();
+  const { actor: worker } = await registry.create(root.id, "worker", "Work");
+  first.close();
+  // The Workspace file as 0.5.0 wrote it, written raw: user_version 3, with a Status table.
+  const file = join(directory, "core.workspace.db");
+  for (const suffix of ["", "-wal", "-shm"]) rmSync(`${file}${suffix}`, { force: true });
+  const old = new DatabaseSync(file);
+  const at = "2026-11-03T00:00:00.000Z";
+  let cursor = 0;
+  for (const name of ["messages", "work", "forms", "status"])
+    old.exec(`
+      CREATE TABLE ${name} (id TEXT PRIMARY KEY, revision INTEGER NOT NULL, cursor INTEGER NOT NULL UNIQUE, data TEXT NOT NULL);
+      CREATE TABLE ${name}_history (id TEXT NOT NULL, revision INTEGER NOT NULL, cursor INTEGER NOT NULL UNIQUE, event TEXT NOT NULL, PRIMARY KEY (id, revision));
+    `);
+  const insert = (name: string, id: string, data: object) => {
+    cursor += 1;
+    const event = { actorID: worker.id, at, action: "created", detail: {}, revision: 1, cursor };
+    old
+      .prepare(`INSERT INTO ${name}_history(id,revision,cursor,event) VALUES(?,?,?,?)`)
+      .run(id, 1, cursor, JSON.stringify(event));
+    old
+      .prepare(`INSERT INTO ${name}(id,revision,cursor,data) VALUES(?,?,?,?)`)
+      .run(id, 1, cursor, JSON.stringify(data));
+  };
+  const held = { ticketID: "held", requesterID: worker.id, ownerID: worker.id, title: "Held" };
+  insert("work", "held", { ...held, status: "blocked", links: [], createdAt: at });
+  const orphan = {
+    formID: "orphan",
+    requesterID: worker.id,
+    title: "Which?",
+    links: [],
+    cause: "carried",
+    approval: false,
+    collect: false,
+    fields: [{ name: "answer", label: "Which?", required: true }],
+    status: "open",
+    createdAt: at,
+    responses: {},
+  };
+  insert("forms", "orphan", orphan);
+  old.exec("PRAGMA user_version=3");
+  old.close();
+  const store = new SqliteStore(path);
+  t.after(() => store.close());
+  const org = organization(store);
+  const asked = await done(org.invoke(root.id, "work_get", { askID: "orphan" }, invocation));
+  const { cause: _cause, ...read } = orphan;
+  assert.deepEqual(asked, { ...read, raises: [], revision: 1, updatedAt: at });
+  const team = await done(org.invoke(root.id, "team", { actor: worker.id, depth: 0 }, invocation));
+  const [position] = team.positions;
+  assert.deepEqual(
+    [position.state, position.headline.subject, position.asks],
+    ["active", { ticketID: "held", title: "Held", state: "active" }, 1],
   );
 });
 

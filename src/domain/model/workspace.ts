@@ -1,7 +1,6 @@
 /** Package-owned contracts projected into explicit Hub feature definitions. */
 import {
   type Form,
-  FormContracts,
   type Level,
   type List,
   type Message,
@@ -35,16 +34,9 @@ export const MESSAGES = toolDefinition("messages", {
 });
 export const WORK = toolDefinition("work", {
   work_create: spec<Work>()(WorkContracts.work_create),
-  work_get: spec<Work>()(WorkContracts.work_get),
+  work_get: spec<Work | Form>()(WorkContracts.work_get),
   work_list: spec<List<Work>>()(WorkContracts.work_list),
-  work_update: spec<Work>()(WorkContracts.work_update),
+  work_update: spec<Work | Form>()(WorkContracts.work_update),
   work_submit: spec<Work>()(WorkContracts.work_submit),
-  work_review: spec<Work>()(WorkContracts.work_review),
-});
-export const FORMS = toolDefinition("forms", {
-  form_create: spec<Form>()(FormContracts.form_create),
-  form_get: spec<Form>()(FormContracts.form_get),
-  form_list: spec<List<Form>>()(FormContracts.form_list),
-  form_respond: spec<Form>()(FormContracts.form_respond),
-  form_close: spec<Form>()(FormContracts.form_close),
+  work_answer: spec<Work | Form>()(WorkContracts.work_answer),
 });

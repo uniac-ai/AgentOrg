@@ -16,11 +16,11 @@ type Position = ResponseOf<"team">["positions"][number];
 type Headline = Position["headline"];
 /** A Work's state: done, review, waiting on its owner's ask, not started, else active. */
 type WorkState = "done" | "review" | "waiting" | "open" | "active";
-const WORKSTREAM = ["active", "blocked", "submitted", "changes_requested"] as const;
+const WORKSTREAM = ["active", "submitted", "changes_requested"] as const;
 /** Up to this many positions, each reads its own Work rather than the organization's. */
 const FEW = 20;
 /** Work that isn't finished, not started included. */
-const UNFINISHED = ["open", "active", "blocked", "submitted", "changes_requested"] as const;
+const UNFINISHED = ["open", "active", "submitted", "changes_requested"] as const;
 const oldestFirst = <T extends { createdAt: string }>(items: T[]) =>
   items.sort((left, right) => left.createdAt.localeCompare(right.createdAt));
 
@@ -37,7 +37,7 @@ function all<T>(read: (after: string | undefined) => { items: T[]; next: string 
 
 /**
  * A Work's state from its status and its owner's open ask on it: submitted Work is in review even
- * with an ask, and a stored `blocked` is active.
+ * with an ask.
  */
 function workState(work: Work, ask: Form | undefined): WorkState {
   if (work.status === "accepted") return "done";
@@ -82,20 +82,17 @@ function step(progress: string | undefined): string | undefined {
   return current?.text ?? sentence(lines.slice(0, start < 0 ? undefined : start).join("\n"));
 }
 
-/** The most urgent among the workstreams: blocked, waiting, review, then active. */
+/** The most urgent among the workstreams: waiting, review, then active. */
 function stateOf(workstreams: View["workstreams"]): View["state"] {
   const states = workstreams.map((work) =>
-    work.status === "blocked"
-      ? "blocked"
-      : work.status === "submitted"
-        ? "review"
-        : work.status === "active" && work.asks.length > 0
-          ? "waiting"
-          : "active",
+    work.status === "submitted"
+      ? "review"
+      : work.status === "active" && work.asks.length > 0
+        ? "waiting"
+        : "active",
   );
   return (
-    (["blocked", "waiting", "review", "active"] as const).find((state) => states.includes(state)) ??
-    "idle"
+    (["waiting", "review", "active"] as const).find((state) => states.includes(state)) ?? "idle"
   );
 }
 
@@ -121,7 +118,7 @@ export function team(
     // The subtree filters walk each row's managers on every page, so the Hub filters instead: a
     // few positions read their own Work, and more read every Actor's unfinished Work once.
     const few = rows.length <= FEW;
-    const positions = workspace.run(caller, ({ work, forms }) => {
+    const positions = workspace.run(caller, ({ work }) => {
       const list = (
         filter: Omit<NonNullable<Parameters<typeof work.list>[0]>, "after" | "limit">,
       ) => all((after) => work.list({ ...filter, limit: 100, after }));
@@ -129,7 +126,7 @@ export function team(
         ? rows.flatMap((row) => list({ ownerID: row.id, status: [...UNFINISHED] }))
         : list({ status: [...UNFINISHED] });
       // Asks stay one pass: branchAsks counts the asks at every depth below each position.
-      const open = oldestFirst(all((after) => forms.list({ status: ["open"], limit: 100, after })));
+      const open = oldestFirst(all((after) => work.asks({ status: ["open"], limit: 100, after })));
       const latest = (actorID: string) =>
         work.list({ ownerID: actorID, status: ["accepted"], order: "recent", limit: 1 }).items[0];
       const recent = few
@@ -225,7 +222,7 @@ export function team(
     const id = viewed.id;
     const reports = registry.reports(id);
     const reportIDs = reports.map((report) => report.id);
-    return workspace.run(caller, ({ work, forms }) => {
+    return workspace.run(caller, ({ work }) => {
       const names: View["actors"] = {};
       const list = <T>(page: { items: T[]; actors: View["actors"] }) => {
         Object.assign(names, page.actors);
@@ -233,8 +230,8 @@ export function team(
       };
       const works = (query: Parameters<typeof work.list>[0]) =>
         list<Work>(work.list({ limit: 100, ...query }));
-      const asks = (query: Parameters<typeof forms.list>[0]) =>
-        list<Form>(forms.list({ limit: 100, ...query }));
+      const asks = (query: Parameters<typeof work.asks>[0]) =>
+        list<Form>(work.asks({ limit: 100, ...query }));
       const own = asks({ requesterID: id, status: ["open"] });
       const workstreams = oldestFirst([
         ...works({ ownerID: id, status: [...WORKSTREAM] }),
@@ -261,10 +258,7 @@ export function team(
         asks: oldestFirst(
           own.filter((ask) => !workstreams.some((item) => item.ticketID === ask.workID)),
         ),
-        needs:
-          reportIDs.length === 0
-            ? []
-            : oldestFirst(asks({ requesterID: reportIDs, status: ["open"] })),
+        needs: oldestFirst(asks({ routedTo: id })),
         reviews: oldestFirst(works({ requesterID: id, status: ["submitted"] })),
         assigned: oldestFirst(open.filter((item) => item.requesterID !== id)),
         followUps: oldestFirst(open.filter((item) => item.requesterID === id)),

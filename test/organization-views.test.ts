@@ -61,38 +61,42 @@ test("any active Actor reads deep and closed subtree Work/ask histories through 
     }),
   );
   work = await done(
-    requester.client.call("work_review", {
+    requester.client.call("work_answer", {
       ticketID: work.ticketID,
-      expectedRevision: work.revision,
-      submissionID: work.submission.submissionID,
-      verdict: "accepted",
-      comment: "Reviewed by actual requester",
+      askID: work.submission.submissionID,
+      answers: { verdict: "accepted" },
+      note: "Reviewed by actual requester",
     }),
   );
-  const form = await done(leaf.client.call("form_create", { title: "Deep ask", fields }));
-  let approval = await done(
-    leaf.client.call("form_create", { title: "Deep approval", approval: true, fields }),
-  );
+  const asks = await done(leaf.client.call("work_create", { title: "Deep asks" }));
+  const ask = (input: object) =>
+    done(leaf.client.call("work_update", { ticketID: asks.ticketID, ask: { fields, ...input } }));
+  const form = await ask({ title: "Deep ask" });
+  let approval = await ask({ title: "Deep approval", approval: true });
   for (const outside of [observer.client, leaf.client])
     assert.equal(
       await refused(
-        outside.call("form_respond", { formID: approval.formID, answers: { answer: "No" } }),
+        outside.call("work_answer", { askID: approval.formID, answers: { answer: "No" } }),
       ),
       "forbidden",
     );
   approval = await done(
-    lead.client.call("form_respond", { formID: approval.formID, answers: { answer: "Approved" } }),
+    lead.client.call("work_answer", { askID: approval.formID, answers: { answer: "Approved" } }),
   );
   assert.equal(approval.status, "resolved");
   assert.deepEqual(Object.keys(approval.responses), [lead.id]);
+  // work_list carries each Work's open asks, and work_get all of them.
+  const listed = [
+    { ...work, asks: [] },
+    { ...asks, asks: [form] },
+  ];
   for (const client of [root, observer.client]) {
     const catalog = await client.available();
-    assert.equal(catalog.length, 9);
-    assert.equal(catalog.flatMap((tool) => tool.interfaces).length, 26);
+    assert.equal(catalog.length, 8);
+    assert.equal(catalog.flatMap((tool) => tool.interfaces).length, 21);
     const interfaces = catalog.flatMap((tool) => tool.interfaces);
     for (const [name, filters, removed] of [
       ["work_list", ["ownerWithin", "requesterWithin"], []],
-      ["form_list", ["requesterWithin"], ["respondentWithin", "awaitingWithin"]],
     ] as const) {
       const operation = interfaces.find((offer) => offer.interface.name === name);
       assert.ok(operation);
@@ -101,10 +105,11 @@ test("any active Actor reads deep and closed subtree Work/ask histories through 
       for (const filter of removed) assert.equal(properties[filter], undefined, filter);
       assert.equal(operation.read_only, true);
     }
-    assert.deepEqual((await done(client.call("work_list", { ownerWithin: lead.id }))).items, [
-      work,
-    ]);
-    assert.deepEqual((await done(client.call("form_list", { requesterWithin: lead.id }))).items, [
+    assert.deepEqual(
+      (await done(client.call("work_list", { ownerWithin: lead.id }))).items,
+      listed,
+    );
+    assert.deepEqual((await done(client.call("work_get", { ticketID: asks.ticketID }))).asks, [
       form,
       approval,
     ]);
@@ -119,14 +124,16 @@ test("any active Actor reads deep and closed subtree Work/ask histories through 
     await done(root.call("actor_close", { actor: actor.id }));
   assert.deepEqual(
     (await done(observer.client.call("work_list", { ownerWithin: lead.id }))).items,
-    [work],
+    listed,
   );
-  assert.deepEqual(
-    (await done(observer.client.call("form_list", { requesterWithin: lead.id }))).items,
-    [form, approval],
-  );
-  assert.deepEqual(await done(observer.client.call("work_get", { ticketID: work.ticketID })), work);
-  assert.deepEqual(await done(observer.client.call("form_get", { formID: form.formID })), form);
+  assert.deepEqual(await done(observer.client.call("work_get", { ticketID: work.ticketID })), {
+    ...work,
+    asks: [],
+  });
+  assert.deepEqual(await done(observer.client.call("work_get", { askID: form.formID })), {
+    ...asks,
+    asks: [form, approval],
+  });
   assert.equal(
     (await done(observer.client.call("work_get", { ticketID: work.ticketID, history: true })))
       .history.length,
@@ -134,8 +141,8 @@ test("any active Actor reads deep and closed subtree Work/ask histories through 
   );
   const closed = await core.org.invoke(
     leaf.id,
-    "form_list",
-    { requesterWithin: lead.id },
+    "work_list",
+    { ownerWithin: lead.id },
     {
       signal: new AbortController().signal,
       progress: async () => {},
@@ -143,10 +150,6 @@ test("any active Actor reads deep and closed subtree Work/ask histories through 
   );
   assert.equal(await refused(closed), "forbidden");
   assert.equal(BUILTINS.work_list.request.parse({ ownerWithin: lead.id }).ownerWithin, lead.id);
-  assert.equal(
-    BUILTINS.form_list.request.parse({ requesterWithin: lead.id }).requesterWithin,
-    lead.id,
-  );
 });
 
 test("Work subtree and exact predicates intersect before sparse pages without granting review or owner roles", async (t) => {
@@ -169,10 +172,10 @@ test("Work subtree and exact predicates intersect before sparse pages without gr
   };
   const actors = { [requester.id]: { name: "requester" }, [worker.id]: { name: "worker" } };
   const page = await done(observer.client.call("work_list", filter));
-  assert.deepEqual(page.items, [first]);
+  assert.deepEqual(page.items, [{ ...first, asks: [] }]);
   assert.equal(typeof page.next, "string");
   assert.deepEqual(await done(observer.client.call("work_list", { ...filter, after: page.next })), {
-    items: [second],
+    items: [{ ...second, asks: [] }],
     next: null,
     actors,
   });
@@ -219,16 +222,15 @@ test("Work subtree and exact predicates intersect before sparse pages without gr
         }),
       )
     ).items,
-    [submitted],
+    [{ ...submitted, asks: [] }],
   );
   assert.equal(
     await refused(
-      remote.client.call("work_review", {
+      remote.client.call("work_answer", {
         ticketID: submitted.ticketID,
-        expectedRevision: submitted.revision,
-        submissionID: submitted.submission.submissionID,
-        verdict: "accepted",
-        comment: "Not requester",
+        askID: submitted.submission.submissionID,
+        answers: { verdict: "accepted" },
+        note: "Not requester",
       }),
     ),
     "forbidden",
@@ -254,99 +256,37 @@ test("Work subtree and exact predicates intersect before sparse pages without gr
       assert.equal(await refused(root.call("work_list", { [name]: value })), "invalid");
 });
 
-test("ask subtree and exact predicates intersect before sparse pages; approvals are answered only up the manager chain", async (t) => {
+test("approvals are answered only up the manager chain, and only the asker closes its ask", async (t) => {
   const { core, root, lead, worker, remote, requester, observer } = await organization();
   t.after(() => core.close());
-  const create = (caller: Actor, title: string) =>
-    done(caller.call("form_create", { title, fields }));
-  await create(root, "Different requester");
-  await create(remote.client, "Inside scope, different requester");
-  const answered = await create(requester.client, "Answered");
-  await done(
-    worker.client.call("form_respond", {
-      formID: answered.formID,
-      expectedRevision: 1,
-      answers: {},
-    }),
-  );
-  const closed = await create(requester.client, "Closed");
-  await done(
-    requester.client.call("form_close", {
-      formID: closed.formID,
-      expectedRevision: 1,
-      status: "resolved",
-      resolution: "Decided",
-    }),
-  );
-  for (let index = 0; index < 12; index += 1)
-    await create(observer.client, `Outside requester scope ${index}`);
-  const first = await create(requester.client, "First match");
-  const second = await create(requester.client, "Second match");
-  const filter = {
-    requesterWithin: remote.id,
-    requesterID: requester.id,
-    status: ["open"],
-    limit: 1,
+  const create = async (caller: Actor, title: string, input: object = {}) => {
+    const work = await done(caller.call("work_create", { title }));
+    return done(
+      caller.call("work_update", { ticketID: work.ticketID, ask: { title, fields, ...input } }),
+    );
   };
-  const page = await done(root.call("form_list", filter));
-  assert.deepEqual(page.items, [first]);
-  assert.equal(typeof page.next, "string");
-  assert.deepEqual(await done(root.call("form_list", { ...filter, after: page.next })), {
-    items: [second],
-    next: null,
-    actors: { [requester.id]: { name: "requester" } },
-  });
-  assert.equal(
-    await refused(
-      root.call("form_list", { ...filter, requesterWithin: requester.id, after: page.next }),
-    ),
-    "invalid",
-  );
-  for (const contradictory of [
-    { ...filter, requesterWithin: lead.id },
-    { ...filter, requesterWithin: "unknown" },
-  ])
-    assert.deepEqual(await done(root.call("form_list", contradictory)), {
-      items: [],
-      next: null,
-      actors: {},
-    });
+  const answered = await create(requester.client, "Answered");
+  await done(worker.client.call("work_answer", { askID: answered.formID, answers: {} }));
   assert.deepEqual(
-    (await done(root.call("form_list", { requesterWithin: remote.id, status: ["resolved"] })))
-      .items,
-    [
-      await done(root.call("form_get", { formID: answered.formID })),
-      await done(root.call("form_get", { formID: closed.formID })),
-    ],
-  );
-  assert.deepEqual(
-    (await done(root.call("form_get", { formID: answered.formID }))).responses[worker.id].answers,
+    (await done(root.call("work_get", { askID: answered.formID }))).asks[0].responses[worker.id]
+      .answers,
     {},
   );
+  const first = await create(requester.client, "First match");
   assert.equal(
     await refused(
-      remote.client.call("form_close", {
-        formID: first.formID,
-        expectedRevision: first.revision,
-        status: "resolved",
-        resolution: "Not requester",
+      remote.client.call("work_update", {
+        close: { askID: first.formID, status: "resolved", resolution: "Not requester" },
       }),
     ),
     "forbidden",
   );
-  let approval = await done(
-    worker.client.call("form_create", {
-      title: "Approve",
-      approval: true,
-      collect: true,
-      fields,
-    }),
-  );
+  let approval = await create(worker.client, "Approve", { approval: true, collect: true });
   for (const outside of [worker, observer, remote, requester])
     assert.equal(
       await refused(
-        outside.client.call("form_respond", {
-          formID: approval.formID,
+        outside.client.call("work_answer", {
+          askID: approval.formID,
           answers: { answer: "Not a manager" },
         }),
       ),
@@ -354,22 +294,19 @@ test("ask subtree and exact predicates intersect before sparse pages; approvals 
     );
   for (const manager of [lead.client, root])
     approval = await done(
-      manager.call("form_respond", { formID: approval.formID, answers: { answer: "Approved" } }),
+      manager.call("work_answer", { askID: approval.formID, answers: { answer: "Approved" } }),
     );
   assert.deepEqual(Object.keys(approval.responses).sort(), [core.rootId, lead.id].sort());
   approval = await done(
-    worker.client.call("form_close", {
-      formID: approval.formID,
-      expectedRevision: approval.revision,
-      status: "resolved",
-      resolution: "Approved by both managers",
+    worker.client.call("work_update", {
+      close: {
+        askID: approval.formID,
+        status: "resolved",
+        resolution: "Approved by both managers",
+      },
     }),
   );
   assert.equal(approval.status, "resolved");
-  for (const value of ["", 7])
-    assert.equal(await refused(root.call("form_list", { requesterWithin: value })), "invalid");
-  for (const removed of [{ respondentWithin: lead.id }, { awaitingWithin: lead.id }])
-    assert.equal(await refused(root.call("form_list", removed)), "invalid");
 });
 
 test("subtree queries retain audit boundaries, and managers and unrelated observers read Messages openly", async (t) => {
@@ -391,7 +328,7 @@ test("subtree queries retain audit boundaries, and managers and unrelated observ
   };
   for (const client of [root, lead.client, observer.client]) {
     assert.deepEqual((await done(client.call("work_list", { ownerWithin: lead.id }))).items, [
-      work,
+      { ...work, asks: [] },
     ]);
     assert.deepEqual(await done(client.call("message_get", { messageID: sent.messageID })), sent);
     assert.deepEqual(await done(client.call("message_list", { of: worker.id })), conversation);

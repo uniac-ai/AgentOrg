@@ -57,12 +57,16 @@ async function attention(client: Actor, since: string | undefined): Promise<Atte
 /** The records an item's frame quotes, read as the session's Actor. */
 async function delivery(client: Actor, self: string, item: Item): Promise<Delivery> {
   if (item.kind === "answer") {
-    const ask = await call<Form>(client, "form_get", { formID: item.recordID });
-    const work =
-      ask.workID === undefined
-        ? undefined
-        : await call<Work>(client, "work_get", { ticketID: ask.workID });
-    return { ...item, ask, ...(work === undefined ? {} : { work }) };
+    // An ask on Work comes with its Work; a 0.5 ask with no Work comes alone.
+    const found = await call<Work | Form>(client, "work_get", { askID: item.recordID });
+    const work = "formID" in found ? undefined : found;
+    const ask =
+      "formID" in found ? found : found.asks?.find((each) => each.formID === item.recordID);
+    return {
+      ...item,
+      ...(ask === undefined ? {} : { ask }),
+      ...(work === undefined ? {} : { work }),
+    };
   }
   if (item.kind === "message") {
     const recent = await call<List<Message>>(client, "message_list", {
@@ -162,11 +166,11 @@ function frame(item: Delivery, here: Here): string {
       return `${from} answered your ask ${quoted(item.title)} (${item.recordID}): ${answers}.${note} Apply it${work}. The ask records the answer; ${item.ask?.status === "open" ? "it collects more until you close it" : "it is resolved"}.`;
     }
     case "ask":
-      return `${from}, your report, asks ${quoted(item.title)} (${item.recordID}). Read it with form_get, then answer with form_respond, or carry it up as your own ask with cause ${item.recordID}.`;
+      return `${from} routes you the ask ${quoted(item.title)} (${item.recordID}). Read it with work_get {askID: "${item.recordID}"}, then answer it with work_answer {askID, answers, note?}, or raise it one manager up with work_answer {askID, raise: true}.`;
     case "assigned":
       return `${from} assigned you Work ${quoted(item.title)} (${item.recordID}). Read it with work_get; set it active with work_update when you start.`;
     case "review_due":
-      return `${from} submitted ${quoted(item.title)} (${item.recordID}) for your review. Read the submission with work_get, then accept it or request changes with work_review.`;
+      return `${from} submitted ${quoted(item.title)} (${item.recordID}) for your answer. Read the submission with work_get, then answer it with work_answer {askID: <its submissionID>, answers: {verdict: "accepted" or "changes_requested"}, note?}; requesting changes needs the note.`;
     case "reviewed":
       return `${from} reviewed your Work ${quoted(item.title)} (${item.recordID}). Read the review with work_get; on requested changes, address them and submit again.`;
     case "message": {

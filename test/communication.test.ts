@@ -128,6 +128,12 @@ test("Messages are immutable P2P conversations that any Actor reads, with no rec
     "status_get",
     "actor_get",
     "actor_list",
+    "form_create",
+    "form_get",
+    "form_list",
+    "form_respond",
+    "form_close",
+    "work_review",
   ])
     assert.equal(await refused(root.call(retired, {})), "not_found", retired);
 });
@@ -138,7 +144,10 @@ test("Work retains role authority, revision conflicts, exact submissions and dyn
   let work = await done(peer.client.call("work_create", { ownerID: owner.id, title: "Build" }));
   assert.equal(work.requesterID, peer.id);
   assert.equal("history" in work, false);
-  assert.deepEqual(await done(root.call("work_get", { ticketID: work.ticketID })), work);
+  assert.deepEqual(await done(root.call("work_get", { ticketID: work.ticketID })), {
+    ...work,
+    asks: [],
+  });
   assert.equal(
     await refused(
       owner.client.call("work_update", {
@@ -176,38 +185,39 @@ test("Work retains role authority, revision conflicts, exact submissions and dyn
       evidence: ["proof"],
     }),
   );
-  assert.deepEqual(await done(third.client.call("work_get", { ticketID: work.ticketID })), work);
+  const earlier = work.submission.submissionID;
+  assert.deepEqual(await done(third.client.call("work_get", { ticketID: work.ticketID })), {
+    ...work,
+    asks: [],
+  });
   assert.equal(
     await refused(
-      root.call("work_review", {
+      root.call("work_answer", {
         ticketID: work.ticketID,
-        expectedRevision: work.revision,
-        submissionID: work.submission.submissionID,
-        verdict: "accepted",
-        comment: "Not requester",
+        askID: work.submission.submissionID,
+        answers: { verdict: "accepted" },
+        note: "Not requester",
       }),
     ),
     "forbidden",
   );
   assert.equal(
     await refused(
-      peer.client.call("work_review", {
+      peer.client.call("work_answer", {
         ticketID: work.ticketID,
-        expectedRevision: work.revision,
-        submissionID: "wrong",
-        verdict: "accepted",
-        comment: "Wrong",
+        askID: "wrong",
+        answers: { verdict: "accepted" },
+        note: "Wrong",
       }),
     ),
-    "conflict",
+    "not_found",
   );
   work = await done(
-    peer.client.call("work_review", {
+    peer.client.call("work_answer", {
       ticketID: work.ticketID,
-      expectedRevision: work.revision,
-      submissionID: work.submission.submissionID,
-      verdict: "changes_requested",
-      comment: "Revise",
+      askID: work.submission.submissionID,
+      answers: { verdict: "changes_requested" },
+      note: "Revise",
     }),
   );
   work = await done(
@@ -217,7 +227,10 @@ test("Work retains role authority, revision conflicts, exact submissions and dyn
       ownerID: third.id,
     }),
   );
-  assert.deepEqual(await done(owner.client.call("work_get", { ticketID: work.ticketID })), work);
+  assert.deepEqual(await done(owner.client.call("work_get", { ticketID: work.ticketID })), {
+    ...work,
+    asks: [],
+  });
   assert.equal(
     await refused(
       owner.client.call("work_submit", {
@@ -229,7 +242,7 @@ test("Work retains role authority, revision conflicts, exact submissions and dyn
     ),
     "forbidden",
   );
-  assert.deepEqual((await done(third.client.call("work_list", {}))).items, [work]);
+  assert.deepEqual((await done(third.client.call("work_list", {}))).items, [{ ...work, asks: [] }]);
   work = await done(
     third.client.call("work_submit", {
       ticketID: work.ticketID,
@@ -238,20 +251,32 @@ test("Work retains role authority, revision conflicts, exact submissions and dyn
       evidence: [],
     }),
   );
+  assert.equal(
+    await refused(
+      peer.client.call("work_answer", {
+        ticketID: work.ticketID,
+        askID: earlier,
+        answers: { verdict: "accepted" },
+      }),
+    ),
+    "conflict",
+  );
   work = await done(
-    peer.client.call("work_review", {
+    peer.client.call("work_answer", {
       ticketID: work.ticketID,
-      expectedRevision: work.revision,
-      submissionID: work.submission.submissionID,
-      verdict: "accepted",
+      askID: work.submission.submissionID,
+      answers: { verdict: "accepted" },
     }),
   );
   assert.equal(work.status, "accepted");
-  assert.deepEqual(await done(root.call("work_get", { ticketID: work.ticketID })), work);
+  assert.deepEqual(await done(root.call("work_get", { ticketID: work.ticketID })), {
+    ...work,
+    asks: [],
+  });
   const { history, ...current } = await done(
     root.call("work_get", { ticketID: work.ticketID, history: true }),
   );
-  assert.deepEqual(current, work);
+  assert.deepEqual(current, { ...work, asks: [] });
   assert.equal(history.length, work.revision);
   assert.equal(
     await refused(
@@ -265,7 +290,7 @@ test("Work retains role authority, revision conflicts, exact submissions and dyn
   );
 });
 
-test("standalone and linked asks have shared full-history reads, responder-keyed answers and asker-only close", async (t) => {
+test("asks on Work have shared full-history reads, owner-only asking, responder-keyed answers and asker-only close", async (t) => {
   const { core, root, owner, peer, third } = await members();
   t.after(() => core.close());
   const fields = [
@@ -276,34 +301,54 @@ test("standalone and linked asks have shared full-history reads, responder-keyed
       options: [{ value: "yes" }, { value: "no" }],
     },
   ];
-  let form = await done(peer.client.call("form_create", { title: "Choose", fields }));
-  assert.equal("workID" in form, false);
-  assert.deepEqual(await done(third.client.call("form_get", { formID: form.formID })), form);
+  const own = await done(peer.client.call("work_create", { title: "Asks" }));
+  // An ask names no cause and no other Work, and finished Work takes no new ask.
+  for (const extra of [{ cause: "form1" }, { workID: own.ticketID }])
+    assert.equal(
+      await refused(
+        peer.client.call("work_update", {
+          ticketID: own.ticketID,
+          ask: { title: "Extra?", fields, ...extra },
+        }),
+      ),
+      "invalid",
+    );
+  const finished = await done(peer.client.call("work_create", { title: "Finished" }));
+  await done(peer.client.call("work_submit", { ticketID: finished.ticketID, result: "Done" }));
   assert.equal(
     await refused(
-      root.call("form_close", {
-        formID: form.formID,
-        expectedRevision: 1,
-        status: "resolved",
-        resolution: "Not requester",
+      peer.client.call("work_update", {
+        ticketID: finished.ticketID,
+        ask: { title: "Too late?", fields },
+      }),
+    ),
+    "conflict",
+  );
+  const ask = (caller: Actor, ticketID: string, input: object) =>
+    caller.call("work_update", { ticketID, ask: { fields, ...input } });
+  let form = await done(ask(peer.client, own.ticketID, { title: "Choose" }));
+  assert.equal(form.workID, own.ticketID);
+  assert.deepEqual(await done(third.client.call("work_get", { askID: form.formID })), {
+    ...own,
+    asks: [form],
+  });
+  assert.equal(
+    await refused(
+      root.call("work_update", {
+        close: { askID: form.formID, status: "resolved", resolution: "Not requester" },
       }),
     ),
     "forbidden",
   );
   assert.equal(
     await refused(
-      owner.client.call("form_respond", {
-        formID: form.formID,
-        expectedRevision: 1,
-        answers: { choice: "other" },
-      }),
+      owner.client.call("work_answer", { askID: form.formID, answers: { choice: "other" } }),
     ),
     "invalid",
   );
   form = await done(
-    owner.client.call("form_respond", {
-      formID: form.formID,
-      expectedRevision: 1,
+    owner.client.call("work_answer", {
+      askID: form.formID,
       answers: { choice: "yes" },
       note: "Because",
     }),
@@ -317,24 +362,16 @@ test("standalone and linked asks have shared full-history reads, responder-keyed
   });
   for (const caller of [third.client, peer.client])
     assert.equal(
-      await refused(
-        caller.call("form_respond", {
-          formID: form.formID,
-          expectedRevision: form.revision,
-          answers: { choice: "no" },
-        }),
-      ),
+      await refused(caller.call("work_answer", { askID: form.formID, answers: { choice: "no" } })),
       "conflict",
     );
-  let poll = await done(
-    peer.client.call("form_create", { title: "Collect", collect: true, fields }),
-  );
+  let poll = await done(ask(peer.client, own.ticketID, { title: "Collect", collect: true }));
   for (const [caller, choice] of [
     [owner.client, "yes"],
     [third.client, "no"],
     [owner.client, "no"],
   ] as const)
-    poll = await done(caller.call("form_respond", { formID: poll.formID, answers: { choice } }));
+    poll = await done(caller.call("work_answer", { askID: poll.formID, answers: { choice } }));
   assert.equal(poll.status, "open");
   assert.deepEqual(
     Object.fromEntries(
@@ -348,54 +385,44 @@ test("standalone and linked asks have shared full-history reads, responder-keyed
   for (const caller of [root, owner.client])
     assert.equal(
       await refused(
-        caller.call("form_close", {
-          formID: poll.formID,
-          expectedRevision: poll.revision,
-          status: "resolved",
-          resolution: "Not requester",
+        caller.call("work_update", {
+          close: { askID: poll.formID, status: "resolved", resolution: "Not requester" },
         }),
       ),
       "forbidden",
     );
   poll = await done(
-    peer.client.call("form_close", {
-      formID: poll.formID,
-      expectedRevision: poll.revision,
-      status: "resolved",
-      resolution: "Decided",
+    peer.client.call("work_update", {
+      close: { askID: poll.formID, status: "resolved", resolution: "Decided" },
     }),
   );
   assert.equal(
     await refused(
-      owner.client.call("form_respond", {
-        formID: poll.formID,
-        expectedRevision: poll.revision,
-        answers: { choice: "yes" },
-      }),
+      owner.client.call("work_answer", { askID: poll.formID, answers: { choice: "yes" } }),
     ),
     "conflict",
   );
   assert.deepEqual(
-    (await done(owner.client.call("form_list", {}))).items.map(
+    (await done(owner.client.call("work_get", { ticketID: own.ticketID }))).asks.map(
       (item: { formID: string }) => item.formID,
     ),
     [form.formID, poll.formID],
   );
-  assert.equal(
-    await refused(
-      peer.client.call("form_create", { workID: "missing", title: "Missing Work", fields }),
-    ),
-    "not_found",
-  );
+  assert.equal(await refused(ask(peer.client, "missing", { title: "Missing Work" })), "not_found");
   const work = await done(peer.client.call("work_create", { ownerID: owner.id, title: "Linked" }));
-  const linked = await done(
-    third.client.call("form_create", { workID: work.ticketID, title: "Linked ask", fields }),
-  );
   assert.equal(
-    (await done(owner.client.call("form_get", { formID: linked.formID }))).formID,
-    linked.formID,
+    await refused(ask(third.client, work.ticketID, { title: "Not the owner's" })),
+    "forbidden",
   );
-  assert.deepEqual(await done(third.client.call("work_get", { ticketID: work.ticketID })), work);
+  const linked = await done(ask(owner.client, work.ticketID, { title: "Linked ask" }));
+  assert.equal(
+    (await done(owner.client.call("work_get", { askID: linked.formID }))).ticketID,
+    work.ticketID,
+  );
+  assert.deepEqual(await done(third.client.call("work_get", { ticketID: work.ticketID })), {
+    ...work,
+    asks: [linked],
+  });
   await done(
     peer.client.call("work_update", {
       ticketID: work.ticketID,
@@ -403,11 +430,15 @@ test("standalone and linked asks have shared full-history reads, responder-keyed
       ownerID: third.id,
     }),
   );
-  assert.deepEqual(await done(owner.client.call("form_get", { formID: linked.formID })), linked);
-  assert.deepEqual(await done(root.call("form_get", { formID: form.formID })), form);
-  const { history, ...current } = await done(
-    root.call("form_get", { formID: poll.formID, history: true }),
+  const [reassigned] = (await done(owner.client.call("work_get", { askID: linked.formID }))).asks;
+  assert.deepEqual(
+    [reassigned.formID, reassigned.status, reassigned.resolution.reason],
+    [linked.formID, "cancelled", "reassigned"],
   );
+  assert.deepEqual((await done(root.call("work_get", { askID: form.formID }))).asks, [form, poll]);
+  const { history, ...current } = (
+    await done(root.call("work_get", { askID: poll.formID, history: true }))
+  ).asks[1];
   assert.deepEqual(current, poll);
   assert.equal(history.length, poll.revision);
 });
@@ -444,9 +475,9 @@ test("Workspace state and list positions survive a Hub restart under the same ad
     owner.client.call("work_create", { ownerID: peer.id, title: "Keep Work" }),
   );
   const form = await done(
-    peer.client.call("form_create", {
-      title: "Keep ask",
-      fields: [{ name: "answer", label: "Answer", required: true }],
+    peer.client.call("work_update", {
+      ticketID: work.ticketID,
+      ask: { title: "Keep ask", fields: [{ name: "answer", label: "Answer", required: true }] },
     }),
   );
   const page = await done(peer.client.call("message_list", { counterpartyID: owner.id, limit: 1 }));
@@ -466,8 +497,14 @@ test("Workspace state and list positions survive a Hub restart under the same ad
     await done(peer.client.call("message_get", { messageID: sent.messageID })),
     sent,
   );
-  assert.deepEqual(await done(peer.client.call("work_get", { ticketID: work.ticketID })), work);
-  assert.deepEqual(await done(owner.client.call("form_get", { formID: form.formID })), form);
+  assert.deepEqual(await done(peer.client.call("work_get", { ticketID: work.ticketID })), {
+    ...work,
+    asks: [form],
+  });
+  assert.deepEqual(await done(owner.client.call("work_get", { askID: form.formID })), {
+    ...work,
+    asks: [form],
+  });
   const resumed = await done(
     peer.client.call("message_list", { counterpartyID: owner.id, after: page.next }),
   );
@@ -532,11 +569,11 @@ test("Work filters AND before pagination, positions continue only their filter, 
   const filter = { ownerID: owner.id, requesterID: peer.id, status: ["active"], limit: 1 };
   const actors = { [peer.id]: { name: "peer" }, [owner.id]: { name: "owner" } };
   const page = await done(third.client.call("work_list", filter));
-  assert.deepEqual(page.items, [first]);
+  assert.deepEqual(page.items, [{ ...first, asks: [] }]);
   assert.deepEqual(page.actors, actors);
   assert.equal(typeof page.next, "string");
   assert.deepEqual(await done(third.client.call("work_list", { ...filter, after: page.next })), {
-    items: [second],
+    items: [{ ...second, asks: [] }],
     next: null,
     actors,
   });
@@ -565,6 +602,7 @@ test("Work filters AND before pagination, positions continue only their filter, 
   for (const bad of [
     { status: "active" },
     { status: ["closed"] },
+    { status: ["blocked"] },
     { ownerID: "" },
     { requesterID: 1 },
     { after: 1 },
@@ -572,97 +610,52 @@ test("Work filters AND before pagination, positions continue only their filter, 
     assert.equal(await refused(root.call("work_list", bad)), "invalid");
 });
 
-test("Form filters and updatedSince intersect before pagination and an empty answer is kept under its responder", async (t) => {
-  const { core, root, owner, peer, third } = await members();
+test("a Work's asks come with it, all from work_get and the open ones from work_list, and an empty answer is kept under its responder", async (t) => {
+  const { core, root, owner, third } = await members();
   t.after(() => core.close());
   const work = await done(
     root.call("work_create", { ownerID: third.id, title: "Shared association" }),
   );
+  const other = await done(root.call("work_create", { ownerID: third.id, title: "Other Work" }));
   const fields = [{ name: "answer", label: "Optional answer", required: false }];
-  const create = (caller: Actor, title: string, linked = true) =>
-    done(
-      caller.call("form_create", {
-        title,
-        fields,
-        ...(linked ? { workID: work.ticketID } : {}),
-      }),
-    );
-  await create(root, "Wrong requester");
-  const answered = await create(peer.client, "Answered");
-  await done(
-    owner.client.call("form_respond", {
-      formID: answered.formID,
-      expectedRevision: 1,
-      answers: {},
-    }),
-  );
-  const closed = await create(peer.client, "Cancelled");
-  await done(
-    peer.client.call("form_close", {
-      formID: closed.formID,
-      expectedRevision: 1,
-      status: "cancelled",
-      resolution: "No longer needed",
-    }),
-  );
-  await create(peer.client, "Unlinked", false);
-  const earlier = await create(peer.client, "Before the reader looked");
-  await new Promise((resolve) => setTimeout(resolve, 5));
-  const since = new Date().toISOString();
-  const first = await create(peer.client, "First match");
-  const second = await create(peer.client, "Second match");
-  await create(third.client, "Wrong requester after");
-  const filter = {
-    workID: work.ticketID,
-    requesterID: peer.id,
-    status: ["open"],
-    updatedSince: since,
-    limit: 1,
-  };
-  const page = await done(root.call("form_list", filter));
-  assert.deepEqual(page.items, [first]);
-  assert.deepEqual(page.actors, { [peer.id]: { name: "peer" } });
-  assert.equal(typeof page.next, "string");
-  assert.deepEqual(await done(root.call("form_list", { ...filter, after: page.next })), {
-    items: [second],
-    next: null,
-    actors: { [peer.id]: { name: "peer" } },
-  });
-  const { updatedSince: _since, ...unbounded } = filter;
-  assert.deepEqual((await done(root.call("form_list", { ...unbounded, limit: 10 }))).items, [
-    earlier,
-    first,
-    second,
-  ]);
+  const create = (title: string, ticketID = work.ticketID) =>
+    done(third.client.call("work_update", { ticketID, ask: { title, fields } }));
+  const own = await done(root.call("work_create", { title: "The root's own" }));
   assert.equal(
-    await refused(root.call("form_list", { ...unbounded, after: page.next })),
-    "invalid",
-  );
-  assert.deepEqual(
-    (await done(root.call("form_list", { status: ["cancelled", "resolved"] }))).items.map(
-      (item: { formID: string }) => item.formID,
+    await refused(
+      root.call("work_update", { ticketID: own.ticketID, ask: { title: "Root", fields } }),
     ),
-    [answered.formID, closed.formID],
+    "forbidden",
   );
-  const response = await done(root.call("form_get", { formID: answered.formID }));
+  const answered = await create("Answered");
+  await done(owner.client.call("work_answer", { askID: answered.formID, answers: {} }));
+  const closed = await create("Cancelled");
+  await done(
+    third.client.call("work_update", {
+      close: { askID: closed.formID, status: "cancelled", resolution: "No longer needed" },
+    }),
+  );
+  await create("On other Work", other.ticketID);
+  const first = await create("First match");
+  const second = await create("Second match");
+  const read = await done(root.call("work_get", { ticketID: work.ticketID }));
+  assert.deepEqual(
+    read.asks.map((item: { formID: string; status: string }) => [item.formID, item.status]),
+    [
+      [answered.formID, "resolved"],
+      [closed.formID, "cancelled"],
+      [first.formID, "open"],
+      [second.formID, "open"],
+    ],
+  );
+  const listed = (await done(root.call("work_list", { ownerID: third.id }))).items.find(
+    (item: { ticketID: string }) => item.ticketID === work.ticketID,
+  );
+  assert.deepEqual(listed.asks, [first, second]);
+  const response = (await done(root.call("work_get", { askID: answered.formID }))).asks[0];
   assert.deepEqual(Object.keys(response.responses), [owner.id]);
   assert.deepEqual(response.responses[owner.id].answers, {});
   assert.equal((await done(root.call("team", { depth: 0 }))).positions[0].id, core.rootId);
-  for (const field of ["workID", "requesterID"])
-    assert.deepEqual(await done(root.call("form_list", { [field]: "unknown-id" })), {
-      items: [],
-      next: null,
-      actors: {},
-    });
-  for (const bad of [
-    { status: "open" },
-    { status: ["active"] },
-    { requesterID: 1 },
-    { updatedSince: "yesterday" },
-    { respondentID: owner.id },
-    { awaitingActorID: owner.id },
-  ])
-    assert.equal(await refused(root.call("form_list", bad)), "invalid");
 });
 
 test("shared Work/Form history and Hub diagnostics do not disclose Message data", async (t) => {
@@ -676,16 +669,17 @@ test("shared Work/Form history and Hub diagnostics do not disclose Message data"
     owner.client.call("message_send", { recipientID: peer.id, text: secret }),
   );
   let form = await done(
-    owner.client.call("form_create", {
-      workID: work.ticketID,
-      title: "Public question",
-      fields: [{ name: "answer", label: "Public question", required: true }],
+    peer.client.call("work_update", {
+      ticketID: work.ticketID,
+      ask: {
+        title: "Public question",
+        fields: [{ name: "answer", label: "Public question", required: true }],
+      },
     }),
   );
   form = await done(
-    peer.client.call("form_respond", {
-      formID: form.formID,
-      expectedRevision: form.revision,
+    owner.client.call("work_answer", {
+      askID: form.formID,
       answers: { answer: "Public response" },
     }),
   );
@@ -699,19 +693,21 @@ test("shared Work/Form history and Hub diagnostics do not disclose Message data"
   );
   const projections: unknown[] = [];
   for (const observer of [root, third.client]) {
-    assert.deepEqual(await done(observer.call("work_get", { ticketID: work.ticketID })), changed);
-    assert.deepEqual(await done(observer.call("form_get", { formID: form.formID })), form);
-    const histories = [
-      await done(observer.call("work_get", { ticketID: work.ticketID, history: true })),
-      await done(observer.call("form_get", { formID: form.formID, history: true })),
-    ];
+    assert.deepEqual(await done(observer.call("work_get", { ticketID: work.ticketID })), {
+      ...changed,
+      asks: [form],
+    });
+    assert.deepEqual(await done(observer.call("work_get", { askID: form.formID })), {
+      ...changed,
+      asks: [form],
+    });
+    const histories = await done(observer.call("work_get", { askID: form.formID, history: true }));
     assert.deepEqual(
-      histories.map((record) => record.history.length),
+      [histories, ...histories.asks].map((record) => record.history.length),
       [2, 2],
     );
-    projections.push(...histories);
-    for (const name of ["work_list", "form_list", "team"])
-      projections.push(await done(observer.call(name, {})));
+    projections.push(histories);
+    for (const name of ["work_list", "team"]) projections.push(await done(observer.call(name, {})));
     projections.push(await observer.call("activity", {}), await observer.available());
     assert.deepEqual(
       await done(observer.call("message_get", { messageID: message.messageID })),

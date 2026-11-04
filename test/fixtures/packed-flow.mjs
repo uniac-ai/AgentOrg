@@ -88,8 +88,8 @@ try {
   let owner = await client(url, ownerID, ownerRecord.credential);
   let requester = await client(url, requesterID, requesterRecord.credential);
   const catalog = await root.available();
-  assert.equal(catalog.length, 9);
-  assert.equal(catalog.flatMap((tool) => tool.interfaces).length, 26);
+  assert.equal(catalog.length, 8);
+  assert.equal(catalog.flatMap((tool) => tool.interfaces).length, 21);
   assert.deepEqual(await owner.available(), catalog);
   const system = catalog.find((tool) => tool.id === "hub:system");
   assert.deepEqual(
@@ -159,7 +159,9 @@ try {
   for (const [name, filters] of [
     ["message_list", ["between", "counterpartyID", "of", "before", "after"]],
     ["work_list", ["ownerWithin", "requesterWithin", "updatedSince", "order"]],
-    ["form_list", ["requesterWithin", "updatedSince", "order"]],
+    ["work_get", ["ticketID", "askID"]],
+    ["work_update", ["ticketID", "ask", "close"]],
+    ["work_answer", ["askID", "answers", "note", "raise"]],
   ]) {
     const offer = catalog
       .flatMap((tool) => tool.interfaces)
@@ -172,8 +174,8 @@ try {
   );
   assert.deepEqual(
     [
-      "form_create",
-      "form_respond",
+      "work_update",
+      "work_answer",
       "message_send",
       "message_list",
       "message_get",
@@ -194,47 +196,57 @@ try {
   assert.deepEqual(await done(requester.call("message_get", { messageID: sent.messageID })), sent);
   const page = await done(requester.call("message_list", { counterpartyID: ownerID, limit: 1 }));
   assert.deepEqual(page.items, [sent]);
+  // Each ask is on Work its asker owns.
+  const publishing = Work.parse(
+    await done(requester.call("work_create", { title: "Publish the fixture" })),
+  );
   let form = Form.parse(
     await done(
-      requester.call("form_create", {
-        title: "Publish the fixture?",
-        approval: true,
-        fields: [
-          {
-            name: "answer",
-            label: "Answer",
-            required: true,
-            options: [{ value: "publish", detail: "After CI" }, { value: "hold" }],
-            recommended: "publish",
-          },
-        ],
+      requester.call("work_update", {
+        ticketID: publishing.ticketID,
+        ask: {
+          title: "Publish the fixture?",
+          approval: true,
+          fields: [
+            {
+              name: "answer",
+              label: "Answer",
+              required: true,
+              options: [{ value: "publish", detail: "After CI" }, { value: "hold" }],
+              recommended: "publish",
+            },
+          ],
+        },
       }),
     ),
   );
-  assert.equal("workID" in form, false);
-  assert.deepEqual(await done(root.call("form_get", { formID: form.formID })), form);
+  assert.equal(form.workID, publishing.ticketID);
+  assert.deepEqual(await done(root.call("work_get", { askID: form.formID })), {
+    ...publishing,
+    asks: [form],
+  });
   const listedAsks = await done(
-    root.call("form_list", {
-      requesterWithin: requesterID,
+    root.call("work_list", {
+      ownerWithin: requesterID,
       requesterID: [requesterID, ownerID],
       status: ["open"],
       limit: 1,
     }),
   );
-  assert.deepEqual(listedAsks.items, [form]);
+  assert.deepEqual(listedAsks.items, [{ ...publishing, asks: [form] }]);
   assert.deepEqual(listedAsks.actors, { [requesterID]: { name: "requester" } });
   await deny(
-    owner.call("form_respond", { formID: form.formID, answers: { answer: "publish" } }),
+    owner.call("work_answer", { askID: form.formID, answers: { answer: "publish" } }),
     "forbidden",
   );
   await deny(
-    requester.call("form_respond", { formID: form.formID, answers: { answer: "publish" } }),
+    requester.call("work_answer", { askID: form.formID, answers: { answer: "publish" } }),
     "forbidden",
   );
   form = Form.parse(
     await done(
-      root.call("form_respond", {
-        formID: form.formID,
+      root.call("work_answer", {
+        askID: form.formID,
         answers: { answer: "publish" },
         note: "Go",
       }),
@@ -242,40 +254,42 @@ try {
   );
   assert.equal(form.status, "resolved");
   assert.deepEqual(form.responses[rootID].answers, { answer: "publish" });
+  const lanes = Work.parse(await done(owner.call("work_create", { title: "Pick a lane" })));
   let question = Form.parse(
     await done(
-      owner.call("form_create", {
-        title: "Which lane?",
-        fields: [{ name: "lane", label: "Lane", required: true }],
+      owner.call("work_update", {
+        ticketID: lanes.ticketID,
+        ask: { title: "Which lane?", fields: [{ name: "lane", label: "Lane", required: true }] },
       }),
     ),
   );
   await deny(
-    requester.call("form_close", {
-      formID: question.formID,
-      expectedRevision: question.revision,
-      status: "resolved",
-      resolution: "Not the asker",
+    requester.call("work_update", {
+      close: { askID: question.formID, status: "resolved", resolution: "Not the asker" },
     }),
     "forbidden",
   );
   question = Form.parse(
     await done(
-      owner.call("form_close", {
-        formID: question.formID,
-        expectedRevision: question.revision,
-        status: "resolved",
-        resolution: "Answered in the session: the owned lane",
+      owner.call("work_update", {
+        close: {
+          askID: question.formID,
+          status: "resolved",
+          resolution: "Answered in the session: the owned lane",
+        },
       }),
     ),
   );
   let work = Work.parse(
     await done(requester.call("work_create", { ownerID, title: "Prove packed public SDK" })),
   );
-  assert.deepEqual(await done(root.call("work_get", { ticketID: work.ticketID })), work);
+  assert.deepEqual(await done(root.call("work_get", { ticketID: work.ticketID })), {
+    ...work,
+    asks: [],
+  });
   assert.deepEqual(
     (await done(root.call("work_list", { ownerID, requesterID, status: ["open"] }))).items,
-    [work],
+    [{ ...work, asks: [] }],
   );
   assert.deepEqual(
     (
@@ -289,7 +303,7 @@ try {
         }),
       )
     ).items,
-    [work],
+    [{ ...work, asks: [] }],
   );
   for (const name of ["ownerWithin", "requesterWithin"])
     assert.deepEqual(await done(root.call("work_list", { [name]: "unknown" })), {
@@ -297,11 +311,6 @@ try {
       next: null,
       actors: {},
     });
-  assert.deepEqual(await done(root.call("form_list", { requesterWithin: "unknown" })), {
-    items: [],
-    next: null,
-    actors: {},
-  });
   await deny(
     root.call("work_update", { ticketID: work.ticketID, progress: "Not owner" }),
     "forbidden",
@@ -320,7 +329,7 @@ try {
     owner.call("work_update", { ticketID: work.ticketID, expectedRevision: 1, progress: "Stale" }),
     "conflict",
   );
-  assert.equal((await done(owner.call("work_list"))).items[0].ticketID, work.ticketID);
+  assert.equal((await done(owner.call("work_list"))).items.at(-1).ticketID, work.ticketID);
   work = Work.parse(
     await done(
       owner.call("work_submit", {
@@ -333,10 +342,10 @@ try {
   assert.equal(work.status, "submitted");
   work = Work.parse(
     await done(
-      requester.call("work_review", {
+      requester.call("work_answer", {
         ticketID: work.ticketID,
-        submissionID: work.submission.submissionID,
-        verdict: "accepted",
+        askID: work.submission.submissionID,
+        answers: { verdict: "accepted" },
       }),
     ),
   );
@@ -375,8 +384,14 @@ try {
   owner = await client(url, ownerID, ownerRecord.credential);
   requester = await client(url, requesterID, requesterRecord.credential);
   assert.deepEqual(await done(requester.call("message_get", { messageID: sent.messageID })), sent);
-  assert.deepEqual(await done(owner.call("form_get", { formID: form.formID })), form);
-  assert.deepEqual(await done(owner.call("work_get", { ticketID: work.ticketID })), work);
+  assert.deepEqual(await done(owner.call("work_get", { askID: form.formID })), {
+    ...publishing,
+    asks: [form],
+  });
+  assert.deepEqual(await done(owner.call("work_get", { ticketID: work.ticketID })), {
+    ...work,
+    asks: [],
+  });
   assert.deepEqual(
     (
       await done(
@@ -451,9 +466,9 @@ try {
   assert.deepEqual(
     (await done(root.call("work_list", { ownerWithin: ownerID, requesterWithin: requesterID })))
       .items,
-    [work],
+    [{ ...work, asks: [] }],
   );
-  assert.deepEqual((await done(root.call("form_list", { requesterWithin: ownerID }))).items, [
+  assert.deepEqual((await done(root.call("work_get", { ticketID: lanes.ticketID }))).asks, [
     question,
   ]);
   const pin = JSON.parse(
@@ -476,8 +491,8 @@ try {
   const result = {
     ok: true,
     node: process.version,
-    toolCount: 9,
-    interfaceCount: 26,
+    toolCount: 8,
+    interfaceCount: 21,
     workspaceSource: pin.source,
     workspaceSha256: digest,
     workspaceVersion: pin.version,
@@ -495,7 +510,7 @@ try {
     transientDetachAndReconnect: true,
     staleRunCursorRefused: true,
     allWorkspaceOperations: true,
-    standaloneAsks: true,
+    asksOnWork: true,
     openMessageReads: true,
     selectedMessageQueries: true,
     discoveryMessageQuerySchemas: true,
