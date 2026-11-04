@@ -782,6 +782,8 @@ test("each entry keeps its own label: a claim on the ticket, a refused write, a 
   );
   start = await position(worker.client);
   await edit(lost, { ownerID: worker.id });
+  // The fallback compares times, so the lost write comes at a later millisecond.
+  await new Promise((resolve) => setTimeout(resolve, 2));
   await edit(lost, { goal: "Its entry is lost" });
   core.store.database.run("DELETE FROM audit WHERE id = (SELECT max(id) FROM audit)");
   assert.deepEqual(
@@ -839,4 +841,57 @@ test("a collecting ask's answers come one per responder, and of two raises the l
   assert.deepEqual(kinds(await read(root, rootStart)), [
     ["ask", twice.formID, "lead", "Twice in one read"],
   ]);
+});
+
+test("closing an Actor gives its stand-in what the close re-routes, past one closed manager or two", async (t) => {
+  const { core, root, make, lead, worker, peer } = await organization();
+  t.after(() => core.close());
+  // One closed manager: worker's report asked, and worker requested Work that waits on it.
+  const sub = await make("sub", worker.client);
+  const near = await ask(sub.client, "Near");
+  const given = await done(worker.client.call("work_create", { title: "Given", ownerID: peer.id }));
+  await done(peer.client.call("work_update", { ticketID: given.ticketID, status: "active" }));
+  await done(peer.client.call("work_submit", { ticketID: given.ticketID, result: "Done" }));
+  await done(worker.client.call("actor_close", { actor: sub.id }));
+  let start = await position(lead.client);
+  await done(root.call("actor_close", { actor: worker.id }));
+  assert.deepEqual(kinds(await read(lead.client, start)), [
+    ["ask", near.formID, "root", "Near"],
+    ["review_due", given.ticketID, "root", "Given"],
+  ]);
+
+  // Two closed managers: the asker's and the requester's managers close first, then the next.
+  const middle = await make("middle", lead.client);
+  const inner = await make("inner", middle.client);
+  const leaf = await make("leaf", inner.client);
+  const far = await ask(leaf.client, "Far");
+  const deep = await done(inner.client.call("work_create", { title: "Deep", ownerID: peer.id }));
+  await done(peer.client.call("work_update", { ticketID: deep.ticketID, status: "active" }));
+  await done(peer.client.call("work_submit", { ticketID: deep.ticketID, result: "Done" }));
+  await done(inner.client.call("actor_close", { actor: leaf.id }));
+  await done(middle.client.call("actor_close", { actor: inner.id }));
+  start = await position(lead.client);
+  await done(root.call("actor_close", { actor: middle.id }));
+  assert.deepEqual(kinds(await read(lead.client, start)), [
+    ["ask", far.formID, "root", "Far"],
+    ["review_due", deep.ticketID, "root", "Deep"],
+  ]);
+});
+
+test("a close that re-routes nothing gives no item", async (t) => {
+  const { core, root, make, lead } = await organization();
+  t.after(() => core.close());
+  const quiet = await make("quiet", lead.client);
+  const own = await ask(quiet.client, "Its own");
+  const start = await position(lead.client);
+  await done(root.call("actor_close", { actor: quiet.id }));
+  assert.deepEqual(
+    kinds(await read(lead.client, start)),
+    [],
+    "its own ask waited on lead already, and still does",
+  );
+  assert.deepEqual(
+    (await done(lead.client.call("actor_view", {}))).needs.map((each: Json) => each.formID),
+    [own.formID],
+  );
 });

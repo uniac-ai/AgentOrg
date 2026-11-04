@@ -24,6 +24,15 @@ type Item = Result["items"][number];
 type Entry = AuditRow & { actor: string; target: string };
 type Event = NonNullable<Work["history"]>[number];
 
+/** A value worked out the first time it is asked for. */
+function once<T>(make: () => T): () => T {
+  let made: { value: T } | undefined;
+  return () => {
+    made ??= { value: make() };
+    return made.value;
+  };
+}
+
 /** The audit entries one read examines; a full batch returns at once and the next read goes on. */
 const BATCH = 500;
 /** The operations 0.5.0 audited, as the writes that replace them, so a resumed read keeps them. */
@@ -107,7 +116,51 @@ export function attention(registry: Registry, audit: Audit, workspace: Workspace
           );
         return works.get(id);
       },
+      /** The open asks routed to the caller, and submitted Work requested in its branch. */
+      routed: once(() =>
+        all(caller, (clients, after) =>
+          clients.work.asks({ routedTo: caller.id, limit: 100, after }),
+        ),
+      ),
+      submitted: once(() =>
+        all(caller, (clients, after) =>
+          clients.work.list({
+            requesterWithin: caller.id,
+            status: ["submitted"],
+            limit: 100,
+            after,
+          }),
+        ),
+      ),
     };
+  }
+
+  /** Every page of a list the caller reads; none where it can't read it. */
+  function all<T>(
+    caller: ActorRow,
+    page: (
+      clients: WorkspaceClients,
+      after: string | undefined,
+    ) => { items: T[]; next: string | null },
+  ): T[] {
+    const items: T[] = [];
+    for (let after: string | undefined; ; ) {
+      const found = read(caller, (clients) => page(clients, after));
+      if (found === undefined) return items;
+      items.push(...found.items);
+      if (found.next === null) return items;
+      after = found.next;
+    }
+  }
+
+  /** Whether the walk from `actorID` up to its nearest open Actor passes `closed`. */
+  function through(actorID: string | null | undefined, closed: string): boolean {
+    for (let at = actorID ? registry.get(actorID) : undefined; at; ) {
+      if (at.id === closed) return true;
+      if (at.closed_at === null) return false;
+      at = at.manager === null ? undefined : registry.get(at.manager);
+    }
+    return false;
   }
 
   /** What one entry did: the parties and records it touched, and the item it makes, if any. */
@@ -119,6 +172,7 @@ export function attention(registry: Registry, audit: Audit, workspace: Workspace
     };
     let kind: Item["kind"] | undefined;
     let title = "";
+    const items: { kind: Item["kind"]; title: string; recordID: string }[] = [];
     const id = entry.target;
     if (entry.operation === "message_send") {
       const message = read(caller, (clients) => clients.messages.get({ messageID: id }));
@@ -130,6 +184,16 @@ export function attention(registry: Registry, audit: Audit, workspace: Workspace
       }
     } else if (entry.operation === "actor_create" || entry.operation === "actor_close") {
       touched.actorIDs.push(id, registry.get(id)?.manager);
+      // A closed Actor's part passes to its nearest open manager (Q10): what was routed to it,
+      // or on its way through it, is the caller's now.
+      if (entry.operation === "actor_close" && registry.standIn(id) === caller.id) {
+        for (const ask of reads.routed())
+          if (through(registry.get(ask.raises.at(-1)?.actorID ?? ask.requesterID)?.manager, id))
+            items.push({ kind: "ask", title: ask.title, recordID: ask.formID });
+        for (const work of reads.submitted())
+          if (through(work.requesterID, id))
+            items.push({ kind: "review_due", title: work.title, recordID: work.ticketID });
+      }
     } else if (entry.operation.startsWith("work_")) {
       // An ask is written by work_update and work_answer with the ask as the entry's target.
       const ask =
@@ -177,7 +241,8 @@ export function attention(registry: Registry, audit: Audit, workspace: Workspace
         if (entry.operation === "work_answer" && event && before === caller.id) kind = "reviewed";
       }
     }
-    return { touched, item: kind && { kind, title } };
+    if (kind) items.push({ kind, title, recordID: id });
+    return { touched, items };
   }
 
   function examine(caller: ActorRow, entries: AuditRow[]): Omit<Result, "next"> {
@@ -190,20 +255,27 @@ export function attention(registry: Registry, audit: Audit, workspace: Workspace
       const { actor, target } = entry;
       if (entry.outcome !== "ok" || actor === null || target === null) continue;
       const operation = RENAMED[entry.operation] ?? entry.operation;
-      const { touched, item } = factOf(caller, { ...entry, operation, actor, target }, reads);
+      const { touched, items: made } = factOf(
+        caller,
+        { ...entry, operation, actor, target },
+        reads,
+      );
       for (const each of touched.actorIDs) if (each) actorIDs.add(each);
       for (const each of touched.workIDs) workIDs.add(each);
       for (const each of touched.conversationIDs) conversationIDs.add(each);
-      // One item per kind and record; a collecting ask's answers, one per responder.
-      const key = `${item?.kind}:${target}${item?.kind === "answer" ? `:${actor}` : ""}`;
-      if (actor === caller.id || item === undefined || items.has(key)) continue;
-      items.set(key, {
-        kind: item.kind,
-        recordID: target,
-        from: { actorID: actor, name: registry.get(actor)?.name ?? actor },
-        title: item.title,
-        at: entry.at,
-      });
+      if (actor === caller.id) continue;
+      for (const item of made) {
+        // One item per kind and record; a collecting ask's answers, one per responder.
+        const key = `${item.kind}:${item.recordID}${item.kind === "answer" ? `:${actor}` : ""}`;
+        if (items.has(key)) continue;
+        items.set(key, {
+          kind: item.kind,
+          recordID: item.recordID,
+          from: { actorID: actor, name: registry.get(actor)?.name ?? actor },
+          title: item.title,
+          at: entry.at,
+        });
+      }
     }
     return {
       items: [...items.values()],
