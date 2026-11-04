@@ -1,9 +1,9 @@
 {
   "package": "@uniac/agentic-workspace",
-  "version": "0.5.0",
-  "source": "6c8c0a62226b062b2037aa3da031324f7bd69758",
-  "merge": "521a2cf4caca1f7ae6b581a58e281842143f8169",
-  "tree": "36f5ee6d66c18edd2c2b9a0b27d6811f5a8c38dd",
-  "archive": "uniac-agentic-workspace-0.5.0-6c8c0a6.tgz",
-  "sha256": "783749be25934bb92443304d9c5a711af79eb9e703ebfe0a1a29bc5737afd7e3"
+  "version": "0.0.1",
+  "source": "efca8d306ca0a926903c1b636501ab0165335441",
+  "merge": "4f696a5b0ab76fc56165f7013ee4834c3360fbf9",
+  "tree": "882cc08517aa53f6a18f62e9a244f0b6f34262e5",
+  "archive": "uniac-agentic-workspace-0.0.1-4f696a5.tgz",
+  "sha256": "4e64072b19e68c40da4fb835eb717d522f4f94b9fe750b8691270343a3e0545d"
 }
