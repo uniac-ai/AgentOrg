@@ -18,13 +18,14 @@ import {
   Handle,
   Id,
   type InterfaceDescriptor,
-  Level,
+  type Level,
   objectSchema,
   type ResponseOf,
   Text,
   type ToolDescriptor,
 } from "../../domain/model/index.ts";
 import { credentials, readPrivate, rootActorPath, rootCredentialPath } from "../../home.ts";
+import { presented } from "./levels.ts";
 import { sessionName, sessions } from "./sessions.ts";
 
 const AttachRequest = z.strictObject({
@@ -93,11 +94,6 @@ export interface AgentOptions {
   level?: Level;
 }
 
-/** Whether an interface tagged `tag` is presented at `level`; each level contains the one before. */
-const presents = (level: Level | undefined, tag: Level | undefined) =>
-  level === undefined ||
-  (tag !== undefined && Level.options.indexOf(tag) <= Level.options.indexOf(level));
-
 export class Agent implements Presented {
   readonly instructions = INSTRUCTIONS;
   readonly #options: AgentOptions;
@@ -111,6 +107,13 @@ export class Agent implements Presented {
     this.#options = options;
     this.#session = options.session;
     if (this.#session !== undefined) this.#filled = sessions.position(this.#session);
+    this.#present();
+  }
+
+  /** Record the level this server presents beside a filled position, for the session's waiter. */
+  #present(): void {
+    if (this.#session !== undefined && this.#filled !== undefined)
+      sessions.present(this.#session, this.#options.level);
   }
 
   /** Connect the position this session filled before, if it did; retried until the core answers. */
@@ -213,9 +216,7 @@ export class Agent implements Presented {
       return refused("unavailable", "the Hub did not list available Tools");
     }
     const level = this.#options.level;
-    const offers = tools.flatMap((tool) =>
-      tool.interfaces.filter((offer) => presents(level, offer.level)),
-    );
+    const offers = presented(tools, level);
     if (name === undefined) {
       const summaryOf = (description = "") => description.split("\n\n")[0] ?? "";
       return {
@@ -233,9 +234,9 @@ export class Agent implements Presented {
     if (offer === undefined)
       return refused(
         "not_found",
-        level === undefined
-          ? `there is no Hub interface ${name}`
-          : `${name} is not presented at the ${level} level`,
+        presented(tools, undefined).some((each) => each.call === name)
+          ? `${name} is not presented at the ${level} level`
+          : `there is no Hub interface ${name}`,
       );
     const { description, input, output } = offer.interface;
     return {
@@ -265,6 +266,7 @@ export class Agent implements Presented {
     }
     this.#session = session;
     this.#filled = sessions.position(session);
+    this.#present();
     const actor = this.#filled;
     const credential = actor === undefined ? undefined : credentials.read(actor);
     if (actor !== undefined && credential !== undefined) {
@@ -312,6 +314,7 @@ export class Agent implements Presented {
     this.#filled = actor;
     if (this.#session !== undefined) {
       sessions.fill(this.#session, actor);
+      this.#present();
       // Delivery starts from now: what happened before the session attached is not its input.
       // Without it, the waiter starts from whenever it first reads.
       const now = await this.#position?.call("attention", {}).catch(() => undefined);

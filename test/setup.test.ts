@@ -279,6 +279,13 @@ test("connect and disconnect leave an empty project empty, and refuse a server n
     await command("mcp", ["connect", "codex", ...leveled], env);
     const servers = JSON.parse(readFileSync(join(project, ".mcp.json"), "utf8")).mcpServers;
     assert.deepEqual(servers.org.args, ["--client", "claude-code", "--level", "report"]);
+    // The level is the server's alone: the hooks stay as they were.
+    const leveledHooks = JSON.parse(
+      readFileSync(join(project, ".claude", "settings.local.json"), "utf8"),
+    ).hooks;
+    assert.match(leveledHooks.Stop[0].hooks[0].command, / wait --client claude-code$/);
+    assert.doesNotMatch(JSON.stringify(leveledHooks), /--level/);
+    assert.doesNotMatch(readFileSync(join(project, ".codex", "hooks.json"), "utf8"), /--level/);
     assert.match(
       readFileSync(join(project, ".codex", "config.toml"), "utf8"),
       /args = \["--client","codex","--level","report"\]/,

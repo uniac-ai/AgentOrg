@@ -184,8 +184,6 @@ export function team(
       if (depth > 0) for (const report of registry.reports(at.id)) visit(report, depth - 1);
     };
     visit(start, request.depth);
-    // The subtree filters walk each row's managers on every page, so the Hub filters instead: a
-    // few positions read their own Work, and more read every Actor's unfinished Work once.
     const few = rows.length <= FEW;
     const positions = workspace.run(caller, ({ work }) => {
       const list = (filter: Filter<Parameters<typeof work.list>[0]>) =>

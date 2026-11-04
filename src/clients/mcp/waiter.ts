@@ -7,8 +7,9 @@ import type { z } from "zod";
 import { type Actor, connectClient } from "../../actor/index.ts";
 import type { Position, Team } from "../../contract/index.ts";
 import type { Answer, ResponseOf } from "../../domain/model/index.ts";
-import { MAX_WAIT_SECONDS } from "../../domain/model/index.ts";
+import { Level, MAX_WAIT_SECONDS } from "../../domain/model/index.ts";
 import { credentials } from "../../home.ts";
+import { presented } from "./levels.ts";
 import { sessions } from "./sessions.ts";
 
 export interface WaitOptions {
@@ -21,14 +22,17 @@ type Attention = ResponseOf<"attention">;
 export type Item = Attention["items"][number];
 /** An item with what the session needs to act on it without reading again. */
 export type Delivery = Item & {
-  /** An answer: the ask, and the Work it blocks. */
+  /** An answer's ask. */
   ask?: Form;
+  /** The Work an answer's ask is on, or the Work an update or a submission concerns. */
   work?: Work;
   /** A message: its conversation from the session's last message in it. */
   conversation?: Message[];
 };
 interface Here {
   self: z.output<typeof Position>;
+  /** The call aliases the session's server presents; a frame names work_answer only if presented. */
+  presented: ReadonlySet<string>;
 }
 const value = <T>(answer: Answer): T => {
   if (answer.state === "done") return answer.value as T;
@@ -78,6 +82,9 @@ async function delivery(client: Actor, self: string, item: Item): Promise<Delive
     const spoke = recent.items.findLastIndex((message) => message.senderID === self);
     return { ...item, conversation: recent.items.slice(Math.max(spoke, 0)) };
   }
+  // A changed Work may have been cancelled, and a submission is answered by its ID.
+  if (item.kind === "updated" || item.kind === "review_due")
+    return { ...item, work: await call<Work>(client, "work_get", { ticketID: item.recordID }) };
   return item;
 }
 
@@ -130,7 +137,10 @@ export async function waitForNews(options: WaitOptions): Promise<boolean> {
             if (item.kind !== "message" || last.get(item.from.actorID) === item)
               items.push(await delivery(client, actorID, item));
           if (!current()) return false;
-          options.write(describe(items, { self }));
+          const level = Level.safeParse(sessions.level(options.session)).data;
+          const offers = presented(await client.available(), level);
+          if (!current()) return false;
+          options.write(describe(items, { self, presented: new Set(offers.map((o) => o.call)) }));
           sessions.advanceInbox(options.session, read.next);
           return true;
         }
@@ -149,16 +159,21 @@ export async function waitForNews(options: WaitOptions): Promise<boolean> {
 
 const quoted = (text: string) => `"${text}"`;
 
-/** What one item says to the session, with what to do about it. */
+/** What one item says to the session, with what to do about it, in tools its level presents. */
 function frame(item: Delivery, here: Here): string {
   const from = `${item.from.name}${item.from.actorID === here.self.manager ? ", your manager," : ""}`;
+  // Answering and raising name work_answer, which the session's level may not present.
+  const answering = here.presented.has("work_answer");
   switch (item.kind) {
     case "answer": {
       const response = item.ask?.responses[item.from.actorID];
       const answers = Object.entries(response?.answers ?? {})
         .map(([field, answer]) => `${field}: ${answer}`)
         .join("; ");
-      const note = response?.note === undefined ? "" : ` Note: ${response.note}`;
+      const note =
+        response?.note === undefined
+          ? ""
+          : ` Note: ${response.note}${/[.!?]$/.test(response.note) ? "" : "."}`;
       const work =
         item.work === undefined
           ? ""
@@ -166,17 +181,27 @@ function frame(item: Delivery, here: Here): string {
       return `${from} answered your ask ${quoted(item.title)} (${item.recordID}): ${answers}.${note} Apply it${work}. The ask records the answer; ${item.ask?.status === "open" ? "it collects more until you close it" : "it is resolved"}.`;
     }
     case "ask":
-      return `${from} routes you the ask ${quoted(item.title)} (${item.recordID}). Read it with work_get {askID: "${item.recordID}"}, then answer it with work_answer {askID, answers, note?}, or raise it one manager up with work_answer {askID, raise: true}.`;
+      return `${from} routes you the ask ${quoted(item.title)} (${item.recordID}). Read it with work_get {askID: "${item.recordID}"}${answering ? ", then answer it with work_answer {askID, answers, note?}, or raise it one manager up with work_answer {askID, raise: true}" : ""}.`;
     case "raised":
       return `${from} raised your ask ${quoted(item.title)} (${item.recordID}) to its manager; it stays open until someone answers it. Keep working on what doesn't depend on it.`;
     case "updated":
-      return `${from} changed your Work ${quoted(item.title)} (${item.recordID}). Read it with work_get before your next write to it.`;
+      return item.work?.status === "cancelled"
+        ? `${from} cancelled your Work ${quoted(item.title)} (${item.recordID}); its open asks are cancelled. Stop working on it.`
+        : `${from} changed your Work ${quoted(item.title)} (${item.recordID}). Read it with work_get before your next write to it.`;
     case "assigned":
-      return `${from} assigned you Work ${quoted(item.title)} (${item.recordID}). Read it with work_get; set it active with work_update when you start.`;
-    case "review_due":
-      return `${from} submitted ${quoted(item.title)} (${item.recordID}) for your answer. Read the submission with work_get, then answer it with work_answer {askID: <its submissionID>, answers: {verdict: "accepted" or "changes_requested"}, note?}; requesting changes needs the note.`;
+      return `${from} gave you Work ${quoted(item.title)} (${item.recordID}). Read it with work_get; set it active with work_update when you start.`;
+    case "review_due": {
+      const submission = item.work?.submission;
+      const answer = answering
+        ? `, then answer it with work_answer {askID: ${submission ? `"${submission.submissionID}"` : "<its submissionID>"}, answers: {verdict: "accepted" or "changes_requested"}, note?}; requesting changes needs the note`
+        : "";
+      // A submission a close re-routes comes from the Actor that closed, not from its submitter.
+      return submission && submission.ownerID !== item.from.actorID
+        ? `${from} closed the Actor the submission of ${quoted(item.title)} (${item.recordID}) waited on; it now waits for your answer. Read the submission with work_get${answer}.`
+        : `${from} submitted ${quoted(item.title)} (${item.recordID}) for your answer. Read the submission with work_get${answer}.`;
+    }
     case "reviewed":
-      return `${from} reviewed your Work ${quoted(item.title)} (${item.recordID}). Read the review with work_get; on requested changes, address them and submit again.`;
+      return `${from} answered your submission of ${quoted(item.title)} (${item.recordID}). Read the answer with work_get; on requested changes, address them and submit again.`;
     case "message": {
       const lines = (item.conversation ?? []).map(
         (message) =>

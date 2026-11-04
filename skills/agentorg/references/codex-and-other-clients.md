@@ -15,7 +15,7 @@ through `/hooks`. `/mcp` lists the three adapter tools.
   `attention {since}` with the `next` of your previous read; its items are what other Actors did
   that concerns you. Use record IDs/revisions to recognize updates. No public read acknowledgement
   is needed or available.
-- **Approvals.** Form responses are ordinary Actor records. Native request authorization requires
+- **Approvals.** Answers to asks are ordinary Actor records. Native request authorization requires
   a client-owned validated binding, independently of the generic adapter.
 - **Other sessions.** Follow the user's authorization for starting or messaging separate sessions.
   A helper within this conversation is not a separately admitted Actor.

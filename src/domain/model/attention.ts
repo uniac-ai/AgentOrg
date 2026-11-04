@@ -27,7 +27,7 @@ export const AttentionItem = z
     kind: z
       .enum(["assigned", "updated", "reviewed", "answer", "raised", "message", "ask", "review_due"])
       .describe(
-        "On your records: assigned (Work given to you), updated (Work you own, changed or cancelled by its requester), reviewed (your submission answered), answer (your ask answered, one per responder), raised (your ask passed one manager up), message (one to you). Routed to you: ask (from a report, or raised to you, while it is open and still routed to you), review_due (a submission of Work you requested, or that a closed requester you stand in for requested, while it waits).",
+        "On your records: assigned (Work given to you), updated (Work you own, changed or cancelled by its requester), reviewed (your submission answered), answer (your ask answered, one per responder), raised (your ask passed one manager up), message (one to you). Routed to you: ask (from a report, raised to you, or passed to you by the close of an Actor it waited on, while it is open and still routed to you), review_due (a submission of Work you requested, or that a closed requester you stand in for requested, while it waits).",
       ),
     recordID: z
       .string()
@@ -66,7 +66,7 @@ export const ATTENTION = toolDefinition("attention", {
     level: "report",
     request: AttentionRequest,
     response: Attention,
-    description: `Read what concerns you since your last read. On your records: Work given to you or changed by its requester, an answer to your submission, an answer to your ask or its raise, and a message to you. Routed to you: an ask from a report or raised to you, and a submission of Work you requested. Your own writes are not items. changed names the Actors, Work and conversations anyone's writes touched.
+    description: `Read what concerns you since your last read. On your records: Work given to you or changed by its requester, an answer to your submission, an answer to your ask or its raise, and a message to you. Routed to you: an ask from a report or raised to you, and a submission of Work you requested, with those of a closed Actor you stand in for. Your own writes are not items. changed names the Actors, Work and conversations anyone's writes touched.
 
 Returns at once when there is something; otherwise it waits up to wait seconds. Pass the returned next as since to continue, and give the call a timeout longer than wait.`,
   },

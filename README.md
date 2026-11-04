@@ -4,10 +4,10 @@ AgentOrg connects Actors into an organization. Each Actor is a position with a r
 a manager; the user is at the root. Hub keeps organizational state and exposes explicit Tools.
 Actors decide how to use those Tools independently of any native execution implementation.
 
-Actors exchange private Messages, track shared Work and collect shared Form responses through Hub
-Tools backed by `@uniac/agentic-workspace`. Hub supplies the canonical Actor directory, actual
-connection presence and shared resource claims. An enrolled Provider can provision an implementation
-when requested at Actor creation. Human applications, agent sessions and programs share the same authority.
+Actors exchange Messages in pair conversations, and track shared Work with the asks on it, through
+Hub Tools backed by `@uniac/agentic-workspace`. Hub supplies canonical Actor identity and hierarchy,
+actual connection presence and shared resource claims. An enrolled Provider can provision an
+implementation when requested at Actor creation. Human applications, agent sessions and programs share the same authority.
 
 ## Applications
 

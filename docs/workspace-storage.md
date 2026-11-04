@@ -15,11 +15,12 @@ the package owns its SQLite schema and transactions.
 
 ## Files and startup
 
-For `<home>/core.db`, Hub opens `<home>/core.workspace.db` for Messages, Work and Forms.
+For `<home>/core.db`, Hub opens `<home>/core.workspace.db` for Messages, and Work with its asks.
 The first open by 0.5 upgrades a 0.4 `core.workspace.db` in place, in one transaction; the package
 refuses a database newer than itself. The first open by this build upgrades the store to the
-package's version 4 in the same way, adding indexed columns and changing no record. That step is
-one way: a Hub on 0.5 then refuses the store, so back up the home before the first start.
+package's version 4 in the same way, adding indexed columns and changing no record; a 0.5 store's
+Status tables stay in the file, unread. That step is one way: a Hub on 0.5 then refuses the store,
+so back up the home before the first start.
 The private import manifest is `<home>/core.workspace.db.import.json`. Database and manifest files
 are private to the home owner. `:memory:` uses two independently owned in-memory databases.
 Hub closes both stores after its network listener and clients finish.
@@ -28,8 +29,8 @@ Fresh homes start at Hub schema 9. Schema 7 first retires Actor execution record
 existing schema 8 transaction. Schema 8 then atomically renames `progress`, `questions` and
 `messages` to private `legacy_*` tables and creates `workspace_imports`, advancing to schema 9.
 The original rows and fields remain intact. Other nonzero versions are refused. Every open also
-adds the audit's index of each Actor's writes if it is missing; it takes no schema step, so an
-earlier release still opens the home.
+adds the audit's two indexes, of each Actor's writes and of its writes on each record, if they are
+missing; they take no schema step, so an earlier release still opens the home.
 
 Historical Messages are imported through the package's public persistence interface. Each preserves
 its original ID, sender, recipient, text and timestamp exactly. The sole public history event records
@@ -41,7 +42,7 @@ Import validates every source before writing. A value requiring trimming or time
 an unknown party, a changed original, a conflicting record, or a missing previously imported record
 prevents startup. Operators must resolve the exact source case before proceeding; startup does not
 invent replacement data. Legacy progress and Questions remain private history; they do not create
-Work, Forms, answers or approvals.
+Work, asks, answers or approvals.
 
 The package transaction commits before the Hub import ledger transaction. Restart verifies any
 already committed record and its exact single send event before completing the ledger, so a crash
