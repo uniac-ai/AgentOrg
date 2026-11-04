@@ -328,6 +328,40 @@ test("ask counts, paging past one page, recency, and the schema", async (t) => {
   );
 });
 
+test("a few positions read their own Work, and give what a read of the whole tree gives", async (t) => {
+  const { core, root, make, lead, worker, peer } = await organization();
+  t.after(() => core.close());
+  const members = [lead, worker, peer];
+  for (let n = 0; n < 20; n += 1)
+    members.push(await make(`member-${n}`, n % 2 ? lead.client : root));
+  for (const [n, member] of members.entries()) {
+    const work = await create(member.client, `Work ${n}`);
+    if (n % 3 !== 0)
+      await update(member.client, work, { status: "active", progress: `Step ${n}.` });
+    if (n % 4 === 1) await ask(member.client, `Question ${n}`, { workID: work.ticketID });
+    if (n % 6 === 3) await update(member.client, work, { waitsOn: { actorID: peer.id } });
+    if (n % 5 === 2) {
+      const finished = await create(member.client, `Done ${n}`);
+      await done(
+        member.client.call("work_submit", { ticketID: finished.ticketID, result: "Done" }),
+      );
+    }
+  }
+  // Past the most recent page of finished Work, a large read reads the rest on its own.
+  for (let n = 0; n < 101; n += 1) {
+    const other = await create(peer.client, `Other ${n}`);
+    await done(peer.client.call("work_submit", { ticketID: other.ticketID, result: "Done" }));
+  }
+  const whole = (await done(root.call("team", { actor: core.rootId, depth: 20 }))).positions;
+  assert.ok(whole.length > 20, "the whole tree takes the organization's pass");
+  assert.ok(whole.filter((each: Json) => each.headline.finished).length > 1);
+  const read = (id: string) => whole.find((each: Json) => each.id === id);
+  for (const each of whole) assert.deepEqual(await position(root, each.id), each, each.name);
+  const small = (await done(root.call("team", { actor: lead.id }))).positions;
+  assert.ok(small.length > 1 && small.length <= 20);
+  for (const each of small) assert.deepEqual(each, read(each.id), each.name);
+});
+
 test("actor_view names an Actor's manager and when it was closed", async (t) => {
   const { core, root, make, lead, worker, peer } = await organization();
   t.after(() => core.close());

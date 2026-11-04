@@ -155,9 +155,10 @@ waiting reads, which read again. It is a read, not a subscription; callers set a
 
 `team {actor?, depth?}` reads a position and its open reports to `depth`, in pre-order.
 - **`state`** comes from the Work on the position only. It is the most urgent of:
-  - `waiting`: an open ask by its owner on Work not submitted;
+  - `waiting`: its owner has an open ask on live Work that is not submitted, started or not;
   - `review`: submitted, even with such an ask;
-  - `active`: a stored `blocked` reads as active.
+  - `active`: started Work (`active`, `blocked` or `changes_requested`) with no such ask; a stored
+    `blocked` reads as active.
 
   With none of these, it is `idle`. It can differ from `actor_view`'s `state`, which still counts
   `blocked` and the Work an Actor requested of its reports.
@@ -178,9 +179,12 @@ waiting reads, which read again. It is a read, not a subscription; callers set a
   ones included.
 - **`lastActiveAt`:** its last recorded write.
 
-One pass over unfinished Work and one over open asks feed every position, and the most recent page of
-finished Work names each position's last. A position that page misses is read on its own, and so
-is Work waited on that the pass doesn't hold. For a single position, the Work read is its own.
+Up to 20 positions, such as the default `team {}` of a manager, each read their own unfinished
+Work and their last finished Work. A larger read takes one pass over the organization's unfinished
+Work, and the most recent page of finished Work names each position's last; a position that page
+misses is read on its own. One pass over the organization's open asks feeds every position's
+counts, and Work waited on that the reads don't hold is read by its ID. Each list decodes the
+Workspace's whole table, so a read of a large tree holds the Hub for up to a few seconds.
 
 `actor_view {actorID?, completed?}` joins an Actor's report at read time, from the registry,
 connections, audit and the Workspace records it can read:

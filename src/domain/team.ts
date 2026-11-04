@@ -17,6 +17,8 @@ type Headline = Position["headline"];
 /** A Work's state: done, review, waiting on its owner's ask, not started, else active. */
 type WorkState = "done" | "review" | "waiting" | "open" | "active";
 const WORKSTREAM = ["active", "blocked", "submitted", "changes_requested"] as const;
+/** Up to this many positions, each reads its own Work rather than the organization's. */
+const FEW = 20;
 /** Work that isn't finished, not started included. */
 const UNFINISHED = ["open", "active", "blocked", "submitted", "changes_requested"] as const;
 const oldestFirst = <T extends { createdAt: string }>(items: T[]) =>
@@ -104,8 +106,9 @@ export function team(
   workspace: Workspace,
 ) {
   /**
-   * The start and its open reports to `depth`, each with its state, headline and ask counts, from
-   * one pass over unfinished Work and one over open asks. For one position the Work is only its own.
+   * The start and its open reports to `depth`, each with its state, headline and ask counts. Up to
+   * `FEW` positions read their own Work, more read the organization's once, and open asks are one
+   * pass.
    */
   function readTeam(caller: ActorRow, request: RequestOf<"team">): ResponseOf<"team"> {
     const start = request.actor === undefined ? caller : registry.found(request.actor);
@@ -115,21 +118,29 @@ export function team(
       if (depth > 0) for (const report of registry.reports(at.id)) visit(report, depth - 1);
     };
     visit(start, request.depth);
-    // The subtree filters walk each row's managers on every page, so the Hub filters instead.
-    const owner = rows.length === 1 ? { ownerID: start.id } : {};
+    // The subtree filters walk each row's managers on every page, so the Hub filters instead: a
+    // few positions read their own Work, and more read every Actor's unfinished Work once.
+    const few = rows.length <= FEW;
     const positions = workspace.run(caller, ({ work, forms }) => {
-      const live = all((after) =>
-        work.list({ ...owner, status: [...UNFINISHED], limit: 100, after }),
-      );
+      const list = (
+        filter: Omit<NonNullable<Parameters<typeof work.list>[0]>, "after" | "limit">,
+      ) => all((after) => work.list({ ...filter, limit: 100, after }));
+      const live = few
+        ? rows.flatMap((row) => list({ ownerID: row.id, status: [...UNFINISHED] }))
+        : list({ status: [...UNFINISHED] });
+      // Asks stay one pass: branchAsks counts the asks at every depth below each position.
       const open = oldestFirst(all((after) => forms.list({ status: ["open"], limit: 100, after })));
-      const recent = work.list({ ...owner, status: ["accepted"], order: "recent", limit: 100 });
+      const latest = (actorID: string) =>
+        work.list({ ownerID: actorID, status: ["accepted"], order: "recent", limit: 1 }).items[0];
+      const recent = few
+        ? undefined
+        : work.list({ status: ["accepted"], order: "recent", limit: 100 });
       /** The last Work it finished; past the most recent page, its own latest. */
       const finished = (actorID: string) =>
-        recent.items.find((item) => item.ownerID === actorID) ??
-        (recent.next === null
-          ? undefined
-          : work.list({ ownerID: actorID, status: ["accepted"], order: "recent", limit: 1 })
-              .items[0]);
+        recent === undefined
+          ? latest(actorID)
+          : (recent.items.find((item) => item.ownerID === actorID) ??
+            (recent.next === null ? undefined : latest(actorID)));
       /** Open asks below each Actor: each counts once for every manager above its asker. */
       const below = new Map<string, number>();
       for (const ask of open)
