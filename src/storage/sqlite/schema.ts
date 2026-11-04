@@ -4,6 +4,10 @@ import { ActorRecord, AuditEntry, Claim } from "../../domain/model/index.ts";
 
 export const SCHEMA_VERSION = 9;
 
+// Made on every open, not in a schema step, so a release from before it still opens the home.
+export const AUDIT_ACTOR_INDEX =
+  "CREATE INDEX IF NOT EXISTS audit_writes ON audit (actor) WHERE outcome = 'ok';";
+
 export const SCHEMA = `
 CREATE TABLE actors (
   id TEXT PRIMARY KEY,

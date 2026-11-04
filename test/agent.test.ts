@@ -491,6 +491,11 @@ test("the waiter frames each item with what to do, without claiming native user 
     online: true,
     created_at: at,
     closed_at: null,
+    state: "idle",
+    headline: { subject: null, clause: null, more: 0, notStarted: 0, finished: null },
+    asks: 0,
+    branchAsks: 0,
+    lastActiveAt: null,
   });
   const message = (messageID: string, senderID: string, text: string) =>
     Message.parse({

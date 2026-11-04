@@ -24,7 +24,9 @@ Hub closes both stores after its network listener and clients finish.
 Fresh homes start at Hub schema 9. Schema 7 first retires Actor execution records through the
 existing schema 8 transaction. Schema 8 then atomically renames `progress`, `questions` and
 `messages` to private `legacy_*` tables and creates `workspace_imports`, advancing to schema 9.
-The original rows and fields remain intact. Other nonzero versions are refused.
+The original rows and fields remain intact. Other nonzero versions are refused. Every open also
+adds the audit's index of each Actor's writes if it is missing; it takes no schema step, so an
+earlier release still opens the home.
 
 Historical Messages are imported through the package's public persistence interface. Each preserves
 its original ID, sender, recipient, text and timestamp exactly. The sole public history event records

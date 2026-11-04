@@ -13,6 +13,7 @@ const text = (max: number) => z.string().trim().min(1).max(max);
 export const Id = text(LIMITS.id);
 export const Text = text(LIMITS.text);
 export const Timestamp = z.iso.datetime({ offset: true });
+export const Count = z.number().int().min(0);
 
 export const Handle = z
   .string()

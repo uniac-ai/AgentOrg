@@ -120,9 +120,10 @@ The Team level adds working with other Actors. Its operations:
 - `message_send`, `message_get` and `message_list`. A Message is private to its two parties and
   joins their one conversation; a reply is a new Message. Point a peer at an ask by its ID rather
   than restating it.
-- `team`, `actor_view`, `actor_get` and `actor_list`. `actor_view` is anyone's report as one view:
-  its derived state, status, workstreams and asks, and for a manager its reports' open asks under
-  `needs` and Work waiting for its review.
+- `team`, `actor_view`, `actor_get` and `actor_list`. `team` gives each position its state and
+  headline from the Work on it, and its open asks and its branch's. `actor_view` is anyone's report
+  as one view: its derived state, status, workstreams and asks, and for a manager its reports' open
+  asks under `needs` and Work waiting for its review.
 - Assigning and reviewing. `work_create {ownerID}` assigns Work. `work_review {ticketID,
   submissionID, verdict, comment?}` reviews the exact submission; requesting changes needs a
   comment.

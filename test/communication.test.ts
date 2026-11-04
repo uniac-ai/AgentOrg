@@ -49,14 +49,19 @@ test("directory is canonical, stable across closure, and distinct from actual pr
   const team = await done(peer.client.call("team", { actor: core.rootId, depth: 20 }));
   assert.deepEqual(Object.keys(team).sort(), ["positions", "root"]);
   assert.deepEqual(Object.keys(team.positions[0]).sort(), [
+    "asks",
+    "branchAsks",
     "closed_at",
     "created_at",
+    "headline",
     "id",
+    "lastActiveAt",
     "manager",
     "name",
     "online",
     "path",
     "purpose",
+    "state",
   ]);
   await third.client.close();
   await until(
