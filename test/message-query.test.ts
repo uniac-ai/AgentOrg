@@ -1,6 +1,7 @@
 /**
- * Private conversation queries through ordinary admitted SDK/MCP calls: forward reads by opaque
- * `next` or `seq`, newest windows and `older` positions, with and without a counterparty.
+ * Conversation queries through ordinary admitted SDK/MCP calls: one pair's conversation by
+ * `between` or `counterpartyID`, read forward by opaque `next` or `seq` or as newest windows with
+ * `older` positions, by any Actor; and an Actor's conversations by `of`, newest first.
  */
 import assert from "node:assert/strict";
 import { type TestContext, test } from "node:test";
@@ -35,11 +36,11 @@ async function fixture(t: TestContext) {
 const send = async (client: Actor, recipientID: string, text: string) =>
   Message.parse(await done(client.call("message_send", { recipientID, text })));
 
-test("private pair/direction qualify before pagination; newest windows and older positions retain chronological history", async (t) => {
+test("one pair's conversation qualifies before pagination for any reader; newest windows and older positions keep its order", async (t) => {
   const { core, root, owner, peer, other } = await fixture(t);
   const catalog = await owner.client.available();
-  assert.equal(catalog.length, 11);
-  assert.equal(catalog.flatMap((tool) => tool.interfaces).length, 30);
+  assert.equal(catalog.length, 9);
+  assert.equal(catalog.flatMap((tool) => tool.interfaces).length, 26);
   assert.deepEqual(await peer.client.available(), catalog);
   const offered = catalog
     .flatMap((tool) => tool.interfaces)
@@ -49,33 +50,33 @@ test("private pair/direction qualify before pagination; newest windows and older
   assert.deepEqual(Object.keys(properties).sort(), [
     "after",
     "before",
+    "between",
     "counterpartyID",
-    "direction",
     "limit",
+    "of",
   ]);
   assert.equal(offered.read_only, true);
-  assert.deepEqual(BUILTINS.message_list.request.parse({}), { limit: 50, direction: "all" });
-  const pairs: Row[] = [],
-    incoming: Row[] = [],
-    outgoing: Row[] = [],
-    everything: Row[] = [];
+  assert.equal(BUILTINS.message_list.request.safeParse({}).success, false, "one selector is named");
+  assert.deepEqual(BUILTINS.message_list.request.parse({ counterpartyID: "x" }), {
+    counterpartyID: "x",
+    limit: 50,
+  });
+  const pairs: Row[] = [];
+  let noise: Row | undefined;
   for (let i = 0; i < 130; i++) {
-    const noise = await send(owner.client, other.id, `noise-${i}`);
-    const left = await send(peer.client, owner.id, `incoming-${i}`),
-      right = await send(owner.client, peer.id, `outgoing-${i}`);
-    pairs.push(left, right);
-    incoming.push(left);
-    outgoing.push(right);
-    everything.push(noise, left, right);
+    noise = await send(owner.client, other.id, `noise-${i}`);
+    pairs.push(
+      await send(peer.client, owner.id, `incoming-${i}`),
+      await send(owner.client, peer.id, `outgoing-${i}`),
+    );
   }
   const named = { [owner.id]: { name: "owner" }, [peer.id]: { name: "peer" } };
-  const traverse = async (direction: string) => {
+  const traverse = async (client: Actor, selector: Record<string, unknown>) => {
     let after: string | undefined;
     const rows: Row[] = [];
     while (true) {
-      const page = await list(owner.client, {
-        counterpartyID: peer.id,
-        direction,
+      const page = await list(client, {
+        ...selector,
         ...(after === undefined ? {} : { after }),
         limit: 100,
       });
@@ -86,9 +87,13 @@ test("private pair/direction qualify before pagination; newest windows and older
       after = page.next;
     }
   };
-  assert.deepEqual(await traverse("all"), pairs);
-  assert.deepEqual(await traverse("incoming"), incoming);
-  assert.deepEqual(await traverse("outgoing"), outgoing);
+  assert.deepEqual(await traverse(owner.client, { counterpartyID: peer.id }), pairs);
+  for (const reader of [owner.client, peer.client, other.client, root])
+    for (const between of [
+      [owner.id, peer.id],
+      [peer.id, owner.id],
+    ])
+      assert.deepEqual(await traverse(reader, { between }), pairs, "any Actor reads any pair");
   assert.deepEqual((await list(owner.client, { counterpartyID: ` ${peer.id} `, limit: 1 })).items, [
     pairs[0],
   ]);
@@ -96,82 +101,57 @@ test("private pair/direction qualify before pagination; newest windows and older
     (await list(owner.client, { counterpartyID: peer.id, after: pairs[9]?.seq, limit: 2 })).items,
     pairs.slice(10, 12),
   );
-  let recent = await list(owner.client, { counterpartyID: peer.id, before: "latest", limit: 20 });
+  let recent = await list(other.client, {
+    between: [owner.id, peer.id],
+    before: "latest",
+    limit: 20,
+  });
   assert.deepEqual(recent.items, pairs.slice(-20));
   assert.equal(recent.next, null);
   const all = [...recent.items];
   while (recent.older !== null) {
-    recent = await list(owner.client, {
-      counterpartyID: peer.id,
+    recent = await list(other.client, {
+      between: [owner.id, peer.id],
       before: recent.older,
       limit: 20,
     });
     all.unshift(...recent.items);
   }
   assert.deepEqual(all, pairs);
+  const conversations = await list(root, { of: owner.id });
   assert.deepEqual(
-    (
-      await list(owner.client, {
-        counterpartyID: peer.id,
-        direction: "incoming",
-        before: "latest",
-        limit: 3,
-      })
-    ).items,
-    incoming.slice(-3),
+    conversations.items,
+    [pairs.at(-1), noise],
+    "an Actor's conversations, newest first, each as its latest message",
   );
-  assert.deepEqual(
-    (
-      await list(owner.client, {
-        counterpartyID: peer.id,
-        direction: "outgoing",
-        before: "latest",
-        limit: 3,
-      })
-    ).items,
-    outgoing.slice(-3),
-  );
-  assert.deepEqual(
-    (await list(owner.client, { before: "latest", limit: 3 })).items,
-    everything.slice(-3),
-  );
-  for (const client of [root, other.client])
-    assert.deepEqual(await list(client, { counterpartyID: peer.id, before: "latest" }), {
-      items: [],
-      next: null,
-      older: null,
-      actors: {},
-    });
+  assert.equal(conversations.next, null);
   assert.deepEqual(await list(owner.client, { counterpartyID: "unknown", before: "latest" }), {
     items: [],
     next: null,
     older: null,
     actors: {},
   });
-  const self = await send(owner.client, owner.id, "self exactly once");
-  for (const direction of ["all", "incoming", "outgoing"])
-    assert.deepEqual(
-      (await list(owner.client, { counterpartyID: owner.id, direction, before: "latest" })).items,
-      [self],
-    );
+  assert.equal(
+    await refused(owner.client.call("message_send", { recipientID: owner.id, text: "self" })),
+    "invalid",
+    "an Actor doesn't message itself",
+  );
   await done(root.call("actor_close", { actor: peer.id }));
   const get = core.store.actors.get.bind(core.store.actors);
   const profile = t.mock.method(core.store.actors, "get", (id: string) => {
     assert.notEqual(id, peer.id, "selection cannot resolve a closed peer");
     return get(id);
   });
-  const before = core.store.workspace.messages.all();
-  assert.deepEqual(await list(owner.client, { counterpartyID: peer.id, after: self.seq }), {
-    items: [],
-    next: null,
-    older: null,
-    actors: {},
-  });
+  const before = core.store.workspace.messages.where({});
+  assert.deepEqual(
+    await list(owner.client, { counterpartyID: peer.id, after: pairs.at(-1)?.seq }),
+    { items: [], next: null, older: null, actors: {} },
+  );
   profile.mock.restore();
   const closed = await list(owner.client, { counterpartyID: peer.id, before: "latest", limit: 20 });
   assert.deepEqual(closed.items, pairs.slice(-20));
-  assert.deepEqual(closed.actors, named, "the closed peer stays named in the directory");
-  assert.deepEqual(core.store.workspace.messages.all(), before);
+  assert.deepEqual(closed.actors, named, "the closed peer stays named in actors");
+  assert.deepEqual(core.store.workspace.messages.where({}), before);
   await core.restart();
   const reopened = await core.client(owner.credential);
   assert.deepEqual(
@@ -210,22 +190,12 @@ test("newest window observes the head once; older positions and own sends cannot
     [unseen, own],
   );
   assert.deepEqual(
-    (
-      await list(owner.client, {
-        counterpartyID: peer.id,
-        direction: "incoming",
-        after: second.seq,
-      })
-    ).items,
-    [unseen],
-  );
-  assert.deepEqual(
     (await list(owner.client, { counterpartyID: peer.id, before: "latest" })).items,
     [first, second, unseen, own],
   );
-  const all = core.store.workspace.messages.all.bind(core.store.workspace.messages);
+  const where = core.store.workspace.messages.where.bind(core.store.workspace.messages);
   let appended: Promise<Row> | undefined;
-  const snapshot = t.mock.method(core.store.workspace.messages, "all", () => {
+  const snapshot = t.mock.method(core.store.workspace.messages, "where", (filter: object) => {
     snapshot.mock.restore();
     // Inject a canonical fixture send after this query observed head, before reading rows.
     appended = done(
@@ -236,7 +206,7 @@ test("newest window observes the head once; older positions and own sends cannot
         { signal: new AbortController().signal, progress: async () => {} },
       ),
     ).then((row) => Message.parse(row));
-    return all();
+    return where(filter);
   });
   const window = await list(owner.client, { counterpartyID: peer.id, before: "latest" });
   assert.deepEqual(window.items, [first, second, unseen, own]);
@@ -249,30 +219,46 @@ test("newest window observes the head once; older positions and own sends cannot
 });
 
 test("invalid/refused/unexpected selected queries never call System diagnostics; public failures remain observable", async (t) => {
-  const { core, root, owner, peer } = await fixture(t);
+  const { core, root, owner, peer, other } = await fixture(t);
   for (const text of ["one", "two"]) await send(peer.client, owner.id, text);
-  const incoming = await list(owner.client, { direction: "incoming", limit: 1 });
-  assert.equal(typeof incoming.next, "string");
+  await send(other.client, owner.id, "three");
+  const pair = await list(owner.client, { counterpartyID: peer.id, limit: 1 });
+  const conversations = await list(owner.client, { of: owner.id, limit: 1 });
+  assert.equal(typeof pair.next, "string");
+  assert.equal(typeof conversations.next, "string");
   const recorded = t.mock.method(core.org.diagnostics, "record");
   const invalid = [
+    {},
+    { after: 1 },
+    { direction: "incoming", counterpartyID: peer.id },
+    { counterpartyID: peer.id, between: [owner.id, peer.id] },
+    { counterpartyID: peer.id, of: owner.id },
+    { between: [owner.id] },
+    { between: [owner.id, peer.id, other.id] },
     { counterpartyID: peer.id, before: "latest", after: 1 },
     ...[0, 1, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, "newest", "", null, true].map((before) => ({
       counterpartyID: peer.id,
       before,
     })),
-    { direction: "outgoing", after: incoming.next },
-    { direction: "incoming", counterpartyID: peer.id, after: incoming.next },
-    { direction: "incoming", before: incoming.next },
+    { of: owner.id, before: "latest" },
+    { of: owner.id, after: 1 },
+    { of: owner.id, after: pair.next },
+    { counterpartyID: peer.id, after: conversations.next },
+    { counterpartyID: peer.id, before: pair.next },
+    { between: [owner.id, other.id], after: pair.next },
     { counterpartyID: " " },
     { counterpartyID: peer.id, before: "latest", actorID: core.rootId },
     { counterpartyID: peer.id, before: "latest", limit: 101 },
-    { counterpartyID: peer.id, before: "latest", direction: "wrong" },
     { counterpartyID: peer.id, after: -1 },
+    { counterpartyID: peer.id, after: 99 },
   ];
   for (const input of invalid)
-    assert.equal(await refused(owner.client.call("message_list", input)), "invalid");
-  assert.equal(await refused(owner.client.call("message_list", { after: 99 })), "invalid");
-  const storage = t.mock.method(core.store.workspace.messages, "all", () => {
+    assert.equal(
+      await refused(owner.client.call("message_list", input)),
+      "invalid",
+      JSON.stringify(input),
+    );
+  const storage = t.mock.method(core.store.workspace.messages, "where", () => {
     throw new Error("PRIVATE_QUERY_STORAGE_SENTINEL");
   });
   await assert.rejects(

@@ -1,10 +1,11 @@
 # Workspace storage and cutover
 
-Hub embeds `@uniac/agentic-workspace` 0.5.0 at source `cda95eb530e2ab6f4a829fa69e78a373b9234e0b`,
-merged as `9c9f89a4b6d83536746de4407405ec2627a33796` with tree
-`8ad65320327ce13b0d4babd4ee8bb7e6a0e48932`.
+Hub embeds a branch build of `@uniac/agentic-workspace` 0.6.0 ahead of its release: source
+`7292f7d27389a8944013351edc64cb07a59cfd08` (the `workspace-060-removals` branch, not yet merged),
+with tree `7e410bc2819aceacae456239f00479f71fddfeef`. Its package version still reads 0.5.0. The
+release replaces it with the published 0.6.0 archive.
 The committed archive has SHA256
-`a3c1e7e7107ffc87cc82cb456d6175a23afd76e4c513eb91e7cd8aca0364940d`. It is a clean `git archive`
+`8c9ab41e1a571d5c52b2626cefe2674525dd15f9ed541f978998e2e8f8f1aae1`. It is a clean `git archive`
 export of the source, built with `npm ci --engine-strict` and `npm pack` on Node 24.22.1 and
 npm 11.19.1, which reproduces the archive byte for byte.
 `vendor/workspace.json`, the dependency and lockfile identify the same archive. `npm pack` bundles
@@ -14,9 +15,11 @@ the package owns its SQLite schema and transactions.
 
 ## Files and startup
 
-For `<home>/core.db`, Hub opens `<home>/core.workspace.db` for Messages, Work, Forms and Status.
+For `<home>/core.db`, Hub opens `<home>/core.workspace.db` for Messages, Work and Forms.
 The first open by 0.5 upgrades a 0.4 `core.workspace.db` in place, in one transaction; the package
-refuses a database newer than itself.
+refuses a database newer than itself. The first open by this build upgrades the store to the
+package's version 4 in the same way, adding indexed columns and changing no record. That step is
+one way: a Hub on 0.5 then refuses the store, so back up the home before the first start.
 The private import manifest is `<home>/core.workspace.db.import.json`. Database and manifest files
 are private to the home owner. `:memory:` uses two independently owned in-memory databases.
 Hub closes both stores after its network listener and clients finish.

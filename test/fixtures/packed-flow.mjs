@@ -11,7 +11,6 @@ import {
   Form,
   Message,
   ProviderPage,
-  Status,
   SystemStatus,
   Work,
 } from "@agentorg/cli/contract";
@@ -89,8 +88,8 @@ try {
   let owner = await client(url, ownerID, ownerRecord.credential);
   let requester = await client(url, requesterID, requesterRecord.credential);
   const catalog = await root.available();
-  assert.equal(catalog.length, 11);
-  assert.equal(catalog.flatMap((tool) => tool.interfaces).length, 30);
+  assert.equal(catalog.length, 9);
+  assert.equal(catalog.flatMap((tool) => tool.interfaces).length, 26);
   assert.deepEqual(await owner.available(), catalog);
   const system = catalog.find((tool) => tool.id === "hub:system");
   assert.deepEqual(
@@ -158,7 +157,7 @@ try {
   assert.equal(otherOwner.ended, undefined);
   await otherOwner.close();
   for (const [name, filters] of [
-    ["message_list", ["counterpartyID", "before", "after"]],
+    ["message_list", ["between", "counterpartyID", "of", "before", "after"]],
     ["work_list", ["ownerWithin", "requesterWithin", "updatedSince", "order"]],
     ["form_list", ["requesterWithin", "updatedSince", "order"]],
   ]) {
@@ -172,28 +171,29 @@ try {
     catalog.flatMap((tool) => tool.interfaces).map((offer) => [offer.call, offer.level]),
   );
   assert.deepEqual(
-    ["status_set", "form_create", "form_respond", "message_send", "team", "actor_create"].map(
-      (name) => levels[name],
-    ),
-    ["report", "report", "team", "team", "team", "organization"],
+    [
+      "form_create",
+      "form_respond",
+      "message_send",
+      "message_list",
+      "message_get",
+      "team",
+      "actor_create",
+    ].map((name) => levels[name]),
+    ["report", "team", "report", "report", "team", "team", "organization"],
   );
-  assert.equal((await done(owner.call("actor_get"))).actorID, ownerID);
-  assert.equal((await done(root.call("actor_list"))).items.length, 3);
+  assert.equal((await done(owner.call("team", { depth: 0 }))).positions[0].id, ownerID);
+  assert.equal((await done(root.call("team", { depth: 20 }))).positions.length, 3);
   const sent = Message.parse(
     await done(
       owner.call("message_send", { recipientID: requesterID, text: "Immutable P2P fixture" }),
     ),
   );
   assert.equal(sent.senderID, ownerID);
-  await deny(root.call("message_get", { messageID: sent.messageID }), "not_found");
+  assert.deepEqual(await done(root.call("message_get", { messageID: sent.messageID })), sent);
   assert.deepEqual(await done(requester.call("message_get", { messageID: sent.messageID })), sent);
-  const page = await done(requester.call("message_list", { direction: "incoming", limit: 1 }));
+  const page = await done(requester.call("message_list", { counterpartyID: ownerID, limit: 1 }));
   assert.deepEqual(page.items, [sent]);
-  const status = Status.parse(
-    await done(owner.call("status_set", { line: "Proving the packed SDK" })),
-  );
-  assert.deepEqual(await done(requester.call("status_get", { actorID: ownerID })), status);
-  await deny(requester.call("status_get"), "not_found");
   let form = Form.parse(
     await done(
       requester.call("form_create", {
@@ -306,7 +306,7 @@ try {
     root.call("work_update", { ticketID: work.ticketID, progress: "Not owner" }),
     "forbidden",
   );
-  assert.equal((await done(root.call("actor_get"))).actorID, rootID);
+  assert.equal((await done(root.call("team", { depth: 0 }))).positions[0].id, rootID);
   work = Work.parse(
     await done(
       owner.call("work_update", {
@@ -377,14 +377,17 @@ try {
   assert.deepEqual(await done(requester.call("message_get", { messageID: sent.messageID })), sent);
   assert.deepEqual(await done(owner.call("form_get", { formID: form.formID })), form);
   assert.deepEqual(await done(owner.call("work_get", { ticketID: work.ticketID })), work);
-  assert.deepEqual(await done(requester.call("status_get", { actorID: ownerID })), status);
   assert.deepEqual(
-    (await done(requester.call("message_list", { after: page.items[0].seq }))).items,
+    (
+      await done(
+        requester.call("message_list", { counterpartyID: ownerID, after: page.items[0].seq }),
+      )
+    ).items,
     [],
   );
   // Exercise selected conversations after the forward/restart assertions.
   for (let i = 0; i < 103; i++)
-    await done(owner.call("message_send", { recipientID: ownerID, text: `owned noise ${i}` }));
+    await done(owner.call("message_send", { recipientID: rootID, text: `owned noise ${i}` }));
   const incomingQuery = Message.parse(
     await done(requester.call("message_send", { recipientID: ownerID, text: "selected inbound" })),
   );
@@ -405,28 +408,17 @@ try {
     ).items,
     [sent],
   );
-  assert.deepEqual(
-    (
-      await done(
-        owner.call("message_list", {
-          counterpartyID: requesterID,
-          direction: "incoming",
-          before: "latest",
-        }),
-      )
-    ).items,
-    [incomingQuery],
-  );
   await deny(
     owner.call("message_list", { counterpartyID: requesterID, before: "latest", after: 1 }),
     "invalid",
   );
-  assert.deepEqual((await done(owner.call("message_list", { before: "latest", limit: 1 }))).items, [
+  assert.deepEqual((await done(owner.call("message_list", { of: ownerID, limit: 1 }))).items, [
     outgoingQuery,
   ]);
   assert.deepEqual(
-    (await done(root.call("message_list", { counterpartyID: ownerID, before: "latest" }))).items,
-    [],
+    (await done(root.call("message_list", { between: [ownerID, requesterID], before: "latest" })))
+      .items,
+    [sent, incomingQuery, outgoingQuery],
   );
   const unseenQuery = Message.parse(
     await done(requester.call("message_send", { recipientID: ownerID, text: "unseen inbound" })),
@@ -444,7 +436,9 @@ try {
   );
   await owner.close();
   await done(root.call("actor_close", { actor: ownerID }));
-  assert.equal((await done(requester.call("actor_get", { actorID: ownerID }))).state, "closed");
+  assert.ok(
+    (await done(requester.call("team", { actor: ownerID, depth: 0 }))).positions[0].closed_at,
+  );
   assert.deepEqual(
     (
       await done(
@@ -453,7 +447,7 @@ try {
     ).items,
     [unseenQuery, ownQuery],
   );
-  assert.equal((await done(root.call("actor_list"))).items.length, 2);
+  assert.equal((await done(root.call("team", { depth: 20 }))).positions.length, 2);
   assert.deepEqual(
     (await done(root.call("work_list", { ownerWithin: ownerID, requesterWithin: requesterID })))
       .items,
@@ -482,15 +476,14 @@ try {
   const result = {
     ok: true,
     node: process.version,
-    toolCount: 11,
-    interfaceCount: 30,
+    toolCount: 9,
+    interfaceCount: 26,
     workspaceSource: pin.source,
     workspaceSha256: digest,
     workspaceVersion: pin.version,
     workspaceBundled: true,
     publicWorkFormHistory: true,
     levelTags: true,
-    statusRecord: true,
     approvalManagerChain: true,
     askerClose: true,
     subtreeFilters: true,
@@ -503,10 +496,10 @@ try {
     staleRunCursorRefused: true,
     allWorkspaceOperations: true,
     standaloneAsks: true,
-    p2pPrivacy: true,
+    openMessageReads: true,
     selectedMessageQueries: true,
     discoveryMessageQuerySchemas: true,
-    privateRecentAndExclusiveOlder: true,
+    recentAndExclusiveOlder: true,
     closedPeerConversation: true,
     ownSendKeepsUnseenInbound: true,
     revisionConflict: true,

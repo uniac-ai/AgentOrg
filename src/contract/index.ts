@@ -1,12 +1,10 @@
 /** Public wire schemas and types for clients; definitions belong to the domain model. */
 
 export {
-  Actor as DirectoryActor,
   Field,
   Form,
   Message,
   Review,
-  Status,
   Submission,
   Work,
   WorkStatus,

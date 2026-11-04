@@ -1,4 +1,4 @@
-/** Bounded run-local observations with a fixed whitelist and no private Message events. */
+/** Bounded run-local observations with a fixed whitelist and no Message events. */
 import { Diagnostic, privateOperation } from "./model/system.ts";
 
 type Observation = Omit<Diagnostic, "at" | "message">;

@@ -115,7 +115,7 @@ export const SYSTEM = toolDefinition("system", {
     request: z.strictObject({ diagnosticLimit: z.number().int().min(1).max(100).default(20) }),
     response: SystemStatus,
     description:
-      "Observe this answering Hub run and its bounded fixed-code diagnostics. Connection presence and local work counts do not establish native health or idleness. Private Message operations produce no diagnostic events.",
+      "Observe this answering Hub run and its bounded fixed-code diagnostics. Connection presence and local work counts do not establish native health or idleness. Message operations produce no diagnostic events.",
   },
   connection_list: {
     writes: false,

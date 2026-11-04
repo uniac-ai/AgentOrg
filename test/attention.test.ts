@@ -68,7 +68,6 @@ test("attention names what concerns its caller, made by someone else, and what c
   const message = await done(
     peer.client.call("message_send", { recipientID: lead.id, text: "Look at this\nplease" }),
   );
-  await done(lead.client.call("status_set", { line: "Reviewing" }));
   const forLead = await read(lead.client, start);
   assert.deepEqual(kinds(forLead), [
     ["ask", workerAsk.formID, "worker", "Worker's ask"],
@@ -77,7 +76,7 @@ test("attention names what concerns its caller, made by someone else, and what c
     ["review_due", assigned.ticketID, "worker", "Build it"],
     ["message", message.messageID, "peer", "Look at this"],
   ]);
-  assert.deepEqual(forLead.changed.actorIDs, [lead.id]);
+  assert.deepEqual(forLead.changed.actorIDs, []);
   assert.equal(forLead.changed.formIDs.length, 3);
   assert.deepEqual(forLead.changed.workIDs.sort(), [assigned.ticketID, toLead.ticketID].sort());
   await done(
@@ -151,10 +150,8 @@ test("actor_view joins an Actor's report at read time, for itself and its manage
   t.after(() => core.close());
   const empty = await done(worker.client.call("actor_view"));
   assert.equal(empty.state, "idle");
-  assert.equal(empty.status, null);
   assert.equal(empty.actor.actorID, worker.id);
   assert.equal(empty.actor.lastActiveAt, null);
-  const status = await done(worker.client.call("status_set", { line: "Building" }));
   const stream = await done(worker.client.call("work_create", { title: "Stream" }));
   await done(worker.client.call("work_update", { ticketID: stream.ticketID, status: "active" }));
   const linked = await done(
@@ -171,7 +168,6 @@ test("actor_view joins an Actor's report at read time, for itself and its manage
   await done(worker.client.call("work_submit", { ticketID: quick.ticketID, result: "Done" }));
   const view = await done(peer.client.call("actor_view", { actorID: worker.id }));
   assert.equal(view.state, "waiting");
-  assert.deepEqual(view.status, status);
   assert.equal(view.actor.name, "worker");
   assert.equal(view.actor.path, "lead.worker");
   assert.equal(view.actor.online, true);

@@ -225,7 +225,7 @@ export function team(
     const id = viewed.id;
     const reports = registry.reports(id);
     const reportIDs = reports.map((report) => report.id);
-    return workspace.run(caller, ({ work, forms, status }) => {
+    return workspace.run(caller, ({ work, forms }) => {
       const names: View["actors"] = {};
       const list = <T>(page: { items: T[]; actors: View["actors"] }) => {
         Object.assign(names, page.actors);
@@ -243,12 +243,6 @@ export function team(
         ),
       ]).map((item) => ({ ...item, asks: own.filter((ask) => ask.workID === item.ticketID) }));
       const open = works({ ownerID: id, status: ["open"] });
-      let current: View["status"] = null;
-      try {
-        current = status.get({ actorID: id });
-      } catch (error) {
-        if (!(error instanceof WorkspaceError && error.code === "not_found")) throw error;
-      }
       for (const actor of [viewed, ...reports]) names[actor.id] = { name: actor.name };
       const { path, online } = actors.view(viewed);
       return {
@@ -263,7 +257,6 @@ export function team(
           closed_at: viewed.closed_at,
         },
         state: stateOf(workstreams),
-        status: current,
         workstreams,
         asks: oldestFirst(
           own.filter((ask) => !workstreams.some((item) => item.ticketID === ask.workID)),

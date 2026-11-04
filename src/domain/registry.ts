@@ -29,11 +29,6 @@ export function registry(actors: Store["actors"], now: () => string) {
   const get = (id: string) => actors.get(id);
   const reports = (manager: string) => actors.reports(manager);
   const open = () => actors.open();
-  function directory(after: number, limit: number) {
-    const page = actors.directory(after, limit);
-    if (after > page.head) throw new Invalid("after: beyond the Actor directory cursor");
-    return { items: page.items, after: page.after };
-  }
 
   /** Inclusive ancestry through retained positions, including closed Actors. */
   function within(actorID: string, ancestorID: string): boolean {
@@ -162,7 +157,6 @@ export function registry(actors: Store["actors"], now: () => string) {
     identify,
     reports,
     open,
-    directory,
     within,
     close,
     path,

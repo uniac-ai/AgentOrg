@@ -88,8 +88,8 @@ test("System is equally offered to active Actors; observations and sparse pages 
   const peer = await provider(t, core);
   assert.deepEqual(await root.available(), await worker.client.available());
   const tools = await root.available();
-  assert.equal(tools.length, 11);
-  assert.equal(tools.flatMap((tool) => tool.interfaces).length, 30);
+  assert.equal(tools.length, 9);
+  assert.equal(tools.flatMap((tool) => tool.interfaces).length, 26);
   const system = tools.find((tool) => tool.id === "hub:system");
   assert.ok(system);
   assert.deepEqual(
@@ -230,7 +230,7 @@ test("Actor detach uses canonical self-other/direct-manager/root authority and p
     { instanceId, connectionId: raw.connectionId, closed: true },
   );
   assert.equal(await raw.closed, 1000);
-  assert.equal((await done(worker.client.call("actor_get"))).state, "active");
+  assert.equal((await done(worker.client.call("team", { depth: 0 }))).positions[0].closed_at, null);
   const another = await socket(t, core, { actorId: worker.id, credential: worker.credential });
   await done(
     lead.client.call("connection_disconnect", { instanceId, connectionId: another.connectionId }),
@@ -474,7 +474,7 @@ test("pending factory RPCs block detach independently and closing refuses a new 
   assert.equal(await peer.closed, 1000);
 });
 
-test("private Message success, refusal, validation, storage and postcommit audit failures emit no diagnostic events", async (t) => {
+test("Message success, refusal, validation, storage and postcommit audit failures emit no diagnostic events", async (t) => {
   const { core, root, make } = await fixture(t);
   const sender = await make("sender");
   const recipient = await make("recipient");
@@ -487,9 +487,13 @@ test("private Message success, refusal, validation, storage and postcommit audit
     }),
   );
   await done(recipient.client.call("message_get", { messageID: sent.messageID }));
-  await done(recipient.client.call("message_list", {}));
+  await done(recipient.client.call("message_list", { counterpartyID: sender.id }));
+  assert.deepEqual(
+    await done(observer.client.call("message_get", { messageID: sent.messageID })),
+    sent,
+  );
   assert.equal(
-    await refused(observer.client.call("message_get", { messageID: sent.messageID })),
+    await refused(observer.client.call("message_get", { messageID: "PRIVATE_UNKNOWN_MESSAGE" })),
     "not_found",
   );
   assert.equal(
@@ -529,7 +533,7 @@ test("private Message success, refusal, validation, storage and postcommit audit
   );
   audit.mock.restore();
   assert.equal(
-    (await done(recipient.client.call("message_list", {}))).items.length,
+    (await done(recipient.client.call("message_list", { counterpartyID: sender.id }))).items.length,
     2,
     "postcommit failure is not replayed",
   );

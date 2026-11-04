@@ -90,14 +90,12 @@ export function attention(registry: Registry, audit: Audit, workspace: Workspace
 
   function examine(caller: ActorRow, entries: AuditRow[]): Omit<Result, "next"> {
     const items = new Map<string, Item>();
-    const actorIDs = new Set<string>();
     const workIDs = new Set<string>();
     const formIDs = new Set<string>();
     for (const entry of entries) {
       const { actor, target } = entry;
       if (entry.outcome !== "ok" || actor === null || target === null) continue;
-      if (entry.operation === "status_set") actorIDs.add(actor);
-      else if (entry.operation.startsWith("work_")) workIDs.add(target);
+      if (entry.operation.startsWith("work_")) workIDs.add(target);
       else if (entry.operation.startsWith("form_")) formIDs.add(target);
       if (actor === caller.id) continue;
       const found = itemOf(caller, { ...entry, actor, target });
@@ -112,7 +110,7 @@ export function attention(registry: Registry, audit: Audit, workspace: Workspace
     }
     return {
       items: [...items.values()],
-      changed: { actorIDs: [...actorIDs], workIDs: [...workIDs], formIDs: [...formIDs] },
+      changed: { actorIDs: [], workIDs: [...workIDs], formIDs: [...formIDs] },
     };
   }
 

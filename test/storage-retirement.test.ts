@@ -185,18 +185,16 @@ test("schema7 retirement preserves records, fails pending calls once and exposes
         [
           "hub:actors",
           "hub:team",
-          "hub:directory",
           "hub:messages",
           "hub:work",
           "hub:forms",
-          "hub:status",
           "hub:claims",
           "hub:attention",
           "hub:activity",
           "hub:system",
         ],
       );
-      assert.equal(org.available(actor).flatMap((tool) => tool.interfaces).length, 30);
+      assert.equal(org.available(actor).flatMap((tool) => tool.interfaces).length, 26);
       for (const alias of [
         "worker.control",
         "manager.control",
@@ -359,7 +357,7 @@ test("import failure before package commit rolls every Message back", async (t) 
       return result;
     });
     assert.throws(() => importLegacyMessages(database, workspace), /owned failure/);
-    assert.deepEqual(workspace.messages.all(), []);
+    assert.deepEqual(workspace.messages.where({}), []);
     assert.deepEqual(database.all("SELECT * FROM workspace_imports"), []);
     mocked.mock.restore();
     const baseline = importLegacyMessages(database, workspace);
@@ -460,7 +458,7 @@ test("unrepresentable source fields are refused before importing or trimming any
   assert.throws(() => new SqliteStore(fixture.file), /source fields cannot be preserved/);
   const workspace = openSqlite(join(fixture.directory, "core.workspace.db"));
   try {
-    assert.deepEqual(workspace.messages.all(), []);
+    assert.deepEqual(workspace.messages.where({}), []);
   } finally {
     workspace.close();
   }
