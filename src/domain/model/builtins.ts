@@ -100,7 +100,7 @@ export const ACTIVITY = toolDefinition("activity", {
     level: "organization",
     request: Activity,
     response: ActivityResult,
-    description: "Read the organization's audit metadata, oldest first. Only the root may.",
+    description: "Read the organization's audit metadata, oldest first.",
   },
 });
 

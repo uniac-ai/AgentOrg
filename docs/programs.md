@@ -36,7 +36,7 @@ attachment. Creation makes a direct report of the caller:
 ```sh
 agentorg actor create --name builds --purpose "Run the nightly builds"
 agentorg team
-agentorg activity    # the root only
+agentorg activity
 agentorg interfaces
 agentorg call team --json '{"depth":2}'
 ```

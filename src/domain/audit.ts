@@ -1,10 +1,8 @@
 /**
- * The audit trail: writes, interface refusals and preserved historical call outcomes. Only the
- * root reads it, since it names every Actor's operations.
- * Each entry wakes the reads waiting for the next one.
+ * The audit trail: writes, interface refusals and preserved historical call outcomes, which every
+ * Actor reads. Each entry wakes the reads waiting for the next one.
  */
 
-import { Forbidden } from "./errors.ts";
 import { ACTIVITY } from "./model/index.ts";
 import type { AuditRow, Store } from "./ports.ts";
 import { bindTool } from "./tools.ts";
@@ -47,11 +45,10 @@ export function audit(entries: Store["audit"], now: () => string) {
     next,
     head: () => list(undefined, 1)[0]?.id ?? 0,
     lastWrite: (actor: string) => entries.lastWrite(actor),
+    writesAfter: (id: number, actor: string, target: string) =>
+      entries.writesAfter(id, actor, target),
     tool: bindTool(ACTIVITY, {
-      activity: (actor, request) => {
-        if (actor.manager !== null) throw new Forbidden("only the root reads the activity");
-        return { entries: list(request.since, request.limit) };
-      },
+      activity: (_actor, request) => ({ entries: list(request.since, request.limit) }),
     }),
   };
 }

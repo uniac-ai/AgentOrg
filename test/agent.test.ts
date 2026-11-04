@@ -172,7 +172,15 @@ test("Codex binds from each call, resumes the same actor, and gives a fork its o
     actor: created.actor.id,
     created: false,
   });
-  assert.match(text(await fork.call("activity")), /^forbidden: only the root/);
+  const activity = await fork.call("activity");
+  assert.notEqual(activity.isError, true, text(activity));
+  assert.equal(
+    (activity.structuredContent as { entries: { target: string }[] }).entries.some(
+      (entry) => entry.target === created.actor.id,
+    ),
+    true,
+  );
+  assert.equal(JSON.stringify(activity).includes(credential), false);
   assert.equal(
     (
       await fork.call("actor_create", {

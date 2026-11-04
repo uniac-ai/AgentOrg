@@ -167,6 +167,10 @@ function frame(item: Delivery, here: Here): string {
     }
     case "ask":
       return `${from} routes you the ask ${quoted(item.title)} (${item.recordID}). Read it with work_get {askID: "${item.recordID}"}, then answer it with work_answer {askID, answers, note?}, or raise it one manager up with work_answer {askID, raise: true}.`;
+    case "raised":
+      return `${from} raised your ask ${quoted(item.title)} (${item.recordID}) to its manager; it stays open until someone answers it. Keep working on what doesn't depend on it.`;
+    case "updated":
+      return `${from} changed your Work ${quoted(item.title)} (${item.recordID}). Read it with work_get before your next write to it.`;
     case "assigned":
       return `${from} assigned you Work ${quoted(item.title)} (${item.recordID}). Read it with work_get; set it active with work_update when you start.`;
     case "review_due":

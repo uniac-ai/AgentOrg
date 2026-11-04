@@ -131,7 +131,7 @@ test("a home without the audit's index of writes gains it on open, with no schem
   new SqliteStore(path).close();
   const old = new DatabaseSync(path);
   old.exec(
-    `DROP INDEX audit_writes;
+    `DROP INDEX audit_writes; DROP INDEX audit_targets;
      INSERT INTO audit (at, actor, operation, target, outcome)
      VALUES ('2026-11-03T00:00:00.000Z', 'kept', 'work_create', NULL, 'ok');`,
   );
@@ -149,6 +149,16 @@ test("a home without the audit's index of writes gains it on open, with no schem
       )
       .map((step) => step.detail),
     ["SEARCH audit USING INDEX audit_writes (actor=?)"],
+  );
+  // The statement attention's writesAfter runs: a range of one Actor's writes on one record.
+  assert.deepEqual(
+    store.database
+      .all(
+        "EXPLAIN QUERY PLAN SELECT id FROM audit WHERE actor = ? AND target = ? AND outcome = 'ok' AND id > ? AND (operation GLOB 'work_*' OR operation GLOB 'form_*') ORDER BY id",
+        ["kept", "work1", 0],
+      )
+      .map((step) => step.detail),
+    ["SEARCH audit USING INDEX audit_targets (actor=? AND target=? AND rowid>?)"],
   );
 });
 
@@ -214,7 +224,7 @@ test("a 0.5.0 Workspace file is served on open: an ask with no Work alone, and b
   );
 });
 
-test("only the root reads audit metadata, which discloses no message bodies or Actor credentials", async (t) => {
+test("every open Actor reads audit metadata, which discloses no message bodies or Actor credentials", async (t) => {
   const store = new SqliteStore(":memory:");
   t.after(() => store.close());
   const org = organization(store);
@@ -226,24 +236,24 @@ test("only the root reads audit metadata, which discloses no message bodies or A
   const secret = "private-message-body-sentinel";
   await done(invoke(actor.id, "message_send", { recipientID: other.id, text: secret }));
   await done(invoke(actor.id, "work_create", { ownerID: root.id, title: "Working" }));
-  for (const caller of [actor, other])
-    assert.equal(await refused(invoke(caller.id, "activity")), "forbidden");
-  const rootView = await done(invoke(root.id, "activity"));
-  assert.deepEqual(
-    rootView.entries.map((entry: { operation: string }) => entry.operation),
-    ["message_send", "work_create"],
-  );
-  for (const entry of rootView.entries)
-    assert.deepEqual(Object.keys(entry).sort(), [
-      "actor",
-      "at",
-      "id",
-      "operation",
-      "outcome",
-      "target",
-    ]);
-  for (const privateValue of [secret, rootCredential, credential])
-    assert.equal(JSON.stringify(rootView).includes(privateValue), false);
+  for (const caller of [root, actor, other]) {
+    const view = await done(invoke(caller.id, "activity"));
+    assert.deepEqual(
+      view.entries.map((entry: { operation: string }) => entry.operation),
+      ["message_send", "work_create"],
+    );
+    for (const entry of view.entries)
+      assert.deepEqual(Object.keys(entry).sort(), [
+        "actor",
+        "at",
+        "id",
+        "operation",
+        "outcome",
+        "target",
+      ]);
+    for (const privateValue of [secret, rootCredential, credential])
+      assert.equal(JSON.stringify(view).includes(privateValue), false);
+  }
 });
 
 test("polling activity past its limit returns every entry exactly once, oldest first", async (t) => {

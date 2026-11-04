@@ -62,6 +62,8 @@ export interface Store {
     list(since: number | undefined, limit: number): AuditRow[];
     /** The time of the actor's latest successful write. */
     lastWrite(actor: string): string | undefined;
+    /** The ids of the actor's successful Work and ask writes on the target after entry `id`, in order. */
+    writesAfter(id: number, actor: string, target: string): number[];
   };
   /** Run `work` so that its writes land together or not at all. */
   transaction<T>(work: () => T): T;
