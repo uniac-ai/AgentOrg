@@ -1,6 +1,12 @@
 /** Organization hierarchy, actual admitted connection presence and each Actor's report. */
 
-import { type Form, type Work, WorkspaceError } from "@uniac/agentic-workspace/contracts";
+import type { WorkspaceClients } from "@uniac/agentic-workspace";
+import {
+  type Form,
+  type List,
+  type Work,
+  WorkspaceError,
+} from "@uniac/agentic-workspace/contracts";
 import type { Actors } from "./actors.ts";
 import type { Audit } from "./audit.ts";
 import { type RequestOf, type ResponseOf, TEAM } from "./model/index.ts";
@@ -16,11 +22,12 @@ type Position = ResponseOf<"team">["positions"][number];
 type Headline = Position["headline"];
 /** A Work's state: done, review, waiting on its owner's ask, not started, else active. */
 type WorkState = "done" | "review" | "waiting" | "open" | "active";
-const WORKSTREAM = ["active", "submitted", "changes_requested"] as const;
 /** Up to this many positions, each reads its own Work rather than the organization's. */
 const FEW = 20;
 /** Work that isn't finished, not started included. */
 const UNFINISHED = ["open", "active", "submitted", "changes_requested"] as const;
+/** A list read's filter, without its paging. */
+type Filter<Query> = Omit<NonNullable<Query>, "after" | "limit">;
 const oldestFirst = <T extends { createdAt: string }>(items: T[]) =>
   items.sort((left, right) => left.createdAt.localeCompare(right.createdAt));
 
@@ -45,6 +52,9 @@ function workState(work: Work, ask: Form | undefined): WorkState {
   if (ask !== undefined) return "waiting";
   return work.status === "open" ? "open" : "active";
 }
+
+/** Its owner's oldest open ask on it, which makes it waiting. */
+const ownerAsk = (work: Work) => work.asks?.find((ask) => ask.requesterID === work.ownerID);
 
 /** Changes were requested on its current submission; it stays so after the owner resumes. */
 const changesRequested = (work: Work) =>
@@ -82,26 +92,85 @@ function step(progress: string | undefined): string | undefined {
   return current?.text ?? sentence(lines.slice(0, start < 0 ? undefined : start).join("\n"));
 }
 
-/** The most urgent among the workstreams: waiting, review, then active. */
-function stateOf(workstreams: View["workstreams"]): View["state"] {
-  const states = workstreams.map((work) =>
-    work.status === "submitted"
-      ? "review"
-      : work.status === "active" && work.asks.length > 0
-        ? "waiting"
-        : "active",
-  );
-  return (
-    (["waiting", "review", "active"] as const).find((state) => states.includes(state)) ?? "idle"
-  );
-}
-
 export function team(
   registry: Registry,
   actors: Pick<Actors, "view">,
   audit: Pick<Audit, "lastWrite">,
   workspace: Workspace,
 ) {
+  /**
+   * An Actor's state and headline from the Work on it (model §3): its most urgent Work that is
+   * waiting, in review or active is the subject, with the clause that applies; with none, its
+   * Work not started and the last it finished. `known` is Work already read, which names Work
+   * waited on without a read of its own.
+   */
+  function standing(
+    caller: ActorRow,
+    work: WorkspaceClients["work"],
+    owned: Work[],
+    known: Work[],
+    last: Work | undefined,
+  ): Pick<Position, "state" | "headline"> {
+    const named = (actorID: string) =>
+      actorID === caller.id ? "you" : (registry.get(actorID)?.name ?? actorID);
+    const titled = (ticketID: string) => {
+      const found = known.find((item) => item.ticketID === ticketID);
+      if (found) return found.title;
+      try {
+        return work.get({ ticketID }).title;
+      } catch (error) {
+        if (error instanceof WorkspaceError && error.code === "not_found") return "other Work";
+        throw error;
+      }
+    };
+    const clause = (item: Work, state: WorkState, ask: Form | undefined): Headline["clause"] => {
+      if (ask) return { kind: ask.approval ? "approval" : "ask", text: ask.title };
+      if (state === "review")
+        return {
+          kind: "review",
+          // A closed requester's part passes to its nearest open manager (Q10).
+          text: `with ${named(registry.standIn(item.requesterID) ?? item.requesterID)} for review`,
+        };
+      const on = item.waitsOn;
+      if (on)
+        return {
+          kind: "waits",
+          text: "text" in on ? on.text : "actorID" in on ? named(on.actorID) : titled(on.ticketID),
+        };
+      const text = step(item.progress);
+      return text === undefined ? null : { kind: "step", text };
+    };
+    const items = owned.map((item) => {
+      const ask = ownerAsk(item);
+      return { item, ask, state: workState(item, ask) };
+    });
+    const ranked = items
+      .flatMap(({ item, ask, state }) =>
+        state === "done" || state === "open"
+          ? []
+          : [{ item, ask, state, rank: urgency(state, item) }],
+      )
+      .sort(
+        (left, right) =>
+          left.rank - right.rank || right.item.updatedAt.localeCompare(left.item.updatedAt),
+      );
+    const [subject] = ranked;
+    return {
+      state: subject?.state ?? "idle",
+      headline: {
+        subject: subject
+          ? { ticketID: subject.item.ticketID, title: subject.item.title, state: subject.state }
+          : null,
+        clause: subject ? clause(subject.item, subject.state, subject.ask) : null,
+        more: Math.max(ranked.length - 1, 0),
+        notStarted: items.filter((each) => each.state === "open").length,
+        finished: last
+          ? { ticketID: last.ticketID, title: last.title, at: last.completedAt ?? last.updatedAt }
+          : null,
+      },
+    };
+  }
+
   /**
    * The start and its open reports to `depth`, each with its state, headline and ask counts. Up to
    * `FEW` positions read their own Work, more read the organization's once, and open asks are one
@@ -115,13 +184,10 @@ export function team(
       if (depth > 0) for (const report of registry.reports(at.id)) visit(report, depth - 1);
     };
     visit(start, request.depth);
-    // The subtree filters walk each row's managers on every page, so the Hub filters instead: a
-    // few positions read their own Work, and more read every Actor's unfinished Work once.
     const few = rows.length <= FEW;
     const positions = workspace.run(caller, ({ work }) => {
-      const list = (
-        filter: Omit<NonNullable<Parameters<typeof work.list>[0]>, "after" | "limit">,
-      ) => all((after) => work.list({ ...filter, limit: 100, after }));
+      const list = (filter: Filter<Parameters<typeof work.list>[0]>) =>
+        all((after) => work.list({ ...filter, limit: 100, after }));
       const live = few
         ? rows.flatMap((row) => list({ ownerID: row.id, status: [...UNFINISHED] }))
         : list({ status: [...UNFINISHED] });
@@ -143,104 +209,62 @@ export function team(
       for (const ask of open)
         for (let at = registry.get(ask.requesterID); at?.manager; at = registry.get(at.manager))
           below.set(at.manager, (below.get(at.manager) ?? 0) + 1);
-      const named = (actorID: string) =>
-        actorID === caller.id ? "you" : (registry.get(actorID)?.name ?? actorID);
-      const titled = (ticketID: string) => {
-        const found = live.find((item) => item.ticketID === ticketID);
-        if (found) return found.title;
-        try {
-          return work.get({ ticketID }).title;
-        } catch (error) {
-          if (error instanceof WorkspaceError && error.code === "not_found") return "other Work";
-          throw error;
-        }
-      };
-      const clause = (item: Work, state: WorkState, ask: Form | undefined): Headline["clause"] => {
-        if (ask) return { kind: ask.approval ? "approval" : "ask", text: ask.title };
-        if (state === "review")
-          return { kind: "review", text: `with ${named(item.requesterID)} for review` };
-        const on = item.waitsOn;
-        if (on)
-          return {
-            kind: "waits",
-            text:
-              "text" in on ? on.text : "actorID" in on ? named(on.actorID) : titled(on.ticketID),
-          };
-        const text = step(item.progress);
-        return text === undefined ? null : { kind: "step", text };
-      };
-      return rows.map((row): Position => {
-        const items = live
-          .filter((item) => item.ownerID === row.id)
-          .map((item) => {
-            const ask = open.find(
-              (each) => each.workID === item.ticketID && each.requesterID === item.ownerID,
-            );
-            return { item, ask, state: workState(item, ask) };
-          });
-        const ranked = items
-          .flatMap(({ item, ask, state }) =>
-            state === "done" || state === "open"
-              ? []
-              : [{ item, ask, state, rank: urgency(state, item) }],
-          )
-          .sort(
-            (left, right) =>
-              left.rank - right.rank || right.item.updatedAt.localeCompare(left.item.updatedAt),
-          );
-        const [subject] = ranked;
-        const last = finished(row.id);
-        return {
+      return rows.map(
+        (row): Position => ({
           ...actors.view(row),
-          state: subject?.state ?? "idle",
-          headline: {
-            subject: subject
-              ? { ticketID: subject.item.ticketID, title: subject.item.title, state: subject.state }
-              : null,
-            clause: subject ? clause(subject.item, subject.state, subject.ask) : null,
-            more: Math.max(ranked.length - 1, 0),
-            notStarted: items.filter((each) => each.state === "open").length,
-            finished: last
-              ? {
-                  ticketID: last.ticketID,
-                  title: last.title,
-                  at: last.completedAt ?? last.updatedAt,
-                }
-              : null,
-          },
+          ...standing(
+            caller,
+            work,
+            live.filter((item) => item.ownerID === row.id),
+            live,
+            finished(row.id),
+          ),
           asks: open.filter((ask) => ask.requesterID === row.id).length,
           branchAsks: below.get(row.id) ?? 0,
           lastActiveAt: audit.lastWrite(row.id) ?? null,
-        };
-      });
+        }),
+      );
     });
     return { root: (registry.root() as ActorRow).id, positions };
   }
 
+  /**
+   * An Actor's report: its state and headline as `team` gives them, from the same Work, the Work
+   * on it, its own open asks wherever they are, and what needs it: the asks routed to it, the
+   * submissions it answers and the Work it must take up or hand on. Each list is every page of
+   * its read.
+   */
   function view(caller: ActorRow, request: RequestOf<"actor_view">): View {
     const viewed = request.actorID === undefined ? caller : registry.found(request.actorID);
     const id = viewed.id;
     const reports = registry.reports(id);
-    const reportIDs = reports.map((report) => report.id);
     return workspace.run(caller, ({ work }) => {
       const names: View["actors"] = {};
-      const list = <T>(page: { items: T[]; actors: View["actors"] }) => {
+      const named = <T>(page: List<T>) => {
         Object.assign(names, page.actors);
-        return page.items;
+        return page;
       };
-      const works = (query: Parameters<typeof work.list>[0]) =>
-        list<Work>(work.list({ limit: 100, ...query }));
-      const asks = (query: Parameters<typeof work.asks>[0]) =>
-        list<Form>(work.asks({ limit: 100, ...query }));
-      const own = asks({ requesterID: id, status: ["open"] });
-      const workstreams = oldestFirst([
-        ...works({ ownerID: id, status: [...WORKSTREAM] }),
-        ...works({ requesterID: id, status: [...WORKSTREAM] }).filter((item) =>
-          reportIDs.includes(item.ownerID),
+      const works = (query: Filter<Parameters<typeof work.list>[0]>) =>
+        oldestFirst(all((after) => named(work.list({ ...query, limit: 100, after }))));
+      const asks = (query: Filter<Parameters<typeof work.asks>[0]>) =>
+        oldestFirst(all((after) => named(work.asks({ ...query, limit: 100, after }))));
+      const mine = works({ ownerID: id, status: [...UNFINISHED] });
+      const last = work.list({ ownerID: id, status: ["accepted"], order: "recent", limit: 1 })
+        .items[0];
+      // Work routed to it as requester: its own, and a closed requester's it stands in for (Q10).
+      const requested = oldestFirst(
+        all((after) =>
+          work.list({ requesterWithin: id, status: [...UNFINISHED], limit: 100, after }),
         ),
-      ]).map((item) => ({ ...item, asks: own.filter((ask) => ask.workID === item.ticketID) }));
-      const open = works({ ownerID: id, status: ["open"] });
+      ).filter((item) => registry.standIn(item.requesterID) === id);
+      const reviews = requested.filter((item) => item.status === "submitted");
+      const ownerClosed = requested.filter(
+        (item) => item.status !== "submitted" && registry.found(item.ownerID).closed_at !== null,
+      );
       for (const actor of [viewed, ...reports]) names[actor.id] = { name: actor.name };
+      for (const item of [...reviews, ...ownerClosed])
+        for (const party of [item.ownerID, item.requesterID])
+          names[party] = { name: registry.found(party).name };
       const { path, online } = actors.view(viewed);
       return {
         actor: {
@@ -253,24 +277,34 @@ export function team(
           lastActiveAt: audit.lastWrite(id) ?? null,
           closed_at: viewed.closed_at,
         },
-        state: stateOf(workstreams),
-        workstreams,
-        asks: oldestFirst(
-          own.filter((ask) => !workstreams.some((item) => item.ticketID === ask.workID)),
+        ...standing(caller, work, mine, mine, last),
+        workstreams: mine
+          .filter((item) => workState(item, ownerAsk(item)) !== "open")
+          .map((item) => ({ ...item, asks: item.asks ?? [] })),
+        asks: asks({ requesterID: id, status: ["open"] }),
+        needs: asks({ routedTo: id }),
+        reviews,
+        assigned: mine.filter(
+          (item) =>
+            item.requesterID !== id &&
+            (item.status === "open" || item.status === "changes_requested"),
         ),
-        needs: oldestFirst(asks({ routedTo: id })),
-        reviews: oldestFirst(works({ requesterID: id, status: ["submitted"] })),
-        assigned: oldestFirst(open.filter((item) => item.requesterID !== id)),
-        followUps: oldestFirst(open.filter((item) => item.requesterID === id)),
+        ownerClosed,
+        ...(request.answeredBy === undefined
+          ? {}
+          : { answered: asks({ requesterID: id, answeredBy: request.answeredBy }) }),
+        followUps: mine.filter((item) => item.status === "open" && item.requesterID === id),
         completed:
           request.completed === 0
             ? []
-            : works({
-                ownerID: id,
-                status: ["accepted"],
-                order: "recent",
-                limit: request.completed,
-              }),
+            : named(
+                work.list({
+                  ownerID: id,
+                  status: ["accepted"],
+                  order: "recent",
+                  limit: request.completed,
+                }),
+              ).items,
         reports: reports.map(actors.view),
         actors: names,
       };

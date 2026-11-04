@@ -8,7 +8,7 @@
 
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import type { z } from "zod";
-import { AUDIT_ACTOR_INDEX, SCHEMA, SCHEMA_VERSION, TABLES } from "./schema.ts";
+import { AUDIT_INDEXES, SCHEMA, SCHEMA_VERSION, TABLES } from "./schema.ts";
 
 export type Table = keyof typeof TABLES;
 export type RecordOf<T extends Table> = z.output<(typeof TABLES)[T]>;
@@ -26,7 +26,7 @@ export class Database {
     );
     try {
       this.createSchema();
-      this.db.exec(AUDIT_ACTOR_INDEX);
+      this.db.exec(AUDIT_INDEXES);
     } catch (error) {
       this.db.close();
       throw error;

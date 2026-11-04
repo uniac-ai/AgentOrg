@@ -30,6 +30,13 @@ export function registry(actors: Store["actors"], now: () => string) {
   const reports = (manager: string) => actors.reports(manager);
   const open = () => actors.open();
 
+  /** The Actor while it is open, else its nearest open manager, who takes its part (Q10). */
+  function standIn(actorID: string): string | undefined {
+    for (let at = get(actorID); at; at = at.manager === null ? undefined : get(at.manager))
+      if (at.closed_at === null) return at.id;
+    return undefined;
+  }
+
   /** Inclusive ancestry through retained positions, including closed Actors. */
   function within(actorID: string, ancestorID: string): boolean {
     if (get(ancestorID) === undefined) return false;
@@ -158,6 +165,7 @@ export function registry(actors: Store["actors"], now: () => string) {
     reports,
     open,
     within,
+    standIn,
     close,
     path,
     names,

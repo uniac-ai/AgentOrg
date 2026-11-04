@@ -1,8 +1,9 @@
 /**
  * Which client session fills which position, kept in the home's `sessions/<session>/` so that a
- * resumed session fills it again. `position` holds the Actor ID, `waiter` the current waiter PID,
- * and `inbox` the `attention` position the session has been given everything before. This private
- * bookkeeping establishes neither public acknowledgements nor user input.
+ * resumed session fills it again. `position` holds the Actor ID, `level` the level its server
+ * presents, `waiter` the current waiter PID, and `inbox` the `attention` position the session has
+ * been given everything before. This private bookkeeping establishes neither public
+ * acknowledgements nor user input.
  */
 
 import { randomUUID } from "node:crypto";
@@ -10,7 +11,7 @@ import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "nod
 import { join } from "node:path";
 import { home, privateDirectory } from "../../home.ts";
 
-type Entry = "position" | "waiter" | "inbox";
+type Entry = "position" | "level" | "waiter" | "inbox";
 
 const SESSION = /^[A-Za-z0-9_-]{1,128}$/;
 
@@ -37,9 +38,27 @@ function write(session: string, entry: Entry, value: string): void {
   writeFileSync(join(privateDirectory(named(session)), entry), `${value}\n`, { mode: 0o600 });
 }
 
+/** Write an entry another process reads at any moment, so it never reads it half-written. */
+function replace(session: string, entry: Entry, value: string): void {
+  const directory = privateDirectory(named(session));
+  const temporary = join(directory, `${entry}.${randomUUID()}.tmp`);
+  try {
+    writeFileSync(temporary, `${value}\n`, { flag: "wx", mode: 0o600 });
+    renameSync(temporary, join(directory, entry));
+  } finally {
+    rmSync(temporary, { force: true });
+  }
+}
+
 export const sessions = {
   position: (session: string) => read(session, "position"),
   fill: (session: string, actor: string) => write(session, "position", actor),
+  /** The level the session's server presents, which the waiter frames for; none is every tool. */
+  level: (session: string) => read(session, "level"),
+  present(session: string, level: string | undefined): void {
+    if (level !== undefined) replace(session, "level", level);
+    else rmSync(join(directory(session), "level"), { force: true });
+  },
   /** Forget the session, as when its position closed. */
   forget: (session: string) => rmSync(directory(session), { recursive: true, force: true }),
   waiter: (session: string) => Number(read(session, "waiter") ?? 0),
@@ -49,14 +68,5 @@ export const sessions = {
     const kept = read(session, "inbox");
     return kept !== undefined && /^\d+$/.test(kept) ? kept : undefined;
   },
-  advanceInbox(session: string, position: string): void {
-    const directory = privateDirectory(named(session));
-    const temporary = join(directory, `inbox.${randomUUID()}.tmp`);
-    try {
-      writeFileSync(temporary, `${position}\n`, { flag: "wx", mode: 0o600 });
-      renameSync(temporary, join(directory, "inbox"));
-    } finally {
-      rmSync(temporary, { force: true });
-    }
-  },
+  advanceInbox: (session: string, position: string) => replace(session, "inbox", position),
 };

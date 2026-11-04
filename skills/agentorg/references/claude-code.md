@@ -5,15 +5,15 @@ hooks, and this skill. `--level report` presents only your own report, for one a
 person; `--level team` adds working with other Actors.
 
 - **Tools.** Use `mcp__org__attach`, `mcp__org__interfaces` and `mcp__org__call`. For example, call
-  `{name: "status_set", input: {line: "The build passed; releasing next."}}` using the schema from
-  `interfaces {name}`.
+  `{name: "work_update", input: {ticketID: "…", progress: "The build passed; releasing next."}}`
+  using the schema from `interfaces {name}`.
 - **Attachment.** A resumed session recovers its saved Actor. A new session attaches with the Actor
   ID in its brief, or creates a position once when the user directly appoints it.
 - **Delivery.** On startup and after a turn, the hook waits on `attention` from where the session
   attached, and hands what other Actors did that concerns you to the session as input, each item
   with what to do. Your own writes never come back. Delivery is at least once; the same item can
   arrive again, and no public receipt is written.
-- **Provenance.** Delivered content is an Actor record. A Form response requires a validated client
+- **Provenance.** Delivered content is an Actor record. An answer to an ask requires a validated client
   binding before it can authorize a native request. Ordinary text and buttons do not create that
   binding through the generic adapter.
 - **Helpers.** Subagents sharing this MCP server share its Actor. They do not create an independent

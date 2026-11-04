@@ -1,11 +1,16 @@
 /**
- * What concerns an Actor, read from the audited writes after its position: answers to its asks,
- * new asks from its direct reports, Work assigned to it, reviews due and done, and Messages to it.
- * A read that finds nothing waits for the next audited write, up to `wait` seconds.
+ * What concerns an Actor, read from the audited writes after its position, by the next mover
+ * (model §2). On its records: Work given to it or changed by its requester, an answer to its
+ * submission, an answer to its ask or the ask's raise, and a message to it. Routed to it, or to a
+ * closed Actor it stands in for: an ask from a report or raised to it while the ask is open and
+ * with it, and a submission of Work it requested while the submission waits. Closing an Actor gives
+ * its stand-in an ask for each open ask the close re-routes and a review_due for each waiting
+ * submission, from the Actor that closed it; a stand-in that closed it gets none, as its own
+ * write. A read that finds nothing waits for the next audited write, up to `wait` seconds.
  */
 
 import type { WorkspaceClients } from "@uniac/agentic-workspace";
-import type { Form } from "@uniac/agentic-workspace/contracts";
+import type { Form, Work } from "@uniac/agentic-workspace/contracts";
 import type { Audit } from "./audit.ts";
 import { Invalid, Refusal } from "./errors.ts";
 import { ATTENTION, type ResponseOf } from "./model/index.ts";
@@ -18,6 +23,17 @@ export { ATTENTION as definition } from "./model/index.ts";
 
 type Result = ResponseOf<"attention">;
 type Item = Result["items"][number];
+type Entry = AuditRow & { actor: string; target: string };
+type Event = NonNullable<Work["history"]>[number];
+
+/** A value worked out the first time it is asked for. */
+function once<T>(make: () => T): () => T {
+  let made: { value: T } | undefined;
+  return () => {
+    made ??= { value: make() };
+    return made.value;
+  };
+}
 
 /** The audit entries one read examines; a full batch returns at once and the next read goes on. */
 const BATCH = 500;
@@ -28,7 +44,6 @@ const RENAMED: Record<string, string> = {
   form_respond: "work_answer",
   work_review: "work_answer",
 };
-
 export function attention(registry: Registry, audit: Audit, workspace: Workspace) {
   /** A record the caller can read, or undefined where it can't. */
   function read<T>(caller: ActorRow, operation: (clients: WorkspaceClients) => T): T | undefined {
@@ -40,109 +55,278 @@ export function attention(registry: Registry, audit: Audit, workspace: Workspace
     }
   }
 
-  /** The ask with this ID, if it is one the caller can read. */
-  function askOf(caller: ActorRow, id: string) {
-    return read(caller, (clients) => {
-      const found = clients.work.get({ askID: id });
-      return "formID" in found ? found : found.asks?.find((ask) => ask.formID === id);
-    });
+  /** The Actor an open ask waits on: its last raiser's, else its asker's, nearest open manager. */
+  function routeOf(ask: Form): string | undefined {
+    const origin = ask.raises.at(-1)?.actorID ?? ask.requesterID;
+    const manager = registry.get(origin)?.manager;
+    return ask.status === "open" && manager ? registry.standIn(manager) : undefined;
   }
 
-  /** The item an entry by another Actor makes for the caller, if any. */
-  function itemOf(
-    caller: ActorRow,
-    entry: AuditRow & { actor: string; target: string },
-    ask: Form | undefined,
-  ) {
-    const id = entry.target;
-    const work = (history = false) =>
-      read(caller, (clients) => {
-        const found = clients.work.get({ ticketID: id, history });
-        return "formID" in found ? undefined : found;
-      });
-    switch (entry.operation) {
-      case "work_create": {
-        const created = work();
-        return created?.ownerID === caller.id
-          ? { kind: "assigned" as const, title: created.title }
-          : undefined;
+  /**
+   * Asks and Work as the caller reads them, with history, and what one read derives from them:
+   * each record, each writer's later writes on it, and each history's writers and owners, once.
+   */
+  function reader(caller: ActorRow) {
+    const asks = new Map<string, Form | undefined>();
+    const works = new Map<string, Work | undefined>();
+    const later = new Map<string, number[]>();
+    const writers = new WeakMap<Event[], Map<string, Event[]>>();
+    const owners = new WeakMap<Work, Map<Event, string | undefined>>();
+    /** A writer's events on a record, without the asks Q12 cancelled with their Work. */
+    function own(history: Event[], actor: string): Event[] {
+      let byWriter = writers.get(history);
+      if (!byWriter) {
+        byWriter = new Map();
+        for (const event of history) {
+          if (event.action === "cancelled" && "reason" in event.detail) continue;
+          const events = byWriter.get(event.actorID);
+          if (events) events.push(event);
+          else byWriter.set(event.actorID, [event]);
+        }
+        writers.set(history, byWriter);
       }
-      case "work_update": {
-        // A new ask is for the asker's manager; a closed one makes nothing.
-        if (ask)
-          return ask.status === "open" && registry.get(entry.actor)?.manager === caller.id
-            ? { kind: "ask" as const, title: ask.title }
-            : undefined;
-        // Only its requester reassigns Work; its latest edit names the owner it gave.
-        const updated = work();
-        if (updated?.ownerID !== caller.id || updated.requesterID !== entry.actor) return undefined;
-        const edit = work(true)?.history?.findLast((each) => each.actorID === entry.actor);
-        return edit?.detail.ownerID === caller.id
-          ? { kind: "assigned" as const, title: updated.title }
-          : undefined;
-      }
-      case "work_submit": {
-        const submitted = work();
-        return submitted?.requesterID === caller.id && submitted.status === "submitted"
-          ? { kind: "review_due" as const, title: submitted.title }
-          : undefined;
-      }
-      case "work_answer": {
-        // An answer to an ask is the asker's; a raise, by an Actor with no answer on it, is the
-        // raiser's manager's; an answer to a submission is the owner's review.
-        if (ask && Object.hasOwn(ask.responses, entry.actor))
-          return ask.requesterID === caller.id
-            ? { kind: "answer" as const, title: ask.title }
-            : undefined;
-        if (ask)
-          return ask.status === "open" && registry.get(entry.actor)?.manager === caller.id
-            ? { kind: "ask" as const, title: ask.title }
-            : undefined;
-        const reviewed = work();
-        return reviewed?.ownerID === caller.id
-          ? { kind: "reviewed" as const, title: reviewed.title }
-          : undefined;
-      }
-      case "message_send": {
-        const message = read(caller, (clients) => clients.messages.get({ messageID: id }));
-        return message?.recipientID === caller.id
-          ? { kind: "message" as const, title: (message.text.split("\n")[0] ?? "").slice(0, 120) }
-          : undefined;
-      }
-      default:
-        return undefined;
+      return byWriter.get(actor) ?? [];
     }
+    return {
+      /**
+       * The history event an entry wrote: the writer's events on its record, counted back from the
+       * newest by the writer's later Work and ask writes on it. Asks cancelled with their Work (Q12)
+       * have an event but no entry of their own, so they are passed over. A counted event later than
+       * the entry, as when an earlier entry was lost, gives way to the writer's last event before it.
+       */
+      event(entry: Entry, history: Event[] | undefined): Event | undefined {
+        // Entries come in order, so the writer's later writes from its first entry here serve all.
+        const pair = `${entry.actor}\n${entry.target}`;
+        let ids = later.get(pair);
+        if (!ids) {
+          ids = audit.writesAfter(entry.id, entry.actor, entry.target);
+          later.set(pair, ids);
+        }
+        let first = 0;
+        for (let last = ids.length; first < last; ) {
+          const middle = (first + last) >> 1;
+          if ((ids[middle] as number) <= entry.id) first = middle + 1;
+          else last = middle;
+        }
+        const events = own(history ?? [], entry.actor);
+        const counted = events.at(-1 - (ids.length - first));
+        return counted && counted.at <= entry.at
+          ? counted
+          : events.findLast((event) => event.at <= entry.at);
+      },
+      /** The Work's owner just before `event`: the last owner an earlier event gave it, else its creator. */
+      ownerBefore(work: Work, event: Event): string | undefined {
+        let before = owners.get(work);
+        if (!before) {
+          before = new Map();
+          let owner: string | undefined;
+          for (const each of work.history ?? []) {
+            before.set(each, owner);
+            const given = each.detail.ownerID;
+            owner = typeof given === "string" ? given : (owner ?? each.actorID);
+          }
+          owners.set(work, before);
+        }
+        return before.get(event);
+      },
+
+      ask(id: string) {
+        if (!asks.has(id)) {
+          const found = read(caller, (clients) => clients.work.get({ askID: id, history: true }));
+          if (found && !("formID" in found)) works.set(found.ticketID, found);
+          asks.set(
+            id,
+            found && ("formID" in found ? found : found.asks?.find((each) => each.formID === id)),
+          );
+        }
+        return asks.get(id);
+      },
+      work(id: string) {
+        if (!works.has(id))
+          works.set(
+            id,
+            read(caller, (clients) => {
+              const found = clients.work.get({ ticketID: id, history: true });
+              return "formID" in found ? undefined : found;
+            }),
+          );
+        return works.get(id);
+      },
+      /** The open asks routed to the caller, and submitted Work requested in its branch. */
+      routing: once(() =>
+        all(caller, (clients, after) =>
+          clients.work.asks({ routedTo: caller.id, limit: 100, after }),
+        ),
+      ),
+      submitted: once(() =>
+        all(caller, (clients, after) =>
+          clients.work.list({
+            requesterWithin: caller.id,
+            status: ["submitted"],
+            limit: 100,
+            after,
+          }),
+        ),
+      ),
+    };
+  }
+
+  /** Every page of a list the caller reads; none where it can't read it. */
+  function all<T>(
+    caller: ActorRow,
+    page: (
+      clients: WorkspaceClients,
+      after: string | undefined,
+    ) => { items: T[]; next: string | null },
+  ): T[] {
+    const items: T[] = [];
+    for (let after: string | undefined; ; ) {
+      const found = read(caller, (clients) => page(clients, after));
+      if (found === undefined) return items;
+      items.push(...found.items);
+      if (found.next === null) return items;
+      after = found.next;
+    }
+  }
+
+  /** Whether the walk from `actorID` up to its nearest open Actor passes `closed`. */
+  function through(actorID: string | null | undefined, closed: string): boolean {
+    for (let at = actorID ? registry.get(actorID) : undefined; at; ) {
+      if (at.id === closed) return true;
+      if (at.closed_at === null) return false;
+      at = at.manager === null ? undefined : registry.get(at.manager);
+    }
+    return false;
+  }
+
+  /** What one entry did: the parties and records it touched, and the item it makes, if any. */
+  function factOf(caller: ActorRow, entry: Entry, reads: ReturnType<typeof reader>) {
+    const touched = {
+      actorIDs: [] as (string | null | undefined)[],
+      workIDs: [] as string[],
+      conversationIDs: [] as string[],
+    };
+    let kind: Item["kind"] | undefined;
+    let title = "";
+    const items: { kind: Item["kind"]; title: string; recordID: string }[] = [];
+    const id = entry.target;
+    if (entry.operation === "message_send") {
+      const message = read(caller, (clients) => clients.messages.get({ messageID: id }));
+      if (message) {
+        touched.actorIDs.push(message.senderID, message.recipientID);
+        touched.conversationIDs.push(message.conversationID);
+        if (message.recipientID === caller.id) kind = "message";
+        title = (message.text.split("\n")[0] ?? "").slice(0, 120);
+      }
+    } else if (entry.operation === "actor_create" || entry.operation === "actor_close") {
+      touched.actorIDs.push(id, registry.get(id)?.manager);
+      // A closed Actor's part passes to its nearest open manager (Q10): what was routed to it,
+      // or on its way through it, is the caller's now.
+      if (entry.operation === "actor_close" && registry.standIn(id) === caller.id) {
+        for (const ask of reads.routing())
+          if (through(registry.get(ask.raises.at(-1)?.actorID ?? ask.requesterID)?.manager, id))
+            items.push({ kind: "ask", title: ask.title, recordID: ask.formID });
+        for (const work of reads.submitted())
+          if (through(work.requesterID, id))
+            items.push({ kind: "review_due", title: work.title, recordID: work.ticketID });
+      }
+    } else if (entry.operation.startsWith("work_")) {
+      // An ask is written by work_update and work_answer with the ask as the entry's target.
+      const ask =
+        entry.operation === "work_update" || entry.operation === "work_answer"
+          ? reads.ask(id)
+          : undefined;
+      const work = ask ? undefined : reads.work(id);
+      if (ask) {
+        touched.actorIDs.push(ask.requesterID);
+        if (ask.workID) touched.workIDs.push(ask.workID);
+        title = ask.title;
+        const asker = ask.requesterID === caller.id;
+        const routed = routeOf(ask) === caller.id;
+        // Only its asker and the Actor it routes to get items from an ask.
+        const action = asker || routed ? reads.event(entry, ask.history)?.action : undefined;
+        // Once raised, the ask reaches its route from the raise that sent it there.
+        if (action === "created" && routed && ask.raises.length === 0) kind = "ask";
+        else if (action === "responded" && asker) kind = "answer";
+        else if (action === "raised") {
+          const raisedTo = registry.get(entry.actor)?.manager;
+          if (asker) kind = "raised";
+          else if (routed && raisedTo && registry.standIn(raisedTo) === caller.id) kind = "ask";
+        }
+      } else if (work) {
+        touched.workIDs.push(id);
+        touched.actorIDs.push(work.ownerID, work.requesterID);
+        title = work.title;
+        const owns = work.ownerID === caller.id;
+        if (entry.operation === "work_create" && owns) kind = "assigned";
+        // An edit may give the Work away and an answer follows its submitter, so their owner before
+        // is a party to them; other writes leave the owner as it is.
+        const event =
+          entry.operation === "work_update" || entry.operation === "work_answer"
+            ? reads.event(entry, work.history)
+            : undefined;
+        const before = event && reads.ownerBefore(work, event);
+        touched.actorIDs.push(before);
+        // Only its requester, or the requester's stand-in, edits Work on another Actor: giving it
+        // to the caller is assigned, and an edit that leaves it the caller's is updated.
+        if (entry.operation === "work_update" && owns && event) {
+          const given = event.detail.ownerID;
+          if ((typeof given === "string" ? given : before) === caller.id)
+            kind = before === caller.id ? "updated" : "assigned";
+        }
+        if (
+          entry.operation === "work_submit" &&
+          work.status === "submitted" &&
+          registry.standIn(work.requesterID) === caller.id
+        )
+          kind = "review_due";
+        // Submitted Work stays as it is until answered, so its owner then made the submission.
+        if (entry.operation === "work_answer" && event && before === caller.id) kind = "reviewed";
+      }
+    }
+    if (kind) items.push({ kind, title, recordID: id });
+    return { touched, items };
   }
 
   function examine(caller: ActorRow, entries: AuditRow[]): Omit<Result, "next"> {
     const items = new Map<string, Item>();
+    const actorIDs = new Set<string>();
     const workIDs = new Set<string>();
-    const formIDs = new Set<string>();
-    for (const audited of entries) {
-      const entry = { ...audited, operation: RENAMED[audited.operation] ?? audited.operation };
+    const conversationIDs = new Set<string>();
+    const reads = reader(caller);
+    for (const entry of entries) {
       const { actor, target } = entry;
       if (entry.outcome !== "ok" || actor === null || target === null) continue;
-      // Asks are written through work_update and work_answer, with the ask as the target.
-      const ask =
-        entry.operation === "work_update" || entry.operation === "work_answer"
-          ? askOf(caller, target)
-          : undefined;
-      if (ask) formIDs.add(target);
-      else if (entry.operation.startsWith("work_")) workIDs.add(target);
+      const operation = RENAMED[entry.operation] ?? entry.operation;
+      const { touched, items: made } = factOf(
+        caller,
+        { ...entry, operation, actor, target },
+        reads,
+      );
+      for (const each of touched.actorIDs) if (each) actorIDs.add(each);
+      for (const each of touched.workIDs) workIDs.add(each);
+      for (const each of touched.conversationIDs) conversationIDs.add(each);
       if (actor === caller.id) continue;
-      const found = itemOf(caller, { ...entry, actor, target }, ask);
-      if (found === undefined || items.has(`${found.kind}:${target}`)) continue;
-      items.set(`${found.kind}:${target}`, {
-        kind: found.kind,
-        recordID: target,
-        from: { actorID: actor, name: registry.get(actor)?.name ?? actor },
-        title: found.title,
-        at: entry.at,
-      });
+      for (const item of made) {
+        // One item per kind and record; a collecting ask's answers, one per responder.
+        const key = `${item.kind}:${item.recordID}${item.kind === "answer" ? `:${actor}` : ""}`;
+        if (items.has(key)) continue;
+        items.set(key, {
+          kind: item.kind,
+          recordID: item.recordID,
+          from: { actorID: actor, name: registry.get(actor)?.name ?? actor },
+          title: item.title,
+          at: entry.at,
+        });
+      }
     }
     return {
       items: [...items.values()],
-      changed: { actorIDs: [], workIDs: [...workIDs], formIDs: [...formIDs] },
+      changed: {
+        actorIDs: [...actorIDs],
+        workIDs: [...workIDs],
+        conversationIDs: [...conversationIDs],
+      },
     };
   }
 
@@ -153,7 +337,7 @@ export function attention(registry: Registry, audit: Audit, workspace: Workspace
         if (request.since === undefined)
           return {
             items: [],
-            changed: { actorIDs: [], workIDs: [], formIDs: [] },
+            changed: { actorIDs: [], workIDs: [], conversationIDs: [] },
             next: `${head}`,
           };
         let position = Number(request.since);

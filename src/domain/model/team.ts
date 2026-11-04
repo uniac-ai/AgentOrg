@@ -34,7 +34,7 @@ export const Headline = z
       })
       .nullable()
       .describe(
-        'The first that applies to the subject: its owner\'s oldest open ask on it, by title, as ask or approval; "with <requester> for review"; what it waits on; its current step, else the first sentence of its progress. The caller is "you".',
+        'The first that applies to the subject: its owner\'s oldest open ask on it, by title, as ask or approval; "with <X> for review", X being its requester or, once that is closed, its nearest open manager; what it waits on; its current step, else the first sentence of its progress. The caller is "you".',
       ),
     more: Count.describe("Its other Work that is waiting, in review or active."),
     notStarted: Count.describe("Open Work on it with no open ask by its owner."),
@@ -72,14 +72,11 @@ export const ActorViewRequest = z
       .max(20)
       .default(5)
       .describe("How many completed Work to include."),
+    answeredBy: Id.optional().describe(
+      "Also return its asks, open or closed, that this Actor answered, on any Work.",
+    ),
   })
   .meta({ id: "ActorViewRequest" });
-
-export const ActorState = z
-  .enum(["waiting", "review", "active", "idle"])
-  .describe(
-    "The most urgent among its workstreams: waiting (active with an open ask), then review (submitted), then active; idle with none.",
-  );
 
 export const ActorView = z
   .strictObject({
@@ -93,20 +90,36 @@ export const ActorView = z
       lastActiveAt: LastActiveAt,
       closed_at: Actor.shape.closed_at,
     }),
-    state: ActorState,
+    state: PositionState,
+    headline: Headline,
     workstreams: z
-      .array(Work.extend({ asks: z.array(Form).describe("Its open asks linked to this Work.") }))
-      .describe(
-        "Work it owns that is active, submitted or has changes requested, and such Work it requested of its direct reports, oldest first.",
-      ),
-    asks: z.array(Form).describe("Its open asks linked to none of its workstreams."),
+      .array(Work.extend({ asks: z.array(Form).describe("The open asks on this Work.") }))
+      .describe("Work on it that is waiting, in review or active, oldest first."),
+    asks: z
+      .array(Form)
+      .describe("Its own open asks, wherever they are: on its Work, on other Work, or on none."),
     needs: z
       .array(Form)
       .describe(
         "Open asks routed to it: its reports' asks it hasn't raised, asks raised to it, and asks passed up past closed managers.",
       ),
-    reviews: z.array(Work).describe("Submitted Work it requested, waiting for its review."),
-    assigned: z.array(Work).describe("Open Work others requested of it, not started."),
+    reviews: z
+      .array(Work)
+      .describe(
+        "Submitted Work routed to it: Work it requested, or a closed Actor requested whom it stands in for.",
+      ),
+    assigned: z
+      .array(Work)
+      .describe("Work on it that others requested, not started or with changes requested."),
+    ownerClosed: z
+      .array(Work)
+      .describe(
+        "Unfinished, unsubmitted Work routed to it as requester whose owner is closed, to reassign or cancel.",
+      ),
+    answered: z
+      .array(Form)
+      .optional()
+      .describe("With answeredBy: its asks, open or closed, that Actor answered."),
     followUps: z.array(Work).describe("Open Work it requested of itself."),
     completed: z.array(Work).describe("Accepted Work it owns, newest first."),
     reports: z.array(Actor).describe("Its open direct reports."),
@@ -130,6 +143,6 @@ export const TEAM = toolDefinition("team", {
     request: ActorViewRequest,
     response: ActorView,
     description:
-      "Read an Actor's report as one view, computed now: its derived state, its workstreams with their open asks, its other open asks, its reports' open asks, reviews due, assigned and follow-up Work, recent completions and its direct reports. Anyone may view any Actor. Default: you.",
+      "Read an Actor's report as one view, computed now: its state and headline, the Work on it with its open asks, its own open asks, the asks routed to it, the submissions it answers, the Work it must take up or hand on, its follow-ups, recent completions and direct reports. Anyone may view any Actor. Default: you.",
   },
 });

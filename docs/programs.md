@@ -36,7 +36,7 @@ attachment. Creation makes a direct report of the caller:
 ```sh
 agentorg actor create --name builds --purpose "Run the nightly builds"
 agentorg team
-agentorg activity    # the root only
+agentorg activity
 agentorg interfaces
 agentorg call team --json '{"depth":2}'
 ```
@@ -79,7 +79,7 @@ The handshake admits identity only; it creates no Actor and returns no service c
 Credentials are required under the default policy. A supplied invalid credential always fails.
 Hub MCP initializes separately on that same socket. Every open Actor receives only the explicit
 Hub Tools composed from feature modules. Each MCP entry carries `_meta["agentorg/tool"]` with
-`id`, `name`, local `interface`, `one_way` and `long_running`, from which the Actor library
+`id`, `name`, local `interface`, `one_way`, `long_running` and, where tagged, `level`, from which the Actor library
 reconstructs its nested Tool catalog. Multiple admitted caller connections coexist.
 
 The core refuses an `Origin` header, so this endpoint is for local processes. Human applications,
@@ -91,18 +91,16 @@ after a drop. Actor identity and Team metadata contain no advertised interfaces 
 `@agentorg/cli/contract` supplies `BUILTINS`, the existing derived inventory of built-in request
 and response schemas, plus public record schemas and the `Answer`, `InterfaceDescriptor` and
 `ToolDescriptor` types. For example, `BUILTINS.actor_create.request.parse(input)` validates an
-Actor creation request. Record exports such as `Actor`, `Position`, `DirectoryActor`, `Message`,
-`Work`, `Form` and `Status` are Zod schemas;
+Actor creation request. Record exports such as `Actor`, `Position`, `Message`, `Work` and `Form`
+are Zod schemas;
 `z.output<typeof Position>` derives a record's TypeScript type. Import the Actor connection API
 from `./actor` and these wire contracts from `./contract`.
 
-Work, Forms and each Actor's Status are shared records for every active admitted Actor; Messages
-remain private to their sender and recipient. Use `work_list` with `ownerID`, `requesterID`,
-`waitsOnActorID`, `status`, `ownerWithin`, `requesterWithin`, `updatedSince` and `order`, and
-`form_list` with `workID`, `requesterID`, `status`, `requesterWithin`, `updatedSince` and `order`.
-All supplied filters AND before pagination; pass a page's `next` back as `after` to continue the
-same read. A query for another Actor's criteria keeps your authenticated identity and write
-authority.
+Work, the asks on it and Messages are shared records for every active admitted Actor. Use
+`work_list` with `ownerID`, `requesterID`, `waitsOnActorID`, `status`, `ownerWithin`,
+`requesterWithin`, `updatedSince` and `order`. All supplied filters AND before pagination; pass a
+page's `next` back as `after` to continue the same read. A query for another Actor's criteria keeps
+your authenticated identity and write authority.
 
 The Actor library requires `actorId` for `connectClient`. Custom clients must
 send `connection.connect` before MCP initialization on `/connection`. Environment-based CLI
