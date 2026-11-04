@@ -8,7 +8,7 @@
 
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import type { z } from "zod";
-import { SCHEMA, SCHEMA_VERSION, TABLES } from "./schema.ts";
+import { AUDIT_ACTOR_INDEX, SCHEMA, SCHEMA_VERSION, TABLES } from "./schema.ts";
 
 export type Table = keyof typeof TABLES;
 export type RecordOf<T extends Table> = z.output<(typeof TABLES)[T]>;
@@ -71,8 +71,14 @@ export class Database {
           message_id TEXT PRIMARY KEY, source_hash TEXT NOT NULL,
           recipient_id TEXT NOT NULL REFERENCES actors(id), workspace_cursor INTEGER NOT NULL
         );
-        PRAGMA user_version = ${SCHEMA_VERSION};
+        PRAGMA user_version = 9;
       `),
+      );
+      version = 9;
+    }
+    if (version === 9) {
+      this.transaction(() =>
+        this.db.exec(`${AUDIT_ACTOR_INDEX}\nPRAGMA user_version = ${SCHEMA_VERSION};`),
       );
       return;
     }

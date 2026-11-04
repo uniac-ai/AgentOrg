@@ -21,10 +21,11 @@ The private import manifest is `<home>/core.workspace.db.import.json`. Database 
 are private to the home owner. `:memory:` uses two independently owned in-memory databases.
 Hub closes both stores after its network listener and clients finish.
 
-Fresh homes start at Hub schema 9. Schema 7 first retires Actor execution records through the
+Fresh homes start at Hub schema 10. Schema 7 first retires Actor execution records through the
 existing schema 8 transaction. Schema 8 then atomically renames `progress`, `questions` and
 `messages` to private `legacy_*` tables and creates `workspace_imports`, advancing to schema 9.
-The original rows and fields remain intact. Other nonzero versions are refused.
+Schema 9 adds an index of each Actor's recorded writes, advancing to schema 10. The original rows
+and fields remain intact. Other nonzero versions are refused.
 
 Historical Messages are imported through the package's public persistence interface. Each preserves
 its original ID, sender, recipient, text and timestamp exactly. The sole public history event records

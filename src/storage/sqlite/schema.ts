@@ -2,7 +2,11 @@
 
 import { ActorRecord, AuditEntry, Claim } from "../../domain/model/index.ts";
 
-export const SCHEMA_VERSION = 9;
+export const SCHEMA_VERSION = 10;
+
+/** An Actor's last recorded write, read for every position `team` returns. */
+export const AUDIT_ACTOR_INDEX =
+  "CREATE INDEX audit_writes ON audit (actor, id) WHERE outcome = 'ok';";
 
 export const SCHEMA = `
 CREATE TABLE actors (
@@ -57,6 +61,7 @@ CREATE TABLE audit (
   target TEXT,
   outcome TEXT NOT NULL
 );
+${AUDIT_ACTOR_INDEX}
 `;
 
 export const TABLES = {

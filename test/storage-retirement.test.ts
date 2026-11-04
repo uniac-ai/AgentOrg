@@ -129,7 +129,7 @@ test("schema7 retirement preserves records, fails pending calls once and exposes
   const config = readFileSync(fixture.config);
   let store = new SqliteStore(fixture.file);
   try {
-    assert.equal(store.database.all("PRAGMA user_version")[0]?.user_version, 9);
+    assert.equal(store.database.all("PRAGMA user_version")[0]?.user_version, 10);
     assert.deepEqual(
       store.database.all("SELECT name FROM sqlite_schema WHERE name='exposures'"),
       [],
