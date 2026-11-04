@@ -17,21 +17,20 @@ type Headline = Position["headline"];
 /** A Work's state: done, review, waiting on its owner's ask, not started, else active. */
 type WorkState = "done" | "review" | "waiting" | "open" | "active";
 const WORKSTREAM = ["active", "blocked", "submitted", "changes_requested"] as const;
-/** Work that isn't finished. */
-const LIVE = ["open", "active", "blocked", "submitted", "changes_requested"] as const;
+/** Work that isn't finished, not started included. */
+const UNFINISHED = ["open", "active", "blocked", "submitted", "changes_requested"] as const;
 const oldestFirst = <T extends { createdAt: string }>(items: T[]) =>
   items.sort((left, right) => left.createdAt.localeCompare(right.createdAt));
 
 /** Every page of a list, each read continuing from the last. */
 function all<T>(read: (after: string | undefined) => { items: T[]; next: string | null }): T[] {
   const items: T[] = [];
-  let next: string | null | undefined;
-  do {
-    const page = read(next ?? undefined);
+  for (let after: string | undefined; ; ) {
+    const page = read(after);
     items.push(...page.items);
-    next = page.next;
-  } while (next !== null);
-  return items;
+    if (page.next === null) return items;
+    after = page.next;
+  }
 }
 
 /**
@@ -50,7 +49,7 @@ const changesRequested = (work: Work) =>
   work.review?.verdict === "changes_requested" &&
   work.review.submissionID === work.submission?.submissionID;
 
-/** How urgent live Work is for a headline: waiting, review, changes requested, then active. */
+/** How urgent Work is for a headline: waiting, review, changes requested, then active. */
 const urgency = (state: "waiting" | "review" | "active", work: Work) =>
   state === "waiting" ? 0 : state === "review" ? 1 : changesRequested(work) ? 2 : 3;
 
@@ -106,7 +105,7 @@ export function team(
 ) {
   /**
    * The start and its open reports to `depth`, each with its state, headline and ask counts, from
-   * one pass over live Work and one over open asks. For one position the Work is only its own.
+   * one pass over unfinished Work and one over open asks. For one position the Work is only its own.
    */
   function readTeam(caller: ActorRow, request: RequestOf<"team">): ResponseOf<"team"> {
     const start = request.actor === undefined ? caller : registry.found(request.actor);
@@ -119,7 +118,9 @@ export function team(
     // The subtree filters walk each row's managers on every page, so the Hub filters instead.
     const owner = rows.length === 1 ? { ownerID: start.id } : {};
     const positions = workspace.run(caller, ({ work, forms }) => {
-      const live = all((after) => work.list({ ...owner, status: [...LIVE], limit: 100, after }));
+      const live = all((after) =>
+        work.list({ ...owner, status: [...UNFINISHED], limit: 100, after }),
+      );
       const open = oldestFirst(all((after) => forms.list({ status: ["open"], limit: 100, after })));
       const recent = work.list({ ...owner, status: ["accepted"], order: "recent", limit: 100 });
       /** The last Work it finished; past the most recent page, its own latest. */
@@ -142,7 +143,7 @@ export function team(
         try {
           return work.get({ ticketID }).title;
         } catch (error) {
-          if (error instanceof WorkspaceError) return "other Work";
+          if (error instanceof WorkspaceError && error.code === "not_found") return "other Work";
           throw error;
         }
       };

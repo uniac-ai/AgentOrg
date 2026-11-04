@@ -105,32 +105,36 @@ test("an unsupported database schema is refused without changing its records", (
     "PRAGMA user_version = 6; CREATE TABLE kept (value TEXT); INSERT INTO kept VALUES ('kept');",
   );
   old.close();
-  assert.throws(() => new SqliteStore(path), /database has schema 6; this agentorg reads 10/);
+  assert.throws(() => new SqliteStore(path), /database has schema 6; this agentorg reads 9/);
   const unchanged = new DatabaseSync(path);
   t.after(() => unchanged.close());
   assert.equal(unchanged.prepare("PRAGMA user_version").get()?.user_version, 6);
   assert.equal(unchanged.prepare("SELECT value FROM kept").get()?.value, "kept");
 });
 
-test("schema 9 gains the audit's index of writes and keeps its records", (t) => {
+test("a home without the audit's index of writes gains it on open, with no schema step", (t) => {
   const directory = mkdtempSync(join(tmpdir(), "agentorg-schema-"));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const path = join(directory, "core.db");
   new SqliteStore(path).close();
   const old = new DatabaseSync(path);
   old.exec(
-    `DROP INDEX audit_writes; PRAGMA user_version = 9;
+    `DROP INDEX audit_writes;
      INSERT INTO audit (at, actor, operation, target, outcome)
      VALUES ('2026-11-03T00:00:00.000Z', 'kept', 'work_create', NULL, 'ok');`,
   );
   old.close();
   const store = new SqliteStore(path);
   t.after(() => store.close());
-  assert.equal(store.database.all("PRAGMA user_version")[0]?.user_version, 10);
+  assert.equal(store.database.all("PRAGMA user_version")[0]?.user_version, 9);
   assert.equal(store.audit.lastWrite("kept"), "2026-11-03T00:00:00.000Z");
+  // The statement lastWrite runs: no scan, and no sort.
   assert.deepEqual(
     store.database
-      .all("EXPLAIN QUERY PLAN SELECT * FROM audit WHERE actor = 'kept' AND outcome = 'ok'")
+      .all(
+        "EXPLAIN QUERY PLAN SELECT * FROM audit WHERE actor = ? AND outcome = 'ok' ORDER BY id DESC LIMIT ?",
+        ["kept", 1],
+      )
       .map((step) => step.detail),
     ["SEARCH audit USING INDEX audit_writes (actor=?)"],
   );

@@ -178,7 +178,7 @@ waiting reads, which read again. It is a read, not a subscription; callers set a
   ones included.
 - **`lastActiveAt`:** its last recorded write.
 
-One pass over live Work and one over open asks feed every position, and the most recent page of
+One pass over unfinished Work and one over open asks feed every position, and the most recent page of
 finished Work names each position's last. A position that page misses is read on its own, and so
 is Work waited on that the pass doesn't hold. For a single position, the Work read is its own.
 
@@ -252,7 +252,7 @@ The durable identity also holds a credential hash that public views omit. Online
 one admitted Actor connection; multiple caller connections coexist. Closing an Actor revokes
 all its connections while preserving independent Provider connections.
 
-Hub SQLite schema 10 stores canonical Actors, claims, audit metadata and a private Workspace import
+Hub SQLite schema 9 stores canonical Actors, claims, audit metadata and a private Workspace import
 ledger. The retired Actor calls stay in their table as private history that no operation reads.
 A separate `core.workspace.db` is opened through the installed package's public persistence API. The package owns its schema, transaction rules and record history; Hub
 owns both handles and closes them after the listener. Workspace authority receives the admitted

@@ -2,11 +2,11 @@
 
 import { ActorRecord, AuditEntry, Claim } from "../../domain/model/index.ts";
 
-export const SCHEMA_VERSION = 10;
+export const SCHEMA_VERSION = 9;
 
-/** An Actor's last recorded write, read for every position `team` returns. */
+// Made on every open, not in a schema step, so a release from before it still opens the home.
 export const AUDIT_ACTOR_INDEX =
-  "CREATE INDEX audit_writes ON audit (actor, id) WHERE outcome = 'ok';";
+  "CREATE INDEX IF NOT EXISTS audit_writes ON audit (actor) WHERE outcome = 'ok';";
 
 export const SCHEMA = `
 CREATE TABLE actors (
@@ -61,7 +61,6 @@ CREATE TABLE audit (
   target TEXT,
   outcome TEXT NOT NULL
 );
-${AUDIT_ACTOR_INDEX}
 `;
 
 export const TABLES = {

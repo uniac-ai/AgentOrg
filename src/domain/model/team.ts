@@ -25,7 +25,7 @@ export const Headline = z
       .strictObject({ ticketID: Id, title: z.string(), state: PositionState.exclude(["idle"]) })
       .nullable()
       .describe(
-        "The most urgent live Work on it: waiting, review, active with changes requested, then active; ties to the latest update. Null with none live.",
+        "The most urgent Work on it that is waiting, in review or active: waiting, review, active with changes requested, then active; ties to the latest update. Null with none.",
       ),
     clause: z
       .strictObject({
@@ -36,7 +36,7 @@ export const Headline = z
       .describe(
         'The first that applies to the subject: its owner\'s oldest open ask on it, by title, as ask or approval; "with <requester> for review"; what it waits on; its current step, else the first sentence of its progress. The caller is "you".',
       ),
-    more: Count.describe("Its other live Work."),
+    more: Count.describe("Its other Work that is waiting, in review or active."),
     notStarted: Count.describe("Open Work on it with no open ask by its owner."),
     finished: z
       .strictObject({ ticketID: Id, title: z.string(), at: Timestamp })

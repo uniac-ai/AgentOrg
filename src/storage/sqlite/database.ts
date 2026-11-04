@@ -26,6 +26,7 @@ export class Database {
     );
     try {
       this.createSchema();
+      this.db.exec(AUDIT_ACTOR_INDEX);
     } catch (error) {
       this.db.close();
       throw error;
@@ -71,14 +72,8 @@ export class Database {
           message_id TEXT PRIMARY KEY, source_hash TEXT NOT NULL,
           recipient_id TEXT NOT NULL REFERENCES actors(id), workspace_cursor INTEGER NOT NULL
         );
-        PRAGMA user_version = 9;
+        PRAGMA user_version = ${SCHEMA_VERSION};
       `),
-      );
-      version = 9;
-    }
-    if (version === 9) {
-      this.transaction(() =>
-        this.db.exec(`${AUDIT_ACTOR_INDEX}\nPRAGMA user_version = ${SCHEMA_VERSION};`),
       );
       return;
     }
