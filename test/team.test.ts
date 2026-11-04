@@ -1,6 +1,7 @@
 /**
  * `team` derives each position's state, headline and ask counts at read time from the Work on it
- * and the open asks under it; `actor_view.actor` names its manager and when it was closed.
+ * and the open asks under it; `actor_view` reads one Actor's report with the same state and
+ * headline, and what needs it.
  */
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -64,6 +65,7 @@ function stored(core: Core, requesterID: string, title: string, input: Json = {}
       detail: row,
     }),
   );
+  return formID;
 }
 /** Work as 0.5.0 stored it once its owner set it blocked, written raw. */
 function blocked(core: Core, work: Json) {
@@ -86,6 +88,9 @@ function blocked(core: Core, work: Json) {
 }
 /** Lets the next write's time follow the last one's: ties in time go to the earlier write. */
 const later = () => new Promise((resolve) => setTimeout(resolve, 2));
+const view = (by: Actor, actorID: string, input: Json = {}) =>
+  done(by.call("actor_view", { actorID, ...input }));
+const ids = (items: Json[], key = "ticketID") => items.map((item: Json) => item[key]);
 const subject = (work: Json, state: string) => ({
   ticketID: work.ticketID,
   title: work.title,
@@ -425,4 +430,214 @@ test("actor_view names an Actor's manager and when it was closed", async (t) => 
   const temp = await make("temp", lead.client);
   const closed = (await done(lead.client.call("actor_close", { actor: temp.id }))).actor;
   assert.equal((await actor(root, temp.id)).closed_at, closed.closed_at);
+});
+
+test("actor_view reads an Actor's report with team's state and headline, and what needs it", async (t) => {
+  const { core, root, lead, worker, peer } = await organization();
+  t.after(() => core.close());
+  const empty = await view(peer.client, worker.id);
+  assert.deepEqual(
+    [empty.state, empty.headline, empty.actor.actorID, empty.actor.lastActiveAt],
+    [
+      "idle",
+      { subject: null, clause: null, more: 0, notStarted: 0, finished: null },
+      worker.id,
+      null,
+    ],
+  );
+  const stream = await create(worker.client, "Stream");
+  await update(worker.client, stream, { status: "active" });
+  const linked = await ask(worker.client, stream, "Linked");
+  const onStream = stored(core, peer.id, "On the stream", { workID: stream.ticketID });
+  const later = await create(worker.client, "Later");
+  const early = await create(worker.client, "Asked before starting");
+  const before = await ask(worker.client, early, "Which way?");
+  const others = await create(worker.client, "Only another's ask");
+  const peers = stored(core, peer.id, "Not the owner's", { workID: others.ticketID });
+  const loose = stored(core, worker.id, "On no Work");
+  const elsewhere = stored(core, worker.id, "On peer's Work", {
+    workID: (await create(peer.client, "Peer's")).ticketID,
+  });
+  const quick = await create(worker.client, "Quick");
+  await done(worker.client.call("work_submit", { ticketID: quick.ticketID, result: "Done" }));
+  const leftover = stored(core, worker.id, "On finished Work", { workID: quick.ticketID });
+  const withdrawn = await ask(worker.client, stream, "Withdrawn");
+  await close(worker.client, withdrawn);
+  const yours = await create(lead.client, "Yours", { ownerID: worker.id });
+  const redo = await create(lead.client, "Redo", { ownerID: worker.id });
+  await update(worker.client, redo, { status: "active" });
+  const submitted = await done(
+    worker.client.call("work_submit", { ticketID: redo.ticketID, result: "First" }),
+  );
+  await done(
+    lead.client.call("work_answer", {
+      askID: submitted.submission.submissionID,
+      answers: { verdict: "changes_requested" },
+      note: "Again",
+    }),
+  );
+  const review = await create(lead.client, "In review", { ownerID: worker.id });
+  await update(worker.client, review, { status: "active" });
+  await done(worker.client.call("work_submit", { ticketID: review.ticketID, result: "Over" }));
+  const dropped = await create(lead.client, "Dropped", { ownerID: worker.id });
+  await done(
+    lead.client.call("work_update", {
+      ticketID: dropped.ticketID,
+      expectedRevision: dropped.revision,
+      status: "cancelled",
+    }),
+  );
+  const accepted = await create(peer.client, "Accepted", { ownerID: worker.id });
+  await update(worker.client, accepted, { status: "active" });
+  const sent = await done(
+    worker.client.call("work_submit", { ticketID: accepted.ticketID, result: "Done" }),
+  );
+  await done(
+    peer.client.call("work_answer", {
+      askID: sent.submission.submissionID,
+      answers: { verdict: "accepted" },
+    }),
+  );
+
+  const report = await view(peer.client, worker.id);
+  const seen = await position(peer.client, worker.id);
+  assert.deepEqual([report.state, report.headline], [seen.state, seen.headline]);
+  assert.equal(report.state, "waiting");
+  assert.deepEqual(
+    [report.actor.name, report.actor.path, report.actor.online, report.actor.managerID],
+    ["worker", "lead.worker", true, lead.id],
+  );
+  assert.deepEqual(
+    report.workstreams.map((item: Json) => [item.ticketID, ids(item.asks, "formID")]),
+    [
+      [stream.ticketID, [linked.formID, onStream]],
+      [early.ticketID, [before.formID]],
+      [redo.ticketID, []],
+      [review.ticketID, []],
+    ],
+    "Work on it that is waiting, in review or active, with its open asks",
+  );
+  assert.equal(report.headline.more, report.workstreams.length - 1);
+  assert.deepEqual(
+    ids(report.asks, "formID").sort(),
+    [linked.formID, before.formID, loose, elsewhere, leftover].sort(),
+    "its own open asks wherever they are, and no closed one",
+  );
+  assert.deepEqual(ids(report.assigned), [yours.ticketID, redo.ticketID]);
+  assert.deepEqual(ids(report.followUps), [later.ticketID, early.ticketID, others.ticketID]);
+  assert.deepEqual(ids(report.completed), [accepted.ticketID, quick.ticketID]);
+  assert.deepEqual(report.headline.finished?.ticketID, accepted.ticketID, "not the cancelled");
+  assert.ok(report.actors[peer.id], "a requester only completed Work names");
+  assert.deepEqual([report.needs, report.reports, report.answered], [[], [], undefined]);
+  assert.deepEqual((await view(peer.client, worker.id, { completed: 0 })).completed, []);
+
+  const manager = await view(lead.client, lead.id);
+  assert.equal(manager.state, "idle", "its reports' Work doesn't make its state");
+  assert.deepEqual(manager.workstreams, []);
+  assert.deepEqual(ids(manager.reviews), [review.ticketID]);
+  assert.deepEqual(
+    ids(manager.needs, "formID").sort(),
+    [linked.formID, before.formID, loose, elsewhere, leftover].sort(),
+    "its reports' open asks",
+  );
+  assert.deepEqual(ids(manager.reports, "id"), [worker.id]);
+  await done(lead.client.call("work_answer", { askID: linked.formID, raise: true }));
+  assert.equal(
+    ids((await view(lead.client, lead.id)).needs, "formID").includes(linked.formID),
+    false,
+  );
+  assert.deepEqual(
+    ids((await view(root, core.rootId)).needs, "formID").sort(),
+    [linked.formID, peers, onStream].sort(),
+    "the raised ask, and its own report's",
+  );
+  assert.equal(await refused(lead.client.call("actor_view", { actorID: "missing" })), "not_found");
+});
+
+test("actor_view routes a closed requester's part to its stand-in", async (t) => {
+  const { core, make, lead, worker, peer } = await organization();
+  t.after(() => core.close());
+  const outer = await make("outer", lead.client);
+  const inner = await make("inner", outer.client);
+  const handed = await create(inner.client, "Handed up", { ownerID: worker.id });
+  await update(worker.client, handed, { status: "active" });
+  await done(worker.client.call("work_submit", { ticketID: handed.ticketID, result: "Done" }));
+  const quit = await make("quit", lead.client);
+  const finished = await create(lead.client, "Submitted, then its owner left", {
+    ownerID: quit.id,
+  });
+  await update(quit.client, finished, { status: "active" });
+  await done(quit.client.call("work_submit", { ticketID: finished.ticketID, result: "Done" }));
+  await done(lead.client.call("actor_close", { actor: quit.id }));
+  const gone = await make("gone", lead.client);
+  const stranded = await create(inner.client, "Stranded", { ownerID: gone.id });
+  const going = await create(inner.client, "Still owned", { ownerID: worker.id });
+  await done(lead.client.call("actor_close", { actor: gone.id }));
+  await done(outer.client.call("actor_close", { actor: inner.id }));
+  await done(lead.client.call("actor_close", { actor: outer.id }));
+  const manager = await view(lead.client, lead.id);
+  assert.deepEqual(
+    ids(manager.reviews),
+    [handed.ticketID, finished.ticketID],
+    "past two closed requesters, and submitted Work whose owner left",
+  );
+  assert.deepEqual(
+    ids(manager.ownerClosed),
+    [stranded.ticketID],
+    "a closed requester's Work with its owner closed, not Work its owner still holds",
+  );
+  assert.equal(ids(manager.ownerClosed).includes(going.ticketID), false);
+  assert.ok(manager.actors[inner.id] && manager.actors[gone.id], "the parties it returns");
+  assert.deepEqual(
+    (await position(peer.client, worker.id)).headline.clause,
+    { kind: "review", text: "with lead for review" },
+    "the review is with the closed requester's stand-in",
+  );
+  const owner = await make("owner", lead.client);
+  const orphaned: string[] = [];
+  for (let n = 0; n < 101; n += 1)
+    orphaned.push((await create(lead.client, `Orphan ${n}`, { ownerID: owner.id })).ticketID);
+  await done(lead.client.call("actor_close", { actor: owner.id }));
+  assert.deepEqual(
+    ids((await view(lead.client, lead.id)).ownerClosed),
+    [stranded.ticketID, ...orphaned],
+    "every page, past a hundred",
+  );
+});
+
+test("actor_view's needs pass closed managers and pages, and answered crosses Work", async (t) => {
+  const { core, root, make, lead, worker, peer } = await organization();
+  t.after(() => core.close());
+  const sub = await make("sub", worker.client);
+  const left = await ask(sub.client, await create(sub.client, "Sub's"), "Left open");
+  await done(worker.client.call("actor_close", { actor: sub.id }));
+  await done(lead.client.call("actor_close", { actor: worker.id }));
+  assert.deepEqual(
+    ids((await view(lead.client, lead.id)).needs, "formID"),
+    [left.formID],
+    "routed past closed managers",
+  );
+  const asker = await make("asker", lead.client);
+  const many = Array.from({ length: 101 }, (_, n) => stored(core, asker.id, `Question ${n}`));
+  assert.deepEqual(
+    ids((await view(lead.client, lead.id)).needs, "formID").sort(),
+    [left.formID, ...many].sort(),
+    "every page, past a hundred",
+  );
+  const collecting = await ask(asker.client, await create(asker.client, "Poll"), "Who's in?", {
+    collect: true,
+  });
+  await done(
+    peer.client.call("work_answer", { askID: collecting.formID, answers: { answer: "Me" } }),
+  );
+  const theirs = stored(core, asker.id, "On root's Work?", {
+    workID: (await create(root, "Root's")).ticketID,
+    status: "resolved",
+    responses: { [peer.id]: { answers: { answer: "No" }, at: new Date().toISOString() } },
+  });
+  assert.deepEqual(
+    (await view(root, asker.id, { answeredBy: peer.id })).answered.map((each: Json) => each.formID),
+    [collecting.formID, theirs],
+    "its asks that Actor answered, open or closed, on any Work",
+  );
 });

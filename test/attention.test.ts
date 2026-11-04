@@ -1,6 +1,6 @@
 /**
  * `attention` reads what concerns its caller from the audited writes after its position and waits
- * for the next write; `actor_view` joins an Actor's records into its report at read time.
+ * for the next write.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -238,80 +238,4 @@ test("a waiting read returns at the next write, or empty when its wait ends, and
     next: woke.next,
   });
   assert.ok(Date.now() - quiet >= 900);
-});
-
-test("actor_view joins an Actor's report at read time, for itself and its manager", async (t) => {
-  const { core, lead, worker, peer } = await organization();
-  t.after(() => core.close());
-  const empty = await done(worker.client.call("actor_view"));
-  assert.equal(empty.state, "idle");
-  assert.equal(empty.actor.actorID, worker.id);
-  assert.equal(empty.actor.lastActiveAt, null);
-  const stream = await done(worker.client.call("work_create", { title: "Stream" }));
-  await done(worker.client.call("work_update", { ticketID: stream.ticketID, status: "active" }));
-  const linked = await ask(worker.client, "Linked", stream.ticketID);
-  const followUp = await done(worker.client.call("work_create", { title: "Later" }));
-  // An ask on Work not yet started is on none of its workstreams.
-  const unlinked = await ask(worker.client, "Loose", followUp.ticketID);
-  const assigned = await done(
-    lead.client.call("work_create", { title: "Yours", ownerID: worker.id }),
-  );
-  const quick = await done(worker.client.call("work_create", { title: "Quick" }));
-  await done(worker.client.call("work_submit", { ticketID: quick.ticketID, result: "Done" }));
-  const view = await done(peer.client.call("actor_view", { actorID: worker.id }));
-  assert.equal(view.state, "waiting");
-  assert.equal(view.actor.name, "worker");
-  assert.equal(view.actor.path, "lead.worker");
-  assert.equal(view.actor.online, true);
-  assert.ok(view.actor.lastActiveAt);
-  assert.deepEqual(
-    view.workstreams.map((item: Json) => [item.ticketID, item.asks.map((ask: Json) => ask.formID)]),
-    [[stream.ticketID, [linked.formID]]],
-  );
-  assert.deepEqual(
-    view.asks.map((ask: Json) => ask.formID),
-    [unlinked.formID],
-  );
-  assert.deepEqual(
-    view.followUps.map((item: Json) => item.ticketID),
-    [followUp.ticketID],
-  );
-  assert.deepEqual(
-    view.assigned.map((item: Json) => item.ticketID),
-    [assigned.ticketID],
-  );
-  assert.deepEqual(
-    view.completed.map((item: Json) => item.ticketID),
-    [quick.ticketID],
-  );
-  assert.deepEqual(view.needs, []);
-  assert.deepEqual(view.reports, []);
-  assert.deepEqual(view.actors[lead.id], { name: "lead" });
-  await done(worker.client.call("work_update", { ticketID: assigned.ticketID, status: "active" }));
-  const submitted = await done(
-    worker.client.call("work_submit", { ticketID: assigned.ticketID, result: "Built" }),
-  );
-  const manager = await done(lead.client.call("actor_view"));
-  assert.equal(manager.state, "review", "Work it assigned and must review is its workstream");
-  assert.deepEqual(
-    manager.workstreams.map((item: Json) => [item.ticketID, item.ownerID]),
-    [[submitted.ticketID, worker.id]],
-  );
-  assert.deepEqual(
-    manager.reviews.map((item: Json) => item.ticketID),
-    [submitted.ticketID],
-  );
-  assert.deepEqual(
-    manager.needs.map((ask: Json) => ask.formID),
-    [linked.formID, unlinked.formID],
-  );
-  assert.deepEqual(
-    manager.reports.map((report: Json) => report.id),
-    [worker.id],
-  );
-  assert.deepEqual(
-    (await done(lead.client.call("actor_view", { completed: 0, actorID: worker.id }))).completed,
-    [],
-  );
-  assert.equal(await refused(lead.client.call("actor_view", { actorID: "missing" })), "not_found");
 });
