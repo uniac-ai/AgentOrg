@@ -1,9 +1,9 @@
 # Workspace storage and cutover
 
 Hub embeds `@uniac/agentic-workspace` 0.0.1, the archive its v0.0.1 release carries, from source
-`efca8d306ca0a926903c1b636501ab0165335441`, merged as `4f696a5b0ab76fc56165f7013ee4834c3360fbf9`
-with tree `882cc08517aa53f6a18f62e9a244f0b6f34262e5`. The committed archive has SHA256
-`4e64072b19e68c40da4fb835eb717d522f4f94b9fe750b8691270343a3e0545d`. It is a clean `git archive`
+`01a336b91fd1a3c2be51818e845b647f98b9094d`, merged as `26fd0eedff2dea64b78e1f15d41ef016680770f0`
+with tree `c7452e1b3abd06faf4e321004e5c994510657cfe`. The committed archive has SHA256
+`0e92d13224bbcea74cda02a33a8ec17215366dcbc731ef61a4484aa48c1631fb`. It is a clean `git archive`
 export of the source, built with `npm ci --engine-strict` and `npm pack` on Node 24.22.1 and
 npm 11.19.1, which reproduces the archive byte for byte.
 `vendor/workspace.json`, the dependency and lockfile identify the same archive. `npm pack` bundles
