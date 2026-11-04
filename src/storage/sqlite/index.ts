@@ -78,11 +78,12 @@ export class SqliteStore implements Store {
     lastWrite: (actor) =>
       this.database.select("audit", "actor = ? AND outcome = 'ok'", [actor], "id DESC", 1)[0]?.at,
     writesAfter: (id, actor, target) =>
-      this.database.count(
-        "audit",
-        "actor = ? AND target = ? AND outcome = 'ok' AND id > ? AND (operation GLOB 'work_*' OR operation GLOB 'form_*')",
-        [actor, target, id],
-      ),
+      this.database
+        .all(
+          "SELECT id FROM audit WHERE actor = ? AND target = ? AND outcome = 'ok' AND id > ? AND (operation GLOB 'work_*' OR operation GLOB 'form_*') ORDER BY id",
+          [actor, target, id],
+        )
+        .map((row) => Number(row.id)),
   };
   transaction<T>(work: () => T): T {
     return this.database.transaction(work);

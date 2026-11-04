@@ -895,3 +895,27 @@ test("a close that re-routes nothing gives no item", async (t) => {
     [own.formID],
   );
 });
+
+test("one read queries each writer's later writes on a record once, however many entries it reads", async (t) => {
+  const { core, lead, worker, peer } = await organization();
+  t.after(() => core.close());
+  const work = await done(lead.client.call("work_create", { title: "Busy", ownerID: worker.id }));
+  const starts = { peer: await position(peer.client), lead: await position(lead.client) };
+  for (let step = 0; step < 40; step++)
+    await done(worker.client.call("work_update", { ticketID: work.ticketID, progress: `${step}` }));
+  await done(
+    lead.client.call("work_update", {
+      ticketID: work.ticketID,
+      goal: "Sooner",
+      expectedRevision: (await done(lead.client.call("work_get", { ticketID: work.ticketID })))
+        .revision,
+    }),
+  );
+  const queried = t.mock.method(core.store.audit, "writesAfter");
+  // The worker's edits concern the peer in nothing, and the lead's edit the worker alone.
+  assert.deepEqual(kinds(await read(peer.client, starts.peer)), []);
+  assert.equal(queried.mock.callCount(), 2, "one query per writer on the record");
+  queried.mock.resetCalls();
+  assert.deepEqual(kinds(await read(lead.client, starts.lead)), []);
+  assert.equal(queried.mock.callCount(), 2);
+});

@@ -154,7 +154,7 @@ test("a home without the audit's index of writes gains it on open, with no schem
   assert.deepEqual(
     store.database
       .all(
-        "EXPLAIN QUERY PLAN SELECT count(*) AS n FROM audit WHERE actor = ? AND target = ? AND outcome = 'ok' AND id > ? AND (operation GLOB 'work_*' OR operation GLOB 'form_*')",
+        "EXPLAIN QUERY PLAN SELECT id FROM audit WHERE actor = ? AND target = ? AND outcome = 'ok' AND id > ? AND (operation GLOB 'work_*' OR operation GLOB 'form_*') ORDER BY id",
         ["kept", "work1", 0],
       )
       .map((step) => step.detail),

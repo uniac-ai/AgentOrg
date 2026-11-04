@@ -1,10 +1,12 @@
 /**
  * What concerns an Actor, read from the audited writes after its position, by the next mover
  * (model §2). On its records: Work given to it or changed by its requester, an answer to its
- * submission, an answer to its ask or the ask's raise, and a message to it. Routed to it: an ask
- * from a report or raised to it while the ask is open and with it, and a submission of Work it
- * requested while the submission waits. A read that finds nothing waits for the next audited
- * write, up to `wait` seconds.
+ * submission, an answer to its ask or the ask's raise, and a message to it. Routed to it, or to a
+ * closed Actor it stands in for: an ask from a report or raised to it while the ask is open and
+ * with it, and a submission of Work it requested while the submission waits. Closing an Actor gives
+ * its stand-in an ask for each open ask the close re-routes and a review_due for each waiting
+ * submission, from the Actor that closed it; a stand-in that closed it gets none, as its own
+ * write. A read that finds nothing waits for the next audited write, up to `wait` seconds.
  */
 
 import type { WorkspaceClients } from "@uniac/agentic-workspace";
@@ -53,24 +55,6 @@ export function attention(registry: Registry, audit: Audit, workspace: Workspace
     }
   }
 
-  /**
-   * The history event an entry wrote: the writer's events on its record, counted back from the
-   * newest by the writer's later Work and ask writes on it. Asks cancelled with their Work (Q12)
-   * have an event but no entry of their own, so they are passed over. A counted event later than
-   * the entry, as when an earlier entry was lost, gives way to the writer's last event before it.
-   */
-  function eventOf(entry: Entry, history: Event[] | undefined): Event | undefined {
-    const own = (history ?? []).filter(
-      (event) =>
-        event.actorID === entry.actor &&
-        !(event.action === "cancelled" && "reason" in event.detail),
-    );
-    const counted = own.at(-1 - audit.writesAfter(entry.id, entry.actor, entry.target));
-    return counted && counted.at <= entry.at
-      ? counted
-      : own.findLast((event) => event.at <= entry.at);
-  }
-
   /** The Actor an open ask waits on: its last raiser's, else its asker's, nearest open manager. */
   function routeOf(ask: Form): string | undefined {
     const origin = ask.raises.at(-1)?.actorID ?? ask.requesterID;
@@ -78,22 +62,74 @@ export function attention(registry: Registry, audit: Audit, workspace: Workspace
     return ask.status === "open" && manager ? registry.standIn(manager) : undefined;
   }
 
-  /** The Work's owner just before `event`: the last owner an earlier event gave it, else its creator. */
-  function ownerBefore(work: Work, event: Event): string | undefined {
-    let owner: string | undefined;
-    for (const each of work.history ?? []) {
-      if (each === event) return owner;
-      const given = each.detail.ownerID;
-      owner = typeof given === "string" ? given : (owner ?? each.actorID);
-    }
-    return owner;
-  }
-
-  /** Asks and Work as the caller reads them, with history, each read once per `attention` read. */
+  /**
+   * Asks and Work as the caller reads them, with history, and what one read derives from them:
+   * each record, each writer's later writes on it, and each history's writers and owners, once.
+   */
   function reader(caller: ActorRow) {
     const asks = new Map<string, Form | undefined>();
     const works = new Map<string, Work | undefined>();
+    const later = new Map<string, number[]>();
+    const writers = new WeakMap<Event[], Map<string, Event[]>>();
+    const owners = new WeakMap<Work, Map<Event, string | undefined>>();
+    /** A writer's events on a record, without the asks Q12 cancelled with their Work. */
+    function own(history: Event[], actor: string): Event[] {
+      let byWriter = writers.get(history);
+      if (!byWriter) {
+        byWriter = new Map();
+        for (const event of history) {
+          if (event.action === "cancelled" && "reason" in event.detail) continue;
+          const events = byWriter.get(event.actorID);
+          if (events) events.push(event);
+          else byWriter.set(event.actorID, [event]);
+        }
+        writers.set(history, byWriter);
+      }
+      return byWriter.get(actor) ?? [];
+    }
     return {
+      /**
+       * The history event an entry wrote: the writer's events on its record, counted back from the
+       * newest by the writer's later Work and ask writes on it. Asks cancelled with their Work (Q12)
+       * have an event but no entry of their own, so they are passed over. A counted event later than
+       * the entry, as when an earlier entry was lost, gives way to the writer's last event before it.
+       */
+      event(entry: Entry, history: Event[] | undefined): Event | undefined {
+        // Entries come in order, so the writer's later writes from its first entry here serve all.
+        const pair = `${entry.actor}\n${entry.target}`;
+        let ids = later.get(pair);
+        if (!ids) {
+          ids = audit.writesAfter(entry.id, entry.actor, entry.target);
+          later.set(pair, ids);
+        }
+        let first = 0;
+        for (let last = ids.length; first < last; ) {
+          const middle = (first + last) >> 1;
+          if ((ids[middle] as number) <= entry.id) first = middle + 1;
+          else last = middle;
+        }
+        const events = own(history ?? [], entry.actor);
+        const counted = events.at(-1 - (ids.length - first));
+        return counted && counted.at <= entry.at
+          ? counted
+          : events.findLast((event) => event.at <= entry.at);
+      },
+      /** The Work's owner just before `event`: the last owner an earlier event gave it, else its creator. */
+      ownerBefore(work: Work, event: Event): string | undefined {
+        let before = owners.get(work);
+        if (!before) {
+          before = new Map();
+          let owner: string | undefined;
+          for (const each of work.history ?? []) {
+            before.set(each, owner);
+            const given = each.detail.ownerID;
+            owner = typeof given === "string" ? given : (owner ?? each.actorID);
+          }
+          owners.set(work, before);
+        }
+        return before.get(event);
+      },
+
       ask(id: string) {
         if (!asks.has(id)) {
           const found = read(caller, (clients) => clients.work.get({ askID: id, history: true }));
@@ -117,7 +153,7 @@ export function attention(registry: Registry, audit: Audit, workspace: Workspace
         return works.get(id);
       },
       /** The open asks routed to the caller, and submitted Work requested in its branch. */
-      routed: once(() =>
+      routing: once(() =>
         all(caller, (clients, after) =>
           clients.work.asks({ routedTo: caller.id, limit: 100, after }),
         ),
@@ -187,7 +223,7 @@ export function attention(registry: Registry, audit: Audit, workspace: Workspace
       // A closed Actor's part passes to its nearest open manager (Q10): what was routed to it,
       // or on its way through it, is the caller's now.
       if (entry.operation === "actor_close" && registry.standIn(id) === caller.id) {
-        for (const ask of reads.routed())
+        for (const ask of reads.routing())
           if (through(registry.get(ask.raises.at(-1)?.actorID ?? ask.requesterID)?.manager, id))
             items.push({ kind: "ask", title: ask.title, recordID: ask.formID });
         for (const work of reads.submitted())
@@ -205,9 +241,10 @@ export function attention(registry: Registry, audit: Audit, workspace: Workspace
         touched.actorIDs.push(ask.requesterID);
         if (ask.workID) touched.workIDs.push(ask.workID);
         title = ask.title;
-        const action = eventOf(entry, ask.history)?.action;
         const asker = ask.requesterID === caller.id;
         const routed = routeOf(ask) === caller.id;
+        // Only its asker and the Actor it routes to get items from an ask.
+        const action = asker || routed ? reads.event(entry, ask.history)?.action : undefined;
         // Once raised, the ask reaches its route from the raise that sent it there.
         if (action === "created" && routed && ask.raises.length === 0) kind = "ask";
         else if (action === "responded" && asker) kind = "answer";
@@ -217,13 +254,19 @@ export function attention(registry: Registry, audit: Audit, workspace: Workspace
           else if (routed && raisedTo && registry.standIn(raisedTo) === caller.id) kind = "ask";
         }
       } else if (work) {
-        const event = eventOf(entry, work.history);
-        const before = event && ownerBefore(work, event);
         touched.workIDs.push(id);
-        touched.actorIDs.push(work.ownerID, work.requesterID, before);
+        touched.actorIDs.push(work.ownerID, work.requesterID);
         title = work.title;
         const owns = work.ownerID === caller.id;
         if (entry.operation === "work_create" && owns) kind = "assigned";
+        // An edit may give the Work away and an answer follows its submitter, so their owner before
+        // is a party to them; other writes leave the owner as it is.
+        const event =
+          entry.operation === "work_update" || entry.operation === "work_answer"
+            ? reads.event(entry, work.history)
+            : undefined;
+        const before = event && reads.ownerBefore(work, event);
+        touched.actorIDs.push(before);
         // Only its requester, or the requester's stand-in, edits Work on another Actor: giving it
         // to the caller is assigned, and an edit that leaves it the caller's is updated.
         if (entry.operation === "work_update" && owns && event) {
