@@ -11,9 +11,54 @@ export const TeamRequest = z
   })
   .meta({ id: "TeamRequest" });
 
-export const Position = Actor.meta({
+export const PositionState = z
+  .enum(["waiting", "review", "active", "idle"])
+  .describe(
+    "The most urgent among the Work on it: waiting (its open ask on it), then review (submitted), then active; idle with none. A stored blocked reads as active.",
+  );
+
+const Count = z.number().int().min(0);
+
+export const Headline = z
+  .strictObject({
+    subject: z
+      .strictObject({ ticketID: Id, title: z.string(), state: PositionState.exclude(["idle"]) })
+      .nullable()
+      .describe(
+        "The most urgent live Work on it: waiting, review, active with changes requested, then active; ties to the latest update. Null with none live.",
+      ),
+    clause: z
+      .strictObject({
+        kind: z.enum(["ask", "approval", "review", "waits", "step"]),
+        text: z.string(),
+      })
+      .nullable()
+      .describe(
+        'The first that applies to the subject: its owner\'s oldest open ask on it, by title; "with <requester> for review"; what it waits on; its current step, else the first sentence of its progress. The caller is "you".',
+      ),
+    more: Count.describe("Its other live Work."),
+    notStarted: Count.describe("Work on it not started."),
+    finished: z
+      .strictObject({ ticketID: Id, title: z.string(), at: Timestamp })
+      .nullable()
+      .describe("The last Work it finished."),
+  })
+  .meta({
+    id: "Headline",
+    description:
+      "An Actor's line: the subject's title, its clause and +N for the rest. With no subject: N not started, else the last finished Work and when.",
+  });
+
+export const Position = Actor.extend({
+  state: PositionState,
+  headline: Headline,
+  asks: Count.describe("Its own open asks."),
+  branchAsks: Count.describe("Open asks of every Actor below it, closed ones included."),
+  lastActiveAt: Timestamp.nullable().describe("The time of its last recorded write."),
+}).meta({
   id: "Position",
-  description: "Identity, hierarchy and connection presence.",
+  description:
+    "Identity, hierarchy and connection presence, with its state and headline from the Work on it.",
 });
 export const Team = z.strictObject({ root: Id, positions: z.array(Position) }).meta({ id: "Team" });
 
@@ -43,8 +88,10 @@ export const ActorView = z
       name: z.string(),
       path: z.string(),
       purpose: z.string(),
+      managerID: Id.nullable().describe("The managing actor; null for the root."),
       online: z.boolean(),
       lastActiveAt: Timestamp.nullable().describe("The time of its last recorded write."),
+      closed_at: Timestamp.nullable(),
     }),
     state: ActorState,
     status: Status.nullable().describe("Null until it first sets one."),
@@ -59,7 +106,7 @@ export const ActorView = z
     assigned: z.array(Work).describe("Open Work others requested of it, not started."),
     followUps: z.array(Work).describe("Open Work it requested of itself."),
     completed: z.array(Work).describe("Accepted Work it owns, newest first."),
-    reports: z.array(Position).describe("Its open direct reports."),
+    reports: z.array(Actor).describe("Its open direct reports."),
     actors: z
       .record(z.string(), z.strictObject({ name: z.string() }))
       .describe("Names of the Actors these records mention."),
@@ -72,7 +119,7 @@ export const TEAM = toolDefinition("team", {
     request: TeamRequest,
     response: Team,
     description:
-      "Read a position and its open reports: identity, purpose, hierarchy, timestamps and actual Hub connection presence. Anyone may explore any position. Default: you and your direct reports.",
+      "Read a position and its open reports: identity, purpose, hierarchy, timestamps, actual Hub connection presence, and from the Work on each its state, headline, open asks and last write. Anyone may explore any position. Default: you and your direct reports.",
   },
   actor_view: {
     writes: false,

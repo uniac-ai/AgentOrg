@@ -153,8 +153,21 @@ position. With nothing to return it waits up to `wait` seconds (at most 600): ev
 waiting reads, which read again. It is a read, not a subscription; callers set a request timeout above
 `wait`.
 
+`team {actor?, depth?}` reads a position and its open reports to `depth`, in pre-order. Each
+position carries, from the Work on it only, its `state`: the most urgent of `waiting` (an open ask
+by its owner on it), `review` (submitted) and `active` (a stored `blocked` reads as active), else
+`idle`. Its `headline` is its subject, the most urgent such Work, ranking changes requested above
+other active Work, with ties going to the latest update. Then comes the first clause that applies:
+its owner's open ask, "with <requester> for review", what it waits on, its current step, else the
+first sentence of its progress. The caller is "you". `more` counts its other such Work,
+`notStarted` its Work not started, and `finished` names the last Work it finished. `asks` counts
+its own open asks, and `branchAsks` the open asks of every Actor below it, closed ones included.
+`lastActiveAt` is its last recorded write. One pass over the Work owned under the start and one
+over the open asks asked under it feed every position.
+
 `actor_view {actorID?, completed?}` joins an Actor's report at read time, from the registry,
-connections, audit and the Workspace records it can read: the Actor with its presence and last write;
+connections, audit and the Workspace records it can read: the Actor with its manager, closure,
+presence and last write;
 its status; its workstreams (Work it owns that is active, blocked, submitted or has changes requested,
 and such Work it requested of its direct reports), each with its open asks linked to it; its other open
 asks; its reports' open asks (`needs`); submitted Work it reviews; open Work assigned to it and its own
@@ -221,7 +234,7 @@ A separate `core.workspace.db` is opened through the installed package's public 
 owns both handles and closes them after the listener. Workspace authority receives the admitted
 Hub Actor ID on every call. The canonical directory returns active Actors in stable insertion order;
 named lookup also resolves closed counterparts. `team` returns only `{root, positions}`, with actual
-connection presence on each position.
+connection presence, state and headline on each position.
 
 The package is vendored and bundled into the distributable SDK at an immutable source/checksum
 pin in `vendor/workspace.json`. No package MCP server or additional network service is started.
