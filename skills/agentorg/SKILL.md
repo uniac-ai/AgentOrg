@@ -42,6 +42,10 @@ is for what the line can't hold; `links` are what a reader opens. Change it when
 overall changes, not with every step: steps belong to your Work. Status holds no state: your state
 is derived from your Work and asks. Omitted fields keep their value.
 
+AgentOrg's next release removes Status and its links. Until then, put each link on the Work it
+belongs to, not in your status, and send that Work's whole `links` list, since it replaces the old
+one; keep where you stand in each Work's progress. `line` and `summary` stay until the release.
+
 **One Work per workstream.** `work_create {title, goal?, links?, waitsOn?}` makes Work you own and
 requested; its ID is its `ticketID`. It starts `open`. Set it `active` with
 `work_update {ticketID, status, progress?, links?, waitsOn?}` when you start; set `blocked` only
