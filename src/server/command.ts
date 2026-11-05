@@ -16,7 +16,7 @@ const HELP = `usage: agentorg-server [--port <n>]
        agentorg-server service install|uninstall
        agentorg-server status
 
-Run the organization's core on 127.0.0.1 at --port, else AGENTORG_PORT, else ${DEFAULT_CORE_PORT}. Its records and root credential are in AGENTORG_HOME, default ~/.local/share/agentorg. The first start creates the root. A missing root credential file is replaced on startup.
+Run the organization's core on 127.0.0.1 at --port, else AGENTORG_PORT, else ${DEFAULT_CORE_PORT}. Its records and the person's credential are in AGENTORG_HOME, default ~/.local/share/agentorg. The first start creates the person, the user's own Actor. A missing credential file for the person is replaced on startup.
 
 service manages only the core's user service. status reports its executable, launcher, service and availability.`;
 
@@ -62,7 +62,7 @@ export async function main(args: string[]): Promise<number> {
   });
   await rootCredential(core.organization.registry, rootCredentialPath());
   process.stderr.write(
-    `${PROGRAM}: core serving on ${core.url}; the root's credential is in ${rootCredentialPath()}\n`,
+    `${PROGRAM}: core serving on ${core.url}; the person's credential is in ${rootCredentialPath()}\n`,
   );
   await Promise.race([once(process, "SIGINT"), once(process, "SIGTERM")]);
   await core.close();

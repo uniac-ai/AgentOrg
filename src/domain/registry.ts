@@ -25,7 +25,7 @@ const mintCredential = () =>
     .replace(/=+$/, "");
 
 export function registry(actors: Store["actors"], now: () => string) {
-  /** The person, at the root: the first Actor this Hub made, the one place that says so. */
+  /** The person: the first Actor this Hub made, the one place that says so. */
   const root = () => actors.first();
   const get = (id: string) => actors.get(id);
   const open = () => actors.open();
@@ -76,7 +76,7 @@ export function registry(actors: Store["actors"], now: () => string) {
     return actor;
   }
 
-  /** Replace an actor's credential, as when the root's file is lost, and return the new one. */
+  /** Replace an actor's credential, as when the person's file is lost, and return the new one. */
   async function rotateCredential(id: string): Promise<string> {
     const { credential, hash } = await mint();
     actors.update({ ...found(id), credential_hash: hash });

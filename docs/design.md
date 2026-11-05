@@ -87,11 +87,11 @@ its own admitted principal and does not turn the created Actor into an invocatio
 
 | Owner | Responsibility |
 |---|---|
-| `registry.ts` | Actor identity, hierarchy, credentials and lifecycle authority. |
+| `registry.ts` | Actor identity on one flat level, the person, credentials and lifecycle authority. |
 | `connections.ts` | All admitted Actor connections, presence and revocation. |
 | `execution.ts` | One optional Provider provisioning outcome for an already-created Actor. |
 | `actors.ts` | Actor lifecycle and public projection, using Registry, Connections and Execution. |
-| `team.ts` | Identity, hierarchy, actual admitted connection presence, each Actor's state and headline from the Work on it, and its report as one view. |
+| `team.ts` | Every open Actor, actual admitted connection presence, each Actor's state and headline from the Work on it, and its report as one view. |
 | `attention.ts` | The one read that waits: what concerns its caller, and which public records changed. |
 | `workspace.ts` | Explicit bindings to package-owned Messages, and Work with its asks, under the admitted Actor. |
 | `claims.ts`, `audit.ts` | Shared resource claims and append-only audit metadata. |
@@ -121,8 +121,8 @@ Every open Actor receives the same eight Hub Tools and twenty-one interfaces:
 | `system` | `system_status`, `connection_list`, `provider_list`, `connection_disconnect` |
 
 IDs are `hub:<name>`. Discovery and invocation use the same module-owned operations. The caller's
-hierarchy and the operation's records govern domain authority; they do not add Tools. Actor IDs,
-paths, cached advertisements and guessed aliases cannot introduce callable interfaces. A closed
+identity and the operation's records govern domain authority; they do not add Tools. Actor IDs,
+cached advertisements and guessed aliases cannot introduce callable interfaces. A closed
 Actor receives no Tools. `BUILTINS` is a derived schema inventory for CLI and typed consumers,
 while feature modules own runtime registration.
 
@@ -134,18 +134,16 @@ caller and was written by someone else. On its records:
 - `updated`: Work it owns, changed or cancelled by its requester;
 - `reviewed`: an answer to its submission;
 - `answer`: an answer to its ask, one item per responder;
-- `raised`: its ask passed one manager up;
 - `message`: a Message to it.
 
-Routed to it, where a closed Actor's part passes to its nearest open manager, its stand-in:
-- `ask`: an ask from one of its reports, or raised to it, while the ask is open and still routed
-  to it;
-- `review_due`: a submission of Work it requested, or that a closed requester it stands in for
-  requested, while the submission waits.
+Routed to it:
+- `ask`: an ask on Work it requested, while the ask is open and still routed to it. The person also
+  gets the asks on Work their asker requested itself or on no Work;
+- `review_due`: a submission of Work it requested, while the submission waits.
 
-Closing an Actor gives its stand-in an `ask` for each open ask the close re-routes to it and a
-`review_due` for each waiting submission it re-routes, from the Actor that closed it. A stand-in
-that closes the Actor itself gets none, as its own write.
+A closed Actor's stand-in is the person. Closing an Actor gives the person an `ask` for each open
+ask the close passes to it and a `review_due` for each waiting submission, from the Actor that
+closed it. When the person closes the Actor itself, it gets none, as its own write.
 
 Each audit entry is matched to the history event it wrote: the writer's events on the record,
 counted back from the newest by its later writes on that record, so two writes by one Actor in one
@@ -154,16 +152,16 @@ read are told apart. Entries that earlier builds audited as `form_create`, `form
 them. Each item names its record, who wrote it, a title and when. `changed` names what anyone's
 writes touched, the caller's included, so a view stays current: `actorIDs`, the parties of each
 write (a Work's owner, requester and previous owner, an ask's asker, a Message's two Actors, and an
-Actor created or closed with its manager); `workIDs`, the Work written and the Work each written ask
+Actor created or closed); `workIDs`, the Work written and the Work each written ask
 is on; and `conversationIDs`, the conversations a Message was sent in. `next` is the audit position
 read through; passing it back as `since` continues without gaps. Without `since` the read returns at
 once with the current position. With nothing to return it waits up to `wait` seconds (at most 600):
 every audited write wakes waiting reads, which read again. It is a read, not a subscription; callers
 set a request timeout above `wait`.
 
-`team {actor?, depth?}` reads a position and its open reports to `depth`, in pre-order;
-`team {actor, depth: 0}` reads any one Actor, closed ones included.
-- **`state`** comes from the Work on the position only. It is the most urgent of:
+`team {}` reads every open Actor, oldest first, so the person comes first. `actor_view` reads any
+one Actor, a closed one included.
+- **`state`** comes from the Work on the Actor only. It is the most urgent of:
   - `waiting`: its owner has an open ask on live Work that is not submitted, started or not;
   - `review`: submitted, even with such an ask;
   - `active`: started Work (`active` or `changes_requested`) with no such ask; a `blocked`
@@ -175,7 +173,7 @@ set a request timeout above `wait`.
     ties go to the latest update.
   - **`clause`:** the first that applies:
     - its owner's oldest open ask (`ask` or `approval`);
-    - "with <requester> for review", naming the requester's stand-in once it is closed;
+    - "with <requester> for review", naming the person once the requester is closed;
     - what it waits on;
     - its current step, else the first sentence of its progress.
 
@@ -183,35 +181,33 @@ set a request timeout above `wait`.
   - **`more`:** its other such Work.
   - **`notStarted`:** its open Work with no open ask by its owner.
   - **`finished`:** the last Work it finished.
-- **`asks`:** its own open asks. **`branchAsks`:** the open asks of every Actor below it, closed
-  ones included.
+- **`asks`:** its own open asks.
 - **`lastActiveAt`:** its last recorded write.
 
-Up to 20 positions, such as the default `team {}` of a manager, each read their own unfinished
-Work and their last finished Work. A larger read takes one pass over the organization's unfinished
-Work, and the most recent page of finished Work names each position's last; a position that page
-misses is read on its own. One pass over the organization's open asks feeds every position's
-counts, and Work waited on that the reads don't hold is read by its ID. Each page of a list decodes
-every row its indexed owner, requester and status filters keep, so a read of a large tree holds the
-Hub while it decodes the organization's unfinished Work and open asks.
+Up to 20 open Actors each read their own unfinished Work and their last finished Work. A larger
+organization takes one pass over its unfinished Work, and the most recent page of finished Work
+names each Actor's last; an Actor that page misses is read on its own. One pass over the
+organization's open asks feeds every Actor's count, and Work waited on that the reads don't hold is
+read by its ID. Each page of a list decodes every row its indexed owner, requester and status
+filters keep, so a read of a large organization holds the Hub while it decodes its unfinished Work
+and open asks.
 
 `actor_view {actorID?, completed?, answeredBy?}` joins an Actor's report at read time, from the
 registry, connections, audit and the Workspace records it can read:
-- the Actor, with its manager, closure, presence and last write;
+- the Actor, with its closure, presence and last write;
 - its `state` and `headline`, derived as `team` derives them, from the same Work;
 - its workstreams: Work it owns that is waiting, in review or active, each with its open asks;
 - its own open asks (`asks`), wherever they are: on its Work, on other Work or on none;
-- the open asks routed to it (`needs`): its reports' asks it hasn't raised, asks raised to it, and
-  asks passed up past closed managers;
-- submitted Work routed to it (`reviews`): Work it requested, or that a closed requester it stands
-  in for requested;
+- the open asks routed to it (`needs`): asks on Work it requested; for the person, also asks on Work
+  their asker requested itself or on no Work, and those of closed requesters;
+- submitted Work routed to it (`reviews`): Work it requested; for the person, also Work a closed
+  Actor requested;
 - Work others requested of it, not started or with changes requested (`assigned`), and its own
   follow-ups;
 - unfinished, unsubmitted Work routed to it as requester whose owner is closed (`ownerClosed`), to
   reassign or cancel;
 - with `answeredBy`, its asks, open or closed, that Actor answered (`answered`);
 - its latest completed Work;
-- its direct reports;
 - a name map.
 
 Each list is every page of its read.
@@ -234,8 +230,8 @@ between pages, so refresh from zero before reconciling removals. Retained values
 timestamp when a refresh fails.
 
 `connection_disconnect {instanceId,connectionId}` detaches one exact socket with close code 1000.
-An active Actor controls its own other sockets, direct reports' sockets, and all Actor sockets when
-it is canonical root. Only canonical root controls Provider sockets. The carrying socket is refused
+An active Actor controls its own other sockets, and the person controls all Actor sockets. Only the
+person controls Provider sockets. The carrying socket is refused
 using trusted admission context. The same authority and observed busy/closing guards produce
 `canDisconnect` and govern mutation. Write invocations, complete Provider creation sequences
 including inter-RPC gaps, and pending factory requests block detach; a read, including a waiting
@@ -265,7 +261,7 @@ or `refused {code, message}`; they carry no Actor-call receipt or destination.
 
 ### Records and storage
 
-An Actor has id, name, path, purpose, manager, online state and creation/closure timestamps.
+An Actor has id, name, purpose, online state and creation/closure timestamps.
 The durable identity also holds a credential hash that public views omit. Online means at least
 one admitted Actor connection; multiple caller connections coexist. Closing an Actor revokes
 all its connections while preserving independent Provider connections.
@@ -274,21 +270,23 @@ Hub SQLite schema 10 stores canonical Actors, claims, audit metadata and a priva
 ledger. The retired Actor calls stay in their table as private history that no operation reads.
 A separate `core.workspace.db` is opened through the installed package's public persistence API. The package owns its schema, transaction rules and record history; Hub
 owns both handles and closes them after the listener. Workspace authority receives the admitted
-Hub Actor ID on every call. Its Actor lookup also resolves closed Actors, and its `manager` returns
-an Actor's retained manager, closed or not. `team` returns only `{root, positions}`, with actual
-connection presence, state and headline on each position.
+Hub Actor ID on every call. Its Actor lookup also resolves closed Actors, and its `person()` names
+the person, the Actor that stands in for closed Actors and receives the asks on Work their asker
+requested itself. `team` returns only `{positions}`, with actual connection presence, state and
+headline on each.
 
 The package is vendored and bundled into the distributable SDK at an immutable source/checksum
 pin in `vendor/workspace.json`. No package MCP server or additional network service is started.
 [Workspace storage](workspace-storage.md) describes startup import, retained originals and backups.
 
-Actor handles are unique among open Actors, and paths describe the organization. The person, at the root, is the first Actor the Hub made. Actor and Team metadata contain no callable-interface or native-session fields.
+Every Actor sits on one flat level, and handles are unique among open Actors. The person is the first Actor the Hub made, the user's own; it is never closed. Actor rows no longer read or write the `manager` column, which schema 10 keeps unused. Actor and Team metadata contain no callable-interface or native-session fields.
 
 ### Record authority
 
-The Hub's Actors Tool creates direct reports and closes leaves under the existing manager/root
-lifecycle policy. Shared resource claims remain Hub-owned: a live holder prevents another claim,
-expiry or holder closure permits replacement, and a holder or root may release it. `activity`
+The Hub's Actors Tool lets any open Actor create an Actor, and close any other, never itself or the
+person; a closed Actor's part passes to the person. Shared resource claims remain Hub-owned: a live
+holder prevents another claim, expiry or holder closure permits replacement, and the holder or the
+person may release it. `activity`
 exposes operation metadata only, to every Actor: who did each operation, on which record, with what
 outcome and when. Its entries come oldest first: the latest `limit` without `since`, or the earliest
 `limit` after `since`, so passing the last entry's id as the next `since` continues a poll without
@@ -299,8 +297,8 @@ Workspace modules enforce record roles, equally for human, agent and program cli
 | Record | Authority |
 |---|---|
 | Message | Immutable P2P correspondence in its pair's conversation. Every active admitted Actor reads every Message and conversation. `message_send` takes `recipientID` and `text`, to another Actor, never itself; replies are new Messages. |
-| Work | Every active admitted Actor reads the complete record, with its asks. The requester sets goal and owner, cancels, and answers the exact submission with `work_answer`; once the requester is closed, its stand-in does. The current owner edits title, progress, status (`open` or `active`), links and waits-on, and submits. Work the owner requested itself completes on submit. |
-| Ask | Part of the Work its asker owns: the owner asks with `work_update {ticketID, ask}`, except the root, and names no respondents. Every active admitted Actor reads it and may answer it with `work_answer` while it is open, except an `approval` ask, which only the asker's managers up to the root answer. It is routed to its asker's manager, or after a raise its last raiser's, and that Actor may raise it one manager up, except the root. Only the asker, or its stand-in once it is closed, resolves or cancels it with `work_update {close}`. Submitting, cancelling or reassigning the Work cancels its open asks. Its record keeps the `Form` schema and `formID`. |
+| Work | Every active admitted Actor reads the complete record, with its asks. The requester sets goal and owner, cancels, and answers the exact submission with `work_answer`; once the requester is closed, the person does. The current owner edits title, progress, status (`open` or `active`), links and waits-on, and submits. Work the owner requested itself completes on submit. |
+| Ask | Part of the Work its asker owns: the owner asks with `work_update {ticketID, ask}`, the person included, and names no respondents. It is routed to its Work's requester, or to the person when the asker requested the Work itself or it names no Work; a closed requester's asks go to the person. Every active admitted Actor reads it and may answer it with `work_answer` while it is open, except an `approval` ask, which only the Actor it is routed to answers, never its asker. An approval the person asks on Work it requested itself, or whose requester is closed, has no one to answer it and stays open until the person closes it. Only the asker, or the person once the asker is closed, resolves or cancels it with `work_update {close}`. Submitting, cancelling or reassigning the Work cancels its open asks. Its record keeps the `Form` schema and `formID`. |
 
 `work_list` and `message_list` return `{items, next, actors}`; `message_list` adds `older`. `next`
 and `older` are opaque positions for the same read and filter, `next` is null when nothing further
@@ -314,12 +312,10 @@ as its latest message. A Message carries its `conversationID` and its `seq`, its
 across every conversation; `message_list` accepts a `seq` as `after`, so a reader resumes from the
 last message it handled. The Workspace contracts document every filter.
 
-`requesterWithin` and `ownerWithin` select the named canonical Actor and all descendants through
-retained `manager` edges, including closed members and anchors without Team's depth limit. Unknown
-IDs match nothing. Hub supplies synchronous `ActorAuthority.within` under the admitted active caller;
-the Workspace applies it to filters and to who may answer an approval. Through Hub's
-`ActorAuthority.manager` it routes asks and passes a closed Actor's part to its stand-in. Membership
-adds no write role. Message state, history and operations expose no read/handled status. A native
+`ownerID` and `requesterID` each take one Actor ID or a list; unknown IDs match nothing, and
+`ownerWithin` and `requesterWithin` are refused as unknown fields. Hub supplies synchronous
+`ActorAuthority.person()` under the admitted active caller; through it the Workspace routes asks and
+passes a closed Actor's part to the person. Reading adds no write role. Message state, history and operations expose no read/handled status. A native
 approval requires a client-owned validated binding to its native request and authorization; an
 arbitrary answer to an ask is insufficient.
 
@@ -369,7 +365,7 @@ The MCP adapter, `agentorg-mcp` in `src/clients/mcp/`, is an optional client for
 - **What the session sees.** The stdio adapter has three fixed MCP tools: `attach`, `interfaces`, and `call {name, input}`. `interfaces` returns `{interfaces: [{name, summary}]}`: the call alias and the first paragraph of the description of each Hub interface. `interfaces {name}` returns that interface's description, input and output schemas. `call` invokes an interface using its `call` alias as `name`.
   - **Presentation.** Every session is offered the whole catalog; `call` passes any name to the Hub, which keeps the one authority. The presentation's fixed controls form one semantic `agentorg` Tool, separate from the Hub catalog. Before its first turn, the client's session-start hook runs `agentorg-mcp context`, so a session that fills no position reads that it loads the `agentorg` skill and attaches before any other action. The adapter's instructions say the same.
   - `attach {actor}` fills the position the session's brief names.
-  - `attach {name, purpose}`, allowed only on a session's first attach, creates its position directly under the root. The agent actor uses the root's credential for that one call.
+  - `attach {name, purpose}`, allowed only on a session's first attach, creates its Actor. The agent actor uses the person's credential for that one call.
   - The MCP controls remain fixed across attachment and resuming. The current Hub catalog is read on each `interfaces` invocation, with no adapter cache. Logical operations such as `team` are invoked as `call {name: "team", input: {}}`.
 - **What the session is told.** Each kind of guidance has one place:
   - the adapter's tool descriptions say how to attach, list and invoke; the core's interface descriptors define each operation's description and schemas, and the core enforces permissions;
@@ -378,7 +374,7 @@ The MCP adapter, `agentorg-mcp` in `src/clients/mcp/`, is an optional client for
   - an organization's own conventions are a skill of its own, loaded beside it.
 - **Credentials.** The session never sees one.
   - Each position's credential is kept in the agentorg home's credential store, `actors/<id>`, mode 600.
-  - When the session's `actor_create` creates a report, the agent actor keeps the report's credential there, and the session gets the result with that credential replaced by a note that it was kept.
+  - When the session's `actor_create` creates an Actor, the agent actor keeps its credential there, and the session gets the result with that credential replaced by a note that it was kept.
   - `actor_close` forgets the closed position's credential.
 - **Session identity and resuming.** `sessions/<client>-<session id>/position` names the position a conversation fills. Claude Code names the session in `CLAUDE_CODE_SESSION_ID`. Codex identifies it in each tool call's `_meta.threadId`, carried through the presentation boundary as optional occupant-session context. Initialization and listing need no identity; a Codex call requires one, and the adapter refuses a different identity after binding. The first call recovers only that conversation's saved position. `attach {actor}` acknowledges the same actor; a session cannot change actors. A fork with a new thread id attaches independently.
 - **Project hooks.** `connect codex` writes AgentOrg's `SessionStart` context commands to `.codex/hooks.json`, preserving other entries. Launcher command and arguments are edited by their parsed TOML value ranges, preserving surrounding policy and comments. The commands take identity from stdin's `session_id`, not inherited environment variables. Project configuration requires trust, hooks must be enabled with `features.hooks`, and the definitions require review and trust through `/hooks`. Startup, resume and fork identity behavior is verified against the Codex build in use; thread and session-tree identities are not derived from each other.
@@ -386,7 +382,7 @@ The MCP adapter, `agentorg-mcp` in `src/clients/mcp/`, is an optional client for
   - The waiter is one re-arming `attention {since, wait: 600}` read as the ordinary attached Actor, from the position in `sessions/<session>/inbox`. A read that returns only `changed` advances the position and waits again; items are what other Actors did, so the session's own writes never come back to it.
   - Attaching records the current position, so a new session starts from now rather than from the organization's history. A session without a position, such as one kept from before this waiter, or with a position its Hub never issued, also starts from now.
   - Each item is framed with what to do: an answer quotes the response and names the Work the ask blocks; a Message carries its conversation from the session's last message in that conversation, so a reply arrives with what it answers, from `message_list {counterpartyID, before: "latest"}`.
-  - An ask's frame says how to answer or raise it, and a submission's frame gives its `submissionID`. A submission a close re-routes is framed as that close, since its item comes from the Actor that closed, not from its submitter.
+  - An ask's frame says how to answer it, and a submission's frame gives its `submissionID`. A submission a close re-routes is framed as that close, since its item comes from the Actor that closed, not from its submitter.
   - A replaced waiter or stopped client closes its read connection, ending the waiting read. Calls other than the wait have a five-second timeout, and the catalog listing the client's own. It writes the framed items, then atomically replaces its private position and exits with status 2. Claude Code hands that output to its session as input. No public receipt is written. A write followed by a crash before saving the position can redeliver the same items.
   - A newer waiter replaces an older one. Generic delivery is at least once; native approval handling belongs to the client.
 

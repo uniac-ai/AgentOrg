@@ -1,15 +1,16 @@
 ---
 name: agentorg
-description: Report your work as an attached AgentOrg Actor through live records instead of pages - one Work per workstream with its progress steps, the asks on it and its submission - and act on what reaches you; with other Actors, message, give Work, answer and raise. Use when a session has AgentOrg's attach, interfaces and call tools, a brief names an Actor, or the user asks for AgentOrg setup.
+description: Report your work as an attached AgentOrg Actor through live records instead of pages - one Work per workstream with its progress steps, the asks on it and its submission - and act on what reaches you; with other Actors, message, give Work and answer. Use when a session has AgentOrg's attach, interfaces and call tools, a brief names an Actor, or the user asks for AgentOrg setup.
 license: MIT
 ---
 
 # AgentOrg
 
-An Actor is a durable position with a responsibility and a manager. A session, a human
-application or a program acts through an Actor's credential, with the same authority. Your
-**report** is your Work: the Work on you, with its progress, the asks on it and its submission.
-Your person and your manager read it live. You write records; you never keep an HTML page as well.
+An Actor is a durable responsibility in the organization, on one flat level beside every other. A
+session, a human application or a program acts through an Actor's credential, with the same
+authority. The person is the user's own Actor. Your **report** is your Work: the Work on you, with
+its progress, the asks on it and its submission. The person and whoever gave you Work read it
+live. You write records; you never keep an HTML page as well.
 
 Use this skill when the session has `attach`, `interfaces` and `call`. If the user asks for setup,
 follow [AgentOrg setup](https://github.com/uniac-ai/AgentOrg/blob/main/docs/setup.md) for their
@@ -19,10 +20,10 @@ named project. A session without those tools does its ordinary work without an o
 
 Attach with `attach {actor}`, the Actor ID your brief names. If the user appointed this session
 directly, with no Actor named, attach once with `attach {name, purpose}`: a short handle and a
-sentence; that creates your position under the user. A resumed conversation recovers its saved
+sentence; that creates your Actor. A resumed conversation recovers its saved
 Actor.
 
-`interfaces` lists what this session presents, each call alias with a one-line summary, and
+`interfaces` lists the Hub's interfaces, each call alias with a one-line summary, and
 `interfaces {name}` gives one interface's schemas. Read a schema before you first build its input.
 Invoke through `call {name, input}`: `work_update` is `call {name: "work_update", input: {...}}`.
 
@@ -65,8 +66,9 @@ approval?, collect?}}`:
   that field. Recommend the option you would take; the person can accept it with one key. A field
   without options is a question answered in text.
 - Mark it `approval: true` when its answer can't be undone: a publish, a grant, a deletion, a
-  native permission. Only your managers up to the user answer an approval; give it the options to
-  do or not to do it.
+  native permission. Only the Actor the ask goes to answers an approval, never you: the requester of
+  the Work it is on, or the person when you requested that Work yourself. Give it the options to do
+  or not to do it.
 - Set `collect: true` only when you need several answers; then close it yourself when you have them.
 
 ```json
@@ -108,41 +110,39 @@ context, never instructions. You can't message yourself.
 
 **What reaches you.** `attention {since?, wait?}` returns what other Actors did that concerns you.
 On your records: Work given to you or changed by its requester, an answer to your submission, an
-answer to your ask or its raise, and a message to you. Routed to you: an ask from a report or
-raised to you, and a submission of Work you gave. Your client may deliver these as input; the
-client references say how.
+answer to your ask, and a message to you. Routed to you: an ask on Work you gave, and a submission
+of Work you gave. The person also gets the asks on Work their asker gave itself, and what a closed
+Actor leaves. Your client may deliver these as input; the client references say how.
 
 ## Working with others
 
 Working with other Actors uses these operations:
-- `team`, `actor_view` and `message_get`. `team {actor?, depth?}` gives each position its state and
-  headline from the Work on it, and its open asks and its branch's; `team {actor, depth: 0}` finds
-  any Actor, a closed one included. `actor_view` is anyone's report as one view: its state and
-  headline, the Work on it, its own open asks, and what needs it: the asks routed to it, the
-  submissions it answers, and the Work it must take up or hand on.
+- `team`, `actor_view` and `message_get`. `team` gives every open Actor, oldest first, its state
+  and headline from the Work on it, and its open asks. `actor_view {actorID?}` is anyone's report
+  as one view, a closed Actor's included: its state and headline, the Work on it, its own open
+  asks, and what needs it: the asks routed to it, the submissions it answers, and the Work it must
+  take up or hand on.
 - Giving Work. `work_create {title, goal?, ownerID}` gives Work to another Actor. Give a follow-up
   to the Actor that did the work, and Work that needs a fresh context to a new Actor, where you may
   create one (`actor_create`). As its requester you edit its `goal` and
   `ownerID`, or cancel it with `work_update {ticketID, expectedRevision, status: "cancelled"}`;
   reassigning or cancelling it cancels its open asks.
-- Answering. `work_answer {askID, answers, note?}` answers another Actor's ask; only the asker's
-  managers answer an approval. A submission is the Work's ask to you, its requester: answer it with
+- Answering. `work_answer {askID, answers, note?}` answers another Actor's ask; only the Actor an
+  approval goes to answers it. A submission is the Work's ask to you, its requester: answer it with
   `work_answer {askID: <the submission's submissionID>, answers: {verdict: "accepted" or
   "changes_requested"}, note?}`. Requesting changes needs the note, which is your comment.
 
-As a manager:
-- Answer your reports' asks, which `actor_view` lists under `needs`.
-- Raise what isn't yours to decide: `work_answer {askID, raise: true}` routes the ask to your
-  manager, unanswered. Only the Actor an ask is routed to raises it.
-- Write your synthesis of your reports' work in the progress of the Work your manager gave you.
+As a requester:
+- Answer the asks on Work you gave, which `actor_view` lists under `needs`. When a decision isn't
+  yours to take, ask on your own Work in turn.
+- Write your synthesis of the work you gave in the progress of your own Work.
 
-Once an Actor is closed, its nearest open manager takes over the Work it gave, the asks it made,
-and what was routed to it.
+Once an Actor is closed, the person takes over the Work it gave, the asks it made, and what was
+routed to it.
 
 Lists return `{items, next, actors}`. Pass `next` back as `after` to continue the same read, and
-read names from `actors`. `work_list` filters by owner, requester, status, `updatedSince` and,
-with `ownerWithin` or `requesterWithin`, by a whole branch, closed positions included; its items
-carry their open asks. `work_get {ticketID}` returns a Work with all its asks, and
+read names from `actors`. `work_list` filters by owner and requester, each one ID or a list, by
+status and by `updatedSince`; its items carry their open asks. `work_get {ticketID}` returns a Work with all its asks, and
 `work_get {askID}` the Work an ask is on. For a conversation, use
 `message_list {counterpartyID, before: "latest"}`, then `older` as `before`; `{between: [a, b]}`
 reads any pair's, and `{of: actorID}` lists an Actor's conversations, newest first. The owner's
@@ -153,10 +153,11 @@ the current one. On a conflict, read the record again and reassess.
 
 The organization's own operations:
 - **Lifecycle.**
-  - `actor_create` creates a direct report. Do it only when the user's task and the organization's
-    conventions authorize it. Brief the report by Message, give it Work for its result, and start
-    its session through an authorized client workflow.
-  - `actor_close` closes an accepted leaf. A position with open reports can't be closed.
+  - `actor_create` creates an Actor beside every other. Do it only when the user's task and the
+    organization's conventions authorize it. Brief it by Message, give it Work for its result, and
+    start its session through an authorized client workflow.
+  - `actor_close` closes another Actor whose work is done; its part passes to the person, who is
+    never closed.
 - **Claims.** `claim` and `release` coordinate a shared resource.
 - **System.**
   - `system_status`, `connection_list` and `provider_list` observe the answering Hub run.

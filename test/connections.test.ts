@@ -14,7 +14,7 @@ import { rootCredential } from "../src/server/index.ts";
 import { SqliteStore } from "../src/storage/sqlite/index.ts";
 import { startCore, until } from "./harness.ts";
 
-test("the first start creates private root credentials and rotating them keeps the Actor identity", async () => {
+test("the first start creates the person's private credentials and rotating them keeps the Actor identity", async () => {
   const directory = mkdtempSync(join(tmpdir(), "agentorg-root-"));
   const store = new SqliteStore(join(directory, "core.db"));
   try {
@@ -33,7 +33,7 @@ test("the first start creates private root credentials and rotating them keeps t
     assert.equal(await registry.byCredential(credential), undefined);
     assert.equal(registry.root()?.id, root?.id);
     writeFileSync(file, "not-the-credential\n", { mode: 0o600 });
-    await assert.rejects(rootCredential(registry, file), /does not hold the root's credential/);
+    await assert.rejects(rootCredential(registry, file), /does not hold the person's credential/);
   } finally {
     store.close();
     rmSync(directory, { recursive: true, force: true });

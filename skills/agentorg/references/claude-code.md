@@ -16,8 +16,8 @@ hooks, and this skill.
   binding before it can authorize a native request. Ordinary text and buttons do not create that
   binding through the generic adapter.
 - **Helpers.** Subagents sharing this MCP server share its Actor. They do not create an independent
-  position merely by running. Use the user's authorized workflow for separate report sessions.
-- **Lifecycle.** Close an accepted leaf Actor with `actor_close`, then end its session through an
+  Actor merely by running. Use the user's authorized workflow for other Actors' sessions.
+- **Lifecycle.** Close an Actor whose Work is accepted with `actor_close`, then end its session through an
   authorized client operation. Actor closure does not manage Provider resources.
 
 A session kept from before delivery moved to `attention` starts from now: what happened before its

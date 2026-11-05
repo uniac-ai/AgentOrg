@@ -160,7 +160,7 @@ export async function startCore(
 }
 
 /**
- * The root's credential, kept in `file`: written with the root on the first start, and minted
+ * The person's credential, kept in `file`: written with the person on the first start, and minted
  * again when the file is gone, since only its hash is stored.
  */
 export async function rootCredential(registry: Registry, file: string): Promise<string> {
@@ -180,7 +180,7 @@ export async function rootCredential(registry: Registry, file: string): Promise<
   const credential = readPrivate(file);
   if ((await registry.byCredential(credential))?.id !== root.id) {
     throw new Error(
-      `${file} does not hold the root's credential; delete it and start the core again to mint a new one`,
+      `${file} does not hold the person's credential; delete it and start the core again to mint a new one`,
     );
   }
   writePrivate(join(dirname(file), "root-actor"), root.id);

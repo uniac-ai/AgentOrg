@@ -180,7 +180,7 @@ test("actor create accepts optional execution and retains the Actor when its Pro
   assert.equal(core.org.registry.open().length, before);
 });
 
-test("agentorg-server creates the root's credential, and the built-ins run as the root or as an actor", async () => {
+test("agentorg-server creates the person's credential, and the built-ins run as the person or as an actor", async () => {
   const home = mkdtempSync(join(tmpdir(), "agentorg-cli-"));
   const core = await serving("server", { AGENTORG_HOME: home }, ["--port", "0"]);
   try {

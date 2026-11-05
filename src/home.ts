@@ -1,5 +1,5 @@
 /**
- * The agentorg home: the directory holding the core's database, the root's credential, the
+ * The agentorg home: the directory holding the core's database, the person's credential, the
  * credential store of the positions sessions fill, and which session fills which. It is
  * `AGENTORG_HOME`, or `~/.local/share/agentorg/`. Backing up means copying it.
  */
@@ -23,12 +23,12 @@ export function databasePath(): string {
   return join(home(), "core.db");
 }
 
-/** The root's credential, which `agentorg-server` writes on first start, mode 600. */
+/** The person's credential, which `agentorg-server` writes on first start, mode 600. */
 export function rootCredentialPath(): string {
   return join(home(), "root-credential");
 }
 
-/** The root's Actor identity, written beside its credential by `agentorg-server`. */
+/** The person's Actor identity, written beside its credential by `agentorg-server`. */
 export function rootActorPath(): string {
   return join(home(), "root-actor");
 }
@@ -76,13 +76,13 @@ export const credentials = {
   },
 };
 
-/** An actor's credential: `AGENTORG_CREDENTIAL` when set, else the root's, from its file. */
+/** An actor's credential: `AGENTORG_CREDENTIAL` when set, else the person's, from its file. */
 export function readCredential(): string | undefined {
   if (process.env.AGENTORG_CREDENTIAL) return process.env.AGENTORG_CREDENTIAL;
   return existsSync(rootCredentialPath()) ? readPrivate(rootCredentialPath()) : undefined;
 }
 
-/** Select an explicit Actor identity and its credential from the environment or local root files. */
+/** Select an explicit Actor identity and its credential from the environment or the person's files. */
 export function readIdentity(): { actorId: string; credential: string } | undefined {
   const actorId = process.env.AGENTORG_ACTOR_ID;
   const credential = process.env.AGENTORG_CREDENTIAL;
@@ -94,7 +94,7 @@ export function readIdentity(): { actorId: string; credential: string } | undefi
   }
   if (!existsSync(rootCredentialPath())) return undefined;
   if (!existsSync(rootActorPath())) {
-    throw new Error(`no root actor id in ${rootActorPath()}; restart agentorg-server`);
+    throw new Error(`no Actor id for the person in ${rootActorPath()}; restart agentorg-server`);
   }
   return { actorId: readPrivate(rootActorPath()), credential: readPrivate(rootCredentialPath()) };
 }

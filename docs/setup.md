@@ -23,7 +23,7 @@ agentorg-server status
 ```
 
 This keeps only the core running across restarts and logins, through launchd on macOS or systemd
-on Linux. It creates the organization's home, database, root identity and credential, and pins its launcher
+on Linux. It creates the organization's home, database, the person's identity and credential, and pins its launcher
 at `<home>/bin/agentorg-server`. Reinstall after upgrading the package or Node. Existing homes require the coordinated
 [Workspace storage cutover](workspace-storage.md) before the upgraded Hub starts.
 

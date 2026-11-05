@@ -29,21 +29,21 @@ import { sessionName, sessions } from "./sessions.ts";
 const AttachRequest = z.strictObject({
   actor: Id.optional().describe("The id of the position your brief names."),
   name: Handle.optional().describe(
-    "Only when the user appointed you directly, with no position named: your handle under the user.",
+    "Only when the user appointed you directly, with no position named: your handle.",
   ),
   purpose: Text.optional().describe("With name: what your position is for."),
 });
 
 const Attached = z.strictObject({
   actor: Id.describe("The position you now fill."),
-  created: z.boolean().describe("True when attaching created it, under the user."),
+  created: z.boolean().describe("True when attaching created it."),
 });
 
 export const ATTACH: InterfaceDescriptor = {
   name: "attach",
   description: `Fill your position in the organization before listing or calling Hub Tools. A resumed session can acknowledge its same actor; an attached session cannot change actors.
 
-Give actor, the id your brief names. A session the user started with an appointment, naming no position, gives name and purpose instead, once: that creates its position directly under the user. Then team shows your position, your manager and your reports.`,
+Give actor, the id your brief names. A session the user started with an appointment, naming no position, gives name and purpose instead, once: that creates its Actor, beside every other. Then team shows every open Actor, you among them.`,
   input: objectSchema(AttachRequest, "input"),
   output: objectSchema(Attached, "output"),
   one_way: false,
@@ -62,7 +62,7 @@ const InterfacesRequest = z.strictObject({
 const INTERFACES: InterfaceDescriptor = {
   name: "interfaces",
   description:
-    "List the Hub interfaces this session presents, each with its call alias and a one-line summary. Give name to read one interface's description and input/output schemas before calling an operation whose contract you have not read.",
+    "List the Hub's interfaces, each with its call alias and a one-line summary. Give name to read one interface's description and input/output schemas before calling an operation whose contract you have not read.",
   input: objectSchema(InterfacesRequest, "input"),
   one_way: false,
   long_running: false,
@@ -78,7 +78,7 @@ const CALL: InterfaceDescriptor = {
 };
 
 /** What the session's client may show its model about the agent actor's tools as a whole. */
-export const INSTRUCTIONS = `These tools make this session a position in an AgentOrg organization: a responsibility with a manager, under the user. Attach before any other action, with the actor id the brief names, or with a name and purpose when the user started the session with no position named. Then use interfaces to list the Hub interfaces this session presents, interfaces {name} to read one's schemas, and call with {name, input} to invoke one. Logical names such as work_update and attention are operations through call. How to work in a position is the agentorg skill; without it, read https://github.com/uniac-ai/AgentOrg/blob/main/skills/agentorg/SKILL.md.`;
+export const INSTRUCTIONS = `These tools make this session an Actor in an AgentOrg organization: a responsibility on its one flat level, working for the user. Attach before any other action, with the actor id the brief names, or with a name and purpose when the user started the session with no position named. Then use interfaces to list the Hub's interfaces, interfaces {name} to read one's schemas, and call with {name, input} to invoke one. Logical names such as work_update and attention are operations through call. How to work as an Actor is the agentorg skill; without it, read https://github.com/uniac-ai/AgentOrg/blob/main/skills/agentorg/SKILL.md.`;
 
 const refused = (code: string, message: string): Answer => ({ state: "refused", code, message });
 
@@ -268,7 +268,7 @@ export class Agent implements Presented {
     }
     let actor = request.actor;
     if (actor === undefined) {
-      const created = await this.#createUnderRoot(
+      const created = await this.#createWithPerson(
         request.name as string,
         request.purpose as string,
       );
@@ -304,9 +304,9 @@ export class Agent implements Presented {
   }
 
   /**
-   * Create the session's position under the root with the root's credential, used for that only.
+   * Create the session's Actor with the person's credential, used for that only.
    */
-  async #createUnderRoot(name: string, purpose: string): Promise<Answer> {
+  async #createWithPerson(name: string, purpose: string): Promise<Answer> {
     const file = rootCredentialPath();
     if (!existsSync(file)) return refused("not_found", `no root credential in ${file}`);
     const identity = rootActorPath();

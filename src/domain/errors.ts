@@ -20,7 +20,7 @@ export class Forbidden extends Refusal {
   override readonly code = "forbidden";
 }
 
-/** The records' state does not allow it, such as closing a position with open reports. */
+/** The records' state does not allow it, such as a handle an open Actor already has. */
 export class Conflict extends Refusal {
   override readonly code = "conflict";
 }

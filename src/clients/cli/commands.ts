@@ -11,7 +11,7 @@ async function asActor(run: (client: Actor) => Promise<number>): Promise<number>
   const identity = readIdentity();
   if (!identity) {
     throw new Error(
-      `no identity: set AGENTORG_ACTOR_ID and AGENTORG_CREDENTIAL, or run \`agentorg-server\`, which writes the root's credential to ${rootCredentialPath()}`,
+      `no identity: set AGENTORG_ACTOR_ID and AGENTORG_CREDENTIAL, or run \`agentorg-server\`, which writes the person's credential to ${rootCredentialPath()}`,
     );
   }
   const url = coreUrl();

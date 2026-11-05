@@ -29,7 +29,7 @@ existing schema 8 transaction. Schema 8 then atomically renames `progress`, `que
 `messages` to private `legacy_*` tables and creates `workspace_imports`, advancing to schema 9.
 Schema 9 makes handles unique among open Actors rather than among siblings: each later open
 duplicate, in creation order, takes the first free `<handle>-2`, `<handle>-3` and so on, and one
-index of open handles replaces the root and sibling indexes, advancing to schema 10.
+index of open handles replaces the `one_root` and sibling-handle indexes, advancing to schema 10.
 The original rows and fields remain intact, apart from those renamed handles. Other nonzero versions are refused. Every open also
 adds the audit's two indexes, of each Actor's writes and of its writes on each record, if they are
 missing; they take no schema step, so an earlier build still opens the home.
