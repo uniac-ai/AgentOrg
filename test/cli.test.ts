@@ -149,15 +149,19 @@ test("actor create accepts optional execution and retains the Actor when its Pro
     assert.equal(typeof created.execution.error?.message, "string");
     assert.equal((await core.org.registry.byCredential(created.credential))?.id, created.actor.id);
     assert.equal(JSON.stringify(created.execution).includes(created.credential), false);
-    const read = await agentorg(["team", "--depth", "0"], {
+    const read = await agentorg(["team"], {
       AGENTORG_URL: core.url,
       AGENTORG_ACTOR_ID: created.actor.id,
       AGENTORG_CREDENTIAL: created.credential,
     });
     assert.equal(read.status, 0, read.stderr);
-    assert.equal(JSON.parse(read.stdout).positions[0].id, created.actor.id);
+    assert.ok(
+      JSON.parse(read.stdout).positions.some(
+        (position: { id: string }) => position.id === created.actor.id,
+      ),
+    );
   }
-  const before = core.org.registry.reports(core.rootId).length;
+  const before = core.org.registry.open().length;
   const missingConfig = await agentorg(
     [
       "actor",
@@ -173,7 +177,7 @@ test("actor create accepts optional execution and retains the Actor when its Pro
   );
   assert.equal(missingConfig.status, 1);
   assert.match(missingConfig.stderr, /execution\.config/);
-  assert.equal(core.org.registry.reports(core.rootId).length, before);
+  assert.equal(core.org.registry.open().length, before);
 });
 
 test("agentorg-server creates the root's credential, and the built-ins run as the root or as an actor", async () => {
@@ -195,10 +199,11 @@ test("agentorg-server creates the root's credential, and the built-ins run as th
       AGENTORG_CREDENTIAL: credential,
     };
 
-    const team = await agentorg(["team", "--depth", "0"], asProg);
+    const team = await agentorg(["team"], asProg);
     assert.equal(team.status, 0, team.stderr);
-    const [seen] = JSON.parse(team.stdout).positions;
-    assert.deepEqual([seen.name, seen.manager], [actor.name, JSON.parse(team.stdout).root]);
+    // Every open Actor, oldest first: the person, then the Actor it created.
+    const [person, seen] = JSON.parse(team.stdout).positions;
+    assert.deepEqual([person.name, seen.name], ["root", actor.name]);
 
     for (const as of [asProg, asRoot]) {
       const activity = await agentorg(["activity", "--limit", "5"], as);
@@ -208,7 +213,7 @@ test("agentorg-server creates the root's credential, and the built-ins run as th
     }
 
     const sent = await agentorg(
-      ["message", "send", "--recipientID", JSON.parse(team.stdout).root, "--text", "Hello"],
+      ["message", "send", "--recipientID", person.id, "--text", "Hello"],
       asProg,
     );
     assert.equal(sent.status, 0, sent.stderr);

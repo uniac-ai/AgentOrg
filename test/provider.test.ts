@@ -352,7 +352,7 @@ test("the assembled Hub keeps a same-ID Provider usable after revoking every Act
   t.after(() => store.close());
   const registry = organization(store).registry;
   const { root, credential: rootCredential } = await registry.createRoot();
-  const { actor, credential } = await registry.create(root.id, "worker", "Receive work");
+  const { actor, credential } = await registry.create("worker", "Receive work");
   const providerCredential = "sentinel-independent-provider";
   const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(providerCredential));
   const hub = await startCore(store, {

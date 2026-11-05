@@ -23,7 +23,7 @@ const work: z.output<typeof Work> = BUILTINS.work_create.response.parse({});
 const owner: string = work.ownerID;
 const written: z.output<typeof Work> | z.output<typeof Form> = BUILTINS.work_update.response.parse({});
 const approval: boolean | undefined = "formID" in written ? written.approval : undefined;
-const teamQuery: z.input<typeof BUILTINS.team.request> = { actor: "actor", depth: 0 };
+const teamQuery: z.input<typeof BUILTINS.team.request> = {};
 const team: z.output<typeof Team> = BUILTINS.team.response.parse({});
 const position: z.output<typeof Position> | undefined = team.positions[0];
 const actorID: string | undefined = position?.id;
@@ -44,16 +44,12 @@ const answer: Promise<Answer> = client.then((actor) => actor.call("message_list"
 void [sender, owner, approval, teamQuery, actorID, position, optionalWork, askApproval, tools, answer];
 
 const workQuery = BUILTINS.work_list.request.parse({
-  ownerID: "owner",
+  ownerID: ["owner", "other-owner"],
   requesterID: "requester",
-  ownerWithin: "owner-branch",
-  requesterWithin: "requester-branch",
   status: ["submitted"],
 });
-const ownerID: string | undefined = workQuery.ownerID;
+const ownerID: string | string[] | undefined = workQuery.ownerID;
 const requesterID: string | string[] | undefined = workQuery.requesterID;
-const ownerWithin: string | undefined = workQuery.ownerWithin;
-const requesterWithin: string | undefined = workQuery.requesterWithin;
 const workStatus:
   | ("open" | "active" | "submitted" | "changes_requested" | "accepted" | "cancelled")[]
   | undefined = workQuery.status;
@@ -71,7 +67,6 @@ const askInputs: (string | Record<string, string> | true | undefined)[] = [
   answerInput.ticketID,
   answerInput.answers,
   answerInput.note,
-  answerInput.raise,
   closeInput.close?.askID,
 ];
 const listedMessage: z.output<typeof Message> | undefined = BUILTINS.message_list.response.parse({})
@@ -82,12 +77,12 @@ const listedForm: z.output<typeof Form> | undefined = BUILTINS.work_list.respons
   .items[0]?.asks?.[0];
 const next: string | null = BUILTINS.work_list.response.parse({}).next;
 const named: string | undefined = BUILTINS.work_list.response.parse({}).actors.actor?.name;
-void [ownerID, requesterID, ownerWithin, requesterWithin, workStatus, askInputs, listedMessage, listedWork, listedForm, next, named];
+void [ownerID, requesterID, workStatus, askInputs, listedMessage, listedWork, listedForm, next, named];
 
-const typedWorkFilter: z.input<typeof BUILTINS.work_list.request> = { ownerWithin: "branch" };
+const typedWorkFilter: z.input<typeof BUILTINS.work_list.request> = { ownerID: ["owner"] };
 const typedAskRead: z.input<typeof BUILTINS.work_get.request> = { askID: "ask" };
-// @ts-expect-error Subtree anchors are Actor IDs, not numbers.
-const invalidWorkFilter: z.input<typeof BUILTINS.work_list.request> = { ownerWithin: 1 };
+// @ts-expect-error Owners are Actor IDs, not numbers.
+const invalidWorkFilter: z.input<typeof BUILTINS.work_list.request> = { ownerID: 1 };
 // @ts-expect-error blocked is gone: Work that can't move asks.
 const invalidStatus: z.input<typeof BUILTINS.work_update.request> = { ticketID: "work", status: "blocked" };
 void [typedWorkFilter, typedAskRead, invalidWorkFilter, invalidStatus];

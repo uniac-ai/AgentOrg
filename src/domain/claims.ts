@@ -35,8 +35,8 @@ export function claims(claimStore: Store["claims"], registry: Registry, now: () 
   function release(actor: ActorRow, request: RequestOf<"release">): ClaimRow {
     const held = heldClaim(request.resource);
     if (!held) throw new NotFound(`nobody holds ${request.resource}`);
-    if (held.holder !== actor.id && actor.manager !== null) {
-      throw new Forbidden(`${heldMessage(held)}; only it or the root releases it`);
+    if (held.holder !== actor.id && registry.root()?.id !== actor.id) {
+      throw new Forbidden(`${heldMessage(held)}; only it or the person releases it`);
     }
     claimStore.remove(request.resource);
     return held;

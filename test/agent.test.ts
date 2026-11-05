@@ -116,30 +116,27 @@ test("Codex binds from each call, resumes the same actor, and gives a fork its o
     assert.equal(refused.isError, true);
     assert.match(text(refused), /^invalid: the client must identify its occupant session/);
   }
-  assert.equal(org.org.registry.reports(org.rootId).length, 0);
+  assert.equal(org.org.registry.open().length, 1, "only the person");
   assert.equal(existsSync(join(org.home, "sessions/codex-")), false);
   const [attached, competing] = await Promise.all([
     first.call("attach", { name: "codex", purpose: "Own Codex." }),
     first.call("attach", { name: "competing", purpose: "Another position." }),
   ]);
   assert.equal(competing.isError, true);
-  assert.equal(org.org.registry.reports(org.rootId).length, 1);
+  assert.equal(org.org.registry.open().length, 2);
   const { actor } = attached.structuredContent as { actor: string };
   assert.equal(
     readFileSync(join(org.home, "sessions/codex-codex-thread/position"), "utf8").trim(),
     actor,
   );
-  assert.equal(
-    Array.isArray((await first.call("team", { depth: 0 })).structuredContent?.positions),
-    true,
-  );
+  assert.equal(Array.isArray((await first.call("team", {})).structuredContent?.positions), true);
   for (const metadata of [{}, { threadId: "different-thread" }]) {
     assert.equal(
       (await first.call("actor_create", { name: "wrong", purpose: "Wrong" }, metadata)).isError,
       true,
     );
   }
-  assert.equal(org.org.registry.reports(actor).length, 0);
+  assert.equal(org.org.registry.open().length, 2);
   await first.close();
 
   const resumed = await session(org, "codex-thread", "codex");
@@ -148,10 +145,10 @@ test("Codex binds from each call, resumes the same actor, and gives a fork its o
     actor,
     created: false,
   });
-  const team = (await resumed.call("team", { depth: 0 })).structuredContent as {
+  const team = (await resumed.call("team", {})).structuredContent as {
     positions: { id: string }[];
   };
-  assert.equal(team.positions[0]?.id, actor);
+  assert.ok(team.positions.some((position) => position.id === actor));
   assert.equal(
     (await resumed.call("attach", { name: "another", purpose: "Another" })).isError,
     true,
@@ -247,7 +244,7 @@ test("the stdio catalog is stable and only attachment can act before a position 
   assert.deepEqual(team.output, teamOffer?.interface.output);
   assert.match(text(await one.tool("interfaces", { name: "nope" })), /^not_found:/);
   assert.equal((await one.tool("interfaces", { name: 1 })).isError, true);
-  const { actor: report, credential } = await org.org.registry.create(actor, "report", "A report");
+  const { actor: report, credential } = await org.org.registry.create("report", "A report");
   await org.client(credential);
   await until("the report's ordinary client is online", () =>
     org.org.connections.connected(report.id),
@@ -281,13 +278,13 @@ test("a session presents every Hub interface, and takes no level", async () => {
   await assert.rejects(session(org, "s-leveled", "claude-code", "report"));
 });
 
-test("an appointed session creates its position under the root, and a resumed one fills it again", async () => {
+test("an appointed session creates its Actor, and a resumed one fills it again", async () => {
   const org = await core();
   const first = await session(org, "s-appointed");
   const attached = await first.call("attach", { name: "storage", purpose: "Own the storage." });
   const { actor, created } = attached.structuredContent as { actor: string; created: boolean };
   assert.equal(created, true);
-  assert.equal(org.org.registry.get(actor)?.manager, org.rootId);
+  assert.equal(org.org.registry.get(actor)?.closed_at, null);
   const tools = await first.interfaces();
   assert.ok(tools.includes("actor_create") && !tools.includes("attach"), tools.join(", "));
   await until("the position is online", () => org.org.connections.connected(actor));
@@ -301,7 +298,7 @@ test("an appointed session creates its position under the root, and a resumed on
   assert.deepEqual(await resumed.tools(), ["attach", "call", "interfaces"]);
   const again = await resumed.call("attach", { name: "other", purpose: "A second position." });
   assert.equal(again.isError, true);
-  assert.equal(org.org.registry.reports(org.rootId).length, 1);
+  assert.equal(org.org.registry.open().length, 2);
 });
 
 test("the model receives execution failure while its created Actor credential remains private and usable", async () => {
@@ -458,9 +455,8 @@ test("a created position's credential is kept for its session, never shown, and 
   const report = await session(org, "s-report");
   const attached = await report.call("attach", { actor: id });
   assert.deepEqual(attached.structuredContent, { actor: id, created: false });
-  const team = await report.call("team", { depth: 0 });
-  const seen = team.structuredContent as { positions: { id: string }[] };
-  assert.equal(seen.positions[0]?.id, id);
+  const viewed = await report.call("actor_view", {});
+  assert.equal((viewed.structuredContent as { actor: { actorID: string } }).actor.actorID, id);
   const credential = readFileSync(file, "utf8").trim();
   for (const shown of [text(result), JSON.stringify(result), manager.log, report.log]) {
     assert.equal(shown.includes(credential), false);
@@ -485,16 +481,13 @@ test("the waiter frames each item with what to do, without claiming native user 
   const self = Position.parse({
     id: "self",
     name: "worker",
-    path: "team.worker",
     purpose: "Work",
-    manager: "manager",
     online: true,
     created_at: at,
     closed_at: null,
     state: "idle",
     headline: { subject: null, clause: null, more: 0, notStarted: 0, finished: null },
     asks: 0,
-    branchAsks: 0,
     lastActiveAt: null,
   });
   const message = (messageID: string, senderID: string, text: string) =>
@@ -519,7 +512,6 @@ test("the waiter frames each item with what to do, without claiming native user 
     status: "resolved",
     createdAt: at,
     responses: { manager: { answers: { choice: "v2" }, note: "Keep v1 readable", at } },
-    raises: [],
     revision: 2,
     updatedAt: at,
   });
@@ -559,7 +551,6 @@ test("the waiter frames each item with what to do, without claiming native user 
       at,
       work: submitted,
     },
-    { kind: "raised", recordID: "form1", from: lead, title: "Which schema?", at },
     { kind: "updated", recordID: "work1", from: lead, title: "Migrate the schema", at, work },
     { kind: "updated", recordID: "work4", from: lead, title: "Old plan", at, work: cancelled },
     { kind: "reviewed", recordID: "work1", from: lead, title: "Migrate the schema", at },
@@ -595,20 +586,17 @@ test("the waiter frames each item with what to do, without claiming native user 
   );
   assert.match(
     delivered,
-    /lead, your manager, answered your ask "Which schema\?" \(form1\): choice: v2\. Note: Keep v1 readable\. Apply it, then update "Migrate the schema" \(work1\)\. The ask records the answer; it is resolved\./,
+    /lead answered your ask "Which schema\?" \(form1\): choice: v2\. Note: Keep v1 readable\. Apply it, then update "Migrate the schema" \(work1\)\. The ask records the answer; it is resolved\./,
   );
   assert.match(
     delivered,
     /The conversation from your last message in it:\nyou \(msg0\): Merge the schema PR\?\nlead \(msg1\): Yes, after CI\.\nlead \(msg2\): Then the data\./,
   );
   assert.match(delivered, /Reply with message_send \{recipientID: manager\}/);
+  assert.match(delivered, /lead gave you Work "Index it" \(work2\)\. Read it with work_get/);
   assert.match(
     delivered,
-    /lead, your manager, gave you Work "Index it" \(work2\)\. Read it with work_get/,
-  );
-  assert.match(
-    delivered,
-    /storage routes you the ask "Delete the bucket\?" \(form2\)\. Read it with work_get \{askID: "form2"\}, then answer it with work_answer \{askID, answers, note\?\}, or raise it one manager up with work_answer \{askID, raise: true\}\./,
+    /storage routes you the ask "Delete the bucket\?" \(form2\)\. Read it with work_get \{askID: "form2"\}, then answer it with work_answer \{askID, answers, note\?\}\./,
   );
   assert.match(
     delivered,
@@ -616,30 +604,21 @@ test("the waiter frames each item with what to do, without claiming native user 
   );
   assert.match(
     delivered,
-    /lead, your manager, raised your ask "Which schema\?" \(form1\) to its manager; it stays open until someone answers it\./,
+    /lead changed your Work "Migrate the schema" \(work1\)\. Read it with work_get before your next write to it\./,
   );
   assert.match(
     delivered,
-    /lead, your manager, changed your Work "Migrate the schema" \(work1\)\. Read it with work_get before your next write to it\./,
+    /lead cancelled your Work "Old plan" \(work4\); its open asks are cancelled\. Stop working on it\./,
   );
   assert.match(
     delivered,
-    /lead, your manager, cancelled your Work "Old plan" \(work4\); its open asks are cancelled\. Stop working on it\./,
+    /lead answered your submission of "Migrate the schema" \(work1\)\. Read the answer with work_get/,
   );
   assert.match(
     delivered,
-    /lead, your manager, answered your submission of "Migrate the schema" \(work1\)\. Read the answer with work_get/,
+    /lead closed the Actor the submission of "Restore drill" \(work5\) waited on; it now waits for your answer\. Read the submission with work_get, then answer it with work_answer \{askID: "sub3", answers: \{verdict: "accepted" or "changes_requested"\}, note\?\}; requesting changes needs the note\./,
   );
-  // Where the session presents no work_answer, as at the Report level, the frames only read.
-  assert.match(
-    delivered,
-    /lead, your manager, closed the Actor the submission of "Restore drill" \(work5\) waited on; it now waits for your answer\. Read the submission with work_get, then answer it with work_answer \{askID: "sub3", answers: \{verdict: "accepted" or "changes_requested"\}, note\?\}; requesting changes needs the note\./,
-  );
-  assert.doesNotMatch(
-    delivered,
-    /lead, your manager, submitted/,
-    "the closer is not the submitter",
-  );
+  assert.doesNotMatch(delivered, /lead submitted/, "the closer is not the submitter");
   assert.doesNotMatch(delivered, /form_|work_review|cause/, "no removed tool is named");
   assert.match(delivered, /a native approval requires its client's validated binding/);
   assert.doesNotMatch(delivered, /only the user|recorded: true|the user \(the root\)/);
@@ -792,7 +771,7 @@ test("the waiter delivers what concerns its Actor from where it attached, never 
   assert.equal(woke.code, 2);
   assert.match(
     woke.stderr,
-    /root, your manager, sent you a message\. The conversation from your last message in it:/,
+    /root sent you a message\. The conversation from your last message in it:/,
   );
   assert.ok(woke.stderr.includes(`root (${id}): Start with the schema.`));
   assert.equal(woke.stderr.includes(own.ticketID), false, "own writes are never items");
@@ -838,7 +817,7 @@ test("the waiter delivers what concerns its Actor from where it attached, never 
   assert.equal(answered.code, 2);
   assert.match(
     answered.stderr,
-    /root, your manager, answered your ask "Which schema\?" \(.+\): choice: v2\. Note: Go\. Apply it, then update "Own Work"/,
+    /root answered your ask "Which schema\?" \(.+\): choice: v2\. Note: Go\. Apply it, then update "Own Work"/,
   );
   assert.deepEqual(await hook(org, "wait", "s-waited", { CLAUDE_PID: "999999" }), {
     code: 0,
@@ -863,14 +842,16 @@ test("the waiter frames how to answer an ask and a submission", async () => {
       readFileSync(join(org.home, "actors", created.actor.id), "utf8").trim(),
     );
     const value = <T>(answer: unknown) => (answer as { value: T }).value;
-    const own = value<{ ticketID: string }>(
-      await helper.call("work_create", { title: "Pick one" }),
-    );
+    // The session's Actor requested the Work, so the helper's ask on it routes to that Actor.
+    const picking = (
+      await manager.call("work_create", { ownerID: created.actor.id, title: "Pick one" })
+    ).structuredContent as { ticketID: string };
     await helper.call("work_update", {
-      ticketID: own.ticketID,
+      ticketID: picking.ticketID,
       ask: { title: "Which one?", fields: [{ name: "choice", label: "Choose", required: true }] },
     });
-    // Work the manager requested and its report submits, and Work the root gives it and cancels.
+    // Work the session's Actor requested and the helper submits, and Work the person gives it
+    // and cancels.
     const requested = (
       await manager.call("work_create", { ownerID: created.actor.id, title: "Prove it" })
     ).structuredContent as { ticketID: string };
@@ -895,7 +876,7 @@ test("the waiter frames how to answer an ask and a submission", async () => {
     );
     assert.match(
       woke.stderr,
-      /root, your manager, cancelled your Work "Old plan" \(.+\); its open asks are cancelled\./,
+      /root cancelled your Work "Old plan" \(.+\); its open asks are cancelled\./,
     );
     const answering = `answer it with work_answer {askID: "${submitted.submission.submissionID}"`;
     assert.match(woke.stderr, /then answer it with work_answer \{askID, answers, note\?\}/);

@@ -43,18 +43,12 @@ export const Actor = z
   .strictObject({
     id: Id.describe("Issued by the core."),
     name: Handle,
-    path: z
-      .string()
-      .describe(
-        "The handles from the root's report down to this actor, joined by dots, as the root names it; empty for the root.",
-      ),
     purpose: Text,
-    manager: Id.nullable().describe("The managing actor; null for the root."),
     online: z.boolean().describe("True while the Actor has an admitted Hub connection."),
     created_at: Timestamp,
     closed_at: Timestamp.nullable(),
   })
-  .meta({ id: "Actor", description: "A position in the organization, with its manager." });
+  .meta({ id: "Actor", description: "An Actor in the organization, on its one flat level." });
 
 export const AuditEntry = z
   .strictObject({
@@ -72,6 +66,6 @@ export const AuditEntry = z
   .meta({ id: "AuditEntry" });
 
 /** Durable identity and lifecycle; connection state is owned separately. */
-export const ActorRecord = Actor.omit({ path: true, online: true }).extend({
+export const ActorRecord = Actor.omit({ online: true }).extend({
   credential_hash: z.string(),
 });

@@ -21,7 +21,7 @@ test("an explicitly composed module binds discovery and dispatch to its own prin
   const now = () => "2026-10-30T00:00:00.000Z";
   const actors = registry(store.actors, now);
   const { root } = await actors.createRoot();
-  const { actor: worker } = await actors.create(root.id, "worker", "Work");
+  const { actor: worker } = await actors.create("worker", "Work");
   const definition = toolDefinition("owned", {
     owned_write: {
       description: "An operation owned by this module.",
@@ -33,7 +33,7 @@ test("an explicitly composed module binds discovery and dispatch to its own prin
   let writes = 0;
   const tool = bindTool(definition, {
     owned_write: (actor, request) => {
-      if (actor.manager !== null) throw new Forbidden("only the root writes this module");
+      if (actor.id !== actors.root()?.id) throw new Forbidden("only the person writes this module");
       writes += 1;
       return { actor: actor.id, value: request.value };
     },

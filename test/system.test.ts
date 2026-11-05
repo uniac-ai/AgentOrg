@@ -178,7 +178,7 @@ test("System is equally offered to active Actors; observations and sparse pages 
   );
 });
 
-test("Actor detach uses canonical self-other/direct-manager/root authority and preserves revocation", async (t) => {
+test("Actor detach uses canonical self-other/person authority and preserves revocation", async (t) => {
   const { core, root, make } = await fixture(t);
   const lead = await make("lead");
   const worker = await make("worker", lead.client);
@@ -186,9 +186,10 @@ test("Actor detach uses canonical self-other/direct-manager/root authority and p
   const outsider = await make("outsider");
   const raw = await socket(t, core, { actorId: worker.id, credential: worker.credential });
   const query = { connectionId: raw.connectionId };
-  for (const client of [root, lead.client, worker.client])
+  for (const client of [root, worker.client])
     assert.equal((await page(client, query)).items[0]?.canDisconnect, true);
-  for (const client of [grandchild.client, outsider.client]) {
+  // The Actor that created it has no more say than any other.
+  for (const client of [lead.client, grandchild.client, outsider.client]) {
     const row = (await page(client, query)).items[0];
     assert.equal(row?.canDisconnect, false);
     assert.equal(row?.blockedBy, "forbidden");
@@ -230,10 +231,10 @@ test("Actor detach uses canonical self-other/direct-manager/root authority and p
     { instanceId, connectionId: raw.connectionId, closed: true },
   );
   assert.equal(await raw.closed, 1000);
-  assert.equal((await done(worker.client.call("team", { depth: 0 }))).positions[0].closed_at, null);
+  assert.equal((await done(worker.client.call("actor_view", {}))).actor.closed_at, null);
   const another = await socket(t, core, { actorId: worker.id, credential: worker.credential });
   await done(
-    lead.client.call("connection_disconnect", { instanceId, connectionId: another.connectionId }),
+    root.call("connection_disconnect", { instanceId, connectionId: another.connectionId }),
   );
   assert.equal(await another.closed, 1000);
   const reconnecting = await core.client(worker.credential);
@@ -546,7 +547,7 @@ test("Message success, refusal, validation, storage and postcommit audit failure
   assert.equal(await refused(root.call("UNKNOWN_OPERATION_SECRET", {})), "not_found");
   assert.equal(recorded.mock.callCount(), 0);
   assert.equal(
-    await refused(observer.client.call("actor_close", { actor: sender.id })),
+    await refused(observer.client.call("actor_close", { actor: observer.id })),
     "forbidden",
   );
   const publicEvents = (await status(observer.client)).diagnostics.items;

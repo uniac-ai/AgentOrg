@@ -66,7 +66,7 @@ test("Actor admission requires the matching credential and refuses a browser Ori
 test("multiple admitted caller sockets coexist and presence ends only after the last closes", async (t) => {
   const core = await startCore();
   t.after(() => core.close());
-  const { actor, credential } = await core.org.registry.create(core.rootId, "worker", "Work");
+  const { actor, credential } = await core.org.registry.create("worker", "Work");
   assert.equal(core.org.connections.connected(actor.id), false);
   const first = await core.client(credential);
   const second = await core.client(credential);
@@ -83,7 +83,7 @@ test("multiple admitted caller sockets coexist and presence ends only after the 
 test("Actor closure revokes every admitted socket and refuses its credential thereafter", async (t) => {
   const core = await startCore();
   t.after(() => core.close());
-  const { actor, credential } = await core.org.registry.create(core.rootId, "worker", "Work");
+  const { actor, credential } = await core.org.registry.create("worker", "Work");
   const first = await core.client(credential);
   const second = await core.client(credential);
   const root = await core.client(core.root);

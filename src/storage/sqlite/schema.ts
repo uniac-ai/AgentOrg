@@ -65,7 +65,8 @@ CREATE TABLE audit (
 `;
 
 export const TABLES = {
-  actors: ActorRecord,
+  // The unused manager column stays in the file; an Actor row neither reads nor writes it.
+  actors: ActorRecord.strip(),
   claims: Claim,
   audit: AuditEntry,
 } as const;

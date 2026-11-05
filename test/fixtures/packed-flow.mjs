@@ -158,10 +158,10 @@ try {
   await otherOwner.close();
   for (const [name, filters] of [
     ["message_list", ["between", "counterpartyID", "of", "before", "after"]],
-    ["work_list", ["ownerWithin", "requesterWithin", "updatedSince", "order"]],
+    ["work_list", ["ownerID", "requesterID", "updatedSince", "order"]],
     ["work_get", ["ticketID", "askID"]],
     ["work_update", ["ticketID", "ask", "close"]],
-    ["work_answer", ["askID", "answers", "note", "raise"]],
+    ["work_answer", ["askID", "answers", "note"]],
   ]) {
     const offer = catalog
       .flatMap((tool) => tool.interfaces)
@@ -172,8 +172,11 @@ try {
   // Every Actor is offered the whole catalog: no interface carries a level.
   for (const offer of catalog.flatMap((tool) => tool.interfaces))
     assert.deepEqual(Object.keys(offer).sort(), ["call", "interface", "read_only"]);
-  assert.equal((await done(owner.call("team", { depth: 0 }))).positions[0].id, ownerID);
-  assert.equal((await done(root.call("team", { depth: 20 }))).positions.length, 3);
+  // Every open Actor on one level, oldest first: the person, then the two it created.
+  assert.deepEqual(
+    (await done(owner.call("team", {}))).positions.map((position) => position.id),
+    [rootID, ownerID, requesterID],
+  );
   const sent = Message.parse(
     await done(
       owner.call("message_send", { recipientID: requesterID, text: "Immutable P2P fixture" }),
@@ -184,7 +187,7 @@ try {
   assert.deepEqual(await done(requester.call("message_get", { messageID: sent.messageID })), sent);
   const page = await done(requester.call("message_list", { counterpartyID: ownerID, limit: 1 }));
   assert.deepEqual(page.items, [sent]);
-  // Each ask is on Work its asker owns.
+  // Each ask is on Work its asker owns; on Work it requested itself, the ask goes to the person.
   const publishing = Work.parse(
     await done(requester.call("work_create", { title: "Publish the fixture" })),
   );
@@ -215,7 +218,7 @@ try {
   });
   const listedAsks = await done(
     root.call("work_list", {
-      ownerWithin: requesterID,
+      ownerID: [requesterID],
       requesterID: [requesterID, ownerID],
       status: ["open"],
       limit: 1,
@@ -283,10 +286,8 @@ try {
     (
       await done(
         root.call("work_list", {
-          ownerWithin: ownerID,
-          requesterWithin: requesterID,
-          ownerID,
-          requesterID,
+          ownerID: [ownerID],
+          requesterID: [requesterID],
           status: ["open"],
         }),
       )
@@ -294,16 +295,12 @@ try {
     [{ ...work, asks: [] }],
   );
   for (const name of ["ownerWithin", "requesterWithin"])
-    assert.deepEqual(await done(root.call("work_list", { [name]: "unknown" })), {
-      items: [],
-      next: null,
-      actors: {},
-    });
+    await deny(root.call("work_list", { [name]: ownerID }), "invalid");
   await deny(
     root.call("work_update", { ticketID: work.ticketID, progress: "Not owner" }),
     "forbidden",
   );
-  assert.equal((await done(root.call("team", { depth: 0 }))).positions[0].id, rootID);
+  assert.equal((await done(root.call("team", {}))).positions[0].id, rootID);
   work = Work.parse(
     await done(
       owner.call("work_update", {
@@ -342,9 +339,9 @@ try {
   await done(owner.call("claim", { resource: "owned-lane", note: "Verification" }));
   await deny(requester.call("claim", { resource: "owned-lane", note: "Competing" }), "conflict");
   await done(owner.call("release", { resource: "owned-lane" }));
-  const team = await done(owner.call("team", { depth: 0 }));
-  assert.deepEqual(Object.keys(team).sort(), ["positions", "root"]);
-  assert.equal(team.positions[0].online, true);
+  const team = await done(owner.call("team", {}));
+  assert.deepEqual(Object.keys(team), ["positions"]);
+  assert.equal(team.positions.find((position) => position.id === ownerID).online, true);
   const audit = await done(root.call("activity"));
   assert.equal(JSON.stringify(audit).includes(sent.text), false);
   assert.equal(JSON.stringify([work, form, audit]).includes("read_at"), false);
@@ -439,9 +436,7 @@ try {
   );
   await owner.close();
   await done(root.call("actor_close", { actor: ownerID }));
-  assert.ok(
-    (await done(requester.call("team", { actor: ownerID, depth: 0 }))).positions[0].closed_at,
-  );
+  assert.ok((await done(requester.call("actor_view", { actorID: ownerID }))).actor.closed_at);
   assert.deepEqual(
     (
       await done(
@@ -450,12 +445,10 @@ try {
     ).items,
     [unseenQuery, ownQuery],
   );
-  assert.equal((await done(root.call("team", { depth: 20 }))).positions.length, 2);
-  assert.deepEqual(
-    (await done(root.call("work_list", { ownerWithin: ownerID, requesterWithin: requesterID })))
-      .items,
-    [{ ...work, asks: [] }],
-  );
+  assert.equal((await done(root.call("team", {}))).positions.length, 2);
+  assert.deepEqual((await done(root.call("work_list", { ownerID, requesterID }))).items, [
+    { ...work, asks: [] },
+  ]);
   assert.deepEqual((await done(root.call("work_get", { ticketID: lanes.ticketID }))).asks, [
     question,
   ]);
@@ -487,11 +480,11 @@ try {
     workspaceBundled: true,
     publicWorkFormHistory: true,
     noLevelTags: true,
-    approvalManagerChain: true,
+    approvalToPerson: true,
     askerClose: true,
-    subtreeFilters: true,
-    closedSubtreeHistory: true,
-    discoverySubtreeSchemas: true,
+    ownerAndRequesterListFilters: true,
+    closedActorHistory: true,
+    flatTeam: true,
     restartPersistence: true,
     systemStatusAndSchemas: true,
     systemConnectionAuthority: true,

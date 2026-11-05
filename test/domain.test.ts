@@ -17,8 +17,8 @@ test("all open Actors see exactly eight Hub Tools and twenty-one interfaces", as
   t.after(() => store.close());
   const org = organization(store);
   const { root } = await org.registry.createRoot();
-  const { actor: lead } = await org.registry.create(root.id, "manager", "Lead");
-  const { actor: worker } = await org.registry.create(lead.id, "worker", "Work");
+  const { actor: lead } = await org.registry.create("manager", "Lead");
+  const { actor: worker } = await org.registry.create("worker", "Work");
   const catalog = org.available(root.id);
   const grouped = Object.fromEntries(
     catalog.map((tool) => {
@@ -61,7 +61,7 @@ test("all open Actors see exactly eight Hub Tools and twenty-one interfaces", as
   assert.deepEqual(org.available(worker.id), catalog);
 });
 
-test("lifecycle authority and leaf closure are checked by the Actors Tool", async (t) => {
+test("lifecycle authority is checked by the Actors Tool: any Actor closes another, never the person", async (t) => {
   const store = new SqliteStore(":memory:");
   t.after(() => store.close());
   const org = organization(store);
@@ -82,17 +82,26 @@ test("lifecycle authority and leaf closure are checked by the Actors Tool", asyn
     "invalid",
   );
   assert.equal(
-    await refused(invoke(other.actor.id, "actor_close", { actor: worker.actor.id })),
+    await refused(invoke(other.actor.id, "actor_create", { name: "lead", purpose: "Twin" })),
+    "conflict",
+  );
+  assert.equal(await refused(invoke(lead.actor.id, "actor_close", { actor: root.id })), "invalid");
+  assert.equal(
+    await refused(invoke(lead.actor.id, "actor_close", { actor: lead.actor.id })),
     "forbidden",
   );
-  assert.equal(await refused(invoke(root.id, "actor_close", { actor: lead.actor.id })), "conflict");
-  const closed = await done(invoke(lead.actor.id, "actor_close", { actor: worker.actor.id }));
+  // Another Actor, not its creator, closes it.
+  const closed = await done(invoke(other.actor.id, "actor_close", { actor: worker.actor.id }));
   assert.deepEqual(Object.keys(closed), ["actor"]);
   assert.ok(closed.actor.closed_at);
   assert.deepEqual(org.available(worker.actor.id), []);
   assert.equal(await refused(invoke(worker.actor.id, "team")), "forbidden");
   await done(invoke(root.id, "actor_close", { actor: lead.actor.id }));
-  const team = await done(invoke(root.id, "team", { depth: 5 }));
+  const team = await done(invoke(root.id, "team"));
+  assert.deepEqual(
+    team.positions.map((position: { id: string }) => position.id),
+    [root.id, other.actor.id],
+  );
   for (const position of team.positions) {
     assert.equal("interfaces" in position, false);
     assert.equal("created_at_attach" in position, false);
@@ -186,7 +195,7 @@ test("a version 3 Workspace store is served on open: an ask with no Work alone, 
   const first = new SqliteStore(path);
   const { registry } = organization(first);
   const { root } = await registry.createRoot();
-  const { actor: worker } = await registry.create(root.id, "worker", "Work");
+  const { actor: worker } = await registry.create("worker", "Work");
   first.close();
   // A version 3 Workspace store, written raw: user_version 3, with a Status table.
   const file = join(directory, "core.workspace.db");
@@ -232,9 +241,9 @@ test("a version 3 Workspace store is served on open: an ask with no Work alone, 
   const org = organization(store);
   const asked = await done(org.invoke(root.id, "work_get", { askID: "orphan" }, invocation));
   const { cause: _cause, ...read } = orphan;
-  assert.deepEqual(asked, { ...read, raises: [], revision: 1, updatedAt: at });
-  const team = await done(org.invoke(root.id, "team", { actor: worker.id, depth: 0 }, invocation));
-  const [position] = team.positions;
+  assert.deepEqual(asked, { ...read, revision: 1, updatedAt: at });
+  const team = await done(org.invoke(root.id, "team", {}, invocation));
+  const position = team.positions.find((each: { id: string }) => each.id === worker.id);
   assert.deepEqual(
     [position.state, position.headline.subject, position.asks],
     ["active", { ticketID: "held", title: "Held", state: "active" }, 1],
@@ -246,8 +255,8 @@ test("every open Actor reads audit metadata, which discloses no message bodies o
   t.after(() => store.close());
   const org = organization(store);
   const { root, credential: rootCredential } = await org.registry.createRoot();
-  const { actor, credential } = await org.registry.create(root.id, "worker", "Work");
-  const { actor: other } = await org.registry.create(root.id, "other", "Other work");
+  const { actor, credential } = await org.registry.create("worker", "Work");
+  const { actor: other } = await org.registry.create("other", "Other work");
   const invoke = (id: string, name: string, input: Record<string, unknown> = {}) =>
     org.invoke(id, name, input, invocation);
   const secret = "private-message-body-sentinel";

@@ -12,22 +12,14 @@ export { ACTORS as definition } from "./model/index.ts";
 export function actors(registry: Registry, connections: Connections, execution: ExecutionClient) {
   function view(actor: ActorRow): ActorView {
     const { credential_hash: _, ...identity } = actor;
-    return {
-      ...identity,
-      path: registry.path(actor),
-      online: connections.connected(actor.id),
-    };
+    return { ...identity, online: connections.connected(actor.id) };
   }
 
   return {
     view,
     tool: bindTool(ACTORS, {
-      actor_create: async (actor, request) => {
-        const { actor: created, credential } = await registry.create(
-          actor.id,
-          request.name,
-          request.purpose,
-        );
+      actor_create: async (_actor, request) => {
+        const { actor: created, credential } = await registry.create(request.name, request.purpose);
         const outcome =
           request.execution === undefined
             ? undefined

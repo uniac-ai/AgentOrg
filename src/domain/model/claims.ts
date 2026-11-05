@@ -36,6 +36,6 @@ export const CLAIMS = toolDefinition("claims", {
     writes: true,
     request: ReleaseRequest,
     response: Claim,
-    description: "Release a shared resource you hold; the root may release any.",
+    description: "Release a shared resource you hold; the person may release any.",
   },
 });

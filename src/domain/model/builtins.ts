@@ -76,7 +76,7 @@ export const ACTORS = toolDefinition("actors", {
     writes: true,
     request: ActorCreate,
     response: ActorCreated,
-    description: `Create a direct report: a position that you manage.
+    description: `Create an Actor, on the organization's one level beside every other.
 
 Returns the actor and its credential, shown only this once. Whatever fills the position connects to the core with it.
 
@@ -86,9 +86,9 @@ With execution, wait for the Provider and return its separate ready, failed or u
     writes: true,
     request: ActorClose,
     response: ActorClosed,
-    description: `Close a direct report whose work is done; the root may close any actor.
+    description: `Close another Actor whose work is done. Any open Actor may close any other; the person is never closed.
 
-Refused while it has open reports of its own. Its Hub connections close.`,
+Its Hub connections close. Its part passes to the person: the Work it requested and the asks waiting on it.`,
   },
 });
 

@@ -1,4 +1,4 @@
-/** Identity, actor tree and authorized lifecycle transitions, with credentials hashed by Web Crypto. */
+/** Identity on one flat level and lifecycle transitions, with credentials hashed by Web Crypto. */
 
 import { Conflict, Forbidden, Invalid, NotFound } from "./errors.ts";
 import type { ActorRow, Store } from "./ports.ts";
@@ -28,43 +28,25 @@ export function registry(actors: Store["actors"], now: () => string) {
   /** The person, at the root: the first Actor this Hub made, the one place that says so. */
   const root = () => actors.first();
   const get = (id: string) => actors.get(id);
-  const reports = (manager: string) => actors.reports(manager);
   const open = () => actors.open();
 
-  /** The Actor while it is open, else its nearest open manager, who takes its part. */
+  /** The Actor while it is open; once it is closed, the person, who takes its part. */
   function standIn(actorID: string): string | undefined {
-    for (let at = get(actorID); at; at = at.manager === null ? undefined : get(at.manager))
-      if (at.closed_at === null) return at.id;
-    return undefined;
+    const actor = get(actorID);
+    return actor === undefined ? undefined : actor.closed_at === null ? actor.id : root()?.id;
   }
 
-  /** Inclusive ancestry through retained positions, including closed Actors. */
-  function within(actorID: string, ancestorID: string): boolean {
-    if (get(ancestorID) === undefined) return false;
-    const visited = new Set<string>();
-    for (
-      let at = get(actorID);
-      at !== undefined && !visited.has(at.id);
-      at = at.manager === null ? undefined : get(at.manager)
-    ) {
-      if (at.id === ancestorID) return true;
-      visited.add(at.id);
-    }
-    return false;
-  }
-
-  /** Create the root, the user's position, and return its credential. */
+  /** Create the person, the user's Actor, and return its credential. */
   async function createRoot(): Promise<{ root: ActorRow; credential: string }> {
     const { credential, hash } = await mint();
     return {
-      root: insert(null, "root", "The user, at the organization's root.", hash),
+      root: insert("root", "The user: the person these Actors work for.", hash),
       credential,
     };
   }
 
-  /** Create a report of `manager` and return it with its credential. */
+  /** Create an Actor and return it with its credential. */
   async function create(
-    manager: string,
     name: string,
     purpose: string,
   ): Promise<{ actor: ActorRow; credential: string }> {
@@ -73,7 +55,7 @@ export function registry(actors: Store["actors"], now: () => string) {
     if (open().some((actor) => actor.name === name)) {
       throw new Conflict(`an open Actor is already named ${name}`);
     }
-    return { actor: insert(manager, name, purpose, hash), credential };
+    return { actor: insert(name, purpose, hash), credential };
   }
 
   async function mint(): Promise<{ credential: string; hash: string }> {
@@ -81,12 +63,11 @@ export function registry(actors: Store["actors"], now: () => string) {
     return { credential, hash: await digest(credential) };
   }
 
-  function insert(manager: string | null, name: string, purpose: string, hash: string): ActorRow {
+  function insert(name: string, purpose: string, hash: string): ActorRow {
     const actor: ActorRow = {
       id: newId("act"),
       name,
       purpose,
-      manager,
       credential_hash: hash,
       created_at: now(),
       closed_at: null,
@@ -118,39 +99,23 @@ export function registry(actors: Store["actors"], now: () => string) {
     return (await byCredential(credential))?.id;
   }
 
-  /** Close an authorized leaf position; repeat closure leaves its timestamp unchanged. */
+  /** Close another Actor, never the person; repeat closure leaves its timestamp unchanged. */
   function close(caller: ActorRow, id: string): { actor: ActorRow; changed: boolean } {
     const target = found(id);
-    if (target.manager === null) throw new Invalid("the root is never closed");
-    if (target.manager !== caller.id && caller.manager !== null) {
-      throw new Forbidden(`only its manager or the root closes ${target.name}`);
-    }
+    if (target.id === root()?.id) throw new Invalid("the person is never closed");
+    if (target.id === caller.id) throw new Forbidden("an Actor closes others, not itself");
     if (target.closed_at !== null) return { actor: target, changed: false };
-    const children = reports(id);
-    if (children.length > 0) {
-      const names = children.map((report) => report.name).join(", ");
-      throw new Conflict(`${target.name} has open reports (${names}); close them first`);
-    }
     const actor = { ...target, closed_at: now() };
     actors.update(actor);
     return { actor, changed: true };
   }
 
-  /** The handles from the root's report down to the actor, joined by dots; empty for the root. */
-  function path(actor: ActorRow): string {
-    const handles: string[] = [];
-    for (let at: ActorRow | undefined = actor; at?.manager; at = get(at.manager)) {
-      handles.unshift(at.name);
-    }
-    return handles.join(".");
-  }
-
-  /** Each of these actors by id: its path, or for the root its name. */
+  /** Each of these actors by id: its handle. */
   function names(ids: Iterable<string>): Record<string, string> {
     const named: Record<string, string> = {};
     for (const id of new Set(ids)) {
       const actor = get(id);
-      if (actor) named[id] = path(actor) || actor.name;
+      if (actor) named[id] = actor.name;
     }
     return named;
   }
@@ -163,12 +128,9 @@ export function registry(actors: Store["actors"], now: () => string) {
     found,
     byCredential,
     identify,
-    reports,
     open,
-    within,
     standIn,
     close,
-    path,
     names,
   };
 }
