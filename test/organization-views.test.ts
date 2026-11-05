@@ -321,6 +321,19 @@ test("an approval is answered only by the Actor it routes to, never its asker, a
     root.call("work_answer", { askID: approval.formID, answers: { answer: "Approved" } }),
   );
   assert.deepEqual(Object.keys(approval.responses).sort(), [core.rootId, requester.id].sort());
+  // An approval that routes back to its asker, as the person's on Work it requested itself, has
+  // no one to answer it: the asker never answers its own.
+  const own = await done(root.call("work_create", { title: "The person's own" }));
+  const mine = await done(
+    root.call("work_update", {
+      ticketID: own.ticketID,
+      ask: { title: "Approve mine", fields, approval: true },
+    }),
+  );
+  assert.equal(
+    await refused(root.call("work_answer", { askID: mine.formID, answers: { answer: "Yes" } })),
+    "forbidden",
+  );
   for (const other of [observer.client, root])
     assert.equal(
       await refused(
