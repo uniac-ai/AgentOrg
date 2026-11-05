@@ -169,21 +169,9 @@ try {
     assert.ok(offer);
     for (const filter of filters) assert.ok(offer.interface.input.properties[filter]);
   }
-  const levels = Object.fromEntries(
-    catalog.flatMap((tool) => tool.interfaces).map((offer) => [offer.call, offer.level]),
-  );
-  assert.deepEqual(
-    [
-      "work_update",
-      "work_answer",
-      "message_send",
-      "message_list",
-      "message_get",
-      "team",
-      "actor_create",
-    ].map((name) => levels[name]),
-    ["report", "team", "report", "report", "team", "team", "organization"],
-  );
+  // Every Actor is offered the whole catalog: no interface carries a level.
+  for (const offer of catalog.flatMap((tool) => tool.interfaces))
+    assert.deepEqual(Object.keys(offer).sort(), ["call", "interface", "read_only"]);
   assert.equal((await done(owner.call("team", { depth: 0 }))).positions[0].id, ownerID);
   assert.equal((await done(root.call("team", { depth: 20 }))).positions.length, 3);
   const sent = Message.parse(
@@ -498,7 +486,7 @@ try {
     workspaceVersion: pin.version,
     workspaceBundled: true,
     publicWorkFormHistory: true,
-    levelTags: true,
+    noLevelTags: true,
     approvalManagerChain: true,
     askerClose: true,
     subtreeFilters: true,
