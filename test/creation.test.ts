@@ -109,14 +109,14 @@ test("the provisioned Actor uses Hub MCP without a reverse server while its Prov
     return value;
   });
   const request = await launch;
-  assert.equal(core.org.registry.get(request.params.actorId)?.manager, core.rootId);
+  assert.equal(core.org.registry.get(request.params.actorId)?.closed_at, null);
   const actor = await connectClient({
     url: core.url,
     actorId: request.params.actorId,
     credential: request.params.credential,
   });
   t.after(() => actor.close());
-  assert.equal((await actor.call("team", { depth: 0 })).state, "done");
+  assert.equal((await actor.call("team", {})).state, "done");
   assert.equal(
     (await actor.available()).length,
     8,
@@ -155,7 +155,7 @@ test("schema or descriptor failures retain the Actor and its valid credential wi
   assert.equal(core.org.registry.get(value.actor.id)?.closed_at, null);
 });
 
-test("valid Zod configuration reaches the Provider unchanged and creates a direct report of the caller", async (t) => {
+test("valid Zod configuration reaches the Provider unchanged and creates an Actor beside the caller", async (t) => {
   const { core, root, requests } = await fixture(t, {
     schema: z.toJSONSchema(z.strictObject({ project: z.string() })),
   });
@@ -164,7 +164,14 @@ test("valid Zod configuration reaches the Provider unchanged and creates a direc
   );
   const manager = await core.client(managerValue.credential);
   const value = await done(manager.call("actor_create", input("report", { project: "example" })));
-  assert.equal(value.actor.manager, managerValue.actor.id);
+  assert.deepEqual(Object.keys(value.actor).sort(), [
+    "closed_at",
+    "created_at",
+    "id",
+    "name",
+    "online",
+    "purpose",
+  ]);
   assert.equal(value.execution.status, "ready");
   assert.deepEqual(requests[1]?.params.config, { project: "example" });
 });

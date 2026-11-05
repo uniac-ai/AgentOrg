@@ -67,8 +67,7 @@ async function peer(t: TestContext, core: Core, identity: Identity) {
 test("ordinary callers list and call explicit Hub Tools without a reverse server", async (t) => {
   const core = await startCore();
   t.after(() => core.close());
-  const { actor: lead } = await core.org.registry.create(core.rootId, "lead", "Lead");
-  const { actor: worker, credential } = await core.org.registry.create(lead.id, "worker", "Work");
+  const { actor: worker, credential } = await core.org.registry.create("worker", "Work");
   const root = await peer(t, core, { actorId: core.rootId, credential: core.root });
   const child = await peer(t, core, { actorId: worker.id, credential });
   for (const caller of [root, child]) {
@@ -79,11 +78,7 @@ test("ordinary callers list and call explicit Hub Tools without a reverse server
       tools.map((tool) => tool.name).sort(),
       Object.values(HUB_INTERFACES).flat().sort(),
     );
-    const team = await caller.request(
-      "tools/call",
-      { name: "team", arguments: { depth: 0 } },
-      "team",
-    );
+    const team = await caller.request("tools/call", { name: "team", arguments: {} }, "team");
     assert.ok(
       Array.isArray(
         team.result?.structuredContent &&
@@ -95,15 +90,11 @@ test("ordinary callers list and call explicit Hub Tools without a reverse server
   assert.equal(core.org.connections.connected(worker.id), true);
 });
 
-test("root, hierarchy and unsolicited advertisements never expose or invoke Actor interfaces", async (t) => {
+test("the person, other Actors and unsolicited advertisements never expose or invoke Actor interfaces", async (t) => {
   const core = await startCore();
   t.after(() => core.close());
-  const { actor: lead, credential: leadCredential } = await core.org.registry.create(
-    core.rootId,
-    "lead",
-    "Lead",
-  );
-  const { actor: worker, credential } = await core.org.registry.create(lead.id, "worker", "Work");
+  const { credential: leadCredential } = await core.org.registry.create("lead", "Lead");
+  const { actor: worker, credential } = await core.org.registry.create("worker", "Work");
   const advertiser = await peer(t, core, { actorId: worker.id, credential });
   await advertiser.initialize();
   const advertised = {
@@ -170,7 +161,7 @@ test("credential omission requires explicit policy and never accepts a supplied 
 test("a second admission request cannot rebind an Actor's connection", async (t) => {
   const core = await startCore();
   t.after(() => core.close());
-  const { actor, credential } = await core.org.registry.create(core.rootId, "other", "Other");
+  const { actor, credential } = await core.org.registry.create("other", "Other");
   const root = await peer(t, core, { actorId: core.rootId, credential: core.root });
   await root.initialize();
   const refused = await root.request(
@@ -179,7 +170,7 @@ test("a second admission request cannot rebind an Actor's connection", async (t)
     "rebind",
   );
   assert.equal(refused.error?.data?.code, "identity_fixed");
-  const team = await root.request("tools/call", { name: "team", arguments: { depth: 0 } }, "team");
+  const team = await root.request("tools/call", { name: "team", arguments: {} }, "team");
   assert.ok(team.result);
   assert.equal(
     (team.result.structuredContent as { positions: { id: string }[] }).positions[0]?.id,

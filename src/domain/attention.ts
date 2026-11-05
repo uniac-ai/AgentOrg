@@ -1,12 +1,13 @@
 /**
  * What concerns an Actor, read from the audited writes after its position, by the next mover.
- * On its records: Work given to it or changed by its requester, an answer to its
- * submission, an answer to its ask or the ask's raise, and a message to it. Routed to it, or to a
- * closed Actor it stands in for: an ask from a report or raised to it while the ask is open and
- * with it, and a submission of Work it requested while the submission waits. Closing an Actor gives
- * its stand-in an ask for each open ask the close re-routes and a review_due for each waiting
- * submission, from the Actor that closed it; a stand-in that closed it gets none, as its own
- * write. A read that finds nothing waits for the next audited write, up to `wait` seconds.
+ * On its records: Work given to it or changed by its requester, an answer to its submission, an
+ * answer to its ask, and a message to it. Routed to it: an ask on Work it requested while the ask
+ * is open and still routed to it, and a submission of Work it requested while the submission
+ * waits. The person also gets the asks on Work their asker requested itself or on no Work, and
+ * stands in for closed Actors: closing one gives it an ask for each open ask the close re-routes
+ * and a review_due for each waiting submission, from the Actor that closed it, or none when the
+ * person closed it, as its own write. A read that finds nothing waits for the next audited write,
+ * up to `wait` seconds.
  */
 
 import type { WorkspaceClients } from "@uniac/agentic-workspace";
@@ -58,11 +59,16 @@ export function attention(registry: Registry, audit: Audit, workspace: Workspace
     }
   }
 
-  /** The Actor an open ask waits on: its last raiser's, else its asker's, nearest open manager. */
-  function routeOf(ask: Form): string | undefined {
-    const origin = ask.raises.at(-1)?.actorID ?? ask.requesterID;
-    const manager = registry.get(origin)?.manager;
-    return ask.status === "open" && manager ? registry.standIn(manager) : undefined;
+  /**
+   * The Actor an open ask waits on: its Work's requester, or the person when its asker requested
+   * the Work itself or it names no Work. A closed requester's asks go to the person.
+   */
+  function routeOf(ask: Form, reads: ReturnType<typeof reader>): string | undefined {
+    if (ask.status !== "open") return undefined;
+    const requester = ask.workID === undefined ? undefined : reads.work(ask.workID)?.requesterID;
+    return requester !== undefined && requester !== ask.requesterID
+      ? registry.standIn(requester)
+      : registry.root()?.id;
   }
 
   /**
@@ -155,20 +161,10 @@ export function attention(registry: Registry, audit: Audit, workspace: Workspace
           );
         return works.get(id);
       },
-      /** The open asks routed to the caller, and submitted Work requested in its branch. */
+      /** The open asks routed to the caller. */
       routing: once(() =>
         all(caller, (clients, after) =>
           clients.work.asks({ routedTo: caller.id, limit: 100, after }),
-        ),
-      ),
-      submitted: once(() =>
-        all(caller, (clients, after) =>
-          clients.work.list({
-            requesterWithin: caller.id,
-            status: ["submitted"],
-            limit: 100,
-            after,
-          }),
         ),
       ),
     };
@@ -192,16 +188,6 @@ export function attention(registry: Registry, audit: Audit, workspace: Workspace
     }
   }
 
-  /** Whether the walk from `actorID` up to its nearest open Actor passes `closed`. */
-  function through(actorID: string | null | undefined, closed: string): boolean {
-    for (let at = actorID ? registry.get(actorID) : undefined; at; ) {
-      if (at.id === closed) return true;
-      if (at.closed_at === null) return false;
-      at = at.manager === null ? undefined : registry.get(at.manager);
-    }
-    return false;
-  }
-
   /** What one entry did: the parties and records it touched, and the item it makes, if any. */
   function factOf(caller: ActorRow, entry: Entry, reads: ReturnType<typeof reader>) {
     const touched = {
@@ -222,16 +208,22 @@ export function attention(registry: Registry, audit: Audit, workspace: Workspace
         title = (message.text.split("\n")[0] ?? "").slice(0, 120);
       }
     } else if (entry.operation === "actor_create" || entry.operation === "actor_close") {
-      touched.actorIDs.push(id, registry.get(id)?.manager);
-      // A closed Actor's part passes to its nearest open manager: what was routed to it,
-      // or on its way through it, is the caller's now.
+      touched.actorIDs.push(id);
+      // A closed Actor's part passes to the person: the asks on Work it requested, and the
+      // submissions of that Work, are the person's now.
       if (entry.operation === "actor_close" && registry.standIn(id) === caller.id) {
         for (const ask of reads.routing())
-          if (through(registry.get(ask.raises.at(-1)?.actorID ?? ask.requesterID)?.manager, id))
+          if (
+            ask.requesterID !== id &&
+            ask.workID !== undefined &&
+            reads.work(ask.workID)?.requesterID === id
+          )
             items.push({ kind: "ask", title: ask.title, recordID: ask.formID });
-        for (const work of reads.submitted())
-          if (through(work.requesterID, id))
-            items.push({ kind: "review_due", title: work.title, recordID: work.ticketID });
+        const submitted = all(caller, (clients, after) =>
+          clients.work.list({ requesterID: id, status: ["submitted"], limit: 100, after }),
+        );
+        for (const work of submitted)
+          items.push({ kind: "review_due", title: work.title, recordID: work.ticketID });
       }
     } else if (entry.operation.startsWith("work_")) {
       // An ask is written by work_update and work_answer with the ask as the entry's target.
@@ -245,17 +237,11 @@ export function attention(registry: Registry, audit: Audit, workspace: Workspace
         if (ask.workID) touched.workIDs.push(ask.workID);
         title = ask.title;
         const asker = ask.requesterID === caller.id;
-        const routed = routeOf(ask) === caller.id;
+        const routed = routeOf(ask, reads) === caller.id;
         // Only its asker and the Actor it routes to get items from an ask.
         const action = asker || routed ? reads.event(entry, ask.history)?.action : undefined;
-        // Once raised, the ask reaches its route from the raise that sent it there.
-        if (action === "created" && routed && ask.raises.length === 0) kind = "ask";
+        if (action === "created" && routed) kind = "ask";
         else if (action === "responded" && asker) kind = "answer";
-        else if (action === "raised") {
-          const raisedTo = registry.get(entry.actor)?.manager;
-          if (asker) kind = "raised";
-          else if (routed && raisedTo && registry.standIn(raisedTo) === caller.id) kind = "ask";
-        }
       } else if (work) {
         touched.workIDs.push(id);
         touched.actorIDs.push(work.ownerID, work.requesterID);

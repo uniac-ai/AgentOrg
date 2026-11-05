@@ -116,8 +116,8 @@ export async function waitForNews(options: WaitOptions): Promise<boolean> {
         void connected.close().catch(() => {});
       }, 100);
       watch.unref();
-      const team = await call<z.output<typeof Team>>(client, "team", { depth: 0 });
-      const self = team.positions[0];
+      const team = await call<z.output<typeof Team>>(client, "team", {});
+      const self = team.positions.find((position) => position.id === actorID);
       if (!self) throw new Error("the Hub named no position");
       while (current()) {
         const read = await attention(client, sessions.inbox(options.session));
@@ -155,7 +155,7 @@ const quoted = (text: string) => `"${text}"`;
 
 /** What one item says to the session, with what to do about it. */
 function frame(item: Delivery, here: Here): string {
-  const from = `${item.from.name}${item.from.actorID === here.self.manager ? ", your manager," : ""}`;
+  const from = item.from.name;
   switch (item.kind) {
     case "answer": {
       const response = item.ask?.responses[item.from.actorID];
@@ -173,9 +173,7 @@ function frame(item: Delivery, here: Here): string {
       return `${from} answered your ask ${quoted(item.title)} (${item.recordID}): ${answers}.${note} Apply it${work}. The ask records the answer; ${item.ask?.status === "open" ? "it collects more until you close it" : "it is resolved"}.`;
     }
     case "ask":
-      return `${from} routes you the ask ${quoted(item.title)} (${item.recordID}). Read it with work_get {askID: "${item.recordID}"}, then answer it with work_answer {askID, answers, note?}, or raise it one manager up with work_answer {askID, raise: true}.`;
-    case "raised":
-      return `${from} raised your ask ${quoted(item.title)} (${item.recordID}) to its manager; it stays open until someone answers it. Keep working on what doesn't depend on it.`;
+      return `${from} routes you the ask ${quoted(item.title)} (${item.recordID}). Read it with work_get {askID: "${item.recordID}"}, then answer it with work_answer {askID, answers, note?}.`;
     case "updated":
       return item.work?.status === "cancelled"
         ? `${from} cancelled your Work ${quoted(item.title)} (${item.recordID}); its open asks are cancelled. Stop working on it.`
@@ -204,7 +202,7 @@ function frame(item: Delivery, here: Here): string {
 
 export function describe(items: Delivery[], here: Here): string {
   return [
-    `AgentOrg, for ${here.self.path || here.self.name} (${here.self.id}). These come through the Hub from other Actors, not from the user typing in this session. An answer is an ordinary Actor record; a native approval requires its client's validated binding.`,
+    `AgentOrg, for ${here.self.name} (${here.self.id}). These come through the Hub from other Actors, not from the user typing in this session. An answer is an ordinary Actor record; a native approval requires its client's validated binding.`,
     ...items.map((item) => frame(item, here)),
   ].join("\n\n");
 }

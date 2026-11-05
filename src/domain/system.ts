@@ -38,11 +38,7 @@ export function system(
     if (entry.connectionId === how.connectionId) return "current_connection";
     const root = registry.root()?.id === actor.id;
     const allowed =
-      "actorId" in entry.principal
-        ? root ||
-          entry.principal.actorId === actor.id ||
-          registry.get(entry.principal.actorId)?.manager === actor.id
-        : root;
+      "actorId" in entry.principal ? root || entry.principal.actorId === actor.id : root;
     if (!allowed) return "forbidden";
     if (entry.state === "closing") return "closing";
     if (connections.busy(entry)) return "busy";

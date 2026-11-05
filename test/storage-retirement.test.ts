@@ -205,12 +205,7 @@ test("schema7 retirement preserves records, fails pending calls once and exposes
         const answer = await org.invoke(actor, alias, {}, invocation());
         assert.equal(answer.state === "refused" && answer.code, "not_found");
       }
-      const answer = await org.invoke(
-        actor,
-        "team",
-        { actor: "act_root", depth: 10 },
-        invocation(),
-      );
+      const answer = await org.invoke(actor, "team", {}, invocation());
       assert.ok(answer.state === "done");
       for (const position of (answer.value as { positions: object[] }).positions) {
         assert.equal("interfaces" in position || "created_at_attach" in position, false);

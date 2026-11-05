@@ -26,35 +26,36 @@ async function members() {
 test("positions are canonical, resolve after closure, and are distinct from actual presence", async (t) => {
   const { core, root, owner, peer, third } = await members();
   t.after(() => core.close());
-  const [profile] = (await done(owner.client.call("team", { depth: 0 }))).positions;
+  const team = async (by = peer.client) => (await done(by.call("team", {}))).positions;
+  const profile = (await team(owner.client)).find(
+    (position: { id: string }) => position.id === owner.id,
+  );
   assert.deepEqual(
     [profile.id, profile.name, profile.purpose, profile.closed_at],
     [owner.id, "owner", "owner", null],
   );
   const closed = (await done(root.call("actor_close", { actor: owner.id }))).actor;
   assert.ok(closed.closed_at);
+  // A closed Actor leaves team, and actor_view still resolves it.
   assert.equal(
-    (await done(peer.client.call("team", { actor: owner.id, depth: 0 }))).positions[0].closed_at,
+    (await done(peer.client.call("actor_view", { actorID: owner.id }))).actor.closed_at,
     closed.closed_at,
   );
-  const team = await done(peer.client.call("team", { actor: core.rootId, depth: 20 }));
+  const read = await done(peer.client.call("team", {}));
   assert.deepEqual(
-    team.positions.map((position: { id: string }) => position.id),
+    read.positions.map((position: { id: string }) => position.id),
     [core.rootId, peer.id, third.id],
   );
-  assert.deepEqual(Object.keys(team).sort(), ["positions", "root"]);
-  assert.deepEqual(Object.keys(team.positions[0]).sort(), [
+  assert.deepEqual(Object.keys(read), ["positions"]);
+  assert.deepEqual(Object.keys(read.positions[0]).sort(), [
     "asks",
-    "branchAsks",
     "closed_at",
     "created_at",
     "headline",
     "id",
     "lastActiveAt",
-    "manager",
     "name",
     "online",
-    "path",
     "purpose",
     "state",
   ]);
@@ -63,7 +64,7 @@ test("positions are canonical, resolve after closure, and are distinct from actu
     "third loses actual admitted presence",
     () => !core.org.connections.connected(third.id),
   );
-  const [offline] = (await done(peer.client.call("team", { actor: third.id, depth: 0 }))).positions;
+  const offline = (await team()).find((position: { id: string }) => position.id === third.id);
   assert.deepEqual([offline.closed_at, offline.online], [null, false]);
 });
 
@@ -582,7 +583,7 @@ test("Work filters AND before pagination, positions continue only their filter, 
       await refused(third.client.call("work_list", { ...filter, ...other, after: page.next })),
       "invalid",
     );
-  assert.equal((await done(third.client.call("team", { depth: 0 }))).positions[0].id, third.id);
+  assert.equal((await done(third.client.call("actor_view", {}))).actor.actorID, third.id);
   assert.equal(
     await refused(
       third.client.call("work_update", {
@@ -620,12 +621,15 @@ test("a Work's asks come with it, all from work_get and the open ones from work_
   const fields = [{ name: "answer", label: "Optional answer", required: false }];
   const create = (title: string, ticketID = work.ticketID) =>
     done(third.client.call("work_update", { ticketID, ask: { title, fields } }));
-  const own = await done(root.call("work_create", { title: "The root's own" }));
+  // The person asks like any Actor, on Work it owns.
+  const own = await done(root.call("work_create", { title: "The person's own" }));
   assert.equal(
-    await refused(
-      root.call("work_update", { ticketID: own.ticketID, ask: { title: "Root", fields } }),
-    ),
-    "forbidden",
+    (
+      await done(
+        root.call("work_update", { ticketID: own.ticketID, ask: { title: "Person", fields } }),
+      )
+    ).requesterID,
+    core.rootId,
   );
   const answered = await create("Answered");
   await done(owner.client.call("work_answer", { askID: answered.formID, answers: {} }));
@@ -655,7 +659,7 @@ test("a Work's asks come with it, all from work_get and the open ones from work_
   const response = (await done(root.call("work_get", { askID: answered.formID }))).asks[0];
   assert.deepEqual(Object.keys(response.responses), [owner.id]);
   assert.deepEqual(response.responses[owner.id].answers, {});
-  assert.equal((await done(root.call("team", { depth: 0 }))).positions[0].id, core.rootId);
+  assert.equal((await done(root.call("team", {}))).positions[0].id, core.rootId);
 });
 
 test("shared Work/Form history and Hub diagnostics do not disclose Message data", async (t) => {

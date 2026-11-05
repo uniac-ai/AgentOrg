@@ -58,8 +58,6 @@ export class SqliteStore implements Store {
     byCredentialHash: (hash) =>
       this.database.select("actors", "credential_hash = ? AND closed_at IS NULL", [hash])[0],
     first: () => this.database.select("actors", "1", [], "rowid", 1)[0],
-    reports: (manager) =>
-      this.database.select("actors", "manager = ? AND closed_at IS NULL", [manager]),
     open: () => this.database.select("actors", "closed_at IS NULL"),
   };
   readonly claims: Store["claims"] = {

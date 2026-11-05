@@ -1,105 +1,61 @@
-/** Canonical ancestry uses retained identities rather than open Team traversal. */
+/** Every Actor on one flat level: the person, handles, stand-ins and closing. */
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { type ActorRow, registry } from "../src/domain/registry.ts";
+import { registry } from "../src/domain/registry.ts";
 import { SqliteStore } from "../src/storage/sqlite/index.ts";
 
 const now = () => "2026-10-31T00:00:00.000Z";
 
-test("inclusive ancestry retains deep, closed positions and rejects unknown or unrelated IDs", async (t) => {
+function fixture(t: { after(fn: () => void): void }) {
   const store = new SqliteStore(":memory:");
   t.after(() => store.close());
-  const actors = registry(store.actors, now);
-  const { root } = await actors.createRoot();
-  const { actor: other } = await actors.create(root.id, "other", "Other branch");
-  const chain = [];
-  let manager = root.id;
-  for (let depth = 0; depth < 25; depth += 1) {
-    const { actor } = await actors.create(manager, `report-${depth}`, "Deep position");
-    chain.push(actor);
-    manager = actor.id;
-  }
-  const anchor = chain[0];
-  const leaf = chain.at(-1);
-  assert.ok(anchor);
-  assert.ok(leaf);
-  assert.equal(actors.within(root.id, root.id), true);
-  assert.equal(actors.within(leaf.id, anchor.id), true);
-  assert.equal(actors.within(anchor.id, leaf.id), false);
-  assert.equal(actors.within(leaf.id, other.id), false);
-  assert.equal(actors.within(other.id, anchor.id), false);
-  for (const [id, ancestor] of [
-    ["missing", root.id],
-    [leaf.id, "missing"],
-    ["missing", "missing"],
-  ] as const)
-    assert.equal(actors.within(id, ancestor), false);
-  for (const actor of [...chain].reverse()) actors.close(root, actor.id);
-  assert.deepEqual(
-    actors.reports(root.id).map((actor) => actor.id),
-    [other.id],
-  );
-  assert.equal(actors.found(anchor.id).closed_at, now());
-  assert.equal(actors.within(leaf.id, root.id), true);
-  assert.equal(actors.within(leaf.id, anchor.id), true);
-  assert.equal(actors.within(anchor.id, anchor.id), true);
-  assert.equal(actors.within(leaf.id, other.id), false);
-});
+  return { store, actors: registry(store.actors, now) };
+}
 
-test("ancestry stops on missing and repeated parents", async (t) => {
-  const store = new SqliteStore(":memory:");
-  t.after(() => store.close());
-  const actors = registry(store.actors, now);
-  const { root } = await actors.createRoot();
-  const { actor: lead } = await actors.create(root.id, "lead", "Lead");
-  const { actor: leaf } = await actors.create(lead.id, "leaf", "Leaf");
-  const get = store.actors.get;
-  const rows = new Map<string, ActorRow>([[leaf.id, { ...leaf, manager: "missing" }]]);
-  let reads = 0;
-  t.mock.method(store.actors, "get", (id: string) => {
-    assert.ok(++reads < 10, "ancestry must terminate on the finite parent chain");
-    return rows.get(id) ?? get(id);
-  });
-  const within = (id: string, ancestor: string) => {
-    reads = 0;
-    return actors.within(id, ancestor);
-  };
-  assert.equal(within(leaf.id, root.id), false);
-  assert.equal(within(leaf.id, leaf.id), true);
-  rows.set(leaf.id, leaf);
-  rows.set(lead.id, { ...lead, manager: leaf.id });
-  assert.equal(within(leaf.id, root.id), false);
-  assert.equal(within(leaf.id, lead.id), true);
-  rows.set(leaf.id, { ...leaf, manager: leaf.id });
-  assert.equal(within(leaf.id, root.id), false);
-});
-
-test("the person is the first Actor the Hub made, whatever any row's manager says", async (t) => {
-  const store = new SqliteStore(":memory:");
-  t.after(() => store.close());
-  const actors = registry(store.actors, now);
+test("the person is the first Actor the Hub made", async (t) => {
+  const { store, actors } = fixture(t);
   assert.equal(actors.root(), undefined);
   const { root } = await actors.createRoot();
-  const { actor: lead } = await actors.create(root.id, "lead", "Lead");
-  // A later row with no manager, as once managers are no longer written, is not the person.
-  store.actors.insert({
-    ...lead,
-    id: "act_later",
-    name: "later",
-    manager: null,
-    credential_hash: "h",
-  });
+  const { actor: lead } = await actors.create("lead", "Lead");
+  store.actors.insert({ ...lead, id: "act_later", name: "later", credential_hash: "h" });
   assert.equal(actors.root()?.id, root.id);
 });
 
 test("handles are unique among open Actors, and a closed Actor's handle is free again", async (t) => {
-  const store = new SqliteStore(":memory:");
-  t.after(() => store.close());
-  const actors = registry(store.actors, now);
+  const { actors } = fixture(t);
   const { root } = await actors.createRoot();
-  const { actor: lead } = await actors.create(root.id, "lead", "Lead");
-  const { actor: storage } = await actors.create(root.id, "storage", "Storage");
-  await assert.rejects(actors.create(lead.id, "storage", "Another"), /already named storage/);
+  const { actor: storage } = await actors.create("storage", "Storage");
+  await assert.rejects(actors.create("storage", "Another"), /already named storage/);
   actors.close(root, storage.id);
-  assert.equal((await actors.create(lead.id, "storage", "Another")).actor.name, "storage");
+  assert.equal((await actors.create("storage", "Another")).actor.name, "storage");
+});
+
+test("an open Actor stands for itself, a closed one's stand-in is the person", async (t) => {
+  const { actors } = fixture(t);
+  const { root } = await actors.createRoot();
+  const { actor: lead } = await actors.create("lead", "Lead");
+  const { actor: worker } = await actors.create("worker", "Work");
+  assert.equal(actors.standIn(worker.id), worker.id);
+  actors.close(lead, worker.id);
+  assert.equal(actors.standIn(worker.id), root.id);
+  assert.equal(actors.standIn(root.id), root.id);
+  assert.equal(actors.standIn("missing"), undefined);
+});
+
+test("any open Actor closes any other, never the person, and not itself", async (t) => {
+  const { actors } = fixture(t);
+  const { root } = await actors.createRoot();
+  const { actor: lead } = await actors.create("lead", "Lead");
+  const { actor: worker } = await actors.create("worker", "Work");
+  assert.throws(() => actors.close(lead, root.id), /the person is never closed/);
+  assert.throws(() => actors.close(root, root.id), /the person is never closed/);
+  assert.throws(() => actors.close(lead, lead.id), /closes others, not itself/);
+  // Any open Actor closes another, with or without open Actors beside it.
+  const closed = actors.close(worker, lead.id);
+  assert.deepEqual([closed.changed, closed.actor.closed_at], [true, now()]);
+  assert.equal(actors.close(root, lead.id).changed, false);
+  assert.deepEqual(
+    actors.open().map((actor) => actor.name),
+    ["root", "worker"],
+  );
 });

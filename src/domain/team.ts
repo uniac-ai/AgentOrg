@@ -1,4 +1,4 @@
-/** Organization hierarchy, actual admitted connection presence and each Actor's report. */
+/** Every open Actor, actual admitted connection presence and each Actor's report. */
 
 import type { WorkspaceClients } from "@uniac/agentic-workspace";
 import {
@@ -128,7 +128,7 @@ export function team(
       if (state === "review")
         return {
           kind: "review",
-          // A closed requester's part passes to its nearest open manager.
+          // A closed requester's part passes to the person.
           text: `with ${named(registry.standIn(item.requesterID) ?? item.requesterID)} for review`,
         };
       const on = item.waitsOn;
@@ -172,18 +172,11 @@ export function team(
   }
 
   /**
-   * The start and its open reports to `depth`, each with its state, headline and ask counts. Up to
-   * `FEW` positions read their own Work, more read the organization's once, and open asks are one
-   * pass.
+   * Every open Actor, oldest first, each with its state, headline and open asks. Up to `FEW`
+   * Actors read their own Work, more read the organization's once, and open asks are one pass.
    */
-  function readTeam(caller: ActorRow, request: RequestOf<"team">): ResponseOf<"team"> {
-    const start = request.actor === undefined ? caller : registry.found(request.actor);
-    const rows: ActorRow[] = [];
-    const visit = (at: ActorRow, depth: number) => {
-      rows.push(at);
-      if (depth > 0) for (const report of registry.reports(at.id)) visit(report, depth - 1);
-    };
-    visit(start, request.depth);
+  function readTeam(caller: ActorRow): ResponseOf<"team"> {
+    const rows = registry.open();
     const few = rows.length <= FEW;
     const positions = workspace.run(caller, ({ work }) => {
       const list = (filter: Filter<Parameters<typeof work.list>[0]>) =>
@@ -191,7 +184,6 @@ export function team(
       const live = few
         ? rows.flatMap((row) => list({ ownerID: row.id, status: [...UNFINISHED] }))
         : list({ status: [...UNFINISHED] });
-      // Asks stay one pass: branchAsks counts the asks at every depth below each position.
       const open = oldestFirst(all((after) => work.asks({ status: ["open"], limit: 100, after })));
       const latest = (actorID: string) =>
         work.list({ ownerID: actorID, status: ["accepted"], order: "recent", limit: 1 }).items[0];
@@ -204,11 +196,6 @@ export function team(
           ? latest(actorID)
           : (recent.items.find((item) => item.ownerID === actorID) ??
             (recent.next === null ? undefined : latest(actorID)));
-      /** Open asks below each Actor: each counts once for every manager above its asker. */
-      const below = new Map<string, number>();
-      for (const ask of open)
-        for (let at = registry.get(ask.requesterID); at?.manager; at = registry.get(at.manager))
-          below.set(at.manager, (below.get(at.manager) ?? 0) + 1);
       return rows.map(
         (row): Position => ({
           ...actors.view(row),
@@ -220,12 +207,11 @@ export function team(
             finished(row.id),
           ),
           asks: open.filter((ask) => ask.requesterID === row.id).length,
-          branchAsks: below.get(row.id) ?? 0,
           lastActiveAt: audit.lastWrite(row.id) ?? null,
         }),
       );
     });
-    return { root: (registry.root() as ActorRow).id, positions };
+    return { positions };
   }
 
   /**
@@ -237,7 +223,6 @@ export function team(
   function view(caller: ActorRow, request: RequestOf<"actor_view">): View {
     const viewed = request.actorID === undefined ? caller : registry.found(request.actorID);
     const id = viewed.id;
-    const reports = registry.reports(id);
     return workspace.run(caller, ({ work }) => {
       const names: View["actors"] = {};
       const named = <T>(page: List<T>) => {
@@ -251,28 +236,25 @@ export function team(
       const mine = works({ ownerID: id, status: [...UNFINISHED] });
       const last = work.list({ ownerID: id, status: ["accepted"], order: "recent", limit: 1 })
         .items[0];
-      // Work routed to it as requester: its own, and a closed requester's it stands in for.
+      // Work routed to it as requester: its own, and for the person a closed requester's too.
+      const requesterID = registry.root()?.id === id ? {} : { requesterID: id };
       const requested = oldestFirst(
-        all((after) =>
-          work.list({ requesterWithin: id, status: [...UNFINISHED], limit: 100, after }),
-        ),
+        all((after) => work.list({ ...requesterID, status: [...UNFINISHED], limit: 100, after })),
       ).filter((item) => registry.standIn(item.requesterID) === id);
       const reviews = requested.filter((item) => item.status === "submitted");
       const ownerClosed = requested.filter(
         (item) => item.status !== "submitted" && registry.found(item.ownerID).closed_at !== null,
       );
-      for (const actor of [viewed, ...reports]) names[actor.id] = { name: actor.name };
+      names[id] = { name: viewed.name };
       for (const item of [...reviews, ...ownerClosed])
         for (const party of [item.ownerID, item.requesterID])
           names[party] = { name: registry.found(party).name };
-      const { path, online } = actors.view(viewed);
+      const { online } = actors.view(viewed);
       return {
         actor: {
           actorID: id,
           name: viewed.name,
-          path,
           purpose: viewed.purpose,
-          managerID: viewed.manager,
           online,
           lastActiveAt: audit.lastWrite(id) ?? null,
           closed_at: viewed.closed_at,
@@ -305,7 +287,6 @@ export function team(
                   limit: request.completed,
                 }),
               ).items,
-        reports: reports.map(actors.view),
         actors: names,
       };
     });
@@ -313,7 +294,7 @@ export function team(
 
   return {
     tool: bindTool(TEAM, {
-      team: (actor, request) => readTeam(actor, request),
+      team: (actor) => readTeam(actor),
       actor_view: (actor, request) => view(actor, request),
     }),
   };

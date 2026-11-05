@@ -135,6 +135,6 @@ export const SYSTEM = toolDefinition("system", {
     request: z.strictObject({ instanceId: InstanceId, connectionId: InstanceId }),
     response: ConnectionDisconnected,
     description:
-      "Detach one exact Hub socket with transient close code 1000. Refused for the calling socket or observed local work. Actor authority is self's other socket, direct manager or root; Provider authority is canonical root. Clients may reconnect; this neither stops native work nor revokes identity. Never retry an unknown outcome blindly.",
+      "Detach one exact Hub socket with transient close code 1000. Refused for the calling socket or observed local work. Actor authority is your own other socket, or the person; Provider authority is the person. Clients may reconnect; this neither stops native work nor revokes identity. Never retry an unknown outcome blindly.",
   },
 });

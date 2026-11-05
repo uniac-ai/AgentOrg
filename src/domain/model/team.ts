@@ -1,15 +1,10 @@
-/** Organization identity, hierarchy, presence and each Actor's report. */
+/** Organization identity, presence and each Actor's report, on one flat level. */
 import { Form, Work } from "@uniac/agentic-workspace/contracts";
 import { z } from "zod";
 import { toolDefinition } from "./json-schema.ts";
 import { Actor, Count, Id, Timestamp } from "./records.ts";
 
-export const TeamRequest = z
-  .strictObject({
-    actor: Id.optional().describe("The position to start from. Default: you."),
-    depth: z.number().int().min(0).max(20).default(1).describe("Levels of reports to include."),
-  })
-  .meta({ id: "TeamRequest" });
+export const TeamRequest = z.strictObject({}).meta({ id: "TeamRequest" });
 
 export const PositionState = z
   .enum(["waiting", "review", "active", "idle"])
@@ -34,7 +29,7 @@ export const Headline = z
       })
       .nullable()
       .describe(
-        'The first that applies to the subject: its owner\'s oldest open ask on it, by title, as ask or approval; "with <X> for review", X being its requester or, once that is closed, its nearest open manager; what it waits on; its current step, else the first sentence of its progress. The caller is "you".',
+        'The first that applies to the subject: its owner\'s oldest open ask on it, by title, as ask or approval; "with <X> for review", X being its requester or, once that is closed, the person; what it waits on; its current step, else the first sentence of its progress. The caller is "you".',
       ),
     more: Count.describe("Its other Work that is waiting, in review or active."),
     notStarted: Count.describe("Open Work on it with no open ask by its owner."),
@@ -53,14 +48,12 @@ export const Position = Actor.extend({
   state: PositionState,
   headline: Headline,
   asks: Count.describe("Its own open asks."),
-  branchAsks: Count.describe("Open asks of every Actor below it, closed ones included."),
   lastActiveAt: LastActiveAt,
 }).meta({
   id: "Position",
-  description:
-    "Identity, hierarchy and connection presence, with its state and headline from the Work on it.",
+  description: "Identity and connection presence, with its state and headline from the Work on it.",
 });
-export const Team = z.strictObject({ root: Id, positions: z.array(Position) }).meta({ id: "Team" });
+export const Team = z.strictObject({ positions: z.array(Position) }).meta({ id: "Team" });
 
 export const ActorViewRequest = z
   .strictObject({
@@ -83,9 +76,7 @@ export const ActorView = z
     actor: z.strictObject({
       actorID: Id,
       name: z.string(),
-      path: z.string(),
       purpose: z.string(),
-      managerID: Actor.shape.manager,
       online: z.boolean(),
       lastActiveAt: LastActiveAt,
       closed_at: Actor.shape.closed_at,
@@ -101,7 +92,7 @@ export const ActorView = z
     needs: z
       .array(Form)
       .describe(
-        "Open asks routed to it: its reports' asks it hasn't raised, asks raised to it, and asks passed up past closed managers.",
+        "Open asks routed to it: asks on Work it requested, or that a closed Actor requested whom it stands in for; for the person, also asks on Work their asker requested itself or on no Work.",
       ),
     reviews: z
       .array(Work)
@@ -122,7 +113,6 @@ export const ActorView = z
       .describe("With answeredBy: its asks, open or closed, that Actor answered."),
     followUps: z.array(Work).describe("Open Work it requested of itself."),
     completed: z.array(Work).describe("Accepted Work it owns, newest first."),
-    reports: z.array(Actor).describe("Its open direct reports."),
     actors: z
       .record(z.string(), z.strictObject({ name: z.string() }))
       .describe("Names of the Actors these records mention."),
@@ -134,13 +124,13 @@ export const TEAM = toolDefinition("team", {
     request: TeamRequest,
     response: Team,
     description:
-      "Read a position and its open reports: identity, purpose, hierarchy, timestamps, actual Hub connection presence, its last write, its own and its branch's open asks, and from the Work on it its state and headline. Anyone may explore any position. Default: you and your direct reports.",
+      "Read every open Actor, oldest first: identity, purpose, timestamps, actual Hub connection presence, its last write, its own open asks, and from the Work on it its state and headline. A closed Actor is read with actor_view.",
   },
   actor_view: {
     writes: false,
     request: ActorViewRequest,
     response: ActorView,
     description:
-      "Read an Actor's report as one view, computed now: its state and headline, the Work on it with its open asks, its own open asks, the asks routed to it, the submissions it answers, the Work it must take up or hand on, its follow-ups, recent completions and direct reports. Anyone may view any Actor. Default: you.",
+      "Read an Actor's report as one view, computed now: its state and headline, the Work on it with its open asks, its own open asks, the asks routed to it, the submissions it answers, the Work it must take up or hand on, its follow-ups and recent completions. Anyone may view any Actor, a closed one included. Default: you.",
   },
 });

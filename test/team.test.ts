@@ -1,7 +1,7 @@
 /**
- * `team` derives each position's state, headline and ask counts at read time from the Work on it
- * and the open asks under it; `actor_view` reads one Actor's report with the same state and
- * headline, and what needs it.
+ * `team` derives each open Actor's state, headline and ask count at read time from the Work on it
+ * and its own open asks; `actor_view` reads any Actor's report with the same state and headline,
+ * and what needs it.
  */
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -13,20 +13,20 @@ import { type Core, done, type Json, refused, startCore } from "./harness.ts";
 async function organization() {
   const core = await startCore();
   const root = await core.client(core.root);
-  const make = async (name: string, manager: Actor = root) => {
-    const created = await done(manager.call("actor_create", { name, purpose: `The ${name}` }));
+  const make = async (name: string) => {
+    const created = await done(root.call("actor_create", { name, purpose: `The ${name}` }));
     return { id: created.actor.id as string, client: await core.client(created.credential) };
   };
   const lead = await make("lead");
-  const worker = await make("worker", lead.client);
+  const worker = await make("worker");
   const peer = await make("peer");
   return { core, root, make, lead, worker, peer };
 }
 
 const fields = [{ name: "answer", label: "Answer", required: false }];
-/** Its position as `by` reads it alone. */
+/** Its position in `team` as `by` reads it: open Actors only. */
 const position = async (by: Actor, actorID: string) =>
-  (await done(by.call("team", { actor: actorID, depth: 0 }))).positions[0];
+  (await done(by.call("team", {}))).positions.find((each: Json) => each.id === actorID);
 const create = (client: Actor, title: string, input: Json = {}) =>
   done(client.call("work_create", { title, ...input }));
 const update = (client: Actor, work: Json, input: Json) =>
@@ -113,11 +113,10 @@ test("a Work's state, and an Actor's from the Work on it only", async (t) => {
     ["waiting", 0],
     "Work not started waits once its owner asks on it",
   );
-  const manager = (await done(peer.client.call("team", { actor: lead.id, depth: 1 }))).positions;
   assert.deepEqual(
-    manager.map((each: Json) => each.state),
+    [await state(lead.id), await state(worker.id)],
     ["idle", "waiting"],
-    "Work it requested of its report doesn't count",
+    "Work it requested of another doesn't count",
   );
   await close(worker.client, early);
   await update(worker.client, stream, { status: "active" });
@@ -138,17 +137,18 @@ test("a Work's state, and an Actor's from the Work on it only", async (t) => {
   blocked(core, stream);
   assert.equal(await state(worker.id), "active", "a stored blocked reads as active");
 
-  const temp = await make("temp", lead.client);
+  const temp = await make("temp");
   const handover = await create(lead.client, "Handover", { ownerID: temp.id });
   await update(temp.client, handover, { status: "active" });
-  stored(core, temp.id, "Left open");
+  const leftOpen = stored(core, temp.id, "Left open");
   await done(lead.client.call("actor_close", { actor: temp.id }));
-  const closed = await position(root, temp.id);
-  assert.ok(closed.closed_at);
+  assert.equal(await position(root, temp.id), undefined, "team reads open Actors only");
+  const closed = await view(root, temp.id);
+  assert.ok(closed.actor.closed_at);
   assert.deepEqual(
-    [closed.state, closed.headline.subject, closed.asks],
-    ["active", subject(handover, "active"), 1],
-    "a closed Actor's position comes from the Work it still owns",
+    [closed.state, closed.headline.subject, ids(closed.asks, "formID")],
+    ["active", subject(handover, "active"), [leftOpen]],
+    "a closed Actor's state comes from the Work it still owns",
   );
 });
 
@@ -233,7 +233,7 @@ test("the clause, first that applies: the owner's oldest ask, review, what it wa
   await close(worker.client, older);
   assert.deepEqual(await clause(), { kind: "approval", text: "Delete the bucket?" });
 
-  const reviewer = await make("reviewer", lead.client);
+  const reviewer = await make("reviewer");
   const leftover = await create(lead.client, "Leftover", { ownerID: reviewer.id });
   await update(reviewer.client, leftover, { status: "active" });
   await done(reviewer.client.call("work_submit", { ticketID: leftover.ticketID, result: "Done" }));
@@ -246,7 +246,7 @@ test("the clause, first that applies: the owner's oldest ask, review, what it wa
     "an owner's ask left open on submitted Work comes before the review",
   );
 
-  const typist = await make("typist", lead.client);
+  const typist = await make("typist");
   const draft = await create(lead.client, "Draft", { ownerID: typist.id });
   await update(typist.client, draft, { status: "active" });
   await done(typist.client.call("work_submit", { ticketID: draft.ticketID, result: "Draft" }));
@@ -256,7 +256,7 @@ test("the clause, first that applies: the owner's oldest ask, review, what it wa
     text: "with you for review",
   });
 
-  const waiter = await make("waiter", lead.client);
+  const waiter = await make("waiter");
   const held = await create(waiter.client, "Held");
   const waits = async (waitsOn: Json, by?: Actor) => {
     await update(waiter.client, held, { status: "active", waitsOn });
@@ -303,7 +303,7 @@ test("the step is the current one, else the first sentence of the progress", asy
 });
 
 test("with nothing live: Work not started, and the last finished, newest first", async (t) => {
-  const { core, lead, worker, peer } = await organization();
+  const { core, worker, peer } = await organization();
   t.after(() => core.close());
   const empty = await position(peer.client, worker.id);
   assert.equal(empty.state, "idle");
@@ -336,9 +336,8 @@ test("with nothing live: Work not started, and the last finished, newest first",
     const other = await create(peer.client, `Other ${n}`);
     await done(peer.client.call("work_submit", { ticketID: other.ticketID, result: "Done" }));
   }
-  const team = await done(peer.client.call("team", { actor: lead.id, depth: 1 }));
   assert.deepEqual(
-    team.positions[1].headline.finished,
+    (await position(peer.client, worker.id)).headline.finished,
     latest,
     "past the most recent page of finished Work",
   );
@@ -355,16 +354,17 @@ test("ask counts, paging past one page, recency, and the schema", async (t) => {
   const stream = await create(worker.client, "Stream");
   await update(worker.client, stream, { status: "active" });
   await ask(worker.client, stream, "Mine");
-  const temp = await make("temp", worker.client);
+  const temp = await make("temp");
   stored(core, temp.id, "Left open");
   await done(worker.client.call("actor_close", { actor: temp.id }));
 
-  const team = await done(lead.client.call("team", { actor: core.rootId, depth: 20 }));
+  const team = await done(lead.client.call("team", {}));
   assert.doesNotThrow(() => Team.parse(team));
   const at = (id: string) => team.positions.find((each: Json) => each.id === id);
   assert.deepEqual(
     team.positions.map((each: Json) => each.name),
     ["root", "lead", "worker", "peer"],
+    "open Actors, oldest first",
   );
   assert.deepEqual(
     [at(worker.id).state, at(worker.id).headline.subject],
@@ -372,11 +372,11 @@ test("ask counts, paging past one page, recency, and the schema", async (t) => {
     "Work and asks past the first page",
   );
   assert.equal(at(peer.id).headline.more, 100);
-  const counts = (id: string) => [at(id).asks, at(id).branchAsks];
-  assert.deepEqual(counts(worker.id), [1, 1], "a closed report's ask still counts");
-  assert.deepEqual(counts(lead.id), [0, 2]);
-  assert.deepEqual(counts(peer.id), [101, 0]);
-  assert.deepEqual(counts(core.rootId), [0, 103]);
+  assert.deepEqual(
+    team.positions.map((each: Json) => each.asks),
+    [0, 0, 1, 101],
+    "its own open asks; a closed Actor's count on no one",
+  );
   assert.ok(at(worker.id).lastActiveAt);
   assert.equal(
     at(worker.id).lastActiveAt,
@@ -384,12 +384,11 @@ test("ask counts, paging past one page, recency, and the schema", async (t) => {
   );
 });
 
-test("a few positions read their own Work, and give what a read of the whole tree gives", async (t) => {
+test("a few Actors read their own Work, and give what the organization's pass gives", async (t) => {
   const { core, root, make, lead, worker, peer } = await organization();
   t.after(() => core.close());
   const members = [lead, worker, peer];
-  for (let n = 0; n < 20; n += 1)
-    members.push(await make(`member-${n}`, n % 2 ? lead.client : root));
+  for (let n = 0; n < 20; n += 1) members.push(await make(`member-${n}`));
   for (const [n, member] of members.entries()) {
     const work = await create(member.client, `Work ${n}`);
     if (n % 3 !== 0)
@@ -408,28 +407,37 @@ test("a few positions read their own Work, and give what a read of the whole tre
     const other = await create(peer.client, `Other ${n}`);
     await done(peer.client.call("work_submit", { ticketID: other.ticketID, result: "Done" }));
   }
-  const whole = (await done(root.call("team", { actor: core.rootId, depth: 20 }))).positions;
-  assert.ok(whole.length > 20, "the whole tree takes the organization's pass");
+  const whole = (await done(root.call("team", {}))).positions;
+  assert.equal(whole.length, 24, "more than twenty take the organization's pass");
   assert.ok(whole.filter((each: Json) => each.headline.finished).length > 1);
   const read = (id: string) => whole.find((each: Json) => each.id === id);
-  for (const each of whole) assert.deepEqual(await position(root, each.id), each, each.name);
-  const small = (await done(root.call("team", { actor: lead.id }))).positions;
-  assert.ok(small.length > 1 && small.length <= 20);
-  for (const each of small) assert.deepEqual(each, read(each.id), each.name);
+  // Closing four leaves twenty, and closing them is the person's last write.
+  for (const each of members.slice(-4)) await done(root.call("actor_close", { actor: each.id }));
+  const small = (await done(root.call("team", {}))).positions;
+  assert.equal(small.length, 20);
+  for (const each of small)
+    if (each.id !== core.rootId) assert.deepEqual(each, read(each.id), each.name);
 });
 
-test("actor_view names an Actor's manager and when it was closed", async (t) => {
+test("actor_view reads any Actor, you by default, and when it was closed", async (t) => {
   const { core, root, make, lead, worker, peer } = await organization();
   t.after(() => core.close());
   const actor = async (by: Actor, actorID?: string) =>
     (await done(by.call("actor_view", actorID === undefined ? {} : { actorID }))).actor;
-  const viewed = await actor(peer.client, worker.id);
-  assert.deepEqual([viewed.managerID, viewed.closed_at], [lead.id, null]);
-  assert.equal((await actor(lead.client)).managerID, core.rootId);
-  assert.equal((await actor(root)).managerID, null);
-  const temp = await make("temp", lead.client);
+  assert.deepEqual(await actor(peer.client, worker.id), {
+    actorID: worker.id,
+    name: "worker",
+    purpose: "The worker",
+    online: true,
+    lastActiveAt: null,
+    closed_at: null,
+  });
+  assert.equal((await actor(lead.client)).actorID, lead.id);
+  assert.equal((await actor(root)).actorID, core.rootId);
+  const temp = await make("temp");
   const closed = (await done(lead.client.call("actor_close", { actor: temp.id }))).actor;
-  assert.equal((await actor(root, temp.id)).closed_at, closed.closed_at);
+  const seen = await actor(peer.client, temp.id);
+  assert.deepEqual([seen.closed_at, seen.online], [closed.closed_at, false]);
 });
 
 test("actor_view reads an Actor's report with team's state and headline, and what needs it", async (t) => {
@@ -487,13 +495,13 @@ test("actor_view reads an Actor's report with team's state and headline, and wha
       status: "cancelled",
     }),
   );
-  const accepted = await create(peer.client, "Accepted", { ownerID: worker.id });
+  const accepted = await create(root, "Accepted", { ownerID: worker.id });
   await update(worker.client, accepted, { status: "active" });
   const sent = await done(
     worker.client.call("work_submit", { ticketID: accepted.ticketID, result: "Done" }),
   );
   await done(
-    peer.client.call("work_answer", {
+    root.call("work_answer", {
       askID: sent.submission.submissionID,
       answers: { verdict: "accepted" },
     }),
@@ -503,10 +511,7 @@ test("actor_view reads an Actor's report with team's state and headline, and wha
   const seen = await position(peer.client, worker.id);
   assert.deepEqual([report.state, report.headline], [seen.state, seen.headline]);
   assert.equal(report.state, "waiting");
-  assert.deepEqual(
-    [report.actor.name, report.actor.path, report.actor.online, report.actor.managerID],
-    ["worker", "lead.worker", true, lead.id],
-  );
+  assert.deepEqual([report.actor.name, report.actor.online], ["worker", true]);
   assert.deepEqual(
     report.workstreams.map((item: Json) => [item.ticketID, ids(item.asks, "formID")]),
     [
@@ -527,100 +532,115 @@ test("actor_view reads an Actor's report with team's state and headline, and wha
   assert.deepEqual(ids(report.followUps), [later.ticketID, early.ticketID, others.ticketID]);
   assert.deepEqual(ids(report.completed), [accepted.ticketID, quick.ticketID]);
   assert.deepEqual(report.headline.finished?.ticketID, accepted.ticketID, "not the cancelled");
-  assert.ok(report.actors[peer.id], "a requester only completed Work names");
-  assert.deepEqual([report.needs, report.reports, report.answered], [[], [], undefined]);
+  assert.ok(report.actors[core.rootId], "a requester only completed Work names");
+  assert.deepEqual(
+    ids(report.needs, "formID").sort(),
+    [onStream, peers].sort(),
+    "others' open asks on Work it requested",
+  );
+  assert.equal(report.answered, undefined);
   assert.deepEqual((await view(peer.client, worker.id, { completed: 0 })).completed, []);
 
-  const manager = await view(lead.client, lead.id);
-  assert.equal(manager.state, "idle", "its reports' Work doesn't make its state");
-  assert.deepEqual(manager.workstreams, []);
-  assert.deepEqual(ids(manager.reviews), [review.ticketID]);
+  const requester = await view(lead.client, lead.id);
+  assert.equal(requester.state, "idle", "Work it requested doesn't make its state");
+  assert.deepEqual(requester.workstreams, []);
+  assert.deepEqual(ids(requester.reviews), [review.ticketID]);
+  assert.deepEqual(requester.needs, [], "no ask is on Work it requested");
   assert.deepEqual(
-    ids(manager.needs, "formID").sort(),
-    [linked.formID, before.formID, loose, elsewhere, leftover].sort(),
-    "its reports' open asks",
-  );
-  assert.deepEqual(ids(manager.reports, "id"), [worker.id]);
-  await done(lead.client.call("work_answer", { askID: linked.formID, raise: true }));
-  assert.equal(
-    ids((await view(lead.client, lead.id)).needs, "formID").includes(linked.formID),
-    false,
+    ids((await view(lead.client, peer.id)).needs, "formID"),
+    [elsewhere],
+    "an ask goes to its Work's requester",
   );
   assert.deepEqual(
-    ids((await view(root, core.rootId)).needs, "formID").sort(),
-    [linked.formID, peers, onStream].sort(),
-    "the raised ask, and its own report's",
+    ids((await view(lead.client, core.rootId)).needs, "formID").sort(),
+    [linked.formID, before.formID, loose, leftover].sort(),
+    "the person's: asks on Work their asker requested, finished or not, or on no Work",
   );
   assert.equal(await refused(lead.client.call("actor_view", { actorID: "missing" })), "not_found");
 });
 
-test("actor_view routes a closed requester's part to its stand-in", async (t) => {
-  const { core, make, lead, worker, peer } = await organization();
+test("actor_view routes a closed requester's part to the person", async (t) => {
+  const { core, root, make, lead, worker, peer } = await organization();
   t.after(() => core.close());
-  const outer = await make("outer", lead.client);
-  const inner = await make("inner", outer.client);
-  const handed = await create(inner.client, "Handed up", { ownerID: worker.id });
+  const leaving = await make("leaving");
+  const handed = await create(leaving.client, "Handed over", { ownerID: worker.id });
   await update(worker.client, handed, { status: "active" });
   await done(worker.client.call("work_submit", { ticketID: handed.ticketID, result: "Done" }));
-  const quit = await make("quit", lead.client);
+  const quit = await make("quit");
   const finished = await create(lead.client, "Submitted, then its owner left", {
     ownerID: quit.id,
   });
   await update(quit.client, finished, { status: "active" });
   await done(quit.client.call("work_submit", { ticketID: finished.ticketID, result: "Done" }));
   await done(lead.client.call("actor_close", { actor: quit.id }));
-  const gone = await make("gone", lead.client);
-  const stranded = await create(inner.client, "Stranded", { ownerID: gone.id });
-  const going = await create(inner.client, "Still owned", { ownerID: worker.id });
+  const gone = await make("gone");
+  const stranded = await create(leaving.client, "Stranded", { ownerID: gone.id });
+  await create(leaving.client, "Still owned", { ownerID: worker.id });
   await done(lead.client.call("actor_close", { actor: gone.id }));
-  await done(outer.client.call("actor_close", { actor: inner.id }));
-  await done(lead.client.call("actor_close", { actor: outer.id }));
-  const manager = await view(lead.client, lead.id);
+  await done(lead.client.call("actor_close", { actor: leaving.id }));
+  const person = await view(root, core.rootId);
+  assert.deepEqual(ids(person.reviews), [handed.ticketID], "past a closed requester");
   assert.deepEqual(
-    ids(manager.reviews),
-    [handed.ticketID, finished.ticketID],
-    "past two closed requesters, and submitted Work whose owner left",
-  );
-  assert.deepEqual(
-    ids(manager.ownerClosed),
+    ids(person.ownerClosed),
     [stranded.ticketID],
     "a closed requester's Work with its owner closed, not Work its owner still holds",
   );
-  assert.equal(ids(manager.ownerClosed).includes(going.ticketID), false);
-  assert.ok(manager.actors[inner.id] && manager.actors[gone.id], "the parties it returns");
+  assert.ok(person.actors[leaving.id] && person.actors[gone.id], "the parties it returns");
+  const left = await view(peer.client, leaving.id);
+  assert.deepEqual([left.reviews, left.ownerClosed], [[], []], "no longer the closed requester's");
+  assert.deepEqual(
+    ids((await view(lead.client, lead.id)).reviews),
+    [finished.ticketID],
+    "submitted Work whose owner left stays with its requester",
+  );
   assert.deepEqual(
     (await position(peer.client, worker.id)).headline.clause,
-    { kind: "review", text: "with lead for review" },
-    "the review is with the closed requester's stand-in",
+    { kind: "review", text: "with root for review" },
+    "the review is with the closed requester's stand-in, the person",
   );
-  const owner = await make("owner", lead.client);
+  const owner = await make("owner");
   const orphaned: string[] = [];
   for (let n = 0; n < 101; n += 1)
     orphaned.push((await create(lead.client, `Orphan ${n}`, { ownerID: owner.id })).ticketID);
   await done(lead.client.call("actor_close", { actor: owner.id }));
   assert.deepEqual(
     ids((await view(lead.client, lead.id)).ownerClosed),
-    [stranded.ticketID, ...orphaned],
+    orphaned,
     "every page, past a hundred",
+  );
+  await done(root.call("actor_close", { actor: lead.id }));
+  const after = await view(root, core.rootId);
+  assert.deepEqual(
+    [ids(after.reviews), ids(after.ownerClosed)],
+    [
+      [handed.ticketID, finished.ticketID],
+      [stranded.ticketID, ...orphaned],
+    ],
+    "and the person's, past a hundred, once that requester closes too",
   );
 });
 
-test("actor_view's needs pass closed managers and pages, and answered crosses Work", async (t) => {
-  const { core, root, make, lead, worker, peer } = await organization();
+test("actor_view's needs pass a closed requester and pages, and answered crosses Work", async (t) => {
+  const { core, root, make, worker, peer } = await organization();
   t.after(() => core.close());
-  const sub = await make("sub", worker.client);
-  const left = await ask(sub.client, await create(sub.client, "Sub's"), "Left open");
-  await done(worker.client.call("actor_close", { actor: sub.id }));
-  await done(lead.client.call("actor_close", { actor: worker.id }));
-  assert.deepEqual(
-    ids((await view(lead.client, lead.id)).needs, "formID"),
-    [left.formID],
-    "routed past closed managers",
+  const sub = await make("sub");
+  const left = await ask(
+    worker.client,
+    await create(sub.client, "Sub's", { ownerID: worker.id }),
+    "Left open",
   );
-  const asker = await make("asker", lead.client);
+  assert.deepEqual(ids((await view(peer.client, sub.id)).needs, "formID"), [left.formID]);
+  await done(peer.client.call("actor_close", { actor: sub.id }));
+  assert.deepEqual((await view(peer.client, sub.id)).needs, [], "no longer the closed requester's");
+  assert.deepEqual(
+    ids((await view(root, core.rootId)).needs, "formID"),
+    [left.formID],
+    "routed past the closed requester, to the person",
+  );
+  const asker = await make("asker");
   const many = Array.from({ length: 101 }, (_, n) => stored(core, asker.id, `Question ${n}`));
   assert.deepEqual(
-    ids((await view(lead.client, lead.id)).needs, "formID").sort(),
+    ids((await view(root, core.rootId)).needs, "formID").sort(),
     [left.formID, ...many].sort(),
     "every page, past a hundred",
   );

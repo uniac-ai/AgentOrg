@@ -22,14 +22,8 @@ export function workspace(registry: Registry, store: WorkspaceStore) {
       const actor = registry.get(actorID);
       return actor === undefined ? undefined : profile(actor);
     },
-    within(callerID, actorID, ancestorID) {
-      if (registry.get(callerID)?.closed_at !== null) throw new Forbidden("the Actor is closed");
-      return registry.within(actorID, ancestorID);
-    },
-    manager(callerID, actorID) {
-      if (registry.get(callerID)?.closed_at !== null) throw new Forbidden("the Actor is closed");
-      return registry.get(actorID)?.manager ?? null;
-    },
+    // Called only for a revalidated active caller; the person is never closed.
+    person: () => (registry.root() as ActorRow).id,
   };
   /** Run an operation on the package clients bound to the admitted Actor, mapping its refusals. */
   function run<T>(actor: ActorRow, operation: (clients: WorkspaceClients) => T): T {
