@@ -901,8 +901,10 @@ test("the waiter frames from the Hub catalog its session's level presents", asyn
     const manager = await session(org, id, "claude-code", level);
     const { actor } = (await manager.call("attach", { name, purpose: "Leads one report." }))
       .structuredContent as { actor: string };
-    const created = (await manager.call("actor_create", { name: "helper", purpose: "Helps." }))
-      .structuredContent as { actor: { id: string } };
+    // Handles are unique among open Actors, so each manager's helper has its own.
+    const created = (
+      await manager.call("actor_create", { name: `${name}-helper`, purpose: "Helps." })
+    ).structuredContent as { actor: { id: string } };
     const helper = await org.client(
       readFileSync(join(org.home, "actors", created.actor.id), "utf8").trim(),
     );

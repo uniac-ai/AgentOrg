@@ -44,7 +44,8 @@ export interface Store {
     get(id: string): ActorRow | undefined;
     /** The open actor with this credential hash. */
     byCredentialHash(hash: string): ActorRow | undefined;
-    root(): ActorRow | undefined;
+    /** The first actor this store recorded. */
+    first(): ActorRow | undefined;
     /** Open direct reports, oldest first. */
     reports(manager: string): ActorRow[];
     /** Every open actor, oldest first, so managers come before their reports. */
