@@ -26,7 +26,6 @@ test("an explicitly composed module binds discovery and dispatch to its own prin
     owned_write: {
       description: "An operation owned by this module.",
       writes: true,
-      level: "organization",
       request: z.strictObject({ value: z.number().int() }),
       response: z.strictObject({ actor: z.string(), value: z.number().int() }),
     },

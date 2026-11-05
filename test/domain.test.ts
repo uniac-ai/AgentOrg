@@ -12,7 +12,7 @@ import { done, HUB_INTERFACES, refused } from "./harness.ts";
 
 const invocation = { signal: new AbortController().signal, progress: async () => {} };
 
-test("all open Actors see exactly eight Hub Tools and twenty-one interfaces, each tagged with its level", async (t) => {
+test("all open Actors see exactly eight Hub Tools and twenty-one interfaces", async (t) => {
   const store = new SqliteStore(":memory:");
   t.after(() => store.close());
   const org = organization(store);
@@ -26,7 +26,7 @@ test("all open Actors see exactly eight Hub Tools and twenty-one interfaces, eac
       assert.deepEqual(Object.keys(tool).sort(), ["id", "interfaces", "name"]);
       for (const offer of tool.interfaces) {
         assert.equal(offer.call, offer.interface.name);
-        assert.deepEqual(Object.keys(offer).sort(), ["call", "interface", "level", "read_only"]);
+        assert.deepEqual(Object.keys(offer).sort(), ["call", "interface", "read_only"]);
       }
       return [tool.name, tool.interfaces.map((offer) => offer.interface.name).sort()];
     }),
@@ -40,15 +40,6 @@ test("all open Actors see exactly eight Hub Tools and twenty-one interfaces, eac
   assert.equal(catalog.length, 8);
   const offers = catalog.flatMap((tool) => tool.interfaces);
   assert.equal(offers.length, 21);
-  // Each level presents its own interfaces and those before it: 8, 12 and 21.
-  const levels = ["report", "team", "organization"];
-  assert.deepEqual(
-    levels.map(
-      (level) =>
-        offers.filter((offer) => levels.indexOf(offer.level ?? "") <= levels.indexOf(level)).length,
-    ),
-    [8, 12, 21],
-  );
   for (const offer of offers)
     assert.equal(offer.interface.output?.type, "object", `${offer.call}'s output is an object`);
   assert.deepEqual(org.available(lead.id), catalog);

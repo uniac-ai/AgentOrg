@@ -131,7 +131,6 @@ export const ActorView = z
 export const TEAM = toolDefinition("team", {
   team: {
     writes: false,
-    level: "team",
     request: TeamRequest,
     response: Team,
     description:
@@ -139,7 +138,6 @@ export const TEAM = toolDefinition("team", {
   },
   actor_view: {
     writes: false,
-    level: "team",
     request: ActorViewRequest,
     response: ActorView,
     description:

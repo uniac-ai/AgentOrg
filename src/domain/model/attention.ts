@@ -63,7 +63,6 @@ export const Attention = z
 export const ATTENTION = toolDefinition("attention", {
   attention: {
     writes: false,
-    level: "report",
     request: AttentionRequest,
     response: Attention,
     description: `Read what concerns you since your last read. On your records: Work given to you or changed by its requester, an answer to your submission, an answer to your ask or its raise, and a message to you. Routed to you: an ask from a report or raised to you, and a submission of Work you requested, with those of a closed Actor you stand in for. Your own writes are not items. changed names the Actors, Work and conversations anyone's writes touched.

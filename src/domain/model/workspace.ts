@@ -1,7 +1,6 @@
 /** Package-owned contracts projected into explicit Hub feature definitions. */
 import {
   type Form,
-  type Level,
   type List,
   type Message,
   MessageContracts,
@@ -15,13 +14,11 @@ import { toolDefinition } from "./json-schema.ts";
 const spec =
   <O>() =>
   <S extends z.ZodType>(definition: {
-    level: Level;
     input: S;
     output: z.ZodType;
     description: string;
     writes: boolean;
   }) => ({
-    level: definition.level,
     request: definition.input,
     response: definition.output as z.ZodType<O>,
     description: definition.description,

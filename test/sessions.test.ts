@@ -37,14 +37,3 @@ test("an earlier kind of checkpoint counts as no position, so delivery starts fr
     assert.equal(sessions.inbox("fixture"), undefined);
   }
 });
-
-test("the level a session's server presents is kept beside its position, and none is removed", (t) => {
-  const directory = fixture(t);
-  assert.equal(sessions.level("fixture"), undefined);
-  sessions.present("fixture", "report");
-  assert.equal(sessions.level("fixture"), "report");
-  assert.equal(statSync(join(directory, "level")).mode & 0o777, 0o600);
-  sessions.present("fixture", undefined);
-  assert.equal(sessions.level("fixture"), undefined, "a server with no level presents every tool");
-  assert.deepEqual(readdirSync(directory).sort(), ["position"]);
-});
