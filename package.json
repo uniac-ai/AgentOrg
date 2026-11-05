@@ -1,6 +1,6 @@
 {
   "name": "@agentorg/cli",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "A Hub of explicit Tools for Actors on one flat level, with identities and shared organization state",
   "license": "MIT",
   "repository": {
