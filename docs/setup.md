@@ -12,7 +12,7 @@ launchers retain the Node they were configured with.
 Install the package from npm:
 
 ```sh
-npm install -g @agentorg/cli@0.0.1
+npm install -g @agentorg/cli@0.0.2
 ```
 
 ## Server
@@ -24,7 +24,8 @@ agentorg-server status
 
 This keeps only the core running across restarts and logins, through launchd on macOS or systemd
 on Linux. It creates the organization's home, database, the person's identity and credential, and pins its launcher
-at `<home>/bin/agentorg-server`. Reinstall after upgrading the package or Node. Existing homes require the coordinated
+at `<home>/bin/agentorg-server`. Reinstall after upgrading the package or Node. Back up the home before an
+upgrade's first start: its schema steps are one way. Existing homes require the coordinated
 [Workspace storage cutover](workspace-storage.md) before the upgraded Hub starts.
 
 ## MCP clients
