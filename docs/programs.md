@@ -20,25 +20,26 @@ only `/usr/bin:/bin` on PATH.
 ## Actor credentials and the CLI
 
 Every actor has a random credential; the core stores only its hash. The first server start creates
-root and writes its identity to `<home>/root-actor` and credential to `<home>/root-credential`.
+the person, the user's own Actor, and writes its identity to `<home>/root-actor` and credential to
+`<home>/root-credential`.
 Removing the credential file rotates the credential on the next start. A file holding a different
 credential makes startup fail.
 
 `actor_create` returns a credential once. MCP adapters keep credentials they create in
 `<home>/actors/<id>` for sessions to attach, without showing them to the model. CLI creation
 prints the credential and keeps no session copy. A program connects with that Actor's id and credential; a
-session attaches through its MCP adapter or creates a position under root on first attachment.
+session attaches through its MCP adapter or creates its Actor on first attachment.
 
 The actor CLI uses `AGENTORG_ACTOR_ID` and `AGENTORG_CREDENTIAL` together when set, otherwise the
-local root's identity and credential files. Its identity is independent of an MCP session's
-attachment. Creation makes a direct report of the caller:
+person's identity and credential files. Its identity is independent of an MCP session's
+attachment. Creation makes an Actor beside every other:
 
 ```sh
 agentorg actor create --name builds --purpose "Run the nightly builds"
 agentorg team
 agentorg activity
 agentorg interfaces
-agentorg call team --json '{"depth":2}'
+agentorg call actor_view --json '{"actorID":"<id>"}'
 ```
 
 `interfaces` returns `{tools: [...]}` from the core: each explicit Hub Tool has a stable `id`, a
@@ -97,8 +98,8 @@ are Zod schemas;
 from `./actor` and these wire contracts from `./contract`.
 
 Work, the asks on it and Messages are shared records for every active admitted Actor. Use
-`work_list` with `ownerID`, `requesterID`, `waitsOnActorID`, `status`, `ownerWithin`,
-`requesterWithin`, `updatedSince` and `order`. All supplied filters AND before pagination; pass a
+`work_list` with `ownerID` and `requesterID` (each one ID or a list), `waitsOnActorID`, `status`,
+`updatedSince` and `order`. All supplied filters AND before pagination; pass a
 page's `next` back as `after` to continue the same read. A query for another Actor's criteria keeps
 your authenticated identity and write authority.
 
