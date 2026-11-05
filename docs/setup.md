@@ -9,10 +9,10 @@ Node.js 22.13 or later and macOS or Linux are required. Check `node --version`; 
 the user's Node installation. An existing newer Node can be selected through PATH. Component
 launchers retain the Node they were configured with.
 
-Install from the repository in a temporary folder:
+Install the package from npm:
 
 ```sh
-cd "$(mktemp -d)" && git clone --depth 1 https://github.com/uniac-ai/AgentOrg . && npm ci && npm pack && npm install -g ./agentorg-cli-*.tgz
+npm install -g @agentorg/cli@0.0.1
 ```
 
 ## Server
