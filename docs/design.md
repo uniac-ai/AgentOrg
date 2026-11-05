@@ -270,7 +270,7 @@ The durable identity also holds a credential hash that public views omit. Online
 one admitted Actor connection; multiple caller connections coexist. Closing an Actor revokes
 all its connections while preserving independent Provider connections.
 
-Hub SQLite schema 9 stores canonical Actors, claims, audit metadata and a private Workspace import
+Hub SQLite schema 10 stores canonical Actors, claims, audit metadata and a private Workspace import
 ledger. The retired Actor calls stay in their table as private history that no operation reads.
 A separate `core.workspace.db` is opened through the installed package's public persistence API. The package owns its schema, transaction rules and record history; Hub
 owns both handles and closes them after the listener. Workspace authority receives the admitted
@@ -282,7 +282,7 @@ The package is vendored and bundled into the distributable SDK at an immutable s
 pin in `vendor/workspace.json`. No package MCP server or additional network service is started.
 [Workspace storage](workspace-storage.md) describes startup import, retained originals and backups.
 
-Actor handles remain unique among open siblings, and paths describe the organization. Actor and Team metadata contain no callable-interface or native-session fields.
+Actor handles are unique among open Actors, and paths describe the organization. The person, at the root, is the first Actor the Hub made. Actor and Team metadata contain no callable-interface or native-session fields.
 
 ### Record authority
 

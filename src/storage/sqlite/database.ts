@@ -72,15 +72,48 @@ export class Database {
           message_id TEXT PRIMARY KEY, source_hash TEXT NOT NULL,
           recipient_id TEXT NOT NULL REFERENCES actors(id), workspace_cursor INTEGER NOT NULL
         );
-        PRAGMA user_version = ${SCHEMA_VERSION};
+        PRAGMA user_version = 9;
       `),
       );
+      version = 9;
+    }
+    if (version === 9) {
+      this.transaction(() => this.uniqueOpenHandles());
       return;
     }
     if (version !== 0) {
       throw new Error(`the database has schema ${version}; this agentorg reads ${SCHEMA_VERSION}`);
     }
     this.transaction(() => this.db.exec(`${SCHEMA}\nPRAGMA user_version = ${SCHEMA_VERSION};`));
+  }
+
+  /**
+   * Schema 10: handles become unique among open Actors, not among siblings. A later open duplicate
+   * takes the first free `<handle>-<n>`, within the 40-character handle, from n = 2.
+   */
+  private uniqueOpenHandles(): void {
+    const taken = new Set(this.all("SELECT name FROM actors").map((row) => String(row.name)));
+    const open = new Set<string>();
+    for (const row of this.all(
+      "SELECT id, name FROM actors WHERE closed_at IS NULL ORDER BY rowid",
+    )) {
+      const handle = String(row.name);
+      let name = handle;
+      for (let n = 2; open.has(name); n += 1) {
+        const candidate = `${handle.slice(0, 39 - String(n).length)}-${n}`;
+        if (!taken.has(candidate)) name = candidate;
+      }
+      if (name !== handle)
+        this.run("UPDATE actors SET name = ? WHERE id = ?", [name, String(row.id)]);
+      taken.add(name);
+      open.add(name);
+    }
+    this.db.exec(`
+      DROP INDEX one_root;
+      DROP INDEX handles_unique_among_siblings;
+      CREATE UNIQUE INDEX handles_unique_among_open ON actors (name) WHERE closed_at IS NULL;
+      PRAGMA user_version = 10;
+    `);
   }
 
   close(): void {

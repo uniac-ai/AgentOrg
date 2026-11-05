@@ -18,7 +18,7 @@ export const Count = z.number().int().min(0);
 export const Handle = z
   .string()
   .regex(/^[a-z0-9][a-z0-9-]{0,39}$/, "a lowercase handle such as storage or web-ui")
-  .describe("A short handle, unique among its siblings, that names the Actor in the organization.");
+  .describe("A short handle, unique among open Actors, that names the Actor in the organization.");
 
 /** The local name of a Hub Tool interface. */
 export const INTERFACE_NAME = /^[A-Za-z0-9_-]{1,64}$/;

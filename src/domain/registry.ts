@@ -25,7 +25,8 @@ const mintCredential = () =>
     .replace(/=+$/, "");
 
 export function registry(actors: Store["actors"], now: () => string) {
-  const root = () => actors.root();
+  /** The person, at the root: the first Actor this Hub made, the one place that says so. */
+  const root = () => actors.first();
   const get = (id: string) => actors.get(id);
   const reports = (manager: string) => actors.reports(manager);
   const open = () => actors.open();
@@ -69,8 +70,8 @@ export function registry(actors: Store["actors"], now: () => string) {
   ): Promise<{ actor: ActorRow; credential: string }> {
     // Hashing waits, so it comes first: the check and the insert then run with nothing between.
     const { credential, hash } = await mint();
-    if (reports(manager).some((report) => report.name === name)) {
-      throw new Conflict(`a report of ${manager} is already named ${name}`);
+    if (open().some((actor) => actor.name === name)) {
+      throw new Conflict(`an open Actor is already named ${name}`);
     }
     return { actor: insert(manager, name, purpose, hash), credential };
   }

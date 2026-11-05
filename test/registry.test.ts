@@ -73,3 +73,33 @@ test("ancestry stops on missing and repeated parents", async (t) => {
   rows.set(leaf.id, { ...leaf, manager: leaf.id });
   assert.equal(within(leaf.id, root.id), false);
 });
+
+test("the person is the first Actor the Hub made, whatever any row's manager says", async (t) => {
+  const store = new SqliteStore(":memory:");
+  t.after(() => store.close());
+  const actors = registry(store.actors, now);
+  assert.equal(actors.root(), undefined);
+  const { root } = await actors.createRoot();
+  const { actor: lead } = await actors.create(root.id, "lead", "Lead");
+  // A later row with no manager, as once managers are no longer written, is not the person.
+  store.actors.insert({
+    ...lead,
+    id: "act_later",
+    name: "later",
+    manager: null,
+    credential_hash: "h",
+  });
+  assert.equal(actors.root()?.id, root.id);
+});
+
+test("handles are unique among open Actors, and a closed Actor's handle is free again", async (t) => {
+  const store = new SqliteStore(":memory:");
+  t.after(() => store.close());
+  const actors = registry(store.actors, now);
+  const { root } = await actors.createRoot();
+  const { actor: lead } = await actors.create(root.id, "lead", "Lead");
+  const { actor: storage } = await actors.create(root.id, "storage", "Storage");
+  await assert.rejects(actors.create(lead.id, "storage", "Another"), /already named storage/);
+  actors.close(root, storage.id);
+  assert.equal((await actors.create(lead.id, "storage", "Another")).actor.name, "storage");
+});

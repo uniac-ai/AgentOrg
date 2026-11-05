@@ -2,7 +2,7 @@
 
 import { ActorRecord, AuditEntry, Claim } from "../../domain/model/index.ts";
 
-export const SCHEMA_VERSION = 9;
+export const SCHEMA_VERSION = 10;
 
 // Made on every open, not in a schema step, so an earlier build still opens the home:
 // an Actor's last write, and its writes on one record, which attention counts.
@@ -20,8 +20,7 @@ CREATE TABLE actors (
   created_at TEXT NOT NULL,
   closed_at TEXT
 );
-CREATE UNIQUE INDEX one_root ON actors ((manager IS NULL)) WHERE manager IS NULL;
-CREATE UNIQUE INDEX handles_unique_among_siblings ON actors (manager, name) WHERE closed_at IS NULL;
+CREATE UNIQUE INDEX handles_unique_among_open ON actors (name) WHERE closed_at IS NULL;
 
 -- Retired Actor-call history, retained privately; no operation reads it.
 CREATE TABLE calls (

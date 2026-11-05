@@ -855,8 +855,10 @@ test("the waiter frames how to answer an ask and a submission", async () => {
     const manager = await session(org, id);
     const { actor } = (await manager.call("attach", { name, purpose: "Leads one report." }))
       .structuredContent as { actor: string };
-    const created = (await manager.call("actor_create", { name: "helper", purpose: "Helps." }))
-      .structuredContent as { actor: { id: string } };
+    // Handles are unique among open Actors, so each manager's helper has its own.
+    const created = (
+      await manager.call("actor_create", { name: `${name}-helper`, purpose: "Helps." })
+    ).structuredContent as { actor: { id: string } };
     const helper = await org.client(
       readFileSync(join(org.home, "actors", created.actor.id), "utf8").trim(),
     );

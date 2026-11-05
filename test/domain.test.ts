@@ -108,7 +108,7 @@ test("an unsupported database schema is refused without changing its records", (
     "PRAGMA user_version = 6; CREATE TABLE kept (value TEXT); INSERT INTO kept VALUES ('kept');",
   );
   old.close();
-  assert.throws(() => new SqliteStore(path), /database has schema 6; this agentorg reads 9/);
+  assert.throws(() => new SqliteStore(path), /database has schema 6; this agentorg reads 10/);
   const unchanged = new DatabaseSync(path);
   t.after(() => unchanged.close());
   assert.equal(unchanged.prepare("PRAGMA user_version").get()?.user_version, 6);
@@ -155,7 +155,7 @@ test("a home without the audit's index of writes gains it on open, with no schem
   old.close();
   const store = new SqliteStore(path);
   t.after(() => store.close());
-  assert.equal(store.database.all("PRAGMA user_version")[0]?.user_version, 9);
+  assert.equal(store.database.all("PRAGMA user_version")[0]?.user_version, 10);
   assert.equal(store.audit.lastWrite("kept"), "2026-11-03T00:00:00.000Z");
   // The statement lastWrite runs: no scan, and no sort.
   assert.deepEqual(
