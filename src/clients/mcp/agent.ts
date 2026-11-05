@@ -29,7 +29,7 @@ import { sessionName, sessions } from "./sessions.ts";
 const AttachRequest = z.strictObject({
   actor: Id.optional().describe("The id of the position your brief names."),
   name: Handle.optional().describe(
-    "Only when the user appointed you directly, with no position named: your handle under the user.",
+    "Only when the user appointed you directly, with no position named: your handle.",
   ),
   purpose: Text.optional().describe("With name: what your position is for."),
 });
