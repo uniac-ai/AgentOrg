@@ -18,14 +18,12 @@ import {
   Handle,
   Id,
   type InterfaceDescriptor,
-  type Level,
   objectSchema,
   type ResponseOf,
   Text,
   type ToolDescriptor,
 } from "../../domain/model/index.ts";
 import { credentials, readPrivate, rootActorPath, rootCredentialPath } from "../../home.ts";
-import { presented } from "./levels.ts";
 import { sessionName, sessions } from "./sessions.ts";
 
 const AttachRequest = z.strictObject({
@@ -90,8 +88,6 @@ export interface AgentOptions {
   session: string | undefined;
   /** A client that identifies its session on each call instead of at process startup. */
   client?: string;
-  /** The organization level whose interfaces `interfaces` presents; without one, all of them. */
-  level?: Level;
 }
 
 export class Agent implements Presented {
@@ -107,13 +103,6 @@ export class Agent implements Presented {
     this.#options = options;
     this.#session = options.session;
     if (this.#session !== undefined) this.#filled = sessions.position(this.#session);
-    this.#present();
-  }
-
-  /** Record the level this server presents beside a filled position, for the session's waiter. */
-  #present(): void {
-    if (this.#session !== undefined && this.#filled !== undefined)
-      sessions.present(this.#session, this.#options.level);
   }
 
   /** Connect the position this session filled before, if it did; retried until the core answers. */
@@ -215,14 +204,12 @@ export class Agent implements Presented {
     } catch {
       return refused("unavailable", "the Hub did not list available Tools");
     }
-    const level = this.#options.level;
-    const offers = presented(tools, level);
+    const offers = tools.flatMap((tool) => tool.interfaces);
     if (name === undefined) {
       const summaryOf = (description = "") => description.split("\n\n")[0] ?? "";
       return {
         state: "done",
         value: {
-          ...(level === undefined ? {} : { level }),
           interfaces: offers.map((offer) => ({
             name: offer.call,
             summary: summaryOf(offer.interface.description),
@@ -231,13 +218,7 @@ export class Agent implements Presented {
       };
     }
     const offer = offers.find((each) => each.call === name);
-    if (offer === undefined)
-      return refused(
-        "not_found",
-        presented(tools, undefined).some((each) => each.call === name)
-          ? `${name} is not presented at the ${level} level`
-          : `there is no Hub interface ${name}`,
-      );
+    if (offer === undefined) return refused("not_found", `there is no Hub interface ${name}`);
     const { description, input, output } = offer.interface;
     return {
       state: "done",
@@ -266,7 +247,6 @@ export class Agent implements Presented {
     }
     this.#session = session;
     this.#filled = sessions.position(session);
-    this.#present();
     const actor = this.#filled;
     const credential = actor === undefined ? undefined : credentials.read(actor);
     if (actor !== undefined && credential !== undefined) {
@@ -314,7 +294,6 @@ export class Agent implements Presented {
     this.#filled = actor;
     if (this.#session !== undefined) {
       sessions.fill(this.#session, actor);
-      this.#present();
       // Delivery starts from now: what happened before the session attached is not its input.
       // Without it, the waiter starts from whenever it first reads.
       const now = await this.#position?.call("attention", {}).catch(() => undefined);

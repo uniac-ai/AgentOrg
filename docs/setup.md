@@ -37,9 +37,8 @@ agentorg-mcp connect codex --project <dir>
 ```
 
 Connect pins `<home>/bin/agentorg-mcp`, configures the project and checks through that launcher.
-It requires the core. `--level report` presents an agent's own report: its Work and the asks on it,
-its conversations and `attention`. `--level team` adds working with other Actors, and without
-`--level` the session sees the whole catalog. Other project entries stay as they are:
+It requires the core. Every session is offered the whole catalog. Other project entries stay as
+they are:
 
 - Claude Code gets the `org` server in `.mcp.json`, approval and hooks in
   `.claude/settings.local.json`, and the skill in `.claude/skills/`.

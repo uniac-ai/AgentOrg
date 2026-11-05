@@ -1,8 +1,7 @@
 # Claude Code
 
 `agentorg-mcp connect claude-code` configures the project's `org` MCP server, context and waiter
-hooks, and this skill. `--level report` presents only your own report, for one agent and its
-person; `--level team` adds working with other Actors.
+hooks, and this skill.
 
 - **Tools.** Use `mcp__org__attach`, `mcp__org__interfaces` and `mcp__org__call`. For example, call
   `{name: "work_update", input: {ticketID: "…", progress: "The build passed; releasing next."}}`

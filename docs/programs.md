@@ -79,7 +79,7 @@ The handshake admits identity only; it creates no Actor and returns no service c
 Credentials are required under the default policy. A supplied invalid credential always fails.
 Hub MCP initializes separately on that same socket. Every open Actor receives only the explicit
 Hub Tools composed from feature modules. Each MCP entry carries `_meta["agentorg/tool"]` with
-`id`, `name`, local `interface`, `one_way`, `long_running` and, where tagged, `level`, from which the Actor library
+`id`, `name`, local `interface`, `one_way` and `long_running`, from which the Actor library
 reconstructs its nested Tool catalog. Multiple admitted caller connections coexist.
 
 The core refuses an `Origin` header, so this endpoint is for local processes. Human applications,

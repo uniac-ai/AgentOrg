@@ -74,7 +74,6 @@ export const ActivityResult = z
 export const ACTORS = toolDefinition("actors", {
   actor_create: {
     writes: true,
-    level: "organization",
     request: ActorCreate,
     response: ActorCreated,
     description: `Create a direct report: a position that you manage.
@@ -85,7 +84,6 @@ With execution, wait for the Provider and return its separate ready, failed or u
   },
   actor_close: {
     writes: true,
-    level: "organization",
     request: ActorClose,
     response: ActorClosed,
     description: `Close a direct report whose work is done; the root may close any actor.
@@ -97,7 +95,6 @@ Refused while it has open reports of its own. Its Hub connections close.`,
 export const ACTIVITY = toolDefinition("activity", {
   activity: {
     writes: false,
-    level: "organization",
     request: Activity,
     response: ActivityResult,
     description: "Read the organization's audit metadata, oldest first.",

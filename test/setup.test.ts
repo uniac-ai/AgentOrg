@@ -274,26 +274,11 @@ test("connect and disconnect leave an empty project empty, and refuse a server n
     assert.match(unknown.stderr, /name a client: claude-code or codex/);
     rmSync(join(project, ".mcp.json"));
 
-    const leveled = ["--project", project, "--level", "report"];
-    await command("mcp", ["connect", "claude-code", ...leveled], env);
-    await command("mcp", ["connect", "codex", ...leveled], env);
-    const servers = JSON.parse(readFileSync(join(project, ".mcp.json"), "utf8")).mcpServers;
-    assert.deepEqual(servers.org.args, ["--client", "claude-code", "--level", "report"]);
-    // The level is the server's alone: the hooks stay as they were.
-    const leveledHooks = JSON.parse(
-      readFileSync(join(project, ".claude", "settings.local.json"), "utf8"),
-    ).hooks;
-    assert.match(leveledHooks.Stop[0].hooks[0].command, / wait --client claude-code$/);
-    assert.doesNotMatch(JSON.stringify(leveledHooks), /--level/);
-    assert.doesNotMatch(readFileSync(join(project, ".codex", "hooks.json"), "utf8"), /--level/);
-    assert.match(
-      readFileSync(join(project, ".codex", "config.toml"), "utf8"),
-      /args = \["--client","codex","--level","report"\]/,
-    );
-    const badLevel = ["connect", "codex", "--project", project, "--level", "all"];
-    const refusedLevel = await command("mcp", badLevel, env);
+    // Every Actor is offered the whole catalog, so there is no level to choose.
+    const leveled = ["connect", "codex", "--project", project, "--level", "report"];
+    const refusedLevel = await command("mcp", leveled, env);
     assert.equal(refusedLevel.status, 1);
-    assert.match(refusedLevel.stderr, /unknown level all; known: report, team, organization/);
+    assert.match(refusedLevel.stderr, /Unknown option '--level'/);
   } finally {
     done();
   }

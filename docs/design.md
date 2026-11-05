@@ -102,30 +102,23 @@ its own admitted principal and does not turn the created Actor into an invocatio
 ### Tools and interfaces
 
 A Tool is `{id, name, interfaces}`. Each interface contains its local descriptor, a `call` alias,
-an optional `read_only` hint and its `level`. `(tool.id, interface.name)` identifies it.
+and an optional `read_only` hint. `(tool.id, interface.name)` identifies it.
 `Actor.available()` returns these Tools, and the CLI's `interfaces` operation returns
-`{tools: [...]}`. The MCP adapter's `interfaces` returns `{level?, interfaces: [{name, summary}]}`,
+`{tools: [...]}`. The MCP adapter's `interfaces` returns `{interfaces: [{name, summary}]}`,
 as [the MCP adapter](#the-mcp-adapter) describes.
 
-`level` is the smallest organization level that presents the interface: `report` (one agent and its
-person), `team` (working with other Actors) or `organization` (the lifecycle and the system). Each
-level contains the one before it. Workspace contracts carry their own tag, which the Hub's
-definitions keep; the Hub tags its own Tools. The tag selects what a client presents and grants or
-refuses nothing.
+Every open Actor receives the same eight Hub Tools and twenty-one interfaces:
 
-Every open Actor receives the same eight Hub Tools and twenty-one interfaces. Report presents eight
-of them, Team twelve and Organization all twenty-one:
-
-| Tool | Report | Team | Organization |
-|---|---|---|---|
-| `actors` | | | `actor_create`, `actor_close` |
-| `team` | | `team`, `actor_view` | |
-| `messages` | `message_send`, `message_list` | `message_get` | |
-| `work` | `work_create`, `work_get`, `work_list`, `work_update`, `work_submit` | `work_answer` | |
-| `claims` | | | `claim`, `release` |
-| `attention` | `attention` | | |
-| `activity` | | | `activity` |
-| `system` | | | `system_status`, `connection_list`, `provider_list`, `connection_disconnect` |
+| Tool | Interfaces |
+|---|---|
+| `actors` | `actor_create`, `actor_close` |
+| `team` | `team`, `actor_view` |
+| `messages` | `message_send`, `message_list`, `message_get` |
+| `work` | `work_create`, `work_get`, `work_list`, `work_update`, `work_submit`, `work_answer` |
+| `claims` | `claim`, `release` |
+| `attention` | `attention` |
+| `activity` | `activity` |
+| `system` | `system_status`, `connection_list`, `provider_list`, `connection_disconnect` |
 
 IDs are `hub:<name>`. Discovery and invocation use the same module-owned operations. The caller's
 hierarchy and the operation's records govern domain authority; they do not add Tools. Actor IDs,
@@ -266,7 +259,7 @@ operation. Observation failures do not alter business outcomes.
 
 An interface descriptor contains name, optional title/description, input/output JSON Schemas and
 generic `one_way`/`long_running` flags. The MCP binding flattens the catalog and carries semantic
-identity through `_meta["agentorg/tool"] = {id, name, interface, one_way, long_running, level}`. The
+identity through `_meta["agentorg/tool"] = {id, name, interface, one_way, long_running}`. The
 Actor client reconstructs the nested catalog from that metadata. Operation results are `done {value}`
 or `refused {code, message}`; they carry no Actor-call receipt or destination.
 
@@ -373,15 +366,15 @@ does not depend on an incoming call, native session or RPC cause.
 
 The MCP adapter, `agentorg-mcp` in `src/clients/mcp/`, is an optional client for Claude Code or Codex. Its local attachment records connect a session to an Actor; the Hub stores no native-session marker. The client starts it over stdio and it calls the Hub through the Actor library. Project integration and hooks belong to this adapter.
 
-- **What the session sees.** The stdio adapter has three fixed MCP tools: `attach`, `interfaces`, and `call {name, input}`. `interfaces` returns `{level, interfaces: [{name, summary}]}`: the call alias and the first paragraph of the description of each Hub interface the session presents. `interfaces {name}` returns that interface's description, input and output schemas. `call` invokes an interface using its `call` alias as `name`.
-  - **Levels.** `agentorg-mcp --level report|team|organization`, which `connect --level` writes into the project's server arguments, chooses the presented level: the interfaces tagged with it and with the levels before it. Without it the session sees the whole catalog. The adapter reads each interface's `level` from the Hub catalog and names none itself. A level only selects what is presented; `call` passes any name to the Hub, which keeps the one authority. The presentation's fixed controls form one semantic `agentorg` Tool, separate from the Hub catalog. Before its first turn, the client's session-start hook runs `agentorg-mcp context`, so a session that fills no position reads that it loads the `agentorg` skill and attaches before any other action. The adapter's instructions say the same.
+- **What the session sees.** The stdio adapter has three fixed MCP tools: `attach`, `interfaces`, and `call {name, input}`. `interfaces` returns `{interfaces: [{name, summary}]}`: the call alias and the first paragraph of the description of each Hub interface. `interfaces {name}` returns that interface's description, input and output schemas. `call` invokes an interface using its `call` alias as `name`.
+  - **Presentation.** Every session is offered the whole catalog; `call` passes any name to the Hub, which keeps the one authority. The presentation's fixed controls form one semantic `agentorg` Tool, separate from the Hub catalog. Before its first turn, the client's session-start hook runs `agentorg-mcp context`, so a session that fills no position reads that it loads the `agentorg` skill and attaches before any other action. The adapter's instructions say the same.
   - `attach {actor}` fills the position the session's brief names.
   - `attach {name, purpose}`, allowed only on a session's first attach, creates its position directly under the root. The agent actor uses the root's credential for that one call.
   - The MCP controls remain fixed across attachment and resuming. The current Hub catalog is read on each `interfaces` invocation, with no adapter cache. Logical operations such as `team` are invoked as `call {name: "team", input: {}}`.
 - **What the session is told.** Each kind of guidance has one place:
   - the adapter's tool descriptions say how to attach, list and invoke; the core's interface descriptors define each operation's description and schemas, and the core enforces permissions;
   - the server's instructions, the start hint and the frame around what the waiter delivers say what to do at that moment;
-  - the `agentorg` skill, `skills/agentorg/`, carries the operating model the core can't enforce, written Report first: how an agent keeps its report (one Work per workstream with its progress steps, follow-ups, asks with a recommended option), when to write, what to do when an answer arrives, and then working with others and the organization, with a reference per client. It maps logical operation names through `call` without restating their descriptions;
+  - the `agentorg` skill, `skills/agentorg/`, carries the operating model the core can't enforce, first how an agent keeps its report (one Work per workstream with its progress steps, follow-ups, asks with a recommended option), when to write, what to do when an answer arrives, and then working with others and the organization, with a reference per client. It maps logical operation names through `call` without restating their descriptions;
   - an organization's own conventions are a skill of its own, loaded beside it.
 - **Credentials.** The session never sees one.
   - Each position's credential is kept in the agentorg home's credential store, `actors/<id>`, mode 600.
@@ -393,7 +386,7 @@ The MCP adapter, `agentorg-mcp` in `src/clients/mcp/`, is an optional client for
   - The waiter is one re-arming `attention {since, wait: 600}` read as the ordinary attached Actor, from the position in `sessions/<session>/inbox`. A read that returns only `changed` advances the position and waits again; items are what other Actors did, so the session's own writes never come back to it.
   - Attaching records the current position, so a new session starts from now rather than from the organization's history. A session without a position, such as one kept from before this waiter, or with a position its Hub never issued, also starts from now.
   - Each item is framed with what to do: an answer quotes the response and names the Work the ask blocks; a Message carries its conversation from the session's last message in that conversation, so a reply arrives with what it answers, from `message_list {counterpartyID, before: "latest"}`.
-  - A frame names `work_answer` only where the session presents it. The adapter records its level in `sessions/<session>/level` when the session fills its position, and again whenever its server starts or binds a session that fills one; a server without a level removes it. The waiter reads that level's interfaces from the Hub catalog: where `work_answer` is presented, an ask's frame says how to answer or raise it and a submission's frame gives its `submissionID`; where it is not, as at `report`, both frames only say to read the record. A submission a close re-routes is framed as that close, since its item comes from the Actor that closed, not from its submitter.
+  - An ask's frame says how to answer or raise it, and a submission's frame gives its `submissionID`. A submission a close re-routes is framed as that close, since its item comes from the Actor that closed, not from its submitter.
   - A replaced waiter or stopped client closes its read connection, ending the waiting read. Calls other than the wait have a five-second timeout, and the catalog listing the client's own. It writes the framed items, then atomically replaces its private position and exits with status 2. Claude Code hands that output to its session as input. No public receipt is written. A write followed by a crash before saving the position can redeliver the same items.
   - A newer waiter replaces an older one. Generic delivery is at least once; native approval handling belongs to the client.
 

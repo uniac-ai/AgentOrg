@@ -257,54 +257,28 @@ test("the stdio catalog is stable and only attachment can act before a position 
   assert.deepEqual(refreshed.structuredContent, listed, "connecting an Actor never adds a Tool");
 });
 
-test("a session at a level presents that level's interfaces, and the one before it", async () => {
+test("a session presents every Hub interface, and takes no level", async () => {
   const org = await core();
-  const report = await session(org, "s-report", "claude-code", "report");
-  await report.call("attach", { name: "solo", purpose: "One agent and its person." });
-  // The waiter frames for the level the session's server presents, kept beside its position.
-  assert.equal(
-    readFileSync(join(org.home, "sessions", "claude-code-s-report", "level"), "utf8"),
-    "report\n",
-  );
+  const one = await session(org, "s-all");
+  await one.call("attach", { name: "solo", purpose: "One agent and its person." });
   const catalog = await (await org.client(org.root)).available();
-  const tagged = (levels: string[]) =>
-    catalog
-      .flatMap((tool) => tool.interfaces)
-      .filter((offer) => offer.level !== undefined && levels.includes(offer.level))
-      .map((offer) => offer.call)
-      .sort();
-  const listed = (await report.tool("interfaces")).structuredContent as {
-    level: string;
+  const listed = (await one.tool("interfaces")).structuredContent as {
     interfaces: { name: string }[];
   };
-  assert.equal(listed.level, "report");
-  assert.deepEqual(listed.interfaces.map((offer) => offer.name).sort(), tagged(["report"]));
-  for (const name of ["message_send", "work_update", "attention"])
-    assert.ok(
-      listed.interfaces.some((offer) => offer.name === name),
-      name,
-    );
-  assert.match(
-    text(await report.tool("interfaces", { name: "team" })),
-    /^not_found: team is not presented at the report level/,
+  assert.deepEqual(
+    listed.interfaces.map((offer) => offer.name).sort(),
+    catalog
+      .flatMap((tool) => tool.interfaces)
+      .map((offer) => offer.call)
+      .sort(),
   );
-  // A name the Hub has at no level, such as a removed tool, is no interface at all.
+  assert.equal(existsSync(join(org.home, "sessions", "claude-code-s-all", "level")), false);
+  // A name the Hub doesn't have, such as a removed tool, is no interface at all.
   assert.match(
-    text(await report.tool("interfaces", { name: "form_create" })),
+    text(await one.tool("interfaces", { name: "form_create" })),
     /^not_found: there is no Hub interface form_create/,
   );
-  const team = await session(org, "s-team", "claude-code", "team");
-  await team.call("attach", { name: "pair", purpose: "Works with others." });
-  assert.deepEqual((await team.interfaces()).sort(), tagged(["report", "team"]));
-  await assert.rejects(session(org, "s-bad", "claude-code", "everything"));
-  // A restarted server records its own level for the position it fills, and one without removes it.
-  const levelFile = join(org.home, "sessions", "claude-code-s-report", "level");
-  await report.close();
-  const resumed = await session(org, "s-report", "claude-code", "team");
-  assert.equal(readFileSync(levelFile, "utf8"), "team\n");
-  await resumed.close();
-  await session(org, "s-report");
-  assert.equal(existsSync(levelFile), false);
+  await assert.rejects(session(org, "s-leveled", "claude-code", "report"));
 });
 
 test("an appointed session creates its position under the root, and a resumed one fills it again", async () => {
@@ -617,7 +591,7 @@ test("the waiter frames each item with what to do, without claiming native user 
       { kind: "assigned", recordID: "work2", from: lead, title: "Index it", at },
       ...due,
     ],
-    { self, presented: TEAM },
+    { self },
   );
   assert.match(
     delivered,
@@ -666,20 +640,6 @@ test("the waiter frames each item with what to do, without claiming native user 
     /lead, your manager, submitted/,
     "the closer is not the submitter",
   );
-  const report = describe(due, { self, presented: REPORT });
-  assert.match(
-    report,
-    /lead, your manager, closed the Actor the submission of "Restore drill" \(work5\) waited on; it now waits for your answer\. Read the submission with work_get\./,
-  );
-  assert.match(
-    report,
-    /storage routes you the ask "Delete the bucket\?" \(form2\)\. Read it with work_get \{askID: "form2"\}\.\n/,
-  );
-  assert.match(
-    report,
-    /storage submitted "Prove the backups" \(work3\) for your answer\. Read the submission with work_get\.\n/,
-  );
-  assert.doesNotMatch(report, /work_answer/);
   assert.doesNotMatch(delivered, /form_|work_review|cause/, "no removed tool is named");
   assert.match(delivered, /a native approval requires its client's validated binding/);
   assert.doesNotMatch(delivered, /only the user|recorded: true|the user \(the root\)/);
@@ -696,8 +656,6 @@ function within<T>(ms: number, what: string, promise: Promise<T>): Promise<T> {
 }
 
 /** The call aliases a frame may name, as a Team and a Report session present them. */
-const REPORT = new Set(["work_get", "work_update", "message_send"]);
-const TEAM = new Set([...REPORT, "work_answer"]);
 
 /** Run a hook's `agentorg-mcp` command for session `id`, as Claude Code runs it. */
 function hook(
@@ -889,16 +847,12 @@ test("the waiter delivers what concerns its Actor from where it attached, never 
   });
 });
 
-test("the waiter frames from the Hub catalog its session's level presents", async () => {
+test("the waiter frames how to answer an ask and a submission", async () => {
   const org = await core();
   const root = await org.client(org.root);
   const alive = { CLAUDE_PID: String(process.pid) };
-  for (const [id, name, level] of [
-    ["s-solo", "solo", "report"],
-    ["s-pair", "pair", "team"],
-    ["s-whole", "whole", undefined],
-  ] as const) {
-    const manager = await session(org, id, "claude-code", level);
+  for (const [id, name] of [["s-whole", "whole"]] as const) {
+    const manager = await session(org, id);
     const { actor } = (await manager.call("attach", { name, purpose: "Leads one report." }))
       .structuredContent as { actor: string };
     const created = (await manager.call("actor_create", { name: "helper", purpose: "Helps." }))
@@ -942,16 +896,8 @@ test("the waiter frames from the Hub catalog its session's level presents", asyn
       /root, your manager, cancelled your Work "Old plan" \(.+\); its open asks are cancelled\./,
     );
     const answering = `answer it with work_answer {askID: "${submitted.submission.submissionID}"`;
-    if (level === "report") {
-      assert.doesNotMatch(woke.stderr, /work_answer/, "the Report level presents no work_answer");
-      assert.match(
-        woke.stderr,
-        /helper submitted "Prove it" \(.+\) for your answer\. Read the submission with work_get\./,
-      );
-    } else {
-      assert.match(woke.stderr, /then answer it with work_answer \{askID, answers, note\?\}/);
-      assert.ok(woke.stderr.includes(answering), "a submission's frame gives its ID");
-    }
+    assert.match(woke.stderr, /then answer it with work_answer \{askID, answers, note\?\}/);
+    assert.ok(woke.stderr.includes(answering), "a submission's frame gives its ID");
   }
 });
 

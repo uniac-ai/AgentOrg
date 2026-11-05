@@ -28,8 +28,8 @@ Invoke through `call {name, input}`: `work_update` is `call {name: "work_update"
 
 ## Your report
 
-Your report is your Work; reply in the conversation. These are the Report level's operations,
-everything one agent and its person need:
+Your report is your Work; reply in the conversation. These operations are everything one agent
+and its person need:
 
 | Record | Operations |
 |---|---|
@@ -114,7 +114,7 @@ client references say how.
 
 ## Working with others
 
-The Team level adds working with other Actors. Its operations:
+Working with other Actors uses these operations:
 - `team`, `actor_view` and `message_get`. `team {actor?, depth?}` gives each position its state and
   headline from the Work on it, and its open asks and its branch's; `team {actor, depth: 0}` finds
   any Actor, a closed one included. `actor_view` is anyone's report as one view: its state and
@@ -122,7 +122,7 @@ The Team level adds working with other Actors. Its operations:
   submissions it answers, and the Work it must take up or hand on.
 - Giving Work. `work_create {title, goal?, ownerID}` gives Work to another Actor. Give a follow-up
   to the Actor that did the work, and Work that needs a fresh context to a new Actor, where you may
-  create one (`actor_create`, at the Organization level). As its requester you edit its `goal` and
+  create one (`actor_create`). As its requester you edit its `goal` and
   `ownerID`, or cancel it with `work_update {ticketID, expectedRevision, status: "cancelled"}`;
   reassigning or cancelling it cancels its open asks.
 - Answering. `work_answer {askID, answers, note?}` answers another Actor's ask; only the asker's
@@ -151,7 +151,7 @@ the current one. On a conflict, read the record again and reassess.
 
 ## The organization
 
-The Organization level adds:
+The organization's own operations:
 - **Lifecycle.**
   - `actor_create` creates a direct report. Do it only when the user's task and the organization's
     conventions authorize it. Brief the report by Message, give it Work for its result, and start

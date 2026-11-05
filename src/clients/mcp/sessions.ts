@@ -1,7 +1,6 @@
 /**
  * Which client session fills which position, kept in the home's `sessions/<session>/` so that a
- * resumed session fills it again. `position` holds the Actor ID, `level` the level its server
- * presents, `waiter` the current waiter PID, and `inbox` the `attention` position the session has
+ * resumed session fills it again. `position` holds the Actor ID, `waiter` the current waiter PID, and `inbox` the `attention` position the session has
  * been given everything before. This private bookkeeping establishes neither public
  * acknowledgements nor user input.
  */
@@ -11,7 +10,7 @@ import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "nod
 import { join } from "node:path";
 import { home, privateDirectory } from "../../home.ts";
 
-type Entry = "position" | "level" | "waiter" | "inbox";
+type Entry = "position" | "waiter" | "inbox";
 
 const SESSION = /^[A-Za-z0-9_-]{1,128}$/;
 
@@ -53,12 +52,6 @@ function replace(session: string, entry: Entry, value: string): void {
 export const sessions = {
   position: (session: string) => read(session, "position"),
   fill: (session: string, actor: string) => write(session, "position", actor),
-  /** The level the session's server presents, which the waiter frames for; none is every tool. */
-  level: (session: string) => read(session, "level"),
-  present(session: string, level: string | undefined): void {
-    if (level !== undefined) replace(session, "level", level);
-    else rmSync(join(directory(session), "level"), { force: true });
-  },
   /** Forget the session, as when its position closed. */
   forget: (session: string) => rmSync(directory(session), { recursive: true, force: true }),
   waiter: (session: string) => Number(read(session, "waiter") ?? 0),

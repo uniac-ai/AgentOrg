@@ -2,13 +2,7 @@
 
 import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
-import {
-  type Answer,
-  Id,
-  INTERFACE_NAME,
-  Level,
-  type ToolDescriptor,
-} from "../../domain/model/index.ts";
+import { type Answer, Id, INTERFACE_NAME, type ToolDescriptor } from "../../domain/model/index.ts";
 
 const TOOL_META = "agentorg/tool";
 const ToolMetadata = z.strictObject({
@@ -17,7 +11,6 @@ const ToolMetadata = z.strictObject({
   interface: z.string().regex(INTERFACE_NAME),
   one_way: z.boolean(),
   long_running: z.boolean(),
-  level: Level.optional(),
 });
 
 /** Flatten explicit Hub Tools for MCP while retaining their identity and local names. */
@@ -41,7 +34,6 @@ export function offeredToolsOf(catalog: ToolDescriptor[]): Tool[] {
             interface: name,
             one_way,
             long_running,
-            ...(offer.level === undefined ? {} : { level: offer.level }),
           },
         },
       };
@@ -78,7 +70,6 @@ export function catalogOf(tools: Tool[]): ToolDescriptor[] {
         long_running: meta.long_running,
       },
       ...(readOnly === undefined ? {} : { read_only: readOnly }),
-      ...(meta.level === undefined ? {} : { level: meta.level }),
     });
     catalog.set(meta.id, group);
     calls.add(tool.name);

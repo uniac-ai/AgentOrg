@@ -4,7 +4,6 @@
  * Hub caller's answer.
  */
 
-import { Level } from "@uniac/agentic-workspace/contracts";
 import { z } from "zod";
 import { Id, Interface } from "./records.ts";
 
@@ -17,7 +16,6 @@ export * from "./system.ts";
 export * from "./team.ts";
 export * from "./workspace.ts";
 
-export { Level };
 export type InterfaceDescriptor = z.output<typeof Interface>;
 
 /** A Hub Tool's stable identity, name and callable interfaces. */
@@ -32,9 +30,6 @@ export const Tool = z
           .string()
           .describe("The alias to pass to call, independent of the local interface name."),
         read_only: z.boolean().optional().describe("An interface that only reads."),
-        level: Level.optional().describe(
-          "The smallest organization level that presents it: report, team or organization. Every Hub interface carries one.",
-        ),
       }),
     ),
   })
