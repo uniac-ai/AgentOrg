@@ -13,6 +13,7 @@ export const probe = defineInterface({
     refuse: method({ input: z.object({}), output: z.object({}) }),
     unbound: method({ input: z.object({}), output: z.object({ notConnected: z.boolean() }) }),
     oddLog: method({ input: z.object({}), output: z.object({}) }),
+    flood: method({ input: z.object({ lines: z.number().int() }), output: z.object({}) }),
   },
 });
 
@@ -38,6 +39,10 @@ export default defineActor({
         } catch (error) {
           return { notConnected: error instanceof NotConnected };
         }
+      },
+      flood: async ({ lines }) => {
+        for (let i = 0; i < lines; i++) console.log(`flood ${i}`);
+        return {};
       },
       oddLog: async () => {
         // A cycle with no prototype can't be turned into JSON or text.

@@ -394,6 +394,20 @@ export class HubState {
     this.#emit(() => this.#events.audited?.(entry));
   }
 
+  /** Record something the Hub itself saw happen, such as the host sandbox's status changing. */
+  auditHub(kind: string, details: Record<string, unknown>): void {
+    this.#transaction(() => this.#audit(HUB, kind, details));
+  }
+
+  /** A package Actor's process exited: kept as its `lastExit`, and counted when it is restarted. */
+  recordExit(actorId: string, exit: Exit, restarted: boolean): void {
+    this.#db
+      .prepare(
+        "UPDATE actors SET last_exit = ?, restarts = restarts + ? WHERE id = ? AND package NOT IN ('external', 'builtin')",
+      )
+      .run(JSON.stringify(exit), restarted ? 1 : 0, actorId);
+  }
+
   /** Record a call's metadata: who, through which binding, which method, and how it ended. */
   auditCall(
     caller: string,
@@ -533,11 +547,16 @@ export class HubState {
     return actor;
   }
 
-  /** Start a package Actor; its process is spawned from step 3. */
-  start(caller: string, actorId: string): void {
+  /** Refused unless the caller may start the Actor and it can be started now; changes nothing. */
+  checkStart(caller: string, actorId: string): void {
     const actor = this.#packageActor(caller, actorId);
     if (actor.state !== "created" && actor.state !== "stopped")
       throw new Refused("state", `${actorId} is ${actor.state}.`);
+  }
+
+  /** Start a package Actor: recorded as running; the Hub spawns its process. */
+  start(caller: string, actorId: string): void {
+    this.checkStart(caller, actorId);
     this.#transaction(() => {
       this.#db.prepare("UPDATE actors SET state = 'running' WHERE id = ?").run(actorId);
       this.#audit(caller, "actor.start", { actorId });

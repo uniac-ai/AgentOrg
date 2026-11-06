@@ -1,5 +1,6 @@
 import { Refused } from "@agentorg/sdk";
 import { readLogs } from "./logs.js";
+import type { Processes } from "./processes.js";
 import type {
   ActorRecord,
   AuditRecord,
@@ -29,18 +30,23 @@ export class HubActor {
   readonly #listeners = new Map<string, Set<Listener>>();
   readonly #handlers: Record<string, Record<string, Handler>>;
 
-  constructor(state: HubState) {
-    /** A package Actor's record with its view modules, which a shell can place. */
+  constructor(state: HubState, processes: Processes) {
+    /**
+     * A package Actor's record with its view modules, which a shell can place, and whether this
+     * machine can run its process now.
+     */
     const withViews = (actor: ActorRecord) => {
       if (actor.package === "external" || actor.package === "builtin") return actor;
+      const host = processes.status;
+      const record = host ? { ...actor, host } : actor;
       let modules: Record<string, { placement: string }>;
       try {
         ({ modules } = state.package(actor.package).manifest);
       } catch {
-        return actor; // A closed Actor's package may be gone.
+        return record; // A closed Actor's package may be gone.
       }
       return {
-        ...actor,
+        ...record,
         views: Object.keys(modules).filter((name) => modules[name]?.placement === "view"),
       };
     };
@@ -62,9 +68,35 @@ export class HubActor {
           }),
         list: () => ({ actors: state.actors().map(withViews) }),
         get: (_, input) => withViews(state.actor(String(input.actorId))),
-        start: (caller, input) => state.start(caller, String(input.actorId)),
-        stop: (caller, input) => state.stop(caller, String(input.actorId)),
-        close: (caller, input) => state.closeActor(caller, String(input.actorId)),
+        start: async (caller, input) => {
+          const actorId = String(input.actorId);
+          state.checkStart(caller, actorId);
+          // Probed again each time, so a change on the machine shows.
+          await processes.ready();
+          state.start(caller, actorId);
+          processes.start(actorId);
+        },
+        // The state changes first, so the exit that follows is never taken for a crash.
+        stop: async (caller, input) => {
+          const actorId = String(input.actorId);
+          state.stop(caller, actorId);
+          await processes.stop(actorId);
+        },
+        // A running Actor is stopped first, as `stop` does it: recorded as stopped, so nothing
+        // waiting to start it runs it again, then its process is let go with stop's grace. Then
+        // the Actor is closed.
+        close: async (caller, input) => {
+          const actorId = String(input.actorId);
+          const actor = state.actor(actorId);
+          if (
+            actor.state === "running" &&
+            actor.package !== "external" &&
+            actor.package !== "builtin"
+          )
+            state.stop(caller, actorId);
+          await processes.stop(actorId);
+          state.closeActor(caller, actorId);
+        },
         logs: (_, input) => {
           // The Actor must exist; its lines are its process's output and its views' lines.
           const { actorId } = state.actor(String(input.actorId));
@@ -104,12 +136,12 @@ export class HubActor {
     };
   }
 
-  call(exported: string, method: string, caller: string, input: unknown): unknown {
+  async call(exported: string, method: string, caller: string, input: unknown): Promise<unknown> {
     const methods = Object.hasOwn(this.#handlers, exported) ? this.#handlers[exported] : undefined;
     const handler = methods && Object.hasOwn(methods, method) ? methods[method] : undefined;
     if (!handler) throw new Refused("unimplemented", `hub.${exported} has no method ${method}.`);
     // A method with nothing to return answers {}.
-    return handler(caller, input as Input) ?? {};
+    return (await handler(caller, input as Input)) ?? {};
   }
 
   /** Listen to one of the hub's events; returns the way to stop. */

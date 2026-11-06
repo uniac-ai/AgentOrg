@@ -437,11 +437,12 @@ test("management goes only through the hub's exports, and requests reach their a
   };
   const seen = (await requested.next()) as { event: { reason: string; needs: string } };
   assert.deepEqual([seen.event.reason, seen.event.needs], ["please", "export"]);
-  // The live audit feed carries the request (after any calls audited before it).
-  let entry: { event: { kind: string } };
-  do entry = (await audited.next()) as { event: { kind: string } };
-  while (entry.event.kind === "call");
-  assert.equal(entry.event.kind, "request");
+  // The live audit feed carries the request (after whatever was audited before it: calls, the
+  // host's status from the Hub's opening probe).
+  let entry: { event: { kind: string } } | undefined;
+  do entry = (await audited.next()) as { event: { kind: string } } | undefined;
+  while (entry && entry.event.kind !== "request");
+  assert.equal(entry?.event.kind, "request");
   assert.deepEqual(await bind(c.id, "notes", p.id, "notes"), { result: { bound: true } });
   assert.deepEqual(await decided.next(), {
     event: {

@@ -26,5 +26,31 @@ jobs:
         run: npx playwright install --only-shell chromium
       - name: Lint and format
         run: npm run check
+      # Host processes sandbox themselves in a user namespace, which stock Ubuntu's AppArmor
+      # restricts: allowed here so every isolation test runs on the namespace path.
+      - name: Allow unprivileged user namespaces
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: Build and test
         run: npm test
+      - name: Restrict user namespaces again, as on stock Ubuntu
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=1
+      - name: Host Actors can't start, and say why
+        env:
+          AGENTORG_EXPECT_NO_USERNS: "1"
+        run: node --test --test-name-pattern="stock Ubuntu" packages/hub/dist/test/processes.test.js
+
+  # The macOS sandbox (sandbox-exec) is proved only here.
+  host-isolation-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install
+        run: npm ci
+      - name: Build
+        run: npm run build
+      - name: Host process tests
+        run: node --test packages/hub/dist/test/processes.test.js packages/hub/dist/test/runner.test.js

@@ -151,8 +151,14 @@ export function boundedEntry(
  * first, replacing the one before, so an Actor's logs never hold more than two files.
  */
 export function appendLog(home: string, actorId: string, entry: LogLine): void {
+  appendLogs(home, actorId, [entry]);
+}
+
+/** Add entries to an Actor's log in one write, rotating first as `appendLog` does. */
+export function appendLogs(home: string, actorId: string, entries: LogLine[]): void {
+  if (!entries.length) return;
   const file = logFile(home, actorId);
-  const line = `${JSON.stringify(entry)}\n`;
+  const line = entries.map((entry) => `${JSON.stringify(entry)}\n`).join("");
   // Past what a reader takes of a file, a line could never be read back.
   if (Buffer.byteLength(line) > MAX_FILE) return;
   mkdirSync(join(home, "logs"), { recursive: true, mode: 0o700 });
@@ -164,4 +170,16 @@ export function appendLog(home: string, actorId: string, entry: LogLine): void {
   }
   if (size > 0 && size + Buffer.byteLength(line) > MAX_FILE) renameSync(file, `${file}.1`);
   appendFileSync(file, line, { mode: 0o600 });
+}
+
+/**
+ * A line a host process wrote, as a log entry: on stderr, a JSON line with a message and a time is
+ * one of the runner's `ctx.log` entries (bounded like any other); anything else is the process's
+ * own output, `info` from stdout and `error` from stderr.
+ */
+export function outputEntry(stream: "stdout" | "stderr", line: string): LogLine {
+  const parsed = stream === "stderr" ? entryOf(line) : undefined;
+  return parsed
+    ? boundedEntry(parsed.level, parsed.message, parsed.data, parsed.module?.slice(0, 64))
+    : boundedEntry(stream === "stdout" ? "info" : "error", line, undefined, undefined);
 }

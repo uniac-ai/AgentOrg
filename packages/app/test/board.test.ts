@@ -1,12 +1,9 @@
 import assert from "node:assert/strict";
-import { type ChildProcess, spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { Duplex as NodeDuplex } from "node:stream";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import type { Duplex } from "@agentorg/sdk";
 import { buildPackage } from "@agentorg/sdk/build";
 import { chromium } from "@playwright/test";
 import WebSocket from "ws";
@@ -14,7 +11,6 @@ import { type App, startApp } from "../src/index.ts";
 
 // dist/test/board.test.js → the repository root.
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..");
-const runner = fileURLToPath(import.meta.resolve("@agentorg/sdk/host/runner.js"));
 
 const until = async (condition: () => boolean, ms = 15_000) => {
   for (let waited = 0; !condition(); waited += 20) {
@@ -53,50 +49,6 @@ function personOf(app: App, token: string) {
   };
 }
 
-/**
- * The board's host process: the SDK's runner over an fd-3 pipe the Hub accepts as that Actor's,
- * as the Hub's spawner will run it. Every process started here is killed when the test ends.
- */
-function hostOf(t: test.TestContext, app: App, packageDir: string, actorId: string) {
-  const children: ChildProcess[] = [];
-  t.after(async () => {
-    for (const child of children)
-      if (child.exitCode === null && child.signalCode === null) {
-        child.kill("SIGKILL");
-        await new Promise((resolve) => child.once("exit", resolve));
-      }
-  });
-  return {
-    async start() {
-      const child = spawn(
-        process.execPath,
-        [
-          "--permission",
-          `--allow-fs-read=${runner}`,
-          `--allow-fs-read=${packageDir}/`,
-          runner,
-          packageDir,
-          actorId,
-        ],
-        { stdio: ["ignore", "ignore", "ignore", "pipe"], env: {} },
-      );
-      children.push(child);
-      app.hub.accept(NodeDuplex.toWeb(child.stdio[3] as NodeDuplex) as unknown as Duplex, {
-        actorId,
-      });
-      await until(() => app.hub.connected(actorId));
-    },
-    async stop() {
-      const child = children.at(-1);
-      if (!child || child.exitCode !== null || child.signalCode !== null) return;
-      const exited = new Promise((resolve) => child.once("exit", resolve));
-      child.kill("SIGTERM");
-      await exited;
-      await until(() => !app.hub.connected(actorId));
-    },
-  };
-}
-
 test("the board in the shell: a card added in its panel outlives a reload and a restart", async (t) => {
   // The real path: --allow-fs-read matches resolved paths, and macOS's tmpdir is behind a symlink.
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "agentorg-board-e2e-")));
@@ -119,9 +71,9 @@ test("the board in the shell: a card added in its panel outlives a reload and a 
     package: hash,
     bindings: [{ slot: "logic.store", provider: "storage", export: "kv" }],
   });
+  // The Hub spawns its process, sandboxed, and it is running once it says hello.
   await person.call("actors", "start", { actorId });
-  const host = hostOf(t, app, join(home, "packages", hash), actorId);
-  await host.start();
+  await until(() => app.hub.connected(actorId));
   await person.call("layout", "place", { actor: actorId, module: "panel", title: "Launch" });
 
   const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
@@ -139,9 +91,9 @@ test("the board in the shell: a card added in its panel outlives a reload and a 
 
   // The board's process stopped and started again: the card is in its store, not its memory.
   await person.call("actors", "stop", { actorId });
-  await host.stop();
+  assert.equal(app.hub.connected(actorId), false, "stop returns once the process is gone");
   await person.call("actors", "start", { actorId });
-  await host.start();
+  await until(() => app.hub.connected(actorId));
   // The open panel reads its cards again when its slot is usable again.
   await panel.getByText("Write the release notes").waitFor();
   await page.reload();

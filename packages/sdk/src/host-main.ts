@@ -59,6 +59,10 @@ const logFor = (module?: string): Log => {
   return { info: line("info"), warn: line("warn"), error: line("error") };
 };
 
+// The Hub's stop. Handled, it reaches the process even as PID 1 of a PID namespace, where an
+// unhandled SIGTERM from outside is ignored.
+process.on("SIGTERM", () => process.exit(0));
+
 const pipe = new Socket({ fd: 3, readable: true, writable: true });
 const channel = NodeDuplex.toWeb(pipe) as unknown as Duplex;
 const host = await runHost({ packageDir, actorId, channel, log: logFor });

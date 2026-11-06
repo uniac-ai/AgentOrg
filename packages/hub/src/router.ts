@@ -28,6 +28,7 @@ import {
 } from "@agentorg/wire";
 import { HubActor } from "./hub-actor.js";
 import { appendLog, boundedEntry } from "./logs.js";
+import { Processes, type ProcessOptions } from "./processes.js";
 import {
   type BindingRecord,
   type CallOutcome,
@@ -67,10 +68,14 @@ export interface HubOptions {
   storage?: StorageLimits;
   /** The schema-check pool: its size and each check's budget (defaults in validate.ts). */
   checks?: { size?: number; budgetMs?: number; compileBudgetMs?: number };
+  /** Package Actors' processes: their sandbox, memory and timings (defaults in processes.ts). */
+  processes?: ProcessOptions;
 }
 
 /** A channel the Hub took: `closed` settles when it ends. */
 export interface ChannelHandle {
+  /** Settles when the channel's hello is admitted; never, if it isn't. */
+  admitted: Promise<void>;
   closed: Promise<void>;
   close(): void;
 }
@@ -172,6 +177,7 @@ export class Hub {
   readonly #actor: HubActor;
   readonly #validators: Validators;
   readonly #storage: Storage;
+  readonly #processes: Processes;
   readonly #connections = new Map<string, Connection>();
   /** Open subscriptions and splices by the binding they run through, ended when it goes. */
   readonly #live = new Map<string, Set<(error?: WireError) => void>>();
@@ -204,7 +210,12 @@ export class Hub {
       exportsChanged: (changed) => actor?.exportsChanged(changed),
       audited: (entry) => actor?.audited(entry),
     });
-    actor = this.#actor = new HubActor(this.state);
+    this.#processes = new Processes(
+      this.state,
+      (channel, admitted) => this.accept(channel, admitted),
+      options.processes,
+    );
+    actor = this.#actor = new HubActor(this.state, this.#processes);
     try {
       this.#storage = new Storage(home, options.storage);
       // Stores of Actors closed while a delete couldn't run (a crash, a lock) go now.
@@ -224,8 +235,14 @@ export class Hub {
     }
   }
 
+  /**
+   * Open the Hub in its home. The host sandbox is probed at once; when it is available, package
+   * Actors recorded as `running` get their processes back.
+   */
   static open(home: string, options: HubOptions = {}): Hub {
-    return new Hub(home, options);
+    const hub = new Hub(home, options);
+    hub.#processes.probe().catch(() => {});
+    return hub;
   }
 
   /** Whether an Actor has a channel now. */
@@ -247,6 +264,10 @@ export class Hub {
         throw new Refused("state", `${actor.actorId} isn't a live package Actor.`);
     }
     let conn: Connection | undefined;
+    let admit!: () => void;
+    const admittedNow = new Promise<void>((resolve) => {
+      admit = resolve;
+    });
     let helloSeen = false;
     let ended = false;
     const options: SessionOptions = {
@@ -268,6 +289,7 @@ export class Hub {
             if (replace === false && this.#connections.has(actorId))
               throw new Refused("connected", `${actorId} already has a channel to this Hub.`);
             conn = this.#admit(actorId, session);
+            admit();
             options.maxStreams = MAX_STREAMS;
           });
         }
@@ -287,7 +309,7 @@ export class Hub {
       this.#sessions.delete(session);
       if (conn) this.#dropped(conn);
     });
-    return { closed, close: () => session.close() };
+    return { admitted: admittedNow, closed, close: () => session.close() };
   }
 
   /**
@@ -411,8 +433,9 @@ export class Hub {
     }
   }
 
-  /** Close every channel, admitted or not, then the state. */
+  /** Kill every host process, close every channel, admitted or not, then the state. */
   close(): void {
+    this.#processes.close();
     for (const session of [...this.#sessions]) session.close();
     this.#connections.clear();
     this.#validators.close();
@@ -687,7 +710,7 @@ export class Hub {
       await this.#validators.check(caller, iface, part, value, "invalid");
       reply = provider
         ? await this.#forward(provider, binding, caller, method, value, cancelled)
-        : this.#builtinCall(binding, method, caller, value);
+        : await this.#builtinCall(binding, method, caller, value);
       if ("error" in reply) outcome = "refused";
       else if ("result" in reply)
         await this.#validators.check(
@@ -710,7 +733,12 @@ export class Hub {
   }
 
   /** A call to a built-in Actor: the hub, or storage with the consumer's own store. */
-  #builtinCall(binding: BindingRecord, method: string, caller: string, value: unknown): Body {
+  async #builtinCall(
+    binding: BindingRecord,
+    method: string,
+    caller: string,
+    value: unknown,
+  ): Promise<Body> {
     try {
       const out =
         binding.provider === STORAGE
@@ -720,7 +748,7 @@ export class Hub {
               method,
               value as Record<string, unknown>,
             )
-          : this.#actor.call(binding.export, method, caller, value);
+          : await this.#actor.call(binding.export, method, caller, value);
       // Through JSON, as a reply from any other provider would be.
       return result(JSON.parse(JSON.stringify(out ?? null)));
     } catch (error) {
