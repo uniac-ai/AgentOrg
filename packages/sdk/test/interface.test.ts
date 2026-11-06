@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
 import { z } from "zod";
 import {
@@ -14,6 +15,7 @@ import {
   normalizeSchema,
   OutcomeUnknown,
   Refused,
+  sha256,
 } from "../src/index.ts";
 
 const BOARD_HASH = "sha256-b854931fbb0f9b7d2dc42b545e4039fe4d0cef89d535b9403c66c543bca16179";
@@ -32,6 +34,14 @@ const board = (title = z.string().min(1)) => {
     events: { changed: event(z.object({ id: z.string() })) },
   });
 };
+
+test("sha256 is the standard digest, in plain JavaScript so it bundles anywhere", () => {
+  assert.equal(sha256(""), `sha256-${createHash("sha256").update("").digest("hex")}`);
+  for (const size of [1, 55, 56, 63, 64, 65, 1000]) {
+    const bytes = new Uint8Array(size).map((_, i) => (i * 31 + size) & 255);
+    assert.equal(sha256(bytes), `sha256-${createHash("sha256").update(bytes).digest("hex")}`);
+  }
+});
 
 test("canonical JSON sorts keys at every depth and keeps array order", () => {
   assert.equal(

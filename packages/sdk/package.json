@@ -12,6 +12,14 @@
     "./testing": {
       "types": "./dist/src/testing.d.ts",
       "default": "./dist/src/testing.js"
+    },
+    "./build": {
+      "types": "./dist/src/build.d.ts",
+      "default": "./dist/src/build.js"
+    },
+    "./describe": {
+      "types": "./dist/src/describe.d.ts",
+      "default": "./dist/src/describe.js"
     }
   },
   "files": [
@@ -26,5 +34,11 @@
   },
   "devDependencies": {
     "zod": "^4.6.7"
+  },
+  "dependencies": {
+    "esbuild": "^0.28.2"
+  },
+  "bin": {
+    "agentorg": "dist/src/cli.js"
   }
 }

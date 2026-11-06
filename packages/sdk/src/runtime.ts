@@ -63,13 +63,22 @@ type Schema = {
     | { success: false; error: { issues: { path: PropertyKey[]; message: string }[] } };
 };
 
-/** A value checked against a schema; a misfit is `Refused` with code `invalid`. */
-export function check(schema: unknown, value: unknown, where: string): unknown {
+/**
+ * A value checked against a schema. A caller's misfit is `Refused` with code `invalid`, and nothing
+ * ran. A provider's is code `bad_output`: the provider ran and its reply or event broke the
+ * contract, so the call may have had its effect; read state before retrying.
+ */
+export function check(
+  schema: unknown,
+  value: unknown,
+  where: string,
+  code: "invalid" | "bad_output" = "invalid",
+): unknown {
   const result = (schema as Schema).safeParse(value);
   if (result.success) return result.data;
   const issue = result.error.issues[0];
   throw new Refused(
-    "invalid",
+    code,
     `${where}: ${issue ? `${issue.path.map(String).join(".") || "value"} ${issue.message}` : "invalid"}`,
   );
 }
@@ -134,6 +143,7 @@ export function createRuntime<S extends InterfaceMap, X extends InterfaceMap>(
                   spec.output,
                   await target.call(method, parsed),
                   `${name}.${method} output`,
+                  "bad_output",
                 );
               },
             ]),
@@ -269,7 +279,7 @@ export function createRuntime<S extends InterfaceMap, X extends InterfaceMap>(
           const iface = state.iface;
           const spec = iface.kind === "rpc" ? own(iface.events, event) : undefined;
           if (!spec) throw new TypeError(`${slot} has no event ${event}.`);
-          const value = check(spec.payload, payload, `${slot}.${event}`);
+          const value = check(spec.payload, payload, `${slot}.${event}`, "bad_output");
           if (state.binding !== binding) return;
           for (const fn of [...(state.listeners.get(event) ?? [])]) fn(value);
         },
@@ -287,7 +297,12 @@ export function createRuntime<S extends InterfaceMap, X extends InterfaceMap>(
       );
       if (!handler)
         throw new Refused("unimplemented", `${exportName}.${method} isn't implemented.`);
-      return check(spec.output, await handler(parsed), `${exportName}.${method} output`);
+      return check(
+        spec.output,
+        await handler(parsed),
+        `${exportName}.${method} output`,
+        "bad_output",
+      );
     },
     async open(exportName, params, stream) {
       const state = target(exportName, "stream");

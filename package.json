@@ -8,7 +8,9 @@
   },
   "workspaces": [
     "packages/sdk",
-    "packages/interfaces"
+    "packages/interfaces",
+    "examples/board-interfaces",
+    "examples/board"
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",
