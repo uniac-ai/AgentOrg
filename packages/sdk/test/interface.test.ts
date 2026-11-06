@@ -212,7 +212,7 @@ test("an interface keeps each schema's own type, which module handles infer from
 test("the three errors carry what a caller needs", () => {
   const notConnected = new NotConnected("store");
   assert.equal(notConnected.name, "NotConnected");
-  assert.equal(notConnected.slot, "store");
+  assert.equal(notConnected.target, "store");
   const refused = new Refused("invalid", "title is required");
   assert.equal(refused.name, "Refused");
   assert.equal(refused.code, "invalid");

@@ -5,17 +5,18 @@ const Key = z.string().min(1).max(512);
 
 /**
  * `kv@1`: a key-value store of JSON values, the state slot a host module uses for now. A storage
- * provider creates one store per Actor; `changed` tells of each write, and `list` reads history.
+ * provider creates one store per Actor; `changed` tells of each write, and `list` pages through
+ * the keys.
  */
 export const kv = defineInterface({
   name: "kv",
   major: 1,
   kind: "rpc",
   methods: {
-    /** The value under `key`, or `null` when there is none. */
+    /** The value under `key`; `value` is absent when there is none, and a stored `null` is `null`. */
     get: method({
       input: z.object({ key: Key }),
-      output: z.object({ value: z.json().nullable() }),
+      output: z.object({ value: z.json().optional() }),
     }),
     set: method({ input: z.object({ key: Key, value: z.json() }), output: z.object({}) }),
     delete: method({ input: z.object({ key: Key }), output: z.object({ deleted: z.boolean() }) }),

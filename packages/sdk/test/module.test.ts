@@ -6,6 +6,8 @@ import {
   defineInterface,
   defineWidget,
   event,
+  type FrameRoot,
+  isFrameInterface,
   isModuleDefinition,
   method,
   NotConnected,
@@ -34,25 +36,22 @@ const pipe = defineInterface({
   open: z.object({ name: z.string() }),
 });
 const site = defineInterface({ name: "site", major: 1, kind: "http" });
-const view = defineInterface({
-  name: "ui.view",
-  major: 1,
-  kind: "rpc",
-  methods: {
-    mount: method({
-      input: z.object({
-        theme: z.record(z.string(), z.string()),
-        size: z.object({ width: z.number(), height: z.number() }),
+const Size = z.object({ width: z.number(), height: z.number() });
+const frame = <const V extends number>(major: V) =>
+  defineInterface({
+    name: "ui.view",
+    major,
+    kind: "rpc",
+    methods: {
+      mount: method({
+        input: z.object({ theme: z.record(z.string(), z.string()), size: Size }),
+        output: z.object({}),
       }),
-      output: z.object({}),
-    }),
-    resize: method({
-      input: z.object({ size: z.object({ width: z.number(), height: z.number() }) }),
-      output: z.object({}),
-    }),
-    unmount: method({ input: z.object({}), output: z.object({}) }),
-  },
-});
+      resize: method({ input: z.object({ size: Size }), output: z.object({}) }),
+      unmount: method({ input: z.object({}), output: z.object({}) }),
+    },
+  });
+const view = frame(1);
 
 const pair = () => {
   const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
@@ -75,7 +74,14 @@ test("slot and export names are checked, and `add` is reserved", () => {
   const start = () => {};
   assert.throws(() => defineActor({ slots: { "my-notes": notes }, start }), /valid slot name/);
   assert.throws(() => defineActor({ exports: { Notes: notes }, start }), /valid export name/);
-  assert.throws(() => defineActor({ exports: { add: notes }, start }), /reserved/);
+  // The types refuse it too; this is the check for code that bypasses them.
+  assert.throws(() => defineActor({ exports: { add: notes } as never, start }), /reserved/);
+});
+
+test("only ui.view@1 is the in-frame interface", () => {
+  assert.equal(isFrameInterface(view), true);
+  assert.equal(isFrameInterface(frame(2)), false);
+  assert.equal(isFrameInterface(notes), false);
 });
 
 test("an rpc slot calls its bound provider, validates both ways, and fails clean when unbound", async () => {
@@ -116,7 +122,7 @@ test("a provider that answers outside the schema, or not at all, is refused", as
   );
 });
 
-test("bind and unbind fire their callbacks, and slot events reach subscribers until they leave", async () => {
+test("bind and unbind fire their callbacks, and events reach subscribers only from the current binding", async () => {
   const seen: string[] = [];
   const t = createTestContext(
     defineActor({
@@ -128,18 +134,39 @@ test("bind and unbind fire their callbacks, and slot events reach subscribers un
     }),
   );
   await t.start();
-  const provider = t.bind("notes", {});
+  const fake = {};
+  const first = t.bind("notes", fake);
   const off = t.ctx.slots.notes.on("written", ({ key }) => seen.push(`written ${key}`));
-  provider.emit("written", { key: "a" });
-  assert.throws(() => provider.emit("written", {}), Refused);
-  off();
-  provider.emit("written", { key: "b" });
+  first.emit("written", { key: "a" });
+  assert.throws(() => first.emit("written", {}), Refused);
   t.unbind("notes");
-  provider.emit("written", { key: "c" });
-  assert.deepEqual(seen, ["bind", "written a", "unbind"]);
+  first.emit("written", { key: "after unbind" });
+  // The same fake bound again is a new binding; the first one's handle no longer delivers.
+  const second = t.bind("notes", fake);
+  first.emit("written", { key: "stale" });
+  second.emit("written", { key: "b" });
+  off();
+  second.emit("written", { key: "unsubscribed" });
+  assert.deepEqual(seen, ["bind", "written a", "unbind", "bind", "written b"]);
 });
 
-test("an rpc export is called through its handlers, emits validated events, and can be withdrawn", async () => {
+test("names that every object has are not methods or events", async () => {
+  const t = createTestContext(
+    defineActor({
+      slots: { notes },
+      exports: { notes },
+      start(ctx) {
+        ctx.exports.notes.implement({ read: () => ({ text: "" }), write: () => ({}) });
+      },
+    }),
+  );
+  await t.start();
+  assert.throws(() => t.ctx.slots.notes.on("hasOwnProperty" as never, () => {}), /no event/);
+  await assert.rejects(t.call("notes", "toString", {}), /no method toString/);
+  assert.throws(() => t.ctx.exports.notes.emit("constructor" as never, {} as never), /no event/);
+});
+
+test("an rpc export is called through its handlers, emits validated events, and stops when withdrawn", async () => {
   const t = createTestContext(
     defineActor({
       exports: { notes },
@@ -168,11 +195,17 @@ test("an rpc export is called through its handlers, emits validated events, and 
   t.ctx.exports.notes.withdraw();
   assert.equal(t.withdrawn("notes"), true);
   await assert.rejects(t.call("notes", "read", { key: "a" }), NotConnected);
+  assert.throws(() => t.ctx.exports.notes.emit("written", { key: "k" }), NotConnected);
+  assert.throws(
+    () => t.ctx.exports.notes.implement({ read: () => ({ text: "" }), write: () => ({}) }),
+    NotConnected,
+  );
 });
 
-test("exports can be added at run time, under a new name", async () => {
+test("exports can be added at run time under a free, valid name, including a withdrawn one", async () => {
   const t = createTestContext(
     defineActor({
+      exports: { notes },
       start(ctx) {
         ctx.exports.add("extra", notes).implement({
           read: () => ({ text: "extra" }),
@@ -183,8 +216,15 @@ test("exports can be added at run time, under a new name", async () => {
   );
   await t.start();
   assert.deepEqual(await t.call("extra", "read", { key: "x" }), { text: "extra" });
-  assert.throws(() => t.ctx.exports.add("extra", notes), /already exists/);
-  assert.throws(() => t.ctx.exports.add("add", notes), /already exists/);
+  assert.throws(() => t.ctx.exports.add("extra", notes), /already offered/);
+  assert.throws(() => t.ctx.exports.add("notes", notes), /already offered/);
+  assert.throws(() => t.ctx.exports.add("add", notes), /valid export name/);
+  assert.throws(() => t.ctx.exports.add("Bad Name!", notes), /valid export name/);
+  t.ctx.exports.notes.withdraw();
+  t.ctx.exports
+    .add("notes", notes)
+    .implement({ read: () => ({ text: "again" }), write: () => ({}) });
+  assert.deepEqual(await t.call("notes", "read", { key: "x" }), { text: "again" });
 });
 
 test("stream and http slots and exports carry bytes and requests", async () => {
@@ -209,29 +249,41 @@ test("stream and http slots and exports carry bytes and requests", async () => {
   await t.open("tunnel", { name: "b" }, pair());
   assert.deepEqual(opened, [{ name: "b" }]);
   assert.equal(await (await t.fetch("web", new Request("http://x/hello"))).text(), "/hello");
-  await assert.rejects(t.call("web", "read", {}), /isn't a rpc export/);
+  await assert.rejects(t.call("web", "read", {}), /isn't an rpc export/);
 });
 
-test("a ui.view export is mounted into an element with validated options", async () => {
-  const mounted: unknown[] = [];
+test("a ui.view@1 export mounts into an element, resizes and unmounts with validated input", async () => {
+  const seen: unknown[] = [];
   const t = createTestContext(
     defineWidget({
       exports: { view },
       start(ctx) {
         ctx.exports.view.implement({
           mount(el, options) {
-            mounted.push([el, options]);
-            return () => mounted.push("unmounted");
+            seen.push(["mount", el, options]);
+            return () => seen.push("unmount");
+          },
+          resize(size) {
+            seen.push(["resize", size]);
           },
         });
       },
     }),
   );
   await t.start();
-  const el = {} as Element;
+  const el = {} as FrameRoot;
   const options = { theme: { "--fg": "#000" }, size: { width: 300, height: 200 } };
-  const cleanup = t.mount("view", el, options);
-  cleanup?.();
-  assert.deepEqual(mounted, [[el, options], "unmounted"]);
+  const mounted = t.mount("view", el, options);
+  mounted.resize({ width: 10, height: 20 });
+  assert.throws(() => mounted.resize({ width: 10 }), Refused);
+  mounted.unmount();
+  assert.deepEqual(seen, [
+    ["mount", el, options],
+    ["resize", { width: 10, height: 20 }],
+    "unmount",
+  ]);
   assert.throws(() => t.mount("view", el, { theme: {} }), Refused);
+  await assert.rejects(t.call("view", "mount", options), /isn't an rpc export/);
+  t.ctx.exports.view.withdraw();
+  assert.throws(() => t.mount("view", el, options), NotConnected);
 });

@@ -33,8 +33,7 @@ const panel = defineWidget({
   start(ctx) {
     ctx.exports.view.implement({
       mount(el, { size }) {
-        el.textContent = `${size.width}x${size.height}`;
-        return undefined;
+        (el as Element).textContent = `${size.width}x${size.height}`;
       },
     });
   },
@@ -45,7 +44,7 @@ test("an Actor uses kv@1 through its slot, and a widget renders through ui.view@
   const t = createTestContext(logic);
   await t.start();
   t.bind("store", {
-    get: ({ key }) => ({ value: (values.get(key) ?? null) as never }),
+    get: ({ key }) => (values.has(key) ? { value: values.get(key) as never } : {}),
     set: ({ key, value }) => {
       values.set(key, value);
       return {};
@@ -54,10 +53,13 @@ test("an Actor uses kv@1 through its slot, and a widget renders through ui.view@
   await new Promise(setImmediate);
   assert.deepEqual(values.get("notes"), ["bound"]);
   await assert.rejects(t.ctx.slots.store.call.get({ key: "" }), /key/);
+  assert.deepEqual(await t.ctx.slots.store.call.get({ key: "missing" }), {});
+  values.set("empty", null);
+  assert.deepEqual(await t.ctx.slots.store.call.get({ key: "empty" }), { value: null });
 
   const view = createTestContext(panel);
   await view.start();
   const el = { textContent: "" } as Element;
-  view.mount("view", el, { theme: {}, size: { width: 320, height: 240 } });
+  view.mount("view", el, { theme: {}, size: { width: 320, height: 240 } }).unmount();
   assert.equal(el.textContent, "320x240");
 });

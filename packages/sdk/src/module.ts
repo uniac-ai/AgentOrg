@@ -66,6 +66,12 @@ export interface HttpExport extends Withdrawable {
 }
 
 /**
+ * The element a view renders into: the DOM's `Element` where the DOM library is in scope (a
+ * widget's code), and `object` elsewhere, so host-only code needs no DOM types.
+ */
+export type FrameRoot = typeof globalThis extends { Element: { prototype: infer E } } ? E : object;
+
+/**
  * The export handle of `ui.view@1`, the one in-frame interface, and so the one interface whose
  * handle isn't derived from its methods. A view renders into its own frame's DOM, which no wire
  * message can carry: the view implements `mount(el, options)` against its frame's root element,
@@ -75,20 +81,21 @@ export interface HttpExport extends Withdrawable {
 export interface ViewExport<MountOptions, Size> extends Withdrawable {
   implement(view: {
     /** Render into `el`; the function returned, if any, runs at unmount. */
-    mount(el: Element, options: MountOptions): (() => void) | undefined;
+    // biome-ignore lint/suspicious/noConfusingVoidType: a mount that cleans up nothing returns nothing.
+    mount(el: FrameRoot, options: MountOptions): (() => void) | void;
     resize?(size: Size): void;
   }): void;
 }
 export type Export<I extends Interface> =
-  I extends RpcInterface<"ui.view", infer M, Events>
+  I extends RpcInterface<"ui.view", infer M, Events, 1>
     ? "mount" extends keyof M
       ? "resize" extends keyof M
         ? ViewExport<
             z.output<M["mount"]["input"]>,
             z.output<M["resize"]["input"]> extends { size: infer Size } ? Size : never
           >
-        : never
-      : never
+        : RpcExport<M, Events>
+      : RpcExport<M, Events>
     : I extends RpcInterface<string, infer M, infer E>
       ? RpcExport<M, E>
       : I extends StreamInterface<string, infer O>
@@ -102,10 +109,18 @@ export interface Log {
   error(message: string, fields?: Record<string, unknown>): void;
 }
 
-export type Interfaces = Record<string, Interface>;
+/** Slots or exports: names to interfaces. */
+export type InterfaceMap = Record<string, Interface>;
+/** Exports may not be named `add`, which is `exports.add`. */
+export type ExportMap = InterfaceMap & { add?: never };
+
+/** Whether an interface is `ui.view@1`, the one in-frame interface, with its own export handle. */
+export function isFrameInterface(iface: Interface): boolean {
+  return iface.kind === "rpc" && iface.name === "ui.view" && iface.major === 1;
+}
 
 /** Everything a module gets. There are no files, network, environment or Hub access besides. */
-export interface Context<S extends Interfaces, X extends Interfaces> {
+export interface Context<S extends InterfaceMap, X extends InterfaceMap> {
   readonly slots: { readonly [K in keyof S]: Slot<S[K]> };
   readonly exports: { readonly [K in keyof X]: Export<X[K]> } & {
     /** Offer another export at run time; consumers still bind it explicitly. */
@@ -119,8 +134,8 @@ export interface Context<S extends Interfaces, X extends Interfaces> {
 export const MODULE = "agentorg.module/1";
 
 export interface ModuleDefinition<
-  S extends Interfaces = Interfaces,
-  X extends Interfaces = Interfaces,
+  S extends InterfaceMap = InterfaceMap,
+  X extends InterfaceMap = InterfaceMap,
 > {
   readonly agentorg: typeof MODULE;
   readonly placement: Placement;
@@ -130,7 +145,7 @@ export interface ModuleDefinition<
 }
 
 type None = Record<never, Interface>;
-export interface ModuleSpec<S extends Interfaces, X extends Interfaces> {
+export interface ModuleSpec<S extends InterfaceMap, X extends InterfaceMap> {
   /** Named, typed dependencies; each may be unbound and may change while the module runs. */
   slots?: S;
   /** What this module offers, each under a name. */
@@ -140,7 +155,7 @@ export interface ModuleSpec<S extends Interfaces, X extends Interfaces> {
 
 const NAME = /^[a-z][A-Za-z0-9_]*$/;
 
-function define<S extends Interfaces, X extends Interfaces>(
+function define<S extends InterfaceMap, X extends InterfaceMap>(
   placement: Placement,
   spec: ModuleSpec<S, X>,
 ): ModuleDefinition<S, X> {
@@ -159,14 +174,14 @@ function define<S extends Interfaces, X extends Interfaces>(
 }
 
 /** A host module: the Actor's logic, in its own process. */
-export function defineActor<const S extends Interfaces = None, const X extends Interfaces = None>(
+export function defineActor<const S extends InterfaceMap = None, const X extends ExportMap = None>(
   spec: ModuleSpec<S, X>,
 ): ModuleDefinition<S, X> {
   return define("host", spec);
 }
 
 /** A view module: a widget, in a sandboxed frame. Same shape as an Actor's module. */
-export function defineWidget<const S extends Interfaces = None, const X extends Interfaces = None>(
+export function defineWidget<const S extends InterfaceMap = None, const X extends ExportMap = None>(
   spec: ModuleSpec<S, X>,
 ): ModuleDefinition<S, X> {
   return define("view", spec);

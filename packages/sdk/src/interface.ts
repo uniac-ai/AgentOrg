@@ -24,16 +24,17 @@ export function event<P extends z.ZodType>(payload: P): EventSpec<P> {
   return { payload };
 }
 
-interface Named<N extends string> {
+interface Named<N extends string, V extends number = number> {
   readonly name: N;
-  readonly major: number;
+  readonly major: V;
 }
 /** Requests, replies and events, each typed by a schema; one stream per call or subscription. */
 export interface RpcInterface<
   N extends string = string,
   M extends Methods = Methods,
   E extends Events = Events,
-> extends Named<N> {
+  V extends number = number,
+> extends Named<N, V> {
   readonly kind: "rpc";
   readonly methods: M;
   readonly events: E;
@@ -62,7 +63,8 @@ export function defineInterface<
   const N extends string,
   M extends Methods,
   E extends Events = NoEvents,
->(spec: { name: N; major: number; kind: "rpc"; methods: M; events?: E }): RpcInterface<N, M, E>;
+  const V extends number = number,
+>(spec: { name: N; major: V; kind: "rpc"; methods: M; events?: E }): RpcInterface<N, M, E, V>;
 export function defineInterface<const N extends string, O extends z.ZodType>(spec: {
   name: N;
   major: number;

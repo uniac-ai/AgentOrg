@@ -3,6 +3,7 @@
 // compile fails the test.
 import { z } from "zod";
 import { defineActor, defineInterface, defineWidget, event, method } from "../src/index.ts";
+import { createTestContext } from "../src/testing.ts";
 
 const Card = z.object({ id: z.string(), title: z.string(), done: z.boolean() });
 const board = defineInterface({
@@ -115,3 +116,31 @@ export const widget = defineWidget({
     ctx.exports.view.implement(wire);
   },
 });
+
+export const servers = defineActor({
+  exports: { tty: shell, web: site },
+  start(ctx) {
+    ctx.exports.tty.accept(({ cols }, stream) => void [cols.toFixed(), stream.readable]);
+    ctx.exports.web.serve(async (request) => new Response(request.url));
+    // @ts-expect-error: a stream export is accepted, not implemented.
+    ctx.exports.tty.implement({});
+    // @ts-expect-error: `accept` gets the open parameters, which have no `name`.
+    ctx.exports.tty.accept(({ name }) => void name);
+    // @ts-expect-error: an http handler returns a Response.
+    ctx.exports.web.serve(() => "text");
+  },
+});
+
+// @ts-expect-error: `add` is reserved for exports.add.
+defineActor({ exports: { add: board }, start() {} });
+
+const harness = createTestContext(actor);
+harness.bind("board", { list: async () => ({ cards: [] }) });
+harness.bind("shell", () => {
+  const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
+  return { readable, writable };
+});
+// @ts-expect-error: a fake board handler must return the method's output.
+harness.bind("board", { list: async () => ({ items: [] }) });
+// @ts-expect-error: no slot named `store` to bind.
+harness.bind("store", {});

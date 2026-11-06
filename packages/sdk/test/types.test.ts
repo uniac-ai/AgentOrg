@@ -13,9 +13,15 @@ const tsc = join(
   "tsc",
 );
 
+const compile = (project: string) =>
+  spawnSync(process.execPath, [tsc, "-p", join(root, project)], { encoding: "utf8" });
+
 test("handles are typed from their interfaces: right uses compile and every wrong one is an error", () => {
-  const result = spawnSync(process.execPath, [tsc, "-p", join(root, "test-types")], {
-    encoding: "utf8",
-  });
+  const result = compile("test-types");
+  assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+});
+
+test("a host-only Actor compiles without the DOM library", () => {
+  const result = compile("test-types-host");
   assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
 });
