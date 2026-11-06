@@ -11,7 +11,9 @@ import {
   describeInterface,
   event,
   hashInterface,
+  type InterfaceSchemas,
   method,
+  type Refused,
 } from "@agentorg/sdk";
 import { buildPackage } from "@agentorg/sdk/build";
 import {
@@ -742,8 +744,9 @@ test("a splice delivers everything when the provider's channel ends after it fin
   assert.equal(got, payload.length);
 });
 
-test("the compiled cache forgets the oldest interfaces, boolean schemas included", () => {
-  const validators = new Validators();
+test("the compiled cache forgets the oldest interfaces, boolean schemas included", async (t) => {
+  // One worker, so its cache (4096 parts) really overflows.
+  const validators = new Validators({ size: 1 });
   const iface = (i: number) =>
     ({
       id: `n${i}@1`,
@@ -752,6 +755,152 @@ test("the compiled cache forgets the oldest interfaces, boolean schemas included
       events: {},
       hash: `sha256-${String(i).padStart(64, "0")}`,
     }) as unknown as DescribedInterface;
-  for (let i = 0; i < 1100; i++) validators.prepare(iface(i));
-  validators.check(iface(0), { method: "m", side: "input" }, {}, "invalid");
+  t.after(() => validators.close());
+  for (let i = 0; i < 2100; i++) await validators.prepare(iface(i));
+  await validators.check(iface(0), { method: "m", side: "input" }, {}, "invalid");
+});
+
+/** A described interface built by hand, for schemas zod doesn't write. */
+function handMade(name: string, input: object, output: object): DescribedInterface {
+  const schemas = {
+    id: `${name}@1`,
+    kind: "rpc" as const,
+    methods: { run: { input, output } },
+    events: {},
+  };
+  return { ...schemas, hash: hashInterface(schemas as InterfaceSchemas) } as DescribedInterface;
+}
+
+test("slow schema checks are refused within the budget, off the router's thread", async (t) => {
+  const { actor, bind, person } = await setup(t);
+  const regex = handMade(
+    "regex",
+    { type: "object", properties: { text: { type: "string", pattern: "^(a+)+$" } } },
+    { type: "object" },
+  );
+  const unique = handMade(
+    "unique",
+    { type: "object" },
+    { type: "object", properties: { items: { type: "array", uniqueItems: true } } },
+  );
+  const items = Array.from({ length: 30_000 }, (_, i) => [i]);
+  let served = 0;
+  const p = await actor(
+    "provider",
+    { exports: { regex, unique, notes } },
+    async (header, stream, reader) => {
+      await reader.next();
+      served++;
+      const writer = stream.writable.getWriter();
+      await writer.write(encodeFrame(result(header.export === "unique" ? { items } : { n: 1 })));
+      await writer.close();
+    },
+  );
+  const c = await actor("consumer", { slots: { regex, unique, notes } });
+  for (const slot of ["regex", "unique", "notes"]) await bind(c.id, slot, p.id, slot);
+
+  const timed = async <T>(work: Promise<T>) => {
+    const started = performance.now();
+    return { value: await work, ms: performance.now() - started };
+  };
+  // A catastrophic regex on the input: refused as invalid, and the provider never runs.
+  let settled = false;
+  const stuck = timed(c.client.call("regex", "run", { text: `${"a".repeat(40)}!` })).finally(() => {
+    settled = true;
+  });
+  // Meanwhile the router stays responsive: a ping, and another Actor's call, both answered while
+  // the stuck check is still running.
+  await c.client.session.ping();
+  const other = await person.call("actors", "list", {});
+  assert.ok("result" in other);
+  assert.equal(settled, false, "the ping and the other call came back first");
+  const refused = await stuck;
+  assert.equal(refused.value.error?.code, "invalid");
+  assert.match(String(refused.value.error?.message), /took over 250 ms/);
+  assert.ok(refused.ms < 1500, `refused after ${refused.ms} ms`);
+  assert.equal(served, 0);
+
+  // A quadratic uniqueItems on the output: refused as bad_output after the provider ran.
+  const quadratic = await timed(c.client.call("unique", "run", {}));
+  assert.equal(quadratic.value.error?.code, "bad_output");
+  assert.match(String(quadratic.value.error?.message), /took over 250 ms/);
+  assert.ok(quadratic.ms < 1500, `refused after ${quadratic.ms} ms`);
+  assert.equal(served, 1);
+
+  // The replaced workers serve the next calls.
+  assert.deepEqual(await c.client.call("notes", "write", { text: "after" }), { result: { n: 1 } });
+  assert.deepEqual(await c.client.call("regex", "run", { text: "aaa" }), { result: { n: 1 } });
+});
+
+test("a check over the budget replaces its worker, and the replacement serves the next check", async (t) => {
+  const validators = new Validators({ size: 1 });
+  t.after(() => validators.close());
+  const regex = handMade("regex", { type: "string", pattern: "^(a+)+$" }, { type: "object" });
+  const input = { method: "run", side: "input" } as const;
+  await assert.rejects(
+    validators.check(regex, input, `${"a".repeat(40)}!`, "invalid"),
+    (e: Refused) => e.code === "invalid" && /took over/.test(e.message),
+  );
+  await validators.check(regex, input, "aaa", "invalid");
+  await assert.rejects(
+    validators.check(regex, input, "b", "invalid"),
+    (e: Refused) => e.code === "invalid",
+  );
+});
+
+test("a pool whose workers can't start fails every check with the reason, without respawning", async () => {
+  const validators = new Validators({
+    size: 1,
+    workerUrl: new URL("./missing-worker.js", import.meta.url),
+  });
+  const regex = handMade("regex", { type: "string" }, { type: "object" });
+  await assert.rejects(
+    validators.check(regex, { method: "run", side: "input" }, "x", "invalid"),
+    /can't start/,
+  );
+  await assert.rejects(validators.prepare(regex), /can't start/);
+});
+
+test("a value too deep to hand to a worker is refused, and the Hub carries on", async (t) => {
+  const { person } = await setup(t);
+  const depth = 400_000;
+  const body = `{"input":{"d":${"[".repeat(depth)}${"]".repeat(depth)}}}`;
+  const frame = (json: string) => {
+    const bytes = new TextEncoder().encode(json);
+    const out = new Uint8Array(4 + bytes.length);
+    new DataView(out.buffer).setUint32(0, bytes.length);
+    out.set(bytes, 4);
+    return out;
+  };
+  const deep = async () => {
+    const stream = person.session.open();
+    const writer = stream.writable.getWriter();
+    await writer.write(encodeFrame({ op: "call", slot: "actors", method: "list" }));
+    await writer.write(frame(body));
+    await writer.close();
+    return reply(await new FrameReader(stream.readable).next());
+  };
+  const answers = await Promise.all(Array.from({ length: 6 }, deep));
+  for (const answer of answers) assert.equal(answer.error?.code, "invalid");
+  assert.ok("result" in (await person.call("actors", "list", {})));
+});
+
+test("jobs that can't be handed to a worker don't strand the ones queued behind them", async (t) => {
+  const validators = new Validators({ size: 1 });
+  t.after(() => validators.close());
+  const open = handMade("open", {}, { type: "object" });
+  const input = { method: "run", side: "input" } as const;
+  let deep: unknown = 0;
+  for (let i = 0; i < 400_000; i++) deep = [deep];
+  // Queued together before the worker is ready: each failed hand-off must free it for the next.
+  const checks = [
+    validators.check(open, input, deep, "invalid"),
+    validators.check(open, input, deep, "invalid"),
+    validators.check(open, input, 1, "invalid"),
+  ];
+  const outcomes = await Promise.allSettled(checks);
+  assert.deepEqual(
+    outcomes.map((o) => o.status),
+    ["rejected", "rejected", "fulfilled"],
+  );
 });

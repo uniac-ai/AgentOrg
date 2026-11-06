@@ -33,7 +33,10 @@ import { type Part, Validators } from "./validate.js";
 const MAX_STREAMS = 256;
 /** Interfaces one hello may declare. */
 const MAX_DECLARED = 256;
-/** Event bytes queued for a subscriber that has stopped reading, before it is cut off. */
+/**
+ * Event bytes queued for a subscriber that has stopped reading, before it is cut off. Events from
+ * a provider wait for each delivery, so this bounds the hub Actor's own events.
+ */
 const MAX_QUEUED_BYTES = 4 * 1024 * 1024;
 
 export interface HubOptions {
@@ -226,6 +229,7 @@ export class Hub {
   close(): void {
     for (const session of [...this.#sessions]) session.close();
     this.#connections.clear();
+    this.#validators.close();
     this.state.close();
   }
 
@@ -261,7 +265,7 @@ export class Hub {
       if (!this.state.authenticate(header.actorId, header.credential))
         throw new Refused("forbidden", "No such Actor, or the credential is wrong.");
       if (header.declares !== undefined)
-        this.state.declareExternal(header.actorId, this.#declares(header.declares));
+        this.state.declareExternal(header.actorId, await this.#declares(header.declares));
       admit(header.actorId);
       await answer(writer, result({ actorId: header.actorId }));
     } catch (error) {
@@ -271,10 +275,10 @@ export class Hub {
   }
 
   /** What a hello declares, checked: shapes, hashes, and schemas that compile. */
-  #declares(value: unknown): {
+  async #declares(value: unknown): Promise<{
     slots: Record<string, DescribedInterface>;
     exports: Record<string, DescribedInterface>;
-  } {
+  }> {
     if (!isRecord(value)) throw new Refused("invalid", "declares must be {slots, exports}.");
     const out = { slots: {}, exports: {} } as Record<
       "slots" | "exports",
@@ -287,14 +291,14 @@ export class Hub {
       for (const [name, iface] of Object.entries(members)) {
         if (++count > MAX_DECLARED)
           throw new Refused("invalid", `A hello declares at most ${MAX_DECLARED} interfaces.`);
-        out[side][name] = this.#described(iface, `declares.${side}.${name}`);
+        out[side][name] = await this.#described(iface, `declares.${side}.${name}`);
       }
     }
     return out;
   }
 
   /** A described interface from the wire: its shape, then its hash, then schemas that compile. */
-  #described(iface: unknown, where: string): DescribedInterface {
+  async #described(iface: unknown, where: string): Promise<DescribedInterface> {
     if (!isRecord(iface) || typeof iface.id !== "string" || typeof iface.hash !== "string")
       throw new Refused("invalid", `${where} isn't a described interface.`);
     const { hash, ...schemas } = iface;
@@ -307,7 +311,7 @@ export class Hub {
     // The hash keys the compiled schemas, so it is checked before anything is compiled.
     if (recomputed !== hash)
       throw new Refused("invalid", `${iface.id}'s hash doesn't match its schemas.`);
-    this.#validators.prepare(iface as DescribedInterface);
+    await this.#validators.prepare(iface as DescribedInterface);
     return iface as DescribedInterface;
   }
 
@@ -330,7 +334,7 @@ export class Hub {
           this.state.offer(
             conn.actorId,
             header.name,
-            this.#described(header.interface, "interface"),
+            await this.#described(header.interface, "interface"),
           );
           await answer(writer, result({}));
           return drain(reader);
@@ -406,13 +410,13 @@ export class Hub {
       const body = parseBody(await reader.next());
       cancelled = whenReset(reader);
       if (!("input" in body)) throw new Refused("invalid", "A call's body is {input}.");
-      this.#validators.check(iface, part, body.input, "invalid");
+      await this.#validators.check(iface, part, body.input, "invalid");
       reply = provider
         ? await this.#forward(provider, binding, conn.actorId, header.method, body.input, cancelled)
         : this.#hubCall(binding.export, header.method, conn.actorId, body.input);
       if ("error" in reply) outcome = "refused";
       else if ("result" in reply)
-        this.#validators.check(
+        await this.#validators.check(
           iface,
           { method: header.method, side: "output" },
           reply.result,
@@ -564,26 +568,31 @@ export class Hub {
       if (error) void answer(writer, error);
       else void writer.close().catch(() => {});
     };
-    const deliver = (payload: unknown) => {
-      if (ended) return;
-      try {
-        this.#validators.check(iface, part, payload, "bad_output");
-      } catch (error) {
-        return end(errorBody(error));
-      }
+    // Events are checked off-thread, so each waits its turn here to keep them in order.
+    let delivered = Promise.resolve();
+    const deliver = (payload: unknown): Promise<void> => {
+      if (ended) return delivered;
       const { frame } = frameOf(eventBody(payload));
       // A subscriber that stops reading is cut off, not buffered for: its stream is reset.
       if (queued + frame.length > MAX_QUEUED_BYTES) {
+        stream.reset();
         end();
-        return stream.reset();
+        return delivered;
       }
       queued += frame.length;
-      writer.write(frame).then(
-        () => {
+      delivered = delivered.then(async () => {
+        try {
+          if (ended) return;
+          await this.#validators.check(iface, part, payload, "bad_output");
+          if (ended) return;
+          await writer.write(frame);
+        } catch (error) {
+          end(error instanceof Refused ? errorBody(error) : undefined);
+        } finally {
           queued -= frame.length;
-        },
-        () => end(),
-      );
+        }
+      });
+      return delivered;
     };
     // A reset (or anything but a clean end of its side) from the subscriber ends it.
     reader.next().then(
@@ -622,12 +631,11 @@ export class Hub {
         const frame = await events.next();
         if (frame === undefined) return end();
         const body = parseBody(frame);
-        if ("event" in body) deliver(body.event);
+        // Backpressure: the provider's next event is read once this one is delivered.
+        if ("event" in body) await deliver(body.event);
         else if ("error" in body) return end(body);
         else return end(wireError("Refused", "A subscription carries events.", "bad_output"));
         if (ended) return;
-        // Backpressure: read the provider's next event only once the subscriber can take it.
-        await writer.ready;
       }
     } catch (error) {
       end(
@@ -666,7 +674,7 @@ export class Hub {
         stream.reset();
       });
       if (header.op === "open")
-        this.#validators.check(resolved.iface, { open: true }, header.params, "invalid");
+        await this.#validators.check(resolved.iface, { open: true }, header.params, "invalid");
       // The hub's own exports are all rpc, so #resolve refused it already; this is for the types.
       if (!resolved.provider) throw new NotConnected(header.slot);
       const opened = this.#openTo(resolved.provider, binding);
