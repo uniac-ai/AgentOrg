@@ -13,6 +13,18 @@ AgentOrg as a dynamic system: Actors and widgets are modules in content-addresse
 
 Every interface crosses the wire as schemas, and a module's handles are derived from them, with one exception. `ui.view@1` is a view module's render surface: the view draws into its own frame's DOM, which no message can carry. So its export handle is `implement({ mount(el, { theme, size }), resize?(size) })`, where `el` is the frame's root element, and the frame runtime maps the wire methods `mount`, `resize` and `unmount` onto it. Don't copy this shape for another interface; anything a module offers to others belongs in schemas.
 
+### A view's frame
+
+A shell runs each view module in its own sandboxed frame, with an opaque origin and no network. The frame holds only the SDK's frame runtime, `@agentorg/sdk/frame/runtime.js`, one self-contained script, and the view's bundle. The shell hands the frame one `MessagePort` (`openFrame`, then `new FrameHost(port, handlers)` from `@agentorg/sdk/frame/host`). Everything the view reaches crosses that port:
+
+- **Load:** the shell names the view's bundle and which of its slots are bound. The frame imports it, runs `start` on the same runtime a host module uses, then binds the slots, so `onBind` runs for each one bound. A frame loads one view, only a `view` module, and takes one port, from its parent window only.
+- **Slots:** a call or subscription on a slot goes to the shell, which runs it as the view's Actor; the shell says when a slot is bound, unbound or usable again. A view's `stream` and `http` slots aren't served yet.
+- **`ui.view@1`:** the shell drives `mount`, `resize` and `unmount`. At mount, the theme's CSS variables (names starting `--`) are set on the frame's document.
+- **`ui.shell@1`:** the shell's own interface, the mirror of `ui.view@1`. A view's slot of it is bound by the frame runtime itself, never by the Hub, so it is always bound. `openExternal({url})` takes only an `https:` URL, which the host checks; the shell's handler must open it in a new tab with no opener (`noopener`). `signIn()` starts the shell's own sign-in. Each method has one call in flight at a time. A frame can't open windows itself.
+- **Logs:** the view's `ctx.log` and any error it doesn't catch go to the shell, for its Actor's log.
+
+The frame isn't trusted: `FrameHost` checks every message, drops what doesn't fit, and refuses what it can't serve. A frame holds one subscription per slot and event, 64 at most; its log lines are cut, their fields rebuilt as a small fresh object, and past 50 lines in 10 s the rest are dropped.
+
 ## Building a package
 
 A package's `package.json` names its modules, its own wiring and any seed state:

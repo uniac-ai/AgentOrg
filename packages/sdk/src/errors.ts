@@ -33,3 +33,30 @@ export class OutcomeUnknown extends Error {
     super(message);
   }
 }
+
+/** An error as it crosses a channel or a frame's port: one of the three names, a message, a code. */
+export interface ErrorBody {
+  name: "NotConnected" | "Refused" | "OutcomeUnknown";
+  message: string;
+  code?: string;
+}
+
+/** Anything thrown, as an error body: a non-SDK error is the other side failing, code `failed`. */
+export function errorBodyOf(error: unknown): ErrorBody {
+  if (error instanceof Refused)
+    return { name: "Refused", message: error.message, code: error.code };
+  if (error instanceof NotConnected) return { name: "NotConnected", message: error.message };
+  if (error instanceof OutcomeUnknown) return { name: "OutcomeUnknown", message: error.message };
+  return {
+    name: "Refused",
+    message: error instanceof Error ? error.message : String(error),
+    code: "failed",
+  };
+}
+
+/** An error body as the SDK's error: `NotConnected`, `Refused(code)` or `OutcomeUnknown`. */
+export function errorFromBody(body: ErrorBody, target: string): Error {
+  if (body.name === "NotConnected") return new NotConnected(target);
+  if (body.name === "OutcomeUnknown") return new OutcomeUnknown(body.message);
+  return new Refused(body.code ?? "refused", body.message);
+}

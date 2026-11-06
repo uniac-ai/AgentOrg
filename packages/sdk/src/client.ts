@@ -17,7 +17,7 @@ import {
   wireError,
   type YamuxStream,
 } from "@agentorg/wire";
-import { NotConnected, OutcomeUnknown, Refused } from "./errors.js";
+import { errorBodyOf, errorFromBody, NotConnected, OutcomeUnknown, Refused } from "./errors.js";
 import { type DescribedInterface, describeInterface, type Interface } from "./interface.js";
 import {
   type Context,
@@ -97,18 +97,13 @@ export interface Channel {
 }
 
 /** A wire error as the SDK's error: `NotConnected`, `Refused(code)` or `OutcomeUnknown`. */
-export function errorOf(error: WireError["error"], target: string): Error {
-  if (error.name === "NotConnected") return new NotConnected(target);
-  if (error.name === "OutcomeUnknown") return new OutcomeUnknown(error.message);
-  return new Refused(error.code ?? "refused", error.message);
-}
+export const errorOf = (error: WireError["error"], target: string): Error =>
+  errorFromBody(error, target);
 
 /** Anything a handler throws, as one wire error body: a non-SDK error is the provider failing. */
 function bodyOf(error: unknown): WireError {
-  if (error instanceof Refused) return wireError("Refused", error.message, error.code);
-  if (error instanceof NotConnected) return wireError("NotConnected", error.message);
-  if (error instanceof OutcomeUnknown) return wireError("OutcomeUnknown", error.message);
-  return wireError("Refused", error instanceof Error ? error.message : String(error), "failed");
+  const body = errorBodyOf(error);
+  return wireError(body.name, body.message, body.code);
 }
 
 /** Write bodies and close our side. Each is encoded first, so a frame too large fails cleanly. */
