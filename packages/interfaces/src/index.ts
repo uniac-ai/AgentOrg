@@ -1,4 +1,6 @@
-export { chat } from "./chat.js";
+export { Account, accountLogin, LoginState } from "./account-login.js";
+export { ChatMessage, ChatState, chat } from "./chat.js";
+export { httpEgress } from "./http-egress.js";
 export {
   Actor,
   ActorState,
@@ -15,5 +17,7 @@ export {
   Package,
 } from "./hub.js";
 export { kv } from "./kv.js";
-export { llmSession } from "./llm-session.js";
+export { layout, Placement } from "./layout.js";
+export { Item, llmSession, OutputItem, Tool } from "./llm-session.js";
+export { uiShell } from "./ui-shell.js";
 export { uiView } from "./ui-view.js";
