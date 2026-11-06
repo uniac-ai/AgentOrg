@@ -27,6 +27,7 @@ import {
   type YamuxStream,
 } from "@agentorg/wire";
 import { HubActor } from "./hub-actor.js";
+import { appendLog, boundedEntry } from "./logs.js";
 import {
   type BindingRecord,
   type CallOutcome,
@@ -362,16 +363,7 @@ export class Hub {
   ): string {
     const name = `${module}.${slot}`;
     try {
-      const actor = this.state.actor(actorId);
-      if (actor.package === "external" || actor.package === "builtin")
-        throw new Refused("forbidden", `${actorId} has no package, so no views.`);
-      if (actor.state !== "running") throw new Refused("state", `${actorId} isn't running.`);
-      const { manifest } = this.state.package(actor.package);
-      if (
-        !Object.hasOwn(manifest.modules, module) ||
-        manifest.modules[module]?.placement !== "view"
-      )
-        throw new Refused("forbidden", `${module} isn't a view module of ${actorId}'s package.`);
+      this.#viewModule(actorId, module, { running: true });
       return name;
     } catch (error) {
       if (error instanceof Refused && error.code !== "unknown")
@@ -380,6 +372,42 @@ export class Hub {
           outcome: outcomeOf(errorBody(error).error),
         });
       throw error;
+    }
+  }
+
+  /** Refused unless `module` is one of the view modules of the Actor's package (and it runs). */
+  #viewModule(actorId: string, module: string, options: { running: boolean }) {
+    const actor = this.state.actor(actorId);
+    if (actor.package === "external" || actor.package === "builtin")
+      throw new Refused("forbidden", `${actorId} has no package, so no views.`);
+    if (options.running && actor.state !== "running")
+      throw new Refused("state", `${actorId} isn't running.`);
+    const { manifest } = this.state.package(actor.package);
+    if (!Object.hasOwn(manifest.modules, module) || manifest.modules[module]?.placement !== "view")
+      throw new Refused("forbidden", `${module} isn't a view module of ${actorId}'s package.`);
+  }
+
+  /**
+   * A line a view module logged, into its Actor's log, marked with the module. The Hub bounds it
+   * itself: a known level, the text cut to 4 KiB, at most 16 fields of 1 KiB each, and its own time.
+   * Refused `forbidden` for a module that isn't a view, `unknown` for no such Actor (or a closed
+   * one whose package is gone); the Actor may be stopped or closed. Not audited: it isn't a call.
+   * A line the disk won't take is dropped.
+   */
+  viewLog(
+    actorId: string,
+    module: string,
+    line: { level: string; message: string; data?: Record<string, unknown> },
+  ): void {
+    this.#viewModule(actorId, module, { running: false });
+    try {
+      appendLog(
+        this.state.home,
+        actorId,
+        boundedEntry(line.level, line.message, line.data, module),
+      );
+    } catch {
+      // The disk's trouble (full, unwritable) isn't the view's: its line is lost, nothing else.
     }
   }
 

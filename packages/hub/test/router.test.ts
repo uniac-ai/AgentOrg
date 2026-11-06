@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -1472,4 +1472,126 @@ test("compiling never runs an Actor's patternProperties regex against its proper
   const started = performance.now();
   await validators.prepare("a", hostile);
   assert.ok(performance.now() - started < 300, `compiling took ${performance.now() - started} ms`);
+});
+
+test("a view module's log lines go to its Actor's log, bounded, and the file rotates", async (t) => {
+  const { hub, home, person } = await setup(t);
+  const board = join(
+    dirname(fileURLToPath(import.meta.url)),
+    "..",
+    "..",
+    "..",
+    "..",
+    "examples",
+    "board",
+  );
+  const out = mkdtempSync(join(tmpdir(), "board-for-logs-"));
+  t.after(() => rmSync(out, { recursive: true, force: true }));
+  const built = await buildPackage(board, { out });
+  hub.state.addPackage(PERSON, built.file);
+  const { actorId } = hub.state.createActor(PERSON, { name: "board", package: built.hash });
+  const logs = async (limit = 10) =>
+    (
+      (await person.call("actors", "logs", { actorId, limit })) as {
+        result: {
+          lines: {
+            level: string;
+            message: string;
+            data?: Record<string, unknown>;
+            module?: string;
+          }[];
+        };
+      }
+    ).result.lines;
+
+  // Not running is fine: a view may log while its Actor is stopped.
+  hub.viewLog(actorId, "panel", { level: "warn", message: "drawn", data: { cards: 2 } });
+  const [first] = await logs();
+  assert.deepEqual(
+    { ...first, at: undefined },
+    { level: "warn", message: "drawn", data: { cards: 2 }, module: "panel", at: undefined },
+  );
+  assert.equal(statSync(join(home, "logs", `${actorId}.log`)).mode & 0o777, 0o600);
+
+  // Whatever the gateway passes, the Hub bounds it, and nothing it passes makes viewLog throw.
+  let toJSONCalls = 0;
+  const hostile = JSON.parse('{"__proto__": "kept"}') as Record<string, unknown>;
+  Object.assign(hostile, {
+    long: "y".repeat(2000),
+    nested: { deep: true },
+    big: 1n,
+    sneaky: { toJSON: () => (toJSONCalls++ ? "Q".repeat(3 << 20) : undefined) },
+  });
+  Object.defineProperty(hostile, "getter", {
+    enumerable: true,
+    get() {
+      throw new Error("no");
+    },
+  });
+  for (let i = 0; i < 20; i++) hostile[`k${i}`] = i;
+  hub.viewLog(actorId, "panel", {
+    level: "loud",
+    message: Object.create(null) as string,
+    data: hostile,
+  });
+  const [bounded] = await logs(1);
+  assert.equal(bounded?.level, "info");
+  assert.equal(bounded?.message, "[unprintable]");
+  assert.equal(Object.keys(bounded?.data ?? {}).length, 16);
+  assert.deepEqual(
+    { ...bounded?.data, long: String(bounded?.data?.long).length },
+    {
+      ["__proto__"]: "kept",
+      long: 1024,
+      nested: '{"deep":true}',
+      big: "[unreadable]",
+      sneaky: "undefined",
+      getter: "[unreadable]",
+      ...Object.fromEntries(Array.from({ length: 10 }, (_, i) => [`k${i}`, i])),
+    },
+  );
+  assert.equal(toJSONCalls, 1, "a value is turned into JSON once, when it is bounded");
+  hub.viewLog(actorId, "panel", { level: "info", message: "x".repeat(5000) });
+  assert.equal((await logs(1))[0]?.message.length, 4096);
+  const trap = new Proxy(
+    {},
+    {
+      ownKeys() {
+        throw new Error("no keys");
+      },
+    },
+  );
+  hub.viewLog(actorId, "panel", { level: "error", message: "trapped", data: trap });
+  assert.deepEqual(
+    { ...(await logs(1))[0], at: undefined },
+    { level: "error", message: "trapped", module: "panel", at: undefined },
+  );
+
+  // Only a view module of a package Actor logs this way.
+  assert.throws(
+    () => hub.viewLog(actorId, "logic", { level: "info", message: "no" }),
+    (e: Refused) => e.code === "forbidden",
+  );
+  assert.throws(
+    () => hub.viewLog(PERSON, "panel", { level: "info", message: "no" }),
+    (e: Refused) => e.code === "forbidden",
+  );
+
+  // Past 1 MiB the file is rotated once: two files at most, the newest lines still read, and
+  // a second rotation replaces the first.
+  for (let i = 0; i < 600; i++)
+    hub.viewLog(actorId, "panel", { level: "info", message: `line ${i} ${"z".repeat(4000)}` });
+  const file = join(home, "logs", `${actorId}.log`);
+  assert.ok(statSync(file).size <= 1024 * 1024);
+  assert.ok(statSync(`${file}.1`).size <= 1024 * 1024);
+  assert.equal(statSync(join(home, "logs")).mode & 0o777, 0o700);
+  assert.ok(
+    !readFileSync(`${file}.1`, "utf8").includes('"drawn"'),
+    "the first file's lines went with the second rotation",
+  );
+  const newest = await logs(2);
+  assert.deepEqual(
+    newest.map((line) => line.message.split(" ").slice(0, 2).join(" ")),
+    ["line 598", "line 599"],
+  );
 });

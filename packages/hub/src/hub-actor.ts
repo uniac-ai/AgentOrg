@@ -66,7 +66,7 @@ export class HubActor {
         stop: (caller, input) => state.stop(caller, String(input.actorId)),
         close: (caller, input) => state.closeActor(caller, String(input.actorId)),
         logs: (_, input) => {
-          // The Actor must exist; its lines come from the files its process's output fills.
+          // The Actor must exist; its lines are its process's output and its views' lines.
           const { actorId } = state.actor(String(input.actorId));
           const limit = typeof input.limit === "number" ? input.limit : 100;
           return { lines: readLogs(state.home, actorId, limit) };
