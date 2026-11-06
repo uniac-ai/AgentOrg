@@ -14,6 +14,11 @@ export const Placement = z.object({
   actor: Id,
   module: ModuleName,
   title: z.string().max(200).optional(),
+  /**
+   * The Actor that placed it, as the layout's provider saw the call: the person, or an agent bound
+   * to `layout@1`. The provider records it; `place` takes no such input.
+   */
+  by: Id.optional(),
 });
 
 /**

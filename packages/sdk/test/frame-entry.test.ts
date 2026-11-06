@@ -82,14 +82,21 @@ test("the frame takes one port, from its parent only, and sets theme tokens on i
       self: { actorId: "act_view", module: "panel" },
       slots: {},
     });
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    /** Until the reply to `id` came, a few seconds at most: a full run's load makes fixed waits flaky. */
+    const replied = async (id: number) => {
+      for (let waited = 0; !replies.some((reply) => reply.id === id); waited += 10) {
+        if (waited > 5000) throw new Error(`No reply to ${id}.`);
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+    };
+    await replied(1);
     first.port1.postMessage({
       op: "mount",
       id: 2,
       theme: { "--canvas": "rgb(20 20 20)", color: "red" },
       size: { width: 1, height: 1 },
     });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await replied(2);
     assert.deepEqual(replies, [
       { op: "reply", id: 1, result: {} },
       { op: "reply", id: 2, result: {} },

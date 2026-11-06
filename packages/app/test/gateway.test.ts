@@ -234,6 +234,10 @@ test("layout@1 places, moves and removes views, keeps them in the person's store
   const ids = async () =>
     ((await cli.call("layout", "get")).result as { home: { id: string }[] }).home.map((p) => p.id);
   assert.deepEqual(await ids(), [placed.id, second.id]);
+  // Through /api, the person placed them; an input can't say otherwise.
+  const byOf = async () =>
+    ((await cli.call("layout", "get")).result as { home: { by?: string }[] }).home.map((p) => p.by);
+  assert.deepEqual(await byOf(), ["person", "person"]);
   // With no `after`, a move goes first; with one, after it.
   await cli.call("layout", "move", { id: second.id });
   assert.deepEqual(await ids(), [second.id, placed.id]);
@@ -260,6 +264,9 @@ test("layout@1 places, moves and removes views, keeps them in the person's store
     assert.equal(refused.error?.code, "invalid", JSON.stringify(input));
   }
   assert.equal((await cli.call("layout", "remove", { id: "gone" })).error?.code, "unknown");
+  // A `by` in the input is no input of place's: dropped, and the caller recorded.
+  await cli.call("layout", "place", { actor: actorId, module: "panel", by: "someone" });
+  assert.equal((await byOf()).at(-1), "person");
   assert.equal((await cli.call("layout", "nope")).error?.code, "invalid");
 });
 
@@ -289,10 +296,11 @@ test("a program bound to the person's layout places a view as the person does", 
   assert.deepEqual(bound.result, { bound: true });
   await until(() => agent.slots.layout.bound);
   const { id } = await agent.slots.layout.call.place({ actor: actorId, module: "panel" });
-  const home = (await cli.call("layout", "get")).result as { home: { id: string }[] };
+  const home = (await cli.call("layout", "get")).result as { home: { id: string; by?: string }[] };
+  // Placed by the agent, as the Hub named the caller.
   assert.deepEqual(
-    home.home.map((p) => p.id),
-    [id],
+    home.home.map((p) => [p.id, p.by]),
+    [[id, made.actorId]],
   );
 });
 

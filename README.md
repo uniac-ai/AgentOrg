@@ -104,7 +104,7 @@ To read a module's definition, the build runs the module's code in a separate No
   - Calls run through the person's slots: `packages`, `actors`, `bindings`, `grants`, `exports`, `audit` and `store`.
   - `layout` is the person's own export, served by the gateway.
   - With `view: {actor, module}`, a call runs as that view's Actor, through the Hub's view path (`viewCall` and `viewSubscribe`). The Hub refuses a module that isn't one of the Actor's views, or an Actor that isn't running.
-- **`layout@1`:** the person exports it, so a program bound to it places a view as the person does. The layout is kept in the person's `store` slot (`kv@1`) under the key `layout`, and the app binds that slot to the built-in `storage` where there is one.
+- **`layout@1`:** the person exports it, so a program bound to it places a view as the person does. Each placement records `by`, the Actor that placed it, from the call's caller as the Hub names it (the person, through `/api`); no input sets it. The layout is kept in the person's `store` slot (`kv@1`) under the key `layout`, and the app binds that slot to the built-in `storage` where there is one.
   - `place` takes only a `view` module of a package Actor, with no `after` meaning last.
   - `move` with no `after` means first.
   - Every change tells `changed`.

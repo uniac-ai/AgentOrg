@@ -130,7 +130,8 @@ export async function startApp(options: AppOptions): Promise<App> {
       const served = logic;
       ctx.exports.layout.implement({
         get: () => served.get(),
-        place: (input) => served.place(input),
+        // Who placed it is the caller the Hub names, never the input.
+        place: (input, { caller }) => served.place(input, caller),
         remove: (input) => served.remove(input),
         move: (input) => served.move(input),
       });
@@ -168,9 +169,10 @@ export async function startApp(options: AppOptions): Promise<App> {
         const parsed = spec.input.safeParse(input);
         if (!parsed.success)
           throw new Refused("invalid", `layout.${method}: ${parsed.error.message}`);
+        // Through /api, the caller is the person.
         const result = await (
-          layoutLogic[method as keyof typeof layout.methods] as (i: unknown) => unknown
-        )(parsed.data);
+          layoutLogic[method as keyof typeof layout.methods] as (i: unknown, by: string) => unknown
+        )(parsed.data, PERSON);
         // Checked as a call through the Hub would be: what's stored may not fit.
         const checked = spec.output.safeParse(result);
         if (!checked.success)

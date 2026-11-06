@@ -41,7 +41,8 @@ export class Layout {
     return { home: await this.#read() };
   }
 
-  place(input: { actor: string; module: string; title?: string; after?: string }) {
+  /** Place a view, recording `by`, the Actor that asked, as the call's caller says. */
+  place(input: { actor: string; module: string; title?: string; after?: string }, by: string) {
     return this.#write((home) => {
       if (!this.#isView(input.actor, input.module))
         throw new Refused(
@@ -55,6 +56,7 @@ export class Layout {
         actor: input.actor,
         module: input.module,
         ...(input.title === undefined ? {} : { title: input.title }),
+        by,
       };
       return { home: insert(home, placement, input.after), result: { id: placement.id } };
     });
