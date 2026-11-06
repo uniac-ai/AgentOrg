@@ -45,14 +45,20 @@
     "./person-commands": {
       "types": "./dist/src/person-commands.d.ts",
       "default": "./dist/src/person-commands.js"
-    }
+    },
+    "./host": {
+      "types": "./dist/src/host.d.ts",
+      "default": "./dist/src/host.js"
+    },
+    "./host/runner.js": "./dist/host/runner.js"
   },
   "files": [
     "dist/src",
-    "dist/frame"
+    "dist/frame",
+    "dist/host"
   ],
   "scripts": {
-    "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.json && node scripts/bundle-frame.js",
+    "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.json && node scripts/bundle-frame.js && node scripts/bundle-runner.js",
     "test": "node --test --test-timeout=60000 \"dist/test/**/*.test.js\""
   },
   "peerDependencies": {

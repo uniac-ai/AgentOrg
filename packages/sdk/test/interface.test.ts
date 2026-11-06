@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
 import { z } from "zod";
+import { errorBodyOf } from "../src/errors.ts";
 import {
   canonicalJson,
   compareInterfaces,
@@ -228,4 +229,29 @@ test("the three errors carry what a caller needs", () => {
   assert.equal(refused.code, "invalid");
   assert.equal(refused.message, "title is required");
   assert.ok(new OutcomeUnknown() instanceof Error);
+});
+
+test("an error from another copy of the SDK is the same error", () => {
+  // A package's bundle and the runner each carry the SDK; an error crosses between them as is.
+  const other = Object.assign(new Error("no such card"), {
+    name: "Refused",
+    code: "not_found",
+    [Symbol.for("@agentorg/sdk/error")]: "Refused",
+  });
+  assert.ok(other instanceof Refused);
+  assert.ok(!(other instanceof NotConnected));
+  assert.deepEqual(errorBodyOf(other), {
+    name: "Refused",
+    message: "no such card",
+    code: "not_found",
+  });
+  // An error that only shares the name is not one.
+  assert.ok(!(Object.assign(new Error("x"), { name: "Refused" }) instanceof Refused));
+  assert.ok(new Refused("quota", "full") instanceof Error);
+  // A copy of an error's fields isn't the error, and a subclass is checked as a subclass.
+  assert.ok(!({ ...new Refused("invalid", "x") } instanceof Refused));
+  class QuotaRefused extends Refused {}
+  assert.ok(new QuotaRefused("quota", "full") instanceof Refused);
+  assert.ok(new QuotaRefused("quota", "full") instanceof QuotaRefused);
+  assert.ok(!(new Refused("invalid", "x") instanceof QuotaRefused));
 });

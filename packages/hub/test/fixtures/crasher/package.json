@@ -1,0 +1,11 @@
+{
+  "name": "crasher",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "agentorg": {
+    "modules": {
+      "main": "src/main.ts"
+    }
+  }
+}

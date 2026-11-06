@@ -27,7 +27,8 @@ import {
   type InterfaceMap,
   type Log,
 } from "./module.js";
-import { type Binding, createRuntime } from "./runtime.js";
+import { ModuleHost } from "./module-host.js";
+import { createRuntime } from "./runtime.js";
 
 /** A stream the Hub opens toward this Actor's exports, naming the export and who is calling. */
 export type Serve = Extract<Header, { op: "serve" }>;
@@ -47,10 +48,17 @@ export interface ServeHandlers {
   serveHttp(serve: Serve): (stream: Duplex) => Promise<void>;
 }
 
-export interface ChannelOptions {
-  hubUrl: string;
+/**
+ * Where the channel goes: the Hub's WebSocket address with the Actor's credential, or a pipe the
+ * Hub made for this Actor's process, whose hello needs no credential.
+ */
+export type ChannelOptions = ChannelBase &
+  (
+    | { hubUrl: string; credential: string; channel?: never }
+    | { channel: Duplex; hubUrl?: never; credential?: never }
+  );
+interface ChannelBase {
   actorId: string;
-  credential: string;
   /**
    * Whether this channel may replace one the Actor already has (the default). With `false`, a
    * live channel makes the hello refused, code `connected`.
@@ -151,8 +159,11 @@ export async function openChannel(options: ChannelOptions): Promise<Channel> {
     ready = resolve;
   });
   try {
-    const socket = new WebSocket(options.hubUrl);
-    session = new Session(await webSocketChannel(socket as unknown as WebSocketLike), {
+    const bytes =
+      options.channel !== undefined
+        ? options.channel
+        : await webSocketChannel(new WebSocket(options.hubUrl) as unknown as WebSocketLike);
+    session = new Session(bytes, {
       client: true,
       onStream(stream) {
         const reader = new FrameReader(stream.readable);
@@ -167,7 +178,7 @@ export async function openChannel(options: ChannelOptions): Promise<Channel> {
       },
     });
   } catch {
-    throw new NotConnected(`the Hub at ${options.hubUrl}`);
+    throw new NotConnected(`the Hub at ${options.hubUrl ?? "its pipe"}`);
   }
 
   async function serveStream(header: Header, stream: YamuxStream, reader: FrameReader) {
@@ -275,7 +286,7 @@ export async function openChannel(options: ChannelOptions): Promise<Channel> {
     {
       op: "hello",
       actorId: options.actorId,
-      credential: options.credential,
+      ...(options.credential === undefined ? {} : { credential: options.credential }),
       ...(options.declares ? { declares: options.declares } : {}),
       ...(options.replace === false ? { replace: false } : {}),
     },
@@ -435,122 +446,13 @@ export async function connect<
   const log = options.log ?? quiet;
   // defineActor checks the names, as it does for a module.
   const definition = defineActor<S, X>({ slots, exports, start: options.start ?? (() => {}) });
-  /** The Hub's subscriptions to this Actor's exports, by export and event: whom each is for. */
-  const senders = new Map<string, Set<{ caller: string; send: (payload: unknown) => void }>>();
-  /** The same subscriptions by export, each ended when its export is withdrawn. */
-  const subscribers = new Map<string, Set<() => void>>();
-  /** Slot events this program listens to, each with its live subscription, if any. */
-  const listened = new Map<string, Map<string, (() => void) | undefined>>();
-  const bindings = new Map<string, Binding>();
-  /** Run-time exports by name, so a refused offer withdraws the right handle. */
-  const added = new Map<string, { handle: { withdraw(): void }; iface: Interface }>();
-  /** Offer a run-time export; one the Hub refuses is withdrawn here too. */
-  const offer = (open: Channel, name: string, iface: Interface, handle: { withdraw(): void }) =>
-    void open.offer(name, describeInterface(iface)).catch((error) => {
-      log.error("The Hub refused an export.", { export: name, error: String(error) });
-      if (added.get(name)?.handle === handle) handle.withdraw();
-    });
-  let channel: Channel | undefined;
-
-  const subscribeSlot = (slot: string, event: string) => {
-    const events = listened.get(slot) ?? new Map<string, (() => void) | undefined>();
-    listened.set(slot, events);
-    if (!events.has(event)) events.set(event, undefined);
-    const binding = bindings.get(slot);
-    if (!channel || !binding || events.get(event)) return;
-    const stop = channel.subscribe(
-      slot,
-      event,
-      (payload) => {
-        try {
-          binding.emit(event, payload);
-        } catch (error) {
-          log.warn("An event didn't fit its schema.", { slot, event, error: String(error) });
-        }
-      },
-      // Ended by an unbind or the provider going: the interest stays for when it is usable again.
-      () => {
-        if (events.get(event) === stop) events.set(event, undefined);
-      },
-    );
-    events.set(event, stop);
-  };
-  const resubscribe = (slot: string) => {
-    const events = listened.get(slot);
-    for (const [event, stop] of events ?? []) {
-      stop?.();
-      events?.set(event, undefined);
-    }
-    for (const event of events?.keys() ?? []) subscribeSlot(slot, event);
-  };
-
+  const host = new ModuleHost("", slots, log);
   const runtime = createRuntime(definition, {
     self: { actorId: options.actorId, module: "client" },
     log,
-    onEmit(exportName, event, payload, to) {
-      // One subscriber's trouble never reaches the emitter or the other subscribers.
-      for (const { caller, send } of [...(senders.get(`${exportName}\0${event}`) ?? [])])
-        try {
-          if (to === undefined || caller === to) send(payload);
-        } catch (error) {
-          log.error("Sending an event failed.", { export: exportName, error: String(error) });
-        }
-    },
-    onListen: (slot, event) => subscribeSlot(slot, event),
-    onAdd(name, iface, handle) {
-      added.set(name, { handle, iface });
-      // Added during start, before the channel opens: offered once it does.
-      if (channel) offer(channel, name, iface, handle);
-    },
-    onWithdraw(name) {
-      for (const end of [...(subscribers.get(name) ?? [])]) end();
-      // Only exports offered at run time can be withdrawn at the Hub; static ones just stop here.
-      if (!added.has(name)) return;
-      added.delete(name);
-      void channel?.withdraw(name).catch(() => {});
-    },
+    ...host.hooks(),
   });
-
-  const onSlot = (slot: string, isBound: boolean) => {
-    if (!Object.hasOwn(slots, slot) || !channel) return;
-    if (!isBound) {
-      bindings.delete(slot);
-      const events = listened.get(slot);
-      for (const [event, stop] of events ?? []) {
-        stop?.();
-        events?.set(event, undefined);
-      }
-      return runtime.unbind(slot);
-    }
-    if (bindings.has(slot)) {
-      // Its provider came back: what was missed is read again in onBind, and events resume.
-      resubscribe(slot);
-      return runtime.usable(slot);
-    }
-    const open = channel;
-    bindings.set(
-      slot,
-      runtime.bind(slot, {
-        call: (method, value) => open.call(slot, method, value),
-        open: (params) => open.open(slot, params),
-        fetch: async (request) => {
-          // HTTP/1.1 is spoken with node:http, loaded only when an http slot is used.
-          const { fetchOver } = await import("./client-http.js");
-          const stream = await open.http(slot);
-          try {
-            return await fetchOver(stream, request);
-          } catch (error) {
-            // An abort keeps its own reason; a stream lost mid-request may have reached the provider.
-            if (request.signal.aborted) throw error;
-            throw new OutcomeUnknown(
-              `The http request on ${slot} ended before its response: ${String(error)}`,
-            );
-          }
-        },
-      }),
-    );
-    resubscribe(slot);
-  };
+  host.runtime = runtime as unknown as ModuleHost["runtime"];
 
   // A module's start: exports implemented and handlers registered before the Hub can reach them.
   await runtime.start();
@@ -559,7 +461,7 @@ export async function connect<
     Object.fromEntries(
       Object.entries(map).map(([name, iface]) => [name, describeInterface(iface as Interface)]),
     );
-  channel = await openChannel({
+  const channel = await openChannel({
     hubUrl: options.hubUrl,
     actorId: options.actorId,
     credential: options.credential,
@@ -567,46 +469,9 @@ export async function connect<
     ...(options.declare === false
       ? {}
       : { declares: { slots: describeAll(slots), exports: describeAll(exports) } }),
-    onSlot,
-    serve: {
-      call: (serve, value) => runtime.call(serve.export, serve.method ?? "", value, serve.caller),
-      subscribe(serve, sendTo, end) {
-        if (runtime.withdrawn(serve.export)) throw new NotConnected(serve.export);
-        const key = `${serve.export}\0${serve.event ?? ""}`;
-        const set = senders.get(key) ?? new Set();
-        senders.set(key, set);
-        const sender = { caller: serve.caller, send: sendTo };
-        set.add(sender);
-        const ends = subscribers.get(serve.export) ?? new Set();
-        subscribers.set(serve.export, ends);
-        const stop = () => {
-          set.delete(sender);
-          ends.delete(withdrawn);
-        };
-        const withdrawn = () => {
-          stop();
-          end(new NotConnected(serve.export));
-        };
-        ends.add(withdrawn);
-        return stop;
-      },
-      accept: (serve) => runtime.accepting(serve.export, serve.params),
-      serveHttp(serve) {
-        const handle = runtime.serving(serve.export);
-        return async (stream) => {
-          const { serveOver } = await import("./client-http.js");
-          await serveOver(stream, handle, log);
-        };
-      },
-    },
+    onSlot: (slot, bound) => host.onSlot(slot, bound),
+    serve: host.serve,
   });
-  const open = channel;
-  for (const [name, { handle, iface }] of added) offer(open, name, iface, handle);
-  for (const slot of open.bound) onSlot(slot, true);
-  // A lost channel leaves nothing usable: every slot reads unbound, and its handlers hear so.
-  void open.closed.then(() => {
-    for (const slot of [...bindings.keys()]) onSlot(slot, false);
-    for (const ends of subscribers.values()) for (const end of [...ends]) end();
-  });
-  return Object.assign(runtime.ctx, { close: () => open.close(), closed: open.closed });
+  host.attach(channel);
+  return Object.assign(runtime.ctx, { close: () => channel.close(), closed: channel.closed });
 }

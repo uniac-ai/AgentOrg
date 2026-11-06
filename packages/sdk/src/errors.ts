@@ -1,5 +1,30 @@
+/**
+ * Marks an SDK error class's prototype with its name. A package's bundles and the runner each carry
+ * their own copy of the SDK, so `instanceof` on these three classes checks this mark rather than
+ * the class, and an error made by one copy is the same error to the other. A subclass is checked
+ * as usual.
+ */
+const BRAND = Symbol.for("@agentorg/sdk/error");
+const isBranded = (value: unknown, name: ErrorBody["name"]): boolean =>
+  typeof value === "object" && value !== null && (value as { [BRAND]?: unknown })[BRAND] === name;
+/** `instanceof` for `asked`: the mark for one of the three classes, the usual check for a subclass. */
+const instanceOf = (
+  asked: unknown,
+  base: unknown,
+  name: ErrorBody["name"],
+  value: unknown,
+): boolean =>
+  // The name is given, not read from the class: a bundler may rename a class.
+  asked === base
+    ? isBranded(value, name)
+    : Function.prototype[Symbol.hasInstance].call(asked, value);
+
 /** A call on a slot that no export is bound to, or on an export that was withdrawn. */
 export class NotConnected extends Error {
+  static override [Symbol.hasInstance](value: unknown): boolean {
+    // biome-ignore lint/complexity/noThisInStatic: `this` is the class instanceof was asked about, a subclass included.
+    return instanceOf(this, NotConnected, "NotConnected", value);
+  }
   override readonly name = "NotConnected";
   /** The slot or export that isn't connected. */
   readonly target: string;
@@ -18,6 +43,10 @@ export type RefusedCode = "invalid" | "bad_output" | "unimplemented" | (string &
 
 /** A call refused by validation or policy, with a stable code. */
 export class Refused extends Error {
+  static override [Symbol.hasInstance](value: unknown): boolean {
+    // biome-ignore lint/complexity/noThisInStatic: `this` is the class instanceof was asked about, a subclass included.
+    return instanceOf(this, Refused, "Refused", value);
+  }
   override readonly name = "Refused";
   readonly code: RefusedCode;
   constructor(code: RefusedCode, message: string) {
@@ -28,11 +57,22 @@ export class Refused extends Error {
 
 /** The channel dropped mid-call, so whether it took effect is unknown; read state before retrying. */
 export class OutcomeUnknown extends Error {
+  static override [Symbol.hasInstance](value: unknown): boolean {
+    // biome-ignore lint/complexity/noThisInStatic: `this` is the class instanceof was asked about, a subclass included.
+    return instanceOf(this, OutcomeUnknown, "OutcomeUnknown", value);
+  }
   override readonly name = "OutcomeUnknown";
   constructor(message = "The connection dropped before the call's outcome was known.") {
     super(message);
   }
 }
+
+for (const [error, name] of [
+  [NotConnected, "NotConnected"],
+  [Refused, "Refused"],
+  [OutcomeUnknown, "OutcomeUnknown"],
+] as const)
+  Object.defineProperty(error.prototype, BRAND, { value: name });
 
 /** An error as it crosses a channel or a frame's port: one of the three names, a message, a code. */
 export interface ErrorBody {
