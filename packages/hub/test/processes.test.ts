@@ -293,7 +293,8 @@ test("a host process holds no capability: files, processes, network, DNS, signal
 const slowToStop = (launches: string) => [
   "/bin/sh",
   "-c",
-  'case "$2" in -e) exit 0;; esac; echo launch >> "$0"; trap "" TERM; exec sleep 30',
+  // The trap first: a stop sent as soon as the launch is seen must find SIGTERM ignored already.
+  'case "$2" in -e) exit 0;; esac; trap "" TERM; echo launch >> "$0"; exec sleep 30',
   launches,
 ];
 const launched = (launches: string) => {

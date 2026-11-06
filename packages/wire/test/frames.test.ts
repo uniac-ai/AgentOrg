@@ -51,20 +51,35 @@ test("frames round-trip, split anywhere, and hand over the raw bytes after them"
 });
 
 test("a frame arriving one byte at a time is assembled in linear time", async () => {
-  const frame = encodeFrame({ text: "y".repeat(64 * 1024) });
-  const started = performance.now();
-  let offset = 0;
-  const reader = new FrameReader(
-    new ReadableStream<Uint8Array>({
-      pull(controller) {
-        if (offset === frame.length) return controller.close();
-        controller.enqueue(frame.subarray(offset, offset + 1));
-        offset++;
-      },
-    }),
+  /** How long a frame of `size` characters takes to assemble from one-byte chunks: the best of 3. */
+  const assemble = async (size: number) => {
+    let best = Number.POSITIVE_INFINITY;
+    for (let run = 0; run < 3; run++) {
+      const frame = encodeFrame({ text: "y".repeat(size) });
+      let offset = 0;
+      const reader = new FrameReader(
+        new ReadableStream<Uint8Array>({
+          pull(controller) {
+            if (offset === frame.length) return controller.close();
+            controller.enqueue(frame.subarray(offset, offset + 1));
+            offset++;
+          },
+        }),
+      );
+      const started = performance.now();
+      assert.equal(((await reader.next()) as { text: string }).text.length, size);
+      best = Math.min(best, performance.now() - started);
+    }
+    return best;
+  };
+  // Four times the bytes: linear assembly takes about four times as long, quadratic about sixteen.
+  // A ratio, not a time, so a loaded machine slows both alike.
+  const small = await assemble(16 * 1024);
+  const large = await assemble(64 * 1024);
+  assert.ok(
+    large / small < 10,
+    `16 KiB in ${small.toFixed(1)} ms, 64 KiB in ${large.toFixed(1)} ms`,
   );
-  assert.equal(((await reader.next()) as { text: string }).text.length, 64 * 1024);
-  assert.ok(performance.now() - started < 5_000, `${performance.now() - started} ms`);
 });
 
 test("oversized, truncated and malformed frames are refused", async () => {

@@ -1,6 +1,8 @@
 /** Bytes arriving in chunks, taken in exact sizes; each byte is copied once, however small the chunks. */
 export class ByteQueue {
   #chunks: Uint8Array[] = [];
+  /** The first chunk not yet taken: shifting the array would be O(chunks) per chunk taken. */
+  #head = 0;
   #length = 0;
 
   get length(): number {
@@ -18,12 +20,17 @@ export class ByteQueue {
     const out = new Uint8Array(size);
     let filled = 0;
     while (filled < size) {
-      const chunk = this.#chunks[0] as Uint8Array;
+      const chunk = this.#chunks[this.#head] as Uint8Array;
       const part = Math.min(chunk.length, size - filled);
       out.set(chunk.subarray(0, part), filled);
       filled += part;
-      if (part === chunk.length) this.#chunks.shift();
-      else this.#chunks[0] = chunk.subarray(part);
+      if (part === chunk.length) this.#head++;
+      else this.#chunks[this.#head] = chunk.subarray(part);
+    }
+    // The taken chunks go once they are most of the array: linear over all the takes.
+    if (this.#head > 1024 && this.#head * 2 > this.#chunks.length) {
+      this.#chunks = this.#chunks.slice(this.#head);
+      this.#head = 0;
     }
     this.#length -= size;
     return out;
