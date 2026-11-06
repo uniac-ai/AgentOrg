@@ -13,6 +13,7 @@ import {
   hashInterface,
   type InterfaceSchemas,
   method,
+  NotConnected,
   type Refused,
 } from "@agentorg/sdk";
 import { buildPackage } from "@agentorg/sdk/build";
@@ -1284,4 +1285,146 @@ test("an Actor's logs are read newest last, across the rotated file, and its rec
   const got = (await person.call("actors", "get", { actorId })) as { result: { restarts: number } };
   assert.equal(got.result.restarts, 0);
   void hub;
+});
+
+test("a view module's calls and events run as its Actor, through the package's own wiring", async (t) => {
+  const { hub, person } = await setup(t);
+  const board = join(
+    dirname(fileURLToPath(import.meta.url)),
+    "..",
+    "..",
+    "..",
+    "..",
+    "examples",
+    "board",
+  );
+  const out = mkdtempSync(join(tmpdir(), "board-for-views-"));
+  t.after(() => rmSync(out, { recursive: true, force: true }));
+  const built = await buildPackage(board, { out });
+  hub.state.addPackage(PERSON, built.file);
+  const { actorId } = hub.state.createActor(PERSON, { name: "board", package: built.hash });
+  const got = (await person.call("actors", "get", { actorId })) as { result: { views: string[] } };
+  assert.deepEqual(got.result.views, ["panel"]);
+  const listed = (await person.call("actors", "list", {})) as {
+    result: { actors: { actorId: string; views?: string[] }[] };
+  };
+  assert.deepEqual(listed.result.actors.find((a) => a.actorId === actorId)?.views, ["panel"]);
+  // Not running yet: its views can't call.
+  await assert.rejects(
+    hub.viewCall(actorId, "panel", "board", "list", {}),
+    (e: Refused) => e.code === "state",
+  );
+  hub.state.start(PERSON, actorId);
+
+  // Its process, played by the test: serves logic.board over a pipe.
+  const subscribers: WritableStreamDefaultWriter<Uint8Array>[] = [];
+  const [hubSide, processSide] = memoryPair();
+  hub.accept(hubSide, { actorId });
+  const process_ = new Session(processSide, {
+    client: true,
+    onStream: (stream) => {
+      const reader = new FrameReader(stream.readable);
+      void reader.next().then(async (h) => {
+        const header = parseHeader(h);
+        if (header.op !== "serve") return void stream.writable.close().catch(() => {});
+        const writer = stream.writable.getWriter();
+        if (header.kind === "subscribe") return void subscribers.push(writer);
+        await reader.next();
+        await writer.write(
+          encodeFrame(result({ cards: [{ id: "1", title: `for ${header.caller}`, done: false }] })),
+        );
+        await writer.close();
+      });
+    },
+  });
+  t.after(() => process_.close());
+  await exchange(process_, { op: "hello", actorId });
+
+  assert.deepEqual(await hub.viewCall(actorId, "panel", "board", "list", {}), {
+    cards: [{ id: "1", title: `for ${actorId}`, done: false }],
+  });
+  await assert.rejects(
+    hub.viewCall(actorId, "panel", "board", "add", { title: "" }),
+    (e: Refused) => e.code === "invalid",
+  );
+  await assert.rejects(
+    hub.viewCall(actorId, "logic", "store", "get", { key: "x" }),
+    (e: Refused) => e.code === "forbidden",
+  );
+  await assert.rejects(
+    hub.viewCall(PERSON, "panel", "board", "list", {}),
+    (e: Refused) => e.code === "forbidden",
+  );
+  const audited = hub.state
+    .audit(0, 1000)
+    .entries.filter(
+      (e) => e.kind === "call" && e.actor === actorId && e.details.slot === "panel.board",
+    );
+  assert.deepEqual(
+    audited.map((e) => e.details.outcome),
+    ["refused", "ok", "invalid"],
+  );
+  const refusedViews = hub.state
+    .audit(0, 1000)
+    .entries.filter(
+      (e) => e.kind === "call" && e.actor === actorId && e.details.slot === "logic.store",
+    );
+  assert.equal(refusedViews.length, 1, "a refused non-view module is audited too");
+  assert.throws(
+    () => hub.viewSubscribe(actorId, "panel", "board", "nope", () => {}),
+    (e: Refused) => e.code === "invalid",
+    "refused at the start: thrown",
+  );
+
+  const heard: unknown[] = [];
+  let ended: unknown = "open";
+  const stop = hub.viewSubscribe(
+    actorId,
+    "panel",
+    "board",
+    "changed",
+    (payload) => {
+      heard.push(payload);
+    },
+    (error) => {
+      ended = error;
+    },
+  );
+  for (let waited = 0; !subscribers.length && waited < 3000; waited += 5) await later(5);
+  await subscribers[0]?.write(encodeFrame(eventBody({ id: "2" })));
+  for (let waited = 0; !heard.length && waited < 3000; waited += 5) await later(5);
+  assert.deepEqual(heard, [{ id: "2" }]);
+  // A second subscriber whose onEnd throws doesn't keep the first from hearing the unbind.
+  const stopRude = hub.viewSubscribe(
+    actorId,
+    "panel",
+    "board",
+    "changed",
+    () => {},
+    () => {
+      throw new Error("rude");
+    },
+  );
+  for (let waited = 0; subscribers.length < 2 && waited < 3000; waited += 5) await later(5);
+  // Unbinding its slot ends the subscription with NotConnected.
+  hub.state.unbind(PERSON, actorId, "panel.board");
+  for (let waited = 0; ended === "open" && waited < 3000; waited += 5) await later(5);
+  assert.ok(ended instanceof NotConnected);
+  stop();
+  stop();
+  stopRude();
+});
+
+test("a provider's own error code reaches the subscriber as an error, whatever it is", async (t) => {
+  const { actor, bind } = await setup(t);
+  const p = await actor("provider", { exports: { notes } }, async (_, stream) => {
+    const writer = stream.writable.getWriter();
+    await writer.write(encodeFrame(wireError("Refused", "too many", "slow")));
+    await writer.close();
+  });
+  const c = await actor("consumer", { slots: { notes } });
+  await bind(c.id, "notes", p.id, "notes");
+  const sub = c.client.subscribe("notes", "written");
+  const first = await sub.next();
+  assert.equal(first?.error?.code, "slow", "an error frame, not a reset");
 });

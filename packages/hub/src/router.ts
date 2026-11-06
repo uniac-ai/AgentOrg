@@ -6,6 +6,7 @@ import {
   OutcomeUnknown,
   Refused,
 } from "@agentorg/sdk";
+import { errorOf } from "@agentorg/sdk/client";
 import {
   type Body,
   type Duplex,
@@ -70,6 +71,14 @@ interface Connection {
   notices: number;
 }
 type Writer = WritableStreamDefaultWriter<Uint8Array>;
+/**
+ * Where a subscription's events go: each in turn (with its encoded frame), then its end, with the
+ * reason if any. `cutOff` is the Hub ending it because the subscriber stopped taking events.
+ */
+interface Sink {
+  send(payload: unknown, frame: Uint8Array): Promise<void>;
+  end(error?: WireError, cutOff?: boolean): void;
+}
 interface Resolved {
   binding: BindingRecord;
   iface: DescribedInterface;
@@ -246,6 +255,100 @@ export class Hub {
       if (conn) this.#dropped(conn);
     });
     return { closed, close: () => session.close() };
+  }
+
+  /**
+   * A call from one of a package Actor's view modules, run in this process for the gateway that
+   * shows it (step 4): through `<module>.<slot>` of the Actor, as the Actor, checked and audited
+   * like any call. A module that isn't a view of the Actor's package is refused.
+   */
+  async viewCall(
+    actorId: string,
+    module: string,
+    slot: string,
+    method: string,
+    input: unknown,
+  ): Promise<unknown> {
+    const name = this.#viewSlot(actorId, module, slot, { op: "call", method });
+    const { body } = await this.#invoke(actorId, name, method, async () => ({
+      value: input,
+      cancelled: new Promise<void>(() => {}),
+    }));
+    if ("error" in body) throw errorOf(body.error, name);
+    return (body as { result: unknown }).result;
+  }
+
+  /**
+   * Events of a view module's slot, as `viewCall` reaches its methods. `onEvent` may return a
+   * promise: the next event waits for it. Returns how to stop; `onEnd` hears when it ended
+   * otherwise, with the reason if it wasn't a clean end.
+   */
+  viewSubscribe(
+    actorId: string,
+    module: string,
+    slot: string,
+    event: string,
+    onEvent: (payload: unknown) => void | Promise<void>,
+    onEnd?: (error?: Error) => void,
+  ): () => void {
+    const name = this.#viewSlot(actorId, module, slot, { op: "subscribe", method: event });
+    let stopped = false;
+    let starting = true;
+    let refused: WireError | undefined;
+    const stop = this.#subscribeCore(actorId, name, event, {
+      send: async (payload) => {
+        await onEvent(payload);
+      },
+      end: (error) => {
+        if (starting) refused = error;
+        else if (!stopped)
+          try {
+            onEnd?.(error ? errorOf(error.error, name) : undefined);
+          } catch {
+            // The gateway's own trouble; other subscriptions and the unbind go on.
+          }
+      },
+    });
+    starting = false;
+    // Refused at the start: thrown, as a module that isn't a view is.
+    if (!stop) throw errorOf(refused?.error ?? { name: "NotConnected", message: name }, name);
+    return () => {
+      stopped = true;
+      stop();
+    };
+  }
+
+  /**
+   * `<module>.<slot>` of a running package Actor, when `module` is one of its view modules. A
+   * refusal here is audited as the Actor's, as a refusal while resolving a channel's call is.
+   */
+  #viewSlot(
+    actorId: string,
+    module: string,
+    slot: string,
+    call: { op: "call" | "subscribe"; method: string },
+  ): string {
+    const name = `${module}.${slot}`;
+    try {
+      const actor = this.state.actor(actorId);
+      if (actor.package === "external" || actor.package === "builtin")
+        throw new Refused("forbidden", `${actorId} has no package, so no views.`);
+      if (actor.state !== "running") throw new Refused("state", `${actorId} isn't running.`);
+      const { manifest } = this.state.package(actor.package);
+      if (
+        !Object.hasOwn(manifest.modules, module) ||
+        manifest.modules[module]?.placement !== "view"
+      )
+        throw new Refused("forbidden", `${module} isn't a view module of ${actorId}'s package.`);
+      return name;
+    } catch (error) {
+      if (error instanceof Refused && error.code !== "unknown")
+        this.#audit(actorId, name, undefined, {
+          ...call,
+          outcome: outcomeOf(errorBody(error).error),
+        });
+      throw error;
+    }
   }
 
   /** Close every channel, admitted or not, then the state. */
@@ -453,8 +556,8 @@ export class Hub {
   // declaring Actor's. A slow provider so delays only the callers using it, each in its own turn.
 
   /** A consumer's slot, resolved through its binding to a live provider of the right kind. */
-  #resolve(conn: Connection, slot: string, kind: DescribedInterface["kind"]): Resolved {
-    const resolved = this.state.resolveCall(conn.actorId, slot);
+  #resolve(caller: string, slot: string, kind: DescribedInterface["kind"]): Resolved {
+    const resolved = this.state.resolveCall(caller, slot);
     if (!resolved) throw new NotConnected(slot);
     const { binding, target } = resolved;
     if (target.iface.kind !== kind)
@@ -484,31 +587,50 @@ export class Hub {
     reader: FrameReader,
     writer: Writer,
   ) {
-    let binding: BindingRecord | undefined;
-    let reply: Body;
-    let outcome: CallOutcome = "ok";
     // Once the input is read, this watches the rest of the caller's stream (and so drains it).
     let cancelled: Promise<void> | undefined;
-    try {
-      const resolved = this.#resolve(conn, header.slot, "rpc");
-      binding = resolved.binding;
-      const { iface, provider } = resolved;
-      const part: Part = { method: header.method, side: "input" };
-      if (!this.#validators.has(iface, part))
-        throw new Refused("invalid", `${iface.id} has no method ${header.method}.`);
+    const { frame } = await this.#invoke(conn.actorId, header.slot, header.method, async () => {
       const body = parseBody(await reader.next());
       cancelled = whenReset(reader);
       if (!("input" in body)) throw new Refused("invalid", "A call's body is {input}.");
-      await this.#validators.check(conn.actorId, iface, part, body.input, "invalid");
+      return { value: body.input, cancelled };
+    });
+    await answer(writer, frame);
+    if (!cancelled) drain(reader);
+  }
+
+  /**
+   * A call through a caller's slot, without a channel: resolve it, check the input, reach the
+   * provider, check the output, audit. `input` gives the value (and how the caller cancels) once
+   * the slot is known to have the method.
+   */
+  async #invoke(
+    caller: string,
+    slot: string,
+    method: string,
+    input: () => Promise<{ value: unknown; cancelled: Promise<void> }>,
+  ): Promise<{ body: Body; frame: Uint8Array }> {
+    let binding: BindingRecord | undefined;
+    let reply: Body;
+    let outcome: CallOutcome = "ok";
+    try {
+      const resolved = this.#resolve(caller, slot, "rpc");
+      binding = resolved.binding;
+      const { iface, provider } = resolved;
+      const part: Part = { method, side: "input" };
+      if (!this.#validators.has(iface, part))
+        throw new Refused("invalid", `${iface.id} has no method ${method}.`);
+      const { value, cancelled } = await input();
+      await this.#validators.check(caller, iface, part, value, "invalid");
       reply = provider
-        ? await this.#forward(provider, binding, conn.actorId, header.method, body.input, cancelled)
-        : this.#hubCall(binding.export, header.method, conn.actorId, body.input);
+        ? await this.#forward(provider, binding, caller, method, value, cancelled)
+        : this.#hubCall(binding.export, method, caller, value);
       if ("error" in reply) outcome = "refused";
       else if ("result" in reply)
         await this.#validators.check(
-          conn.actorId,
+          caller,
           iface,
-          { method: header.method, side: "output" },
+          { method, side: "output" },
           reply.result,
           "bad_output",
         );
@@ -520,13 +642,8 @@ export class Hub {
     }
     const encoded = frameOf(reply);
     if (encoded.body !== reply) outcome = "refused";
-    this.#audit(conn.actorId, header.slot, binding, {
-      op: "call",
-      method: header.method,
-      outcome,
-    });
-    await answer(writer, encoded.frame);
-    if (!cancelled) drain(reader);
+    this.#audit(caller, slot, binding, { op: "call", method, outcome });
+    return encoded;
   }
 
   #hubCall(exported: string, method: string, caller: string, value: unknown): Body {
@@ -624,124 +741,148 @@ export class Hub {
    * Events from the provider, each validated, until the subscriber resets the stream, the
    * provider ends it, or the binding goes.
    */
-  async #subscribe(
+  #subscribe(
     conn: Connection,
     header: { slot: string; event: string },
     stream: YamuxStream,
     reader: FrameReader,
     writer: Writer,
   ) {
+    const stop = this.#subscribeCore(conn.actorId, header.slot, header.event, {
+      send: async (_, frame) => {
+        await writer.write(frame);
+      },
+      end: (error, cutOff) => {
+        // A subscriber that stops reading is cut off, not buffered for: its stream is reset.
+        if (cutOff) return stream.reset();
+        if (error) void answer(writer, error);
+        else void writer.close().catch(() => {});
+      },
+    });
+    if (!stop) return drain(reader);
+    // A reset (or anything but a clean end of its side) from the subscriber ends it.
+    reader.next().then(
+      (more) =>
+        more !== undefined && stop(wireError("Refused", "A subscriber sends nothing.", "invalid")),
+      () => stop(),
+    );
+  }
+
+  /**
+   * Events of a caller's slot, without a channel: each checked, then handed to `sink` in order, the
+   * next waiting for the last to be taken, until the provider ends it, the binding goes, or the
+   * returned `stop` runs. A refusal at the start ends the sink at once and returns nothing.
+   */
+  #subscribeCore(caller: string, slot: string, event: string, sink: Sink) {
     let resolved: Resolved | undefined;
-    const part: Part = { event: header.event };
+    const part: Part = { event };
     try {
-      resolved = this.#resolve(conn, header.slot, "rpc");
+      resolved = this.#resolve(caller, slot, "rpc");
       if (!this.#validators.has(resolved.iface, part))
-        throw new Refused("invalid", `${resolved.iface.id} has no event ${header.event}.`);
+        throw new Refused("invalid", `${resolved.iface.id} has no event ${event}.`);
     } catch (error) {
       const body = errorBody(error);
-      this.#audit(conn.actorId, header.slot, resolved?.binding, {
+      this.#audit(caller, slot, resolved?.binding, {
         op: "subscribe",
-        method: header.event,
+        method: event,
         outcome: outcomeOf(body.error),
       });
-      await answer(writer, body);
-      return drain(reader);
+      sink.end(body);
+      return undefined;
     }
     const { binding, iface, provider } = resolved;
-    this.#audit(conn.actorId, header.slot, binding, {
-      op: "subscribe",
-      method: header.event,
-      outcome: "ok",
-    });
-    let stop = () => {};
+    this.#audit(caller, slot, binding, { op: "subscribe", method: event, outcome: "ok" });
+    let stopProvider = () => {};
     let ended = false;
     let queued = 0;
     const untrack = this.#track(binding, (error) => end(error));
-    const end = (error?: WireError) => {
+    const end = (error?: WireError, cutOff?: boolean) => {
       if (ended) return;
       ended = true;
       untrack();
-      stop();
-      if (error) void answer(writer, error);
-      else void writer.close().catch(() => {});
+      stopProvider();
+      sink.end(error, cutOff);
     };
     // Events are checked off-thread, so each waits its turn here to keep them in order.
     let delivered = Promise.resolve();
     const deliver = (payload: unknown): Promise<void> => {
       if (ended) return delivered;
       const { frame } = frameOf(eventBody(payload));
-      // A subscriber that stops reading is cut off, not buffered for: its stream is reset.
-      if (queued + frame.length > MAX_QUEUED_BYTES) {
-        stream.reset();
-        end();
+      const size = frame.length;
+      if (queued + size > MAX_QUEUED_BYTES) {
+        end(wireError("Refused", "The subscriber stopped reading.", "slow"), true);
         return delivered;
       }
-      queued += frame.length;
+      queued += size;
       delivered = delivered.then(async () => {
         try {
           if (ended) return;
-          await this.#validators.check(conn.actorId, iface, part, payload, "bad_output");
+          await this.#validators.check(caller, iface, part, payload, "bad_output");
           if (ended) return;
-          await writer.write(frame);
+          await sink.send(payload, frame);
         } catch (error) {
-          end(error instanceof Refused ? errorBody(error) : undefined);
+          // A refused event (bad_output) or the subscriber failing to take it.
+          end(
+            error instanceof Refused
+              ? errorBody(error)
+              : wireError(
+                  "Refused",
+                  error instanceof Error ? error.message : String(error),
+                  "failed",
+                ),
+          );
         } finally {
-          queued -= frame.length;
+          queued -= size;
         }
       });
       return delivered;
     };
-    // A reset (or anything but a clean end of its side) from the subscriber ends it.
-    reader.next().then(
-      (more) =>
-        more !== undefined && end(wireError("Refused", "A subscriber sends nothing.", "invalid")),
-      () => end(),
-    );
     if (!provider) {
-      stop = this.#actor.subscribe(binding.export, header.event, {
-        caller: conn.actorId,
-        emit: deliver,
-      });
-      return;
+      stopProvider = this.#actor.subscribe(binding.export, event, { caller, emit: deliver });
+      return end;
     }
     let out: YamuxStream;
     try {
       out = provider.session.open();
     } catch {
-      return end(errorBody(new NotConnected(header.slot)));
+      end(errorBody(new NotConnected(slot)));
+      return end;
     }
-    stop = () => out.reset();
-    try {
-      const upstream = out.writable.getWriter();
-      await upstream.write(
-        encodeFrame({
-          op: "serve",
-          kind: "subscribe",
-          export: binding.export,
-          caller: conn.actorId,
-          slot: binding.slot,
-          event: header.event,
-        }),
-      );
-      await upstream.close();
-      const events = new FrameReader(out.readable);
-      for (;;) {
-        const frame = await events.next();
-        if (frame === undefined) return end();
-        const body = parseBody(frame);
-        // Backpressure: the provider's next event is read once this one is delivered.
-        if ("event" in body) await deliver(body.event);
-        else if ("error" in body) return end(body);
-        else return end(wireError("Refused", "A subscription carries events.", "bad_output"));
-        if (ended) return;
+    stopProvider = () => out.reset();
+    void (async () => {
+      try {
+        const upstream = out.writable.getWriter();
+        await upstream.write(
+          encodeFrame({
+            op: "serve",
+            kind: "subscribe",
+            export: binding.export,
+            caller,
+            slot: binding.slot,
+            event,
+          }),
+        );
+        await upstream.close();
+        const events = new FrameReader(out.readable);
+        for (;;) {
+          const frame = await events.next();
+          if (frame === undefined) return end();
+          const body = parseBody(frame);
+          // Backpressure: the provider's next event is read once this one is delivered.
+          if ("event" in body) await deliver(body.event);
+          else if ("error" in body) return end(body);
+          else return end(wireError("Refused", "A subscription carries events.", "bad_output"));
+          if (ended) return;
+        }
+      } catch (error) {
+        end(
+          error instanceof HeaderError || error instanceof FrameError
+            ? wireError("Refused", error.message, "bad_output")
+            : errorBody(new NotConnected(slot)),
+        );
       }
-    } catch (error) {
-      end(
-        error instanceof HeaderError || error instanceof FrameError
-          ? wireError("Refused", error.message, "bad_output")
-          : errorBody(new NotConnected(header.slot)),
-      );
-    }
+    })();
+    return end;
   }
 
   /**
@@ -763,7 +904,11 @@ export class Hub {
     let unbound = false;
     let untrack = () => {};
     try {
-      const resolved = this.#resolve(conn, header.slot, header.op === "open" ? "stream" : "http");
+      const resolved = this.#resolve(
+        conn.actorId,
+        header.slot,
+        header.op === "open" ? "stream" : "http",
+      );
       binding = resolved.binding;
       // Tracked from here, so a binding that goes while the provider decides ends it too.
       untrack = this.#track(binding, () => {

@@ -59,6 +59,8 @@ export const Actor = z.object({
    * what to do about it.
    */
   host: z.object({ available: z.boolean(), reason: z.string().optional() }).optional(),
+  /** For a package Actor: its view modules, which the person's shell can place. */
+  views: z.array(z.string()).optional(),
 });
 
 /** One line of an Actor's log, from its `ctx.log` or its process's own output. */

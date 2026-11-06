@@ -1,6 +1,13 @@
 import { Refused } from "@agentorg/sdk";
 import { readLogs } from "./logs.js";
-import type { AuditRecord, Decision, HubState, RequestRecord, Wiring } from "./state.js";
+import type {
+  ActorRecord,
+  AuditRecord,
+  Decision,
+  HubState,
+  RequestRecord,
+  Wiring,
+} from "./state.js";
 
 type Input = Record<string, unknown>;
 type Handler = (caller: string, input: Input) => unknown;
@@ -23,6 +30,20 @@ export class HubActor {
   readonly #handlers: Record<string, Record<string, Handler>>;
 
   constructor(state: HubState) {
+    /** A package Actor's record with its view modules, which a shell can place. */
+    const withViews = (actor: ActorRecord) => {
+      if (actor.package === "external" || actor.package === "builtin") return actor;
+      let modules: Record<string, { placement: string }>;
+      try {
+        ({ modules } = state.package(actor.package).manifest);
+      } catch {
+        return actor; // A closed Actor's package may be gone.
+      }
+      return {
+        ...actor,
+        views: Object.keys(modules).filter((name) => modules[name]?.placement === "view"),
+      };
+    };
     this.#handlers = {
       packages: {
         add: (caller, input) => state.addPackage(caller, String(input.path)),
@@ -39,8 +60,8 @@ export class HubActor {
               ? { bindings: input.bindings as Omit<Wiring, "consumer">[] }
               : {}),
           }),
-        list: () => ({ actors: state.actors() }),
-        get: (_, input) => state.actor(String(input.actorId)),
+        list: () => ({ actors: state.actors().map(withViews) }),
+        get: (_, input) => withViews(state.actor(String(input.actorId))),
         start: (caller, input) => state.start(caller, String(input.actorId)),
         stop: (caller, input) => state.stop(caller, String(input.actorId)),
         close: (caller, input) => state.closeActor(caller, String(input.actorId)),
