@@ -43,6 +43,8 @@ export interface ServeHandlers {
   ): () => void;
   /** Check that the export takes the stream (throwing a refusal if not), then return what runs it. */
   accept(serve: Serve): (stream: Duplex) => Promise<void>;
+  /** The same for an `http` export: the stream carries HTTP/1.1 once accepted. */
+  serveHttp(serve: Serve): (stream: Duplex) => Promise<void>;
 }
 
 export interface ChannelOptions {
@@ -84,6 +86,8 @@ export interface Channel {
     onEnd?: (error?: Error) => void,
   ): () => void;
   open(slot: string, params: unknown): Promise<Duplex>;
+  /** A stream to an `http` slot's provider, carrying HTTP/1.1 once it accepts. */
+  http(slot: string): Promise<Duplex>;
   /** Offer and withdraw run-time exports; they reach the Hub in the order they were made. */
   offer(name: string, iface: DescribedInterface): Promise<void>;
   withdraw(name: string): Promise<void>;
@@ -196,8 +200,8 @@ export async function openChannel(options: ChannelOptions): Promise<Channel> {
         return await answer(stream, result(await handlers.call(header, body.input)));
       }
       if (header.kind === "subscribe") return subscribeStream(handlers, header, stream);
-      if (header.kind === "open") {
-        const run = handlers.accept(header);
+      if (header.kind === "open" || header.kind === "http") {
+        const run = header.kind === "open" ? handlers.accept(header) : handlers.serveHttp(header);
         const writer = stream.writable.getWriter();
         await writer.write(encodeFrame(result({})));
         writer.releaseLock();
@@ -206,7 +210,7 @@ export async function openChannel(options: ChannelOptions): Promise<Channel> {
           stream.reset(),
         );
       }
-      throw new Refused("unimplemented", "http exports aren't served by this client yet.");
+      return stream.reset();
     } catch (error) {
       await answer(stream, bodyOf(error));
       drain(reader);
@@ -346,29 +350,8 @@ export async function openChannel(options: ChannelOptions): Promise<Channel> {
         stream.reset();
       };
     },
-    async open(slot, params) {
-      let stream: YamuxStream | undefined;
-      try {
-        stream = session.open();
-        const writer = stream.writable.getWriter();
-        await writer.write(encodeFrame({ op: "open", slot, params }));
-        writer.releaseLock();
-        const reader = new FrameReader(stream.readable);
-        const first = await reader.next();
-        if (first === undefined) throw new NotConnected(slot);
-        answered(parseBody(first), slot);
-        return { readable: reader.rest(), writable: stream.writable };
-      } catch (error) {
-        stream?.reset();
-        if (
-          error instanceof Refused ||
-          error instanceof NotConnected ||
-          error instanceof OutcomeUnknown
-        )
-          throw error;
-        throw new NotConnected(slot);
-      }
-    },
+    open: (slot, params) => splice({ op: "open", slot, params }, slot),
+    http: (slot) => splice({ op: "http", slot }, slot),
     offer: (name, iface) =>
       inOrder(async () => {
         answered(await exchange({ op: "offer", name, interface: iface }, name), name);
@@ -380,6 +363,31 @@ export async function openChannel(options: ChannelOptions): Promise<Channel> {
     close: () => session.close(),
     closed,
   };
+
+  /** Open a raw stream: send its header, read the one body that answers, then hand over the bytes. */
+  async function splice(header: unknown, slot: string): Promise<Duplex> {
+    let stream: YamuxStream | undefined;
+    try {
+      stream = session.open();
+      const writer = stream.writable.getWriter();
+      await writer.write(encodeFrame(header));
+      writer.releaseLock();
+      const reader = new FrameReader(stream.readable);
+      const first = await reader.next();
+      if (first === undefined) throw new NotConnected(slot);
+      answered(parseBody(first), slot);
+      return { readable: reader.rest(), writable: stream.writable };
+    } catch (error) {
+      stream?.reset();
+      if (
+        error instanceof Refused ||
+        error instanceof NotConnected ||
+        error instanceof OutcomeUnknown
+      )
+        throw error;
+      throw new NotConnected(slot);
+    }
+  }
 }
 
 export interface ConnectOptions<S extends InterfaceMap, X extends ExportMap> {
@@ -421,7 +429,7 @@ type None = Record<never, Interface>;
  * reaches an export before it is implemented. A slot is bound when the Hub says so; `onBind` runs
  * when it becomes usable (bound, or its provider back), and `on` handlers subscribe while it is
  * usable. `exports.add` and `withdraw()` offer and withdraw over the channel. `http` slots and
- * exports aren't served yet.
+ * exports speak HTTP/1.1 over the Hub's stream, one request per stream, with `node:http`.
  */
 export async function connect<
   const S extends InterfaceMap = None,
@@ -530,8 +538,19 @@ export async function connect<
       runtime.bind(slot, {
         call: (method, value) => open.call(slot, method, value),
         open: (params) => open.open(slot, params),
-        fetch: async () => {
-          throw new Refused("unimplemented", "http slots aren't served by this client yet.");
+        fetch: async (request) => {
+          // HTTP/1.1 is spoken with node:http, loaded only when an http slot is used.
+          const { fetchOver } = await import("./client-http.js");
+          const stream = await open.http(slot);
+          try {
+            return await fetchOver(stream, request);
+          } catch (error) {
+            // An abort keeps its own reason; a stream lost mid-request may have reached the provider.
+            if (request.signal.aborted) throw error;
+            throw new OutcomeUnknown(
+              `The http request on ${slot} ended before its response: ${String(error)}`,
+            );
+          }
         },
       }),
     );
@@ -576,6 +595,13 @@ export async function connect<
         return stop;
       },
       accept: (serve) => runtime.accepting(serve.export, serve.params),
+      serveHttp(serve) {
+        const handle = runtime.serving(serve.export);
+        return async (stream) => {
+          const { serveOver } = await import("./client-http.js");
+          await serveOver(stream, handle, log);
+        };
+      },
     },
   });
   const open = channel;

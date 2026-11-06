@@ -51,6 +51,8 @@ export interface ModuleRuntime<S extends InterfaceMap, X extends InterfaceMap> {
    */
   accepting(exportName: string, params: unknown): (stream: Duplex) => Promise<void>;
   fetch(exportName: string, request: Request): Promise<Response>;
+  /** The checking half of `fetch`: refuses at once, or returns what serves each request. */
+  serving(exportName: string): (request: Request) => Promise<Response>;
   mount(exportName: string, el: FrameRoot, options: unknown): MountedView;
   withdrawn(exportName: string): boolean;
 }
@@ -272,6 +274,15 @@ export function createRuntime<S extends InterfaceMap, X extends InterfaceMap>(
     log: options.log,
   } as unknown as Context<S, X>;
 
+  const serving = (exportName: string) => {
+    const state = target(exportName, "http");
+    const handler = implemented<(request: Request) => Response | Promise<Response>>(
+      state,
+      exportName,
+    );
+    return async (request: Request) => handler(request);
+  };
+
   const accepting = (exportName: string, params: unknown) => {
     const state = target(exportName, "stream");
     const parsed = check((state.iface as StreamInterface).open, params, `${exportName} open`);
@@ -357,12 +368,9 @@ export function createRuntime<S extends InterfaceMap, X extends InterfaceMap>(
     async open(exportName, params, stream) {
       await accepting(exportName, params)(stream);
     },
+    serving,
     async fetch(exportName, request) {
-      const state = target(exportName, "http");
-      return implemented<(request: Request) => Response | Promise<Response>>(
-        state,
-        exportName,
-      )(request);
+      return serving(exportName)(request);
     },
     mount(exportName, el, options) {
       const state = target(exportName, "frame");
