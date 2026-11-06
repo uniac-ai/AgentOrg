@@ -5,7 +5,9 @@
  * How each stream ends:
  * - `hello`: the Hub answers with one body (`{result}` or `{error}`) and closes; on an error it
  *   closes the channel too. Without `declares` the Actor keeps what it declared before; with it,
- *   `declares` replaces that. The result is `{actorId, bound}`: the Actor's slots bound now.
+ *   `declares` replaces that. The result is `{actorId, bound}`: the Actor's slots bound now. A
+ *   newer channel for an Actor replaces its older one; with `replace: false` the hello is refused
+ *   instead (`Refused`, code `connected`) while the Actor has a live channel.
  * - `slot`: from the Hub, one of the Actor's slots was bound or unbound after its channel's hello
  *   result was taken. The header is the whole message: the Hub closes its side, and the Actor
  *   closes its side once it has read it (an open notice counts against its streams). Applied in
@@ -27,7 +29,7 @@
  */
 export type Header =
   /** Admits an external client's channel; its first stream. The Hub validates `declares`. */
-  | { op: "hello"; actorId: string; credential: string; declares?: unknown }
+  | { op: "hello"; actorId: string; credential: string; declares?: unknown; replace?: false }
   | { op: "call"; slot: string; method: string }
   | { op: "subscribe"; slot: string; event: string }
   /** Raw bytes in the interface's protocol, after the Hub validates `params`. */
@@ -81,6 +83,7 @@ export function parseHeader(value: unknown): Header {
         actorId: text(value, "actorId"),
         credential: text(value, "credential", 4096),
         ...("declares" in value ? { declares: value.declares } : {}),
+        ...(value.replace === false ? { replace: false as const } : {}),
       };
     case "call":
       return { op: "call", slot: text(value, "slot"), method: text(value, "method") };

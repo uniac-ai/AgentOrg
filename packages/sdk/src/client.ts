@@ -49,6 +49,11 @@ export interface ChannelOptions {
   hubUrl: string;
   actorId: string;
   credential: string;
+  /**
+   * Whether this channel may replace one the Actor already has (the default). With `false`, a
+   * live channel makes the hello refused, code `connected`.
+   */
+  replace?: boolean;
   /** The Actor's slots and static exports. Without it, the Actor keeps what it declared before. */
   declares?: {
     slots: Record<string, DescribedInterface>;
@@ -273,6 +278,7 @@ export async function openChannel(options: ChannelOptions): Promise<Channel> {
       actorId: options.actorId,
       credential: options.credential,
       ...(options.declares ? { declares: options.declares } : {}),
+      ...(options.replace === false ? { replace: false } : {}),
     },
     "the Hub",
   );

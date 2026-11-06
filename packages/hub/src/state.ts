@@ -7,6 +7,7 @@ import {
   openSync,
   readFileSync,
   renameSync,
+  rmSync,
   writeFileSync,
   writeSync,
 } from "node:fs";
@@ -153,6 +154,43 @@ const MIGRATIONS = [
      kind TEXT NOT NULL, details TEXT NOT NULL);`,
 ];
 
+/** Whether a process with this pid runs now. */
+function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+/**
+ * Take the home for this process: `hub.lock` holds the pid of the one Hub open in it. A lock left
+ * by a process that is gone is taken over; one held by a live process is refused.
+ */
+function lock(home: string) {
+  const file = join(home, "hub.lock");
+  for (let attempt = 0; ; attempt++)
+    try {
+      writeFileSync(file, `${process.pid}\n`, { flag: "wx", mode: 0o600 });
+      return;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST" || attempt > 0) throw error;
+      const pid = Number.parseInt(readFileSync(file, "utf8"), 10);
+      if (pid > 0 && alive(pid)) throw new Error(`Another Hub has ${home} open (process ${pid}).`);
+      rmSync(file, { force: true });
+    }
+}
+
+function unlock(home: string) {
+  const file = join(home, "hub.lock");
+  try {
+    if (Number.parseInt(readFileSync(file, "utf8"), 10) === process.pid) rmSync(file);
+  } catch {
+    // Already gone.
+  }
+}
+
 type Row = Record<string, unknown>;
 type Pending = { request: RequestRecord; approvers: string[] };
 const bindingOf = (row: Row): BindingRecord => ({
@@ -225,13 +263,21 @@ export class HubState {
    */
   static open(home: string, events: StateEvents = {}): HubState {
     mkdirSync(home, { recursive: true, mode: 0o700 });
-    const state = new HubState(home, events);
-    state.#bootstrap();
-    return state;
+    lock(home);
+    try {
+      const state = new HubState(home, events);
+      state.#bootstrap();
+      return state;
+    } catch (error) {
+      unlock(home);
+      throw error;
+    }
   }
 
   close(): void {
-    if (this.#db.isOpen) this.#db.close();
+    if (!this.#db.isOpen) return;
+    this.#db.close();
+    unlock(this.home);
   }
 
   #bootstrap() {

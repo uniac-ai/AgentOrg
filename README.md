@@ -53,6 +53,18 @@ To read a module's definition, the build runs the module's code in a separate No
 - `Refused` with code `unimplemented`: the export has no handler for that method yet.
 - `OutcomeUnknown`: the channel dropped mid-call. Read state before retrying.
 
+### The `agentorg` command
+
+- `agentorg hub [--port N]` runs a Hub in its home, serving WebSocket on loopback, and writes the address to `<home>/url`. It loads `@agentorg/hub`, which the SDK doesn't depend on.
+- The other commands act as the person, with `<home>/person-credential`, one per hub method:
+  - `agentorg add <file.agentorg>`;
+  - `agentorg actors|bindings|exports|audit`;
+  - `agentorg bind <consumer.slot> <provider.export>`;
+  - `agentorg call <slot> <method> [json]`.
+- The home is `--home`, else `$AGENTORG_HUB_HOME`, else `~/.local/share/agentorg-next`.
+- Results are JSON on stdout. A refusal exits 1 with its reason on stderr, and a usage mistake exits 2.
+- The CLI never takes over the person's channel: while something else holds it, the command says so and exits 1 (hello's `replace: false`).
+
 ### The `agentorg` command name
 
 `@agentorg/sdk`'s bin is named `agentorg`, the same name the current `@agentorg/cli` package uses. With both installed, the one found first on `PATH` wins. The name will be settled before anything is published; in this repository, run the build with `node packages/sdk/dist/src/cli.js build <dir>` or `buildPackage`.

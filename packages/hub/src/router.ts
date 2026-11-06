@@ -214,8 +214,12 @@ export class Hub {
         else if (helloSeen) stream.reset();
         else {
           helloSeen = true;
-          void this.#hello(stream, session, (actorId) => {
+          void this.#hello(stream, session, (actorId, replace) => {
             if (ended) throw new NotConnected("The channel");
+            // Checked again as the channel is admitted: one may have connected while declares
+            // were checked.
+            if (replace === false && this.#connections.has(actorId))
+              throw new Refused("connected", `${actorId} already has a channel to this Hub.`);
             conn = this.#admit(actorId, session);
             options.maxStreams = MAX_STREAMS;
           });
@@ -278,7 +282,11 @@ export class Hub {
     }
   }
 
-  async #hello(stream: YamuxStream, session: Session, admit: (actorId: string) => void) {
+  async #hello(
+    stream: YamuxStream,
+    session: Session,
+    admit: (actorId: string, replace?: false) => void,
+  ) {
     const reader = new FrameReader(stream.readable);
     const writer = stream.writable.getWriter();
     try {
@@ -287,12 +295,14 @@ export class Hub {
         throw new Refused("invalid", "A channel's first stream must be hello.");
       if (!this.state.authenticate(header.actorId, header.credential))
         throw new Refused("forbidden", "No such Actor, or the credential is wrong.");
+      if (header.replace === false && this.#connections.has(header.actorId))
+        throw new Refused("connected", `${header.actorId} already has a channel to this Hub.`);
       if (header.declares !== undefined)
         this.state.declareExternal(
           header.actorId,
           await this.#declares(header.actorId, header.declares),
         );
-      admit(header.actorId);
+      admit(header.actorId, header.replace);
       // Taken as the channel is admitted: every change after it reaches the channel as a notice.
       const bound = this.state
         .bindings(header.actorId)

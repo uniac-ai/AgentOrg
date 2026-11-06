@@ -121,6 +121,17 @@ test("headers and bodies are checked for their shape", () => {
     "hello",
     "a credential may be long",
   );
+  assert.deepEqual(parseHeader({ op: "hello", actorId: "a", credential: "c", replace: false }), {
+    op: "hello",
+    actorId: "a",
+    credential: "c",
+    replace: false,
+  });
+  assert.equal(
+    "replace" in parseHeader({ op: "hello", actorId: "a", credential: "c", replace: true }),
+    false,
+    "only false changes anything",
+  );
   assert.deepEqual(parseHeader({ op: "offer", name: "extra", interface: { id: "x@1" } }), {
     op: "offer",
     name: "extra",
