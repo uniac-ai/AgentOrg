@@ -1,10 +1,11 @@
-/** A call on a slot that no export is bound to. */
+/** A call on a slot that no export is bound to, or on an export that was withdrawn. */
 export class NotConnected extends Error {
   override readonly name = "NotConnected";
-  readonly slot: string;
-  constructor(slot: string) {
-    super(`Slot ${slot} is not connected.`);
-    this.slot = slot;
+  /** The slot or export that isn't connected. */
+  readonly target: string;
+  constructor(target: string) {
+    super(`${target} is not connected.`);
+    this.target = target;
   }
 }
 
