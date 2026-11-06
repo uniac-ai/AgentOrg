@@ -1,5 +1,5 @@
 import { Refused } from "@agentorg/sdk";
-import type { AuditRecord, HubState, RequestRecord, Wiring } from "./state.js";
+import type { AuditRecord, Decision, HubState, RequestRecord, Wiring } from "./state.js";
 
 type Input = Record<string, unknown>;
 type Handler = (caller: string, input: Input) => unknown;
@@ -34,6 +34,9 @@ export class HubActor {
           state.createActor(caller, {
             name: String(input.name),
             ...(typeof input.package === "string" ? { package: input.package } : {}),
+            ...(Array.isArray(input.bindings)
+              ? { bindings: input.bindings as Omit<Wiring, "consumer">[] }
+              : {}),
           }),
         list: () => ({ actors: state.actors() }),
         get: (_, input) => state.actor(String(input.actorId)),
@@ -41,17 +44,22 @@ export class HubActor {
         stop: (caller, input) => state.stop(caller, String(input.actorId)),
         close: (caller, input) => state.closeActor(caller, String(input.actorId)),
       },
-      bindings: {
+      grants: {
         bind: (caller, input) => state.bind(caller, wiring(input)),
         unbind: (caller, input) => state.unbind(caller, String(input.consumer), String(input.slot)),
-        list: (_, input) => ({
-          bindings: state.bindings(typeof input.actor === "string" ? input.actor : undefined),
-        }),
         request: (caller, input) => ({
           requestId: state.request(caller, wiring(input), String(input.reason)).requestId,
         }),
         requests: (caller) => ({ requests: state.requests(caller) }),
+        mine: (caller, input) => ({
+          requests: state.mine(caller, typeof input.limit === "number" ? input.limit : 100),
+        }),
         decline: (caller, input) => state.decline(caller, String(input.requestId)),
+      },
+      bindings: {
+        list: (_, input) => ({
+          bindings: state.bindings(typeof input.actor === "string" ? input.actor : undefined),
+        }),
       },
       exports: {
         list: (_, input) => ({
@@ -92,7 +100,12 @@ export class HubActor {
 
   /** A request, to the subscribers who could approve it. */
   requested(request: RequestRecord, approvers: string[]) {
-    this.#send("bindings.requested", request, (caller) => approvers.includes(caller));
+    this.#send("grants.requested", request, (caller) => approvers.includes(caller));
+  }
+
+  /** A decision, to the subscribers its request went to and its requester. */
+  decided(request: RequestRecord, status: Decision, approvers: string[]) {
+    this.#send("grants.decided", { request, status }, (caller) => approvers.includes(caller));
   }
 
   exportsChanged(actor: string) {

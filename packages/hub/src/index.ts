@@ -7,11 +7,13 @@ export {
   type AuditRecord,
   type BindingRecord,
   type CallOutcome,
+  type Decision,
   type Declaration,
   HUB,
   HubState,
   PERSON,
   type RequestRecord,
+  type Side,
   type StateEvents,
   type Wiring,
 } from "./state.js";

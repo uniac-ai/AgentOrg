@@ -158,6 +158,7 @@ export class Hub {
       },
       closed: (actorId) => this.#connections.get(actorId)?.session.close(),
       requested: (request, approvers) => actor?.requested(request, approvers),
+      decided: (request, status, approvers) => actor?.decided(request, status, approvers),
       exportsChanged: (changed) => actor?.exportsChanged(changed),
       audited: (entry) => actor?.audited(entry),
     });

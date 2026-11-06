@@ -10,6 +10,7 @@ export {
   hubAudit,
   hubBindings,
   hubExports,
+  hubGrants,
   hubPackages,
   Package,
 } from "./hub.js";

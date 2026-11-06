@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { hubGrants } from "@agentorg/interfaces";
 import {
   type DescribedInterface,
   defineInterface,
@@ -30,7 +31,7 @@ import {
   type YamuxStream,
 } from "@agentorg/wire";
 import { z } from "zod";
-import { Hub, listen, PERSON } from "../src/index.ts";
+import { HUB, Hub, listen, PERSON } from "../src/index.ts";
 import { Validators } from "../src/validate.ts";
 
 const notes = describeInterface(
@@ -149,15 +150,18 @@ async function setup(t: test.TestContext, options: { answerTimeoutMs?: number } 
     credential: readFileSync(join(home, "person-credential"), "utf8").trim(),
   });
   /** An external Actor made through the person's hub.actors slot, then connected. */
-  const actor = async (name: string, declares: unknown, serve?: Serve) => {
-    const made = (await person.call("actors", "create", { name })) as {
+  const actor = async (name: string, declares: unknown, serve?: Serve, bindings?: unknown[]) => {
+    const made = (await person.call("actors", "create", {
+      name,
+      ...(bindings ? { bindings } : {}),
+    })) as {
       result: { actorId: string; credential: string };
     };
     const client = await join_(server.url, { ...made.result, declares }, serve);
     return { id: made.result.actorId, client };
   };
   const bind = (consumer: string, slot: string, provider: string, exported: string) =>
-    person.call("bindings", "bind", { consumer, slot, provider, export: exported });
+    person.call("grants", "bind", { consumer, slot, provider, export: exported });
   return { hub, home, url: server.url, person, actor, bind };
 }
 
@@ -207,7 +211,7 @@ test("bind, call, events, and an unbind that ends the subscription", async (t) =
     (await c.client.call("notes", "write", { text: "hi" })).error?.name,
     "NotConnected",
   );
-  assert.deepEqual(await bind(c.id, "notes", p.id, "notes"), { result: {} });
+  assert.deepEqual(await bind(c.id, "notes", p.id, "notes"), { result: { bound: true } });
   assert.deepEqual(await c.client.call("notes", "write", { text: "hi" }), { result: { n: 1 } });
   assert.deepEqual(
     provider.calls,
@@ -219,7 +223,7 @@ test("bind, call, events, and an unbind that ends the subscription", async (t) =
   await provider.waitSubscribed();
   await provider.emit({ text: "one" });
   assert.deepEqual(await sub.next(), { event: { text: "one" } });
-  assert.deepEqual(await person.call("bindings", "unbind", { consumer: c.id, slot: "notes" }), {
+  assert.deepEqual(await person.call("grants", "unbind", { consumer: c.id, slot: "notes" }), {
     result: {},
   });
   assert.equal((await sub.next())?.error?.name, "NotConnected", "the unbind ends it");
@@ -380,34 +384,70 @@ test("open and http streams are validated, then spliced", async (t) => {
 test("management goes only through the hub's exports, and requests reach their approvers live", async (t) => {
   const { actor, bind, person, hub } = await setup(t);
   const p = await actor("provider", { exports: { notes } }, notesProvider().serve);
-  const c = await actor("consumer", { slots: { notes } });
+  const grants = describeInterface(hubGrants);
+  const c = await actor("consumer", { slots: { notes, grants } }, undefined, [
+    { slot: "grants", provider: HUB, export: "grants" },
+  ]);
   assert.equal(
     (await c.client.call("actors", "list", {})).error?.name,
     "NotConnected",
     "no hub slot, no management",
   );
 
-  const requested = person.subscribe("bindings", "requested");
+  const requested = person.subscribe("grants", "requested");
+  const decided = person.subscribe("grants", "decided");
+  // The consumer holds hub.grants too, but its own request isn't its to decide.
+  const own = c.client.subscribe("grants", "requested");
   const audited = person.subscribe("audit", "appended");
   const subscribed = () =>
     hub.state
       .audit(0, 1000)
       .entries.filter((e) => e.actor === PERSON && e.details.op === "subscribe");
-  while (subscribed().length < 2) await later(5);
-  // Until hub.grants@1, only a manager reaches request over the wire; the state makes it here.
-  hub.state.request(
-    c.id,
-    { consumer: c.id, slot: "notes", provider: p.id, export: "notes" },
-    "please",
-  );
-  const seen = await requested.next();
-  assert.equal((seen as { event: { reason: string } }).event.reason, "please");
-  assert.equal(((await audited.next()) as { event: { kind: string } }).event.kind, "request");
-  assert.deepEqual(await bind(c.id, "notes", p.id, "notes"), { result: {} });
-  const listed = (await person.call("bindings", "requests", {})) as {
+  while (subscribed().length < 3) await later(5);
+  while (
+    !hub.state.audit(0, 1000).entries.some((e) => e.actor === c.id && e.details.op === "subscribe")
+  )
+    await later(5);
+  const wiring = { consumer: c.id, slot: "notes", provider: p.id, export: "notes" };
+  const asked = (await c.client.call("grants", "request", { ...wiring, reason: "please" })) as {
+    result: { requestId: string };
+  };
+  const seen = (await requested.next()) as { event: { reason: string; needs: string } };
+  assert.deepEqual([seen.event.reason, seen.event.needs], ["please", "export"]);
+  // The live audit feed carries the request (after any calls audited before it).
+  let entry: { event: { kind: string } };
+  do entry = (await audited.next()) as { event: { kind: string } };
+  while (entry.event.kind === "call");
+  assert.equal(entry.event.kind, "request");
+  assert.deepEqual(await bind(c.id, "notes", p.id, "notes"), { result: { bound: true } });
+  assert.deepEqual(await decided.next(), {
+    event: {
+      request: { ...(seen.event as object), requestId: asked.result.requestId },
+      status: "approved",
+    },
+  });
+  // The provider offering itself is a request to the consumer, which hears of it.
+  const p2 = await actor("offerer", { slots: { grants }, exports: { notes } }, undefined, [
+    { slot: "grants", provider: HUB, export: "grants" },
+  ]);
+  await person.call("grants", "unbind", { consumer: c.id, slot: "notes" });
+  const offered = await p2.client.call("grants", "bind", {
+    consumer: c.id,
+    slot: "notes",
+    provider: p2.id,
+    export: "notes",
+  });
+  assert.equal((offered.result as { bound: boolean }).bound, false);
+  const heard = (await own.next()) as { event: { requestedBy: string; needs: string } };
+  assert.deepEqual([heard.event.requestedBy, heard.event.needs], [p2.id, "slot"], "only the offer");
+  const listed = (await person.call("grants", "requests", {})) as {
     result: { requests: unknown[] };
   };
-  assert.deepEqual(listed.result.requests, [], "binding it was the approval");
+  assert.deepEqual(
+    listed.result.requests.map((r) => (r as { needs: string }).needs),
+    ["slot"],
+    "the first was approved by binding; the offer waits for the consumer",
+  );
   const created = await person.call("actors", "create", { name: "" });
   assert.equal(created.error?.code, "invalid", "the hub's inputs are validated like any other");
   const refused = await person.call("actors", "close", { actorId: PERSON });
@@ -556,7 +596,7 @@ test("splices end with their binding, and a closed Actor's channel goes", async 
   await writer.write(encodeFrame({ op: "open", slot: "echo", params: { prefix: "" } }));
   const reader = new FrameReader(stream.readable);
   assert.deepEqual(reply(await reader.next()), { result: {} });
-  await person.call("bindings", "unbind", { consumer: c.id, slot: "echo" });
+  await person.call("grants", "unbind", { consumer: c.id, slot: "echo" });
   await assert.rejects(
     (async () => {
       for await (const _ of reader.rest());
@@ -671,7 +711,7 @@ test("an open the provider refuses, or whose binding goes while it decides, leav
 
   const pending = open("wait");
   while (served.length < 302) await later(5);
-  await person.call("bindings", "unbind", { consumer: c.id, slot: "echo" });
+  await person.call("grants", "unbind", { consumer: c.id, slot: "echo" });
   decide();
   assert.match(String((await pending).error?.name), /NotConnected|reset/);
 });

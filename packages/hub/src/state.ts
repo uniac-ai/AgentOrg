@@ -12,7 +12,14 @@ import {
 } from "node:fs";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { hubActors, hubAudit, hubBindings, hubExports, hubPackages } from "@agentorg/interfaces";
+import {
+  hubActors,
+  hubAudit,
+  hubBindings,
+  hubExports,
+  hubGrants,
+  hubPackages,
+} from "@agentorg/interfaces";
 import {
   compareInterfaces,
   type DescribedInterface,
@@ -32,6 +39,7 @@ const HUB_EXPORTS = {
   packages: hubPackages,
   actors: hubActors,
   bindings: hubBindings,
+  grants: hubGrants,
   exports: hubExports,
   audit: hubAudit,
 };
@@ -55,8 +63,17 @@ export interface BindingRecord extends Wiring {
   madeBy: string;
   at: string;
 }
+/** The two ends of a binding: the export side gives the export, the slot side takes it. */
+export type Side = "export" | "slot";
+/**
+ * How a request ended: `approved` (its binding was made), `declined`, or `closed` (its slot was
+ * bound to something else, or one end went away).
+ */
+export type Decision = "approved" | "declined" | "closed";
 export interface RequestRecord extends Wiring {
   requestId: string;
+  /** The side the requester lacks, whose approvers decide. */
+  needs: Side;
   reason: string;
   requestedBy: string;
   at: string;
@@ -96,12 +113,8 @@ export interface StateEvents {
   /** Bindings that ended, by unbind, withdrawal, redeclaration, disconnection or closing. */
   unbound?(bindings: BindingRecord[]): void;
   requested?(request: RequestRecord, approvers: string[]): void;
-  /** A request was approved, declined or closed; its approvers can clear it. */
-  decided?(
-    request: RequestRecord,
-    status: "approved" | "declined" | "closed",
-    approvers: string[],
-  ): void;
+  /** A request was approved, declined or closed: to its approvers and its requester. */
+  decided?(request: RequestRecord, status: Decision, approvers: string[]): void;
   exportsChanged?(actor: string): void;
   /** An Actor was closed for good: its channel should go too. */
   closed?(actorId: string): void;
@@ -133,7 +146,8 @@ const MIGRATIONS = [
    CREATE TABLE requests (
      id TEXT PRIMARY KEY, consumer TEXT NOT NULL, slot TEXT NOT NULL, provider TEXT NOT NULL,
      export TEXT NOT NULL, reason TEXT NOT NULL, requested_by TEXT NOT NULL, at TEXT NOT NULL,
-     status TEXT NOT NULL CHECK (status IN ('open', 'approved', 'declined', 'closed')));
+     status TEXT NOT NULL CHECK (status IN ('open', 'approved', 'declined', 'closed')),
+     needs TEXT NOT NULL CHECK (needs IN ('export', 'slot')));
    CREATE TABLE audit (
      seq INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, actor TEXT NOT NULL,
      kind TEXT NOT NULL, details TEXT NOT NULL);`,
@@ -159,7 +173,9 @@ const requestOf = (row: Row): RequestRecord => ({
   reason: String(row.reason),
   requestedBy: String(row.requested_by),
   at: String(row.at),
+  needs: row.needs === "slot" ? "slot" : "export",
 });
+const other = (side: Side): Side => (side === "export" ? "slot" : "export");
 
 /**
  * The core's state in its home folder: Actors, packages, declarations, bindings, binding requests
@@ -364,7 +380,16 @@ export class HubState {
   /** Create an Actor: one that runs a package, or an external one, whose credential comes back once. */
   createActor(
     caller: string,
-    input: { name: string; package?: string },
+    input: {
+      name: string;
+      package?: string;
+      /**
+       * Initial bindings for the new Actor's slots, made with the caller's export-side authority;
+       * the creation is the slot side's yes. An external Actor's slot is declared with the
+       * export's interface, and its hello must declare it the same way to keep it.
+       */
+      bindings?: Omit<Wiring, "consumer">[];
+    },
   ): { actorId: string; credential?: string } {
     this.#require(caller, "actors");
     const actorId = `act_${randomBytes(8).toString("hex")}`;
@@ -398,6 +423,26 @@ export class HubState {
         name: input.name,
         package: input.package ?? "external",
       });
+      for (const initial of input.bindings ?? []) {
+        const wiring = { consumer: actorId, ...initial };
+        if (!this.sides(caller, wiring).export)
+          throw new Refused(
+            "forbidden",
+            `${caller} can't grant ${initial.provider}'s ${initial.export}.`,
+          );
+        if (!input.package && !this.declaration(actorId, "slot", initial.slot)) {
+          if (!NAME.test(initial.slot))
+            throw new Refused(
+              "invalid",
+              `${JSON.stringify(initial.slot)} isn't a valid slot name.`,
+            );
+          const offered = this.declaration(initial.provider, "export", initial.export);
+          if (!offered)
+            throw new Refused("unknown", `${initial.provider} offers no ${initial.export}.`);
+          this.#declare(actorId, "slot", initial.slot, offered.iface, false);
+        }
+        this.#insertBinding(wiring, caller);
+      }
     });
     return credential ? { actorId, credential } : { actorId };
   }
@@ -762,34 +807,44 @@ export class HubState {
   }
 
   /**
-   * The binding authority rule, in one place: the caller is the provider, already holds that
-   * export, or is a manager. `approvers` lists exactly the Actors it accepts.
+   * The binding authority rule, in one place. A binding needs both ends: the export side is its
+   * provider, an Actor already bound to that export, or a manager; the slot side is the consumer
+   * itself, or a manager.
    */
-  mayGrant(caller: string, wiring: Wiring): boolean {
-    return (
-      caller === wiring.provider ||
-      !!this.#db
-        .prepare("SELECT 1 FROM bindings WHERE consumer = ? AND provider = ? AND export = ?")
-        .get(caller, wiring.provider, wiring.export) ||
-      this.isManager(caller)
-    );
+  sides(caller: string, wiring: Wiring): Record<Side, boolean> {
+    const manager = this.isManager(caller);
+    return {
+      export:
+        manager ||
+        caller === wiring.provider ||
+        !!this.#db
+          .prepare("SELECT 1 FROM bindings WHERE consumer = ? AND provider = ? AND export = ?")
+          .get(caller, wiring.provider, wiring.export),
+      slot: manager || caller === wiring.consumer,
+    };
   }
 
-  /** Who could make this binding: its provider, the export's holders, and every manager. */
-  approvers(wiring: Pick<Wiring, "provider" | "export">): string[] {
-    const holders = this.#db
-      .prepare("SELECT DISTINCT consumer FROM bindings WHERE provider = ? AND export = ?")
-      .all(wiring.provider, wiring.export) as Row[];
-    const managers = this.#db
-      .prepare("SELECT DISTINCT consumer FROM bindings WHERE provider = ? AND export = 'bindings'")
-      .all(HUB) as Row[];
-    return [
-      ...new Set([
-        wiring.provider,
-        ...holders.map((h) => String(h.consumer)),
-        ...managers.map((m) => String(m.consumer)),
-      ]),
-    ];
+  /** Who can give the side a request needs: exactly the Actors `sides` grants it to. */
+  approvers(request: Wiring & { needs: Side }): string[] {
+    const managers = (
+      this.#db
+        .prepare(
+          "SELECT DISTINCT consumer FROM bindings WHERE provider = ? AND export = 'bindings'",
+        )
+        .all(HUB) as Row[]
+    ).map((m) => String(m.consumer));
+    const own =
+      request.needs === "slot"
+        ? [request.consumer]
+        : [
+            request.provider,
+            ...(
+              this.#db
+                .prepare("SELECT DISTINCT consumer FROM bindings WHERE provider = ? AND export = ?")
+                .all(request.provider, request.export) as Row[]
+            ).map((h) => String(h.consumer)),
+          ];
+    return [...new Set([...own, ...managers])];
   }
 
   /** The two ends exist, are live, and take and offer the same interface. */
@@ -839,22 +894,31 @@ export class HubState {
         "forbidden",
         "The person's hub bindings stay, so someone can always manage the Hub.",
       );
+    // Requests whose requester held its end through these bindings can't be approved any more.
+    const open = this.#pending("1 = 1");
     this.#db.prepare(`DELETE FROM bindings WHERE ${where}`).run(...params);
     this.#emit(() => this.#events.unbound?.(removed));
+    for (const pending of open)
+      if (!this.#standing(pending.request)) this.#decide(pending, "closed");
   }
 
   /**
-   * Bind a slot to an export. The caller may when it is the provider, already holds that export,
-   * or is a manager. Making a binding that was requested is the approval.
+   * Bind a slot to an export. A caller with both ends binds. A caller with one end approves an
+   * open request for this binding from the other end, if its requester still holds that end;
+   * otherwise its call becomes a request to the other end's approvers. A caller with neither end
+   * is refused.
    */
-  bind(caller: string, wiring: Wiring): void {
-    if (!this.mayGrant(caller, wiring))
-      throw new Refused(
-        "forbidden",
-        `${caller} can't grant ${wiring.provider}'s ${wiring.export}: request it instead.`,
-      );
+  bind(caller: string, wiring: Wiring): { bound: true } | { bound: false; requestId: string } {
+    const sides = this.sides(caller, wiring);
+    if (!sides.export && !sides.slot)
+      throw new Refused("forbidden", `${caller} holds neither end of this binding.`);
+    if (!(sides.export && sides.slot)) {
+      const has: Side = sides.export ? "export" : "slot";
+      if (!this.#asked(wiring, has))
+        return { bound: false, requestId: this.#ask(caller, wiring, "", other(has)).requestId };
+    }
     this.#transaction(() => {
-      // Every open request for this slot is settled: the one this binding makes is approved, and
+      // Every open request for this slot is settled: the ones for this binding are approved, and
       // the rest can't be made any more.
       const pending = this.#pending("consumer = ? AND slot = ?", wiring.consumer, wiring.slot);
       this.#insertBinding(wiring, caller);
@@ -866,6 +930,7 @@ export class HubState {
             : "closed",
         );
     });
+    return { bound: true };
   }
 
   /** Unbind a slot: its consumer, its provider or a manager may. */
@@ -886,10 +951,35 @@ export class HubState {
   }
 
   /**
-   * Ask for a binding the caller can't make; it goes to everyone who could. Asking again for the
-   * same wiring while a request is open returns that request.
+   * Ask for a binding the caller holds one end of; it goes to the other end's approvers. Asking
+   * again for the same wiring while a request is open returns that request.
    */
   request(caller: string, wiring: Wiring, reason: string): RequestRecord {
+    const sides = this.sides(caller, wiring);
+    if (!sides.export && !sides.slot)
+      throw new Refused("forbidden", `${caller} holds neither end of this binding.`);
+    if (sides.export && sides.slot)
+      throw new Refused("state", `${caller} holds both ends: bind it instead.`);
+    const has: Side = sides.export ? "export" : "slot";
+    if (this.#asked(wiring, has))
+      throw new Refused("state", "The other end has asked already: bind to approve.");
+    return this.#ask(caller, wiring, reason, other(has));
+  }
+
+  /** Whether the other end has an open request for this binding that `has` would complete. */
+  #asked(wiring: Wiring, has: Side): boolean {
+    return (
+      this.#db
+        .prepare(
+          "SELECT * FROM requests WHERE status = 'open' AND needs = ? AND consumer = ? AND slot = ? AND provider = ? AND export = ?",
+        )
+        .all(has, wiring.consumer, wiring.slot, wiring.provider, wiring.export) as Row[]
+    )
+      .map(requestOf)
+      .some((request) => this.#standing(request));
+  }
+
+  #ask(caller: string, wiring: Wiring, reason: string, needs: Side): RequestRecord {
     this.#ends(wiring);
     if (this.binding(wiring.consumer, wiring.slot))
       throw new Refused("bound", `${wiring.consumer}'s ${wiring.slot} is already bound.`);
@@ -902,6 +992,7 @@ export class HubState {
     const request: RequestRecord = {
       requestId: `req_${randomBytes(8).toString("hex")}`,
       ...wiring,
+      needs,
       reason,
       requestedBy: caller,
       at: now(),
@@ -909,7 +1000,7 @@ export class HubState {
     this.#transaction(() => {
       this.#db
         .prepare(
-          "INSERT INTO requests (id, consumer, slot, provider, export, reason, requested_by, at, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open')",
+          "INSERT INTO requests (id, consumer, slot, provider, export, reason, requested_by, at, status, needs) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)",
         )
         .run(
           request.requestId,
@@ -920,9 +1011,10 @@ export class HubState {
           reason,
           caller,
           request.at,
+          needs,
         );
-      this.#audit(caller, "request", { ...wiring, requestId: request.requestId });
-      const approvers = this.approvers(wiring).filter((a) => a !== caller);
+      this.#audit(caller, "request", { ...wiring, needs, requestId: request.requestId });
+      const approvers = this.approvers(request).filter((a) => a !== caller);
       this.#emit(() => this.#events.requested?.(request, approvers));
     });
     return request;
@@ -936,8 +1028,24 @@ export class HubState {
     return rows
       .map(requestOf)
       .filter(
-        (request) => request.requestedBy !== caller && this.approvers(request).includes(caller),
+        (request) =>
+          request.requestedBy !== caller &&
+          this.#standing(request) &&
+          this.approvers(request).includes(caller),
       );
+  }
+
+  /** The caller's own requests with how each stands, newest first. */
+  mine(caller: string, limit = 100): (RequestRecord & { status: "open" | Decision })[] {
+    const rows = this.#db
+      .prepare("SELECT * FROM requests WHERE requested_by = ? ORDER BY at DESC, rowid DESC LIMIT ?")
+      .all(caller, limit) as Row[];
+    return rows.map((row) => ({ ...requestOf(row), status: row.status as "open" | Decision }));
+  }
+
+  /** A request can still be approved only while its requester holds the end it brought. */
+  #standing(request: RequestRecord): boolean {
+    return this.sides(request.requestedBy, request)[other(request.needs)];
   }
 
   /**
@@ -958,9 +1066,15 @@ export class HubState {
     });
   }
 
-  #decide({ request, approvers }: Pending, status: "approved" | "declined" | "closed") {
-    this.#db.prepare("UPDATE requests SET status = ? WHERE id = ?").run(status, request.requestId);
-    this.#emit(() => this.#events.decided?.(request, status, approvers));
+  #decide({ request, approvers }: Pending, status: Decision) {
+    // A request is decided once; a later path that finds it again leaves it be.
+    const { changes } = this.#db
+      .prepare("UPDATE requests SET status = ? WHERE id = ? AND status = 'open'")
+      .run(status, request.requestId);
+    if (!changes) return;
+    // The requester hears too; events are at most once, so it can also read the outcome in `mine`.
+    const to = [...new Set([...approvers, request.requestedBy])];
+    this.#emit(() => this.#events.decided?.(request, status, to));
   }
 
   decline(caller: string, requestId: string): void {

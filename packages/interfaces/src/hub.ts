@@ -56,9 +56,20 @@ export const hubActors = defineInterface({
   major: 1,
   kind: "rpc",
   methods: {
-    /** With a package, an Actor that runs it; without, an external one, whose credential is returned once. */
+    /**
+     * With a package, an Actor that runs it; without, an external one, whose credential is returned
+     * once. `bindings` wire the new Actor's slots at once, with the caller's export-side authority
+     * (the creation is the slot side's yes), for example to its own `hub.grants@1`.
+     */
     create: method({
-      input: z.object({ name: z.string().min(1).max(128), package: Hash.optional() }),
+      input: z.object({
+        name: z.string().min(1).max(128),
+        package: Hash.optional(),
+        bindings: z
+          .array(z.object({ slot: Name, provider: Id, export: Name }))
+          .max(64)
+          .optional(),
+      }),
       output: z.object({ actorId: Id, credential: z.string().optional() }),
     }),
     list: method({ input: Empty, output: z.object({ actors: z.array(Actor) }) }),
@@ -80,27 +91,35 @@ export const Binding = z.object({
 export const BindingRequest = z.object({
   requestId: Id,
   ...Wiring,
+  /** The end the requester lacks: `export` (provider, holders, managers) or `slot` (consumer, managers). */
+  needs: z.enum(["export", "slot"]),
   reason: z.string(),
   requestedBy: Id,
   at: z.string(),
 });
 
 /**
- * `hub.bindings@1`: who is wired to whom. A binding is the grant. The caller may bind when it is
- * the provider, already holds that export, or is bound to `hub.bindings@1` (a manager); otherwise
- * it requests, and any Actor that could make the binding makes it or declines.
+ * `hub.grants@1`: binding with the caller's own authority, so it is safe to give any Actor. A
+ * binding needs both ends: the export side (the provider, an Actor already bound to that export,
+ * or a manager) and the slot side (the consumer itself, or a manager). With both, `bind` binds.
+ * With one, it approves an open request from the other end, or becomes a request to that end's
+ * approvers. With neither it is refused.
  */
-export const hubBindings = defineInterface({
-  name: "hub.bindings",
+export const hubGrants = defineInterface({
+  name: "hub.grants",
   major: 1,
   kind: "rpc",
   methods: {
-    bind: method({ input: z.object(Wiring), output: Empty }),
-    unbind: method({ input: z.object({ consumer: Id, slot: Name }), output: Empty }),
-    list: method({
-      input: z.object({ actor: Id.optional() }),
-      output: z.object({ bindings: z.array(Binding) }),
+    /** A request made by `bind` has an empty reason; `request` gives one. */
+    bind: method({
+      input: z.object(Wiring),
+      output: z.union([
+        z.object({ bound: z.literal(true) }),
+        z.object({ bound: z.literal(false), requestId: Id }),
+      ]),
     }),
+    /** The consumer, the provider or a manager may unbind. */
+    unbind: method({ input: z.object({ consumer: Id, slot: Name }), output: Empty }),
     request: method({
       input: z.object({ ...Wiring, reason: z.string().min(1).max(1000) }),
       output: z.object({ requestId: Id }),
@@ -108,10 +127,46 @@ export const hubBindings = defineInterface({
     /** The open requests the caller could approve. */
     requests: method({ input: Empty, output: z.object({ requests: z.array(BindingRequest) }) }),
     decline: method({ input: z.object({ requestId: Id }), output: Empty }),
+    /**
+     * The caller's own requests and how each stands, newest first: how a requester that missed
+     * `decided` learns the outcome.
+     */
+    mine: method({
+      input: z.object({ limit: z.number().int().min(1).max(1000).optional() }),
+      output: z.object({
+        requests: z.array(
+          BindingRequest.extend({ status: z.enum(["open", "approved", "declined", "closed"]) }),
+        ),
+      }),
+    }),
   },
   events: {
     /** A request the subscriber could approve. */
     requested: event(BindingRequest),
+    /**
+     * A request the subscriber could approve, or made, was approved (its binding made), declined,
+     * or closed (its slot was bound to something else, or one end went away).
+     */
+    decided: event(
+      z.object({ request: BindingRequest, status: z.enum(["approved", "declined", "closed"]) }),
+    ),
+  },
+});
+
+/**
+ * `hub.bindings@1`: management scope. An Actor bound to it is a manager: it holds both ends of
+ * every binding and is an approver of every request, acting through `hub.grants@1`, which it needs
+ * as well. Here, the manager-wide reads.
+ */
+export const hubBindings = defineInterface({
+  name: "hub.bindings",
+  major: 1,
+  kind: "rpc",
+  methods: {
+    list: method({
+      input: z.object({ actor: Id.optional() }),
+      output: z.object({ bindings: z.array(Binding) }),
+    }),
   },
 });
 
