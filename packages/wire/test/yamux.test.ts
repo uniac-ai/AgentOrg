@@ -222,6 +222,33 @@ test("incoming streams are reset when nothing takes them, when there are too man
   assert.ok(Number.isFinite(await ping), "the session goes on");
 });
 
+test("only streams the other side opened count toward maxStreams", async () => {
+  const { client, server } = pair(echo, 1);
+  // The server's own streams to the client don't use up the client's one stream.
+  const own = [server.open(), server.open()];
+  const stream = client.open();
+  const writer = stream.writable.getWriter();
+  await writer.write(new Uint8Array([7]));
+  await writer.close();
+  assert.deepEqual([...(await readAll(stream.readable))], [7]);
+  for (const s of own) s.reset();
+  client.close();
+});
+
+test("a reset reaches a writer that is idle: its stream's closed rejects", async () => {
+  let held: YamuxStream | undefined;
+  const { client } = pair((stream) => {
+    held = stream;
+  });
+  const stream = client.open();
+  await stream.writable.getWriter().write(new Uint8Array([1]));
+  while (!held) await new Promise((resolve) => setTimeout(resolve, 5));
+  const idle = (held as YamuxStream).writable.getWriter();
+  stream.reset();
+  await assert.rejects(idle.closed, /reset/);
+  client.close();
+});
+
 test("data that arrived is still read after the channel ends", async () => {
   let received: YamuxStream | undefined;
   const peer = rawPeer({

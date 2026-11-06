@@ -50,7 +50,11 @@ export interface SessionOptions {
   client: boolean;
   /** Each stream the other side opens. Without it, they're reset; if it throws, that stream is. */
   onStream?(stream: YamuxStream): void;
-  /** Most streams open at once; more from the other side are reset. */
+  /**
+   * Most streams the other side may have open at once; more are reset. Streams this side opens
+   * don't count. It is read as each stream
+   * arrives, so the owner of this object may change it, as the Hub does once a channel is admitted.
+   */
   maxStreams?: number;
   /** How long a ping waits for its answer. */
   pingTimeoutMs?: number;
@@ -89,6 +93,8 @@ interface StreamState {
   failed?: YamuxError;
   /** Wakes a reader waiting for data, or a writer waiting for window. */
   wake(): void;
+  /** Errors the writable, so a writer that is idle still learns of a reset. */
+  failWrites?(error: YamuxError): void;
   stream: YamuxStream;
 }
 
@@ -101,6 +107,8 @@ export class Session {
   readonly #pings = new Map<number, { resolve(at: number): void; reject(e: Error): void }>();
   #nextId: number;
   #nextPing = 1;
+  /** Streams the other side opened that are still open; only these count toward maxStreams. */
+  #opened = 0;
   #remoteGoAway = false;
   #ended?: YamuxError;
   #replies = 0;
@@ -224,6 +232,9 @@ export class Session {
       { highWaterMark: 0 },
     );
     const writable = new WritableStream<Uint8Array>({
+      start: (controller) => {
+        state.failWrites = (error) => controller.error(error);
+      },
       write: async (chunk) => {
         let offset = 0;
         while (offset < chunk.length) {
@@ -264,7 +275,10 @@ export class Session {
   }
 
   #forget(state: StreamState) {
-    if (this.#streams.get(state.id) === state) this.#streams.delete(state.id);
+    if (this.#streams.get(state.id) === state) {
+      this.#streams.delete(state.id);
+      if (this.#theirs(state.id)) this.#opened--;
+    }
     if (this.#remoteGoAway && !this.#streams.size) this.#end(undefined);
   }
 
@@ -278,6 +292,9 @@ export class Session {
     state.failed ??= error;
     if (discard) state.incoming.length = 0;
     state.wake();
+    // A reset ends writing at once; an ended session leaves a pending write to fail on its own,
+    // so a splice still delivers what was read before it.
+    if (discard) state.failWrites?.(state.failed);
     this.#forget(state);
   }
 
@@ -407,10 +424,16 @@ export class Session {
     }
   }
 
+  /** Whether the other side opened this stream: its ids have the other parity. */
+  #theirs(id: number) {
+    return id % 2 === (this.#options.client ? 0 : 1);
+  }
+
   /** A stream the other side opened: acknowledged and handed over, or reset. */
   #accept(id: number): StreamState | undefined {
+    const full = this.#opened >= (this.#options.maxStreams ?? 1024);
     const state = this.#create(id);
-    const full = this.#streams.size > (this.#options.maxStreams ?? 1024);
+    this.#opened++;
     if (!this.#options.onStream || full || this.#remoteGoAway) {
       this.#reset(state, true);
       return undefined;

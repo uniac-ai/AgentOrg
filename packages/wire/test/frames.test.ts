@@ -121,10 +121,21 @@ test("headers and bodies are checked for their shape", () => {
     "hello",
     "a credential may be long",
   );
+  assert.deepEqual(parseHeader({ op: "offer", name: "extra", interface: { id: "x@1" } }), {
+    op: "offer",
+    name: "extra",
+    interface: { id: "x@1" },
+  });
+  assert.deepEqual(parseHeader({ op: "withdraw", name: "extra" }), {
+    op: "withdraw",
+    name: "extra",
+  });
   for (const bad of [
     null,
     [],
     { op: "fly" },
+    { op: "offer", name: "x" },
+    { op: "withdraw" },
     { op: "call", slot: "s" },
     { op: "call", slot: "", method: "m" },
     { op: "open", slot: "tty" },

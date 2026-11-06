@@ -4,13 +4,18 @@
  *
  * How each stream ends:
  * - `hello`: the Hub answers with one body (`{result}` or `{error}`) and closes; on an error it
- *   closes the channel too.
+ *   closes the channel too. Without `declares` the Actor keeps what it declared before; with it,
+ *   `declares` replaces that.
+ * - `offer` and `withdraw`: the channel's own Actor offers an export at run time, or withdraws
+ *   one it offered; one body (`{result: {}}` or `{error}`) answers, then the stream closes.
  * - `call`: the caller sends one `{input}` body and closes its side; the answer is one `{result}`
  *   or `{error}` body, then the stream closes.
  * - `subscribe`: `{event}` bodies flow until the subscriber resets the stream, or the provider
  *   side closes it (with an `{error}` body first when it was refused).
- * - `open` and `http`: raw bytes after the header, closed by either side in its own direction; a
- *   reset ends both. A refusal before any bytes is one `{error}` body.
+ * - `open` and `http`: the answering side sends exactly one body first, `{result: {}}` to accept
+ *   or `{error}` to refuse; after an accept, raw bytes flow both ways, each side closing its own
+ *   direction, and a reset ends both. The provider answers the Hub, and the Hub forwards that
+ *   answer. The opener may send bytes before the answer; they wait.
  * Cancelling a reader of a yamux stream resets it.
  */
 export type Header =
@@ -22,6 +27,9 @@ export type Header =
   | { op: "open"; slot: string; params: unknown }
   /** HTTP/1.1 bytes. */
   | { op: "http"; slot: string }
+  /** Offer an export at run time, as a described interface; it lasts until withdrawn or disconnect. */
+  | { op: "offer"; name: string; interface: unknown }
+  | { op: "withdraw"; name: string }
   /** From the Hub to a provider: the same four, naming its export and who is calling. */
   | {
       op: "serve";
@@ -74,6 +82,11 @@ export function parseHeader(value: unknown): Header {
       return { op: "open", slot: text(value, "slot"), params: value.params };
     case "http":
       return { op: "http", slot: text(value, "slot") };
+    case "offer":
+      if (!isRecord(value.interface)) throw new HeaderError("An offer header needs an interface.");
+      return { op: "offer", name: text(value, "name"), interface: value.interface };
+    case "withdraw":
+      return { op: "withdraw", name: text(value, "name") };
     case "serve": {
       const kind = value.kind;
       if (kind !== "call" && kind !== "subscribe" && kind !== "open" && kind !== "http")

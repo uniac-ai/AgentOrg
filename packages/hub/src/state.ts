@@ -83,7 +83,9 @@ export type CallOutcome =
   | "bad_output"
   | "refused"
   | "not_connected"
-  | "outcome_unknown";
+  | "outcome_unknown"
+  /** The caller reset the stream before the provider answered. */
+  | "cancelled";
 
 /**
  * What the router listens for. Each is sent after the change commits, never for a change that
@@ -101,6 +103,8 @@ export interface StateEvents {
     approvers: string[],
   ): void;
   exportsChanged?(actor: string): void;
+  /** An Actor was closed for good: its channel should go too. */
+  closed?(actorId: string): void;
   audited?(entry: AuditRecord): void;
 }
 
@@ -311,7 +315,8 @@ export class HubState {
   /** Record a call's metadata: who, through which binding, which method, and how it ended. */
   auditCall(
     caller: string,
-    binding: Wiring,
+    /** The binding the call went through; an unbound slot has only its consumer and slot. */
+    binding: Pick<Wiring, "consumer" | "slot"> & Partial<Wiring>,
     call: { op: "call" | "subscribe" | "open" | "http"; method?: string; outcome: CallOutcome },
   ): void {
     this.#transaction(() => this.#audit(caller, "call", { ...binding, ...call }));
@@ -455,6 +460,7 @@ export class HubState {
       for (const open of pending) this.#decide(open, "closed");
       this.#audit(caller, "actor.close", { actorId });
       this.#emit(() => this.#events.exportsChanged?.(actorId));
+      this.#emit(() => this.#events.closed?.(actorId));
     });
   }
 
@@ -755,6 +761,20 @@ export class HubState {
     return this.holds(actor, "bindings");
   }
 
+  /**
+   * The binding authority rule, in one place: the caller is the provider, already holds that
+   * export, or is a manager. `approvers` lists exactly the Actors it accepts.
+   */
+  mayGrant(caller: string, wiring: Wiring): boolean {
+    return (
+      caller === wiring.provider ||
+      !!this.#db
+        .prepare("SELECT 1 FROM bindings WHERE consumer = ? AND provider = ? AND export = ?")
+        .get(caller, wiring.provider, wiring.export) ||
+      this.isManager(caller)
+    );
+  }
+
   /** Who could make this binding: its provider, the export's holders, and every manager. */
   approvers(wiring: Pick<Wiring, "provider" | "export">): string[] {
     const holders = this.#db
@@ -828,13 +848,7 @@ export class HubState {
    * or is a manager. Making a binding that was requested is the approval.
    */
   bind(caller: string, wiring: Wiring): void {
-    if (
-      caller !== wiring.provider &&
-      !this.#db
-        .prepare("SELECT 1 FROM bindings WHERE consumer = ? AND provider = ? AND export = ?")
-        .get(caller, wiring.provider, wiring.export) &&
-      !this.isManager(caller)
-    )
+    if (!this.mayGrant(caller, wiring))
       throw new Refused(
         "forbidden",
         `${caller} can't grant ${wiring.provider}'s ${wiring.export}: request it instead.`,
