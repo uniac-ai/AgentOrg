@@ -33,6 +33,13 @@ export interface ViewCalls {
     send: (payload: unknown) => void,
     end: () => void,
   ): () => void;
+  /** A line for the view's Actor's log, which the Hub bounds as it does a frame's. */
+  log(
+    view: View,
+    level: "info" | "warn" | "error",
+    message: string,
+    fields?: Record<string, unknown>,
+  ): void;
 }
 
 /** The socket a tab or the CLI holds: text messages in, text messages out. */
@@ -68,6 +75,7 @@ function errorBody(error: unknown) {
  *   answered `{id, result}` or `{id, error}`.
  * - `{sub, op: "subscribe", slot, event}` (or with `view`): then `{sub, payload}` per event, and
  *   `{sub, end: true}` once it can't go on. `{sub, op: "unsubscribe"}` stops it.
+ * - `{op: "log", view, level, message, fields?}`: a line for the view's Actor's log, unanswered.
  *
  * A view's calls run as its Actor, for one of its views only, which the Hub checks. Everything else
  * runs as the person: through its own slots, and `layout`, its own export.
@@ -156,6 +164,18 @@ export function serveSocket(
         } catch (error) {
           ended = true;
           send({ sub, end: true, error: errorBody(error) });
+        }
+        return;
+      }
+      case "log": {
+        const { level, message: text, fields } = message;
+        if (level !== "info" && level !== "warn" && level !== "error") return;
+        if (typeof text !== "string") return;
+        try {
+          const view = viewOf(message.view);
+          if (view) deps.views.log(view, level, text, isRecord(fields) ? fields : undefined);
+        } catch {
+          // Not one of an Actor's views: nothing is logged, and nothing answers.
         }
         return;
       }

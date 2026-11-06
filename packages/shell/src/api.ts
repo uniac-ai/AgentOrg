@@ -102,6 +102,12 @@ export class Api {
     };
   }
 
+  /** A line for a view's Actor's log; dropped while the socket isn't open. */
+  log(view: View, level: "info" | "warn" | "error", message: string, fields?: unknown) {
+    if (this.#connection !== "open") return;
+    this.#send({ op: "log", view, level, message, ...(fields ? { fields } : {}) });
+  }
+
   #open(subscription: Subscription) {
     const sub = ++this.#nextId;
     subscription.sub = sub;

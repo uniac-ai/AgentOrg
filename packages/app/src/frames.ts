@@ -48,11 +48,17 @@ const DOCUMENT =
 
 /**
  * Serve `/frames/`: the runtime, a view's frame document and its bundle. A frame has an opaque
- * origin, so a module script it loads is a CORS request: scripts carry `Access-Control-Allow-Origin:
- * *`, and no request here reads or needs the session. A bundle is served only for a `view` module,
- * by hash, and never changes.
+ * origin, so a module script it loads is a CORS request from `Origin: null`: only that one is
+ * answered `Access-Control-Allow-Origin: null`, and no other origin is allowed to read a script.
+ * No request here reads or needs the session. A bundle is served only for a `view` module, by
+ * hash, and never changes. `from` is the request's `Origin` header.
  */
-export function serveFrame(path: string, origin: string, bundle: ViewBundle): Served | undefined {
+export function serveFrame(
+  path: string,
+  origin: string,
+  bundle: ViewBundle,
+  from?: string,
+): Served | undefined {
   const base = {
     "Content-Security-Policy": frameCsp(origin),
     "X-Content-Type-Options": "nosniff",
@@ -61,7 +67,9 @@ export function serveFrame(path: string, origin: string, bundle: ViewBundle): Se
   const script = {
     ...base,
     "Content-Type": "text/javascript; charset=utf-8",
-    "Access-Control-Allow-Origin": "*",
+    // A sandboxed frame's own request: nothing else needs to read a script across origins.
+    ...(from === "null" ? { "Access-Control-Allow-Origin": "null" } : {}),
+    Vary: "Origin",
   };
   if (path === "/frames/runtime.js")
     return { status: 200, headers: { ...script, "Cache-Control": "no-cache" }, body: runtime() };

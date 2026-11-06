@@ -92,6 +92,23 @@ To read a module's definition, the build runs the module's code in a separate No
 
 `agentorg` is also the bin of the current `@agentorg/cli` package. With both installed, the one found first on `PATH` wins. The name will be settled before anything is published.
 
+## Try it
+
+From a clone, after `npm ci` and `npm run build`, with `agentorg` being `node packages/app/dist/src/cli.js`:
+
+1. **Run the app:** `agentorg`. It prints its address and opens the shell in the browser, already signed in; `agentorg open` signs a browser in again.
+2. **Add the board:** `agentorg build examples/board` prints its hash and writes `examples/board/agentorg-build/<hash>.agentorg`; then `agentorg add examples/board/agentorg-build/<hash>.agentorg`.
+3. **Create it with its store, and start it:**
+
+   ```sh
+   agentorg call actors create '{"name":"Board","package":"<hash>","bindings":[{"slot":"logic.store","provider":"storage","export":"kv"}]}'
+   agentorg call actors start '{"actorId":"<actorId>"}'
+   ```
+4. **Place its panel on home:** `agentorg call layout place '{"actor":"<actorId>","module":"panel","title":"Launch"}'`. It shows in the shell at once.
+5. **Add a card** in the panel: type it and press Enter. It is kept in the board's store, so it's there after a reload, and after the board's process restarts (`actors stop`, then `actors start`).
+
+Until the Hub spawns package processes itself, `actors start` marks the board running without running its logic, so step 5's cards need its host process, `@agentorg/sdk/host/runner.js`, run over a pipe the Hub accepts, as `packages/app/test/board.test.ts` does.
+
 ## The app: the person's gateway
 
 `agentorg` runs the person's Actor as the app's gateway: its single running instance, holding the person's one channel to the Hub, in this process. Browser tabs and the CLI are the person's UIs, not channels: they reach the gateway, not the Hub.
@@ -100,6 +117,7 @@ To read a module's definition, the build runs the module's code in a separate No
 - **`/api`:** one WebSocket per tab, with the same calls a channel carries, as JSON:
   - `{id, op: "call", slot, method, input}` is answered `{id, result}` or `{id, error}`;
   - `{sub, op: "subscribe", slot, event}` gets `{sub, payload}` per event, and `{sub, end: true}` when it ends; `{sub, op: "unsubscribe"}` stops it.
+  - `{op: "log", view: {actor, module}, level, message, fields?}` adds a line to the view's Actor's log, through the Hub's `viewLog`, which bounds it as a frame's line is; nothing answers.
 
   A socket holds 256 subscriptions and 64 calls in flight at most (past it, `busy`). A tab's socket must come from the gateway's own `Origin`, and its first message must be `{op: "hello", session}` with a live session, answered `{op: "hello"}`; otherwise it's closed with code 4401, and the tab signs in again. The CLI gets in with the token in `<home>/cli-token` (0600, new at each start) as a bearer. The gateway answers only to `127.0.0.1:<port>` in `Host`, so a page that rebinds DNS to loopback gets nothing.
 - **What the calls reach:**
@@ -110,12 +128,12 @@ To read a module's definition, the build runs the module's code in a separate No
   - `place` takes only a `view` module of a package Actor, with no `after` meaning last.
   - `move` with no `after` means first.
   - Every change tells `changed`.
-- **`/frames/`:** a view's frame, its runtime and its bundle, for `view` modules only, and only by package hash. Every response's policy is `sandbox allow-scripts`, so whatever loads there runs on an opaque origin, even opened as a top page, and never as the shell's origin, where the session is. It allows scripts only from the gateway's `/frames/`, inline styles, and no fetches, forms or windows. The frame's origin is opaque, so its scripts are served with `Access-Control-Allow-Origin: *`, and nothing there reads or needs the session.
+- **`/frames/`:** a view's frame, its runtime and its bundle, for `view` modules only, and only by package hash. Every response's policy is `sandbox allow-scripts`, so whatever loads there runs on an opaque origin, even opened as a top page, and never as the shell's origin, where the session is. It allows scripts only from the gateway's `/frames/`, inline styles, and no fetches, forms or windows. The frame's origin is opaque, so its module scripts are CORS requests from `Origin: null`: only those are answered `Access-Control-Allow-Origin: null`, and nothing there reads or needs the session.
 - **The app's own pages** carry a policy of their own: scripts and styles from the app only, framed by nothing.
 - **The shell,** `@agentorg/shell`, is what the gateway serves at `/`: one socket to `/api`, and nothing it decides on its own.
   - **Agents** are the package Actors with a `chat` view. Selecting one mounts that view in the main container, with the placements beside it whose `actor` is that agent or whose `by` is.
   - **Home** shows the open grant requests, with Allow and Decline, then every placement of `layout@1`, in order. Each event (`layout` `changed`, `grants` `requested` and `decided`, and the audit's lifecycle and binding entries) reads its part again.
   - **Settings** reads the Actors, packages and connections through `hub.*`, and the ChatGPT account through `login` when it's bound.
   - **New agent** is offered once a package named `assistant` is added. It creates one with step 5's bindings, less the grants switched off, then starts and opens it.
-  - **Views** each get their own frame and `FrameHost`. Their calls run with `view: {actor, module}`, `openExternal` opens a new tab with no opener, `signIn` is the shell's ChatGPT sign-in, and their log lines go to the browser's console for now.
+  - **Views** each get their own frame and `FrameHost`. Their calls run with `view: {actor, module}`, `openExternal` opens a new tab with no opener, `signIn` is the shell's ChatGPT sign-in, and their log lines go to their Actor's log (`agentorg call actors logs`).
   - **ChatGPT sign-in** calls `login.start`, opens the consent page in a new tab, and moves on when `login` says `signed_in`. The one-time plan notice is remembered in the person's store under `ui/plan-notice`.

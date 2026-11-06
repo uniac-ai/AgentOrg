@@ -88,9 +88,7 @@ async function setup(t: test.TestContext) {
     return actorId;
   };
   const page = await context.newPage();
-  const logs: string[] = [];
-  page.on("console", (message) => logs.push(message.text()));
-  return { app, person, context, page, logs, hashes, create, add };
+  return { app, person, context, page, hashes, create, add };
 }
 
 type LoginState = "signed_out" | "signed_in" | "ineligible";
@@ -177,7 +175,7 @@ test("with no session, or a dead one, the shell says to run agentorg open", asyn
 });
 
 test("the sidebar lists the agents, and selecting one mounts its chat view in a sandboxed frame", async (t) => {
-  const { app, page, logs, hashes, create } = await setup(t);
+  const { app, page, person, hashes, create } = await setup(t);
   const planner = await create("Planner", hashes.assistant);
   await create("Research", hashes.assistant, false);
   await create("Board", hashes.board);
@@ -213,8 +211,24 @@ test("the sidebar lists the agents, and selecting one mounts its chat view in a 
     await chatFrame?.evaluate(() => getComputedStyle(document.body).color),
     "rgb(250, 250, 250)",
   );
-  // Its log lines go to the console, named by the view.
-  assert.ok(logs.some((line) => line.startsWith(`[${planner}.chat] mounted`)));
+  // Its log lines go to its Actor's log, named by the module.
+  const logged = async () =>
+    (
+      await person.call<{ lines: { message: string; module?: string; data?: unknown }[] }>(
+        "actors",
+        "logs",
+        { actorId: planner },
+      )
+    ).lines.find((line) => line.message === "mounted");
+  for (let i = 0; !(await logged()); i++) {
+    assert.ok(i < 100, "the view's line is in its Actor's log");
+    await new Promise((done) => setTimeout(done, 50));
+  }
+  assert.deepEqual(await logged(), {
+    ...(await logged()),
+    module: "chat",
+    data: { canvas: "rgb(20 20 20)" },
+  });
   // Smaller: the view hears its new size.
   await page.setViewportSize({ width: 1000, height: 700 });
   await body.getByText(/ \d+x6\d\d /).waitFor();

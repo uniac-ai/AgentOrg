@@ -1,4 +1,5 @@
 import type { View } from "./api.ts";
+import { api } from "./data.ts";
 
 /** One placement of the person's `layout@1`. */
 export interface Placement {
@@ -21,12 +22,12 @@ export function besideAgent(home: readonly Placement[], agent: string): Placemen
   );
 }
 
-/** A view's log line. For now the browser's console; later its Actor's log. */
+/** A view's log line, for its Actor's log, through the gateway (`hub.actors.logs` reads it). */
 export function viewLog(
   view: View,
   level: "info" | "warn" | "error",
   message: string,
   fields?: Record<string, unknown>,
 ) {
-  console[level](`[${view.actor}.${view.module}] ${message}`, ...(fields ? [fields] : []));
+  api.log(view, level, message, fields);
 }

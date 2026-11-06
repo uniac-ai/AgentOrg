@@ -13,7 +13,7 @@ test("a socket has 64 calls in flight at most; past it, a call is refused busy",
         call: () => new Promise((done) => release.push(() => done({}))),
         subscribe: () => () => {},
       },
-      views: { call: async () => ({}), subscribe: () => () => {} },
+      views: { call: async () => ({}), subscribe: () => () => {}, log() {} },
     },
   );
   for (let id = 1; id <= 66; id++)
@@ -37,5 +37,35 @@ test("a socket has 64 calls in flight at most; past it, a call is refused busy",
     false,
   );
   for (const done of release) done();
+  served.closed();
+});
+
+test("a view's log line goes to its Actor's log, unanswered; one that doesn't fit is dropped", () => {
+  const sent: unknown[] = [];
+  const logged: unknown[][] = [];
+  const served = serveSocket(
+    { send: (text) => sent.push(JSON.parse(text)), close() {} },
+    {
+      person: { call: async () => ({}), subscribe: () => () => {} },
+      views: {
+        call: async () => ({}),
+        subscribe: () => () => {},
+        log: (...line) => void logged.push(line),
+      },
+    },
+  );
+  const view = { actor: "board", module: "panel" };
+  served.receive(
+    JSON.stringify({ op: "log", view, level: "warn", message: "slow", fields: { ms: 9 } }),
+  );
+  for (const odd of [
+    { op: "log", view, level: "debug", message: "no such level" },
+    { op: "log", view, level: "info", message: 7 },
+    { op: "log", view: { actor: "board" }, level: "info", message: "no module" },
+    { op: "log", level: "info", message: "no view" },
+  ])
+    served.receive(JSON.stringify(odd));
+  assert.deepEqual(logged, [[view, "warn", "slow", { ms: 9 }]]);
+  assert.deepEqual(sent, []);
   served.closed();
 });

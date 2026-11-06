@@ -326,7 +326,17 @@ test("/frames/ serves a view's bundle under the frame policy, and nothing else",
   const { hash } = await board(t, cli);
   const runtime = await fetch(`${app.url}/frames/runtime.js`);
   assert.equal(runtime.status, 200);
-  assert.equal(runtime.headers.get("access-control-allow-origin"), "*");
+  // Readable across origins by a sandboxed frame only, whose Origin is null: no page needs it.
+  assert.equal(runtime.headers.get("access-control-allow-origin"), null);
+  for (const path of ["/frames/runtime.js", `/frames/${hash}/panel.js`]) {
+    const allowed = async (from: string) =>
+      (await fetch(`${app.url}${path}`, { headers: { Origin: from } })).headers.get(
+        "access-control-allow-origin",
+      );
+    assert.equal(await allowed("null"), "null", path);
+    assert.equal(await allowed(app.url), null, path);
+    assert.equal(await allowed("https://example.com"), null, path);
+  }
   const csp = runtime.headers.get("content-security-policy") ?? "";
   assert.match(csp, /default-src 'none'/);
   assert.match(csp, new RegExp(`script-src ${app.url}/frames/(;|$)`));

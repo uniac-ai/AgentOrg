@@ -223,6 +223,12 @@ export async function startApp(options: AppOptions): Promise<App> {
     call: (view, slot, method, input) => hub.viewCall(view.actor, view.module, slot, method, input),
     subscribe: (view, slot, event, send, end) =>
       hub.viewSubscribe(view.actor, view.module, slot, event, send, () => end()),
+    log: (view, level, message, fields) =>
+      hub.viewLog(view.actor, view.module, {
+        level,
+        message,
+        ...(fields ? { data: fields } : {}),
+      }),
   };
 
   /** The app's own pages: scripts and styles from here only, framed by nothing. */
@@ -256,7 +262,9 @@ export async function startApp(options: AppOptions): Promise<App> {
     if (route) return route(request, response, url);
     if (url.pathname.startsWith("/frames/")) {
       const served =
-        request.method === "GET" ? serveFrame(url.pathname, origin, bundleOf) : undefined;
+        request.method === "GET"
+          ? serveFrame(url.pathname, origin, bundleOf, request.headers.origin)
+          : undefined;
       if (!served) return void response.writeHead(404).end();
       response.writeHead(served.status, served.headers).end(served.body);
       return;
