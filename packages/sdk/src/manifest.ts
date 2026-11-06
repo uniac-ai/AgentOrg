@@ -27,10 +27,18 @@ export interface Manifest {
   interfaces: Record<string, ManifestInterface>;
   /** The package's own wiring: `[ "module.slot", "module.export" ]`. Other slots are the installer's. */
   connections: [string, string][];
-  /** Optional initial state for state slots, the only runtime state a package may carry. */
-  seed: unknown;
-  signature: null;
+  /**
+   * Optional initial state for state slots, keyed by `"module.slot"`: the only runtime state a
+   * package may carry. `null` when there is none.
+   */
+  seed: Record<string, unknown> | null;
 }
+
+/**
+ * The reserved name of a package's signature. It is detached: a file beside the package that signs
+ * the package hash, so it can never be inside what it signs.
+ */
+export const SIGNATURE = "agentorg.sig";
 
 const NAME = /^[a-z][A-Za-z0-9_]*$/;
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -57,7 +65,10 @@ export function checkManifest(value: unknown): string[] {
   for (const field of ["name", "version"])
     if (typeof value[field] !== "string" || !value[field])
       problems.push(`The manifest needs a ${field}.`);
-  if (value.signature !== null) problems.push("signature must be null in this format.");
+  if ("signature" in value)
+    problems.push(
+      `A signature is detached, in ${SIGNATURE} beside the package, not in the manifest.`,
+    );
   const interfaces = isRecord(value.interfaces) ? value.interfaces : {};
   if (!isRecord(value.interfaces)) problems.push("interfaces must be an object.");
   for (const [id, entry] of Object.entries(interfaces)) {
@@ -135,6 +146,16 @@ export function checkManifest(value: unknown): string[] {
       problems.push(`Connection ${label} joins ${slot} to ${exported}.`);
     if (wired.has(from)) problems.push(`${from} is connected twice.`);
     wired.add(from);
+  }
+  if (value.seed !== null && !isRecord(value.seed))
+    problems.push(`seed must be null or an object keyed by "module.slot".`);
+  for (const key of isRecord(value.seed) ? Object.keys(value.seed) : []) {
+    const parts = key.split(".");
+    if (
+      parts.length !== 2 ||
+      typeof own(ids[`slots:${parts[0]}`] ?? {}, parts[1] as string) !== "string"
+    )
+      problems.push(`seed ${JSON.stringify(key)} isn't a slot of a module here, as "module.slot".`);
   }
   return problems;
 }

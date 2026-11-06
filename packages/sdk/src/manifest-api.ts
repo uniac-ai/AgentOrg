@@ -4,6 +4,7 @@ export {
   type Manifest,
   type ManifestInterface,
   type ManifestModule,
+  SIGNATURE,
   treeHash,
   type Verified,
   verifyArchive,

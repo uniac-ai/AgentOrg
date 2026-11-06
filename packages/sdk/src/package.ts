@@ -22,7 +22,8 @@ import { writeTar } from "./tar.js";
 interface Config {
   modules: Record<string, string>;
   connections?: [string, string][];
-  seed?: unknown;
+  /** Initial state for state slots, keyed by `"module.slot"`. */
+  seed?: Record<string, unknown>;
 }
 
 export interface Built {
@@ -141,7 +142,6 @@ export async function buildPackage(dir: string, options: BuildOptions = {}): Pro
     interfaces: Object.fromEntries(Object.entries(interfaces).sort(([a], [b]) => (a < b ? -1 : 1))),
     connections: config.connections ?? [],
     seed: config.seed ?? null,
-    signature: null,
   };
   const problems = checkManifest(manifest);
   if (problems.length) throw new BuildError(problems.join("\n"));

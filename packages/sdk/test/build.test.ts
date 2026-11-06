@@ -135,11 +135,14 @@ test("a manifest is checked as data, so a malformed one lists problems instead o
     modules: { logic: { placement: "host", entry: "dist/logic.js" } },
     interfaces: {},
     connections: [["logic.a", "logic.b", "extra"], 5],
+    seed: { "logic.store": [] },
     signature: null,
   }).join("\n");
   assert.match(problems, /Unknown format/);
   assert.match(problems, /Module logic needs slots/);
   assert.match(problems, /must be \["module.slot", "module.export"\]/);
+  assert.match(problems, /seed "logic.store" isn't a slot/);
+  assert.match(problems, /A signature is detached, in agentorg.sig/);
 });
 
 test("a connection must join a slot to an export of the same interface, once", async (t) => {
@@ -182,9 +185,18 @@ export default defineWidget({ slots: { notes: other }, start() {} });
   assert.deepEqual(built.manifest.connections, [["panel.notes", "logic.notes"]]);
 });
 
-test("seed state passes into the manifest as given", async (t) => {
-  const f = await fixture(t, one, { ...logicOnly, seed: { "logic.store": { cards: [] } } });
-  assert.deepEqual((await f.build()).manifest.seed, { "logic.store": { cards: [] } });
+test("seed state is keyed by a slot of a module here, and passes into the manifest as given", async (t) => {
+  const seeded = { "panel.notes": { cards: [] } };
+  const modules = { logic: "src/logic.ts", panel: "src/panel.ts" };
+  const files = { ...one, "panel.ts": reader };
+  const f = await fixture(t, files, { modules, seed: seeded });
+  const built = await f.build();
+  assert.deepEqual(built.manifest.seed, seeded);
+  assert.equal("signature" in built.manifest, false);
+  const wrong = await fixture(t, files, { modules, seed: { "logic.store": [] } });
+  await assert.rejects(wrong.build(), /seed "logic.store" isn't a slot of a module here/);
+  const flat = await fixture(t, files, { modules, seed: { notes: [] } });
+  await assert.rejects(flat.build(), /seed "notes" isn't a slot/);
 });
 
 test("one package can't hold two definitions of the same interface", async (t) => {

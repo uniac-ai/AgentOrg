@@ -18,15 +18,20 @@ A package's `package.json` names its modules, its own wiring and any seed state:
 ```json
 "agentorg": {
   "modules": { "logic": "src/logic.ts", "panel": "src/panel.ts" },
-  "connections": [["panel.board", "logic.board"]]
+  "connections": [["panel.board", "logic.board"]],
+  "seed": { "logic.store": { "cards": [] } }
 }
 ```
+
+`seed` is optional initial state for state slots, keyed by `"module.slot"`; the build checks each slot exists. It is the only runtime state a package may carry.
 
 `agentorg build [dir]` (from `@agentorg/sdk`; `buildPackage` in `@agentorg/sdk/build`) then:
 
 - bundles each module, with every library it uses, into one ESM file, `dist/<module>.js`, with no imports at run time and no Node built-ins;
-- reads each module's definition from its code and writes `agentorg.json`: each module's placement, slots and exports, every interface's JSON Schemas and hash, the package's `connections`, `seed` and `signature: null`;
+- reads each module's definition from its code and writes `agentorg.json`: each module's placement, slots and exports, every interface's JSON Schemas and hash, the package's `connections` and `seed`;
 - hashes the tree, `agentorg.json` and `dist/`, as SHA-256 over the canonical list of each file's path and SHA-256, and archives it as `<hash>.agentorg`, a deterministic tar. The tree goes to `agentorg-build/package/` and the archive beside it.
+
+A signature is detached: a file named `agentorg.sig` beside the package, signing the package hash, so it is never inside what it signs. The manifest has no signature field.
 
 The build bundles; it doesn't type-check. Run `tsc --noEmit` on the package first.
 

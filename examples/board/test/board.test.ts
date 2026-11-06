@@ -47,7 +47,6 @@ test("the board builds to the manifest the spec describes", async (t) => {
       interfaces: ["board@1", "kv@1", "ui.view@1"],
       connections: [["panel.board", "logic.board"]],
       seed: null,
-      signature: null,
     },
   );
   for (const hash of Object.values(hashes)) assert.match(hash, /^sha256-[0-9a-f]{64}$/);
