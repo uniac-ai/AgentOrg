@@ -1,0 +1,19 @@
+{
+  "name": "@agentorg/sdk",
+  "version": "0.0.0",
+  "description": "Define interfaces, Actors and widgets, and build AgentOrg packages.",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    }
+  },
+  "files": [
+    "dist/src"
+  ],
+  "scripts": {
+    "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.json"
+  }
+}

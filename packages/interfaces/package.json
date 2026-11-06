@@ -1,0 +1,19 @@
+{
+  "name": "@agentorg/interfaces",
+  "version": "0.0.0",
+  "description": "AgentOrg's standard interfaces.",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    }
+  },
+  "files": [
+    "dist/src"
+  ],
+  "scripts": {
+    "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.json"
+  }
+}
