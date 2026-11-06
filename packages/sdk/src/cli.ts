@@ -6,6 +6,7 @@ import { parseArgs } from "node:util";
 import { openChannel } from "./client.js";
 import { NotConnected, OutcomeUnknown, Refused } from "./errors.js";
 import { BuildError, buildPackage } from "./package.js";
+import { personCall, UsageError } from "./person-commands.js";
 
 const USAGE = `Usage: agentorg <command> [--home DIR]
 
@@ -52,34 +53,6 @@ const home = resolve(
     process.env.AGENTORG_HUB_HOME ??
     join(homedir(), ".local", "share", "agentorg-next"),
 );
-
-/** Each person command: the person's hub slot and method it calls, and its input from the args. */
-const commands: Record<string, { slot: string; method: string; input(args: string[]): unknown }> = {
-  add: {
-    slot: "packages",
-    method: "add",
-    input: ([file]) => (file ? { path: resolve(file) } : usage("add takes a .agentorg file.")),
-  },
-  actors: { slot: "actors", method: "list", input: () => ({}) },
-  bindings: { slot: "bindings", method: "list", input: () => ({}) },
-  exports: { slot: "exports", method: "list", input: () => ({}) },
-  audit: { slot: "audit", method: "list", input: () => ({}) },
-  bind: {
-    slot: "grants",
-    method: "bind",
-    input([from, to]) {
-      // Actor ids have no dots, so the first dot ends the Actor; a package's slot keeps the rest.
-      const end = (arg: string | undefined, what: string) => {
-        const dot = arg?.indexOf(".") ?? -1;
-        if (!arg || dot < 1 || dot === arg.length - 1) usage(`bind takes ${what} as actor.name.`);
-        return [arg.slice(0, dot), arg.slice(dot + 1)] as const;
-      };
-      const [consumer, slot] = end(from, "<consumer.slot>");
-      const [provider, exported] = end(to, "<provider.export>");
-      return { consumer, slot, provider, export: exported };
-    },
-  },
-};
 
 async function build() {
   try {
@@ -204,19 +177,14 @@ async function asPerson(slot: string, method: string, input: unknown) {
   }
 }
 
+let call: ReturnType<typeof personCall>;
+try {
+  call = command === undefined ? undefined : personCall(command, rest);
+} catch (error) {
+  if (!(error instanceof UsageError)) throw error;
+  usage(error.message);
+}
 if (command === "build") await build();
 else if (command === "hub") await hub();
-else if (command === "call") {
-  const [slot, method, json = "{}"] = rest;
-  if (!slot || !method) usage("call takes <slot> <method> [json].");
-  let input: unknown;
-  try {
-    input = JSON.parse(json);
-  } catch {
-    usage("call's input must be JSON.");
-  }
-  await asPerson(slot, method, input);
-} else if (command && Object.hasOwn(commands, command)) {
-  const { slot, method, input } = commands[command] as (typeof commands)[string];
-  await asPerson(slot, method, input(rest));
-} else usage(command ? `Unknown command ${JSON.stringify(command)}.` : undefined);
+else if (call) await asPerson(call.slot, call.method, call.input);
+else usage(command ? `Unknown command ${JSON.stringify(command)}.` : undefined);

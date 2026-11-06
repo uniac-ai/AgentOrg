@@ -535,3 +535,38 @@ test("ui.shell@1 takes one call at a time per method", async (t) => {
   await tick();
   assert.ok(raw.replies.some((reply) => reply.id === 3 && "result" in reply));
 });
+
+test("a frame has 64 calls in flight at most; past it, a call is refused busy", async (t) => {
+  const calls: Calls = { calls: [], subscribed: [], opened: [], signIns: 0, logs: [] };
+  const release: (() => void)[] = [];
+  const channel = new MessageChannel();
+  const host = new FrameHost(channel.port1 as unknown as PortLike, {
+    ...handlers(calls),
+    call: () => new Promise((done) => release.push(() => done({}))),
+  });
+  t.after(() => host.close());
+  const port = channel.port2 as unknown as PortLike;
+  const replies: { id: number; error?: { code?: string } }[] = [];
+  port.onmessage = (event) => void replies.push(event.data as { id: number });
+  for (let id = 1; id <= 66; id++)
+    port.postMessage({ op: "call", id, slot: "board", method: "list", input: {} });
+  await tick();
+  assert.deepEqual(
+    replies.map((reply) => [reply.id, reply.error?.code]),
+    [
+      [65, "busy"],
+      [66, "busy"],
+    ],
+  );
+  // One answered, one more fits: it waits, unrefused.
+  release.shift()?.();
+  await tick();
+  port.postMessage({ op: "call", id: 67, slot: "board", method: "list", input: {} });
+  await tick();
+  assert.deepEqual(replies.at(-1), { op: "reply", id: 1, result: {} });
+  assert.equal(
+    replies.some((reply) => reply.id === 67),
+    false,
+  );
+  for (const done of release) done();
+});

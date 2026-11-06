@@ -37,7 +37,15 @@
       "types": "./dist/src/frame-host.d.ts",
       "default": "./dist/src/frame-host.js"
     },
-    "./frame/runtime.js": "./dist/frame/runtime.js"
+    "./frame/runtime.js": "./dist/frame/runtime.js",
+    "./cli": {
+      "types": "./dist/src/cli.d.ts",
+      "default": "./dist/src/cli.js"
+    },
+    "./person-commands": {
+      "types": "./dist/src/person-commands.d.ts",
+      "default": "./dist/src/person-commands.js"
+    }
   },
   "files": [
     "dist/src",
@@ -58,6 +66,6 @@
     "@agentorg/wire": "0.0.0"
   },
   "bin": {
-    "agentorg": "dist/src/cli.js"
+    "agentorg-sdk": "dist/src/cli.js"
   }
 }

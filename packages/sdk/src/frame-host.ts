@@ -45,6 +45,8 @@ const LOG_LINES = 50;
 const LOG_WINDOW_MS = 10_000;
 /** Live subscriptions one frame may hold. */
 const MAX_SUBSCRIPTIONS = 64;
+/** Calls on its slots one frame may have in flight; past it, `busy`. */
+const MAX_CALLS = 64;
 
 /**
  * A frame's log fields, rebuilt: a fresh object of at most `MAX_FIELDS` plain keys (no prototype
@@ -138,6 +140,7 @@ export class FrameHost {
   /** ui.shell@1 methods with a call in flight: one at a time each. */
   readonly #shellBusy = new Set<string>();
   #logWindow = { start: 0, lines: 0 };
+  #calls = 0;
   #closed = false;
 
   constructor(port: PortLike, handlers: FrameHandlers) {
@@ -212,9 +215,17 @@ export class FrameHost {
           return void this.#answer(message.id, () => {
             throw new Refused("invalid", "A call names its slot and method.");
           });
-        return void this.#answer(message.id, () =>
-          this.#handlers.call(message.slot, message.method, message.input),
-        );
+        return void this.#answer(message.id, async () => {
+          // One view can't flood the gateway and the Hub: past the cap, it waits its turn.
+          if (this.#calls >= MAX_CALLS)
+            throw new Refused("busy", `A view has ${MAX_CALLS} calls in flight at most.`);
+          this.#calls++;
+          try {
+            return await this.#handlers.call(message.slot, message.method, message.input);
+          } finally {
+            this.#calls--;
+          }
+        });
       case "shell": {
         if (!isId(message.id)) return;
         const { method, input } = message;

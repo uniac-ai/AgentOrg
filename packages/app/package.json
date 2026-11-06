@@ -1,0 +1,38 @@
+{
+  "name": "@agentorg/app",
+  "version": "0.0.0",
+  "description": "AgentOrg as one app: the Hub, the person's gateway and the shell, on loopback.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22.15"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    }
+  },
+  "bin": {
+    "agentorg": "dist/src/cli.js"
+  },
+  "files": [
+    "dist/src",
+    "static"
+  ],
+  "scripts": {
+    "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.json",
+    "test": "node --test --test-timeout=60000 \"dist/test/**/*.test.js\""
+  },
+  "dependencies": {
+    "@agentorg/hub": "0.0.0",
+    "@agentorg/interfaces": "0.0.0",
+    "@agentorg/sdk": "0.0.0",
+    "ws": "^8.22.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.1",
+    "@types/ws": "^8.18.2"
+  }
+}

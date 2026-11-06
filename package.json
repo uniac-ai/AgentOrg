@@ -11,6 +11,7 @@
     "packages/sdk",
     "packages/interfaces",
     "packages/hub",
+    "packages/app",
     "examples/board-interfaces",
     "examples/board"
   ],
