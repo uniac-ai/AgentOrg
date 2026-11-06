@@ -86,14 +86,14 @@ export const llmSession = defineInterface({
           .optional(),
       }),
     }),
-    /** Stop the response to `requestId`, if it is still running; its `respond` is refused. */
+    /**
+     * Stop the caller's own response to `requestId`, if it is still running; its `respond` is
+     * refused.
+     */
     cancel: method({ input: z.object({ requestId: RequestId }), output: z.object({}) }),
   },
   events: {
-    /**
-     * Text of a response, as it streams. Events reach every consumer bound to the export, so
-     * `requestId` is chosen to be unguessable and each consumer keeps only its own.
-     */
+    /** Text of a response, as it streams, to the consumer whose request it answers only. */
     delta: event(z.object({ requestId: RequestId, text: z.string() })),
   },
 });

@@ -11,6 +11,7 @@
     "packages/sdk",
     "packages/interfaces",
     "packages/hub",
+    "packages/chatgpt",
     "packages/app",
     "examples/board-interfaces",
     "examples/board"
