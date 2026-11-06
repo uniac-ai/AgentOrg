@@ -34,6 +34,12 @@ const MAX_STREAMS = 256;
 /** Interfaces one hello may declare. */
 const MAX_DECLARED = 256;
 /**
+ * Slot notices an Actor may leave unclosed beyond one per slot it declares (one change, such as its
+ * provider closing, can unbind every slot at once). Past that its channel is closed with a
+ * protocol error: the Hub holds each until the Actor closes it, and its next hello carries the state.
+ */
+const MAX_OPEN_NOTICES = 64;
+/**
  * Event bytes queued for a subscriber that has stopped reading, before it is cut off. Events from
  * a provider wait for each delivery, so this bounds the hub Actor's own events.
  */
@@ -60,6 +66,8 @@ export interface ChannelHandle {
 interface Connection {
   actorId: string;
   session: Session;
+  /** Slot notices sent that the Actor hasn't closed yet. */
+  notices: number;
 }
 type Writer = WritableStreamDefaultWriter<Uint8Array>;
 interface Resolved {
@@ -157,10 +165,13 @@ export class Hub {
     this.#validators = new Validators(options.checks);
     let actor: HubActor | undefined;
     this.state = HubState.open(home, {
+      bound: (binding) => this.#notify(binding.consumer, binding.slot, true),
       unbound: (bindings) => {
-        for (const binding of bindings)
+        for (const binding of bindings) {
           for (const end of [...(this.#live.get(bindingKey(binding)) ?? [])])
             end(errorBody(new NotConnected(binding.slot)));
+          this.#notify(binding.consumer, binding.slot, false);
+        }
       },
       closed: (actorId) => this.#connections.get(actorId)?.session.close(),
       requested: (request, approvers) => actor?.requested(request, approvers),
@@ -243,7 +254,7 @@ export class Hub {
       this.#dropped(old);
       old.session.close();
     }
-    const conn = { actorId, session };
+    const conn = { actorId, session, notices: 0 };
     this.#connections.set(actorId, conn);
     return conn;
   }
@@ -273,10 +284,41 @@ export class Hub {
           await this.#declares(header.actorId, header.declares),
         );
       admit(header.actorId);
-      await answer(writer, result({ actorId: header.actorId }));
+      // Taken as the channel is admitted: every change after it reaches the channel as a notice.
+      const bound = this.state
+        .bindings(header.actorId)
+        .filter((b) => b.consumer === header.actorId)
+        .map((b) => b.slot);
+      await answer(writer, result({ actorId: header.actorId, bound }));
     } catch (error) {
       await answer(writer, errorBody(error));
       session.close(GO_AWAY.protocolError);
+    }
+  }
+
+  /** Tell an Actor's channel that one of its slots was bound or unbound. */
+  #notify(actorId: string, slot: string, bound: boolean) {
+    const conn = this.#connections.get(actorId);
+    if (!conn) return;
+    if (conn.notices >= this.state.slotCount(actorId) + MAX_OPEN_NOTICES)
+      return conn.session.close(GO_AWAY.protocolError);
+    try {
+      const stream = conn.session.open();
+      conn.notices++;
+      const writer = stream.writable.getWriter();
+      void writer
+        .write(encodeFrame({ op: "slot", name: slot, bound }))
+        .then(() => writer.close())
+        .catch(() => {});
+      // Nothing comes back; the Actor closing its side ends the read and frees the notice.
+      void stream.readable
+        .pipeTo(new WritableStream())
+        .catch(() => {})
+        .finally(() => {
+          conn.notices--;
+        });
+    } catch {
+      // The channel is going; its next hello carries the state.
     }
   }
 

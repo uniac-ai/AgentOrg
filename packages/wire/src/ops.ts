@@ -5,7 +5,12 @@
  * How each stream ends:
  * - `hello`: the Hub answers with one body (`{result}` or `{error}`) and closes; on an error it
  *   closes the channel too. Without `declares` the Actor keeps what it declared before; with it,
- *   `declares` replaces that.
+ *   `declares` replaces that. The result is `{actorId, bound}`: the Actor's slots bound now.
+ * - `slot`: from the Hub, one of the Actor's slots was bound or unbound after its channel's hello
+ *   result was taken. The header is the whole message: the Hub closes its side, and the Actor
+ *   closes its side once it has read it (an open notice counts against its streams). Applied in
+ *   the order the streams arrive, on top of hello's `bound` (buffered until that result is read),
+ *   they give each slot's state.
  * - `offer` and `withdraw`: the channel's own Actor offers an export at run time, or withdraws
  *   one it offered; one body (`{result: {}}` or `{error}`) answers, then the stream closes.
  * - `call`: the caller sends one `{input}` body and closes its side; the answer is one `{result}`
@@ -30,6 +35,8 @@ export type Header =
   /** Offer an export at run time, as a described interface; it lasts until withdrawn or disconnect. */
   | { op: "offer"; name: string; interface: unknown }
   | { op: "withdraw"; name: string }
+  /** From the Hub to an Actor: one of its slots was bound or unbound. */
+  | { op: "slot"; name: string; bound: boolean }
   /** From the Hub to a provider: the same four, naming its export and who is calling. */
   | {
       op: "serve";
@@ -87,6 +94,9 @@ export function parseHeader(value: unknown): Header {
       return { op: "offer", name: text(value, "name"), interface: value.interface };
     case "withdraw":
       return { op: "withdraw", name: text(value, "name") };
+    case "slot":
+      if (typeof value.bound !== "boolean") throw new HeaderError("A slot header needs bound.");
+      return { op: "slot", name: text(value, "name"), bound: value.bound };
     case "serve": {
       const kind = value.kind;
       if (kind !== "call" && kind !== "subscribe" && kind !== "open" && kind !== "http")

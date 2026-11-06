@@ -97,18 +97,35 @@ async function connect(
   serve?: Serve,
 ) {
   const socket = new WebSocket(url);
+  /** Slot notices from the Hub, in the order they arrived. */
+  const notices: [string, boolean][] = [];
+  // Headers are read in the order streams arrive, so notices keep their order.
+  let headers = Promise.resolve();
   const session = new Session(await webSocketChannel(socket), {
     client: true,
     onStream: (stream) => {
       const reader = new FrameReader(stream.readable);
-      void reader
-        .next()
-        .then((h) => serve?.(parseHeader(h) as Extract<Header, { op: "serve" }>, stream, reader))
+      const header = headers.then(() => reader.next());
+      headers = header.then(
+        () => {},
+        () => {},
+      );
+      void header
+        .then((h) => {
+          const parsed = parseHeader(h);
+          if (parsed.op === "slot") {
+            notices.push([parsed.name, parsed.bound]);
+            // A notice is the header alone; closing our side lets the stream be forgotten.
+            return void stream.writable.close().catch(() => {});
+          }
+          return serve?.(parsed as Extract<Header, { op: "serve" }>, stream, reader);
+        })
         .catch(() => {});
     },
   });
   const admitted = await exchange(session, { op: "hello", ...hello });
   return {
+    notices,
     session,
     socket,
     admitted,
@@ -1002,4 +1019,128 @@ test("a slow caller of a shared provider doesn't hold up its other callers", asy
   assert.deepEqual(reply, { result: { items: [] } });
   assert.ok(during <= 5, `${during} of the slow caller's calls finished first`);
   for (const r of await Promise.all(flood)) assert.equal(r.error?.code, "bad_output");
+});
+
+test("an Actor learns which of its slots are bound: at hello, then by notice on each change", async (t) => {
+  const { actor, bind, person } = await setup(t);
+  const p = await actor("provider", { exports: { notes } }, notesProvider().serve);
+  const c = await actor("consumer", { slots: { notes, echo } });
+  assert.deepEqual((c.client.admitted.result as { bound: string[] }).bound, []);
+  assert.deepEqual([...(person.admitted.result as { bound: string[] }).bound].sort(), [
+    "actors",
+    "audit",
+    "bindings",
+    "exports",
+    "grants",
+    "packages",
+  ]);
+  const settle = async (count: number) => {
+    for (let waited = 0; c.client.notices.length < count && waited < 3000; waited += 5)
+      await later(5);
+    await later(50); // and nothing more arrives
+  };
+  await bind(c.id, "notes", p.id, "notes");
+  await person.call("grants", "unbind", { consumer: c.id, slot: "notes" });
+  await bind(c.id, "notes", p.id, "notes");
+  await settle(3);
+  assert.deepEqual(c.client.notices, [
+    ["notes", true],
+    ["notes", false],
+    ["notes", true],
+  ]);
+  assert.deepEqual(p.client.notices, [], "the provider's slots didn't change");
+  // Closing the provider ends its bindings: a notice.
+  await person.call("actors", "close", { actorId: p.id });
+  await settle(4);
+  assert.deepEqual(c.client.notices.at(-1), ["notes", false]);
+  // Many changes don't use up the Actor's streams: each notice is closed once read.
+  const q = await actor("other-provider", { exports: { notes } }, notesProvider().serve);
+  for (let i = 0; i < 520; i++) {
+    await bind(c.id, "notes", q.id, "notes");
+    await person.call("grants", "unbind", { consumer: c.id, slot: "notes" });
+  }
+  await settle(1044);
+  assert.equal(c.client.notices.length, 1044, "more than a channel's 1024 streams");
+  await bind(c.id, "notes", q.id, "notes");
+  assert.deepEqual(await c.client.call("notes", "write", { text: "still" }), { result: { n: 1 } });
+});
+
+test("a reconnecting Actor's hello carries the slots bound while it was away", async (t) => {
+  const { url, person, bind } = await setup(t);
+  const made = (await person.call("actors", "create", { name: "away" })) as {
+    result: { actorId: string; credential: string };
+  };
+  const { actorId, credential } = made.result;
+  const first = await connect(url, { actorId, credential, declares: { slots: { notes } } });
+  const provider = (await person.call("actors", "create", { name: "p" })) as {
+    result: { actorId: string; credential: string };
+  };
+  const p = await connect(url, { ...provider.result, declares: { exports: { notes } } });
+  t.after(() => p.close());
+  first.close();
+  await first.session.closed;
+  await bind(actorId, "notes", provider.result.actorId, "notes");
+  const again = await connect(url, { actorId, credential });
+  t.after(() => again.close());
+  assert.deepEqual((again.admitted.result as { bound: string[] }).bound, ["notes"]);
+  await later(100);
+  assert.deepEqual(again.notices, [], "nothing it missed arrives as a notice");
+});
+
+test("an Actor that leaves slot notices open loses its channel at the cap; one that closes them never does", async (t) => {
+  const { url, actor, bind, person } = await setup(t);
+  const p = await actor("provider", { exports: { notes } }, notesProvider().serve);
+  const made = (await person.call("actors", "create", { name: "careless" })) as {
+    result: { actorId: string; credential: string };
+  };
+  const { actorId, credential } = made.result;
+  // Takes every stream the Hub opens and never closes one.
+  const socket = new WebSocket(url);
+  const careless = new Session(await webSocketChannel(socket), {
+    client: true,
+    maxStreams: 1e9,
+    onStream: () => {},
+  });
+  t.after(() => careless.close());
+  const admitted = await exchange(careless, {
+    op: "hello",
+    actorId,
+    credential,
+    declares: { slots: { notes } },
+  });
+  assert.ok("result" in admitted);
+  let cycles = 0;
+  const lost = careless.closed.then(() => cycles);
+  for (; cycles < 100; cycles++) {
+    if ((await Promise.race([lost.then(() => true), later(0).then(() => false)])) === true) break;
+    await bind(actorId, "notes", p.id, "notes");
+    await person.call("grants", "unbind", { consumer: actorId, slot: "notes" });
+  }
+  const at = await Promise.race([lost, later(2000).then(() => -1)]);
+  // (A client that closes its notices is never cut off: see the 1,044-notice test above.)
+  assert.ok(
+    at > 0 && at <= 40,
+    `the careless channel closed after ${at} cycles (cap 1 + 64 notices)`,
+  );
+});
+
+test("an Actor with many slots keeps its channel when one change unbinds them all at once", async (t) => {
+  const { url, actor, bind, person } = await setup(t);
+  const p = await actor("provider", { exports: { notes } }, notesProvider().serve);
+  const made = (await person.call("actors", "create", { name: "many" })) as {
+    result: { actorId: string; credential: string };
+  };
+  const slots = Object.fromEntries(Array.from({ length: 256 }, (_, i) => [`s${i}`, notes]));
+  const c = await connect(url, { ...made.result, declares: { slots } });
+  t.after(() => c.close());
+  for (const slot of Object.keys(slots)) await bind(made.result.actorId, slot, p.id, "notes");
+  for (let waited = 0; c.notices.length < 256 && waited < 5000; waited += 5) await later(5);
+  // Closing the provider unbinds all 256 slots in one go: 256 notices before any can be closed.
+  await person.call("actors", "close", { actorId: p.id });
+  for (let waited = 0; c.notices.length < 512 && waited < 5000; waited += 5) await later(5);
+  assert.equal(c.notices.length, 512);
+  assert.equal(
+    await Promise.race([c.session.closed.then(() => "closed"), later(100).then(() => "open")]),
+    "open",
+  );
 });

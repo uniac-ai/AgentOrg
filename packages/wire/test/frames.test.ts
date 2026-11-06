@@ -130,12 +130,19 @@ test("headers and bodies are checked for their shape", () => {
     op: "withdraw",
     name: "extra",
   });
+  assert.deepEqual(parseHeader({ op: "slot", name: "notes", bound: false }), {
+    op: "slot",
+    name: "notes",
+    bound: false,
+  });
   for (const bad of [
     null,
     [],
     { op: "fly" },
     { op: "offer", name: "x" },
     { op: "withdraw" },
+    { op: "slot", name: "notes" },
+    { op: "slot", name: "notes", bound: "yes" },
     { op: "call", slot: "s" },
     { op: "call", slot: "", method: "m" },
     { op: "open", slot: "tty" },

@@ -599,6 +599,14 @@ export class HubState {
       .run(actor, side, name, JSON.stringify(iface), dynamic ? 1 : 0);
   }
 
+  /** How many slots an Actor declares. */
+  slotCount(actor: string): number {
+    const row = this.#db
+      .prepare("SELECT COUNT(*) AS n FROM declarations WHERE actor = ? AND side = 'slot'")
+      .get(actor) as { n: number };
+    return Number(row.n);
+  }
+
   declaration(actor: string, side: "slot" | "export", name: string): Declaration | undefined {
     const row = this.#db
       .prepare("SELECT iface, dynamic FROM declarations WHERE actor = ? AND side = ? AND name = ?")
