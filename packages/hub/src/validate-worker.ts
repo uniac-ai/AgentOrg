@@ -15,12 +15,19 @@ export interface Job {
 export type Reply =
   | { id: number; ok: true }
   | { id: number; ok: false; stage: "compile" | "check"; message: string };
+/** Sent once a job's schemas are compiled, before its value is checked: the check's budget starts. */
+export interface Compiled {
+  id: number;
+  compiled: true;
+}
 
 /** Parts kept compiled; past this the oldest are dropped and compiled again on use. */
 const MAX_COMPILED = 4096;
 
 // addUsedSchema off: a schema's `$id` stays its own, so one Actor's can't clash with another's.
-const ajv = new Ajv2020({ strict: true, addUsedSchema: false });
+// allowMatchingProperties: strict mode would otherwise test each patternProperties regex against the
+// property names while compiling, running an Actor's regex on its own strings outside any check.
+const ajv = new Ajv2020({ strict: true, addUsedSchema: false, allowMatchingProperties: true });
 const compiled = new Map<string, { validate: ValidateFunction; schema: unknown }>();
 
 function compile(part: SchemaPart): ValidateFunction {
@@ -37,7 +44,7 @@ function compile(part: SchemaPart): ValidateFunction {
   return validate;
 }
 
-function run(job: Job): Reply {
+function run(job: Job, compiled: () => void): Reply {
   let validate: ValidateFunction | undefined;
   for (const part of job.parts)
     try {
@@ -51,7 +58,9 @@ function run(job: Job): Reply {
         message: error instanceof Error ? error.message : String(error),
       };
     }
-  if (!job.check || !validate || validate(job.check.value)) return { id: job.id, ok: true };
+  if (!job.check || !validate) return { id: job.id, ok: true };
+  compiled();
+  if (validate(job.check.value)) return { id: job.id, ok: true };
   const issue = validate.errors?.[0];
   return {
     id: job.id,
@@ -61,6 +70,10 @@ function run(job: Job): Reply {
   };
 }
 
-parentPort?.on("message", (job: Job) => parentPort?.postMessage(run(job)));
+parentPort?.on("message", (job: Job) =>
+  parentPort?.postMessage(
+    run(job, () => parentPort?.postMessage({ id: job.id, compiled: true } satisfies Compiled)),
+  ),
+);
 // ajv is loaded: from here, jobs and their budgets.
 parentPort?.postMessage("ready");

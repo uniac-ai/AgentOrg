@@ -65,7 +65,7 @@ export interface HubOptions {
   /** What a consumer's stores may hold (defaults in storage.ts). */
   storage?: StorageLimits;
   /** The schema-check pool: its size and each check's budget (defaults in validate.ts). */
-  checks?: { size?: number; budgetMs?: number };
+  checks?: { size?: number; budgetMs?: number; compileBudgetMs?: number };
 }
 
 /** A channel the Hub took: `closed` settles when it ends. */
