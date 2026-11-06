@@ -131,7 +131,10 @@ async function connect(
 }
 type Client = Awaited<ReturnType<typeof connect>>;
 
-async function setup(t: test.TestContext, options: { answerTimeoutMs?: number } = {}) {
+async function setup(
+  t: test.TestContext,
+  options: { answerTimeoutMs?: number; checks?: { size?: number } } = {},
+) {
   const home = join(mkdtempSync(join(tmpdir(), "agentorg-router-")), "home");
   const hub = Hub.open(home, { helloTimeoutMs: 300, ...options });
   const server = await listen(hub);
@@ -756,8 +759,8 @@ test("the compiled cache forgets the oldest interfaces, boolean schemas included
       hash: `sha256-${String(i).padStart(64, "0")}`,
     }) as unknown as DescribedInterface;
   t.after(() => validators.close());
-  for (let i = 0; i < 2100; i++) await validators.prepare(iface(i));
-  await validators.check(iface(0), { method: "m", side: "input" }, {}, "invalid");
+  for (let i = 0; i < 2100; i++) await validators.prepare("a", iface(i));
+  await validators.check("a", iface(0), { method: "m", side: "input" }, {}, "invalid");
 });
 
 /** A described interface built by hand, for schemas zod doesn't write. */
@@ -838,12 +841,12 @@ test("a check over the budget replaces its worker, and the replacement serves th
   const regex = handMade("regex", { type: "string", pattern: "^(a+)+$" }, { type: "object" });
   const input = { method: "run", side: "input" } as const;
   await assert.rejects(
-    validators.check(regex, input, `${"a".repeat(40)}!`, "invalid"),
+    validators.check("a", regex, input, `${"a".repeat(40)}!`, "invalid"),
     (e: Refused) => e.code === "invalid" && /took over/.test(e.message),
   );
-  await validators.check(regex, input, "aaa", "invalid");
+  await validators.check("a", regex, input, "aaa", "invalid");
   await assert.rejects(
-    validators.check(regex, input, "b", "invalid"),
+    validators.check("a", regex, input, "b", "invalid"),
     (e: Refused) => e.code === "invalid",
   );
 });
@@ -855,10 +858,10 @@ test("a pool whose workers can't start fails every check with the reason, withou
   });
   const regex = handMade("regex", { type: "string" }, { type: "object" });
   await assert.rejects(
-    validators.check(regex, { method: "run", side: "input" }, "x", "invalid"),
+    validators.check("a", regex, { method: "run", side: "input" }, "x", "invalid"),
     /can't start/,
   );
-  await assert.rejects(validators.prepare(regex), /can't start/);
+  await assert.rejects(validators.prepare("a", regex), /can't start/);
 });
 
 test("a value too deep to hand to a worker is refused, and the Hub carries on", async (t) => {
@@ -894,13 +897,109 @@ test("jobs that can't be handed to a worker don't strand the ones queued behind 
   for (let i = 0; i < 400_000; i++) deep = [deep];
   // Queued together before the worker is ready: each failed hand-off must free it for the next.
   const checks = [
-    validators.check(open, input, deep, "invalid"),
-    validators.check(open, input, deep, "invalid"),
-    validators.check(open, input, 1, "invalid"),
+    validators.check("a", open, input, deep, "invalid"),
+    validators.check("a", open, input, deep, "invalid"),
+    validators.check("a", open, input, 1, "invalid"),
   ];
   const outcomes = await Promise.allSettled(checks);
   assert.deepEqual(
     outcomes.map((o) => o.status),
     ["rejected", "rejected", "fulfilled"],
   );
+});
+
+test("checks are served in turn by Actor, so one Actor's flood delays only itself", async (t) => {
+  const validators = new Validators({ size: 1 });
+  t.after(() => validators.close());
+  const regex = handMade("regex", { type: "string", pattern: "^(a+)+$" }, { type: "object" });
+  const input = { method: "run", side: "input" } as const;
+  const slow = `${"a".repeat(40)}!`;
+  let pending = 6;
+  const flood = Array.from({ length: 6 }, () =>
+    validators.check("flooder", regex, input, slow, "invalid").catch(() => {
+      pending--;
+    }),
+  );
+  const other = await validators.check("other", regex, input, "aaa", "invalid").then(() => pending);
+  assert.ok(other >= 4, `the other Actor waited for ${6 - other} of the flood's checks`);
+  await Promise.all(flood);
+});
+
+test("another Actor's call waits about one budget per check during a flood of slow calls", async (t) => {
+  // Two workers, as on a small machine, so the flood can't hide behind a wide pool.
+  const { actor, bind, person } = await setup(t, { checks: { size: 2 } });
+  const unique = handMade(
+    "unique",
+    { type: "object", properties: { items: { type: "array", uniqueItems: true } } },
+    { type: "object" },
+  );
+  const self = await actor(
+    "flooder",
+    { slots: { unique }, exports: { unique } },
+    async (_, stream) => {
+      const writer = stream.writable.getWriter();
+      await writer.write(encodeFrame(result({})));
+      await writer.close();
+    },
+  );
+  await bind(self.id, "unique", self.id, "unique");
+  const items = Array.from({ length: 30_000 }, (_, i) => [i]);
+  let answered = 0;
+  const flood = Array.from({ length: 12 }, () =>
+    self.client.call("unique", "run", { items }).then((r) => {
+      answered++;
+      return r;
+    }),
+  );
+  // Let the flood reach the Hub and queue before the other Actor calls.
+  await later(600);
+  const before = answered;
+  // The flood must still be queued behind the running checks, or this proves nothing.
+  assert.ok(12 - before >= 4, `only ${12 - before} flood calls were left to queue`);
+  const started = performance.now();
+  const listed = await person.call("exports", "list", {});
+  const waited = performance.now() - started;
+  const during = answered - before;
+  assert.ok("result" in listed);
+  for (const r of await Promise.all(flood)) assert.equal(r.error?.code, "invalid");
+  // Its input and output checks each wait for the flood checks already running (two workers,
+  // and a respawn each), not for the whole queue behind them: about four flood calls, five if
+  // one was in flight when counted.
+  assert.ok(during <= 5, `${during} flood calls finished while the other call waited`);
+  assert.ok(waited < 1500, `the other call waited ${Math.round(waited)} ms`);
+});
+
+test("a slow caller of a shared provider doesn't hold up its other callers", async (t) => {
+  const { actor, bind } = await setup(t, { checks: { size: 2 } });
+  const unique = handMade(
+    "unique",
+    { type: "object" },
+    { type: "object", properties: { items: { type: "array", uniqueItems: true } } },
+  );
+  const items = Array.from({ length: 30_000 }, (_, i) => [i]);
+  const provider = await actor("provider", { exports: { unique } }, async (_, stream, reader) => {
+    const body = parseBody(await reader.next()) as { input: { small?: boolean } };
+    const writer = stream.writable.getWriter();
+    await writer.write(encodeFrame(result(body.input.small ? { items: [] } : { items })));
+    await writer.close();
+  });
+  const slow = await actor("slow", { slots: { unique } });
+  const quick = await actor("quick", { slots: { unique } });
+  await bind(slow.id, "unique", provider.id, "unique");
+  await bind(quick.id, "unique", provider.id, "unique");
+  let answered = 0;
+  const flood = Array.from({ length: 12 }, () =>
+    slow.client.call("unique", "run", {}).then((r) => {
+      answered++;
+      return r;
+    }),
+  );
+  await later(600);
+  const before = answered;
+  assert.ok(12 - before >= 4, `only ${12 - before} flood calls were left to queue`);
+  const reply = await quick.client.call("unique", "run", { small: true });
+  const during = answered - before;
+  assert.deepEqual(reply, { result: { items: [] } });
+  assert.ok(during <= 5, `${during} of the slow caller's calls finished first`);
+  for (const r of await Promise.all(flood)) assert.equal(r.error?.code, "bad_output");
 });

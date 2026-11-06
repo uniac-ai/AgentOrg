@@ -47,6 +47,8 @@ export interface HubOptions {
    * it the caller gets OutcomeUnknown and the provider's stream is reset.
    */
   answerTimeoutMs?: number;
+  /** The schema-check pool: its size and each check's budget (defaults in validate.ts). */
+  checks?: { size?: number; budgetMs?: number };
 }
 
 /** A channel the Hub took: `closed` settles when it ends. */
@@ -140,7 +142,7 @@ async function answer(writer: Writer, frame: Uint8Array | Body) {
 export class Hub {
   readonly state: HubState;
   readonly #actor: HubActor;
-  readonly #validators = new Validators();
+  readonly #validators: Validators;
   readonly #connections = new Map<string, Connection>();
   /** Open subscriptions and splices by the binding they run through, ended when it goes. */
   readonly #live = new Map<string, Set<(error?: WireError) => void>>();
@@ -152,6 +154,7 @@ export class Hub {
   private constructor(home: string, options: HubOptions) {
     this.#helloTimeoutMs = options.helloTimeoutMs ?? 10_000;
     this.#answerTimeoutMs = options.answerTimeoutMs ?? 60_000;
+    this.#validators = new Validators(options.checks);
     let actor: HubActor | undefined;
     this.state = HubState.open(home, {
       unbound: (bindings) => {
@@ -265,7 +268,10 @@ export class Hub {
       if (!this.state.authenticate(header.actorId, header.credential))
         throw new Refused("forbidden", "No such Actor, or the credential is wrong.");
       if (header.declares !== undefined)
-        this.state.declareExternal(header.actorId, await this.#declares(header.declares));
+        this.state.declareExternal(
+          header.actorId,
+          await this.#declares(header.actorId, header.declares),
+        );
       admit(header.actorId);
       await answer(writer, result({ actorId: header.actorId }));
     } catch (error) {
@@ -275,7 +281,10 @@ export class Hub {
   }
 
   /** What a hello declares, checked: shapes, hashes, and schemas that compile. */
-  async #declares(value: unknown): Promise<{
+  async #declares(
+    actor: string,
+    value: unknown,
+  ): Promise<{
     slots: Record<string, DescribedInterface>;
     exports: Record<string, DescribedInterface>;
   }> {
@@ -291,14 +300,14 @@ export class Hub {
       for (const [name, iface] of Object.entries(members)) {
         if (++count > MAX_DECLARED)
           throw new Refused("invalid", `A hello declares at most ${MAX_DECLARED} interfaces.`);
-        out[side][name] = await this.#described(iface, `declares.${side}.${name}`);
+        out[side][name] = await this.#described(actor, iface, `declares.${side}.${name}`);
       }
     }
     return out;
   }
 
   /** A described interface from the wire: its shape, then its hash, then schemas that compile. */
-  async #described(iface: unknown, where: string): Promise<DescribedInterface> {
+  async #described(actor: string, iface: unknown, where: string): Promise<DescribedInterface> {
     if (!isRecord(iface) || typeof iface.id !== "string" || typeof iface.hash !== "string")
       throw new Refused("invalid", `${where} isn't a described interface.`);
     const { hash, ...schemas } = iface;
@@ -311,7 +320,7 @@ export class Hub {
     // The hash keys the compiled schemas, so it is checked before anything is compiled.
     if (recomputed !== hash)
       throw new Refused("invalid", `${iface.id}'s hash doesn't match its schemas.`);
-    await this.#validators.prepare(iface as DescribedInterface);
+    await this.#validators.prepare(actor, iface as DescribedInterface);
     return iface as DescribedInterface;
   }
 
@@ -334,7 +343,7 @@ export class Hub {
           this.state.offer(
             conn.actorId,
             header.name,
-            await this.#described(header.interface, "interface"),
+            await this.#described(conn.actorId, header.interface, "interface"),
           );
           await answer(writer, result({}));
           return drain(reader);
@@ -362,6 +371,10 @@ export class Hub {
       if (!ends.size) this.#live.delete(key);
     };
   }
+
+  // Every schema check runs in the turn of the Actor the work is for: a call's input and output in
+  // the caller's, a subscription's events in the subscriber's, a hello's or offer's compile in the
+  // declaring Actor's. A slow provider so delays only the callers using it, each in its own turn.
 
   /** A consumer's slot, resolved through its binding to a live provider of the right kind. */
   #resolve(conn: Connection, slot: string, kind: DescribedInterface["kind"]): Resolved {
@@ -410,13 +423,14 @@ export class Hub {
       const body = parseBody(await reader.next());
       cancelled = whenReset(reader);
       if (!("input" in body)) throw new Refused("invalid", "A call's body is {input}.");
-      await this.#validators.check(iface, part, body.input, "invalid");
+      await this.#validators.check(conn.actorId, iface, part, body.input, "invalid");
       reply = provider
         ? await this.#forward(provider, binding, conn.actorId, header.method, body.input, cancelled)
         : this.#hubCall(binding.export, header.method, conn.actorId, body.input);
       if ("error" in reply) outcome = "refused";
       else if ("result" in reply)
         await this.#validators.check(
+          conn.actorId,
           iface,
           { method: header.method, side: "output" },
           reply.result,
@@ -583,7 +597,7 @@ export class Hub {
       delivered = delivered.then(async () => {
         try {
           if (ended) return;
-          await this.#validators.check(iface, part, payload, "bad_output");
+          await this.#validators.check(conn.actorId, iface, part, payload, "bad_output");
           if (ended) return;
           await writer.write(frame);
         } catch (error) {
@@ -674,7 +688,13 @@ export class Hub {
         stream.reset();
       });
       if (header.op === "open")
-        await this.#validators.check(resolved.iface, { open: true }, header.params, "invalid");
+        await this.#validators.check(
+          conn.actorId,
+          resolved.iface,
+          { open: true },
+          header.params,
+          "invalid",
+        );
       // The hub's own exports are all rpc, so #resolve refused it already; this is for the types.
       if (!resolved.provider) throw new NotConnected(header.slot);
       const opened = this.#openTo(resolved.provider, binding);

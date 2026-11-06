@@ -66,7 +66,12 @@ interface Slot {
 export class Validators {
   readonly #budgetMs: number;
   readonly #slots: Slot[] = [];
-  readonly #queue: { job: Job; settle(outcome: Outcome): void }[] = [];
+  /**
+   * Waiting jobs, one queue per Actor the work is for, served in turn. An Actor flooding slow
+   * checks delays mostly itself; another Actor's check waits for the checks already running, about
+   * one budget with two or more workers (a whole-interface compile in flight takes one per part).
+   */
+  readonly #queues = new Map<string, { job: Job; settle(outcome: Outcome): void }[]>();
   #nextId = 1;
   /** Set when a worker can't even start: every check fails with it rather than respawning forever. */
   #broken?: Error;
@@ -133,7 +138,7 @@ export class Validators {
     for (;;) {
       const slot = this.#slots.find((candidate) => candidate.ready && !candidate.busy);
       if (!slot) return;
-      const next = this.#queue.shift();
+      const next = this.#next();
       if (!next) return;
       // The budget runs from when a ready worker takes the job, not while it waits; a compile of a
       // whole interface gets one budget per part.
@@ -159,18 +164,35 @@ export class Validators {
     }
   }
 
-  #run(parts: SchemaPart[], check?: Job["check"]): Promise<Outcome> {
+  /** The next job in turn: the first Actor's oldest, after which that Actor goes to the back. */
+  #next() {
+    for (const [actor, queue] of this.#queues) {
+      this.#queues.delete(actor);
+      const next = queue.shift();
+      if (queue.length) this.#queues.set(actor, queue);
+      if (next) return next;
+    }
+    return undefined;
+  }
+
+  #run(actor: string, parts: SchemaPart[], check?: Job["check"]): Promise<Outcome> {
     if (this.#broken) return Promise.resolve(this.#broken);
     if (!this.#slots.length) return Promise.resolve(new Error("The validators are closed."));
     return new Promise((settle) => {
-      this.#queue.push({ job: { id: this.#nextId++, parts, ...(check ? { check } : {}) }, settle });
+      const queue = this.#queues.get(actor) ?? [];
+      this.#queues.set(actor, queue);
+      queue.push({ job: { id: this.#nextId++, parts, ...(check ? { check } : {}) }, settle });
       this.#pump();
     });
   }
 
-  /** Compile every schema of an interface; one that won't compile, or compiles too slowly, is `invalid`. */
-  async prepare(iface: DescribedInterface): Promise<void> {
+  /**
+   * Compile every schema of an interface, on behalf of the Actor that declared it; one that won't
+   * compile, or compiles too slowly, is `invalid`.
+   */
+  async prepare(actor: string, iface: DescribedInterface): Promise<void> {
     const reply = await this.#run(
+      actor,
       partsOf(iface).map((part) => ({ key: keyOf(iface, part), schema: schemaOf(iface, part) })),
     );
     if (reply instanceof Error) throw reply;
@@ -188,11 +210,12 @@ export class Validators {
   }
 
   /**
-   * Check a value against a part's schema. A caller's misfit is `invalid` (nothing ran); a
-   * provider's is `bad_output` (it ran and broke the contract). A check over the budget is refused
-   * the same way.
+   * Check a value against a part's schema, in the turn of `actor`, the Actor the work is for. A
+   * caller's misfit is `invalid` (nothing ran); a provider's is `bad_output` (it ran and broke the
+   * contract). A check over the budget is refused the same way.
    */
   async check(
+    actor: string,
     iface: DescribedInterface,
     part: Part,
     value: unknown,
@@ -201,7 +224,7 @@ export class Validators {
     const schema = schemaOf(iface, part);
     if (schema === undefined) throw new Refused("invalid", `${iface.id} has no ${describe(part)}.`);
     const key = keyOf(iface, part);
-    const reply = await this.#run([{ key, schema }], { key, value });
+    const reply = await this.#run(actor, [{ key, schema }], { key, value });
     if (reply instanceof Error) throw reply;
     if (reply === "late")
       throw new Refused(
@@ -222,6 +245,8 @@ export class Validators {
       slot.busy?.settle(error);
       void slot.worker.terminate();
     }
-    for (const waiting of this.#queue.splice(0)) waiting.settle(error);
+    const waiting = [...this.#queues.values()].flat();
+    this.#queues.clear();
+    for (const job of waiting) job.settle(error);
   }
 }
