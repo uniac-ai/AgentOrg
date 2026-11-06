@@ -103,7 +103,7 @@ To read a module's definition, the build runs the module's code in a separate No
 
   A socket holds 256 subscriptions and 64 calls in flight at most (past it, `busy`). A tab's socket must come from the gateway's own `Origin`, and its first message must be `{op: "hello", session}` with a live session, answered `{op: "hello"}`; otherwise it's closed with code 4401, and the tab signs in again. The CLI gets in with the token in `<home>/cli-token` (0600, new at each start) as a bearer. The gateway answers only to `127.0.0.1:<port>` in `Host`, so a page that rebinds DNS to loopback gets nothing.
 - **What the calls reach:**
-  - Calls run through the person's slots: `packages`, `actors`, `bindings`, `grants`, `exports`, `audit` and `store`.
+  - Calls run through the person's slots: `packages`, `actors`, `bindings`, `grants`, `exports`, `audit`, `store`, and `login` (`account.login@1`, the model's sign-in, which may be unbound).
   - `layout` is the person's own export, served by the gateway.
   - With `view: {actor, module}`, a call runs as that view's Actor, through the Hub's view path (`viewCall` and `viewSubscribe`). The Hub refuses a module that isn't one of the Actor's views, or an Actor that isn't running.
 - **`layout@1`:** the person exports it, so a program bound to it places a view as the person does. Each placement records `by`, the Actor that placed it, from the call's caller as the Hub names it (the person, through `/api`); no input sets it. The layout is kept in the person's `store` slot (`kv@1`) under the key `layout`, and the app binds that slot to the built-in `storage` where there is one.
@@ -112,3 +112,10 @@ To read a module's definition, the build runs the module's code in a separate No
   - Every change tells `changed`.
 - **`/frames/`:** a view's frame, its runtime and its bundle, for `view` modules only, and only by package hash. Every response's policy is `sandbox allow-scripts`, so whatever loads there runs on an opaque origin, even opened as a top page, and never as the shell's origin, where the session is. It allows scripts only from the gateway's `/frames/`, inline styles, and no fetches, forms or windows. The frame's origin is opaque, so its scripts are served with `Access-Control-Allow-Origin: *`, and nothing there reads or needs the session.
 - **The app's own pages** carry a policy of their own: scripts and styles from the app only, framed by nothing.
+- **The shell,** `@agentorg/shell`, is what the gateway serves at `/`: one socket to `/api`, and nothing it decides on its own.
+  - **Agents** are the package Actors with a `chat` view. Selecting one mounts that view in the main container, with the placements beside it whose `actor` is that agent or whose `by` is.
+  - **Home** shows the open grant requests, with Allow and Decline, then every placement of `layout@1`, in order. Each event (`layout` `changed`, `grants` `requested` and `decided`, and the audit's lifecycle and binding entries) reads its part again.
+  - **Settings** reads the Actors, packages and connections through `hub.*`, and the ChatGPT account through `login` when it's bound.
+  - **New agent** is offered once a package named `assistant` is added. It creates one with step 5's bindings, less the grants switched off, then starts and opens it.
+  - **Views** each get their own frame and `FrameHost`. Their calls run with `view: {actor, module}`, `openExternal` opens a new tab with no opener, `signIn` is the shell's ChatGPT sign-in, and their log lines go to the browser's console for now.
+  - **ChatGPT sign-in** calls `login.start`, opens the consent page in a new tab, and moves on when `login` says `signed_in`. The one-time plan notice is remembered in the person's store under `ui/plan-notice`.

@@ -1,10 +1,12 @@
 import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { createRequire } from "node:module";
 import type { AddressInfo } from "node:net";
 import { dirname, join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Hub, listen, PERSON, STORAGE } from "@agentorg/hub";
 import {
+  accountLogin,
   hubActors,
   hubAudit,
   hubBindings,
@@ -22,7 +24,10 @@ import { serveFrame } from "./frames.js";
 import { Layout } from "./layout.js";
 import { SignIn } from "./signin.js";
 
-/** The person's slots the gateway declares: every `hub.*` it holds, and its own store. */
+/**
+ * The person's slots the gateway declares: every `hub.*` it holds, its own store, and `login`, the
+ * model's account sign-in, which the first run binds (it may be unbound).
+ */
 const SLOTS = {
   packages: hubPackages,
   actors: hubActors,
@@ -31,8 +36,14 @@ const SLOTS = {
   exports: hubExports,
   audit: hubAudit,
   store: kv,
+  login: accountLogin,
 };
 const STATIC = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "static");
+/** The shell's built files, `@agentorg/shell`'s `dist`. */
+const SHELL = join(
+  dirname(createRequire(import.meta.url).resolve("@agentorg/shell/package.json")),
+  "dist",
+);
 /** A request body the gateway reads: a sign-in code, nothing more. */
 const MAX_BODY = 1024;
 /** One `/api` message. */
@@ -50,7 +61,7 @@ export interface AppOptions {
   home: string;
   /** The gateway's port on 127.0.0.1; any free one by default. */
   port?: number;
-  /** Where the shell's static files are; the gateway's placeholder by default. */
+  /** Where the shell's static files are; `@agentorg/shell`'s build by default. */
   shell?: string;
 }
 
@@ -277,7 +288,7 @@ export async function startApp(options: AppOptions): Promise<App> {
     const file =
       url.pathname === "/signin" || url.pathname === "/signin.js"
         ? join(STATIC, url.pathname === "/signin" ? "signin.html" : "signin.js")
-        : staticFile(options.shell ?? join(STATIC, "shell"), url.pathname);
+        : staticFile(options.shell ?? SHELL, url.pathname);
     if (!file) return void response.writeHead(404).end();
     let body: Buffer;
     try {

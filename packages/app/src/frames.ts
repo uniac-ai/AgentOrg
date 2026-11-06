@@ -39,9 +39,12 @@ export const frameCsp = (origin: string) =>
     "sandbox allow-scripts",
   ].join("; ");
 
-/** The frame document: nothing but the runtime, which waits for the shell's port. */
+/**
+ * The frame document: nothing but the runtime, which waits for the shell's port, and the shell's
+ * base text, from the theme's tokens once the view is mounted.
+ */
 const DOCUMENT =
-  '<!doctype html><html><head><meta charset="utf-8"><script type="module" src="/frames/runtime.js"></script></head><body></body></html>';
+  '<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0}body{font:14px/1.45 var(--font, ui-sans-serif, system-ui, sans-serif);color:var(--fg)}</style><script type="module" src="/frames/runtime.js"></script></head><body></body></html>';
 
 /**
  * Serve `/frames/`: the runtime, a view's frame document and its bundle. A frame has an opaque

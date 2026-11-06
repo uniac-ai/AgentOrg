@@ -1,0 +1,12 @@
+{
+  "name": "chatgpt",
+  "version": "0.0.1",
+  "private": true,
+  "description": "A stand-in for the model Actor's package, for the shell's tests",
+  "type": "module",
+  "agentorg": {
+    "modules": {
+      "model": "src/model.js"
+    }
+  }
+}

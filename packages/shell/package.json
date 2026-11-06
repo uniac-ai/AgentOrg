@@ -1,0 +1,29 @@
+{
+  "name": "@agentorg/shell",
+  "version": "0.0.0",
+  "description": "The person's web shell for AgentOrg: their agents, their views and their settings.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22.15"
+  },
+  "exports": {
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.json && node scripts/build.js"
+  },
+  "devDependencies": {
+    "@agentorg/interfaces": "0.0.0",
+    "@agentorg/sdk": "0.0.0",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "esbuild": "0.28.2",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "zod": "^4.6.7"
+  }
+}
