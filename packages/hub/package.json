@@ -1,0 +1,28 @@
+{
+  "name": "@agentorg/hub",
+  "version": "0.0.0",
+  "description": "AgentOrg's core: an interface router with bindings as grants.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22.15"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    }
+  },
+  "files": [
+    "dist/src"
+  ],
+  "scripts": {
+    "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.json",
+    "test": "node --test --test-timeout=60000 \"dist/test/**/*.test.js\""
+  },
+  "dependencies": {
+    "@agentorg/interfaces": "0.0.0",
+    "@agentorg/sdk": "0.0.0",
+    "zod": "^4.6.7"
+  }
+}

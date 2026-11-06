@@ -10,6 +10,7 @@
     "packages/wire",
     "packages/sdk",
     "packages/interfaces",
+    "packages/hub",
     "examples/board-interfaces",
     "examples/board"
   ],

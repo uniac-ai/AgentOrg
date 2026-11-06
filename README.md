@@ -5,7 +5,9 @@ AgentOrg as a dynamic system: Actors and widgets are modules in content-addresse
 ## Packages
 
 - `@agentorg/sdk`: `defineInterface` (with `method` and `event`) for `rpc`, `stream` and `http` interfaces; `defineActor` for host modules and `defineWidget` for view modules, with typed slot and export handles; the errors `NotConnected`, `Refused` and `OutcomeUnknown`; and `createTestContext` (`@agentorg/sdk/testing`), which runs a module without a Hub.
-- `@agentorg/interfaces`: the standard interfaces `kv@1` and `ui.view@1`, with `chat@1` and `llm.session@1` as stubs.
+- `@agentorg/interfaces`: the standard interfaces `kv@1` and `ui.view@1`, with `chat@1` and `llm.session@1` as stubs, and the Hub's management interfaces `hub.packages@1`, `hub.actors@1`, `hub.bindings@1`, `hub.exports@1` and `hub.audit@1`.
+- `@agentorg/wire`: the channel: yamux streams, length-prefixed JSON frames, stream headers and transports.
+- `@agentorg/hub`: the core. Its state, in `node:sqlite` in a private home: Actors, a verified package store, what each Actor takes and offers, bindings, binding requests and an audit trail. A binding is the grant: an Actor may bind a slot to an export when it is the provider, already holds that export, or is bound to the hub's `hub.bindings@1`; otherwise it requests, and the request goes to everyone who could grant it.
 
 ### Why `ui.view@1` is different
 
