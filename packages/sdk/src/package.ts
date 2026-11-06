@@ -1,9 +1,14 @@
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { build as esbuild } from "esbuild";
+import {
+  type BuildOptions as EsbuildOptions,
+  context as esbuildContext,
+  type Plugin,
+} from "esbuild";
 import type { ModuleDescription } from "./describe.js";
 import { compareInterfaces, type DescribedInterface } from "./interface.js";
 import {
@@ -41,6 +46,24 @@ export interface BuildOptions {
   out?: string;
   /** How long reading one module's definition may take. */
   describeTimeoutMs?: number;
+  /**
+   * What the package's own files may import by name: only these packages (and their subpaths),
+   * found from `from`, and nothing outside the package's folder by path. The libraries resolve
+   * their own imports as usual. Without it, imports resolve from the package's folder as Node's do.
+   */
+  packages?: { allowed: string[]; from: string };
+  /**
+   * At most this many modules and bytes of output; each bundling cancelled past `bundleMs`, and
+   * the whole build refused past `totalMs`.
+   */
+  limits?: { modules: number; bytes: number; bundleMs: number; totalMs: number };
+  /**
+   * How a module's describer runs. `sandbox` gives the OS sandbox command put before `node …`
+   * for a process that may read `paths`: the Hub runs untrusted source there, as it runs host
+   * processes. `preload: false` drops the in-process closing of built-ins and network globals;
+   * it is only for testing that the sandbox holds without it.
+   */
+  describer?: { sandbox?: (paths: string[]) => string[]; preload?: boolean };
 }
 
 const NAME = /^[a-z][A-Za-z0-9_]*$/;
@@ -80,30 +103,60 @@ export async function buildPackage(dir: string, options: BuildOptions = {}): Pro
     if (!NAME.test(name))
       throw new BuildError(`${JSON.stringify(name)} isn't a valid module name.`);
 
+  // A limited build's modules are its own files too.
+  if (options.packages)
+    for (const [name, entry] of Object.entries(config.modules))
+      if (!within(resolve(root, entry), root))
+        throw new BuildError(`Module ${name}'s entry ${entry} is outside the package's folder.`);
+  const limits = options.limits;
+  if (limits && Object.keys(config.modules).length > limits.modules)
+    throw new BuildError(`A package has at most ${limits.modules} modules.`);
+  let bytes = 0;
+  const deadline = limits ? Date.now() + limits.totalMs : Number.POSITIVE_INFINITY;
+  /** The time a step may take: its own limit, within what's left of the build's. */
+  const inTime = (ms: number) => {
+    const left = deadline - Date.now();
+    if (left <= 0)
+      throw new BuildError(`A build takes at most ${(limits?.totalMs ?? 0) / 1000} s.`);
+    return Math.min(ms, left);
+  };
+  const bundleMs = limits?.bundleMs ?? 30_000;
+  const limited = () => options.packages && { ...options.packages, bundleMs: inTime(bundleMs) };
   const files = new Map<string, Uint8Array>();
   const described: Record<string, ModuleDescription> = {};
   const scratch = await realpath(await mkdtemp(join(tmpdir(), "agentorg-build-")));
   try {
     for (const [name, entry] of Object.entries(config.modules)) {
-      files.set(`dist/${name}.js`, await bundle(root, { entryPoints: [join(root, entry)] }));
+      const code = await bundle(root, { entryPoints: [join(root, entry)] }, limited());
+      bytes += code.byteLength;
+      if (limits && bytes > limits.bytes)
+        throw new BuildError(
+          `A package's modules are at most ${limits.bytes / 1024 / 1024} MiB built.`,
+        );
+      files.set(`dist/${name}.js`, code);
       // The definition is read by running the module's code, so the describer is bundled with it
       // and shares its SDK and zod.
-      const describer = await bundle(root, {
-        stdin: {
-          contents: [
-            `import definition from ${JSON.stringify(join(root, entry))};`,
-            `import { describeModule } from "@agentorg/sdk/describe";`,
-            "export default describeModule(definition);",
-          ].join("\n"),
-          resolveDir: root,
-          sourcefile: `describe-${name}.js`,
+      const describer = await bundle(
+        root,
+        {
+          stdin: {
+            contents: [
+              `import definition from ${JSON.stringify(join(root, entry))};`,
+              `import { describeModule } from "@agentorg/sdk/describe";`,
+              "export default describeModule(definition);",
+            ].join("\n"),
+            resolveDir: root,
+            sourcefile: `describe-${name}.js`,
+          },
         },
-      });
+        limited(),
+      );
       described[name] = await describeInChild(
         scratch,
         name,
         describer,
-        options.describeTimeoutMs ?? 30_000,
+        inTime(options.describeTimeoutMs ?? 30_000),
+        options.describer ?? {},
       );
     }
   } finally {
@@ -164,11 +217,20 @@ export async function buildPackage(dir: string, options: BuildOptions = {}): Pro
  */
 async function bundle(
   root: string,
-  input: Pick<Parameters<typeof esbuild>[0], "entryPoints" | "stdin">,
+  input: Pick<EsbuildOptions, "entryPoints" | "stdin">,
+  packages?: BuildOptions["packages"] & { bundleMs: number },
 ): Promise<Uint8Array> {
+  const loadable = new Set<string>();
+  let ctx: Awaited<ReturnType<typeof esbuildContext>> | undefined;
+  let timer: NodeJS.Timeout | undefined;
   try {
-    const result = await esbuild({
+    ctx = await esbuildContext({
       ...input,
+      // A limited build reads no tsconfig or jsconfig (one could name any file to read), and
+      // loads only what its plugin resolved.
+      ...(packages
+        ? { plugins: [limitImports(root, packages, loadable)], tsconfigRaw: "{}", metafile: true }
+        : {}),
       absWorkingDir: root,
       bundle: true,
       format: "esm",
@@ -181,22 +243,183 @@ async function bundle(
       write: false,
       logLevel: "silent",
     });
-    return (result.outputFiles[0] as { contents: Uint8Array }).contents;
+    const running = ctx.rebuild();
+    const result = packages
+      ? await Promise.race([
+          running,
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(() => {
+              void ctx?.cancel();
+              reject(
+                new BuildError(`Bundling a module takes at most ${packages.bundleMs / 1000} s.`),
+              );
+            }, packages.bundleMs);
+          }),
+        ])
+      : await running;
+    // Everything in the bundle was resolved by the plugin, or is the describer's stdin.
+    const input_ = input;
+    if (packages)
+      for (const input of Object.keys(result.metafile?.inputs ?? {}))
+        if (
+          input !== (input_.stdin?.sourcefile ?? "<stdin>") &&
+          !loadable.has(resolve(root, input))
+        )
+          throw new BuildError("The bundle reached a file the package didn't import.");
+    return (
+      ((result.outputFiles ?? []) as { contents: Uint8Array }[])[0]?.contents ?? new Uint8Array()
+    );
   } catch (error) {
+    if (error instanceof BuildError) throw error;
     const errors = (
       error as { errors?: { text: string; location?: { file: string; line: number } }[] }
     ).errors;
+    /** A place in the package by its relative path; anywhere else isn't told. */
+    const place = (file: string) =>
+      !packages || (!file.startsWith("..") && !isAbsolute(file)) ? file : "<outside>";
     throw new BuildError(
       errors?.length
         ? errors
-            .map((e) => `${e.location ? `${e.location.file}:${e.location.line}: ` : ""}${e.text}`)
+            .map(
+              (e) =>
+                `${e.location ? `${place(e.location.file)}:${e.location.line}: ` : ""}${packages ? e.text.replaceAll(`${root}/`, "") : e.text}`,
+            )
             .join("\n")
         : String(error),
     );
+  } finally {
+    clearTimeout(timer);
+    await ctx?.dispose();
   }
 }
 
+/** The package a bare import names: `zod`, `@agentorg/sdk` (from `@agentorg/sdk/describe`). */
+const packageOf = (specifier: string) =>
+  specifier
+    .split("/")
+    .slice(0, specifier.startsWith("@") ? 2 : 1)
+    .join("/");
+
+/** Whether `path` is inside the installed package `name`: a folder above it is that package's. */
+function inPackage(path: string, name: string): boolean {
+  for (let dir = dirname(path); ; dir = dirname(dir)) {
+    try {
+      if (JSON.parse(readFileSync(join(dir, "package.json"), "utf8")).name === name) return true;
+    } catch {
+      // No package.json here, or not one to read.
+    }
+    if (dirname(dir) === dir) return false;
+  }
+}
+
+/**
+ * Imports from the package's own files (and its module entries): by name, only an allowed
+ * package, found from `from`, and only a file inside it; by relative path, only inside the
+ * package's folder, checked as text before anything is looked up; never by absolute path. A
+ * library's own imports are its business.
+ */
+function limitImports(
+  root: string,
+  packages: { allowed: string[]; from: string },
+  loadable: Set<string>,
+): Plugin {
+  const allowed = new Set(packages.allowed);
+  const SKIP = Symbol("resolving");
+  const refuse = (text: string) => ({ errors: [{ text }] });
+  return {
+    name: "agentorg-limit-imports",
+    setup(build) {
+      build.onResolve({ filter: /.*/ }, async (args) => {
+        if ((args.pluginData as { [SKIP]?: boolean } | undefined)?.[SKIP]) return undefined;
+        const entry = args.kind === "entry-point";
+        // The describer's stdin and the package's own files; not the libraries'.
+        const ours =
+          entry ||
+          args.importer === "" ||
+          args.importer.startsWith("<stdin>") ||
+          within(args.importer, root);
+        const relativePath = args.path.startsWith(".");
+        const bare = !entry && !relativePath && !isAbsolute(args.path);
+        if (ours) {
+          // An absolute path (a module's entry, the describer's import of it) only into the
+          // folder, checked as text, so nothing outside is ever looked up.
+          if ((entry || isAbsolute(args.path)) && !within(args.path, root))
+            return refuse(
+              entry
+                ? "A module's entry is outside the package's folder."
+                : `${args.path}: an import leaves the package's folder.`,
+            );
+          if (bare && !allowed.has(packageOf(args.path)))
+            return refuse(
+              `${args.path}: a package built by the Hub imports only ${[...allowed].join(", ")}.`,
+            );
+          if (relativePath && !within(resolve(args.resolveDir, args.path), root))
+            return refuse(`${args.path}: an import leaves the package's folder.`);
+        }
+        const found = await build.resolve(args.path, {
+          kind: args.kind,
+          resolveDir: ours && bare ? packages.from : args.resolveDir,
+          importer: args.importer,
+          pluginData: { [SKIP]: true },
+        });
+        if (found.errors.length) return { errors: found.errors };
+        if (
+          ours &&
+          (bare ? !inPackage(found.path, packageOf(args.path)) : !within(found.path, root))
+        )
+          return refuse(
+            `${args.path}: an import leaves ${bare ? "its package" : "the package's folder"}.`,
+          );
+        // A library's own import is its business, but only what was resolved here is loaded.
+        if (found.namespace === "file") loadable.add(found.path);
+        return { path: found.path, namespace: found.namespace, external: found.external };
+      });
+      // A file esbuild found any other way (a pattern in a template-string import or require
+      // matches files without resolving them) is never read.
+      build.onLoad({ filter: /.*/ }, (args) =>
+        args.namespace !== "file" || loadable.has(args.path)
+          ? undefined
+          : refuse(
+              "A pattern import (a template string in import() or require()) isn't built: import each file by its own path.",
+            ),
+      );
+    },
+  };
+}
+
 const MARK = "agentorg-describe:";
+/**
+ * What a process and the processes it started hold resident, in bytes: under a sandbox, the
+ * describer's node is a child of the sandbox's process. 0 where it can't be told (Windows).
+ */
+async function residentBytes(pid: number): Promise<number> {
+  if (process.platform === "linux") {
+    let total = 0;
+    const visit = (id: number) => {
+      try {
+        total += Number(readFileSync(`/proc/${id}/statm`, "utf8").split(" ")[1]) * 4096;
+        for (const child of readFileSync(`/proc/${id}/task/${id}/children`, "utf8").split(" "))
+          if (child.trim()) visit(Number(child));
+      } catch {
+        // Gone, or not to be read.
+      }
+    };
+    visit(pid);
+    return total;
+  }
+  if (process.platform === "win32") return 0;
+  // macOS: sandbox-exec becomes the node it runs, so the process is the describer.
+  return new Promise((resolve) =>
+    execFile("ps", ["-o", "rss=", "-p", String(pid)], (error, out) =>
+      resolve(error ? 0 : Number(out.trim()) * 1024),
+    ),
+  );
+}
+/**
+ * What a module's describer may hold resident, all of it. A describer only defines, so it needs
+ * little; macOS compresses idle pages, so what it really holds can be about twice this.
+ */
+const MAX_DESCRIBER_MEMORY = 512 * 1024 * 1024;
 /**
  * Run before the module in the describer's process. No Node built-in can be imported, the ways
  * around that are gone, and so are the network globals. Node's permission model already stops
@@ -211,7 +434,8 @@ registerHooks({
 });
 for (const [owner, names] of [
   [globalThis, ["fetch", "WebSocket", "EventSource", "XMLHttpRequest"]],
-  [process, ["getBuiltinModule", "binding", "_linkedBinding", "dlopen"]],
+  // And what describes the host: its paths, its command line, its report.
+  [process, ["getBuiltinModule", "binding", "_linkedBinding", "dlopen", "report", "execPath", "argv", "execArgv", "title"]],
 ])
   for (const name of names)
     Object.defineProperty(owner, name, {
@@ -223,7 +447,7 @@ for (const [owner, names] of [
 `;
 const RUNNER = `let result;
 try {
-  result = { described: (await import(process.argv[2])).default };
+  result = { described: (await import("./module.mjs")).default };
 } catch (error) {
   result = { error: String(error && error.stack ? error.name + ": " + error.message : error) };
 }
@@ -240,33 +464,38 @@ async function describeInChild(
   name: string,
   describer: Uint8Array,
   timeoutMs: number,
+  how: NonNullable<BuildOptions["describer"]>,
 ): Promise<ModuleDescription> {
   const files = { preload: join(scratch, "preload.mjs"), runner: join(scratch, "runner.mjs") };
   await writeFile(files.preload, PRELOAD);
   await writeFile(files.runner, RUNNER);
-  const target = join(scratch, `${name}.mjs`);
+  // The module is beside the runner by a fixed name: the runner can't read its own argv.
+  const target = join(scratch, "module.mjs");
   await writeFile(target, describer);
   let timedOut = false;
+  let tooBig = false;
   const { code, stdout, stderr } = await new Promise<{
     code: number | null;
     stdout: string;
     stderr: string;
   }>((done, fail) => {
-    const child = spawn(
+    const node = [
       process.execPath,
-      [
-        "--permission",
-        `--allow-fs-read=${scratch}`,
-        "--import",
-        pathToFileURL(files.preload).href,
-        files.runner,
-        pathToFileURL(target).href,
-      ],
-      {
-        stdio: ["ignore", "pipe", "pipe"],
-        env: process.env.SYSTEMROOT ? { SYSTEMROOT: process.env.SYSTEMROOT } : {},
-      },
-    );
+      "--permission",
+      "--max-old-space-size=256",
+      `--allow-fs-read=${scratch}`,
+      ...(how.preload === false ? [] : ["--import", pathToFileURL(files.preload).href]),
+      files.runner,
+    ];
+    const [command, ...args] = [...(how.sandbox?.([scratch]) ?? []), ...node] as [
+      string,
+      ...string[],
+    ];
+    const child = spawn(command, args, {
+      cwd: scratch,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: process.env.SYSTEMROOT ? { SYSTEMROOT: process.env.SYSTEMROOT } : {},
+    });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (chunk) => {
@@ -280,12 +509,28 @@ async function describeInChild(
       timedOut = true;
       child.kill("SIGKILL");
     }, timeoutMs);
+    // Its heap is capped by V8, but not what it allocates outside it (ArrayBuffers): its memory
+    // is watched, and past the cap it is stopped.
+    const watch = setInterval(() => {
+      if (child.pid === undefined) return;
+      void residentBytes(child.pid).then((bytes) => {
+        if (bytes > MAX_DESCRIBER_MEMORY) {
+          tooBig = true;
+          child.kill("SIGKILL");
+        }
+      });
+    }, 200);
     child.on("error", fail);
     child.on("close", (code) => {
       clearTimeout(timer);
+      clearInterval(watch);
       done({ code, stdout, stderr });
     });
   });
+  if (tooBig)
+    throw new BuildError(
+      `Module ${name}: reading its definition took over ${MAX_DESCRIBER_MEMORY / 1024 / 1024} MiB of memory. A module's top level must only define; do work in start().`,
+    );
   if (timedOut)
     throw new BuildError(
       `Module ${name}: reading its definition took over ${timeoutMs} ms. A module's top level must only define; do work in start().`,
@@ -301,11 +546,11 @@ async function describeInChild(
   }
   if (!result)
     throw new BuildError(
-      `Module ${name}: its definition couldn't be read (exit ${code}). ${stderr.trim().split("\n").slice(-3).join(" ")}`,
+      `Module ${name}: its definition couldn't be read (exit ${code}). ${stderr.trim().split("\n").slice(-3).join(" ").replaceAll(scratch, "<describer>")}`,
     );
   if (result.error || !result.described)
     throw new BuildError(
-      `Module ${name}: its top level failed while its definition was read: ${result.error}. A module's top level must not do I/O or touch DOM globals; do that work in start().`,
+      `Module ${name}: its top level failed while its definition was read: ${String(result.error).replaceAll(scratch, "<describer>")}. A module's top level must not do I/O or touch DOM globals; do that work in start().`,
     );
   return result.described;
 }

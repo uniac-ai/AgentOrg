@@ -100,7 +100,7 @@ exec "$@"`;
  * to signal) with the minimal root above, built on `rootDir`. Root inside the namespace is nobody
  * outside it (--map-root-user: util-linux before 2.38 lacks --map-current-user).
  */
-function defaultSandbox(rootDir: string, paths: string[]): string[] | undefined {
+export function defaultSandbox(rootDir: string, paths: string[]): string[] | undefined {
   if (process.platform === "darwin") return ["sandbox-exec", "-p", MAC_PROFILE];
   if (process.platform === "linux")
     return [
@@ -148,7 +148,7 @@ const MAX_LINE = 64 * 1024;
  * folder, owned by this user and closed to others, is used: another user could make the path
  * first.
  */
-function rootFolder(): { path: string } | { problem: string } {
+export function rootFolder(): { path: string } | { problem: string } {
   const path = join(realpathSync(tmpdir()), `agentorg-root-${process.getuid?.() ?? "user"}`);
   try {
     mkdirSync(path, { mode: 0o700 });
@@ -233,6 +233,14 @@ export class Processes {
    * the host is available, Actors recorded as `running` without a process are started.
    */
   /** The sandbox command for a process that may read `paths`; none where there is no sandbox. */
+  /**
+   * The OS sandbox command for a process that may read `paths`, as host processes run: for the
+   * Hub's build too, which runs untrusted source to read its modules' definitions.
+   */
+  sandboxCommand(paths: string[]): string[] | undefined {
+    return this.#sandbox(paths);
+  }
+
   #sandbox(paths: string[]): string[] | undefined {
     if (this.#options.sandbox) return this.#options.sandbox;
     if (this.#rootDir && "problem" in this.#rootDir) return undefined;

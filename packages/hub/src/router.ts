@@ -27,6 +27,7 @@ import {
   wireError,
   type YamuxStream,
 } from "@agentorg/wire";
+import { sweepBuilds } from "./build.js";
 import { HubActor } from "./hub-actor.js";
 import { appendLog, boundedEntry } from "./logs.js";
 import { Net, type NetOptions } from "./net.js";
@@ -219,6 +220,8 @@ export class Hub {
       audited: (entry) => actor?.audited(entry),
     });
     this.#net = new Net(this.state, options.net);
+    // Builds a crash interrupted leave their folders; they go now.
+    sweepBuilds(home);
     this.#processes = new Processes(
       this.state,
       (channel, admitted) => this.accept(channel, admitted),

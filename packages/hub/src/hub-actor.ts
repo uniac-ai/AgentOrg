@@ -1,4 +1,5 @@
 import { Refused } from "@agentorg/sdk";
+import { buildSource, checkSource } from "./build.js";
 import { readLogs } from "./logs.js";
 import type { Processes } from "./processes.js";
 import type {
@@ -29,6 +30,10 @@ const wiring = (input: Input): Wiring => ({
 export class HubActor {
   readonly #listeners = new Map<string, Set<Listener>>();
   readonly #handlers: Record<string, Record<string, Handler>>;
+  /** The build running now, if any; the next one waits for it. */
+  #building: Promise<unknown> = Promise.resolve();
+  /** Callers with a build waiting or running. */
+  readonly #builders = new Set<string>();
 
   constructor(state: HubState, processes: Processes) {
     /**
@@ -56,6 +61,35 @@ export class HubActor {
         list: () => ({ packages: state.packages() }),
         get: (_, input) => state.package(String(input.hash)),
         remove: (caller, input) => state.removePackage(caller, String(input.hash)),
+        // One build at a time: each runs esbuild and a describer process. The source is checked
+        // before it waits, and a caller has one build waiting or running at most.
+        build: async (caller, input) => {
+          const entries = checkSource(input.files);
+          // A build runs the source's code in the OS sandbox: where host processes can't run,
+          // neither can a build, and the reason is the same.
+          await processes.ready();
+          if (this.#builders.has(caller))
+            throw new Refused("busy", "A build of yours is already waiting or running.");
+          this.#builders.add(caller);
+          const sandbox = (paths: string[]) => {
+            const command = processes.sandboxCommand(paths);
+            if (!command) throw new Refused("unsupported", "Host Actors can't start here.");
+            return command;
+          };
+          const next = this.#building.then(() =>
+            buildSource(state.home, entries, sandbox, (file) => {
+              const added = state.addPackage(caller, file);
+              state.auditHub(
+                "package.build",
+                { hash: added.hash, name: added.manifest.name, version: added.manifest.version },
+                caller,
+              );
+              return added;
+            }),
+          );
+          this.#building = next.catch(() => {});
+          return next.finally(() => this.#builders.delete(caller));
+        },
       },
       actors: {
         create: (caller, input) =>

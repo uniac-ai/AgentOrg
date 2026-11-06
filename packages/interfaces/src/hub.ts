@@ -35,6 +35,17 @@ export const hubPackages = defineInterface({
     }),
     /** Refused while an Actor runs the package. */
     remove: method({ input: z.object({ hash: Hash }), output: Empty }),
+    /**
+     * Build a package from its source, given as data (`package.json` and files under `src/`, up to
+     * 768 KiB), and add it as `add` does. It's `agentorg build`'s build, reading no tsconfig; its
+     * files import only `@agentorg/sdk`, `@agentorg/interfaces` and `zod` by name, and nothing outside
+     * the package's folder, never by a pattern. A build that fails is
+     * `Refused("build")` with the build's message, so the source can be fixed and built again.
+     */
+    build: method({
+      input: z.object({ files: z.record(z.string().min(1).max(256), z.string()) }),
+      output: z.object({ hash: Hash, manifest: z.record(z.string(), z.json()) }),
+    }),
   },
 });
 
