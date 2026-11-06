@@ -145,6 +145,51 @@ test("bind, call, events, unbind and rebind through the client, with onBind and 
   assert.deepEqual(changes, ["bind", "unbind", "bind"]);
 });
 
+test("an event sent to one caller reaches only that consumer; a handler knows its caller", async (t) => {
+  const { url, makeActor, bind } = await setup(t);
+  const p = await makeActor("provider");
+  const a = await makeActor("alice");
+  const b = await makeActor("bob");
+  const provider = await connect({ hubUrl: url, ...p, exports: { notes } });
+  const alice = await connect({ hubUrl: url, ...a, slots: { notes } });
+  const bob = await connect({ hubUrl: url, ...b, slots: { notes } });
+  t.after(() => {
+    for (const client of [provider, alice, bob]) client.close();
+  });
+  const callers: string[] = [];
+  provider.exports.notes.implement({
+    write: async ({ text }, { caller }) => {
+      callers.push(caller);
+      provider.exports.notes.emit("written", { text }, { to: caller });
+      return { n: callers.length };
+    },
+  });
+  const heard: Record<string, string[]> = { alice: [], bob: [] };
+  alice.slots.notes.on("written", ({ text }) => heard.alice?.push(text));
+  bob.slots.notes.on("written", ({ text }) => heard.bob?.push(text));
+  await bind(a.actorId, "notes", p.actorId, "notes");
+  await bind(b.actorId, "notes", p.actorId, "notes");
+  await until(() => alice.slots.notes.bound && bob.slots.notes.bound);
+  // Both subscriptions are open once an event to everyone reaches both.
+  await emitUntilHeard(
+    () => provider.exports.notes.emit("written", { text: "all" }),
+    () => Boolean(heard.alice?.includes("all") && heard.bob?.includes("all")),
+  );
+  await alice.slots.notes.call.write({ text: "for alice" });
+  await bob.slots.notes.call.write({ text: "for bob" });
+  await until(() => Boolean(heard.alice?.includes("for alice") && heard.bob?.includes("for bob")));
+  await later(50);
+  assert.deepEqual(callers, [a.actorId, b.actorId]);
+  assert.deepEqual(
+    heard.alice?.filter((text) => text !== "all"),
+    ["for alice"],
+  );
+  assert.deepEqual(
+    heard.bob?.filter((text) => text !== "all"),
+    ["for bob"],
+  );
+});
+
 test("a provider that restarts: onBind runs again and events resume, with bound unchanged", async (t) => {
   const { url, makeActor, bind } = await setup(t);
   const p = await makeActor("provider");

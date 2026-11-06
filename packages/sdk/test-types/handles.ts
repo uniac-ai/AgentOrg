@@ -53,9 +53,13 @@ export const actor = defineActor({
     await ctx.slots.site.fetch(new Request("http://site/"));
     ctx.exports.board.implement({
       list: async () => ({ cards: [] }),
-      add: ({ title }) => ({ id: "1", title, done: false }),
+      add: ({ title }, { caller }) => {
+        const who: string = caller;
+        return { id: who, title, done: false };
+      },
     });
     ctx.exports.board.emit("changed", { id: "1" });
+    ctx.exports.board.emit("changed", { id: "1" }, { to: "actor" });
     ctx.exports.board.withdraw();
     const extra = ctx.exports.add("extra", board);
     extra.emit("changed", { id: "2" });
@@ -73,6 +77,8 @@ export const actor = defineActor({
     ctx.slots.board.on("removed", () => {});
     // @ts-expect-error: `changed`'s payload needs `id`.
     ctx.exports.board.emit("changed", {});
+    // @ts-expect-error: an event goes `to` an Actor's id, a string.
+    ctx.exports.board.emit("changed", { id: "1" }, { to: 1 });
     // @ts-expect-error: a stream slot has no `call`.
     ctx.slots.shell.call;
     // @ts-expect-error: opening a pty needs `cols` and `rows`.

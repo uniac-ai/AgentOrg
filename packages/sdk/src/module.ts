@@ -48,19 +48,38 @@ export type Slot<I extends Interface> =
       ? StreamSlot<O>
       : HttpSlot;
 
-/** An `rpc` export's handlers: each gets its validated input and returns its output. */
+/** Who made a call: the calling Actor, as the Hub names it. */
+export interface CallInfo {
+  readonly caller: string;
+}
+/**
+ * An `rpc` export's handlers: each gets its validated input, and who called, and returns its
+ * output.
+ */
 export type Handlers<M extends Methods> = {
   readonly [K in keyof M]: (
     input: z.output<M[K]["input"]>,
+    call: CallInfo,
   ) => z.input<M[K]["output"]> | Promise<z.input<M[K]["output"]>>;
 };
+/**
+ * Where an event goes: `to` one subscribing Actor only (every subscription that Actor holds), or,
+ * without it, every subscriber.
+ */
+export interface EmitOptions {
+  readonly to?: string;
+}
 interface Withdrawable {
   /** Stop offering this export; bindings to it end. */
   withdraw(): void;
 }
 export interface RpcExport<M extends Methods, E extends Events> extends Withdrawable {
   implement(handlers: Handlers<M>): void;
-  emit<K extends keyof E & string>(event: K, payload: z.input<E[K]["payload"]>): void;
+  emit<K extends keyof E & string>(
+    event: K,
+    payload: z.input<E[K]["payload"]>,
+    options?: EmitOptions,
+  ): void;
 }
 export interface StreamExport<O extends z.ZodType> extends Withdrawable {
   accept(handler: (params: z.output<O>, stream: Duplex) => void | Promise<void>): void;

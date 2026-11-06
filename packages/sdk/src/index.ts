@@ -22,10 +22,12 @@ export {
   type StreamInterface,
 } from "./interface.js";
 export {
+  type CallInfo,
   type Context,
   type Duplex,
   defineActor,
   defineWidget,
+  type EmitOptions,
   type Export,
   type ExportMap,
   type FrameRoot,

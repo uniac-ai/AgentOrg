@@ -1,8 +1,10 @@
 import { NotConnected, Refused } from "./errors.js";
 import type { Interface, RpcInterface, StreamInterface } from "./interface.js";
 import {
+  type CallInfo,
   type Context,
   type Duplex,
+  type EmitOptions,
   type FrameRoot,
   type InterfaceMap,
   isFrameInterface,
@@ -43,7 +45,8 @@ export interface ModuleRuntime<S extends InterfaceMap, X extends InterfaceMap> {
   unbind(slot: string): void;
   /** A bound slot's provider came back after going away: its `onBind` handlers run again. */
   usable(slot: string): void;
-  call(exportName: string, method: string, input: unknown): Promise<unknown>;
+  /** Call an export's method for `caller`, the calling Actor as the Hub names it. */
+  call(exportName: string, method: string, input: unknown, caller: string): Promise<unknown>;
   open(exportName: string, params: unknown, stream: Duplex): Promise<void>;
   /**
    * The two halves of `open`: checks that the export takes the stream (throwing a refusal at
@@ -61,7 +64,7 @@ export interface RuntimeOptions {
   self: { actorId: string; module: string };
   log: Log;
   /** Called with each event an export emits, after validation. */
-  onEmit(exportName: string, event: string, payload: unknown): void;
+  onEmit(exportName: string, event: string, payload: unknown, to: string | undefined): void;
   /** Called when the module listens to a slot's event, so a remote host can subscribe. */
   onListen?(slot: string, event: string): void;
   /** Called when the module offers an export at run time with `exports.add`, with its handle. */
@@ -214,11 +217,16 @@ export function createRuntime<S extends InterfaceMap, X extends InterfaceMap>(
       case "rpc":
         return {
           implement: store,
-          emit(event: string, payload: unknown) {
+          emit(event: string, payload: unknown, emitting?: EmitOptions) {
             live();
             const spec = own(iface.events, event);
             if (!spec) throw new TypeError(`${name} has no event ${event}.`);
-            options.onEmit(name, event, check(spec.payload, payload, `${name}.${event} payload`));
+            options.onEmit(
+              name,
+              event,
+              check(spec.payload, payload, `${name}.${event} payload`),
+              emitting?.to,
+            );
           },
           withdraw,
         };
@@ -346,20 +354,20 @@ export function createRuntime<S extends InterfaceMap, X extends InterfaceMap>(
       if (!state) throw new TypeError(`No slot ${slot}.`);
       if (state.binding) notify(slot, state.binds);
     },
-    async call(exportName, method, input) {
+    async call(exportName, method, input, caller) {
       const state = target(exportName, "rpc");
       const spec = own((state.iface as RpcInterface).methods, method);
       if (!spec) throw new TypeError(`${exportName} has no method ${method}.`);
       const parsed = check(spec.input, input, `${exportName}.${method} input`);
       const handler = own(
-        implemented<Record<string, (input: unknown) => unknown>>(state, exportName),
+        implemented<Record<string, (input: unknown, call: CallInfo) => unknown>>(state, exportName),
         method,
       );
       if (!handler)
         throw new Refused("unimplemented", `${exportName}.${method} isn't implemented.`);
       return check(
         spec.output,
-        await handler(parsed),
+        await handler(parsed, { caller }),
         `${exportName}.${method} output`,
         "bad_output",
       );

@@ -309,3 +309,45 @@ test("a ui.view@1 export mounts into an element, resizes and unmounts with valid
   t.ctx.exports.view.withdraw();
   assert.throws(() => t.mount("view", el, options), NotConnected);
 });
+
+test("a handler learns who called, and an event can go to one subscriber", async () => {
+  const seen: string[] = [];
+  const provider = defineActor({
+    exports: { notes },
+    start(ctx) {
+      ctx.exports.notes.implement({
+        read: ({ key }, { caller }) => {
+          seen.push(caller);
+          ctx.exports.notes.emit("written", { key }, { to: caller });
+          return { text: key };
+        },
+        write: () => ({}),
+      });
+    },
+  });
+  const t = createTestContext(provider);
+  await t.start();
+  await t.call("notes", "read", { key: "a" }, "alice");
+  await t.call("notes", "read", { key: "b" });
+  assert.deepEqual(seen, ["alice", "test-actor"]);
+  t.ctx.exports.notes.emit("written", { key: "all" });
+  assert.deepEqual(t.emitted, [
+    { export: "notes", event: "written", payload: { key: "a" }, to: "alice" },
+    { export: "notes", event: "written", payload: { key: "b" }, to: "test-actor" },
+    { export: "notes", event: "written", payload: { key: "all" } },
+  ]);
+
+  // A fake bound to a slot is called by the module itself.
+  const consumer = defineActor({ slots: { notes }, start() {} });
+  const c = createTestContext(consumer, { actorId: "bob" });
+  await c.start();
+  const callers: string[] = [];
+  c.bind("notes", {
+    read: ({ key }, { caller }) => {
+      callers.push(caller);
+      return { text: key };
+    },
+  });
+  await c.ctx.slots.notes.call.read({ key: "x" });
+  assert.deepEqual(callers, ["bob"]);
+});

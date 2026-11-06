@@ -435,8 +435,8 @@ export async function connect<
   const log = options.log ?? quiet;
   // defineActor checks the names, as it does for a module.
   const definition = defineActor<S, X>({ slots, exports, start: options.start ?? (() => {}) });
-  /** The Hub's subscriptions to this Actor's exports: their senders by export and event. */
-  const senders = new Map<string, Set<(payload: unknown) => void>>();
+  /** The Hub's subscriptions to this Actor's exports, by export and event: whom each is for. */
+  const senders = new Map<string, Set<{ caller: string; send: (payload: unknown) => void }>>();
   /** The same subscriptions by export, each ended when its export is withdrawn. */
   const subscribers = new Map<string, Set<() => void>>();
   /** Slot events this program listens to, each with its live subscription, if any. */
@@ -487,11 +487,11 @@ export async function connect<
   const runtime = createRuntime(definition, {
     self: { actorId: options.actorId, module: "client" },
     log,
-    onEmit(exportName, event, payload) {
+    onEmit(exportName, event, payload, to) {
       // One subscriber's trouble never reaches the emitter or the other subscribers.
-      for (const sendTo of [...(senders.get(`${exportName}\0${event}`) ?? [])])
+      for (const { caller, send } of [...(senders.get(`${exportName}\0${event}`) ?? [])])
         try {
-          sendTo(payload);
+          if (to === undefined || caller === to) send(payload);
         } catch (error) {
           log.error("Sending an event failed.", { export: exportName, error: String(error) });
         }
@@ -569,17 +569,18 @@ export async function connect<
       : { declares: { slots: describeAll(slots), exports: describeAll(exports) } }),
     onSlot,
     serve: {
-      call: (serve, value) => runtime.call(serve.export, serve.method ?? "", value),
+      call: (serve, value) => runtime.call(serve.export, serve.method ?? "", value, serve.caller),
       subscribe(serve, sendTo, end) {
         if (runtime.withdrawn(serve.export)) throw new NotConnected(serve.export);
         const key = `${serve.export}\0${serve.event ?? ""}`;
         const set = senders.get(key) ?? new Set();
         senders.set(key, set);
-        set.add(sendTo);
+        const sender = { caller: serve.caller, send: sendTo };
+        set.add(sender);
         const ends = subscribers.get(serve.export) ?? new Set();
         subscribers.set(serve.export, ends);
         const stop = () => {
-          set.delete(sendTo);
+          set.delete(sender);
           ends.delete(withdrawn);
         };
         const withdrawn = () => {
