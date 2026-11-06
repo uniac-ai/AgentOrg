@@ -1,0 +1,30 @@
+{
+  "name": "board",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A shared task board",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.json",
+    "test": "node --test \"dist/test/**/*.test.js\""
+  },
+  "agentorg": {
+    "modules": {
+      "logic": "src/logic.ts",
+      "panel": "src/panel.ts"
+    },
+    "connections": [
+      [
+        "panel.board",
+        "logic.board"
+      ]
+    ]
+  },
+  "dependencies": {
+    "@agentorg/interfaces": "0.0.0",
+    "@agentorg/sdk": "0.0.0",
+    "board-interfaces": "0.1.0",
+    "zod": "^4.6.7"
+  }
+}

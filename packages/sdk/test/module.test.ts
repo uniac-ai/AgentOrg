@@ -112,10 +112,26 @@ test("an rpc slot calls its bound provider, validates both ways, and fails clean
   await assert.rejects(slots.notes.call.read({ key: "a" }), NotConnected);
 });
 
-test("a provider that answers outside the schema, or not at all, is refused", async () => {
+test("a provider that answers outside the schema broke the contract after running: bad_output", async () => {
   const t = createTestContext(defineActor({ slots: { notes }, start: () => {} }));
-  t.bind("notes", { read: async () => ({ text: 1 }) as never });
-  await assert.rejects(t.ctx.slots.notes.call.read({ key: "a" }), /output/);
+  let ran = 0;
+  t.bind("notes", {
+    read: async () => {
+      ran++;
+      return { text: 1 } as never;
+    },
+  });
+  await assert.rejects(
+    t.ctx.slots.notes.call.read({ key: "a" }),
+    (e: Refused) => e.code === "bad_output" && /output/.test(e.message),
+  );
+  assert.equal(ran, 1, "the provider ran: the caller reads state before retrying");
+  // A caller's bad input is refused before anything runs.
+  await assert.rejects(
+    t.ctx.slots.notes.call.read({} as never),
+    (e: Refused) => e.code === "invalid",
+  );
+  assert.equal(ran, 1);
   await assert.rejects(
     t.ctx.slots.notes.call.write({ key: "a", text: "b" }),
     (e: Refused) => e.code === "unimplemented",
@@ -138,7 +154,10 @@ test("bind and unbind fire their callbacks, and events reach subscribers only fr
   const first = t.bind("notes", fake);
   const off = t.ctx.slots.notes.on("written", ({ key }) => seen.push(`written ${key}`));
   first.emit("written", { key: "a" });
-  assert.throws(() => first.emit("written", {}), Refused);
+  assert.throws(
+    () => first.emit("written", {}),
+    (e: Refused) => e.code === "bad_output",
+  );
   t.unbind("notes");
   first.emit("written", { key: "after unbind" });
   // The same fake bound again is a new binding; the first one's handle no longer delivers.
@@ -190,7 +209,10 @@ test("an rpc export is called through its handlers, emits validated events, and 
   assert.deepEqual(await t.call("notes", "read", { key: "a" }), { text: "A" });
   await t.call("notes", "write", { key: "k", text: "v" });
   assert.deepEqual(t.emitted, [{ export: "notes", event: "written", payload: { key: "k" } }]);
-  await assert.rejects(t.call("notes", "write", { key: "k" }), Refused);
+  await assert.rejects(
+    t.call("notes", "write", { key: "k" }),
+    (e: Refused) => e.code === "invalid",
+  );
   assert.deepEqual(t.logs, [{ level: "info", message: "ready", fields: { exports: 1 } }]);
   t.ctx.exports.notes.withdraw();
   assert.equal(t.withdrawn("notes"), true);

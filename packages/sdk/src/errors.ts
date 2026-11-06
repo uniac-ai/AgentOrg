@@ -9,11 +9,18 @@ export class NotConnected extends Error {
   }
 }
 
+/**
+ * Why a call was refused: `invalid` (the caller's input broke the schema; nothing ran),
+ * `bad_output` (the provider ran and its reply or event broke the contract; read state before
+ * retrying), `unimplemented` (no handler yet), or a policy's own code.
+ */
+export type RefusedCode = "invalid" | "bad_output" | "unimplemented" | (string & {});
+
 /** A call refused by validation or policy, with a stable code. */
 export class Refused extends Error {
   override readonly name = "Refused";
-  readonly code: string;
-  constructor(code: string, message: string) {
+  readonly code: RefusedCode;
+  constructor(code: RefusedCode, message: string) {
     super(message);
     this.code = code;
   }

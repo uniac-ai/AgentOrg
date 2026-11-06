@@ -8,3 +8,5 @@ dist/
 .idea/
 .vscode/
 .DS_Store
+agentorg-build/
+.test-fixtures/
