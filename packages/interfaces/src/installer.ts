@@ -5,6 +5,35 @@ import { Id, Name } from "./hub.js";
 const Hash = z.string().regex(/^sha256-[0-9a-f]{64}$/);
 /** An export of a running Actor, by its id and the export's name. */
 const Target = z.object({ actor: Id, export: Name });
+/** An Actor of a composition, by the name it has there. */
+const ActorName = z.string().min(1).max(128);
+
+/**
+ * `agentorg.system/1`: a system as data, by names, never by ids. Its Actors and the packages
+ * they run (`name@version#hash`), its connections, and the person's layout. Built-in Actors
+ * (`hub`, `storage`, `net`) are named by their ids. No credentials, tokens, stores or logs.
+ */
+export const Composition = z.object({
+  format: z.literal("agentorg.system/1"),
+  actors: z.record(ActorName, z.object({ package: z.string(), running: z.boolean().optional() })),
+  connections: z.array(
+    z.object({ consumer: ActorName, slot: Name, provider: ActorName, export: Name }),
+  ),
+  layout: z.object({
+    home: z.array(
+      z.object({
+        actor: ActorName,
+        module: z
+          .string()
+          .regex(/^[a-z][A-Za-z0-9_]*$/)
+          .max(64),
+        title: z.string().max(200).optional(),
+      }),
+    ),
+  }),
+});
+/** What a system's export or import couldn't carry over, and why: listed, never guessed. */
+const Unresolved = z.array(z.object({ what: z.string(), why: z.string() }));
 
 /**
  * `installer@1`: how a package becomes a working Actor. The installer is a package Actor the
@@ -49,6 +78,38 @@ export const installer = defineInterface({
         start: z.boolean().optional(),
       }),
       output: z.object({ actorId: Id, unbound: z.array(Name), unseeded: z.array(Name) }),
+    }),
+    /**
+     * The system as it is, as a composition: every package Actor that isn't closed, the
+     * connections among them and to the built-in Actors, and the layout. External Actors (a
+     * program that connects itself, the person) and connections to them are listed in
+     * `unresolved`, not exported.
+     */
+    exportSystem: method({
+      input: z.object({}),
+      output: z.object({ composition: Composition, unresolved: Unresolved }),
+    }),
+    /**
+     * Make a composition's system here, with the caller's authority: every connection's export
+     * side must be the caller's, as in `install`, or nothing is made (`forbidden`, listing them).
+     * Its packages must already be added (a composition travels with them; whoever holds the
+     * files adds them). An Actor whose package isn't here (or is another version) isn't made, and
+     * is listed in `unresolved` with what depends on it; so is an Actor that needs a sign-in, a
+     * seed that can't land, and the placements, unless the caller holds the person's layout.
+     * A connection to the Hub's management (`hub`) or to `storage.admin` is never made by an
+     * import, even a manager's: a composition may come from anyone, so those are listed in
+     * `ungranted`, for the person to grant one by one. A name already taken gets a suffix. Seeds land as in `install`; what was running is
+     * started; the layout is placed. If anything else fails, what this import made is closed.
+     */
+    importSystem: method({
+      input: z.object({ composition: Composition }),
+      output: z.object({
+        created: z.record(ActorName, Id),
+        unresolved: Unresolved,
+        ungranted: z.array(
+          z.object({ consumer: ActorName, slot: Name, provider: ActorName, export: Name }),
+        ),
+      }),
     }),
   },
 });

@@ -6,8 +6,8 @@ import { dirname, join } from "node:path";
 import { Duplex as NodeDuplex } from "node:stream";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { hubActors, hubBindings, installer, kv } from "@agentorg/interfaces";
-import type { Duplex, Refused } from "@agentorg/sdk";
+import { hubActors, hubBindings, installer, kv, layout } from "@agentorg/interfaces";
+import { type Duplex, Refused } from "@agentorg/sdk";
 import { buildPackage } from "@agentorg/sdk/build";
 import { connect } from "@agentorg/sdk/client";
 import { HUB, Hub, type HubOptions, listen, PERSON, STORAGE } from "../src/index.ts";
@@ -60,6 +60,39 @@ async function setup(
     return built.hash;
   };
   const installerHash = await add(join(packages, "installer"));
+  // The person's layout, as the gateway would serve it: a list kept here.
+  const placements: { id: string; actor: string; module: string; title?: string; by?: string }[] =
+    [];
+  const layoutMade = hub.state.createActor(PERSON, { name: "layout provider" });
+  const layoutProvider = await connect({
+    hubUrl: server.url,
+    actorId: layoutMade.actorId,
+    credential: layoutMade.credential as string,
+    exports: { layout },
+    start(ctx) {
+      ctx.exports.layout.implement({
+        get: async () => ({ home: placements }),
+        place: async (input, { caller }) => {
+          if (input.title === "refused") throw new Refused("invalid", "This layout won't take it.");
+          const id = `p${placements.length + 1}`;
+          placements.push({
+            id,
+            actor: input.actor,
+            module: input.module,
+            title: input.title,
+            by: caller,
+          });
+          return { id };
+        },
+        remove: async ({ id }) => {
+          placements.splice(placements.findIndex((p) => p.id === id) >>> 0, 1);
+          return {};
+        },
+        move: async () => ({}),
+      });
+    },
+  });
+  open.push(layoutProvider);
   const { actorId: installerId } = await person.slots.actors.call.create({
     name: "installer",
     package: installerHash,
@@ -68,6 +101,7 @@ async function setup(
         (name) => ({ slot: `installer.${name}`, provider: HUB, export: name }),
       ),
       { slot: "installer.storage", provider: STORAGE, export: "admin" },
+      { slot: "installer.layout", provider: layoutMade.actorId, export: "layout" },
     ],
   });
   if (options.runInstaller === "by hand") {
@@ -115,7 +149,7 @@ async function setup(
       shell.slots.installer.bound && assistant.slots.installer.bound && bare.slots.installer.bound,
   );
   const seeded = await add(join(fixtures, "seeded"));
-  return { hub, person, shell, assistant, bare, seeded, installerHash, as, track };
+  return { hub, person, shell, assistant, bare, seeded, installerHash, as, track, add, placements };
 }
 
 test("plan proposes, for each open slot, the running exports of exactly its interface", async (t) => {
@@ -298,4 +332,186 @@ test("the installer grants nothing its caller couldn't: delegation only narrows"
     },
   });
   assert.equal(hub.state.isManager(anything.actorId), true);
+});
+
+test("a system exported from one home is made again in another, by names, with what can't be listed", async (t) => {
+  const a = await setup(t);
+  const board = await a.add(join(packages, "..", "examples", "board"));
+  const made = await a.shell.slots.installer.call.install({
+    package: board,
+    name: "Board",
+    connections: { "logic.store": { actor: STORAGE, export: "kv" } },
+    start: true,
+  });
+  a.placements.push({ id: "p1", actor: made.actorId, module: "panel", title: "Launch" });
+  // An Actor the manager gave the Hub's management and storage.admin: a manager in this home.
+  const powerful = await a.shell.slots.installer.call.install({
+    package: a.installerHash,
+    name: "deputy",
+    connections: {
+      "installer.bindings": { actor: HUB, export: "bindings" },
+      "installer.storage": { actor: STORAGE, export: "admin" },
+    },
+  });
+  assert.equal(a.hub.state.isManager(powerful.actorId), true);
+  const { composition, unresolved } = await a.shell.slots.installer.call.exportSystem({});
+  const boardRef = composition.actors.Board?.package ?? "";
+  assert.match(boardRef, new RegExp(`^board@[^#]+#${board}$`));
+  assert.deepEqual(composition.actors.Board, { package: boardRef, running: true });
+  assert.deepEqual(
+    composition.connections.filter((c) => c.consumer === "Board"),
+    [{ consumer: "Board", slot: "logic.store", provider: STORAGE, export: "kv" }],
+  );
+  assert.deepEqual(composition.layout.home, [{ actor: "Board", module: "panel", title: "Launch" }]);
+  // The test's own programs connect themselves, and this home's installer is its own: listed.
+  assert.ok(unresolved.some((u) => u.what === "shell" && /external/.test(u.why)));
+  assert.ok(unresolved.some((u) => u.what === "installer" && /its own/.test(u.why)));
+  assert.equal(composition.actors.installer, undefined);
+  assert.doesNotMatch(JSON.stringify({ composition, unresolved }), /act_/, "by names, never ids");
+
+  // In another home, with the board's package added: the same Actor, connection and layout.
+  const b = await setup(t);
+  await b.add(join(packages, "..", "examples", "board"));
+  // The export records the deputy's management connections faithfully.
+  assert.deepEqual(
+    composition.connections
+      .filter((c) => c.consumer === "deputy")
+      .map((c) => `${c.provider}.${c.export}`),
+    ["hub.bindings", "storage.admin"],
+  );
+  // As exported, unchanged.
+  const system = composition;
+  const imported = await b.shell.slots.installer.call.importSystem({ composition: system });
+  // Even for a manager, an import grants no management: the deputy is made, not made a manager,
+  // and what it would need is listed for the person to grant.
+  const deputy = imported.created.deputy as string;
+  assert.ok(deputy);
+  assert.equal(b.hub.state.isManager(deputy), false);
+  assert.equal(b.hub.state.binding(deputy, "installer.storage"), undefined);
+  assert.deepEqual(
+    imported.ungranted.map((c) => `${c.consumer}.${c.slot} → ${c.provider}.${c.export}`),
+    ["deputy.installer.bindings → hub.bindings", "deputy.installer.storage → storage.admin"],
+  );
+  const boardId = imported.created.Board as string;
+  assert.equal(b.hub.state.actor(boardId).name, "Board");
+  assert.equal(b.hub.state.actor(boardId).state, "running");
+  assert.equal(b.hub.state.binding(boardId, "logic.store")?.provider, STORAGE);
+  assert.deepEqual(
+    b.placements.map((p) => [p.actor, p.module, p.title]),
+    [[boardId, "panel", "Launch"]],
+  );
+  // Again: the name is taken, so the second is made under another, and says so.
+  const again = await b.shell.slots.installer.call.importSystem({ composition: system });
+  assert.equal(b.hub.state.actor(again.created.Board as string).name, "Board (2)");
+  assert.ok(again.unresolved.some((u) => u.what === "Board" && /Board \(2\)/.test(u.why)));
+
+  // What isn't here is listed, never guessed: a package not added, and an Actor needing sign-in.
+  const chatgpt = await b.add(join(packages, "chatgpt"));
+  const partial = await b.shell.slots.installer.call.importSystem({
+    composition: {
+      format: "agentorg.system/1",
+      actors: {
+        Missing: { package: `nope@1.0.0#sha256-${"0".repeat(64)}` },
+        ChatGPT: { package: `chatgpt@0.0.1#${chatgpt}` },
+      },
+      connections: [{ consumer: "Missing", slot: "logic.store", provider: STORAGE, export: "kv" }],
+      layout: { home: [{ actor: "Missing", module: "panel" }] },
+    },
+  });
+  assert.deepEqual(Object.keys(partial.created), ["ChatGPT"]);
+  const why = (what: string) => partial.unresolved.filter((u) => u.what === what).map((u) => u.why);
+  assert.match(why("Missing").join(), /isn't here: add it/);
+  assert.match(why("ChatGPT").join(), /sign-in/);
+  assert.match(why("Missing.logic.store").join(), /isn't here/);
+});
+
+test("an import grants nothing its caller couldn't, and takes back all it made when it fails", async (t) => {
+  const { hub, shell, assistant, seeded, as, track, add, placements } = await setup(t);
+  const count = () => hub.state.actors().length;
+  const before = count();
+  const ref = `seeded@0.1.0#${seeded}`;
+  // Connecting one new Actor to another's export takes a manager: the assistant isn't one.
+  await assert.rejects(
+    assistant.slots.installer.call.importSystem({
+      composition: {
+        format: "agentorg.system/1",
+        actors: { One: { package: ref }, Two: { package: ref } },
+        connections: [
+          { consumer: "One", slot: "counter.store", provider: "Two", export: "counter.counter" },
+        ],
+        layout: { home: [] },
+      },
+    }),
+    (e: Refused) =>
+      e.code === "forbidden" && e.message.includes("One.counter.store → Two.counter.counter"),
+  );
+  assert.equal(count(), before, "nothing was created");
+  // Storage's kv, which it holds itself, it may connect, and the seed lands (41, so 42 next).
+  const done = await assistant.slots.installer.call.importSystem({
+    composition: {
+      format: "agentorg.system/1",
+      actors: { Counter: { package: ref, running: true } },
+      connections: [
+        { consumer: "Counter", slot: "counter.store", provider: STORAGE, export: "kv" },
+      ],
+      layout: { home: [] },
+    },
+  });
+  const counterId = done.created.Counter as string;
+  await until(() => hub.connected(counterId));
+  const user = track(
+    await connect({
+      ...as("user", [{ slot: "counter", provider: counterId, export: "counter.counter" }]),
+      slots: { counter },
+    }),
+  );
+  await until(() => user.slots.counter.bound);
+  assert.deepEqual(await user.slots.counter.call.increment({}), { value: 42 });
+  // The person's layout isn't the assistant's: the Actor is made, its placement isn't.
+  const board = await add(join(packages, "..", "examples", "board"));
+  const boardRef = `board@${hub.state.package(board).manifest.version}#${board}`;
+  const placedBy = await assistant.slots.installer.call.importSystem({
+    composition: {
+      format: "agentorg.system/1",
+      actors: { Board: { package: boardRef } },
+      connections: [{ consumer: "Board", slot: "logic.store", provider: STORAGE, export: "kv" }],
+      layout: { home: [{ actor: "Board", module: "panel" }] },
+    },
+  });
+  assert.ok(placedBy.created.Board);
+  assert.deepEqual(placements, []);
+  assert.ok(placedBy.unresolved.some((u) => u.what === "Board.panel" && /can't place/.test(u.why)));
+  // A failure after anything is made takes it all back, placements too.
+  const actorsBefore = hub.state.actors().filter((a) => a.state !== "closed").length;
+  await assert.rejects(
+    shell.slots.installer.call.importSystem({
+      composition: {
+        format: "agentorg.system/1",
+        actors: { Board: { package: boardRef } },
+        connections: [],
+        layout: {
+          home: [
+            { actor: "Board", module: "panel", title: "kept, then taken back" },
+            { actor: "Board", module: "panel", title: "refused" },
+          ],
+        },
+      },
+    }),
+    (e: Refused) => e.code === "invalid",
+  );
+  assert.deepEqual(placements, []);
+  assert.equal(hub.state.actors().filter((a) => a.state !== "closed").length, actorsBefore);
+  // A composition can't name an Actor after a built-in.
+  await assert.rejects(
+    shell.slots.installer.call.importSystem({
+      composition: {
+        format: "agentorg.system/1",
+        actors: { storage: { package: ref } },
+        connections: [],
+        layout: { home: [] },
+      },
+    }),
+    (e: Refused) => e.code === "invalid",
+  );
+  assert.equal(hub.state.binding(counterId, "counter.store")?.export, "kv");
 });
