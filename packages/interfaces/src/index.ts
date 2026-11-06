@@ -17,6 +17,7 @@ export {
   LogLine,
   Package,
 } from "./hub.js";
+export { installer } from "./installer.js";
 export { kv } from "./kv.js";
 export { layout, Placement } from "./layout.js";
 export { Item, llmSession, OutputItem, Tool } from "./llm-session.js";

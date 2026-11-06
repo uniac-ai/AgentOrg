@@ -1,0 +1,21 @@
+{
+  "name": "installer",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Plans and installs packages: proposes each slot's connections, and makes the Actor with the ones given",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.json"
+  },
+  "agentorg": {
+    "modules": {
+      "installer": "src/installer.ts"
+    }
+  },
+  "dependencies": {
+    "@agentorg/interfaces": "0.0.0",
+    "@agentorg/sdk": "0.0.0",
+    "zod": "^4.6.7"
+  }
+}

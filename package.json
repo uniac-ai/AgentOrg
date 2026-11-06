@@ -11,6 +11,7 @@
     "packages/sdk",
     "packages/interfaces",
     "packages/hub",
+    "packages/installer",
     "packages/chatgpt",
     "packages/assistant",
     "packages/shell",
