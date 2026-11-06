@@ -7,6 +7,7 @@
     "node": ">=22.15"
   },
   "workspaces": [
+    "packages/wire",
     "packages/sdk",
     "packages/interfaces",
     "examples/board-interfaces",
