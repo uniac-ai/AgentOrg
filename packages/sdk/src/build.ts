@@ -1,12 +1,8 @@
 export {
+  BuildError,
+  type BuildOptions,
   type Built,
   buildPackage,
-  FORMAT,
-  type Manifest,
-  type ManifestInterface,
-  type ManifestModule,
-  treeHash,
-  type Verified,
   verifyPackage,
 } from "./package.js";
-export { readTar, writeTar } from "./tar.js";
+export { writeTar } from "./tar.js";

@@ -4,7 +4,7 @@
   "type": "module",
   "license": "MIT",
   "engines": {
-    "node": ">=22.13"
+    "node": ">=22.15"
   },
   "workspaces": [
     "packages/sdk",

@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { buildPackage, readTar, verifyPackage } from "@agentorg/sdk/build";
+import { buildPackage, verifyPackage } from "@agentorg/sdk/build";
+import { readTar } from "@agentorg/sdk/manifest";
 import { createTestContext } from "@agentorg/sdk/testing";
 import logic from "../src/logic.ts";
 
@@ -61,7 +62,7 @@ test("two builds hash the same, and the archive verifies", async (t) => {
   const second = await build(t);
   assert.equal(second.hash, first.hash);
   const verified = await verifyPackage(first.file);
-  assert.deepEqual(verified.problems, []);
+  assert.ok(verified.ok, verified.ok ? "" : verified.problems.join("\n"));
   assert.equal(verified.hash, first.hash);
 });
 
@@ -71,7 +72,7 @@ test("each module is one self-contained ESM file: no imports at run time", async
   assert.deepEqual([...files.keys()], ["agentorg.json", "dist/logic.js", "dist/panel.js"]);
   for (const path of ["dist/logic.js", "dist/panel.js"]) {
     const code = new TextDecoder().decode(files.get(path));
-    assert.doesNotMatch(code, /^\s*import\s/m, `${path} imports`);
+    assert.doesNotMatch(code, /\bimport\s*[{*"'(]/, `${path} imports`);
     assert.doesNotMatch(code, /\brequire\(/, `${path} requires`);
   }
 });

@@ -37,6 +37,16 @@ export function writeTar(files: Map<string, Uint8Array>): Uint8Array {
   return out;
 }
 
+/** A plain relative path: `/`-separated, with no empty, `.` or `..` segments or backslashes. */
+function safePath(path: string): boolean {
+  return (
+    path.length > 0 &&
+    !path.includes("\\") &&
+    !/^[A-Za-z]:/.test(path) &&
+    path.split("/").every((segment) => segment !== "" && segment !== "." && segment !== "..")
+  );
+}
+
 /** The regular files of a ustar archive, refusing anything else and any checksum mismatch. */
 export function readTar(archive: Uint8Array): Map<string, Uint8Array> {
   const files = new Map<string, Uint8Array>();
@@ -53,8 +63,10 @@ export function readTar(archive: Uint8Array): Map<string, Uint8Array> {
       throw new Error(`Only regular files are allowed in a package.`);
     const path = text(offset, 100);
     const size = Number.parseInt(text(offset + 124, 12).trim(), 8);
-    if (!path || path.startsWith("/") || path.split("/").includes(".."))
-      throw new Error(`Unsafe path ${JSON.stringify(path)} in a package.`);
+    if (text(offset + 345, 155)) throw new Error("A package's tar uses no name prefix.");
+    if (!safePath(path)) throw new Error(`Unsafe path ${JSON.stringify(path)} in a package.`);
+    if (!Number.isInteger(size) || size < 0 || offset + 512 + size > archive.length)
+      throw new Error(`${path}'s size runs past the end of the archive.`);
     if (files.has(path)) throw new Error(`${path} appears twice in a package.`);
     files.set(path, archive.slice(offset + 512, offset + 512 + size));
     offset += 512 + Math.ceil(size / 512) * 512;

@@ -1,47 +1,22 @@
 import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { build as esbuild } from "esbuild";
-import { hashOf, sha256 } from "./canonical.js";
 import type { ModuleDescription } from "./describe.js";
+import { compareInterfaces, type DescribedInterface } from "./interface.js";
 import {
-  compareInterfaces,
-  type DescribedInterface,
-  hashInterface,
-  type InterfaceSchemas,
-} from "./interface.js";
-import type { Placement } from "./module.js";
-import { readTar, writeTar } from "./tar.js";
-
-export const FORMAT = "agentorg.package/1";
-
-/** An interface as `agentorg.json` records it, keyed by its `name@major`. */
-export type ManifestInterface = DescribedInterface extends infer D
-  ? D extends unknown
-    ? Omit<D, "id">
-    : never
-  : never;
-export interface ManifestModule {
-  placement: Placement;
-  entry: string;
-  slots: Record<string, string>;
-  exports: Record<string, string>;
-}
-/** `agentorg.json`, generated from the package's code. */
-export interface Manifest {
-  format: typeof FORMAT;
-  name: string;
-  version: string;
-  description?: string;
-  modules: Record<string, ManifestModule>;
-  interfaces: Record<string, ManifestInterface>;
-  /** The package's own wiring: `[ "module.slot", "module.export" ]`. Other slots are the installer's. */
-  connections: [string, string][];
-  /** Optional initial state for state slots, the only runtime state a package may carry. */
-  seed: unknown;
-  signature: null;
-}
+  checkManifest,
+  FORMAT,
+  type Manifest,
+  type ManifestInterface,
+  type ManifestModule,
+  treeHash,
+  type Verified,
+  verifyArchive,
+} from "./manifest.js";
+import { writeTar } from "./tar.js";
 
 /** What a package's `package.json` says under `agentorg`. */
 interface Config {
@@ -54,34 +29,42 @@ export interface Built {
   manifest: Manifest;
   /** SHA-256 over the canonical file tree: what a composition pins and grants follow. */
   hash: string;
-  /** The `.agentorg` archive, named by the hash. */
-  file: string;
-  /** The tree: `agentorg.json` and `dist/`. */
+  /** The tree, exactly what is hashed: `agentorg.json` and `dist/`. */
   dir: string;
+  /** The `.agentorg` archive of the tree, named by the hash, beside it. */
+  file: string;
+}
+
+export interface BuildOptions {
+  /** Where the build goes, replaced each time: `package/` holds the tree, beside its archive. */
+  out?: string;
+  /** How long reading one module's definition may take. */
+  describeTimeoutMs?: number;
 }
 
 const NAME = /^[a-z][A-Za-z0-9_]*$/;
 
-class BuildError extends Error {
+/** A build that can't go on: the message says what to fix. */
+export class BuildError extends Error {
   override readonly name = "BuildError";
 }
 
-/** The canonical tree hash: SHA-256 over the sorted `[path, sha256(bytes)]` of every file. */
-export function treeHash(files: Map<string, Uint8Array>): string {
-  return hashOf(
-    [...files.keys()].sort().map((path) => [path, sha256(files.get(path) as Uint8Array)]),
-  );
-}
+/** Whether `inner` is `outer` or inside it. */
+const within = (inner: string, outer: string) => {
+  const path = relative(outer, inner);
+  return path === "" || (!path.startsWith("..") && !isAbsolute(path));
+};
 
 /**
  * Build a package: bundle each module with every library into one ESM file, read each module's
  * definition from its code, write `agentorg.json`, hash the tree, and archive it as
- * `<hash>.agentorg`. The tree and archive go to `out` (default `<dir>/agentorg-build`), which is
- * replaced.
+ * `<hash>.agentorg`. The output folder (default `<dir>/agentorg-build`) is replaced.
  */
-export async function buildPackage(dir: string, options: { out?: string } = {}): Promise<Built> {
+export async function buildPackage(dir: string, options: BuildOptions = {}): Promise<Built> {
   const root = resolve(dir);
   const out = resolve(options.out ?? join(root, "agentorg-build"));
+  if (within(root, out))
+    throw new BuildError(`The output folder ${out} holds the package itself; choose another.`);
   const pkg = JSON.parse(await readFile(join(root, "package.json"), "utf8")) as {
     name?: string;
     version?: string;
@@ -96,13 +79,14 @@ export async function buildPackage(dir: string, options: { out?: string } = {}):
     if (!NAME.test(name))
       throw new BuildError(`${JSON.stringify(name)} isn't a valid module name.`);
 
-  const bundles = new Map<string, Uint8Array>();
+  const files = new Map<string, Uint8Array>();
   const described: Record<string, ModuleDescription> = {};
   const scratch = await realpath(await mkdtemp(join(tmpdir(), "agentorg-build-")));
   try {
     for (const [name, entry] of Object.entries(config.modules)) {
-      bundles.set(`dist/${name}.js`, await bundle(root, { entryPoints: [join(root, entry)] }));
-      // The definition is read by running the module's code, so the describer is bundled with it.
+      files.set(`dist/${name}.js`, await bundle(root, { entryPoints: [join(root, entry)] }));
+      // The definition is read by running the module's code, so the describer is bundled with it
+      // and shares its SDK and zod.
       const describer = await bundle(root, {
         stdin: {
           contents: [
@@ -114,7 +98,12 @@ export async function buildPackage(dir: string, options: { out?: string } = {}):
           sourcefile: `describe-${name}.js`,
         },
       });
-      described[name] = await describeInChild(scratch, name, describer);
+      described[name] = await describeInChild(
+        scratch,
+        name,
+        describer,
+        options.describeTimeoutMs ?? 30_000,
+      );
     }
   } finally {
     await rm(scratch, { recursive: true, force: true });
@@ -143,30 +132,6 @@ export async function buildPackage(dir: string, options: { out?: string } = {}):
         Object.entries(d.exports).map(([exp, i]) => [exp, record(`${name}.${exp}`, i)]),
       ),
     };
-
-  const connections = config.connections ?? [];
-  const wired = new Set<string>();
-  for (const connection of connections) {
-    const [from, to] = connection;
-    const end = (path: string, side: "slots" | "exports") => {
-      const [module, member, extra] = String(path).split(".");
-      const id = module && member && !extra ? modules[module]?.[side][member] : undefined;
-      if (!id)
-        throw new BuildError(
-          `Connection ${JSON.stringify(connection)}: ${JSON.stringify(path)} isn't a ${side === "slots" ? "slot" : "export"} of a module here, as "module.${side === "slots" ? "slot" : "export"}".`,
-        );
-      return id;
-    };
-    const slot = end(from, "slots");
-    const exported = end(to, "exports");
-    if (slot !== exported)
-      throw new BuildError(
-        `Connection ${JSON.stringify(connection)} joins ${slot} to ${exported}.`,
-      );
-    if (wired.has(from)) throw new BuildError(`${from} is connected twice.`);
-    wired.add(from);
-  }
-
   const manifest: Manifest = {
     format: FORMAT,
     name: pkg.name,
@@ -174,22 +139,29 @@ export async function buildPackage(dir: string, options: { out?: string } = {}):
     ...(pkg.description ? { description: pkg.description } : {}),
     modules,
     interfaces: Object.fromEntries(Object.entries(interfaces).sort(([a], [b]) => (a < b ? -1 : 1))),
-    connections,
+    connections: config.connections ?? [],
     seed: config.seed ?? null,
     signature: null,
   };
-  const files = new Map(bundles);
+  const problems = checkManifest(manifest);
+  if (problems.length) throw new BuildError(problems.join("\n"));
+
   files.set("agentorg.json", new TextEncoder().encode(`${JSON.stringify(manifest, null, 2)}\n`));
   const hash = treeHash(files);
+  const tree = join(out, "package");
   await rm(out, { recursive: true, force: true });
-  await mkdir(join(out, "dist"), { recursive: true });
-  for (const [path, data] of files) await writeFile(join(out, path), data);
+  await mkdir(join(tree, "dist"), { recursive: true });
+  for (const [path, data] of files) await writeFile(join(tree, path), data);
   const file = join(out, `${hash}.agentorg`);
   await writeFile(file, writeTar(files));
-  return { manifest, hash, file, dir: out };
+  return { manifest, hash, dir: tree, file };
 }
 
-/** One ESM file holding the entry and every library it uses: no runtime imports, no CDN. */
+/**
+ * One ESM file holding the entry and every library it uses: no runtime imports and no Node
+ * built-ins. Whitespace and comments are dropped, since esbuild's comments name each file's path
+ * and would make the hash depend on where the package sits.
+ */
 async function bundle(
   root: string,
   input: Pick<Parameters<typeof esbuild>[0], "entryPoints" | "stdin">,
@@ -204,6 +176,8 @@ async function bundle(
       mainFields: ["module", "main"],
       conditions: ["import", "module", "default"],
       target: "es2023",
+      minifyWhitespace: true,
+      legalComments: "none",
       write: false,
       logLevel: "silent",
     });
@@ -222,34 +196,57 @@ async function bundle(
   }
 }
 
-/** Globals a module's top level might reach for I/O; the describer's process removes them. */
-const PRELOAD = `for (const name of ["fetch", "WebSocket", "EventSource", "XMLHttpRequest"])
-  Object.defineProperty(globalThis, name, { get() { throw new Error(name + " is not available at a module's top level"); } });
+const MARK = "agentorg-describe:";
+/**
+ * Run before the module in the describer's process. No Node built-in can be imported, the ways
+ * around that are gone, and so are the network globals. Node's permission model already stops
+ * reads outside the scratch folder, writes, processes and workers, but it has no network control.
+ */
+const PRELOAD = `import { isBuiltin, registerHooks } from "node:module";
+registerHooks({
+  resolve(specifier, context, next) {
+    if (isBuiltin(specifier)) throw new Error(specifier + " is not available at a module's top level");
+    return next(specifier, context);
+  },
+});
+for (const [owner, names] of [
+  [globalThis, ["fetch", "WebSocket", "EventSource", "XMLHttpRequest"]],
+  [process, ["getBuiltinModule", "binding", "_linkedBinding", "dlopen"]],
+])
+  for (const name of names)
+    Object.defineProperty(owner, name, {
+      configurable: false,
+      get() {
+        throw new Error(name + " is not available at a module's top level");
+      },
+    });
 `;
-const RUNNER = `try {
-  const described = (await import(process.argv[2])).default;
-  process.stdout.write(JSON.stringify({ described }));
+const RUNNER = `let result;
+try {
+  result = { described: (await import(process.argv[2])).default };
 } catch (error) {
-  process.stdout.write(JSON.stringify({ error: String(error && error.stack ? error.name + ": " + error.message : error) }));
+  result = { error: String(error && error.stack ? error.name + ": " + error.message : error) };
 }
-process.exit(0);
+process.stdout.write("\\n${MARK}" + JSON.stringify(result) + "\\n", () => process.exit(0));
 `;
 
 /**
  * Run a module's describer in a child Node process under the permission model: it reads only the
- * scratch folder, writes nothing, starts no processes or workers, and has no network globals. A
- * top level that does I/O or touches DOM globals fails there, and the build says why.
+ * scratch folder, writes nothing, starts no processes or workers, and can reach no network. A top
+ * level that does I/O or touches DOM globals fails there, and the build says why.
  */
 async function describeInChild(
   scratch: string,
   name: string,
   describer: Uint8Array,
+  timeoutMs: number,
 ): Promise<ModuleDescription> {
   const files = { preload: join(scratch, "preload.mjs"), runner: join(scratch, "runner.mjs") };
   await writeFile(files.preload, PRELOAD);
   await writeFile(files.runner, RUNNER);
   const target = join(scratch, `${name}.mjs`);
   await writeFile(target, describer);
+  let timedOut = false;
   const { code, stdout, stderr } = await new Promise<{
     code: number | null;
     stdout: string;
@@ -261,31 +258,51 @@ async function describeInChild(
         "--permission",
         `--allow-fs-read=${scratch}`,
         "--import",
-        files.preload,
+        pathToFileURL(files.preload).href,
         files.runner,
-        target,
+        pathToFileURL(target).href,
       ],
-      { stdio: ["ignore", "pipe", "pipe"], env: {} },
+      {
+        stdio: ["ignore", "pipe", "pipe"],
+        env: process.env.SYSTEMROOT ? { SYSTEMROOT: process.env.SYSTEMROOT } : {},
+      },
     );
     let stdout = "";
     let stderr = "";
-    child.stdout.on("data", (chunk) => (stdout += chunk));
-    child.stderr.on("data", (chunk) => (stderr += chunk));
-    const timer = setTimeout(() => child.kill(), 30_000);
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    // SIGKILL, since a module's top level can ignore SIGTERM.
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGKILL");
+    }, timeoutMs);
     child.on("error", fail);
     child.on("close", (code) => {
       clearTimeout(timer);
       done({ code, stdout, stderr });
     });
   });
-  let result: { described?: ModuleDescription; error?: string };
+  if (timedOut)
+    throw new BuildError(
+      `Module ${name}: reading its definition took over ${timeoutMs} ms. A module's top level must only define; do work in start().`,
+    );
+  // A module's own output may come first. JSON holds no raw newline, so the result is the text
+  // after the last newline-led marker.
+  const at = stdout.lastIndexOf(`\n${MARK}`);
+  let result: { described?: ModuleDescription; error?: string } | undefined;
   try {
-    result = JSON.parse(stdout);
+    result = at < 0 ? undefined : JSON.parse(stdout.slice(at + MARK.length + 1));
   } catch {
+    result = undefined;
+  }
+  if (!result)
     throw new BuildError(
       `Module ${name}: its definition couldn't be read (exit ${code}). ${stderr.trim().split("\n").slice(-3).join(" ")}`,
     );
-  }
   if (result.error || !result.described)
     throw new BuildError(
       `Module ${name}: its top level failed while its definition was read: ${result.error}. A module's top level must not do I/O or touch DOM globals; do that work in start().`,
@@ -293,46 +310,16 @@ async function describeInChild(
   return result.described;
 }
 
-export interface Verified {
-  /** The tree hash recomputed from the archive. */
-  hash: string;
-  manifest?: Manifest;
-  /** Everything wrong; empty when the package is intact and its manifest consistent. */
-  problems: string[];
-}
-
 /**
- * Check a `.agentorg` archive: its tree hash against the expected one (by default the hash in its
- * file name), every interface hash against its recorded schemas, and every module entry present.
+ * Check a `.agentorg` file against its expected hash, by default the one in its file name. See
+ * `verifyArchive` (`@agentorg/sdk/manifest`) for the same check on bytes.
  */
 export async function verifyPackage(file: string, expected?: string): Promise<Verified> {
-  const files = readTar(new Uint8Array(await readFile(file)));
-  const hash = treeHash(files);
-  const problems: string[] = [];
   const want = expected ?? /(sha256-[0-9a-f]{64})\.agentorg$/.exec(file)?.[1];
-  if (!want) problems.push("No expected hash: pass one, or keep the file named by its hash.");
-  else if (want !== hash) problems.push(`The package hashes to ${hash}, not ${want}.`);
-  const raw = files.get("agentorg.json");
-  if (!raw) return { hash, problems: [...problems, "The package has no agentorg.json."] };
-  let manifest: Manifest;
-  try {
-    manifest = JSON.parse(new TextDecoder().decode(raw)) as Manifest;
-  } catch {
-    return { hash, problems: [...problems, "agentorg.json isn't JSON."] };
-  }
-  if (manifest.format !== FORMAT)
-    problems.push(`Unknown format ${JSON.stringify(manifest.format)}.`);
-  for (const [id, entry] of Object.entries(manifest.interfaces ?? {})) {
-    const { hash: recorded, ...schemas } = entry;
-    if (hashInterface({ id, ...schemas } as InterfaceSchemas) !== recorded)
-      problems.push(`${id}'s recorded hash doesn't match its schemas.`);
-  }
-  for (const [name, module] of Object.entries(manifest.modules ?? {})) {
-    if (!files.has(module.entry))
-      problems.push(`Module ${name}'s entry ${module.entry} is missing.`);
-    for (const id of [...Object.values(module.slots), ...Object.values(module.exports)])
-      if (!manifest.interfaces?.[id])
-        problems.push(`Module ${name} uses ${id}, which isn't recorded.`);
-  }
-  return { hash, manifest, problems };
+  if (!want)
+    return {
+      ok: false,
+      problems: ["No expected hash: pass one, or keep the file named by its hash."],
+    };
+  return verifyArchive(new Uint8Array(await readFile(file)), want);
 }

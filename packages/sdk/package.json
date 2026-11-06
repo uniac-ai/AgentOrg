@@ -20,6 +20,10 @@
     "./describe": {
       "types": "./dist/src/describe.d.ts",
       "default": "./dist/src/describe.js"
+    },
+    "./manifest": {
+      "types": "./dist/src/manifest-api.d.ts",
+      "default": "./dist/src/manifest-api.js"
     }
   },
   "files": [
@@ -36,7 +40,7 @@
     "zod": "^4.6.7"
   },
   "dependencies": {
-    "esbuild": "^0.28.2"
+    "esbuild": "0.28.2"
   },
   "bin": {
     "agentorg": "dist/src/cli.js"

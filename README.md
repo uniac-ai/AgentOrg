@@ -26,13 +26,17 @@ A package's `package.json` names its modules, its own wiring and any seed state:
 
 - bundles each module, with every library it uses, into one ESM file, `dist/<module>.js`, with no imports at run time and no Node built-ins;
 - reads each module's definition from its code and writes `agentorg.json`: each module's placement, slots and exports, every interface's JSON Schemas and hash, the package's `connections`, `seed` and `signature: null`;
-- hashes the tree, `agentorg.json` and `dist/`, as SHA-256 over the canonical list of each file's path and SHA-256, and archives it as `<hash>.agentorg`, a deterministic tar. `verifyPackage` checks an archive against its hash and its interface hashes against their schemas.
+- hashes the tree, `agentorg.json` and `dist/`, as SHA-256 over the canonical list of each file's path and SHA-256, and archives it as `<hash>.agentorg`, a deterministic tar. The tree goes to `agentorg-build/package/` and the archive beside it.
+
+The build bundles; it doesn't type-check. Run `tsc --noEmit` on the package first.
+
+`@agentorg/sdk/manifest` reads packages without esbuild, for a Hub or an installer: `verifyArchive(bytes, hash)` checks an archive holds exactly `agentorg.json` and each module's entry, hashes to the expected hash, and has a sound manifest (`checkManifest`: its shape, each interface's recorded hash against its schemas, and its connections). Problems are returned, not thrown.
 
 The examples folder holds the spec's board package; its tests build it.
 
 ### Module top levels have no side effects
 
-To read a module's definition, the build runs the module's code in a separate Node process under the permission model: it can read only its own scratch folder, write nothing, and start no processes, and the network globals are gone. Widget bundles run there too, in Node, not a browser. So a module's top level must only define: no I/O, no timers that do work, no DOM globals such as `document` or `window`. Do that work in `start()`. A top level that tries fails the build with a message naming the module and what it touched.
+To read a module's definition, the build runs the module's code in a separate Node process (Node 22.15 or later) under the permission model: it can read only its own scratch folder, write nothing, and start no processes; Node built-ins can't be imported, and the network globals are gone. A definition that takes over 30 seconds to read is stopped. Widget bundles run there too, in Node, not a browser. So a module's top level must only define: no I/O, no timers that do work, no DOM globals such as `document` or `window`. Do that work in `start()`. A top level that tries fails the build with a message naming the module and what it touched.
 
 ### Errors
 
