@@ -151,7 +151,7 @@ type Client = Awaited<ReturnType<typeof connect>>;
 
 async function setup(
   t: test.TestContext,
-  options: { answerTimeoutMs?: number; checks?: { size?: number } } = {},
+  options: { answerTimeoutMs?: number; helloTimeoutMs?: number; checks?: { size?: number } } = {},
 ) {
   const home = join(mkdtempSync(join(tmpdir(), "agentorg-router-")), "home");
   const hub = Hub.open(home, { helloTimeoutMs: 300, ...options });
@@ -1155,7 +1155,9 @@ test("an Actor that leaves slot notices open loses its channel at the cap; one t
 });
 
 test("an Actor with many slots keeps its channel when one change unbinds them all at once", async (t) => {
-  const { url, actor, bind, person } = await setup(t);
+  // A hello declaring 256 slots is checked one interface at a time; on a loaded machine that can
+  // take longer than the other tests' short deadline, so this one has the Hub's own.
+  const { url, actor, bind, person } = await setup(t, { helloTimeoutMs: 10_000 });
   const p = await actor("provider", { exports: { notes } }, notesProvider().serve);
   const made = (await person.call("actors", "create", { name: "many" })) as {
     result: { actorId: string; credential: string };
