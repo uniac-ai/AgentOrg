@@ -1144,3 +1144,63 @@ test("an Actor with many slots keeps its channel when one change unbinds them al
     "open",
   );
 });
+
+test("when a provider comes back, its consumers hear their slot is usable again", async (t) => {
+  const { url, actor, bind, person } = await setup(t);
+  const made = (await person.call("actors", "create", { name: "returning" })) as {
+    result: { actorId: string; credential: string };
+  };
+  const provider = notesProvider();
+  const first = await connect(
+    url,
+    { ...made.result, declares: { exports: { notes } } },
+    provider.serve,
+  );
+  const c = await actor("consumer", { slots: { notes } });
+  const self = await actor("self", { slots: { notes }, exports: { notes } });
+  await bind(c.id, "notes", made.result.actorId, "notes");
+  await bind(self.id, "notes", self.id, "notes");
+  const settle = async (count: number) => {
+    for (let waited = 0; c.client.notices.length < count && waited < 3000; waited += 5)
+      await later(5);
+    await later(50);
+  };
+  await settle(1);
+  const sub = c.client.subscribe("notes", "written");
+  await provider.waitSubscribed();
+
+  first.close();
+  assert.equal((await sub.next())?.error?.name, "NotConnected", "the subscription ends");
+  await later(50);
+  assert.deepEqual(c.client.notices, [["notes", true]], "going away sends nothing");
+
+  const back = await connect(url, { ...made.result }, provider.serve);
+  t.after(() => back.close());
+  await settle(2);
+  assert.deepEqual(c.client.notices, [
+    ["notes", true],
+    ["notes", true],
+  ]);
+  assert.deepEqual(
+    self.client.notices,
+    [["notes", true]],
+    "an Actor's own wiring isn't re-noticed",
+  );
+  assert.deepEqual(await c.client.call("notes", "write", { text: "again" }), { result: { n: 1 } });
+
+  // A run-time export went with the old channel, its bindings too: no notice when the Actor returns.
+  await exchange(back.session, { op: "offer", name: "extra", interface: notes });
+  const d = await actor("other-consumer", { slots: { notes } });
+  await bind(d.id, "notes", made.result.actorId, "extra");
+  for (let waited = 0; d.client.notices.length < 1 && waited < 3000; waited += 5) await later(5);
+  back.close();
+  for (let waited = 0; d.client.notices.length < 2 && waited < 3000; waited += 5) await later(5);
+  assert.deepEqual(d.client.notices, [
+    ["notes", true],
+    ["notes", false],
+  ]);
+  const third = await connect(url, { ...made.result }, provider.serve);
+  t.after(() => third.close());
+  await later(100);
+  assert.deepEqual(d.client.notices.length, 2);
+});

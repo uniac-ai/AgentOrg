@@ -10,7 +10,9 @@
  *   result was taken. The header is the whole message: the Hub closes its side, and the Actor
  *   closes its side once it has read it (an open notice counts against its streams). Applied in
  *   the order the streams arrive, on top of hello's `bound` (buffered until that result is read),
- *   they give each slot's state.
+ *   they give each slot's state. A `bound: true` for a slot already bound means its provider came
+ *   back after going away: the slot is usable again, and what was subscribed must be again. A
+ *   provider going away sends nothing; calls meanwhile are `NotConnected`.
  * - `offer` and `withdraw`: the channel's own Actor offers an export at run time, or withdraws
  *   one it offered; one body (`{result: {}}` or `{error}`) answers, then the stream closes.
  * - `call`: the caller sends one `{input}` body and closes its side; the answer is one `{result}`

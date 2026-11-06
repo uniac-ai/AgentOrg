@@ -256,6 +256,15 @@ export class Hub {
     }
     const conn = { actorId, session, notices: 0 };
     this.#connections.set(actorId, conn);
+    // Its consumers' subscriptions ended when it went; a notice tells each slot it is usable again.
+    // Exports offered at run time went with the old channel, and their bindings with them.
+    for (const binding of this.state.bindings(actorId))
+      if (
+        binding.provider === actorId &&
+        binding.consumer !== actorId &&
+        this.state.declaration(actorId, "export", binding.export)?.dynamic === false
+      )
+        this.#notify(binding.consumer, binding.slot, true);
     return conn;
   }
 
