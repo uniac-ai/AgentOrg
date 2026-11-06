@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
-import { hubActors, hubGrants, kv } from "@agentorg/interfaces";
+import { hubActors, hubGrants, kv, storageAdmin } from "@agentorg/interfaces";
 import type { Refused } from "@agentorg/sdk";
 import { connect } from "@agentorg/sdk/client";
 import { Hub, listen, PERSON, STORAGE } from "../src/index.ts";
@@ -55,7 +55,7 @@ async function setup(t: test.TestContext) {
     await until(() => client.slots.a.bound && client.slots.b.bound);
     return { id: made.actorId, client };
   };
-  return { hub, home, person, consumer };
+  return { hub, home, person, consumer, url: server.url };
 }
 
 test("one store per consumer slot, apart from every other consumer's", async (t) => {
@@ -193,4 +193,147 @@ test("a storage that can't open leaves the home unlocked for the next try", (t) 
   rmSync(join(home, "storage.db"), { recursive: true });
   const again = Hub.open(home);
   again.close();
+});
+
+test("storage.admin seeds an empty store, all or none, within the limits, and audits it", async (t) => {
+  const { hub, person, consumer, url } = await setup(t);
+  const target = await consumer("target");
+  // The installer's stand-in: an Actor bound to storage's admin export.
+  const made = await person.slots.actors.call.create({
+    name: "installer",
+    bindings: [{ slot: "storage", provider: STORAGE, export: "admin" }],
+  });
+  const installer = await connect({
+    hubUrl: url,
+    actorId: made.actorId,
+    credential: made.credential as string,
+    slots: { storage: storageAdmin },
+  });
+  t.after(() => installer.close());
+  await until(() => installer.slots.storage.bound);
+  const seed = (slot: string, entries: { key: string; value: unknown }[], who = target.id) =>
+    installer.slots.storage.call.seed({ consumer: who, slot, entries: entries as never });
+
+  await seed("a", [
+    { key: "count", value: 3 },
+    { key: "title", value: "seeded" },
+  ]);
+  assert.deepEqual(await target.client.slots.a.call.get({ key: "count" }), { value: 3 });
+  assert.deepEqual(await target.client.slots.a.call.list({}), {
+    keys: ["count", "title"],
+    next: null,
+  });
+  // Not empty any more: refused, and nothing changes.
+  await assert.rejects(
+    seed("a", [{ key: "count", value: 9 }]),
+    (e: Refused) => e.code === "not_empty",
+  );
+  assert.deepEqual(await target.client.slots.a.call.get({ key: "count" }), { value: 3 });
+  // Emptied, it can be seeded again.
+  await target.client.slots.a.call.delete({ key: "count" });
+  await target.client.slots.a.call.delete({ key: "title" });
+  await seed("a", [{ key: "count", value: 1 }]);
+
+  // All or none: a value past the limit, a key given twice, or past the consumer's quota.
+  const refused = async (entries: { key: string; value: unknown }[], code: string) => {
+    await assert.rejects(seed("b", entries), (e: Refused) => e.code === code, code);
+    assert.deepEqual(await target.client.slots.b.call.list({}), { keys: [], next: null });
+  };
+  await refused(
+    [
+      { key: "ok", value: 1 },
+      { key: "big", value: "x".repeat(2000) },
+    ],
+    "quota",
+  );
+  await refused(
+    [
+      { key: "k", value: 1 },
+      { key: "k", value: 2 },
+    ],
+    "invalid",
+  );
+  await refused(
+    Array.from({ length: 6 }, (_, i) => ({ key: `k${i}`, value: "y".repeat(900) })),
+    "quota",
+  );
+  // A consumer that isn't there, or is closed.
+  await assert.rejects(seed("a", [], "act_nobody"), (e: Refused) => e.code === "unknown");
+  const gone = await consumer("gone");
+  await person.slots.actors.call.close({ actorId: gone.id });
+  await assert.rejects(
+    seed("a", [{ key: "k", value: 1 }], gone.id),
+    (e: Refused) => e.code === "state",
+  );
+
+  const audited = hub.state
+    .audit(0, 1000)
+    .entries.filter((e) => e.kind === "storage.seed")
+    .map((e) => [e.actor, e.details]);
+  assert.deepEqual(audited, [
+    [made.actorId, { consumer: target.id, slot: "a", entries: 2 }],
+    [made.actorId, { consumer: target.id, slot: "a", entries: 1 }],
+  ]);
+});
+
+test("a seed counts toward its Actor's quota, reaches only its kv slots, and takes only well-formed keys", async (t) => {
+  const { hub, person, consumer, url } = await setup(t);
+  const target = await consumer("target");
+  const made = await person.slots.actors.call.create({
+    name: "installer",
+    bindings: [{ slot: "storage", provider: STORAGE, export: "admin" }],
+  });
+  const installer = await connect({
+    hubUrl: url,
+    actorId: made.actorId,
+    credential: made.credential as string,
+    slots: { storage: storageAdmin },
+  });
+  t.after(() => installer.close());
+  await until(() => installer.slots.storage.bound);
+  const seed = (slot: string, entries: { key: string; value: unknown }[], who = target.id) =>
+    installer.slots.storage.call.seed({ consumer: who, slot, entries: entries as never });
+  const value = "v".repeat(990);
+
+  // What's already stored counts: this fits alone (about 4 KB of 4 KiB), not beside 1 KB in b.
+  await target.client.slots.b.call.set({ key: "held", value });
+  const four = Array.from({ length: 4 }, (_, i) => ({ key: `k${i}`, value }));
+  await assert.rejects(seed("a", four), (e: Refused) => e.code === "quota");
+  await target.client.slots.b.call.delete({ key: "held" });
+  // And what a seed stores counts afterwards.
+  await seed("a", four);
+  await target.client.slots.b.call.set({ key: "one", value: "x" });
+  await assert.rejects(
+    target.client.slots.b.call.set({ key: "two", value }),
+    (e: Refused) => e.code === "quota",
+  );
+  // Deleted, it no longer counts.
+  for (const { key } of four) await target.client.slots.a.call.delete({ key });
+  await target.client.slots.b.call.set({ key: "two", value });
+
+  // Only the consumer's own slots bound to storage.kv: not a slot it lacks, not a built-in Actor.
+  for (const [who, slot] of [
+    [target.id, "nosuch"],
+    ["hub", "packages"],
+    ["storage", "kv"],
+  ] as const)
+    await assert.rejects(
+      seed(slot, [{ key: "k", value: 1 }], who),
+      (e: Refused) => e.code === "invalid",
+      `${who}.${slot}`,
+    );
+  // A key's limit is in UTF-8 bytes; half a surrogate pair isn't a key.
+  await assert.rejects(
+    seed("a", [{ key: "€".repeat(400), value: 1 }]),
+    (e: Refused) => e.code === "quota",
+  );
+  await assert.rejects(
+    seed("a", [{ key: "\ud800", value: 1 }]),
+    (e: Refused) => e.code === "invalid",
+  );
+  await assert.rejects(
+    target.client.slots.a.call.set({ key: "\udc00", value: 1 }),
+    (e: Refused) => e.code === "invalid",
+  );
+  assert.equal(hub.state.audit(0, 1000).entries.filter((e) => e.kind === "storage.seed").length, 1);
 });

@@ -7,9 +7,9 @@ import { z } from "zod";
  */
 
 const Hash = z.string().regex(/^sha256-[0-9a-f]{64}$/);
-const Id = z.string().min(1).max(128);
+export const Id = z.string().min(1).max(128);
 /** A slot or export: `name` for an external Actor, `module.name` for a package Actor. */
-const Name = z
+export const Name = z
   .string()
   .regex(/^[a-z][A-Za-z0-9_]*(\.[a-z][A-Za-z0-9_]*)?$/)
   .max(129);

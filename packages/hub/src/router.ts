@@ -742,6 +742,40 @@ export class Hub {
     return encoded;
   }
 
+  /**
+   * `storage.admin@1`'s seed, for its caller (the installer): into a live Actor's empty store,
+   * audited with the consumer, the slot and how many entries.
+   */
+  #seed(
+    caller: string,
+    method: string,
+    input: { consumer: string; slot: string; entries: { key: string; value: unknown }[] },
+  ): object {
+    if (method !== "seed")
+      throw new Refused("unimplemented", `storage.admin@1 has no method ${method}.`);
+    if (this.state.actor(input.consumer).state === "closed")
+      throw new Refused("state", `${input.consumer} is closed.`);
+    // Only a store the consumer can reach: its slot, bound to storage's kv.
+    const bound = this.state.binding(input.consumer, input.slot);
+    if (bound?.provider !== STORAGE || bound.export !== "kv")
+      throw new Refused(
+        "invalid",
+        `${input.consumer}.${input.slot} isn't a slot bound to storage.kv.`,
+      );
+    this.#storage.seed(input.consumer, input.slot, input.entries);
+    // The seed is done; an audit that fails now (the Hub closing) doesn't undo or hide it.
+    try {
+      this.state.auditHub(
+        "storage.seed",
+        { consumer: input.consumer, slot: input.slot, entries: input.entries.length },
+        caller,
+      );
+    } catch {
+      // The state is closed.
+    }
+    return {};
+  }
+
   /** A call to a built-in Actor: the hub, or storage with the consumer's own store. */
   async #builtinCall(
     binding: BindingRecord,
@@ -751,14 +785,24 @@ export class Hub {
   ): Promise<Body> {
     try {
       const out =
-        binding.provider === STORAGE
-          ? this.#storage.call(
-              binding.consumer,
-              binding.slot,
-              method,
-              value as Record<string, unknown>,
-            )
-          : await this.#actor.call(binding.export, method, caller, value);
+        binding.provider !== STORAGE
+          ? await this.#actor.call(binding.export, method, caller, value)
+          : binding.export === "admin"
+            ? this.#seed(
+                caller,
+                method,
+                value as {
+                  consumer: string;
+                  slot: string;
+                  entries: { key: string; value: unknown }[];
+                },
+              )
+            : this.#storage.call(
+                binding.consumer,
+                binding.slot,
+                method,
+                value as Record<string, unknown>,
+              );
       // Through JSON, as a reply from any other provider would be.
       return result(JSON.parse(JSON.stringify(out ?? null)));
     } catch (error) {

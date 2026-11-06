@@ -20,5 +20,6 @@ export {
 export { kv } from "./kv.js";
 export { layout, Placement } from "./layout.js";
 export { Item, llmSession, OutputItem, Tool } from "./llm-session.js";
+export { storageAdmin } from "./storage-admin.js";
 export { uiShell } from "./ui-shell.js";
 export { uiView } from "./ui-view.js";

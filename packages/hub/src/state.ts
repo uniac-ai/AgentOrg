@@ -22,6 +22,7 @@ import {
   hubGrants,
   hubPackages,
   kv,
+  storageAdmin,
 } from "@agentorg/interfaces";
 import {
   compareInterfaces,
@@ -336,6 +337,7 @@ export class HubState {
           )
           .run(STORAGE, now());
       this.#declare(STORAGE, "export", "kv", describeInterface(kv), false);
+      this.#declare(STORAGE, "export", "admin", describeInterface(storageAdmin), false);
       if (!this.#actor(NET))
         this.#db
           .prepare(
