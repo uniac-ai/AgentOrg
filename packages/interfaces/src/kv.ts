@@ -1,0 +1,36 @@
+import { defineInterface, event, method } from "@agentorg/sdk";
+import { z } from "zod";
+
+const Key = z.string().min(1).max(512);
+
+/**
+ * `kv@1`: a key-value store of JSON values, the state slot a host module uses for now. A storage
+ * provider creates one store per Actor; `changed` tells of each write, and `list` reads history.
+ */
+export const kv = defineInterface({
+  name: "kv",
+  major: 1,
+  kind: "rpc",
+  methods: {
+    /** The value under `key`, or `null` when there is none. */
+    get: method({
+      input: z.object({ key: Key }),
+      output: z.object({ value: z.json().nullable() }),
+    }),
+    set: method({ input: z.object({ key: Key, value: z.json() }), output: z.object({}) }),
+    delete: method({ input: z.object({ key: Key }), output: z.object({ deleted: z.boolean() }) }),
+    /** Keys in order, a page at a time: pass the last page's `next` as `after`. */
+    list: method({
+      input: z.object({
+        prefix: z.string().optional(),
+        after: Key.optional(),
+        limit: z.number().int().min(1).max(1000).optional(),
+      }),
+      output: z.object({ keys: z.array(Key), next: Key.nullable() }),
+    }),
+  },
+  events: {
+    /** A key was set or deleted. */
+    changed: event(z.object({ key: Key })),
+  },
+});
