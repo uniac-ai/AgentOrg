@@ -249,6 +249,9 @@ test("placements appear on home as they're placed, move up, and go when removed"
   await person.call("layout", "place", { actor: board, module: "panel", title: "Launch" });
   const placed = page.locator(".placed");
   await placed.nth(1).waitFor();
+  // Each placement names its agent once the Actors are read, which may come after it shows.
+  await placed.nth(1).getByText("· Board").waitFor();
+  await placed.nth(0).getByText("· Planner").waitFor();
   assert.deepEqual(await placed.locator(".view-head").allInnerTexts(), [
     "Notes\n· Planner",
     "Launch\n· Board",

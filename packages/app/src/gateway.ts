@@ -420,7 +420,11 @@ export async function startApp(options: AppOptions): Promise<App> {
         }
       for (const client of sockets.clients) client.terminate();
       sockets.close();
-      await new Promise<void>((done) => server.close(() => done()));
+      // server.close waits for every open connection; a tab still connected (a keep-alive request,
+      // a socket reconnecting) would hold the app open, so they are all closed now.
+      const serverClosed = new Promise<void>((done) => server.close(() => done()));
+      server.closeAllConnections();
+      await serverClosed;
       person.close();
       await person.closed;
       await listener.close();

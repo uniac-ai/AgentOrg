@@ -62,12 +62,20 @@ test("a view's frame reaches nothing of the shell, the gateway or the network", 
   page.on("popup", () => assert.fail("A frame opened a window."));
   const outcome = await page.evaluate(async (hash) => {
     // The shell's side of the frame protocol, as FrameHost speaks it.
+    // Every wait here is bounded, so a frame that stalls fails the test with what it waited for.
+    const within = <T>(promise: Promise<T>, what: string) =>
+      Promise.race([
+        promise,
+        new Promise<never>((_, failed) =>
+          setTimeout(() => failed(new Error(`The frame didn't ${what} within 10 s.`)), 10_000),
+        ),
+      ]);
     const frame = document.createElement("iframe");
     frame.sandbox.add("allow-scripts");
     frame.src = `/frames/${hash}/probe.html`;
     const loaded = new Promise((done) => frame.addEventListener("load", done, { once: true }));
     document.body.append(frame);
-    await loaded;
+    await within(loaded, "load");
     const channel = new MessageChannel();
     const logs: { message: string; fields?: Record<string, string> }[] = [];
     const replies = new Map<number, (reply: unknown) => void>();
@@ -78,10 +86,13 @@ test("a view's frame reaches nothing of the shell, the gateway or the network", 
     };
     frame.contentWindow?.postMessage("frame/1", "*", [channel.port2]);
     const request = (message: { id: number } & Record<string, unknown>) =>
-      new Promise((done) => {
-        replies.set(message.id, done);
-        channel.port1.postMessage(message);
-      });
+      within(
+        new Promise((done) => {
+          replies.set(message.id, done);
+          channel.port1.postMessage(message);
+        }),
+        `answer ${message.op}`,
+      );
     const load = await request({
       op: "load",
       id: 1,
