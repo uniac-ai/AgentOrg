@@ -164,10 +164,17 @@ export class ModuleHost {
           const { fetchOver } = await import("./client-http.js");
           const stream = await open.http(name);
           try {
-            return await fetchOver(stream, request);
+            return await fetchOver(stream, request, name);
           } catch (error) {
-            // An abort keeps its own reason; a stream lost mid-request may have reached the provider.
-            if (request.signal.aborted) throw error;
+            // An abort keeps its own reason, and the provider's own SDK error is that error; a
+            // stream lost mid-request may have reached the provider.
+            if (
+              request.signal.aborted ||
+              error instanceof Refused ||
+              error instanceof NotConnected ||
+              error instanceof OutcomeUnknown
+            )
+              throw error;
             throw new OutcomeUnknown(
               `The http request on ${name} ended before its response: ${String(error)}`,
             );

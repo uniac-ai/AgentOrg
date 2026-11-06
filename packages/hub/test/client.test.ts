@@ -536,6 +536,9 @@ test("http: fetch from a slot reaches serve on the export, both ways, one reques
       ctx.exports.web.serve(async (request) => {
         const path = new URL(request.url).pathname;
         if (path === "/boom") throw new Error("it broke");
+        if (path === "/refuse") throw new Refused("nope", "not this one");
+        if (path === "/gone") throw new NotConnected("upstream");
+        if (path === "/url") return new Response(request.url);
         if (path === "/empty") return new Response(null, { status: 204 });
         if (path === "/big") return new Response("z".repeat(1024 * 1024));
         const headers = new Headers({ "x-seen": request.headers.get("x-asked") ?? "" });
@@ -579,6 +582,20 @@ test("http: fetch from a slot reaches serve on the export, both ways, one reques
   const failed = await consumer.slots.web.fetch(new Request("http://web/boom"));
   assert.equal(failed.status, 500);
   assert.match(await failed.text(), /it broke/);
+  // The handler sees the consumer's absolute URL, scheme included.
+  assert.equal(
+    await (await consumer.slots.web.fetch(new Request("https://web:8443/url?q=1"))).text(),
+    "https://web:8443/url?q=1",
+  );
+  // An SDK error the handler throws is that error at the consumer's fetch.
+  await assert.rejects(consumer.slots.web.fetch(new Request("http://web/refuse")), {
+    name: "Refused",
+    code: "nope",
+    message: "not this one",
+  });
+  await assert.rejects(consumer.slots.web.fetch(new Request("http://web/gone")), {
+    name: "NotConnected",
+  });
   // Several at once, each on its own stream.
   const many = await Promise.all(
     Array.from({ length: 8 }, (_, i) => consumer.slots.web.fetch(new Request(`http://web/n${i}`))),

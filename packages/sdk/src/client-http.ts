@@ -3,7 +3,49 @@ import type { Socket } from "node:net";
 import { Duplex as NodeDuplex, Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
+import {
+  type ErrorBody,
+  errorBodyOf,
+  errorFromBody,
+  NotConnected,
+  OutcomeUnknown,
+  Refused,
+} from "./errors.js";
 import type { Duplex, Log } from "./module.js";
+
+/**
+ * The header that carries an SDK error a provider's handler threw, as its error body in JSON, on a
+ * 502: the consumer's `fetch` throws that error instead of returning the response.
+ */
+export const ERROR_HEADER = "agentorg-error";
+const ERROR_NAMES = new Set(["Refused", "NotConnected", "OutcomeUnknown"]);
+
+/** The error a response carries, if it is a 502 whose error header is one of the SDK's three. */
+function carriedError(
+  status: number,
+  header: string | string[] | undefined,
+): ErrorBody | undefined {
+  if (status !== 502 || typeof header !== "string") return undefined;
+  try {
+    const body = JSON.parse(header) as Partial<ErrorBody>;
+    if (typeof body !== "object" || body === null || !ERROR_NAMES.has(String(body.name)))
+      return undefined;
+    return {
+      name: body.name as ErrorBody["name"],
+      message: String(body.message ?? ""),
+      ...(typeof body.code === "string" ? { code: body.code } : {}),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+/** JSON with everything past ASCII escaped, so it fits in a header. */
+const asciiJson = (value: unknown) =>
+  JSON.stringify(value).replace(
+    /[\u007f-\uffff]/g,
+    (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
 
 /**
  * HTTP/1.1 over one of the Hub's byte streams, with `node:http` on both ends, one request per
@@ -84,10 +126,17 @@ function outgoingHeaders(headers: Headers): Record<string, string | string[]> {
 const noBody = (method: string) => method === "GET" || method === "HEAD";
 
 /**
- * Send one request over the stream and read its response. Aborting the request's signal resets
- * the stream; once the response's body has ended, so is the stream, since nothing more is read.
+ * Send one request over the stream and read its response. The request line carries the request's
+ * absolute URL, so the provider sees exactly what was asked for. Aborting the request's signal
+ * resets the stream; once the response's body has ended, so is the stream, since nothing more is
+ * read. A provider whose handler threw one of the SDK's errors makes this throw it (`target`
+ * names the slot in a NotConnected).
  */
-export function fetchOver(stream: Duplex, request: Request): Promise<Response> {
+export function fetchOver(
+  stream: Duplex,
+  request: Request,
+  target = "the http slot",
+): Promise<Response> {
   const socket = socketOf(stream);
   const url = new URL(request.url);
   const headers = outgoingHeaders(request.headers);
@@ -99,22 +148,42 @@ export function fetchOver(stream: Duplex, request: Request): Promise<Response> {
         // No agent: with createConnection, node:http uses this stream and pools nothing.
         createConnection: () => socket,
         method: request.method,
-        path: `${url.pathname}${url.search}`,
+        path: url.href,
         headers,
       },
       (incoming) => {
         const status = incoming.statusCode ?? 502;
-        const empty = request.method === "HEAD" || status === 204 || status === 304;
+        const carried = carriedError(status, incoming.headers[ERROR_HEADER]);
+        if (carried) {
+          incoming.resume();
+          socket.destroy();
+          return reject(errorFromBody(carried, target));
+        }
+        const empty =
+          request.method === "HEAD" || status === 204 || status === 205 || status === 304;
         // The response is whole: an upload the provider never read stops here.
         incoming.once("end", () => socket.destroy());
-        if (empty) incoming.resume();
-        resolve(
-          new Response(empty ? null : (Readable.toWeb(incoming) as ReadableStream<Uint8Array>), {
-            status,
-            statusText: incoming.statusMessage ?? "",
-            headers: headersOf(incoming.headers),
-          }),
-        );
+        // Whatever the provider answers, it ends as a response or an error, never a throw here.
+        try {
+          if (status < 200 || status > 599) throw new Error(`a status of ${status}`);
+          const response = new Response(
+            empty ? null : (Readable.toWeb(incoming) as ReadableStream<Uint8Array>),
+            {
+              status,
+              statusText: incoming.statusMessage ?? "",
+              headers: headersOf(incoming.headers),
+            },
+          );
+          if (empty) incoming.resume();
+          resolve(response);
+        } catch (error) {
+          socket.destroy();
+          reject(
+            new OutcomeUnknown(
+              `The provider answered what isn't a response: ${(error as Error).message}`,
+            ),
+          );
+        }
       },
     );
     const abort = () => {
@@ -133,10 +202,13 @@ export function fetchOver(stream: Duplex, request: Request): Promise<Response> {
 }
 
 /**
- * Serve requests arriving on the stream with `handle`, until the stream ends. A handler that
- * throws before answering answers 500 with its message; a body that fails once sent ends the
- * response abruptly, so the consumer's read fails rather than looking complete. The handler's
- * request is aborted if the consumer goes before the response is done.
+ * Serve requests arriving on the stream with `handle`, until the stream ends. The handler's
+ * `request.url` is the consumer's absolute URL, from the request line; a request line that isn't
+ * absolute, or whose host isn't the `Host` header's, is answered 400. A handler that throws one
+ * of the SDK's errors before answering reaches the consumer's `fetch` as that error (a 502 with
+ * the error header); any other throw answers 500 with its message. A body that fails once sent
+ * ends the response abruptly, so the consumer's read fails rather than looking complete. The
+ * handler's request is aborted if the consumer goes before the response is done.
  */
 export function serveOver(
   stream: Duplex,
@@ -149,26 +221,55 @@ export function serveOver(
     outgoing.once("close", () => {
       if (!outgoing.writableFinished) left.abort(new Error("The consumer went away."));
     });
+    let target: URL | undefined;
     try {
-      const request = new Request(
-        `http://${incoming.headers.host ?? "actor"}${incoming.url ?? "/"}`,
-        {
-          method,
-          headers: headersOf(incoming.headers),
-          signal: left.signal,
-          ...(noBody(method)
-            ? {}
-            : { body: Readable.toWeb(incoming) as ReadableStream<Uint8Array>, duplex: "half" }),
-        } as RequestInit,
+      target = new URL(incoming.url ?? "");
+    } catch {
+      target = undefined;
+    }
+    if (
+      !target ||
+      (target.protocol !== "http:" && target.protocol !== "https:") ||
+      target.host !== incoming.headers.host
+    ) {
+      outgoing.writeHead(400, { "content-type": "text/plain" });
+      return void outgoing.end(
+        "A request names its absolute URL, whose host is the Host header's.",
       );
+    }
+    try {
+      const request = new Request(target.href, {
+        method,
+        headers: headersOf(incoming.headers),
+        signal: left.signal,
+        ...(noBody(method)
+          ? {}
+          : { body: Readable.toWeb(incoming) as ReadableStream<Uint8Array>, duplex: "half" }),
+      } as RequestInit);
       const response = await handle(request);
       outgoing.writeHead(response.status, response.statusText, outgoingHeaders(response.headers));
       if (!response.body || method === "HEAD") return void outgoing.end();
       // Paced by the consumer: the next chunk is read once the last one is taken.
       await pipeline(Readable.fromWeb(response.body as NodeReadableStream), outgoing);
     } catch (error) {
+      if (outgoing.headersSent) {
+        log.error("An http handler failed.", { error: String(error) });
+        return void outgoing.destroy(error as Error);
+      }
+      if (
+        error instanceof Refused ||
+        error instanceof NotConnected ||
+        error instanceof OutcomeUnknown
+      ) {
+        const body = errorBodyOf(error);
+        body.message = body.message.slice(0, 1024);
+        outgoing.writeHead(502, {
+          "content-type": "text/plain",
+          [ERROR_HEADER]: asciiJson(body),
+        });
+        return void outgoing.end(body.message);
+      }
       log.error("An http handler failed.", { error: String(error) });
-      if (outgoing.headersSent) return void outgoing.destroy(error as Error);
       outgoing.writeHead(500, { "content-type": "text/plain" });
       outgoing.end(error instanceof Error ? error.message : String(error));
     }

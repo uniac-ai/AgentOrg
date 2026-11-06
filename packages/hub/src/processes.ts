@@ -1,5 +1,6 @@
 import { type ChildProcess, execFile, spawn } from "node:child_process";
-import { mkdirSync, realpathSync } from "node:fs";
+import { lstatSync, mkdirSync, realpathSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Duplex as NodeDuplex, type Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
@@ -142,6 +143,27 @@ const LINE_WINDOW_MS = 10_000;
 /** A line longer than this is cut, and the rest of it dropped. */
 const MAX_LINE = 64 * 1024;
 
+/**
+ * This user's root folder for the Linux sandbox, made if missing (0700). Only one that is a real
+ * folder, owned by this user and closed to others, is used: another user could make the path
+ * first.
+ */
+function rootFolder(): { path: string } | { problem: string } {
+  const path = join(realpathSync(tmpdir()), `agentorg-root-${process.getuid?.() ?? "user"}`);
+  try {
+    mkdirSync(path, { mode: 0o700 });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST")
+      return { problem: `its root folder ${path} couldn't be made: ${(error as Error).message}` };
+  }
+  const stat = lstatSync(path);
+  if (!stat.isDirectory() || stat.uid !== process.getuid?.() || (stat.mode & 0o077) !== 0)
+    return {
+      problem: `its root folder ${path} isn't a folder of this user's, closed to others; remove it`,
+    };
+  return { path };
+}
+
 /** One running (or restarting) Actor's process. */
 interface Entry {
   child?: ChildProcess;
@@ -165,8 +187,15 @@ export class Processes {
   readonly #state: HubState;
   readonly #accept: (channel: Duplex, admitted: { actorId: string }) => ChannelHandle;
   readonly #options: Required<Omit<ProcessOptions, "sandbox">> & { sandbox?: string[] };
-  /** Where the Linux sandbox builds each process's root (inside its own mount namespace). */
-  readonly #rootDir: string;
+  /**
+   * Where the Linux sandbox builds each process's root, inside its own mount namespace: one empty
+   * folder per user in the system's temporary folder, never removed. Outside the home, so a
+   * namespace still ending, which holds it as a mount point, never keeps the home from being
+   * removed. Linux only; `undefined` with the reason when it can't be trusted.
+   */
+  readonly #rootDir: { path: string } | { problem: string } | undefined;
+  /** Probes still running, killed when the Hub closes. */
+  readonly #probes = new Set<ChildProcess>();
   /** The runner, as a real path: Node's permission model matches resolved paths. */
   readonly #runner = realpathSync(
     fileURLToPath(import.meta.resolve("@agentorg/sdk/host/runner.js")),
@@ -182,8 +211,7 @@ export class Processes {
   ) {
     this.#state = state;
     this.#accept = accept;
-    this.#rootDir = join(realpathSync(state.home), "sandbox-root");
-    mkdirSync(this.#rootDir, { recursive: true, mode: 0o700 });
+    this.#rootDir = process.platform === "linux" && !options.sandbox ? rootFolder() : undefined;
     this.#options = {
       ...(options.sandbox ? { sandbox: options.sandbox } : {}),
       memoryMb: options.memoryMb ?? 256,
@@ -206,15 +234,17 @@ export class Processes {
    */
   /** The sandbox command for a process that may read `paths`; none where there is no sandbox. */
   #sandbox(paths: string[]): string[] | undefined {
-    return this.#options.sandbox ?? defaultSandbox(this.#rootDir, paths);
+    if (this.#options.sandbox) return this.#options.sandbox;
+    if (this.#rootDir && "problem" in this.#rootDir) return undefined;
+    return defaultSandbox(this.#rootDir?.path ?? "", paths);
   }
 
   async probe(): Promise<HostStatus> {
     // The runner is bound as every process's is, so the probe proves the binds work too.
     const sandbox = this.#sandbox([this.#runner]);
     const status: HostStatus = sandbox
-      ? await new Promise((resolve) =>
-          execFile(
+      ? await new Promise((resolve) => {
+          const probe = execFile(
             sandbox[0] as string,
             [...sandbox.slice(1), process.execPath, "-e", "0"],
             { env: {}, timeout: 10_000, killSignal: "SIGKILL" },
@@ -231,9 +261,16 @@ export class Processes {
                     }
                   : { available: true },
               ),
+          );
+          this.#probes.add(probe);
+          probe.once("exit", () => this.#probes.delete(probe));
+        })
+      : {
+          available: false,
+          reason: unavailable(
+            this.#rootDir && "problem" in this.#rootDir ? this.#rootDir.problem : "",
           ),
-        )
-      : { available: false, reason: unavailable("") };
+        };
     if (this.#closed) return status;
     const changed = this.#status?.available !== status.available;
     this.#status = status;
@@ -486,5 +523,8 @@ export class Processes {
       entry.stopping?.done();
     }
     this.#entries.clear();
+    // A probe's namespace ends with it; the root's folder goes if nothing holds it any more.
+    // unshare --kill-child takes its child down with it.
+    for (const probe of this.#probes) probe.kill("SIGKILL");
   }
 }

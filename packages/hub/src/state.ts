@@ -14,6 +14,7 @@ import {
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
+  httpEgress,
   hubActors,
   hubAudit,
   hubBindings,
@@ -36,6 +37,8 @@ import { type Manifest, readTar, treeHash, verifyArchive } from "@agentorg/sdk/m
 export const HUB = "hub";
 /** The built-in Actor that keeps state: `kv@1`, one store per consumer slot. */
 export const STORAGE = "storage";
+/** The built-in Actor that reaches the public internet: `http.egress@1`, over HTTPS only. */
+export const NET = "net";
 /** The person's Actor, created at first start with every `hub.*` binding. */
 export const PERSON = "person";
 /** The hub's exports, each the authority for its own part of management. */
@@ -333,6 +336,13 @@ export class HubState {
           )
           .run(STORAGE, now());
       this.#declare(STORAGE, "export", "kv", describeInterface(kv), false);
+      if (!this.#actor(NET))
+        this.#db
+          .prepare(
+            "INSERT INTO actors (id, name, package, state, credential, created_at) VALUES (?, 'net', 'builtin', 'running', NULL, ?)",
+          )
+          .run(NET, now());
+      this.#declare(NET, "export", "egress", describeInterface(httpEgress), false);
       for (const [name, iface] of Object.entries(HUB_EXPORTS)) {
         const described = describeInterface(iface);
         this.#declare(HUB, "export", name, described, false);
@@ -395,8 +405,8 @@ export class HubState {
   }
 
   /** Record something the Hub itself saw happen, such as the host sandbox's status changing. */
-  auditHub(kind: string, details: Record<string, unknown>): void {
-    this.#transaction(() => this.#audit(HUB, kind, details));
+  auditHub(kind: string, details: Record<string, unknown>, actor: string = HUB): void {
+    this.#transaction(() => this.#audit(actor, kind, details));
   }
 
   /** A package Actor's process exited: kept as its `lastExit`, and counted when it is restarted. */
@@ -576,7 +586,7 @@ export class HubState {
   closeActor(caller: string, actorId: string): void {
     this.#require(caller, "actors");
     const actor = this.actor(actorId);
-    if (actorId === HUB || actorId === PERSON || actorId === STORAGE)
+    if (actorId === HUB || actorId === PERSON || actorId === STORAGE || actorId === NET)
       throw new Refused("forbidden", `${actorId} can't be closed.`);
     if (actor.state === "closed") return;
     this.#transaction(() => {

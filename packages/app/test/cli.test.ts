@@ -43,7 +43,7 @@ test("agentorg runs the app; while it runs, the person's commands go through it"
   const actors = await run("actors", "--home", home);
   assert.equal(actors.code, 0, actors.stderr);
   const listed = JSON.parse(actors.stdout) as { actors: { actorId: string }[] };
-  assert.deepEqual(listed.actors.map((a) => a.actorId).sort(), ["hub", "person", "storage"]);
+  assert.deepEqual(listed.actors.map((a) => a.actorId).sort(), ["hub", "net", "person", "storage"]);
   // layout@1 is the gateway's own, kept in the person's store.
   const layout = await run("call", "layout", "get", "--home", home);
   assert.equal(layout.code, 0, layout.stderr);

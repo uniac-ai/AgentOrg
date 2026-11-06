@@ -1,4 +1,5 @@
 export { HubActor } from "./hub-actor.js";
+export { blockedAddresses, isPublicAddress, type NetOptions } from "./net.js";
 export { type ChannelHandle, Hub, type HubOptions } from "./router.js";
 export { type Listener, listen } from "./server.js";
 export {
@@ -12,6 +13,7 @@ export {
   type Exit,
   HUB,
   HubState,
+  NET,
   PERSON,
   type RequestRecord,
   type Side,

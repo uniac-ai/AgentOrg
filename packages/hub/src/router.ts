@@ -7,6 +7,7 @@ import {
   Refused,
 } from "@agentorg/sdk";
 import { errorOf } from "@agentorg/sdk/client";
+import { serveOver } from "@agentorg/sdk/http";
 import {
   type Body,
   type Duplex,
@@ -28,12 +29,14 @@ import {
 } from "@agentorg/wire";
 import { HubActor } from "./hub-actor.js";
 import { appendLog, boundedEntry } from "./logs.js";
+import { Net, type NetOptions } from "./net.js";
 import { Processes, type ProcessOptions } from "./processes.js";
 import {
   type BindingRecord,
   type CallOutcome,
   HUB,
   HubState,
+  NET,
   STORAGE,
   type Wiring,
 } from "./state.js";
@@ -55,6 +58,8 @@ const MAX_OPEN_NOTICES = 64;
  * a provider wait for each delivery, so this bounds the hub Actor's own events.
  */
 const MAX_QUEUED_BYTES = 4 * 1024 * 1024;
+/** Where the Hub's in-process http serving reports a handler's own failure: nowhere. */
+const QUIET = { info() {}, warn() {}, error() {} };
 
 export interface HubOptions {
   /** How long a new channel has to finish hello before it is closed. */
@@ -70,6 +75,8 @@ export interface HubOptions {
   checks?: { size?: number; budgetMs?: number; compileBudgetMs?: number };
   /** Package Actors' processes: their sandbox, memory and timings (defaults in processes.ts). */
   processes?: ProcessOptions;
+  /** The built-in `net` Actor's resolver, extra CA and idle timeout (defaults in net.ts). */
+  net?: NetOptions;
 }
 
 /** A channel the Hub took: `closed` settles when it ends. */
@@ -178,6 +185,7 @@ export class Hub {
   readonly #validators: Validators;
   readonly #storage: Storage;
   readonly #processes: Processes;
+  readonly #net: Net;
   readonly #connections = new Map<string, Connection>();
   /** Open subscriptions and splices by the binding they run through, ended when it goes. */
   readonly #live = new Map<string, Set<(error?: WireError) => void>>();
@@ -210,6 +218,7 @@ export class Hub {
       exportsChanged: (changed) => actor?.exportsChanged(changed),
       audited: (entry) => actor?.audited(entry),
     });
+    this.#net = new Net(this.state, options.net);
     this.#processes = new Processes(
       this.state,
       (channel, admitted) => this.accept(channel, admitted),
@@ -647,7 +656,8 @@ export class Hub {
     if (target.iface.kind !== kind)
       throw new Refused("invalid", `${slot} is an ${target.iface.kind} slot, not ${kind}.`);
     // The built-in Actors are served in this process; any other provider needs its channel.
-    const builtin = binding.provider === HUB || binding.provider === STORAGE;
+    const builtin =
+      binding.provider === HUB || binding.provider === STORAGE || binding.provider === NET;
     const provider = builtin ? undefined : this.#connections.get(binding.provider);
     if (!builtin && !provider) throw new NotConnected(slot);
     return { binding, iface: target.iface, provider };
@@ -986,6 +996,33 @@ export class Hub {
   }
 
   /**
+   * An accepted http stream to `net`: its requests are made from this process, HTTP/1.1 over the
+   * stream's raw bytes, until either side ends it or its binding goes.
+   */
+  async #egress(
+    consumer: string,
+    binding: BindingRecord,
+    stream: YamuxStream,
+    reader: FrameReader,
+    writer: Writer,
+    untrack: () => void,
+  ) {
+    try {
+      await writer.write(encodeFrame(result({})));
+    } catch {
+      untrack();
+      return stream.reset();
+    }
+    writer.releaseLock();
+    await serveOver(
+      { readable: reader.rest(), writable: stream.writable },
+      (request) => this.#net.handle(request, { consumer, slot: binding.slot }),
+      QUIET,
+    );
+    untrack();
+  }
+
+  /**
    * `open` and `http`: validated, then the provider accepts or refuses with one body, which the Hub
    * passes on; after an accept, raw bytes both ways until either side ends them.
    */
@@ -1003,6 +1040,8 @@ export class Hub {
     let outcome: CallOutcome = "ok";
     let unbound = false;
     let untrack = () => {};
+    /** `net`'s egress, served here: no provider stream to splice. */
+    let egress = false;
     try {
       const resolved = this.#resolve(
         conn.actorId,
@@ -1024,39 +1063,48 @@ export class Hub {
           header.params,
           "invalid",
         );
-      // The hub's own exports are all rpc, so #resolve refused it already; this is for the types.
-      if (!resolved.provider) throw new NotConnected(header.slot);
-      const opened = this.#openTo(resolved.provider, binding);
-      out = opened;
-      try {
-        const head = opened.writable.getWriter();
-        await head.write(
-          encodeFrame({
-            op: "serve",
-            kind: header.op,
-            export: binding.export,
-            caller: conn.actorId,
-            slot: binding.slot,
-            ...(header.op === "open" ? { params: header.params } : {}),
-          }),
-        );
-        head.releaseLock();
-      } catch {
-        throw new OutcomeUnknown(`${binding.provider} went away before answering.`);
+      if (!resolved.provider && binding.provider === NET && header.op === "http") {
+        // net's egress is served in this process: accepted here, then the stream is its.
+        egress = true;
+        answered = result({});
+      } else {
+        // The hub's and storage's exports are all rpc, so #resolve refused them already.
+        if (!resolved.provider) throw new NotConnected(header.slot);
+        const opened = this.#openTo(resolved.provider, binding);
+        out = opened;
+        try {
+          const head = opened.writable.getWriter();
+          await head.write(
+            encodeFrame({
+              op: "serve",
+              kind: header.op,
+              export: binding.export,
+              caller: conn.actorId,
+              slot: binding.slot,
+              ...(header.op === "open" ? { params: header.params } : {}),
+            }),
+          );
+          head.releaseLock();
+        } catch {
+          throw new OutcomeUnknown(`${binding.provider} went away before answering.`);
+        }
+        upstream = new FrameReader(opened.readable);
+        const body = await this.#answerFrom(opened, upstream, binding, new Promise(() => {}));
+        if (unbound) throw new NotConnected(header.slot);
+        if ("error" in body) {
+          outcome = "refused";
+          answered = body;
+        } else if ("result" in body) answered = result({});
+        else
+          throw new Refused("bad_output", "A provider answers an open with {result} or {error}.");
       }
-      upstream = new FrameReader(opened.readable);
-      const body = await this.#answerFrom(opened, upstream, binding, new Promise(() => {}));
-      if (unbound) throw new NotConnected(header.slot);
-      if ("error" in body) {
-        outcome = "refused";
-        answered = body;
-      } else if ("result" in body) answered = result({});
-      else throw new Refused("bad_output", "A provider answers an open with {result} or {error}.");
     } catch (error) {
       answered = errorBody(unbound ? new NotConnected(header.slot) : error);
       outcome = outcomeOf(answered.error);
     }
     this.#audit(conn.actorId, header.slot, binding, { op: header.op, outcome });
+    if (egress && binding && "result" in answered)
+      return this.#egress(conn.actorId, binding, stream, reader, writer, untrack);
     if (!("result" in answered) || !out || !upstream) {
       untrack();
       out?.reset();
