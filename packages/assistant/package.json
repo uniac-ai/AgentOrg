@@ -11,8 +11,15 @@
   },
   "agentorg": {
     "modules": {
-      "logic": "src/logic.ts"
-    }
+      "logic": "src/logic.ts",
+      "chat": "src/chat.ts"
+    },
+    "connections": [
+      [
+        "chat.chat",
+        "logic.chat"
+      ]
+    ]
   },
   "dependencies": {
     "@agentorg/interfaces": "0.0.0",
