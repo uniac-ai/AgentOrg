@@ -1,0 +1,214 @@
+/**
+ * The assistant's record of its chat, kept in its `store` slot: one key per message, holding the
+ * Responses items it stands for, and for a tool message the line the person sees. It is read once,
+ * then kept in memory, and the oldest messages are deleted past a retention cap.
+ */
+import { Item, type kv } from "@agentorg/interfaces";
+import type { Log, Slot } from "@agentorg/sdk";
+import { z } from "zod";
+
+export type ResponseItem = z.output<typeof Item>;
+const Entry = z.object({
+  id: z.string(),
+  role: z.enum(["user", "assistant", "tool"]),
+  /** What the person sees, for a tool message; the others show their message items. */
+  text: z.string().optional(),
+  at: z.string(),
+  items: z.array(Item),
+});
+export type Entry = z.output<typeof Entry>;
+
+const PREFIX = "msg/";
+const keyOf = (seq: number) => `${PREFIX}${String(seq).padStart(12, "0")}`;
+/** What the model is sent of the past: the newest exchanges up to this many bytes of JSON. */
+export const INPUT_BUDGET = 400_000;
+/** At most this many messages are kept, in at most this many bytes, oldest deleted first. */
+export const KEEP = 2000;
+export const KEEP_BYTES = 16 * 1024 * 1024;
+/** A stored message's text, and a call's arguments, are cut to fit these, in bytes of JSON. */
+const MAX_TEXT = 192 * 1024;
+const MAX_ARGUMENTS = 16 * 1024;
+/** A history page stays well inside one frame. */
+const PAGE_BUDGET = 512 * 1024;
+const encoder = new TextEncoder();
+const size = (value: unknown) => encoder.encode(JSON.stringify(value)).byteLength;
+const LEFT_OUT = "(Left out: the conversation was too large to send it.)";
+const ARGUMENTS_LEFT_OUT = '{"left_out":"too large to keep"}';
+
+/** The first `length` UTF-16 units of `text`, never ending inside a surrogate pair. */
+export function head(text: string, length: number): string {
+  const cut = text.slice(0, length);
+  return /[\uD800-\uDBFF]$/.test(cut) ? cut.slice(0, -1) : cut;
+}
+/** `text`, cut so its JSON fits `max` bytes, saying so when it is cut. */
+export function fitted(text: string, max: number): string {
+  let kept = text;
+  for (let bytes = size(kept); bytes > max; bytes = size(kept))
+    kept = `${head(kept, Math.floor((kept.length * max) / bytes) - 16)}… (cut)`;
+  return kept;
+}
+/** A chat message shows at most this much; the record keeps all of it. */
+const MAX_SHOWN = 100_000;
+/** What the person sees of a message. */
+export const textOf = (entry: Entry) =>
+  head(
+    entry.text ??
+      entry.items.flatMap((item) => (item.type === "message" ? [item.content] : [])).join(""),
+    MAX_SHOWN,
+  );
+/** A message as it is stored: each text once, and nothing past its cap. */
+const kept = (entry: Entry): Entry => ({
+  ...entry,
+  items: entry.items.map((item) => {
+    if (item.type === "message") return { ...item, content: fitted(item.content, MAX_TEXT) };
+    if (item.type === "function_call_output")
+      return { ...item, output: fitted(item.output, MAX_TEXT) };
+    return size(item.arguments) > MAX_ARGUMENTS ? { ...item, arguments: ARGUMENTS_LEFT_OUT } : item;
+  }),
+});
+
+interface Kept {
+  key: string;
+  entry: Entry;
+  bytes: number;
+}
+
+export function createHistory(
+  store: Slot<typeof kv>["call"],
+  log: Log,
+  limits = { keep: KEEP, keepBytes: KEEP_BYTES },
+) {
+  let loaded: Promise<{ records: Kept[]; last: number; bytes: number }> | undefined;
+
+  const load = () => {
+    if (loaded) return loaded;
+    const attempt = (async () => {
+      const records: Kept[] = [];
+      let last = 0;
+      let bytes = 0;
+      let after: string | undefined;
+      do {
+        const page = await store.list({ prefix: PREFIX, limit: 1000, ...(after ? { after } : {}) });
+        for (const key of page.keys) {
+          last = Math.max(last, Number(key.slice(PREFIX.length)) || 0);
+          const parsed = Entry.safeParse((await store.get({ key })).value);
+          if (!parsed.success) {
+            log.warn("A stored message didn't read back; it is left out.", { key });
+            continue;
+          }
+          const record = { key, entry: parsed.data, bytes: size(parsed.data) };
+          records.push(record);
+          bytes += record.bytes;
+        }
+        after = page.next ?? undefined;
+      } while (after);
+      return { records, last, bytes };
+    })();
+    loaded = attempt;
+    attempt.catch(() => {
+      if (loaded === attempt) loaded = undefined;
+    });
+    return attempt;
+  };
+
+  return {
+    /** Read the store again, as after it was bound to another one. */
+    reset() {
+      loaded = undefined;
+    },
+    /**
+     * Keep a message, under `id` or its own number, and delete the oldest past the cap. A tool
+     * message the store refuses is still kept in memory, since its call has run.
+     */
+    async append(entry: Omit<Entry, "id" | "at">, id?: string): Promise<Entry> {
+      const state = await load();
+      const key = keyOf(++state.last);
+      const record = {
+        key,
+        entry: kept({ id: id ?? key.slice(PREFIX.length), at: new Date().toISOString(), ...entry }),
+        bytes: 0,
+      };
+      record.bytes = size(record.entry);
+      state.records.push(record);
+      state.bytes += record.bytes;
+      try {
+        await store.set({ key, value: record.entry as z.core.util.JSONType });
+      } catch (error) {
+        if (entry.role !== "tool") {
+          state.records.splice(state.records.indexOf(record), 1);
+          state.bytes -= record.bytes;
+          throw error;
+        }
+        log.error("A tool message couldn't be stored; it is kept until a restart.", {
+          error: String(error),
+        });
+      }
+      while (
+        state.records.length > 1 &&
+        (state.records.length > limits.keep || state.bytes > limits.keepBytes)
+      ) {
+        const oldest = state.records.shift() as Kept;
+        state.bytes -= oldest.bytes;
+        await store.delete({ key: oldest.key }).catch((error: unknown) =>
+          log.warn("An old message couldn't be deleted.", {
+            key: oldest.key,
+            error: String(error),
+          }),
+        );
+      }
+      return record.entry;
+    },
+    /** The person's last message, if any. */
+    async lastUser(): Promise<Entry | undefined> {
+      return (await load()).records.findLast((record) => record.entry.role === "user")?.entry;
+    },
+    /** Messages before `before`, oldest first, as many as fit `limit` and one frame. */
+    async page(before: string | undefined, limit: number) {
+      const { records } = await load();
+      const end =
+        before === undefined
+          ? records.length
+          : records.findIndex((record) => record.entry.id === before);
+      const messages = [];
+      let bytes = 0;
+      let start = Math.max(end, 0);
+      while (start > 0 && messages.length < limit) {
+        const { entry } = records[start - 1] as Kept;
+        const message = { id: entry.id, role: entry.role, text: textOf(entry), at: entry.at };
+        bytes += size(message);
+        if (bytes > PAGE_BUDGET && messages.length > 0) break;
+        messages.unshift(message);
+        start--;
+      }
+      return { messages, more: start > 0 };
+    },
+    /**
+     * The conversation to send: the newest whole exchanges (each from a user message on) that fit
+     * the budget, and always the latest one. A latest one that alone is over the budget has its
+     * oldest function arguments and outputs left out, each call still paired with an output.
+     */
+    async input(): Promise<ResponseItem[]> {
+      const { records } = await load();
+      const exchanges: ResponseItem[][] = [];
+      for (const { entry } of records) {
+        if (entry.role === "user" || exchanges.length === 0) exchanges.push([]);
+        exchanges.at(-1)?.push(...entry.items);
+      }
+      let total = exchanges.reduce((sum, items) => sum + size(items), 0);
+      while (exchanges.length > 1 && total > INPUT_BUDGET) total -= size(exchanges.shift());
+      const items = exchanges.flat();
+      for (let i = 0; i < items.length && total > INPUT_BUDGET; i++) {
+        const item = items[i] as ResponseItem;
+        if (item.type === "function_call_output" && item.output !== LEFT_OUT) {
+          total -= size(item.output) - size(LEFT_OUT);
+          items[i] = { ...item, output: LEFT_OUT };
+        } else if (item.type === "function_call" && item.arguments !== ARGUMENTS_LEFT_OUT) {
+          total -= size(item.arguments) - size(ARGUMENTS_LEFT_OUT);
+          items[i] = { ...item, arguments: ARGUMENTS_LEFT_OUT };
+        }
+      }
+      return items;
+    },
+  };
+}
+export type History = ReturnType<typeof createHistory>;
