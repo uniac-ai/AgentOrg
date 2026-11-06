@@ -24,6 +24,10 @@
     "./manifest": {
       "types": "./dist/src/manifest-api.d.ts",
       "default": "./dist/src/manifest-api.js"
+    },
+    "./client": {
+      "types": "./dist/src/client.d.ts",
+      "default": "./dist/src/client.js"
     }
   },
   "files": [
@@ -40,7 +44,8 @@
     "zod": "^4.6.7"
   },
   "dependencies": {
-    "esbuild": "0.28.2"
+    "esbuild": "0.28.2",
+    "@agentorg/wire": "0.0.0"
   },
   "bin": {
     "agentorg": "dist/src/cli.js"

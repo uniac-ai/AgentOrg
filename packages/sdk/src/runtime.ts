@@ -41,8 +41,15 @@ export interface ModuleRuntime<S extends InterfaceMap, X extends InterfaceMap> {
   start(): Promise<void>;
   bind(slot: string, provider: SlotProvider): Binding;
   unbind(slot: string): void;
+  /** A bound slot's provider came back after going away: its `onBind` handlers run again. */
+  usable(slot: string): void;
   call(exportName: string, method: string, input: unknown): Promise<unknown>;
   open(exportName: string, params: unknown, stream: Duplex): Promise<void>;
+  /**
+   * The two halves of `open`: checks that the export takes the stream (throwing a refusal at
+   * once), then returns what runs it. A remote host answers accept or refuse in between.
+   */
+  accepting(exportName: string, params: unknown): (stream: Duplex) => Promise<void>;
   fetch(exportName: string, request: Request): Promise<Response>;
   mount(exportName: string, el: FrameRoot, options: unknown): MountedView;
   withdrawn(exportName: string): boolean;
@@ -53,6 +60,12 @@ export interface RuntimeOptions {
   log: Log;
   /** Called with each event an export emits, after validation. */
   onEmit(exportName: string, event: string, payload: unknown): void;
+  /** Called when the module listens to a slot's event, so a remote host can subscribe. */
+  onListen?(slot: string, event: string): void;
+  /** Called when the module offers an export at run time with `exports.add`, with its handle. */
+  onAdd?(name: string, iface: Interface, handle: { withdraw(): void }): void;
+  /** Called when the module withdraws an export. */
+  onWithdraw?(name: string): void;
 }
 
 type Schema = {
@@ -153,6 +166,7 @@ export function createRuntime<S extends InterfaceMap, X extends InterfaceMap>(
             const set = state.listeners.get(event) ?? new Set();
             state.listeners.set(event, set);
             set.add(fn);
+            options.onListen?.(name, event);
             return () => void set.delete(fn);
           },
         });
@@ -185,7 +199,9 @@ export function createRuntime<S extends InterfaceMap, X extends InterfaceMap>(
       if (state.withdrawn) throw new NotConnected(name);
     };
     const withdraw = () => {
+      if (state.withdrawn) return;
       state.withdrawn = true;
+      options.onWithdraw?.(name);
     };
     const store = (impl: unknown) => {
       live();
@@ -246,7 +262,9 @@ export function createRuntime<S extends InterfaceMap, X extends InterfaceMap>(
           const existing = exported.get(name);
           if (existing && !existing.withdrawn)
             throw new TypeError(`An export named ${name} is already offered.`);
-          return exportHandle(name, iface);
+          const handle = exportHandle(name, iface);
+          options.onAdd?.(name, iface, handle);
+          return handle;
         },
       },
     ),
@@ -254,12 +272,38 @@ export function createRuntime<S extends InterfaceMap, X extends InterfaceMap>(
     log: options.log,
   } as unknown as Context<S, X>;
 
+  const accepting = (exportName: string, params: unknown) => {
+    const state = target(exportName, "stream");
+    const parsed = check((state.iface as StreamInterface).open, params, `${exportName} open`);
+    const handler = implemented<(params: unknown, stream: Duplex) => void | Promise<void>>(
+      state,
+      exportName,
+    );
+    return async (stream: Duplex) => {
+      await handler(parsed, stream);
+    };
+  };
+
+  /** Run a slot's bind or unbind handlers; one that throws is logged and the rest still run. */
+  const notify = (slot: string, handlers: Set<() => void>) => {
+    const failed = (error: unknown) =>
+      options.log.error("A slot handler threw.", { slot, error: String(error) });
+    for (const fn of [...handlers])
+      try {
+        // A handler may be async; its rejection is logged the same way.
+        const done = fn() as unknown;
+        if (done instanceof Promise) done.catch(failed);
+      } catch (error) {
+        failed(error);
+      }
+  };
+
   const unbind = (slot: string) => {
     const state = slots.get(slot);
     if (!state) throw new TypeError(`No slot ${slot}.`);
     if (!state.binding) return;
     state.binding = undefined;
-    for (const fn of [...state.unbinds]) fn();
+    notify(slot, state.unbinds);
   };
 
   return {
@@ -273,7 +317,7 @@ export function createRuntime<S extends InterfaceMap, X extends InterfaceMap>(
       unbind(slot);
       const binding = { provider };
       state.binding = binding;
-      for (const fn of [...state.binds]) fn();
+      notify(slot, state.binds);
       return {
         emit(event, payload) {
           const iface = state.iface;
@@ -286,6 +330,11 @@ export function createRuntime<S extends InterfaceMap, X extends InterfaceMap>(
       };
     },
     unbind,
+    usable(slot) {
+      const state = slots.get(slot);
+      if (!state) throw new TypeError(`No slot ${slot}.`);
+      if (state.binding) notify(slot, state.binds);
+    },
     async call(exportName, method, input) {
       const state = target(exportName, "rpc");
       const spec = own((state.iface as RpcInterface).methods, method);
@@ -304,13 +353,9 @@ export function createRuntime<S extends InterfaceMap, X extends InterfaceMap>(
         "bad_output",
       );
     },
+    accepting,
     async open(exportName, params, stream) {
-      const state = target(exportName, "stream");
-      const parsed = check((state.iface as StreamInterface).open, params, `${exportName} open`);
-      await implemented<(params: unknown, stream: Duplex) => void | Promise<void>>(
-        state,
-        exportName,
-      )(parsed, stream);
+      await accepting(exportName, params)(stream);
     },
     async fetch(exportName, request) {
       const state = target(exportName, "http");

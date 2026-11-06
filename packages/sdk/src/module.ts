@@ -13,7 +13,11 @@ export interface Duplex {
 interface SlotState {
   /** Whether an export is bound to this slot now; a slot may be unbound at any time. */
   readonly bound: boolean;
-  /** Runs when the slot becomes bound; returns a function that removes it. */
+  /**
+   * Runs when the slot becomes usable: newly bound, or its provider came back after going away.
+   * Events sent meanwhile were missed, so this is where to read state again. Returns a function
+   * that removes it.
+   */
   onBind(fn: () => void): () => void;
   /** Runs when the slot becomes unbound; returns a function that removes it. */
   onUnbind(fn: () => void): () => void;
