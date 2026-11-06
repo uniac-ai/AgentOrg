@@ -27,7 +27,15 @@ import {
   type YamuxStream,
 } from "@agentorg/wire";
 import { HubActor } from "./hub-actor.js";
-import { type BindingRecord, type CallOutcome, HUB, HubState, type Wiring } from "./state.js";
+import {
+  type BindingRecord,
+  type CallOutcome,
+  HUB,
+  HubState,
+  STORAGE,
+  type Wiring,
+} from "./state.js";
+import { Storage, type StorageLimits } from "./storage.js";
 import { type Part, Validators } from "./validate.js";
 
 /** Streams an admitted channel may have open at once. Before admission it may have one: hello. */
@@ -54,6 +62,8 @@ export interface HubOptions {
    * it the caller gets OutcomeUnknown and the provider's stream is reset.
    */
   answerTimeoutMs?: number;
+  /** What a consumer's stores may hold (defaults in storage.ts). */
+  storage?: StorageLimits;
   /** The schema-check pool: its size and each check's budget (defaults in validate.ts). */
   checks?: { size?: number; budgetMs?: number };
 }
@@ -160,6 +170,7 @@ export class Hub {
   readonly state: HubState;
   readonly #actor: HubActor;
   readonly #validators: Validators;
+  readonly #storage: Storage;
   readonly #connections = new Map<string, Connection>();
   /** Open subscriptions and splices by the binding they run through, ended when it goes. */
   readonly #live = new Map<string, Set<(error?: WireError) => void>>();
@@ -182,13 +193,34 @@ export class Hub {
           this.#notify(binding.consumer, binding.slot, false);
         }
       },
-      closed: (actorId) => this.#connections.get(actorId)?.session.close(),
+      closed: (actorId) => {
+        this.#connections.get(actorId)?.session.close();
+        // Closing is for good: its stores go too. Unbinding keeps them.
+        this.#storage.deleteConsumer(actorId);
+      },
       requested: (request, approvers) => actor?.requested(request, approvers),
       decided: (request, status, approvers) => actor?.decided(request, status, approvers),
       exportsChanged: (changed) => actor?.exportsChanged(changed),
       audited: (entry) => actor?.audited(entry),
     });
     actor = this.#actor = new HubActor(this.state);
+    try {
+      this.#storage = new Storage(home, options.storage);
+      // Stores of Actors closed while a delete couldn't run (a crash, a lock) go now.
+      this.#storage.keepOnly(
+        new Set(
+          this.state
+            .actors()
+            .filter((a) => a.state !== "closed")
+            .map((a) => a.actorId),
+        ),
+      );
+    } catch (error) {
+      // Nothing half-open is left: the home's lock and the check workers go with it.
+      this.#validators.close();
+      this.state.close();
+      throw error;
+    }
   }
 
   static open(home: string, options: HubOptions = {}): Hub {
@@ -356,6 +388,7 @@ export class Hub {
     for (const session of [...this.#sessions]) session.close();
     this.#connections.clear();
     this.#validators.close();
+    this.#storage.close();
     this.state.close();
   }
 
@@ -562,8 +595,10 @@ export class Hub {
     const { binding, target } = resolved;
     if (target.iface.kind !== kind)
       throw new Refused("invalid", `${slot} is an ${target.iface.kind} slot, not ${kind}.`);
-    const provider = binding.provider === HUB ? undefined : this.#connections.get(binding.provider);
-    if (binding.provider !== HUB && !provider) throw new NotConnected(slot);
+    // The built-in Actors are served in this process; any other provider needs its channel.
+    const builtin = binding.provider === HUB || binding.provider === STORAGE;
+    const provider = builtin ? undefined : this.#connections.get(binding.provider);
+    if (!builtin && !provider) throw new NotConnected(slot);
     return { binding, iface: target.iface, provider };
   }
 
@@ -624,7 +659,7 @@ export class Hub {
       await this.#validators.check(caller, iface, part, value, "invalid");
       reply = provider
         ? await this.#forward(provider, binding, caller, method, value, cancelled)
-        : this.#hubCall(binding.export, method, caller, value);
+        : this.#builtinCall(binding, method, caller, value);
       if ("error" in reply) outcome = "refused";
       else if ("result" in reply)
         await this.#validators.check(
@@ -646,10 +681,19 @@ export class Hub {
     return encoded;
   }
 
-  #hubCall(exported: string, method: string, caller: string, value: unknown): Body {
+  /** A call to a built-in Actor: the hub, or storage with the consumer's own store. */
+  #builtinCall(binding: BindingRecord, method: string, caller: string, value: unknown): Body {
     try {
+      const out =
+        binding.provider === STORAGE
+          ? this.#storage.call(
+              binding.consumer,
+              binding.slot,
+              method,
+              value as Record<string, unknown>,
+            )
+          : this.#actor.call(binding.export, method, caller, value);
       // Through JSON, as a reply from any other provider would be.
-      const out = this.#actor.call(exported, method, caller, value);
       return result(JSON.parse(JSON.stringify(out ?? null)));
     } catch (error) {
       return errorBody(error);

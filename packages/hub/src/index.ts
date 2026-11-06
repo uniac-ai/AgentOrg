@@ -15,6 +15,8 @@ export {
   PERSON,
   type RequestRecord,
   type Side,
+  STORAGE,
   type StateEvents,
   type Wiring,
 } from "./state.js";
+export { STORAGE_LIMITS, type StorageLimits } from "./storage.js";

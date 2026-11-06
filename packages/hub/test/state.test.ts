@@ -61,6 +61,7 @@ test("first start creates the hub and the person, bound to every hub export, in 
     [
       [HUB, "builtin", "running"],
       [PERSON, "external", "created"],
+      ["storage", "builtin", "running"],
     ],
   );
   assert.deepEqual(

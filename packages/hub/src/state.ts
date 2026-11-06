@@ -20,6 +20,7 @@ import {
   hubExports,
   hubGrants,
   hubPackages,
+  kv,
 } from "@agentorg/interfaces";
 import {
   compareInterfaces,
@@ -33,6 +34,8 @@ import { type Manifest, readTar, treeHash, verifyArchive } from "@agentorg/sdk/m
 
 /** The built-in Actor that exports management. */
 export const HUB = "hub";
+/** The built-in Actor that keeps state: `kv@1`, one store per consumer slot. */
+export const STORAGE = "storage";
 /** The person's Actor, created at first start with every `hub.*` binding. */
 export const PERSON = "person";
 /** The hub's exports, each the authority for its own part of management. */
@@ -323,6 +326,13 @@ export class HubState {
         }
         this.#audit(HUB, "bootstrap", { person: PERSON });
       }
+      if (!this.#actor(STORAGE))
+        this.#db
+          .prepare(
+            "INSERT INTO actors (id, name, package, state, credential, created_at) VALUES (?, 'storage', 'builtin', 'running', NULL, ?)",
+          )
+          .run(STORAGE, now());
+      this.#declare(STORAGE, "export", "kv", describeInterface(kv), false);
       for (const [name, iface] of Object.entries(HUB_EXPORTS)) {
         const described = describeInterface(iface);
         this.#declare(HUB, "export", name, described, false);
@@ -547,7 +557,7 @@ export class HubState {
   closeActor(caller: string, actorId: string): void {
     this.#require(caller, "actors");
     const actor = this.actor(actorId);
-    if (actorId === HUB || actorId === PERSON)
+    if (actorId === HUB || actorId === PERSON || actorId === STORAGE)
       throw new Refused("forbidden", `${actorId} can't be closed.`);
     if (actor.state === "closed") return;
     this.#transaction(() => {

@@ -65,7 +65,7 @@ test("the person's commands map one to one onto the hub's methods", async (t) =>
   assert.equal(actors.code, 0, actors.err);
   assert.deepEqual(
     (JSON.parse(actors.out) as { actors: { actorId: string }[] }).actors.map((a) => a.actorId),
-    ["hub", "person"],
+    ["hub", "person", "storage"],
   );
 
   const out = mkdtempSync(join(tmpdir(), "board-for-cli-"));
