@@ -1,12 +1,11 @@
-import { defineInterface, event, method } from "@agentorg/sdk";
+import { defineInterface, method } from "@agentorg/sdk";
 import { z } from "zod";
 
-const Key = z.string().min(1).max(512);
+const Key = z.string().min(1).max(1024);
 
 /**
- * `kv@1`: a key-value store of JSON values, the state slot a host module uses for now. A storage
- * provider creates one store per Actor; `changed` tells of each write, and `list` pages through
- * the keys.
+ * `kv@1`: a key-value store of JSON values, the state slot a host module uses. A storage provider
+ * keeps one store per consumer slot, so the store is the slot's own; `list` pages through its keys.
  */
 export const kv = defineInterface({
   name: "kv",
@@ -29,9 +28,5 @@ export const kv = defineInterface({
       }),
       output: z.object({ keys: z.array(Key), next: Key.nullable() }),
     }),
-  },
-  events: {
-    /** A key was set or deleted. */
-    changed: event(z.object({ key: Key })),
   },
 });

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -564,7 +564,7 @@ test("a newer channel for an Actor replaces the older one", async (t) => {
   void actor;
 });
 
-test("a channel the Hub made is admitted by its actorId, for live package Actors only", async (t) => {
+test("a pipe the Hub made says hello as its Actor, with no credential and no declares", async (t) => {
   const { hub, person } = await setup(t);
   const made = (await person.call("actors", "create", { name: "outside" })) as {
     result: { actorId: string };
@@ -586,9 +586,38 @@ test("a channel the Hub made is admitted by its actorId, for live package Actors
   const built = await buildPackage(board, { out });
   hub.state.addPackage(PERSON, built.file);
   const { actorId } = hub.state.createActor(PERSON, { name: "board", package: built.hash });
-  const [hubSide, processSide] = memoryPair();
-  const handle = hub.accept(hubSide, { actorId });
-  const process_ = new Session(processSide, { client: true });
+  const pipe = () => {
+    const [hubSide, processSide] = memoryPair();
+    return {
+      handle: hub.accept(hubSide, { actorId }),
+      process: new Session(processSide, { client: true }),
+    };
+  };
+  // A pipe's hello must name its own Actor, and may not declare.
+  for (const [hello, code] of [
+    [{ op: "hello", actorId: made.result.actorId }, "forbidden"],
+    [{ op: "hello", actorId, declares: { slots: {} } }, "invalid"],
+  ] as const) {
+    const wrong = pipe();
+    assert.equal((await exchange(wrong.process, hello)).error?.code, code);
+    await wrong.handle.closed;
+  }
+  // A pipe made before its Actor was closed doesn't admit it.
+  const doomed = hub.state.createActor(PERSON, { name: "doomed", package: built.hash }).actorId;
+  const [doomedHub, doomedProcess] = memoryPair();
+  const doomedHandle = hub.accept(doomedHub, { actorId: doomed });
+  hub.state.closeActor(PERSON, doomed);
+  const closed = await exchange(new Session(doomedProcess, { client: true }), {
+    op: "hello",
+    actorId: doomed,
+  });
+  assert.equal(closed.error?.code, "state");
+  await doomedHandle.closed;
+  const { handle, process: process_ } = pipe();
+  assert.equal(hub.connected(actorId), false, "not admitted before its hello");
+  // No credential: the pipe is the proof. The answer is the baseline: its own wiring is bound.
+  const admitted = await exchange(process_, { op: "hello", actorId });
+  assert.deepEqual((admitted.result as { bound: string[] }).bound, ["panel.board"]);
   assert.ok(hub.connected(actorId));
   // Its own wiring: the panel's slot reaches the logic's export, and it has no provider channel
   // other than itself, so a call is forwarded back to it.
@@ -1203,4 +1232,56 @@ test("when a provider comes back, its consumers hear their slot is usable again"
   t.after(() => third.close());
   await later(100);
   assert.deepEqual(d.client.notices.length, 2);
+});
+
+test("a hello over a WebSocket needs its credential, and a serve names the caller's slot", async (t) => {
+  const { url, actor, bind } = await setup(t);
+  const made = await actor("someone", {});
+  const bare = new Session(await webSocketChannel(new WebSocket(url)), { client: true });
+  const refused = await exchange(bare, { op: "hello", actorId: made.id });
+  assert.equal(refused.error?.code, "forbidden");
+  await bare.closed;
+
+  const seen: string[] = [];
+  const p = await actor("provider", { exports: { notes } }, async (header, stream, reader) => {
+    seen.push(`${header.caller}.${header.slot}`);
+    await notesProvider().serve(header, stream, reader);
+  });
+  const c = await actor("consumer", { slots: { mine: notes } });
+  await bind(c.id, "mine", p.id, "notes");
+  assert.ok("result" in (await c.client.call("mine", "write", { text: "x" })));
+  assert.deepEqual(seen, [`${c.id}.mine`]);
+});
+
+test("an Actor's logs are read newest last, across the rotated file, and its record counts restarts", async (t) => {
+  const { hub, person, home } = await setup(t);
+  const made = (await person.call("actors", "create", { name: "logged" })) as {
+    result: { actorId: string };
+  };
+  const { actorId } = made.result;
+  const line = (n: number) =>
+    JSON.stringify({ level: "info", message: `line ${n}`, at: new Date(n).toISOString() });
+  mkdirSync(join(home, "logs"), { recursive: true });
+  writeFileSync(join(home, "logs", `${actorId}.log.1`), `${[1, 2, 3].map(line).join("\n")}\n`);
+  // Lines that aren't entries don't count against the limit, and odd fields are dropped.
+  const odd = JSON.stringify({ level: "loud", message: "odd", at: "x", data: [1], extra: 1 });
+  writeFileSync(
+    join(home, "logs", `${actorId}.log`),
+    `${[4, 5].map(line).join("\n")}\n${"not json\n".repeat(10)}${odd}\npartial`,
+  );
+  const logs = (await person.call("actors", "logs", { actorId, limit: 4 })) as {
+    result: { lines: { message: string }[] };
+  };
+  assert.deepEqual(
+    logs.result.lines.map((l) => l.message),
+    ["line 3", "line 4", "line 5", "odd"],
+  );
+  assert.deepEqual(logs.result.lines.at(-1), { level: "info", message: "odd", at: "x" });
+  assert.equal(
+    (await person.call("actors", "logs", { actorId: "act_nobody" })).error?.code,
+    "unknown",
+  );
+  const got = (await person.call("actors", "get", { actorId })) as { result: { restarts: number } };
+  assert.equal(got.result.restarts, 0);
+  void hub;
 });

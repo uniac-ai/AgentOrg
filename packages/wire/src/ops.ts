@@ -7,7 +7,9 @@
  *   closes the channel too. Without `declares` the Actor keeps what it declared before; with it,
  *   `declares` replaces that. The result is `{actorId, bound}`: the Actor's slots bound now. A
  *   newer channel for an Actor replaces its older one; with `replace: false` the hello is refused
- *   instead (`Refused`, code `connected`) while the Actor has a live channel.
+ *   instead (`Refused`, code `connected`) while the Actor has a live channel. On a pipe the Hub
+ *   made for a package Actor's process, the hello names that Actor and carries no credential (the
+ *   pipe is the proof) and no `declares` (a package declares through its manifest).
  * - `slot`: from the Hub, one of the Actor's slots was bound or unbound after its channel's hello
  *   result was taken. The header is the whole message: the Hub closes its side, and the Actor
  *   closes its side once it has read it (an open notice counts against its streams). Applied in
@@ -28,8 +30,11 @@
  * Cancelling a reader of a yamux stream resets it.
  */
 export type Header =
-  /** Admits an external client's channel; its first stream. The Hub validates `declares`. */
-  | { op: "hello"; actorId: string; credential: string; declares?: unknown; replace?: false }
+  /**
+   * Admits a channel; its first stream. An external client's carries its credential and may
+   * declare (the Hub validates `declares`); a pipe's names its Actor only.
+   */
+  | { op: "hello"; actorId: string; credential?: string; declares?: unknown; replace?: false }
   | { op: "call"; slot: string; method: string }
   | { op: "subscribe"; slot: string; event: string }
   /** Raw bytes in the interface's protocol, after the Hub validates `params`. */
@@ -41,12 +46,16 @@ export type Header =
   | { op: "withdraw"; name: string }
   /** From the Hub to an Actor: one of its slots was bound or unbound. */
   | { op: "slot"; name: string; bound: boolean }
-  /** From the Hub to a provider: the same four, naming its export and who is calling. */
+  /**
+   * From the Hub to a provider: the same four, naming its export, who is calling, and through which
+   * of the caller's slots (a provider keeping state per consumer keys it by both).
+   */
   | {
       op: "serve";
       kind: "call" | "subscribe" | "open" | "http";
       export: string;
       caller: string;
+      slot: string;
       method?: string;
       event?: string;
       params?: unknown;
@@ -81,7 +90,7 @@ export function parseHeader(value: unknown): Header {
       return {
         op: "hello",
         actorId: text(value, "actorId"),
-        credential: text(value, "credential", 4096),
+        ...("credential" in value ? { credential: text(value, "credential", 4096) } : {}),
         ...("declares" in value ? { declares: value.declares } : {}),
         ...(value.replace === false ? { replace: false as const } : {}),
       };
@@ -113,6 +122,7 @@ export function parseHeader(value: unknown): Header {
         kind,
         export: text(value, "export"),
         caller: text(value, "caller"),
+        slot: text(value, "slot"),
         ...(kind === "call" ? { method: text(value, "method") } : {}),
         ...(kind === "subscribe" ? { event: text(value, "event") } : {}),
         ...(kind === "open" ? { params: value.params } : {}),

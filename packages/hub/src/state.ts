@@ -46,12 +46,21 @@ const HUB_EXPORTS = {
 };
 
 export type ActorState = "created" | "running" | "stopped" | "closed";
+/** How a process ended on its own: its exit code or signal, and when. */
+export interface Exit {
+  code: number | null;
+  signal: string | null;
+  at: string;
+}
 export interface ActorRecord {
   actorId: string;
   name: string;
   /** A package hash, `external` for a program that connects itself, or `builtin` for the hub. */
   package: string;
   state: ActorState;
+  /** Times its process was restarted after a crash. */
+  restarts: number;
+  lastExit?: Exit;
 }
 export interface Wiring {
   consumer: string;
@@ -132,7 +141,8 @@ const MIGRATIONS = [
   `CREATE TABLE actors (
      id TEXT PRIMARY KEY, name TEXT NOT NULL, package TEXT NOT NULL,
      state TEXT NOT NULL CHECK (state IN ('created', 'running', 'stopped', 'closed')),
-     credential BLOB, created_at TEXT NOT NULL);
+     credential BLOB, created_at TEXT NOT NULL,
+     restarts INTEGER NOT NULL DEFAULT 0, last_exit TEXT);
    CREATE TABLE packages (
      hash TEXT PRIMARY KEY, name TEXT NOT NULL, version TEXT NOT NULL,
      manifest TEXT NOT NULL, added_by TEXT NOT NULL, added_at TEXT NOT NULL);
@@ -388,7 +398,7 @@ export class HubState {
 
   #actor(actorId: string): ActorRecord | undefined {
     const row = this.#db
-      .prepare("SELECT id, name, package, state FROM actors WHERE id = ?")
+      .prepare("SELECT id, name, package, state, restarts, last_exit FROM actors WHERE id = ?")
       .get(actorId) as Row | undefined;
     return (
       row && {
@@ -396,6 +406,8 @@ export class HubState {
         name: String(row.name),
         package: String(row.package),
         state: row.state as ActorState,
+        restarts: Number(row.restarts),
+        ...(row.last_exit ? { lastExit: JSON.parse(String(row.last_exit)) as Exit } : {}),
       }
     );
   }

@@ -192,10 +192,11 @@ export class Hub {
   }
 
   /**
-   * Take a channel. An external client's first stream must be `hello` with its credential, within
-   * the hello deadline, and nothing else may open before it is admitted. A channel the Hub made
-   * itself, a pipe to a package Actor's process it spawned, is admitted by that: pass its
-   * `actorId`. The handle settles when the channel ends, and closes it.
+   * Take a channel. Its first stream must be `hello`, and nothing else may open before it is
+   * admitted. An external client's hello carries its credential, within the hello deadline. A
+   * channel the Hub made itself, a pipe to a package Actor's process it spawned, is given with
+   * that Actor's id: its hello names that Actor and needs no credential, and its spawner keeps
+   * the deadline. The handle settles when the channel ends, and closes it.
    */
   accept(channel: Duplex, admitted?: { actorId: string }): ChannelHandle {
     if (admitted) {
@@ -208,14 +209,18 @@ export class Hub {
     let ended = false;
     const options: SessionOptions = {
       client: false,
-      maxStreams: admitted ? MAX_STREAMS : 1,
+      maxStreams: 1,
       onStream: (stream) => {
         if (conn) void this.#serve(conn, stream);
         else if (helloSeen) stream.reset();
         else {
           helloSeen = true;
-          void this.#hello(stream, session, (actorId, replace) => {
+          void this.#hello(stream, session, admitted, (actorId, replace) => {
             if (ended) throw new NotConnected("The channel");
+            // Closed while its hello was on the way (a pipe made before a close, or declares
+            // being checked): a closed Actor is never admitted.
+            if (this.state.actor(actorId).state === "closed")
+              throw new Refused("state", `${actorId} is closed.`);
             // Checked again as the channel is admitted: one may have connected while declares
             // were checked.
             if (replace === false && this.#connections.has(actorId))
@@ -228,7 +233,7 @@ export class Hub {
     };
     const session = new Session(channel, options);
     this.#sessions.add(session);
-    if (admitted) conn = this.#admit(admitted.actorId, session);
+    // A pipe's hello is waited for by whoever spawned its process, under its own deadline.
     const timer = admitted
       ? undefined
       : setTimeout(() => {
@@ -285,6 +290,7 @@ export class Hub {
   async #hello(
     stream: YamuxStream,
     session: Session,
+    pipe: { actorId: string } | undefined,
     admit: (actorId: string, replace?: false) => void,
   ) {
     const reader = new FrameReader(stream.readable);
@@ -293,7 +299,16 @@ export class Hub {
       const header = parseHeader(await reader.next());
       if (header.op !== "hello")
         throw new Refused("invalid", "A channel's first stream must be hello.");
-      if (!this.state.authenticate(header.actorId, header.credential))
+      if (pipe) {
+        // The pipe is the proof: it was made for this one Actor's process.
+        if (header.actorId !== pipe.actorId)
+          throw new Refused("forbidden", `This channel is ${pipe.actorId}'s.`);
+        if (header.declares !== undefined)
+          throw new Refused("invalid", "A package Actor declares through its manifest.");
+      } else if (
+        header.credential === undefined ||
+        !this.state.authenticate(header.actorId, header.credential)
+      )
         throw new Refused("forbidden", "No such Actor, or the credential is wrong.");
       if (header.replace === false && this.#connections.has(header.actorId))
         throw new Refused("connected", `${header.actorId} already has a channel to this Hub.`);
@@ -537,7 +552,14 @@ export class Hub {
     try {
       const writer = out.writable.getWriter();
       await writer.write(
-        encodeFrame({ op: "serve", kind: "call", export: binding.export, caller, method }),
+        encodeFrame({
+          op: "serve",
+          kind: "call",
+          export: binding.export,
+          caller,
+          slot: binding.slot,
+          method,
+        }),
       );
       await writer.write(encodeFrame(input(value)));
       await writer.close();
@@ -697,6 +719,7 @@ export class Hub {
           kind: "subscribe",
           export: binding.export,
           caller: conn.actorId,
+          slot: binding.slot,
           event: header.event,
         }),
       );
@@ -768,6 +791,7 @@ export class Hub {
             kind: header.op,
             export: binding.export,
             caller: conn.actorId,
+            slot: binding.slot,
             ...(header.op === "open" ? { params: header.params } : {}),
           }),
         );

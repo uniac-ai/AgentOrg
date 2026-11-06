@@ -48,6 +48,26 @@ export const Actor = z.object({
    */
   package: z.union([Hash, z.literal("external"), z.literal("builtin")]),
   state: ActorState,
+  /** Times the Hub restarted its process after a crash; 0 for Actors without one. */
+  restarts: z.number().int().min(0),
+  /** How its process last ended on its own, if it has: an exit code or a signal, and when. */
+  lastExit: z
+    .object({ code: z.number().int().nullable(), signal: z.string().nullable(), at: z.string() })
+    .optional(),
+  /**
+   * For a package Actor: whether this machine can run its host process now, and if not, why and
+   * what to do about it.
+   */
+  host: z.object({ available: z.boolean(), reason: z.string().optional() }).optional(),
+});
+
+/** One line of an Actor's log, from its `ctx.log` or its process's own output. */
+export const LogLine = z.object({
+  level: z.enum(["info", "warn", "error"]),
+  message: z.string(),
+  data: z.record(z.string(), z.json()).optional(),
+  module: z.string().optional(),
+  at: z.string(),
 });
 
 /** `hub.actors@1`: Actors and their lifecycle. */
@@ -78,6 +98,11 @@ export const hubActors = defineInterface({
     stop: method({ input: z.object({ actorId: Id }), output: Empty }),
     /** Final: its bindings, both ways, are removed. */
     close: method({ input: z.object({ actorId: Id }), output: Empty }),
+    /** Its newest log lines, oldest first. */
+    logs: method({
+      input: z.object({ actorId: Id, limit: z.number().int().min(1).max(1000).optional() }),
+      output: z.object({ lines: z.array(LogLine) }),
+    }),
   },
 });
 

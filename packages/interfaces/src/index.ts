@@ -14,6 +14,7 @@ export {
   hubExports,
   hubGrants,
   hubPackages,
+  LogLine,
   Package,
 } from "./hub.js";
 export { kv } from "./kv.js";

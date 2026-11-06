@@ -9,6 +9,7 @@ export {
   type CallOutcome,
   type Decision,
   type Declaration,
+  type Exit,
   HUB,
   HubState,
   PERSON,

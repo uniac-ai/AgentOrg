@@ -112,10 +112,24 @@ test("headers and bodies are checked for their shape", () => {
       kind: "subscribe",
       export: "board",
       caller: "a1",
+      slot: "board",
       event: "changed",
     }),
-    { op: "serve", kind: "subscribe", export: "board", caller: "a1", event: "changed" },
+    {
+      op: "serve",
+      kind: "subscribe",
+      export: "board",
+      caller: "a1",
+      slot: "board",
+      event: "changed",
+    },
   );
+  assert.throws(
+    () => parseHeader({ op: "serve", kind: "call", export: "e", caller: "c", method: "m" }),
+    HeaderError,
+    "a serve header names the caller's slot",
+  );
+  assert.equal("credential" in parseHeader({ op: "hello", actorId: "a" }), false, "on a pipe");
   assert.equal(
     parseHeader({ op: "hello", actorId: "a", credential: "c".repeat(2000) }).op,
     "hello",

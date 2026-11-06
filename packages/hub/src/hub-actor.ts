@@ -1,4 +1,5 @@
 import { Refused } from "@agentorg/sdk";
+import { readLogs } from "./logs.js";
 import type { AuditRecord, Decision, HubState, RequestRecord, Wiring } from "./state.js";
 
 type Input = Record<string, unknown>;
@@ -43,6 +44,12 @@ export class HubActor {
         start: (caller, input) => state.start(caller, String(input.actorId)),
         stop: (caller, input) => state.stop(caller, String(input.actorId)),
         close: (caller, input) => state.closeActor(caller, String(input.actorId)),
+        logs: (_, input) => {
+          // The Actor must exist; its lines come from the files its process's output fills.
+          const { actorId } = state.actor(String(input.actorId));
+          const limit = typeof input.limit === "number" ? input.limit : 100;
+          return { lines: readLogs(state.home, actorId, limit) };
+        },
       },
       grants: {
         bind: (caller, input) => state.bind(caller, wiring(input)),
