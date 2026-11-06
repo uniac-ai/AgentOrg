@@ -2,25 +2,25 @@ import { z } from "zod";
 import { hashOf } from "./canonical.js";
 
 /** One request and its reply on an `rpc` interface. */
-export interface Method<I extends z.ZodType = z.ZodType, O extends z.ZodType = z.ZodType> {
+export interface MethodSpec<I extends z.ZodType = z.ZodType, O extends z.ZodType = z.ZodType> {
   readonly input: I;
   readonly output: O;
 }
 /** One event an `rpc` interface's provider emits: live, delivered at most once. */
-export interface Event<P extends z.ZodType = z.ZodType> {
+export interface EventSpec<P extends z.ZodType = z.ZodType> {
   readonly payload: P;
 }
-export type Methods = Record<string, Method>;
-export type Events = Record<string, Event>;
-type NoEvents = Record<never, Event>;
+export type Methods = Record<string, MethodSpec>;
+export type Events = Record<string, EventSpec>;
+type NoEvents = Record<never, EventSpec>;
 
 export function method<I extends z.ZodType, O extends z.ZodType>(spec: {
   input: I;
   output: O;
-}): Method<I, O> {
+}): MethodSpec<I, O> {
   return { input: spec.input, output: spec.output };
 }
-export function event<P extends z.ZodType>(payload: P): Event<P> {
+export function event<P extends z.ZodType>(payload: P): EventSpec<P> {
   return { payload };
 }
 
@@ -100,6 +100,8 @@ export function defineInterface(spec: {
           throw new TypeError(
             `${id}: ${JSON.stringify(member)} isn't a valid method or event name.`,
           );
+      for (const name of Object.keys(events))
+        if (name in methods) throw new TypeError(`${id}: ${name} is both a method and an event.`);
       return { name: spec.name, major: spec.major, kind: "rpc", methods, events };
     }
     case "stream":
@@ -120,26 +122,86 @@ export function defineInterface(spec: {
 }
 
 export type JsonSchema = Record<string, unknown>;
-/** An interface as the manifest records it, without its hash. */
-export type InterfaceDescription =
+/** An interface's identity and JSON Schemas, as the manifest records them. */
+export type InterfaceSchemas = { id: string } & (
   | {
       kind: "rpc";
       methods: Record<string, { input: JsonSchema; output: JsonSchema }>;
       events: Record<string, JsonSchema>;
     }
   | { kind: "stream"; protocol: string; open: JsonSchema }
-  | { kind: "http" };
-/** An interface as the manifest records it. */
-export type DescribedInterface = InterfaceDescription & { hash: string };
+  | { kind: "http" }
+);
+/** An interface's identity, JSON Schemas and hash. */
+export type DescribedInterface = InterfaceSchemas & { hash: string };
 
 /** `name@major`, the identity a slot and an export must share. */
 export function interfaceId(iface: Interface): string {
   return `${iface.name}@${iface.major}`;
 }
 
+const isObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+/**
+ * The JSON Schema as hashed, with nothing an equal contract could vary: no `$schema` (it names
+ * zod's dialect, not the contract), `required` sorted (field order isn't part of the contract) and
+ * `$defs` renamed `d0`, `d1`, … in the order a key-sorted walk first reaches them (zod numbers them
+ * in declaration order). Union options and enum values keep their order.
+ */
+export function normalizeSchema(schema: JsonSchema): JsonSchema {
+  const defs = isObject(schema.$defs) ? schema.$defs : {};
+  const names = new Map<string, string>();
+  const queue: string[] = [];
+  const reach = (value: unknown): void => {
+    if (Array.isArray(value)) {
+      for (const item of value) reach(item);
+      return;
+    }
+    if (!isObject(value)) return;
+    for (const key of Object.keys(value).sort()) {
+      if (key === "$defs") continue;
+      const item = value[key];
+      if (key === "$ref" && typeof item === "string" && item.startsWith("#/$defs/")) {
+        const old = item.slice("#/$defs/".length);
+        if (!names.has(old)) {
+          names.set(old, `d${names.size}`);
+          queue.push(old);
+        }
+      } else reach(item);
+    }
+  };
+  reach(schema);
+  for (let i = 0; i < queue.length; i++) reach(defs[queue[i] as string]);
+  const rewrite = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(rewrite);
+    if (!isObject(value)) return value;
+    const out: Record<string, unknown> = {};
+    for (const [key, item] of Object.entries(value)) {
+      if (key === "$defs") continue;
+      if (key === "$ref" && typeof item === "string" && item.startsWith("#/$defs/"))
+        out[key] = `#/$defs/${names.get(item.slice("#/$defs/".length)) ?? item}`;
+      else if (
+        key === "required" &&
+        Array.isArray(item) &&
+        item.every((r) => typeof r === "string")
+      )
+        out[key] = [...item].sort();
+      else out[key] = rewrite(item);
+    }
+    return out;
+  };
+  const { $schema: _, ...rest } = rewrite(schema) as JsonSchema;
+  if (names.size)
+    rest.$defs = Object.fromEntries(
+      queue.map((old) => [names.get(old) as string, rewrite(defs[old])]),
+    );
+  return rest;
+}
+
 function jsonSchema(id: string, where: string, schema: z.ZodType, io: "input" | "output") {
   try {
-    return z.toJSONSchema(schema, { io }) as JsonSchema;
+    return normalizeSchema(z.toJSONSchema(schema, { io }) as JsonSchema);
   } catch (error) {
     throw new TypeError(
       `${id} ${where}: the schema has no JSON Schema form (${error instanceof Error ? error.message : error}).`,
@@ -147,12 +209,12 @@ function jsonSchema(id: string, where: string, schema: z.ZodType, io: "input" | 
   }
 }
 
-/** The JSON Schemas of an interface's methods and events, or of its stream's open parameters. */
-export function interfaceDescription(iface: Interface): InterfaceDescription {
+function interfaceSchemas(iface: Interface): InterfaceSchemas {
   const id = interfaceId(iface);
   switch (iface.kind) {
     case "rpc":
       return {
+        id,
         kind: "rpc",
         methods: Object.fromEntries(
           Object.entries(iface.methods).map(([name, m]) => [
@@ -172,34 +234,40 @@ export function interfaceDescription(iface: Interface): InterfaceDescription {
       };
     case "stream":
       return {
+        id,
         kind: "stream",
         protocol: iface.protocol,
         open: jsonSchema(id, "open", iface.open, "input"),
       };
     case "http":
-      return { kind: "http" };
+      return { id, kind: "http" };
   }
 }
 
-/** The hash of an interface's identity and canonical schemas; a reader recomputes it from the manifest. */
-export function hashInterface(id: string, description: InterfaceDescription): string {
-  return hashOf({ id, ...description });
+/**
+ * The hash of an interface: SHA-256 over the canonical JSON of its identity and normalized JSON
+ * Schemas. Everything in those schemas is contract, `.describe()` text included, so a reader can
+ * recompute the hash from the manifest alone.
+ */
+export function hashInterface(schemas: InterfaceSchemas): string {
+  return hashOf(schemas);
 }
 
-/** The interface's manifest entry: its description and hash. */
+/** The interface as the manifest records it: identity, JSON Schemas and hash. */
 export function describeInterface(iface: Interface): DescribedInterface {
-  const description = interfaceDescription(iface);
-  return { ...description, hash: hashInterface(interfaceId(iface), description) };
+  const schemas = interfaceSchemas(iface);
+  return { ...schemas, hash: hashInterface(schemas) };
 }
 
 /**
- * Whether a slot's interface and an export's can be bound: the same `name@major` with the same
- * hash. The same identity with another hash is a mismatch, which the Hub refuses.
+ * Whether a slot's interface and an export's can be bound: `same` is the same `name@major` with
+ * the same hash; `conflict` is the same `name@major` with another hash, which the Hub refuses;
+ * `unrelated` is another interface.
  */
 export function compareInterfaces(
   a: { id: string; hash: string },
   b: { id: string; hash: string },
-): "same" | "different" | "mismatch" {
-  if (a.id !== b.id) return "different";
-  return a.hash === b.hash ? "same" : "mismatch";
+): "same" | "unrelated" | "conflict" {
+  if (a.id !== b.id) return "unrelated";
+  return a.hash === b.hash ? "same" : "conflict";
 }

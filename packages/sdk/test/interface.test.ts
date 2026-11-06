@@ -11,9 +11,12 @@ import {
   interfaceId,
   method,
   NotConnected,
+  normalizeSchema,
   OutcomeUnknown,
   Refused,
 } from "../src/index.ts";
+
+const BOARD_HASH = "sha256-b854931fbb0f9b7d2dc42b545e4039fe4d0cef89d535b9403c66c543bca16179";
 
 /** The spec's board@1, built fresh each call so equal definitions are separate zod objects. */
 const board = (title = z.string().min(1)) => {
@@ -38,6 +41,9 @@ test("canonical JSON sorts keys at every depth and keeps array order", () => {
   assert.equal(canonicalJson({ b: 1, a: 2 }), canonicalJson({ a: 2, b: 1 }));
   assert.throws(() => canonicalJson({ n: Number.NaN }), TypeError);
   assert.throws(() => canonicalJson({ f: () => {} }), TypeError);
+  assert.throws(() => canonicalJson({ at: new Date(0) }), /Date instance/);
+  assert.throws(() => canonicalJson(new Map()), /Map instance/);
+  assert.equal(canonicalJson(Object.create(null)), "{}");
 });
 
 test("an rpc interface describes each method and event as JSON Schema", () => {
@@ -68,7 +74,19 @@ test("stream and http interfaces name their protocol instead of method schemas",
     "cols",
     "rows",
   ]);
-  assert.deepEqual(Object.keys(describeInterface(site)), ["kind", "hash"]);
+  assert.deepEqual(Object.keys(describeInterface(site)), ["id", "kind", "hash"]);
+  assert.notEqual(described.hash, describeInterface({ ...shell, protocol: "raw" }).hash);
+  assert.throws(
+    () =>
+      defineInterface({
+        name: "shell",
+        major: 1,
+        kind: "stream",
+        protocol: "",
+        open: z.object({}),
+      }),
+    /names its protocol/,
+  );
   assert.notEqual(describeInterface(site).hash, describeInterface({ ...site, major: 2 }).hash);
 });
 
@@ -95,25 +113,55 @@ test("an interface's hash is stable across rebuilds and changes with any schema"
   );
 });
 
+test("field order and zod's $defs numbering are not part of the contract", () => {
+  const record = (fields: "pq" | "qp") =>
+    describeInterface(
+      defineInterface({
+        name: "store",
+        major: 1,
+        kind: "rpc",
+        methods: {
+          put: method({
+            input:
+              fields === "pq"
+                ? z.object({ p: z.json(), q: z.array(z.json()) })
+                : z.object({ q: z.array(z.json()), p: z.json() }),
+            output: z.object({}),
+          }),
+        },
+      }),
+    );
+  assert.equal(record("pq").hash, record("qp").hash);
+  const described = record("pq");
+  assert.ok(described.kind === "rpc");
+  const input = described.methods.put as { input: Record<string, unknown> };
+  assert.equal(input.input.$schema, undefined);
+  assert.deepEqual(input.input.required, ["p", "q"]);
+  assert.deepEqual(Object.keys(input.input.$defs as object), ["d0", "d1"]);
+  assert.deepEqual(normalizeSchema(input.input), input.input);
+});
+
+test("board@1's hash is pinned, so a change in zod's JSON Schema output fails here first", () => {
+  assert.equal(describeInterface(board()).hash, BOARD_HASH);
+});
+
 test("a recorded hash is recomputed from the description, so an edited schema or hash is caught", () => {
   const { hash, ...description } = describeInterface(board());
-  assert.equal(hashInterface("board@1", description), hash);
+  assert.equal(hashInterface(description), hash);
   assert.ok(description.kind === "rpc");
   const edited = structuredClone(description);
   const add = edited.methods.add;
   assert.ok(add);
   (add.input as { properties: { title: { minLength: number } } }).properties.title.minLength = 0;
-  assert.notEqual(hashInterface("board@1", edited), hash);
+  assert.notEqual(hashInterface(edited), hash);
+  assert.notEqual(hashInterface({ ...description, id: "board@2" }), hash);
 });
 
 test("a slot and an export bind only with the same name@major and the same hash", () => {
   const ours = { id: "board@1", hash: describeInterface(board()).hash };
-  assert.equal(compareInterfaces(ours, { ...ours }), "same");
-  assert.equal(
-    compareInterfaces(ours, { id: "board@1", hash: describeInterface(board(z.string())).hash }),
-    "mismatch",
-  );
-  assert.equal(compareInterfaces(ours, { id: "board@2", hash: ours.hash }), "different");
+  assert.equal(compareInterfaces(ours, describeInterface(board())), "same");
+  assert.equal(compareInterfaces(ours, describeInterface(board(z.string()))), "conflict");
+  assert.equal(compareInterfaces(ours, { id: "board@2", hash: ours.hash }), "unrelated");
 });
 
 test("invalid names, majors and members are refused at definition", () => {
@@ -132,6 +180,17 @@ test("invalid names, majors and members are refused at definition", () => {
   assert.throws(rpc("board", 1.5), /major/);
   assert.throws(rpc("board", 1, "list-all"), /valid method or event name/);
   assert.doesNotThrow(rpc("llm.session"));
+  assert.throws(
+    () =>
+      defineInterface({
+        name: "board",
+        major: 1,
+        kind: "rpc",
+        methods: { changed: method({ input: z.object({}), output: z.object({}) }) },
+        events: { changed: event(z.object({})) },
+      }),
+    /both a method and an event/,
+  );
 });
 
 test("a schema with no JSON Schema form is refused when described, naming where", () => {
@@ -142,6 +201,12 @@ test("a schema with no JSON Schema form is refused when described, naming where"
     methods: { now: method({ input: z.object({}), output: z.date() }) },
   });
   assert.throws(() => describeInterface(dated), /clock@1 now output/);
+});
+
+test("an interface keeps each schema's own type, which module handles infer from", () => {
+  const add: z.ZodObject<{ title: z.ZodString }> = board().methods.add.input;
+  const changed: z.ZodObject<{ id: z.ZodString }> = board().events.changed.payload;
+  assert.ok(add && changed);
 });
 
 test("the three errors carry what a caller needs", () => {
