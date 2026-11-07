@@ -1,7 +1,8 @@
 /**
  * What a new agent gets: the assistant package's slots, each bound at creation (step 5, §4). The
  * slots are its `logic` module's; `model` and `store` it always gets, and the person decides the
- * rest in New agent's dialog.
+ * rest in New agent's dialog. A grant that `needs` another is off while that one is: installing
+ * creates and starts Actors.
  */
 export const AGENT_GRANTS = [
   { slot: "model", what: "ChatGPT", iface: "llm.session@1", fixed: true },
@@ -11,7 +12,13 @@ export const AGENT_GRANTS = [
   { slot: "actors", what: "create and run Actors", iface: "hub.actors@1", fixed: false },
   { slot: "grants", what: "ask for connections", iface: "hub.grants@1", fixed: false },
   { slot: "exports", what: "see what's offered", iface: "hub.exports@1", fixed: false },
-  { slot: "installer", what: "install Actors", iface: "installer@1", fixed: false },
+  {
+    slot: "installer",
+    what: "install Actors",
+    iface: "installer@1",
+    fixed: false,
+    needs: "actors",
+  },
 ] as const;
 
 export type AgentSlot = (typeof AGENT_GRANTS)[number]["slot"];
@@ -83,17 +90,18 @@ export async function agentProviders(call: Call): Promise<AgentProviders> {
 /**
  * New agent itself: install the assistant package `assistant` named `name` through the person's
  * `installer`, with `agentConnections` to the person's own ChatGPT and installer, and start it, all
- * or nothing. `call` is the person's call (the shell's `/api`, or a test's). Returns its id.
+ * or nothing. `call` is the person's call (the shell's `/api`, or a test's). Returns the installer's
+ * answer: its id, the slots left unbound (the switched-off ones among them) and the seeds that
+ * didn't land.
  */
 export async function installAgent(
   call: Call,
   agent: { assistant: string; name: string; off?: ReadonlySet<string> },
-): Promise<string> {
-  const { actorId } = (await call("installer", "install", {
+): Promise<{ actorId: string; unbound: string[]; unseeded: string[] }> {
+  return (await call("installer", "install", {
     package: agent.assistant,
     name: agent.name,
     connections: agentConnections(await agentProviders(call), agent.off),
     start: true,
-  })) as { actorId: string };
-  return actorId;
+  })) as { actorId: string; unbound: string[]; unseeded: string[] };
 }

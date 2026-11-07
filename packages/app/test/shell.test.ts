@@ -487,6 +487,19 @@ test("from the first run to a chat: sign in with ChatGPT, New agent, a turn", as
   await page.getByRole("button", { name: "New agent" }).click();
   const dialog = page.getByRole("dialog", { name: "New agent" });
   await dialog.getByRole("textbox", { name: "Name" }).fill("Scout");
+  // Installing creates and starts Actors: without that, it's off and can't be switched on.
+  const actors = dialog.getByRole("switch", { name: "create and run Actors" });
+  const install = dialog.getByRole("switch", { name: "install Actors" });
+  await actors.click();
+  assert.deepEqual(
+    [await install.getAttribute("aria-checked"), await install.isDisabled()],
+    ["false", true],
+  );
+  await actors.click();
+  assert.deepEqual(
+    [await install.getAttribute("aria-checked"), await install.isDisabled()],
+    ["true", false],
+  );
   await dialog.getByRole("switch", { name: "install packages" }).click();
   await dialog.getByRole("button", { name: "Create" }).click();
   await page.waitForURL(/#\/a\//);
@@ -543,6 +556,22 @@ test("from the first run to a chat: sign in with ChatGPT, New agent, a turn", as
     assert.ok(!shown.includes(secret));
     assert.ok(!JSON.stringify(logs).includes(secret));
   }
+  // Without creating and running Actors, it can't install them either: neither is connected.
+  await page.getByRole("button", { name: "New agent" }).click();
+  await dialog.getByRole("textbox", { name: "Name" }).fill("Quiet");
+  await dialog.getByRole("switch", { name: "create and run Actors" }).click();
+  await dialog.getByRole("button", { name: "Create" }).click();
+  await page.waitForURL((url) => url.hash.startsWith("#/a/") && !url.hash.endsWith(scout));
+  const quiet = decodeURIComponent(new URL(page.url()).hash.slice("#/a/".length));
+  const slots = (
+    await person.call<{ bindings: { consumer: string; slot: string }[] }>("bindings", "list", {
+      actor: quiet,
+    })
+  ).bindings
+    .filter((binding) => binding.consumer === quiet)
+    .map((binding) => binding.slot);
+  assert.ok(slots.includes("logic.packages"));
+  assert.ok(!slots.includes("logic.actors") && !slots.includes("logic.installer"));
 });
 
 test("ChatGPT's first run: sign-in opens in a new tab, and the plan notice shows once", async (t) => {
@@ -624,6 +653,21 @@ test("opening a menu, the dialog and a theme switch move nothing", async (t) => 
   await page.getByRole("button", { name: "New agent" }).click();
   await page.getByRole("dialog").waitFor();
   assert.deepEqual(await boxes(page, LAID_OUT), before, "the dialog");
+  // This home's first run never ran: the dialog says so plainly, in room it kept for it.
+  const dialog = page.getByRole("dialog", { name: "New agent" });
+  const createButton = dialog.getByRole("button", { name: "Create" });
+  const where = JSON.stringify([await dialog.boundingBox(), await createButton.boundingBox()]);
+  await dialog.getByRole("textbox", { name: "Name" }).fill("Early");
+  await createButton.click();
+  await dialog
+    .getByRole("alert")
+    .getByText("AgentOrg isn't set up yet. Restart it to finish setting up.")
+    .waitFor();
+  assert.equal(
+    JSON.stringify([await dialog.boundingBox(), await createButton.boundingBox()]),
+    where,
+    "a refusal",
+  );
   await page.keyboard.press("Escape");
   await page.getByRole("dialog").waitFor({ state: "detached" });
 

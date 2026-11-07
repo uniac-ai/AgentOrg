@@ -168,7 +168,7 @@ test("New agent from a test: installAgent with what the first run made", async (
     message: "AgentOrg isn't set up yet. Restart it to finish setting up.",
   });
   const ran = await firstRun(person, { connected: (id) => app.hub.connected(id) });
-  const agent = await installAgent(person.call, {
+  const { actorId: agent, unbound } = await installAgent(person.call, {
     assistant: ran.packages.assistant as string,
     name: "Scout",
     off: new Set(["packages", "actors"]),
@@ -182,6 +182,11 @@ test("New agent from a test: installAgent with what the first run made", async (
     "logic.layout person.layout",
     `logic.model ${ran.chatgpt}.model.session`,
     "logic.store storage.kv",
+  ]);
+  // Its grants left unbound: the switched-off ones.
+  assert.deepEqual(unbound.filter((slot) => slot.startsWith("logic.")).sort(), [
+    "logic.actors",
+    "logic.packages",
   ]);
 });
 
