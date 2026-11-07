@@ -141,23 +141,10 @@ export default defineActor({
       entries: { export: string; to: string }[],
       caller: string,
       manager: boolean,
+      what: "planned" | "created",
     ) => {
-      const exportable = Object.entries(manifest.modules).flatMap(([module, m]) =>
-        Object.entries(m.exports)
-          .filter(([, id]) => manifest.interfaces[id]?.kind === "rpc")
-          .map(([name]) => `${module}.${name}`),
-      );
-      const unknown = entries.filter((e) => !exportable.includes(e.export));
-      if (unknown.length)
-        throw new Refused(
-          "invalid",
-          `${unknown.map((e) => e.export).join(", ")} ${unknown.length === 1 ? "isn't an rpc export" : "aren't rpc exports"} of the package; it has ${exportable.length ? exportable.join(", ") : "none"}.`,
-        );
-      for (const to of new Set(entries.map((e) => e.to))) {
-        const actor = await ctx.slots.actors.call.get({ actorId: to }).catch(() => undefined);
-        if (!actor || actor.state === "closed")
-          throw new Refused("unknown", `No Actor ${to} to expose to; nothing was created.`);
-      }
+      // Authority first, as the Hub's own expose: one beyond the caller is refused before any
+      // Actor is looked up.
       const beyond = manager ? [] : entries.filter((e) => e.to !== caller);
       if (beyond.length) {
         const who = await named(caller);
@@ -166,8 +153,35 @@ export default defineActor({
         );
         throw new Refused(
           "forbidden",
-          `${who} can expose the new Actor's exports only to itself, as a request it files, unless it is a manager: not ${targets.join(", ")}; nothing was created. Expose them to ${who}, or ask a manager (the person) to.`,
+          `${who} can expose the new Actor's exports only to itself, as a request it files, unless it is a manager: not ${targets.join(", ")}; nothing was ${what}. Expose them to ${who}, or ask a manager (the person) to.`,
         );
+      }
+      // A host module's rpc exports: a view's run in its frame, where nothing else can call them.
+      const exportable = Object.entries(manifest.modules).flatMap(([module, m]) =>
+        m.placement === "view"
+          ? []
+          : Object.entries(m.exports)
+              .filter(([, id]) => manifest.interfaces[id]?.kind === "rpc")
+              .map(([name]) => `${module}.${name}`),
+      );
+      const unknown = entries.filter((e) => !exportable.includes(e.export));
+      if (unknown.length)
+        throw new Refused(
+          "invalid",
+          `${unknown.map((e) => e.export).join(", ")} ${unknown.length === 1 ? "isn't an rpc export" : "aren't rpc exports"} of the package's host modules; it has ${exportable.length ? exportable.join(", ") : "none"}.`,
+        );
+      for (const to of new Set(entries.map((e) => e.to))) {
+        if (BUILTIN.has(to))
+          throw new Refused(
+            "forbidden",
+            `${to} is the Hub itself and takes no slots; nothing was ${what}.`,
+          );
+        const actor = await ctx.slots.actors.call.get({ actorId: to }).catch((error: unknown) => {
+          if (error instanceof Refused && error.code === "unknown") return undefined;
+          throw error;
+        });
+        if (!actor || actor.state === "closed")
+          throw new Refused("unknown", `No Actor ${to} to expose to; nothing was ${what}.`);
       }
       return entries.map((e) => ({
         ...e,
@@ -179,7 +193,7 @@ export default defineActor({
       async plan({ package: hash, expose }, { caller }) {
         const manifest = await manifestOf(hash);
         const exposes = expose?.length
-          ? await settle(manifest, expose, caller, (await grantsOf(caller)).manager)
+          ? await settle(manifest, expose, caller, (await grantsOf(caller)).manager, "planned")
           : [];
         const [{ exports }, { actors }] = await Promise.all([
           ctx.slots.exports.call.list({}),
@@ -238,7 +252,7 @@ export default defineActor({
           return entries ? [{ slot, entries }] : [];
         });
         // Exposures are settled before anything is made, as connections are checked.
-        const exposes = await settle(manifest, expose ?? [], caller, manager);
+        const exposes = await settle(manifest, expose ?? [], caller, manager, "created");
         let actorId: string;
         try {
           ({ actorId } = await ctx.slots.actors.call.create({

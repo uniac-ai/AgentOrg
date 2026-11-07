@@ -67,7 +67,10 @@ export const installer = defineInterface({
           z.object({ slot: Name, interface: z.string(), candidates: z.array(Target) }),
         ),
         views: z.array(z.string()),
-        /** Each `expose` entry given, with how `install` would settle it for this caller. */
+        /**
+         * Each `expose` entry given, with how `install` would settle it for this caller; an entry
+         * `install` would refuse is refused here the same way.
+         */
         exposes: z.array(Exposure.extend({ settles: Settles })),
       }),
     }),
@@ -81,7 +84,7 @@ export const installer = defineInterface({
      * the start fails, the new Actor is closed. Slots left out stay unbound, listed in `unbound`.
      * The Actor is recorded as made for the caller (`installedFor`), which grants nothing.
      *
-     * `expose` lists the new Actor's exports to expose, each to one Actor, all or none like the
+     * `expose` lists the new Actor's exports to expose (`rpc` exports of its host modules), each to one Actor, all or none like the
      * connections: a manager's are made now (`granted`, with the slot); one to the caller itself
      * is left for the caller to file (`request`, with the exact `hub.grants.expose` call); any
      * other is refused, and nothing is created. Nothing is exposed that isn't listed.

@@ -639,3 +639,34 @@ test("install exposes what it lists: a manager's now, an agent's to itself as it
   );
   assert.equal(count(), before);
 });
+
+test("only a host module's rpc exports are exposed, never to the Hub's own Actors", async (t) => {
+  const { hub, shell, assistant, seeded, add } = await setup(t);
+  const count = () => hub.state.actors().filter((a) => a.state !== "closed").length;
+  const before = count();
+  // A manager's plan refuses a built-in target as install would, before anything is made.
+  for (const to of [HUB, STORAGE, "net"]) {
+    const expose = [{ export: "counter.counter", to }];
+    await assert.rejects(
+      shell.slots.installer.call.plan({ package: seeded, expose }),
+      (e: Refused) =>
+        e.code === "forbidden" && /takes no slots; nothing was planned/.test(e.message),
+    );
+    await assert.rejects(
+      shell.slots.installer.call.install({ package: seeded, name: "x", connections: {}, expose }),
+      (e: Refused) => e.code === "forbidden" && /nothing was created/.test(e.message),
+    );
+  }
+  // A view's export (the assistant's chat view) runs in its frame: it isn't one to expose.
+  const helper = await add(join(packages, "assistant"));
+  await assert.rejects(
+    shell.slots.installer.call.install({
+      package: helper,
+      name: "Helper",
+      connections: {},
+      expose: [{ export: "chat.view", to: assistant.self.actorId }],
+    }),
+    (e: Refused) => e.code === "invalid" && e.message.includes("logic.chat"),
+  );
+  assert.equal(count(), before);
+});
