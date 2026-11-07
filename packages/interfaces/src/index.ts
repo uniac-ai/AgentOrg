@@ -1,5 +1,5 @@
 export { Account, accountLogin, LoginState } from "./account-login.js";
-export { ChatMessage, ChatState, ChatStatus, chat } from "./chat.js";
+export { ChatMessage, ChatState, ChatStatus, ChatTool, chat } from "./chat.js";
 export { httpEgress } from "./http-egress.js";
 export {
   Actor,

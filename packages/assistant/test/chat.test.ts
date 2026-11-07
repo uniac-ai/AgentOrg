@@ -298,6 +298,29 @@ test("Enter does nothing while a turn runs", async () => {
   assert.equal(v.input.value, "More.");
 });
 
+test("a message sent again under its id replaces the first, after any redraw too", async () => {
+  const all: Message[] = Array.from({ length: 101 }, (_, i) => ({
+    id: String(i + 1).padStart(4, "0"),
+    role: "user" as const,
+    text: `M${i + 1}`,
+    at,
+  }));
+  const page = ({ before, limit = 100 }: { before?: string; limit?: number }) => {
+    const end = before === undefined ? all.length : all.findIndex((m) => m.id === before);
+    const start = Math.max(0, end - limit);
+    return { messages: all.slice(start, end), more: start > 0 };
+  };
+  const v = await mounted({ page });
+  v.chat.emit("message", { id: "t1", role: "tool", text: "layout__place: running", at });
+  v.chat.emit("message", { id: "t1", role: "tool", text: "layout__place: done", at });
+  assert.equal(v.texts().at(-1), "layout__place: done");
+  // "Earlier messages" draws every row again from what the view holds.
+  v.button("Earlier messages")?.click();
+  await tick();
+  assert.equal(v.texts().at(-1), "layout__place: done");
+  assert.equal(v.texts().filter((t) => t.startsWith("layout__place")).length, 1);
+});
+
 test("after a rebind the newest page shows in order, and earlier pages come on request", async () => {
   const all: Message[] = Array.from({ length: 100 }, (_, i) => ({
     id: String(i + 1).padStart(4, "0"),

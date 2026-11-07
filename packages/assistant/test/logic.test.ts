@@ -121,13 +121,15 @@ async function setup(values = new Map<string, unknown>()) {
     await actor.call("chat", "send", { text });
     return ended(from);
   };
-  const messages = () =>
-    actor.emitted
-      .filter((e) => e.event === "message")
-      .map((e) => {
-        const { role, text } = e.payload as { role: string; text: string };
-        return `${role}: ${text}`;
-      });
+  /** The messages as a view shows them: one row per id, the latest event for it. */
+  const messages = () => {
+    const rows = new Map<string, string>();
+    for (const e of actor.emitted.filter((e) => e.event === "message")) {
+      const { id, role, text } = e.payload as { id: string; role: string; text: string };
+      rows.set(id, `${role}: ${text}`);
+    }
+    return [...rows.values()];
+  };
   return { actor, store, requests, cancels, script, model, turn, ended, statuses, messages };
 }
 
@@ -180,6 +182,85 @@ test("bound to an installer, the agent can plan and install what it builds", asy
     offered.find((tool) => tool.name === "installer__install")?.parameters,
     described.methods.install?.input,
   );
+});
+
+test("a tool message says its call running, then how it ended, under one id; the record keeps it", async () => {
+  const s = await setup();
+  s.actor.bind("layout", {
+    place: () => ({ id: "p1" }),
+    remove: () => {
+      throw new Refused("unknown", "No such placement.");
+    },
+  });
+  s.script.push(
+    calls(
+      callTool("layout__place", { actor: "board", module: "panel" }, "c1"),
+      callTool("layout__remove", { id: "p9" }, "c2"),
+    ),
+    calls(...Array.from({ length: 21 }, (_, i) => callTool("layout__get", {}, `g${i}`))),
+  );
+  await s.turn("Place it, then remove p9.");
+  type Shown = { id: string; role: string; text: string; tool?: Record<string, unknown> };
+  const tools = s.actor.emitted
+    .filter((e) => e.event === "message")
+    .map((e) => e.payload as Shown)
+    .filter((m) => m.role === "tool");
+  const [placing, placed, removing, removed] = tools;
+  assert.deepEqual(placing?.tool, {
+    name: "layout__place",
+    state: "running",
+    input: JSON.stringify({ actor: "board", module: "panel" }),
+  });
+  assert.equal(placed?.id, placing?.id);
+  assert.deepEqual(placed?.tool, {
+    name: "layout__place",
+    state: "done",
+    input: JSON.stringify({ actor: "board", module: "panel" }),
+    output: JSON.stringify({ id: "p1" }),
+  });
+  assert.equal(removed?.id, removing?.id);
+  assert.notEqual(removed?.id, placed?.id);
+  assert.equal(removed?.tool?.state, "refused");
+  assert.match(String(removed?.tool?.output), /No such placement/);
+  // Calls that never ran (past the turn's limit) are one note, with no tool.
+  const note = tools.at(-1);
+  assert.equal(note?.text, "3 calls: limit");
+  assert.equal(note?.tool, undefined);
+  // The record shows the same as the events' last word on each.
+  const { messages } = (await s.actor.call("chat", "history", {})) as { messages: Shown[] };
+  const recorded = messages.filter((m) => m.role === "tool");
+  assert.deepEqual(recorded[0], placed);
+  assert.deepEqual(recorded[1], removed);
+  assert.equal(recorded.at(-1)?.tool, undefined);
+});
+
+test("how each call ended outlives a restart, and a call ends shown even if its record fails", async () => {
+  const values = new Map<string, unknown>();
+  const s = await setup(values);
+  s.actor.bind("layout", {
+    place: () => ({ id: "p1" }),
+    // The store goes while this call runs: its record can't be written.
+    remove: () => {
+      s.actor.unbind("store");
+      return {};
+    },
+  });
+  s.script.push(calls(callTool("layout__place", { actor: "board", module: "panel" }, "c1")));
+  await s.turn("Place it.");
+  type Shown = { id: string; role: string; tool?: { state: string } };
+  const again = await setup(values);
+  const { messages } = (await again.actor.call("chat", "history", {})) as { messages: Shown[] };
+  assert.equal(messages.find((m) => m.role === "tool")?.tool?.state, "done");
+
+  s.script.push(calls(callTool("layout__remove", { id: "p1" }, "c2")));
+  await s.turn("Remove it.");
+  const last = new Map<string, Shown>();
+  for (const e of s.actor.emitted.filter((e) => e.event === "message")) {
+    const m = e.payload as Shown;
+    last.set(m.id, m);
+  }
+  const states = [...last.values()].filter((m) => m.role === "tool").map((m) => m.tool?.state);
+  assert.deepEqual(states, ["done", "done"]);
 });
 
 test("a function call runs through its slot, and its result or refusal goes back", async () => {

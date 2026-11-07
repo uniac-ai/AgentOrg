@@ -3,13 +3,30 @@ import { z } from "zod";
 
 const MessageId = z.string().min(1).max(128);
 
-/** One message of a chat; `tool` messages tell what the agent did with its tools. */
+/**
+ * A tool call a `tool` message stands for: its name, whether it is `running` or ended `done` or
+ * `refused`, and its input (the call's JSON arguments) and output (its JSON result, or the
+ * refusal), each as text, when there are any.
+ */
+export const ChatTool = z.object({
+  name: z.string().min(1).max(128),
+  state: z.enum(["running", "done", "refused"]),
+  input: z.string().max(100_000).optional(),
+  output: z.string().max(100_000).optional(),
+});
+
+/**
+ * One message of a chat; `tool` messages tell what the agent did with its tools. A `tool` message
+ * may carry `tool`, the call it stands for: it is sent as `running` when the call starts, and again
+ * with the same id when it ends. Without `tool`, its `text` says it in one line.
+ */
 export const ChatMessage = z.object({
   id: MessageId,
   role: z.enum(["user", "assistant", "tool"]),
   text: z.string().max(100_000),
   /** An ISO 8601 time. */
   at: z.string().max(64),
+  tool: ChatTool.optional(),
 });
 export const ChatState = z.enum(["idle", "thinking", "tool", "error"]);
 /**

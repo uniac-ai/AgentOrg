@@ -3,7 +3,7 @@
  * Responses items it stands for, and for a tool message the line the person sees. It is read once,
  * then kept in memory, and the oldest messages are deleted past a retention cap.
  */
-import { Item, type kv } from "@agentorg/interfaces";
+import { type ChatMessage, Item, type kv } from "@agentorg/interfaces";
 import type { Log, Slot } from "@agentorg/sdk";
 import { z } from "zod";
 
@@ -15,6 +15,8 @@ const Entry = z.object({
   text: z.string().optional(),
   at: z.string(),
   items: z.array(Item),
+  /** For a tool message whose call ran: how it ended. */
+  state: z.enum(["done", "refused"]).optional(),
 });
 export type Entry = z.output<typeof Entry>;
 
@@ -56,6 +58,30 @@ export const textOf = (entry: Entry) =>
       entry.items.flatMap((item) => (item.type === "message" ? [item.content] : [])).join(""),
     MAX_SHOWN,
   );
+/** A call's arguments as they are kept and shown: past their cap, a note in their place. */
+export const argumentsOf = (args: string) =>
+  size(args) > MAX_ARGUMENTS ? ARGUMENTS_LEFT_OUT : args;
+
+/**
+ * A message as the chat shows it. A tool message whose call ran carries `tool`: the call's name,
+ * how it ended, its arguments and its output.
+ */
+export function messageOf(entry: Entry): z.input<typeof ChatMessage> {
+  const message = { id: entry.id, role: entry.role, text: textOf(entry), at: entry.at };
+  const call = entry.items.find((item) => item.type === "function_call");
+  if (entry.role !== "tool" || !entry.state || !call) return message;
+  const output = entry.items.find((item) => item.type === "function_call_output");
+  return {
+    ...message,
+    tool: {
+      name: head(call.name, 128),
+      state: entry.state,
+      input: head(call.arguments, MAX_SHOWN),
+      ...(output ? { output: head(output.output, MAX_SHOWN) } : {}),
+    },
+  };
+}
+
 /** A message as it is stored: each text once, and nothing past its cap. */
 const kept = (entry: Entry): Entry => ({
   ...entry,
@@ -63,7 +89,7 @@ const kept = (entry: Entry): Entry => ({
     if (item.type === "message") return { ...item, content: fitted(item.content, MAX_TEXT) };
     if (item.type === "function_call_output")
       return { ...item, output: fitted(item.output, MAX_TEXT) };
-    return size(item.arguments) > MAX_ARGUMENTS ? { ...item, arguments: ARGUMENTS_LEFT_OUT } : item;
+    return { ...item, arguments: argumentsOf(item.arguments) };
   }),
 });
 
@@ -174,7 +200,7 @@ export function createHistory(
       let start = Math.max(end, 0);
       while (start > 0 && messages.length < limit) {
         const { entry } = records[start - 1] as Kept;
-        const message = { id: entry.id, role: entry.role, text: textOf(entry), at: entry.at };
+        const message = messageOf(entry);
         bytes += size(message);
         if (bytes > PAGE_BUDGET && messages.length > 0) break;
         messages.unshift(message);

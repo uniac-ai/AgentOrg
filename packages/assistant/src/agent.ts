@@ -3,9 +3,10 @@
  * model calls through its slot, and sends the results back, until the model answers without
  * calling anything, or the turn has made its 20 calls.
  */
-import type { llmSession } from "@agentorg/interfaces";
+import type { ChatMessage, llmSession } from "@agentorg/interfaces";
 import { type Log, Refused, type Slot } from "@agentorg/sdk";
-import { type History, type ResponseItem, textOf } from "./history.js";
+import type { z } from "zod";
+import { argumentsOf, type History, head, messageOf, type ResponseItem } from "./history.js";
 import { capped, codeOf, runTool, type Tools } from "./tools.js";
 
 export const MAX_CALLS = 20;
@@ -15,12 +16,7 @@ type Status =
   | { state: "error"; detail: { code: string; message: string } };
 type FunctionCall = Extract<ResponseItem, { type: "function_call" }>;
 export interface Chat {
-  message(entry: {
-    id: string;
-    role: "user" | "assistant" | "tool";
-    text: string;
-    at: string;
-  }): void;
+  message(message: z.input<typeof ChatMessage>): void;
   delta(id: string, text: string): void;
   status(status: Status): void;
 }
@@ -74,25 +70,52 @@ export function createAgent(options: {
       })
       .catch((error: unknown) => log.error("A turn's status failed.", { error: String(error) }));
   };
-  const show = (entry: Awaited<ReturnType<History["append"]>>) =>
+  const show = (entry: Awaited<ReturnType<History["append"]>>) => chat.message(messageOf(entry));
+  /** A call starting: shown as running, under the id its record will have when it ends. */
+  const running = (call: FunctionCall, id: string) =>
     chat.message({
-      id: entry.id,
-      role: entry.role,
-      text: textOf(entry),
-      at: entry.at,
+      id,
+      role: "tool",
+      text: `${call.name}: running`,
+      at: new Date().toISOString(),
+      tool: { name: head(call.name, 128), state: "running", input: argumentsOf(call.arguments) },
     });
-  /** Record a function call with its output, keeping every call paired, as the API needs. */
-  const answered = async (call: FunctionCall, output: string, text: string) =>
-    show(
-      await history.append({
-        role: "tool",
-        text,
-        items: [
-          call,
-          { type: "function_call_output", callId: call.callId, output: capped(output) },
-        ],
-      }),
-    );
+  /**
+   * Record a function call with its output, keeping every call paired, as the API needs. Its end
+   * is shown even if the record can't be written, so no call is left shown as running.
+   */
+  const answered = async (
+    call: FunctionCall,
+    result: { output: string; ok: boolean; code?: string },
+    id: string,
+  ) => {
+    const entry = {
+      role: "tool" as const,
+      text: `${call.name}: ${result.ok ? "done" : result.code}`,
+      state: result.ok ? ("done" as const) : ("refused" as const),
+      items: [
+        call,
+        {
+          type: "function_call_output" as const,
+          callId: call.callId,
+          output: capped(result.output),
+        },
+      ],
+    };
+    try {
+      show(await history.append(entry, id));
+    } catch (error) {
+      chat.message(
+        messageOf({
+          ...entry,
+          id,
+          at: new Date().toISOString(),
+          items: [{ ...call, arguments: argumentsOf(call.arguments) }, ...entry.items.slice(1)],
+        }),
+      );
+      throw error;
+    }
+  };
   /**
    * Note calls that won't run, in one message however many there are. They never ran, so the
    * record leaves them out: what the model is sent next holds only calls with their outputs.
@@ -150,8 +173,10 @@ export function createAgent(options: {
         status(current, { state: "tool" });
         // A call that has started runs to its end, and its real result is kept: it may have
         // taken effect.
+        const id = crypto.randomUUID();
+        running(call, id);
         const result = await runTool(tools, call.name, call.arguments);
-        await answered(call, result.output, `${call.name}: ${result.ok ? "done" : result.code}`);
+        await answered(call, result, id);
       }
       if (current.cancelled) return;
       if (calls >= MAX_CALLS)
