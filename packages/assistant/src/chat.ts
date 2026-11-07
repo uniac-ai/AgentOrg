@@ -221,7 +221,10 @@ export default defineWidget({
         const off = [
           ctx.slots.chat.on("message", (message) => {
             streaming.delete(message.id);
-            if (!messages.some((m) => m.id === message.id)) messages.push(message);
+            // The latest word on an id replaces the earlier: a tool call running, then ended.
+            const at = messages.findIndex((m) => m.id === message.id);
+            if (at === -1) messages.push(message);
+            else messages[at] = message;
             changing(() => rowFor(message.id, message.role, message.text));
           }),
           ctx.slots.chat.on("delta", ({ id, text }) => {

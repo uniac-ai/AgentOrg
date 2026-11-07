@@ -6,7 +6,7 @@
 import type { ChatMessage, llmSession } from "@agentorg/interfaces";
 import { type Log, Refused, type Slot } from "@agentorg/sdk";
 import type { z } from "zod";
-import { argumentsOf, type History, messageOf, type ResponseItem } from "./history.js";
+import { argumentsOf, type History, head, messageOf, type ResponseItem } from "./history.js";
 import { capped, codeOf, runTool, type Tools } from "./tools.js";
 
 export const MAX_CALLS = 20;
@@ -78,28 +78,44 @@ export function createAgent(options: {
       role: "tool",
       text: `${call.name}: running`,
       at: new Date().toISOString(),
-      tool: { name: call.name.slice(0, 128), state: "running", input: argumentsOf(call.arguments) },
+      tool: { name: head(call.name, 128), state: "running", input: argumentsOf(call.arguments) },
     });
-  /** Record a function call with its output, keeping every call paired, as the API needs. */
+  /**
+   * Record a function call with its output, keeping every call paired, as the API needs. Its end
+   * is shown even if the record can't be written, so no call is left shown as running.
+   */
   const answered = async (
     call: FunctionCall,
     result: { output: string; ok: boolean; code?: string },
     id: string,
-  ) =>
-    show(
-      await history.append(
+  ) => {
+    const entry = {
+      role: "tool" as const,
+      text: `${call.name}: ${result.ok ? "done" : result.code}`,
+      state: result.ok ? ("done" as const) : ("refused" as const),
+      items: [
+        call,
         {
-          role: "tool",
-          text: `${call.name}: ${result.ok ? "done" : result.code}`,
-          state: result.ok ? "done" : "refused",
-          items: [
-            call,
-            { type: "function_call_output", callId: call.callId, output: capped(result.output) },
-          ],
+          type: "function_call_output" as const,
+          callId: call.callId,
+          output: capped(result.output),
         },
-        id,
-      ),
-    );
+      ],
+    };
+    try {
+      show(await history.append(entry, id));
+    } catch (error) {
+      chat.message(
+        messageOf({
+          ...entry,
+          id,
+          at: new Date().toISOString(),
+          items: [{ ...call, arguments: argumentsOf(call.arguments) }, ...entry.items.slice(1)],
+        }),
+      );
+      throw error;
+    }
+  };
   /**
    * Note calls that won't run, in one message however many there are. They never ran, so the
    * record leaves them out: what the model is sent next holds only calls with their outputs.

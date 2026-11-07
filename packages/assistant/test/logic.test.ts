@@ -234,6 +234,35 @@ test("a tool message says its call running, then how it ended, under one id; the
   assert.equal(recorded.at(-1)?.tool, undefined);
 });
 
+test("how each call ended outlives a restart, and a call ends shown even if its record fails", async () => {
+  const values = new Map<string, unknown>();
+  const s = await setup(values);
+  s.actor.bind("layout", {
+    place: () => ({ id: "p1" }),
+    // The store goes while this call runs: its record can't be written.
+    remove: () => {
+      s.actor.unbind("store");
+      return {};
+    },
+  });
+  s.script.push(calls(callTool("layout__place", { actor: "board", module: "panel" }, "c1")));
+  await s.turn("Place it.");
+  type Shown = { id: string; role: string; tool?: { state: string } };
+  const again = await setup(values);
+  const { messages } = (await again.actor.call("chat", "history", {})) as { messages: Shown[] };
+  assert.equal(messages.find((m) => m.role === "tool")?.tool?.state, "done");
+
+  s.script.push(calls(callTool("layout__remove", { id: "p1" }, "c2")));
+  await s.turn("Remove it.");
+  const last = new Map<string, Shown>();
+  for (const e of s.actor.emitted.filter((e) => e.event === "message")) {
+    const m = e.payload as Shown;
+    last.set(m.id, m);
+  }
+  const states = [...last.values()].filter((m) => m.role === "tool").map((m) => m.tool?.state);
+  assert.deepEqual(states, ["done", "done"]);
+});
+
 test("a function call runs through its slot, and its result or refusal goes back", async () => {
   const s = await setup();
   const placed: unknown[] = [];
