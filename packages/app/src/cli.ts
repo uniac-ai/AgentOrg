@@ -1,10 +1,9 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { parseArgs } from "node:util";
-import { personCall, UsageError } from "@agentorg/sdk/person-commands";
+import { hubHome, personCall, UsageError } from "@agentorg/sdk/person-commands";
 import WebSocket from "ws";
 
 const USAGE = `Usage: agentorg [command] [--home DIR]
@@ -21,7 +20,8 @@ const USAGE = `Usage: agentorg [command] [--home DIR]
   call <slot> <method> [json]               call one of the person's slots
 
 While the app runs, the person's commands go through it; otherwise they use the Hub home's
-person-credential. The home is --home, else $AGENTORG_HUB_HOME, else ~/.local/share/agentorg-next.
+person-credential. The home is --home, else $AGENTORG_HUB_HOME, else
+$XDG_DATA_HOME/agentorg, else ~/.local/share/agentorg.
 `;
 
 const write = (stream: NodeJS.WriteStream, text: string) => stream.write(`${text}\n`);
@@ -48,11 +48,7 @@ if (values.help && command === undefined) {
   process.stdout.write(USAGE);
   process.exit(0);
 }
-const home = resolve(
-  (values.home as string | undefined) ??
-    process.env.AGENTORG_HUB_HOME ??
-    join(homedir(), ".local", "share", "agentorg-next"),
-);
+const home = hubHome(values.home as string | undefined);
 
 /** The running app in this home, if there is one: its address, and the CLI's token. */
 function running(): { url: string; token: string } | undefined {

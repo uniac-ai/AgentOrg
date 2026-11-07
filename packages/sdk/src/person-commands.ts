@@ -1,4 +1,21 @@
-import { resolve } from "node:path";
+import { homedir } from "node:os";
+import { isAbsolute, join, resolve } from "node:path";
+
+/**
+ * The Hub home a command uses: `--home`, else `$AGENTORG_HUB_HOME`, else `agentorg` in the XDG
+ * data folder: `$XDG_DATA_HOME` when it is an absolute path (a relative one is ignored, as the
+ * XDG spec says), else `~/.local/share`. An empty value counts as unset.
+ */
+export function hubHome(
+  flag: string | undefined,
+  env: Record<string, string | undefined> = process.env,
+  home: string = homedir(),
+): string {
+  if (flag) return resolve(flag);
+  if (env.AGENTORG_HUB_HOME) return resolve(env.AGENTORG_HUB_HOME);
+  const data = env.XDG_DATA_HOME;
+  return join(data && isAbsolute(data) ? data : join(home, ".local", "share"), "agentorg");
+}
 
 /** A command's arguments don't fit it; the message says how. */
 export class UsageError extends Error {

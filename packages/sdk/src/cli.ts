@@ -1,12 +1,11 @@
 #!/usr/bin/env node
 import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join, relative, resolve } from "node:path";
+import { join, relative } from "node:path";
 import { parseArgs } from "node:util";
 import { openChannel } from "./client.js";
 import { NotConnected, OutcomeUnknown, Refused } from "./errors.js";
 import { BuildError, buildPackage } from "./package.js";
-import { personCall, UsageError } from "./person-commands.js";
+import { hubHome, personCall, UsageError } from "./person-commands.js";
 
 const USAGE = `Usage: agentorg <command> [--home DIR]
 
@@ -18,7 +17,8 @@ const USAGE = `Usage: agentorg <command> [--home DIR]
   call <slot> <method> [json]               call one of the person's slots
 
 Commands other than build and hub act as the person, with the Hub home's person-credential.
-The home is --home, else $AGENTORG_HUB_HOME, else ~/.local/share/agentorg-next.
+The home is --home, else $AGENTORG_HUB_HOME, else
+$XDG_DATA_HOME/agentorg, else ~/.local/share/agentorg.
 `;
 
 const write = (stream: NodeJS.WriteStream, text: string) => stream.write(`${text}\n`);
@@ -48,11 +48,7 @@ if (values.help) {
   process.stdout.write(USAGE);
   process.exit(0);
 }
-const home = resolve(
-  values.home ??
-    process.env.AGENTORG_HUB_HOME ??
-    join(homedir(), ".local", "share", "agentorg-next"),
-);
+const home = hubHome(values.home);
 
 async function build() {
   try {
