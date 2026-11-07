@@ -1,8 +1,19 @@
 import type { z } from "zod";
 import { Refused } from "./errors.js";
-import type { Interface, RpcInterface, StreamInterface } from "./interface.js";
+import {
+  describeInterface,
+  type Interface,
+  type RpcInterface,
+  type StreamInterface,
+} from "./interface.js";
 import type { CallInfo, Duplex, Handlers, InterfaceMap, Log, ModuleDefinition } from "./module.js";
-import { type Binding, createRuntime, type ModuleRuntime, type SlotProvider } from "./runtime.js";
+import {
+  type Binding,
+  check,
+  createRuntime,
+  type ModuleRuntime,
+  type SlotProvider,
+} from "./runtime.js";
 
 /** A fake bound to a slot in a test: handlers for `rpc`, a function for `stream` and `http`. */
 export type Provider<I extends Interface> =
@@ -32,8 +43,22 @@ export interface LogLine {
  * withdrawn export throws `NotConnected`.
  */
 export interface TestContext<S extends InterfaceMap, X extends InterfaceMap>
-  extends Omit<ModuleRuntime<S, X>, "bind" | "call"> {
+  extends Omit<ModuleRuntime<S, X>, "bind" | "call" | "expose"> {
   bind<K extends keyof S & string>(slot: K, provider: Provider<S[K]>): Binding;
+  /**
+   * Make a slot at run time, as `hub.grants.expose` does: an `rpc` export faked by `handlers`,
+   * whose values are checked against `iface` as the Hub checks them. `provider` names whose
+   * export it is (by default a made-up Actor's, `export`). Exposing the same slot again with the
+   * same interface and provider makes it usable again; `emit` sends its events.
+   */
+  expose<I extends RpcInterface>(
+    slot: string,
+    iface: I,
+    handlers: Provider<I>,
+    provider?: { actor: string; export: string },
+  ): Binding;
+  /** The slot made at run time goes, as when its binding is removed. */
+  unexpose(slot: string): void;
   /** Call an export as `caller`; by default as the module's own Actor. */
   call(exportName: string, method: string, input: unknown, caller?: string): Promise<unknown>;
   readonly emitted: Emitted[];
@@ -91,6 +116,49 @@ export function createTestContext<S extends InterfaceMap, X extends InterfaceMap
       }
       return runtime.bind(slot, provider);
     },
+    expose(slot, iface, fake, provider = { actor: "test-provider", export: "export" }) {
+      const handlers = fake as Record<
+        string,
+        ((input: unknown, call: CallInfo) => unknown) | undefined
+      >;
+      const listeners = new Map<string, Set<(payload: unknown) => void>>();
+      runtime.expose(slot, {
+        described: describeInterface(iface),
+        provider,
+        async call(method, input) {
+          const spec = Object.hasOwn(iface.methods, method) ? iface.methods[method] : undefined;
+          if (!spec) throw new Refused("unknown", `${slot} has no method ${method}.`);
+          const parsed = check(spec.input, input, `${slot}.${method} input`);
+          const handler = Object.hasOwn(handlers, method) ? handlers[method] : undefined;
+          if (!handler) throw new Refused("unimplemented", `${slot}.${method} isn't faked.`);
+          // JSON both ways, as through the Hub.
+          const output = check(
+            spec.output,
+            await handler(parsed, { caller: self }),
+            `${slot}.${method} output`,
+            "bad_output",
+          );
+          return JSON.parse(JSON.stringify(output ?? null));
+        },
+        subscribe(event, onEvent) {
+          const set = listeners.get(event) ?? new Set();
+          listeners.set(event, set);
+          set.add(onEvent);
+          return () => void set.delete(onEvent);
+        },
+      });
+      return {
+        emit(event, payload) {
+          const spec = Object.hasOwn(iface.events, event) ? iface.events[event] : undefined;
+          if (!spec) throw new TypeError(`${slot} has no event ${event}.`);
+          const value = JSON.parse(
+            JSON.stringify(check(spec.payload, payload, `${slot}.${event}`, "bad_output")),
+          );
+          for (const fn of [...(listeners.get(event) ?? [])]) fn(value);
+        },
+      };
+    },
+    unexpose: (slot) => runtime.unexpose(slot),
     emitted,
     logs,
   };

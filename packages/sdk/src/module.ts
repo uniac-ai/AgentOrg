@@ -1,5 +1,12 @@
 import type { z } from "zod";
-import type { Events, Interface, Methods, RpcInterface, StreamInterface } from "./interface.js";
+import type {
+  DescribedInterface,
+  Events,
+  Interface,
+  Methods,
+  RpcInterface,
+  StreamInterface,
+} from "./interface.js";
 
 /** Where a module runs: `host` in its own process, `view` in a sandboxed frame. */
 export type Placement = "host" | "view";
@@ -142,6 +149,26 @@ export function isFrameInterface(iface: Interface): boolean {
   return iface.kind === "rpc" && iface.name === "ui.view" && iface.major === 1;
 }
 
+/**
+ * A slot made at run time: another Actor's export, exposed to this Actor with `hub.grants.expose`
+ * rather than declared by its package. It is here exactly while it is bound. Its values are JSON,
+ * checked against `described` by the Hub both ways, not here, so a misfit comes back as
+ * `Refused` (code `invalid`). A call on a slot that's gone, or whose provider isn't running, throws
+ * `NotConnected`, as a declared slot's does.
+ */
+export interface ExposedSlot {
+  /** Its name on this Actor. */
+  readonly slot: string;
+  /** The export's interface: its methods' input and output JSON Schemas, and its events'. */
+  readonly described: DescribedInterface;
+  /** Whose export it is. */
+  readonly provider: { readonly actor: string; readonly export: string };
+  /** One function per method of an `rpc` interface; none for another kind. */
+  readonly call: Readonly<Record<string, (input: unknown) => Promise<unknown>>>;
+  /** Live events from the export while the slot is here; returns a function that unsubscribes. */
+  on(event: string, fn: (payload: unknown) => void): () => void;
+}
+
 /** Everything a module gets. There are no files, network, environment or Hub access besides. */
 export interface Context<S extends InterfaceMap, X extends InterfaceMap> {
   readonly slots: { readonly [K in keyof S]: Slot<S[K]> };
@@ -151,6 +178,13 @@ export interface Context<S extends InterfaceMap, X extends InterfaceMap> {
   };
   readonly self: { readonly actorId: string; readonly module: string };
   readonly log: Log;
+  /**
+   * The slots made for this Actor at run time and bound now, in the order they came. Every host
+   * module of the Actor sees them all; a view module sees none.
+   */
+  exposed(): readonly ExposedSlot[];
+  /** Runs after one is added or removed, so `exposed()` is read again; returns how to stop it. */
+  onExposed(fn: () => void): () => void;
 }
 
 /** The marker the build looks for on a module's default export. */

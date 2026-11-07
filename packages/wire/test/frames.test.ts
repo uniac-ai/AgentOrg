@@ -211,6 +211,14 @@ test("headers and bodies are checked for their shape", () => {
     name: "notes",
     bound: false,
   });
+  const exposure = {
+    interface: { id: "quests@1", kind: "rpc", methods: {}, events: {}, hash: "h" },
+    provider: { actor: "act_q", export: "logic.quests" },
+  };
+  assert.deepEqual(
+    parseHeader({ op: "slot", name: "quests_quests", bound: true, exposed: exposure }),
+    { op: "slot", name: "quests_quests", bound: true, exposed: exposure },
+  );
   for (const bad of [
     null,
     [],
@@ -219,6 +227,11 @@ test("headers and bodies are checked for their shape", () => {
     { op: "withdraw" },
     { op: "slot", name: "notes" },
     { op: "slot", name: "notes", bound: "yes" },
+    // Only a bound slot carries its exposure, and all of it.
+    { op: "slot", name: "q", bound: false, exposed: exposure },
+    { op: "slot", name: "q", bound: true, exposed: null },
+    { op: "slot", name: "q", bound: true, exposed: { provider: exposure.provider } },
+    { op: "slot", name: "q", bound: true, exposed: { ...exposure, provider: { actor: "a" } } },
     { op: "call", slot: "s" },
     { op: "call", slot: "", method: "m" },
     { op: "open", slot: "tty" },

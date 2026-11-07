@@ -76,8 +76,19 @@ interface ChannelBase {
    * or, for a slot already bound, when its provider came back.
    */
   onSlot?(name: string, bound: boolean): void;
+  /**
+   * Each notice for a slot made at run time, in the same order: its exposure when bound (or
+   * usable again), `undefined` when it is gone. These don't reach `onSlot`.
+   */
+  onExposed?(name: string, exposure: ChannelExposure | undefined): void;
   /** Where a notice handler's own failure is reported. */
   log?: Log;
+}
+
+/** A slot made at run time, as the channel keeps it: the export's interface, and whose it is. */
+export interface ChannelExposure {
+  interface: DescribedInterface;
+  provider: { actor: string; export: string };
 }
 
 /** A channel to the Hub as one Actor, at the wire's level: no local checks, no handles. */
@@ -85,6 +96,8 @@ export interface Channel {
   readonly actorId: string;
   /** The Actor's slots bound now, from hello's snapshot and the Hub's notices; empty once closed. */
   readonly bound: ReadonlySet<string>;
+  /** The slots made for it at run time and bound now, from hello's snapshot and the notices. */
+  readonly exposed: ReadonlyMap<string, ChannelExposure>;
   call(slot: string, method: string, value: unknown): Promise<unknown>;
   /** Events from a slot's provider until it ends (`onEnd`) or is stopped; returns how to stop. */
   subscribe(
@@ -153,6 +166,7 @@ const drain = (reader: FrameReader) =>
 export async function openChannel(options: ChannelOptions): Promise<Channel> {
   let session: Session;
   const bound = new Set<string>();
+  const exposed = new Map<string, ChannelExposure>();
   // Notices arrive as streams; their headers are read in arrival order, after hello's snapshot.
   let ready!: () => void;
   let headers = new Promise<void>((resolve) => {
@@ -185,9 +199,14 @@ export async function openChannel(options: ChannelOptions): Promise<Channel> {
     if (header.op === "slot") {
       if (header.bound) bound.add(header.name);
       else bound.delete(header.name);
+      // A slot made at run time is its exposure while bound, and gone when unbound.
+      const wasExposed = exposed.delete(header.name);
+      const exposure = header.exposed as ChannelExposure | undefined;
+      if (exposure) exposed.set(header.name, exposure);
       await stream.writable.close().catch(() => {});
       try {
-        options.onSlot?.(header.name, header.bound);
+        if (exposure || wasExposed) options.onExposed?.(header.name, exposure);
+        else options.onSlot?.(header.name, header.bound);
       } catch (error) {
         options.log?.error("A slot notice's handler threw.", {
           slot: header.name,
@@ -296,8 +315,14 @@ export async function openChannel(options: ChannelOptions): Promise<Channel> {
     session.close();
     throw errorOf(hello.error, options.actorId);
   }
-  for (const slot of (hello as { result: { bound?: string[] } }).result.bound ?? [])
+  const snapshot = (
+    hello as { result: { bound?: string[]; exposed?: Record<string, ChannelExposure> } }
+  ).result;
+  for (const slot of snapshot.bound ?? []) bound.add(slot);
+  for (const [slot, exposure] of Object.entries(snapshot.exposed ?? {})) {
     bound.add(slot);
+    exposed.set(slot, exposure);
+  }
   ready();
 
   const answered = (body: Body, target: string) => {
@@ -312,11 +337,15 @@ export async function openChannel(options: ChannelOptions): Promise<Channel> {
     changes = next.catch(() => {});
     return next;
   };
-  const closed = session.closed.then(() => bound.clear());
+  const closed = session.closed.then(() => {
+    bound.clear();
+    exposed.clear();
+  });
 
   return {
     actorId: options.actorId,
     bound,
+    exposed,
     async call(slot, method, value) {
       return answered(await exchange({ op: "call", slot, method }, slot, input(value)), slot);
     },
@@ -470,6 +499,7 @@ export async function connect<
       ? {}
       : { declares: { slots: describeAll(slots), exports: describeAll(exports) } }),
     onSlot: (slot, bound) => host.onSlot(slot, bound),
+    onExposed: (slot, exposure) => host.onExposed(slot, exposure),
     serve: host.serve,
   });
   host.attach(channel);
