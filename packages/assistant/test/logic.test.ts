@@ -601,3 +601,48 @@ test("calls with large arguments never take a request past its budget", async ()
     last.filter((item) => item.type === "function_call_output").length,
   );
 });
+
+test("state says what the agent is doing, for a view that opens late", async () => {
+  const s = await setup();
+  assert.deepEqual(await s.actor.call("chat", "state", {}), { state: "idle" });
+  const late = gate<Reply>();
+  s.script.push(() => late.shut);
+  const from = s.actor.emitted.length;
+  await s.actor.call("chat", "send", { text: "Think." });
+  await until(() => s.requests.length === 1, "the model request");
+  assert.deepEqual(await s.actor.call("chat", "state", {}), { state: "thinking" });
+  late.open(say("Done."));
+  await s.ended(from);
+  assert.deepEqual(await s.actor.call("chat", "state", {}), { state: "idle" });
+  s.script.push(() => {
+    throw new Refused("usage_limit", "Usage limit reached.");
+  });
+  await s.turn("Again.");
+  assert.deepEqual(await s.actor.call("chat", "state", {}), {
+    state: "error",
+    detail: { code: "usage_limit", message: "Usage limit reached." },
+  });
+});
+
+test("retry runs the last turn again without recording the message twice", async () => {
+  const s = await setup();
+  await assert.rejects(s.actor.call("chat", "retry", {}), { code: "nothing_to_retry" });
+  s.script.push(() => {
+    throw new Refused("unavailable", "Try again later.");
+  });
+  const first = (await s.actor.call("chat", "send", { text: "Hello." })) as { messageId: string };
+  await s.ended(0);
+  const from = s.actor.emitted.length;
+  const again = (await s.actor.call("chat", "retry", {})) as { messageId: string };
+  assert.equal(again.messageId, first.messageId);
+  assert.deepEqual(await s.ended(from), { state: "idle" });
+  const input = s.requests.at(-1)?.input ?? [];
+  assert.equal(input.filter((item) => item.content === "Hello.").length, 1);
+  assert.deepEqual(s.messages(), ["user: Hello.", "assistant: ok"]);
+  // Not during a turn.
+  const late = gate<Reply>();
+  s.script.push(() => late.shut);
+  await s.actor.call("chat", "retry", {});
+  await assert.rejects(s.actor.call("chat", "retry", {}), { code: "busy" });
+  late.open(say("Done."));
+});

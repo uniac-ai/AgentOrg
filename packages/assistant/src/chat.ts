@@ -147,9 +147,9 @@ export default defineWidget({
             ctx.slots.shell.call.openExternal({ url: MANAGE_USAGE }).catch(failed);
           else if (action === "signIn") ctx.slots.shell.call.signIn({}).catch(failed);
           else {
-            // Retry is the person's last message, sent again.
-            const lastUser = messages.findLast((m) => m.role === "user");
-            if (lastUser) void submit(lastUser.text);
+            // Retry runs the last turn again, without sending the message a second time.
+            show(undefined);
+            ctx.slots.chat.call.retry({}).catch(failed);
           }
         };
         async function submit(text: string) {
@@ -161,18 +161,25 @@ export default defineWidget({
             failed(error);
           }
         }
-        /** The record, read again whenever the chat becomes usable; it outranks what streamed. */
+        /**
+         * The record and the status now, read again whenever the chat becomes usable; the record
+         * outranks what streamed, and the status says whether a turn is running.
+         */
         const load = () => {
           // Only what arrives while the page is read is newer than it: everything before is
           // in the page, or older than it.
           const since = messages.length;
-          return ctx.slots.chat.call
-            .history({ limit: 100 })
-            .then(({ messages: page, more }) => {
+          return Promise.all([
+            ctx.slots.chat.call.history({ limit: 100 }),
+            ctx.slots.chat.call.state({}),
+          ])
+            .then(([{ messages: page, more }, now]) => {
               const known = new Set(page.map((m) => m.id));
               messages = [...page, ...messages.slice(since).filter((m) => !known.has(m.id))];
               hasEarlier = more;
               redraw();
+              setBusy(now.state === "thinking" || now.state === "tool");
+              if (now.state === "error" && now.detail) show(noticeOf(now.detail));
             })
             .catch(failed);
         };

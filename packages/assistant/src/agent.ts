@@ -46,10 +46,32 @@ export function createAgent(options: {
   let turn: Turn | undefined;
   /** A cancelled turn whose running call hasn't settled: the next turn waits for its records. */
   let draining: Promise<void> | undefined;
+  /** The latest status, for a view that asks. */
+  let latest: Status = { state: "idle" };
+  const say = (next: Status) => {
+    latest = next;
+    chat.status(next);
+  };
 
   /** A turn's status, while it is still the turn: a cancelled one has already said idle. */
   const status = (current: Turn, next: Status) => {
-    if (turn === current) chat.status(next);
+    if (turn === current) say(next);
+  };
+  /** Run a turn on the record as it stands; its progress arrives as events. */
+  const begin = (current: Turn) => {
+    current.ended = run(current)
+      .then(
+        () => status(current, { state: "idle" }),
+        (error: unknown) => {
+          if (current.cancelled) return;
+          log.error("A turn failed.", { error: String(error) });
+          status(current, { state: "error", detail: codeOf(error) });
+        },
+      )
+      .finally(() => {
+        if (turn === current) turn = undefined;
+      })
+      .catch((error: unknown) => log.error("A turn's status failed.", { error: String(error) }));
   };
   const show = (entry: Awaited<ReturnType<History["append"]>>) =>
     chat.message({
@@ -151,27 +173,32 @@ export function createAgent(options: {
           items: [{ type: "message", role: "user", content: text }],
         });
         show(entry);
-        current.ended = run(current)
-          .then(
-            () => status(current, { state: "idle" }),
-            (error: unknown) => {
-              if (current.cancelled) return;
-              log.error("A turn failed.", { error: String(error) });
-              status(current, { state: "error", detail: codeOf(error) });
-            },
-          )
-          .finally(() => {
-            if (turn === current) turn = undefined;
-          })
-          .catch((error: unknown) =>
-            log.error("A turn's status failed.", { error: String(error) }),
-          );
+        begin(current);
         return { messageId: entry.id };
       } catch (error) {
         if (turn === current) turn = undefined;
         throw error;
       }
     },
+    /** Run the last turn again from the record, without recording the person's message again. */
+    async retry() {
+      if (turn) throw new Refused("busy", "A turn is running. Wait for it, or cancel it.");
+      const current: Turn = { cancelled: false };
+      turn = current;
+      try {
+        await draining;
+        draining = undefined;
+        const last = await history.lastUser();
+        if (!last) throw new Refused("nothing_to_retry", "No message has been sent yet.");
+        begin(current);
+        return { messageId: last.id };
+      } catch (error) {
+        if (turn === current) turn = undefined;
+        throw error;
+      }
+    },
+    /** The status now. */
+    state: () => latest,
     /**
      * Stop the turn now: its model request is cancelled, no further call starts, and a new turn
      * may begin at once. A call already running finishes, and its result is kept.
@@ -183,7 +210,7 @@ export function createAgent(options: {
       turn = undefined;
       // In a model call, nothing more is recorded; in a tool call, its result still is.
       if (!current.requestId) draining = current.ended;
-      chat.status({ state: "idle" });
+      say({ state: "idle" });
       if (current.requestId && model.bound)
         await model.call.cancel({ requestId: current.requestId }).catch(() => {});
     },

@@ -11,12 +11,17 @@ const at = "2026-11-06T00:00:00.000Z";
 type Message = { id: string; role: "user" | "assistant" | "tool"; text: string; at: string };
 
 /** The chat view mounted on a fake DOM, with a fake chat and shell bound to its slots. */
+type Status = {
+  state: "idle" | "thinking" | "tool" | "error";
+  detail?: { code: string; message: string };
+};
 async function mounted(
   options: {
     history?: () => Promise<Message[]> | Message[];
     /** A paged record, used instead of `history` when given. */
     page?: (input: { before?: string; limit?: number }) => { messages: Message[]; more: boolean };
     bind?: boolean;
+    state?: Status;
   } = {},
 ) {
   const context = createTestContext(view, { actorId: "assistant", module: "chat" });
@@ -24,6 +29,7 @@ async function mounted(
   const sent: string[] = [];
   const shell = { opened: [] as string[], signIns: 0 };
   let cancels = 0;
+  let retries = 0;
   let refuse: Refused | undefined;
   const history =
     options.history ?? (() => [{ id: "1", role: "user" as const, text: "Earlier", at }]);
@@ -39,6 +45,11 @@ async function mounted(
       cancel: () => {
         cancels++;
         return {};
+      },
+      state: () => options.state ?? { state: "idle" },
+      retry: () => {
+        retries++;
+        return { messageId: "1" };
       },
     });
   let chat = options.bind === false ? undefined : bindChat();
@@ -85,6 +96,7 @@ async function mounted(
     mount,
     texts: () => log.children.map((el) => el.textContent),
     cancels: () => cancels,
+    retries: () => retries,
   };
 }
 
@@ -229,12 +241,14 @@ test("each refusal shows its own action", async () => {
   await tick();
   assert.equal(v.shell.signIns, 1);
 
-  // Retry sends the person's last message again.
+  // Retry runs the last turn again; the message isn't sent a second time.
   v.chat.emit("message", { id: "2", role: "user", text: "Try this.", at });
   v.chat.emit("status", { state: "error", detail: { code: "unavailable", message: "x" } });
   v.button("Retry")?.click();
   await tick();
-  assert.deepEqual(v.sent, ["Try this."]);
+  assert.equal(v.retries(), 1);
+  assert.deepEqual(v.sent, []);
+  assert.equal(v.box.hidden, true);
 });
 
 test("Retry isn't offered when there is nothing to send again", async () => {
@@ -316,4 +330,14 @@ test("after a rebind the newest page shows in order, and earlier pages come on r
     Array.from({ length: 150 }, (_, i) => `M${i + 1}`),
   );
   assert.equal(v.button("Earlier messages"), undefined);
+});
+
+test("a view opened mid-turn shows Stop, and one opened after an error shows its notice", async () => {
+  const busy = await mounted({ state: { state: "tool" } });
+  assert.ok(busy.button("Stop"));
+  const failed = await mounted({
+    state: { state: "error", detail: { code: "usage_limit", message: "x" } },
+  });
+  assert.ok(failed.box.find((el) => el.textContent === "Usage limit reached"));
+  assert.ok(failed.button("Send"));
 });

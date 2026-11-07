@@ -66,6 +66,8 @@ export default defineActor({
         await agent.cancel();
         return {};
       },
+      state: () => agent.state(),
+      retry: () => agent.retry(),
     });
   },
 });
