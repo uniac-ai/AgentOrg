@@ -154,7 +154,9 @@ async function setup(
   options: { answerTimeoutMs?: number; helloTimeoutMs?: number; checks?: { size?: number } } = {},
 ) {
   const home = join(mkdtempSync(join(tmpdir(), "agentorg-router-")), "home");
-  const hub = Hub.open(home, { helloTimeoutMs: 300, ...options });
+  // The Hub's own hello deadline unless a test watches it close a channel: a short one fails
+  // every hello in the file on a loaded machine.
+  const hub = Hub.open(home, options);
   const server = await listen(hub);
   const clients: Client[] = [];
   t.after(async () => {
@@ -479,7 +481,8 @@ test("management goes only through the hub's exports, and requests reach their a
 });
 
 test("admission: a credential, hello first, nothing else before it, and a deadline", async (t) => {
-  const { url, actor } = await setup(t);
+  // Short enough to wait out, long enough for this test's own hellos on a loaded machine.
+  const { url, actor } = await setup(t, { helloTimeoutMs: 1_000 });
   const { id } = await actor("someone", {});
   const wrong = await connect(url, { actorId: id, credential: "wrong" });
   assert.equal(wrong.admitted.error?.code, "forbidden");
@@ -516,8 +519,13 @@ test("a declared interface whose hash doesn't match its schemas is refused at he
     slots: { x: { id: "x@1", kind: "rpc", hash: "sha256-0" } },
   });
   assert.equal(noMethods.client.admitted.error?.code, "invalid");
-  const many = Object.fromEntries(Array.from({ length: 257 }, (_, i) => [`s${i}`, notes]));
-  assert.equal((await actor("greedy", { slots: many })).client.admitted.error?.code, "invalid");
+  // Too many is refused before any is checked: the first, forged, isn't what the refusal names.
+  const many = Object.fromEntries(
+    Array.from({ length: 257 }, (_, i) => [`s${i}`, i === 0 ? forged : notes]),
+  );
+  const greedy = (await actor("greedy", { slots: many })).client.admitted.error;
+  assert.equal(greedy?.code, "invalid");
+  assert.match(greedy?.message ?? "", /at most 256 interfaces/);
   const { client } = await actor("honest", { exports: { notes } });
   assert.ok("result" in client.admitted);
 });
@@ -1156,9 +1164,7 @@ test("an Actor that leaves slot notices open loses its channel at the cap; one t
 });
 
 test("an Actor with many slots keeps its channel when one change unbinds them all at once", async (t) => {
-  // A hello declaring 256 slots is checked one interface at a time; on a loaded machine that can
-  // take longer than the other tests' short deadline, so this one has the Hub's own.
-  const { url, actor, bind, person } = await setup(t, { helloTimeoutMs: 10_000 });
+  const { url, actor, bind, person } = await setup(t);
   const p = await actor("provider", { exports: { notes } }, notesProvider().serve);
   const made = (await person.call("actors", "create", { name: "many" })) as {
     result: { actorId: string; credential: string };

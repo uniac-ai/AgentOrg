@@ -628,16 +628,17 @@ export class Hub {
       "slots" | "exports",
       Record<string, DescribedInterface>
     >;
-    let count = 0;
-    for (const side of ["slots", "exports"] as const) {
+    const sides = (["slots", "exports"] as const).map((side) => {
       const members = value[side] ?? {};
       if (!isRecord(members)) throw new Refused("invalid", `declares.${side} must be an object.`);
-      for (const [name, iface] of Object.entries(members)) {
-        if (++count > MAX_DECLARED)
-          throw new Refused("invalid", `A hello declares at most ${MAX_DECLARED} interfaces.`);
+      return [side, Object.entries(members)] as const;
+    });
+    // Counted before anything is compiled: an over-long hello costs the Hub no work.
+    if (sides.reduce((n, [, members]) => n + members.length, 0) > MAX_DECLARED)
+      throw new Refused("invalid", `A hello declares at most ${MAX_DECLARED} interfaces.`);
+    for (const [side, members] of sides)
+      for (const [name, iface] of members)
         out[side][name] = await this.#described(actor, iface, `declares.${side}.${name}`);
-      }
-    }
     return out;
   }
 
