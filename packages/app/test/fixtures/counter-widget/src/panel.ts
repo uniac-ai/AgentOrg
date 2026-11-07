@@ -18,13 +18,18 @@ export default defineWidget({
         const show = (value: number) => {
           shown.textContent = `Count: ${value}`;
         };
-        const read = async () => show((await ctx.slots.counter.call.get({})).value);
-        add.addEventListener("click", async () =>
-          show((await ctx.slots.counter.call.increment({})).value),
-        );
+        // A call that fails says so in the widget, rather than leaving it blank.
+        const failed = (error: unknown) => {
+          shown.textContent = `The counter didn't answer: ${error instanceof Error ? error.message : String(error)}`;
+        };
+        const read = () => ctx.slots.counter.call.get({}).then(({ value }) => show(value), failed);
+        add.addEventListener("click", () => {
+          void ctx.slots.counter.call.increment({}).then(({ value }) => show(value), failed);
+        });
         // Read now (the slot is bound before mount), and again whenever it is usable again.
         void read();
-        ctx.slots.counter.onBind(read);
+        const offBind = ctx.slots.counter.onBind(() => void read());
+        return () => offBind();
       },
     });
   },

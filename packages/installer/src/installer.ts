@@ -19,6 +19,11 @@ import type { Manifest } from "@agentorg/sdk/manifest";
 
 /** The built-in Actors that keep state and that manage. */
 const STORAGE = "storage";
+/**
+ * The interface a view's frame binds to the shell itself, with no binding in the Hub (the SDK's
+ * `isShellInterface`): a view's slot of it is never the installer's to connect.
+ */
+const SHELL = "ui.shell@1";
 const HUB = "hub";
 /** Built-in Actors: a composition names them by their ids. */
 const BUILTIN = new Set([HUB, STORAGE, "net"]);
@@ -43,13 +48,16 @@ export default defineActor({
   start(ctx) {
     const manifestOf = async (hash: string) =>
       (await ctx.slots.packages.call.get({ hash })).manifest as unknown as Manifest;
-    /** The package's slots the installer connects (`module.slot`), with their interfaces. */
+    /**
+     * The package's slots the installer connects (`module.slot`), with their interfaces: not those
+     * its own connections wire, nor a view's shell, which its frame binds itself.
+     */
     const openSlots = (manifest: Manifest) => {
       const wired = new Set(manifest.connections.map(([slot]) => slot));
       return Object.entries(manifest.modules).flatMap(([module, m]) =>
         Object.entries(m.slots)
           .map(([slot, id]) => ({ slot: `${module}.${slot}`, id }))
-          .filter(({ slot }) => !wired.has(slot)),
+          .filter(({ slot, id }) => !wired.has(slot) && !(m.placement === "view" && id === SHELL)),
       );
     };
 

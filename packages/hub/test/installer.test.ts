@@ -168,6 +168,25 @@ test("plan proposes, for each open slot, the running exports of exactly its inte
   assert.ok(hub.state.actor(actorId));
 });
 
+test("a view's in-frame slots aren't the installer's: plan and install leave out ui.shell", async (t) => {
+  const { shell, add } = await setup(t);
+  // The assistant's chat view takes the shell (ui.shell@1), which its frame serves itself.
+  const assistant = await add(join(packages, "assistant"));
+  const plan = await shell.slots.installer.call.plan({ package: assistant });
+  assert.ok(!plan.slots.some((s) => s.slot === "chat.shell"), JSON.stringify(plan.slots));
+  assert.ok(
+    plan.slots.some((s) => s.slot === "logic.model"),
+    "its other slots are planned",
+  );
+  const { unbound } = await shell.slots.installer.call.install({
+    package: assistant,
+    name: "Helper",
+    connections: {},
+  });
+  assert.ok(!unbound.includes("chat.shell"));
+  assert.ok(unbound.includes("logic.model"));
+});
+
 test("install makes the Actor with exactly the connections given, seeds its store and starts it", async (t) => {
   const { hub, shell, seeded, as, track } = await setup(t);
   const done = await shell.slots.installer.call.install({
