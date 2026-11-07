@@ -58,6 +58,8 @@ A package's `package.json` names its modules, its own wiring and any seed state:
 - reads each module's definition from its code and writes `agentorg.json`: each module's placement, slots and exports, every interface's JSON Schemas and hash, the package's `connections` and `seed`;
 - hashes the tree, `agentorg.json` and `dist/`, as SHA-256 over the canonical list of each file's path and SHA-256, and archives it as `<hash>.agentorg`, a deterministic tar. The tree goes to `agentorg-build/package/` and the archive beside it.
 
+It finds `@agentorg/sdk`, `@agentorg/interfaces` and `zod` from the package's own folder, so it works in a checkout of this repository, where they are. With `agentorg` installed from npm, build through the running app instead: `agentorg call packages build '{"files": {"package.json": "…", "src/logic.ts": "…"}}'` is the Hub's build (`hub.packages.build`), which takes the source as data, builds it as above against the SDK, the interfaces and zod it ships with, and adds the package.
+
 A signature is detached: a file named `agentorg.sig` beside the package, signing the package hash, so it is never inside what it signs. The manifest has no signature field.
 
 The build bundles; it doesn't type-check. Run `tsc --noEmit` on the package first.
@@ -84,7 +86,7 @@ To read a module's definition, the build runs the module's code in a separate No
 
 - **`agentorg`**, with no command, runs AgentOrg: a Hub in its home, the person's gateway and the shell, on `127.0.0.1` (`--port N`, else any free port). It opens the browser already signed in, and prints only its address, never a sign-in code. `--no-open` doesn't open a browser. The code is in the address it hands the system's opener; on Linux, other local users can see that program's arguments for the moment it runs, and the code works for 60 s.
 - **`agentorg open`** signs a browser in to the running app again.
-- **`agentorg build [dir]`** builds a package, as the SDK's build does.
+- **`agentorg build [dir]`** builds a package, as the SDK's build does, in a checkout of this repository. Installed from npm, build with `agentorg call packages build '{"files": {…}}'`, the Hub's build.
 - **`agentorg hub [--port N]`** runs a bare Hub in its home, without the gateway or the shell, serving WebSocket on loopback, and writes the address to `<home>/url`.
 - **The person's commands**, one per hub method:
   - `agentorg add <file.agentorg>`;

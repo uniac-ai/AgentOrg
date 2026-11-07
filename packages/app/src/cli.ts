@@ -11,7 +11,9 @@ const USAGE = `Usage: agentorg [command] [--home DIR]
 
   (no command) [--port N] [--no-open]       run AgentOrg: the Hub, your gateway and the shell
   open                                      sign a browser in to the running app
-  build [package-dir]                       build a package into a .agentorg archive
+  build [package-dir]                       build a package into a .agentorg archive, in a
+                                            checkout of this repository; installed, use
+                                            call packages build '{"files": {...}}'
   hub [--port N]                            run a bare Hub, without the shell
   add <file.agentorg>                       hub.packages.add
   actors | bindings | exports | audit       each one's list
