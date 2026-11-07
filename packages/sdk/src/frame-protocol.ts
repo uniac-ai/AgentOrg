@@ -54,11 +54,6 @@ export type FromFrame =
       message: string;
       fields?: Record<string, unknown>;
     }
-  /**
-   * The mounted view's content height in CSS pixels, each time it changes: the frame runtime's
-   * own, not `ui.view@1`'s. The shell may size the frame to it.
-   */
-  | { op: "size"; height: number }
   /** The answer to one of the shell's requests. */
   | { op: "reply"; id: number; result: unknown }
   | { op: "reply"; id: number; error: ErrorBody };

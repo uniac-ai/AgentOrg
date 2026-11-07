@@ -189,6 +189,7 @@ const TOKENS = [
   "accent-fg",
   "ok",
   "warn",
+  "bad",
   "ring",
   "radius",
 ];

@@ -1,34 +1,24 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { FRAME_BASE } from "../src/frame-base.ts";
 import { FRAME_HELLO, type PortLike } from "../src/frame-protocol.ts";
 
 type Listener = (event: unknown) => void;
 
-test("the frame takes one port, from its parent only, sets theme tokens on its document and tells its height", async () => {
+test("the frame puts the base styles first, takes one port, from its parent only, and sets theme tokens on its document", async () => {
   // The few browser globals the entry reads, as a frame's window has them.
   const listeners = new Map<string, Listener[]>();
   const parent = { name: "the shell" };
   const style = new Map<string, string>();
   const g = globalThis as Record<string, unknown>;
   g.parent = parent;
-  let height = 0;
-  const body = { root: true, getBoundingClientRect: () => ({ height }) };
-  const observers: { callback: () => void; target?: unknown }[] = [];
-  g.ResizeObserver = class {
-    #observer: { callback: () => void; target?: unknown };
-    constructor(callback: () => void) {
-      this.#observer = { callback };
-      observers.push(this.#observer);
-    }
-    observe(target: unknown) {
-      this.#observer.target = target;
-    }
-  };
-  const resized = () => {
-    for (const { callback } of observers) callback();
-  };
+  const body = { root: true };
+  // The head as the frame document has it: its own style and the runtime's script, in order.
+  const head: unknown[] = ["the document's style", "the runtime's script"];
   g.document = {
     body,
+    head: { prepend: (node: unknown) => head.unshift(node) },
+    createElement: (tag: string) => ({ tag, textContent: null }),
     documentElement: {
       style: { setProperty: (name: string, value: string) => style.set(name, value) },
     },
@@ -36,6 +26,12 @@ test("the frame takes one port, from its parent only, sets theme tokens on its d
   g.addEventListener = (type: string, listener: Listener) =>
     listeners.set(type, [...(listeners.get(type) ?? []), listener]);
   await import("../src/frame-entry.ts");
+  // Before any view: the base styles, first in the head, so the view's own come after and win.
+  assert.deepEqual(head, [
+    { tag: "style", textContent: FRAME_BASE },
+    "the document's style",
+    "the runtime's script",
+  ]);
   const channels: InstanceType<typeof MessageChannel>[] = [];
   const channel = () => {
     const made = new MessageChannel();
@@ -106,12 +102,6 @@ test("the frame takes one port, from its parent only, sets theme tokens on its d
       }
     };
     await replied(1);
-    // One observer, on the body; before mount its height isn't the view's, so nothing is told.
-    assert.deepEqual(
-      observers.map(({ target }) => target),
-      [body],
-    );
-    resized();
     first.port1.postMessage({
       op: "mount",
       id: 2,
@@ -119,24 +109,15 @@ test("the frame takes one port, from its parent only, sets theme tokens on its d
       size: { width: 1, height: 1 },
     });
     await replied(2);
-    // Mounted: each new height, rounded up, once.
-    height = 321.4;
-    resized();
-    resized();
-    height = 90;
-    resized();
-    await new Promise((resolve) => setTimeout(resolve, 20));
     assert.deepEqual(replies, [
       { op: "reply", id: 1, result: {} },
       { op: "reply", id: 2, result: {} },
-      { op: "size", height: 322 },
-      { op: "size", height: 90 },
     ]);
     assert.deepEqual([...style], [["--canvas", "rgb(20 20 20)"]]);
     assert.equal((g.document as { body: { mounted?: boolean } }).body.mounted, true);
   } finally {
     // Closing our end closes the frame's too, so nothing keeps the test's process alive.
     for (const made of channels) made.port1.close();
-    for (const name of ["parent", "document", "addEventListener", "ResizeObserver"]) delete g[name];
+    for (const name of ["parent", "document", "addEventListener"]) delete g[name];
   }
 });

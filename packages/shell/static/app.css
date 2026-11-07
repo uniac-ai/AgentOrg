@@ -407,10 +407,6 @@ a {
   padding: 4px 14px 14px;
   height: 260px;
 }
-/* Its view reported its height: the frame takes it, and the body fits the frame. */
-.view-body.sized {
-  height: auto;
-}
 /*
  * A view's own frame. Its color scheme is the frame document's, so the browser paints no backdrop
  * behind it: the view draws on the shell's container.

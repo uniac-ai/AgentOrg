@@ -332,10 +332,6 @@ test("a placement names the agent that placed it, and moves up among those besid
     await beside.locator("section").evaluateAll((all) => all.map((e) => e.ariaLabel)),
     ["Launch", "Notes"],
   );
-  // Each takes its content's height once its frame reports it: click once they have, not mid-shift.
-  await page.waitForFunction(
-    () => document.querySelectorAll(".widgets .view-body.sized").length === 2,
-  );
   await page.getByRole("button", { name: "Notes options" }).click();
   await page.getByRole("menuitem", { name: "Move up" }).click();
   await page.getByRole("menu").waitFor({ state: "detached" });
@@ -711,8 +707,6 @@ test("opening a menu, the dialog and a theme switch move nothing", async (t) => 
   const chat = page.frameLocator(".container.main iframe");
   await chat.getByText(/^chat rgb\(20 20 20\)/).waitFor();
   await page.frameLocator(".widgets iframe").getByText("panel").waitFor();
-  // Sized to its content, as its frame reported.
-  await page.locator(".widgets .view-body.sized").waitFor();
   await page.getByRole("button", { name: "New agent" }).waitFor();
   const before = await boxes(page, LAID_OUT);
 

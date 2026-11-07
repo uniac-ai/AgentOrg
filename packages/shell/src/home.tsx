@@ -1,4 +1,4 @@
-import { type ReactNode, useState } from "react";
+import type { ReactNode } from "react";
 import { Avatar } from "./app.tsx";
 import { type Actor, api, type BindingRequest, go, useAction, useLoad } from "./data.ts";
 import { MoreIcon } from "./icons.tsx";
@@ -121,8 +121,6 @@ export function PlacedView({
   menuOpen: boolean;
   onMenu(): void;
 }) {
-  // The view's own height once its frame reports one; until then, the default.
-  const [height, setHeight] = useState<number>();
   const actor = actors.find((a) => a.actorId === placement.actor);
   // Until the Actors are read, no name rather than an id.
   const name = actor?.name ?? "";
@@ -167,15 +165,9 @@ export function PlacedView({
           remove={() => api.call("layout", "remove", { id: placement.id })}
         />
       )}
-      <div className={height === undefined ? "view-body" : "view-body sized"}>
+      <div className="view-body">
         {hash ? (
-          <ViewFrame
-            actor={placement.actor}
-            module={placement.module}
-            hash={hash}
-            onSize={setHeight}
-            {...(height !== undefined ? { height } : {})}
-          />
+          <ViewFrame actor={placement.actor} module={placement.module} hash={hash} />
         ) : (
           actors.length > 0 && <div className="view-error">This view didn't load.</div>
         )}
