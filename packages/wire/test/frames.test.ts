@@ -51,11 +51,45 @@ test("frames round-trip, split anywhere, and hand over the raw bytes after them"
 });
 
 test("a frame arriving one byte at a time is assembled in linear time", async () => {
-  /** How long a frame of `size` characters takes to assemble from one-byte chunks: the best of 3. */
-  const assemble = async (size: number) => {
-    let best = Number.POSITIVE_INFINITY;
-    for (let run = 0; run < 3; run++) {
-      const frame = encodeFrame({ text: "y".repeat(size) });
+  /**
+   * The work assembling a frame of `size` characters from one-byte chunks takes, counted rather
+   * than timed, so a loaded machine can't change it: each byte a typed array copies, and each
+   * element an array operation moves (a shift moves the whole array). Node's own streams use
+   * their own copies of these methods, so only the wire's code is counted. What it can't see is a
+   * quadratic made without them: copying by spread, `Array.from` or `Buffer.concat`, or a loop
+   * that rescans what is queued on each read.
+   */
+  const work = async (size: number) => {
+    const frame = encodeFrame({ text: "y".repeat(size) });
+    let moved = 0;
+    const array = Array.prototype as unknown as Record<string, unknown>;
+    const bytes = Uint8Array.prototype as unknown as Record<string, unknown>;
+    type Cost = (self: unknown, args: unknown[], out: unknown) => number;
+    const counted: [Record<string, unknown>, string, Cost][] = [
+      [array, "shift", (self) => (self as unknown[]).length],
+      [array, "splice", (self) => (self as unknown[]).length],
+      [array, "slice", (_, __, out) => (out as unknown[]).length],
+      [array, "concat", (_, __, out) => (out as unknown[]).length],
+      [bytes, "set", (_, args) => (args[0] as ArrayLike<number>).length],
+      [bytes, "slice", (_, __, out) => (out as Uint8Array).length],
+    ];
+    // Restored as they were: Uint8Array's set and slice are inherited, so theirs go again.
+    const own = counted.map(([proto, name]) => Object.getOwnPropertyDescriptor(proto, name));
+    for (const [proto, name, cost] of counted) {
+      const original = proto[name] as (...args: unknown[]) => unknown;
+      Object.defineProperty(proto, name, {
+        configurable: true,
+        writable: true,
+        value(this: unknown, ...args: unknown[]) {
+          // A shift's or splice's cost is the array before it; a slice's, what it made.
+          const before = name === "shift" || name === "splice" ? cost(this, args, undefined) : 0;
+          const out = original.apply(this, args);
+          moved += before || cost(this, args, out);
+          return out;
+        },
+      });
+    }
+    try {
       let offset = 0;
       const reader = new FrameReader(
         new ReadableStream<Uint8Array>({
@@ -66,20 +100,22 @@ test("a frame arriving one byte at a time is assembled in linear time", async ()
           },
         }),
       );
-      const started = performance.now();
       assert.equal(((await reader.next()) as { text: string }).text.length, size);
-      best = Math.min(best, performance.now() - started);
+    } finally {
+      counted.forEach(([proto, name], i) => {
+        const was = own[i];
+        if (was) Object.defineProperty(proto, name, was);
+        else delete proto[name];
+      });
     }
-    return best;
+    return moved;
   };
-  // Four times the bytes: linear assembly takes about four times as long, quadratic about sixteen.
-  // A ratio, not a time, so a loaded machine slows both alike.
-  const small = await assemble(16 * 1024);
-  const large = await assemble(64 * 1024);
-  assert.ok(
-    large / small < 10,
-    `16 KiB in ${small.toFixed(1)} ms, 64 KiB in ${large.toFixed(1)} ms`,
-  );
+  // Four times the bytes: linear assembly is about four times the work, quadratic about sixteen.
+  const small = await work(16 * 1024);
+  const large = await work(64 * 1024);
+  assert.ok(small >= 16 * 1024, `each byte is copied at least once (${small})`);
+  assert.ok(large / small < 8, `16 KiB moved ${small}, 64 KiB moved ${large}`);
+  assert.ok(!Object.hasOwn(Uint8Array.prototype, "set"), "the typed arrays are as they were");
 });
 
 test("oversized, truncated and malformed frames are refused", async () => {
