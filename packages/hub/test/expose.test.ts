@@ -229,19 +229,85 @@ test("expose refuses the Hub's own Actors, a missing export, another kind and a 
     );
 });
 
-test("a redeclared exposed slot keeps its binding as declared, and can't change its interface", (t) => {
+test("an Actor naming its own slot like an exposed one takes the name: the exposure yields", (t) => {
   const state = open(t);
   const { provider, agent } = cast(state);
   state.expose(PERSON, { provider, export: "quests", to: agent, as: "quests" });
-  assert.throws(
-    () => state.declareExternal(agent, { slots: { quests: pipe }, exports: {} }),
-    refused("conflict"),
-  );
   // A hello that doesn't name it keeps it: it isn't the Actor's to drop.
   state.declareExternal(agent, { slots: {}, exports: {} });
   assert.equal(state.binding(agent, "quests")?.exposed, true);
-  state.declareExternal(agent, { slots: { quests: described }, exports: {} });
-  assert.equal(state.binding(agent, "quests")?.exposed, undefined);
+  // One that names it, as anything, has its own slot; the exposure and its binding go.
+  state.declareExternal(agent, { slots: { quests: pipe }, exports: {} });
+  assert.equal(state.binding(agent, "quests"), undefined);
+  assert.equal(state.declaration(agent, "slot", "quests")?.dynamic, false);
+  // A request to expose under a name the Actor then declares closes.
+  const asked = state.expose(agent, { provider, export: "quests", to: agent, as: "later" });
+  assert.equal(asked.exposed, false);
+  state.declareExternal(agent, { slots: { quests: pipe, later: described }, exports: {} });
+  assert.deepEqual(
+    state.mine(agent).map((r) => [r.slot, r.status]),
+    [["later", "closed"]],
+  );
+});
+
+test("a request reserves no name, settles with the exposure it asked for, and is bounded", (t) => {
+  const state = open(t);
+  const { provider, agent, stranger } = cast(state);
+  state.offer(stranger, "other", described);
+  // The stranger asks to expose its export to the agent as "model"; the person exposes the
+  // provider's under that name first: it has it, and the stranger's request closes.
+  const asked = state.expose(stranger, {
+    provider: stranger,
+    export: "other",
+    to: agent,
+    as: "model",
+  });
+  assert.equal(asked.exposed, false);
+  assert.deepEqual(state.expose(PERSON, { provider, export: "quests", to: agent, as: "model" }), {
+    exposed: true,
+    slot: "model",
+  });
+  assert.deepEqual(
+    state.mine(stranger).map((r) => r.status),
+    ["closed"],
+  );
+  // A request for an export closes when that export is exposed to the Actor under another name.
+  const waiting = state.expose(agent, { provider: stranger, export: "other", to: agent });
+  assert.equal(waiting.exposed, false);
+  state.expose(PERSON, { provider: stranger, export: "other", to: agent, as: "elsewhere" });
+  assert.equal(state.mine(agent)[0]?.status, "closed");
+  // One Actor's open exposure requests toward another are bounded.
+  for (let n = 0; n < 32; n++)
+    state.expose(stranger, { provider: stranger, export: "other", to: provider, as: `ask${n}` });
+  assert.throws(
+    () =>
+      state.expose(stranger, { provider: stranger, export: "other", to: provider, as: "one_more" }),
+    refused("limit"),
+  );
+});
+
+test("a caller with neither end learns nothing of what is exposed", (t) => {
+  const state = open(t);
+  const { provider, agent, stranger } = cast(state);
+  state.expose(PERSON, { provider, export: "quests", to: agent });
+  assert.throws(
+    () => state.expose(stranger, { provider, export: "quests", to: agent }),
+    refused("forbidden"),
+  );
+  assert.throws(
+    () => state.expose(stranger, { provider, export: "nope", to: agent }),
+    refused("forbidden"),
+  );
+});
+
+test("a Hub export exposed to the person can be removed again", (t) => {
+  const state = open(t);
+  const made = state.expose(PERSON, { provider: "hub", export: "audit", to: PERSON });
+  assert.equal(made.exposed, true);
+  state.unexpose(PERSON, PERSON, made.slot);
+  assert.equal(state.binding(PERSON, made.slot), undefined);
+  // The person's own hub bindings still stay.
+  assert.throws(() => state.unbind(PERSON, PERSON, "audit"), refused("forbidden"));
 });
 
 test("only a manager says whom an Actor is made for, and it is recorded, granting nothing", (t) => {
@@ -290,7 +356,7 @@ test("an exposed slot reaches a connected Actor as ctx.exposed(), at hello and a
   clients.push(provider);
   provider.exports.quests.implement({ get: async () => ({ quests: ["walk"] }) });
 
-  // Exposed before the agent connects: hello's snapshot carries it.
+  // Exposed before the agent connects: a notice follows its hello.
   const first = await person.slots.grants.call.expose({
     provider: p.actorId,
     export: "quests",
@@ -302,7 +368,9 @@ test("an exposed slot reaches a connected Actor as ctx.exposed(), at hello and a
   let changes = 0;
   agent.onExposed(() => changes++);
   const names = () => agent.exposed().map((slot) => slot.slot);
+  for (let i = 0; i < 300 && names().length < 1; i++) await new Promise((r) => setTimeout(r, 10));
   assert.deepEqual(names(), ["pocketSideQuests_quests"]);
+  changes = 0;
   const [slot] = agent.exposed();
   assert.deepEqual(slot?.provider, { actor: p.actorId, export: "quests" });
   assert.deepEqual(slot?.described, described);

@@ -149,6 +149,8 @@ export interface StateEvents {
 const NAME = /^[a-z][A-Za-z0-9_]*$/;
 /** The longest name of a slot made at run time, so a tool named `<slot>__<method>` fits. */
 const EXPOSED_MAX = 48;
+/** Exposure requests one Actor may have open toward one other at a time. */
+const MAX_OPEN_EXPOSURES = 32;
 /** The Actors that are the Hub itself: they take no slots. */
 const BUILTIN = new Set(["hub", "storage", "net"]);
 
@@ -830,6 +832,17 @@ export class HubState {
           if (!NAME.test(name))
             throw new Refused("invalid", `${JSON.stringify(name)} isn't a valid name.`);
           this.#checked(iface);
+          if (side === "slot") {
+            // The Actor's own slots are its to name: an exposure under the same name yields,
+            // with its binding, and requests to make one under it close.
+            if (this.declaration(actorId, side, name)?.dynamic) this.#drop(actorId, side, name);
+            for (const open of this.#pending(
+              "consumer = ? AND slot = ? AND exposed = 1",
+              actorId,
+              name,
+            ))
+              this.#decide(open, "closed");
+          }
           const known = this.declaration(actorId, side, name);
           if (
             known &&
@@ -1069,7 +1082,7 @@ export class HubState {
       this.#db.prepare(`SELECT ${BINDING} FROM bindings b WHERE ${where}`).all(...params) as Row[]
     ).map(bindingOf);
     if (!removed.length) return;
-    if (removed.some((b) => b.consumer === PERSON && b.provider === HUB))
+    if (removed.some((b) => b.consumer === PERSON && b.provider === HUB && !b.exposed))
       throw new Refused(
         "forbidden",
         "The person's hub bindings stay, so someone can always manage the Hub.",
@@ -1149,6 +1162,14 @@ export class HubState {
   ): { exposed: true; slot: string } | { exposed: false; slot: string; requestId: string } {
     const to = this.#open(input.to);
     const provider = this.#open(input.provider);
+    // Authority first, as bind's: a caller with neither end learns nothing more.
+    const ends = { consumer: to.actorId, provider: provider.actorId, export: input.export };
+    const sides = this.sides(caller, { ...ends, slot: "" });
+    if (!sides.export && !sides.slot)
+      throw new Refused(
+        "forbidden",
+        `${this.#named(caller)} can't expose ${input.export} of ${this.#named(provider.actorId)} to ${this.#named(to.actorId)}: that takes the provider's side (it, an Actor bound to that export, or a manager) or ${this.#named(to.actorId)}'s (it, or a manager). Ask one of them to expose it.`,
+      );
     if (BUILTIN.has(to.actorId))
       throw new Refused(
         "forbidden",
@@ -1169,10 +1190,12 @@ export class HubState {
     );
     if (already && (input.as === undefined || input.as === already.slot))
       return { exposed: true, slot: already.slot };
-    const asking = this.#db
-      .prepare("SELECT * FROM requests WHERE status = 'open' AND exposed = 1 AND consumer = ?")
-      .all(to.actorId) as Row[];
-    const requested = asking.map(requestOf);
+    const requested = (
+      this.#db
+        .prepare("SELECT * FROM requests WHERE status = 'open' AND exposed = 1 AND consumer = ?")
+        .all(to.actorId) as Row[]
+    ).map(requestOf);
+    // An open request's name for this export is taken again, so approving needs no `as`.
     const slot =
       input.as ??
       requested.find(same)?.slot ??
@@ -1182,33 +1205,45 @@ export class HubState {
         "invalid",
         `${JSON.stringify(slot)} isn't a slot name: one word of letters, digits and _, at most ${EXPOSED_MAX}.`,
       );
-    if (
-      this.declaration(to.actorId, "slot", slot) ||
-      requested.some((r) => r.slot === slot && !same(r))
-    )
+    // A request reserves no name: the first exposure made under it has it, and the rest close.
+    if (this.declaration(to.actorId, "slot", slot))
       throw new Refused(
         "conflict",
         `${this.#named(to.actorId)} already has a slot ${slot}; name another with as.`,
       );
-    const wiring = { consumer: to.actorId, slot, provider: provider.actorId, export: input.export };
-    const sides = this.sides(caller, wiring);
-    if (!sides.export && !sides.slot)
-      throw new Refused(
-        "forbidden",
-        `${this.#named(caller)} can't expose ${input.export} of ${this.#named(provider.actorId)} to ${this.#named(to.actorId)}: that takes the provider's side (it, an Actor bound to that export, or a manager) or ${this.#named(to.actorId)}'s (it, or a manager). Ask one of them to expose it.`,
-      );
+    const wiring = { ...ends, slot };
     if (!(sides.export && sides.slot)) {
       const has: Side = sides.export ? "export" : "slot";
       if (!this.#asked(wiring, has)) {
+        const mine = requested.filter(
+          (r) => r.requestedBy === caller && !(same(r) && r.slot === slot),
+        );
+        if (mine.length >= MAX_OPEN_EXPOSURES)
+          throw new Refused(
+            "limit",
+            `${this.#named(caller)} has ${MAX_OPEN_EXPOSURES} exposures to ${this.#named(to.actorId)} waiting; wait for them to be decided, or withdraw one by exposing it.`,
+          );
         const request = this.#ask(caller, wiring, "", other(has), true);
         return { exposed: false, slot, requestId: request.requestId };
       }
     }
     this.#transaction(() => {
-      const pending = this.#pending("consumer = ? AND slot = ?", wiring.consumer, wiring.slot);
+      // Settled: this slot's requests (approved if for this export), and this export's requests
+      // to `to` under other names, which can't be made any more.
+      const pending = this.#pending(
+        "consumer = ? AND (slot = ? OR (exposed = 1 AND provider = ? AND export = ?))",
+        wiring.consumer,
+        wiring.slot,
+        wiring.provider,
+        wiring.export,
+      );
       this.#declare(to.actorId, "slot", slot, offered.iface, true);
       this.#insertBinding(wiring, caller);
-      for (const open of pending) this.#decide(open, same(open.request) ? "approved" : "closed");
+      for (const open of pending)
+        this.#decide(
+          open,
+          same(open.request) && open.request.slot === slot ? "approved" : "closed",
+        );
       this.#audit(caller, "expose", { ...wiring });
     });
     return { exposed: true, slot };
