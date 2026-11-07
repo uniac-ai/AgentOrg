@@ -15,7 +15,7 @@ const fixtures = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "test
 test("a view's frame reaches nothing of the shell, the gateway or the network", async (t) => {
   const home = mkdtempSync(join(tmpdir(), "agentorg-sandbox-"));
   const out = mkdtempSync(join(tmpdir(), "agentorg-probe-"));
-  const app = await startApp({ home });
+  const app = await startApp({ home, firstRun: false });
   t.after(async () => {
     await app.close();
     rmSync(home, { recursive: true, force: true });
@@ -133,7 +133,7 @@ test("a view's frame reaches nothing of the shell, the gateway or the network", 
 test("a frame's address opened top-level is still sandboxed, so it can't read the shell's session", async (t) => {
   const home = mkdtempSync(join(tmpdir(), "agentorg-toplevel-"));
   const out = mkdtempSync(join(tmpdir(), "agentorg-probe-"));
-  const app = await startApp({ home });
+  const app = await startApp({ home, firstRun: false });
   t.after(async () => {
     await app.close();
     rmSync(home, { recursive: true, force: true });

@@ -23,6 +23,7 @@ import { WebSocketServer } from "ws";
 import { type PersonSide, serveSocket, type ViewCalls } from "./api.js";
 import { serveFrame } from "./frames.js";
 import { Layout } from "./layout.js";
+import { type FirstRun, type FirstRunOptions, firstRun, oauthRoute } from "./model.js";
 import { SignIn } from "./signin.js";
 import {
   MAX_TRANSFER,
@@ -34,8 +35,8 @@ import {
 } from "./transfer.js";
 
 /**
- * The person's slots the gateway declares: every `hub.*` it holds, its own store, and `login`, the
- * model's account sign-in, which the first run binds (it may be unbound).
+ * The person's slots the gateway declares: every `hub.*` it holds, its own store, and the two the
+ * first run binds (either may be unbound): `installer`, and `login`, the model's account sign-in.
  */
 const SLOTS = {
   packages: hubPackages,
@@ -74,6 +75,11 @@ export interface AppOptions {
   port?: number;
   /** Where the shell's static files are; `@agentorg/shell`'s build by default. */
   shell?: string;
+  /**
+   * The first run, at each start after the person's store is bound: on by default; `false` leaves
+   * the home as it is.
+   */
+  firstRun?: FirstRunOptions | false;
 }
 
 export interface App {
@@ -82,6 +88,8 @@ export interface App {
   /** Where external Actors reach the Hub. */
   readonly hubUrl: string;
   readonly hub: Hub;
+  /** This start's first run: what it found or made, once it's done; none when it was off. */
+  readonly firstRun?: Promise<FirstRun | undefined>;
   /** A fresh one-time sign-in address, `<url>/signin#<code>`. */
   signInUrl(): string;
   /** Serve `path` with `route`, for another part of the app. */
@@ -243,6 +251,22 @@ export async function startApp(options: AppOptions): Promise<App> {
       }),
   };
 
+  // The first run, beside serving: the shell follows the person's bindings as they're made, so it
+  // needn't wait. What it can't do is logged and tried at the next start.
+  const ran =
+    options.firstRun === false
+      ? undefined
+      : firstRun(personSide, {
+          log: (message) => process.stderr.write(`${message}\n`),
+          connected: (actorId) => hub.connected(actorId),
+          ...options.firstRun,
+        }).catch((error: unknown) => {
+          process.stderr.write(
+            `First run didn't work: ${error instanceof Error ? error.message : String(error)}\n`,
+          );
+          return undefined;
+        });
+
   /** The app's own pages: scripts and styles from here only, framed by nothing. */
   const appCsp = [
     "default-src 'self'",
@@ -256,7 +280,8 @@ export async function startApp(options: AppOptions): Promise<App> {
     "form-action 'self'",
     "frame-ancestors 'none'",
   ].join("; ");
-  const routes = new Map<string, Route>();
+  // Where ChatGPT sends the browser back after sign-in.
+  const routes = new Map<string, Route>([["/oauth/chatgpt", oauthRoute(personSide)]]);
   let origin = "";
   const host = () => origin.slice("http://".length);
 
@@ -504,6 +529,8 @@ export async function startApp(options: AppOptions): Promise<App> {
   });
   const close = () => {
     closing ??= (async () => {
+      // A first run still going finishes first, so it isn't cut off half way.
+      await ran;
       const ours = (file: string, text: string) => {
         if (file === "cli-token") return text.trim() === signIn.cliToken;
         if (file === "url") return text.trim() === listener.url;
@@ -539,6 +566,7 @@ export async function startApp(options: AppOptions): Promise<App> {
     url: origin,
     hubUrl: listener.url,
     hub,
+    ...(ran ? { firstRun: ran } : {}),
     signInUrl: () => `${origin}/signin#${signIn.code()}`,
     route: (path, route) => void routes.set(path, route),
     close,

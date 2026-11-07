@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { AGENT_GRANTS, agentBindings, CHATGPT } from "./agent-bindings.ts";
+import { AGENT_GRANTS, CHATGPT, installAgent } from "./agent-bindings.ts";
 import { type Actor, api, go, manifestOf } from "./data.ts";
 
 /** The chatgpt Actor: the live Actor running the package named `chatgpt`. */
@@ -13,8 +13,8 @@ async function chatgptOf(actors: Actor[]): Promise<string | undefined> {
 }
 
 /**
- * New agent: a name, and what it gets. It is created from the assistant package with its
- * bindings (the switched-off ones left out), started, and opened.
+ * New agent: a name, and what it gets. The installer installs the assistant package with those
+ * connections (the switched-off ones left out) and starts it, all or nothing; then it opens.
  */
 export function NewAgent({
   assistant,
@@ -39,22 +39,15 @@ export function NewAgent({
     return () => document.removeEventListener("keydown", onKey);
   }, []);
 
-  /** Made already, by a try whose start failed: the next try only starts it. */
-  const created = useRef<string | undefined>(undefined);
   const create = async () => {
-    if (!created.current) {
-      const chatgpt = await chatgptOf(actors);
-      if (!chatgpt) throw new Error("ChatGPT isn't set up yet.");
-      created.current = (
-        await api.call<{ actorId: string }>("actors", "create", {
-          name: name.trim(),
-          package: assistant,
-          bindings: agentBindings(chatgpt, off),
-        })
-      ).actorId;
-    }
-    const actorId = created.current;
-    await api.call("actors", "start", { actorId });
+    const chatgpt = await chatgptOf(actors);
+    if (!chatgpt) throw new Error("ChatGPT isn't set up yet.");
+    const actorId = await installAgent((slot, method, input) => api.call(slot, method, input), {
+      assistant,
+      name: name.trim(),
+      chatgpt,
+      off,
+    });
     onClose();
     go({ screen: "agent", agent: actorId });
   };

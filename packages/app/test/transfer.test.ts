@@ -22,7 +22,7 @@ const MANAGEMENT = ["packages", "actors", "grants", "exports", "bindings"];
 /** An app in a temporary home, and the CLI's way in: calls through `/api`, and a bearer. */
 async function setup(t: test.TestContext) {
   const home = mkdtempSync(join(tmpdir(), "agentorg-transfer-"));
-  const app = await startApp({ home });
+  const app = await startApp({ home, firstRun: false });
   const token = readFileSync(join(home, "cli-token"), "utf8").trim();
   const socket = new WebSocket(`${app.url.replace("http", "ws")}/api`, {
     headers: { Authorization: `Bearer ${token}` },

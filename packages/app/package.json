@@ -18,10 +18,11 @@
   },
   "files": [
     "dist/src",
+    "dist/bundled",
     "static"
   ],
   "scripts": {
-    "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.json",
+    "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.json && node scripts/bundle.js",
     "test": "node --test --test-timeout=60000 \"dist/test/**/*.test.js\""
   },
   "dependencies": {
@@ -33,6 +34,7 @@
     "zod": "^4.6.7"
   },
   "devDependencies": {
+    "chatgpt": "0.0.1",
     "@playwright/test": "1.64.1",
     "@types/ws": "^8.18.2"
   }

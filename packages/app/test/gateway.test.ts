@@ -17,7 +17,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..
 
 async function setup(t: test.TestContext) {
   const home = mkdtempSync(join(tmpdir(), "agentorg-app-"));
-  const app = await startApp({ home });
+  const app = await startApp({ home, firstRun: false });
   t.after(async () => {
     await app.close();
     rmSync(home, { recursive: true, force: true });

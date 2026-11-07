@@ -54,7 +54,7 @@ const until = async (read: () => Promise<unknown>, expected: unknown) => {
 test("widgets size to their content, and the column beside an agent is the person's to size", async (t) => {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "agentorg-layout-")));
   const home = join(dir, "home");
-  const app = await startApp({ home });
+  const app = await startApp({ home, firstRun: false });
   const person = personOf(app, readFileSync(join(home, "cli-token"), "utf8").trim());
   const browser = await chromium.launch();
   t.after(async () => {

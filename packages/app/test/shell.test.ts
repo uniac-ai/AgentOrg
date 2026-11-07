@@ -4,19 +4,27 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { accountLogin, hubGrants, kv } from "@agentorg/interfaces";
+import { accountLogin, httpEgress, hubGrants, kv } from "@agentorg/interfaces";
 import { Refused } from "@agentorg/sdk";
 import { buildPackage } from "@agentorg/sdk/build";
 import { connect } from "@agentorg/sdk/client";
 import { type Browser, chromium, type Page } from "@playwright/test";
+import { completed, fakeOpenAI, text } from "chatgpt/fake-openai";
 import WebSocket from "ws";
-import { type App, startApp } from "../src/index.ts";
+import { type App, firstRun, startApp } from "../src/index.ts";
 
 // dist/test/shell.test.js → the package folder, and the repository root.
 const fixtures = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "test", "fixtures");
 const root = join(fixtures, "..", "..", "..", "..");
 
 let browser: Browser;
+const until = async (condition: () => boolean, ms = 15_000) => {
+  const end = Date.now() + ms;
+  while (!condition()) {
+    if (Date.now() > end) throw new Error("timed out");
+    await new Promise((done) => setTimeout(done, 50));
+  }
+};
 /** The test packages, built once. */
 const out = mkdtempSync(join(tmpdir(), "agentorg-shell-pkg-"));
 const built: Record<"assistant" | "board" | "chatgpt", string> = {
@@ -58,16 +66,20 @@ function personOf(app: App, token: string) {
         waiting.set(++id, done);
         socket.send(JSON.stringify({ id, op: "call", slot, method, input }));
       });
-      if (reply.error) throw new Error(JSON.stringify(reply.error));
+      if (reply.error) {
+        // Named and coded as /api says, for the first run, which waits out NotConnected.
+        const { name, code } = reply.error as { name?: string; code?: string };
+        throw Object.assign(new Error(JSON.stringify(reply.error)), { name, code });
+      }
       return reply.result as T;
     },
   };
 }
 
-/** An app in a fresh home with the test packages added, and a signed-in tab. */
-async function setup(t: test.TestContext) {
+/** An app in a fresh home with the test packages added (unless `bare`), and a signed-in tab. */
+async function setup(t: test.TestContext, bare = false) {
   const home = mkdtempSync(join(tmpdir(), "agentorg-shell-"));
-  const app = await startApp({ home });
+  const app = await startApp({ home, firstRun: false });
   const person = personOf(app, readFileSync(join(home, "cli-token"), "utf8").trim());
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   t.after(async () => {
@@ -78,7 +90,9 @@ async function setup(t: test.TestContext) {
   });
   const add = async (name: keyof typeof built) =>
     (await person.call<{ hash: string }>("packages", "add", { path: built[name] })).hash;
-  const hashes = { assistant: await add("assistant"), board: await add("board") };
+  const hashes = bare
+    ? { assistant: "", board: "" }
+    : { assistant: await add("assistant"), board: await add("board") };
   const create = async (name: string, hash: string, start = true) => {
     const { actorId } = await person.call<{ actorId: string }>("actors", "create", {
       name,
@@ -429,43 +443,105 @@ test("settings read the Actors, packages and connections through hub.*", async (
   ]);
 });
 
-test("New agent creates the assistant with the grants left on, starts it and opens it", async (t) => {
-  const { app, page, person, add, create } = await setup(t);
-  const chatgpt = await create("chatgpt", await add("chatgpt"));
+test("from the first run to a chat: sign in with ChatGPT, New agent, a turn", async (t) => {
+  const { app, page, person, context } = await setup(t, true);
+  // OpenAI is a fake behind a stand-in for net: an Actor serving http.egress@1 in this process.
+  const fake = await fakeOpenAI();
+  const made = await person.call<{ actorId: string; credential: string }>("actors", "create", {
+    name: "egress",
+  });
+  const egress = await connect({
+    hubUrl: app.hubUrl,
+    actorId: made.actorId,
+    credential: made.credential,
+    exports: { egress: httpEgress },
+    start(ctx) {
+      ctx.exports.egress.serve((request) => fake.handle(request));
+    },
+  });
+  t.after(() => egress.close());
+  const ran = await firstRun(person, {
+    egress: { actor: made.actorId, export: "egress" },
+    connected: (id) => app.hub.connected(id),
+  });
+  const chatgpt = ran.chatgpt as string;
+  await until(() => app.hub.connected(chatgpt));
+  // ChatGPT's page approves at once and sends the browser back to the app.
+  await context.route("https://auth.openai.com/**", async (route) =>
+    route.fulfill({
+      status: 302,
+      headers: { location: await fake.authorize(route.request().url()) },
+    }),
+  );
+
   await signIn(page, app);
+  const opened = context.waitForEvent("page");
+  await page.getByRole("button", { name: "Continue with ChatGPT" }).click();
+  const tab = await opened;
+  await tab.getByText("Signed in to ChatGPT. You can close this tab.").waitFor();
+  // Sent on to an address without the code.
+  assert.equal(new URL(tab.url()).pathname, "/oauth/chatgpt");
+  assert.equal(new URL(tab.url()).search, "?result=signed_in");
+  await page.getByRole("status").getByText("You're using your ChatGPT plan").waitFor();
+
   await page.getByRole("button", { name: "New agent" }).click();
   const dialog = page.getByRole("dialog", { name: "New agent" });
   await dialog.getByRole("textbox", { name: "Name" }).fill("Scout");
-  assert.equal(await dialog.getByRole("switch", { name: "ChatGPT" }).isDisabled(), true);
-  await dialog.getByRole("switch", { name: "create and run Actors" }).click();
   await dialog.getByRole("switch", { name: "install packages" }).click();
   await dialog.getByRole("button", { name: "Create" }).click();
   await page.waitForURL(/#\/a\//);
   const scout = decodeURIComponent(new URL(page.url()).hash.slice("#/a/".length));
-  await page
-    .frameLocator(".container.main iframe")
-    .getByText(/^chat /)
-    .waitFor();
   const actor = await person.call<{ name: string; state: string }>("actors", "get", {
     actorId: scout,
   });
   assert.deepEqual([actor.name, actor.state], ["Scout", "running"]);
   const { bindings } = await person.call<{
-    bindings: { consumer: string; slot: string; provider: string; export: string }[];
+    bindings: {
+      consumer: string;
+      slot: string;
+      provider: string;
+      export: string;
+      madeBy: string;
+    }[];
   }>("bindings", "list", { actor: scout });
+  const own = bindings.filter((binding) => binding.consumer === scout);
   assert.deepEqual(
-    bindings
-      .filter((binding) => binding.consumer === scout)
-      .map((binding) => `${binding.slot} ${binding.provider}.${binding.export}`)
-      .sort(),
+    own.map((binding) => `${binding.slot} ${binding.provider}.${binding.export}`).sort(),
     [
+      `chat.chat ${scout}.logic.chat`,
+      "logic.actors hub.actors",
       "logic.exports hub.exports",
       "logic.grants hub.grants",
       "logic.layout person.layout",
       `logic.model ${chatgpt}.model.session`,
       "logic.store storage.kv",
-    ],
+    ].sort(),
   );
+  // Made by the installer, on the person's say; the package's own connection, by the Hub.
+  assert.ok(own.every((b) => b.madeBy === (b.slot === "chat.chat" ? "hub" : ran.installer)));
+
+  // A turn in the agent's chat, answered by the plan through the fake.
+  fake.script({ events: [completed([text("Hello from the plan.")])] });
+  const chat = page.frameLocator(".container.main iframe");
+  // The view opened as the agent's process started; its frame follows the slot as it connects.
+  await until(() => app.hub.connected(scout));
+  await chat.getByRole("textbox", { name: "Message" }).fill("Hi.");
+  await chat.getByRole("button", { name: "Send" }).click();
+  await chat.getByText("Hello from the plan.").waitFor();
+  const asked = fake.requests.filter((r) => r.url.endsWith("/responses"));
+  assert.equal(asked.length, 1);
+  assert.match(asked[0]?.body ?? "", /Hi\./);
+  // Nothing the fake issued reaches the person's side: not the page, nor any Actor's log.
+  const shown = (await page.content()) + (await tab.content()) + tab.url();
+  const logs = await Promise.all(
+    [chatgpt, scout, ran.installer as string].map((actorId) =>
+      person.call("actors", "logs", { actorId, limit: 1000 }),
+    ),
+  );
+  for (const secret of fake.secrets) {
+    assert.ok(!shown.includes(secret));
+    assert.ok(!JSON.stringify(logs).includes(secret));
+  }
 });
 
 test("ChatGPT's first run: sign-in opens in a new tab, and the plan notice shows once", async (t) => {

@@ -16,5 +16,14 @@ await build({
   legalComments: "none",
   logLevel: "warning",
 });
+// A new agent's connections, for Node too: what a test of New agent installs.
+await build({
+  entryPoints: [at("src/agent-bindings.ts")],
+  outfile: at("dist/agent-bindings.js"),
+  format: "esm",
+  platform: "neutral",
+  target: "es2022",
+  logLevel: "warning",
+});
 for (const file of ["index.html", "app.css"])
   copyFileSync(at(`static/${file}`), at(`dist/${file}`));

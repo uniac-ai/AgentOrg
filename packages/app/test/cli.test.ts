@@ -40,10 +40,18 @@ test("agentorg runs the app; while it runs, the person's commands go through it"
   assert.match(started, /^AgentOrg at http:\/\/127\.0\.0\.1:\d+, home /);
   assert.doesNotMatch(started, /signin#/);
   // The person's channel is the app's: a command through it works where its own channel couldn't.
-  const actors = await run("actors", "--home", home);
-  assert.equal(actors.code, 0, actors.stderr);
-  const listed = JSON.parse(actors.stdout) as { actors: { actorId: string }[] };
-  assert.deepEqual(listed.actors.map((a) => a.actorId).sort(), ["hub", "net", "person", "storage"]);
+  // The built-ins, and the two the first run makes beside serving, once it has.
+  const names = async () => {
+    const actors = await run("actors", "--home", home);
+    assert.equal(actors.code, 0, actors.stderr);
+    const listed = JSON.parse(actors.stdout) as { actors: { name: string }[] };
+    return listed.actors.map((a) => a.name).sort();
+  };
+  const want = ["ChatGPT", "Installer", "hub", "net", "person", "storage"];
+  let listed = await names();
+  for (const end = Date.now() + 30_000; listed.join() !== want.join() && Date.now() < end; )
+    listed = await names();
+  assert.deepEqual(listed, want);
   // layout@1 is the gateway's own, kept in the person's store.
   const layout = await run("call", "layout", "get", "--home", home);
   assert.equal(layout.code, 0, layout.stderr);

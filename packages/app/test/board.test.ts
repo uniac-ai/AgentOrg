@@ -53,7 +53,7 @@ test("the board in the shell: a card added in its panel outlives a reload and a 
   // The real path: --allow-fs-read matches resolved paths, and macOS's tmpdir is behind a symlink.
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "agentorg-board-e2e-")));
   const home = join(dir, "home");
-  const app = await startApp({ home });
+  const app = await startApp({ home, firstRun: false });
   const person = personOf(app, readFileSync(join(home, "cli-token"), "utf8").trim());
   const browser = await chromium.launch();
   t.after(async () => {
@@ -120,7 +120,7 @@ test("the board in the shell: a card added in its panel outlives a reload and a 
 test("a view placed before its Actor's process connects renders once the process is up", async (t) => {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "agentorg-board-early-")));
   const home = join(dir, "home");
-  const app = await startApp({ home });
+  const app = await startApp({ home, firstRun: false });
   const person = personOf(app, readFileSync(join(home, "cli-token"), "utf8").trim());
   const browser = await chromium.launch();
   t.after(async () => {

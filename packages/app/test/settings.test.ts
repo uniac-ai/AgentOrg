@@ -68,7 +68,7 @@ test.after(async () => {
 /** A home whose person is bound to an installer, as the first run binds it, and a signed-in tab. */
 async function home(t: test.TestContext, name: string) {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), `agentorg-settings-${name}-`)));
-  const app = await startApp({ home: dir });
+  const app = await startApp({ home: dir, firstRun: false });
   const person = personOf(app, readFileSync(join(dir, "cli-token"), "utf8").trim());
   const context = await browser.newContext({
     viewport: { width: 1400, height: 900 },

@@ -15,7 +15,7 @@ export const AGENT_GRANTS = [
 
 export type AgentSlot = (typeof AGENT_GRANTS)[number]["slot"];
 
-/** The package New agent creates from, and the model's, found by name in `packages.list`. */
+/** The package New agent installs, and the model's, found by name in `packages.list`. */
 export const ASSISTANT = "assistant";
 export const CHATGPT = "chatgpt";
 
@@ -31,15 +31,35 @@ const PROVIDERS: Record<AgentSlot, (chatgpt: string) => { provider: string; expo
 };
 
 /**
- * A new agent's bindings for `hub.actors.create`: every grant but the ones switched off, which
+ * A new agent's connections for `installer.install`: every grant but the ones switched off, which
  * can't be `model` or `store`. `chatgpt` is the chatgpt Actor's id.
  */
-export function agentBindings(
+export function agentConnections(
   chatgpt: string,
   off: ReadonlySet<string> = new Set(),
-): { slot: string; provider: string; export: string }[] {
-  return AGENT_GRANTS.filter((grant) => grant.fixed || !off.has(grant.slot)).map((grant) => ({
-    slot: `logic.${grant.slot}`,
-    ...PROVIDERS[grant.slot](chatgpt),
-  }));
+): Record<string, { actor: string; export: string }> {
+  return Object.fromEntries(
+    AGENT_GRANTS.filter((grant) => grant.fixed || !off.has(grant.slot)).map((grant) => {
+      const { provider, export: name } = PROVIDERS[grant.slot](chatgpt);
+      return [`logic.${grant.slot}`, { actor: provider, export: name }];
+    }),
+  );
+}
+
+/**
+ * New agent itself: install the assistant package `assistant` named `name` through the person's
+ * `installer`, with `agentConnections`, and start it, all or nothing. `call` is the person's call
+ * (the shell's `/api`, or a test's). Returns the new agent's id.
+ */
+export async function installAgent(
+  call: (slot: string, method: string, input: unknown) => Promise<unknown>,
+  agent: { assistant: string; name: string; chatgpt: string; off?: ReadonlySet<string> },
+): Promise<string> {
+  const { actorId } = (await call("installer", "install", {
+    package: agent.assistant,
+    name: agent.name,
+    connections: agentConnections(agent.chatgpt, agent.off),
+    start: true,
+  })) as { actorId: string };
+  return actorId;
 }

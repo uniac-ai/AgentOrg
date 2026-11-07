@@ -5,6 +5,12 @@
   "description": "Sign in with ChatGPT, and model inference on the person's ChatGPT plan",
   "license": "MIT",
   "type": "module",
+  "exports": {
+    "./fake-openai": {
+      "types": "./dist/test/fake-openai.d.ts",
+      "default": "./dist/test/fake-openai.js"
+    }
+  },
   "scripts": {
     "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.json",
     "test": "node --test \"dist/test/**/*.test.js\""

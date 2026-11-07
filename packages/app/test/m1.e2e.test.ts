@@ -107,7 +107,7 @@ function personOf(app: App, token: string) {
  */
 async function home(t: test.TestContext, name: string) {
   const dir = mkdtempSync(join(tmpdir(), `agentorg-m1-${name}-`));
-  const app = await startApp({ home: dir });
+  const app = await startApp({ home: dir, firstRun: false });
   const person = personOf(app, readFileSync(join(dir, "cli-token"), "utf8").trim());
   const open: { close(): void }[] = [];
   const context = await browser.newContext({ viewport: { width: 1400, height: 900 } });

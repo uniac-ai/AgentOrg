@@ -99,17 +99,14 @@ To read a module's definition, the build runs the module's code in a separate No
 From a clone, after `npm ci` and `npm run build`, with `agentorg` being `node packages/app/dist/src/cli.js`:
 
 1. **Run the app:** `agentorg`. It prints its address and opens the shell in the browser, already signed in; `agentorg open` signs a browser in again.
-2. **Add the board:** `agentorg build examples/board` prints its hash and writes `examples/board/agentorg-build/<hash>.agentorg`; then `agentorg add examples/board/agentorg-build/<hash>.agentorg`.
-3. **Create it with its store, and start it:**
+2. **Find the board:** the app's first run added it. `agentorg call packages list` shows its hash, under the name `board`.
+3. **Install it with its store, started,** through the installer the first run made:
 
    ```sh
-   agentorg call actors create '{"name":"Board","package":"<hash>","bindings":[{"slot":"logic.store","provider":"storage","export":"kv"}]}'
-   agentorg call actors start '{"actorId":"<actorId>"}'
+   agentorg call installer install '{"package":"<hash>","name":"Board","connections":{"logic.store":{"actor":"storage","export":"kv"}},"start":true}'
    ```
 4. **Place its panel on home:** `agentorg call layout place '{"actor":"<actorId>","module":"panel","title":"Launch"}'`. It shows in the shell at once.
 5. **Add a card** in the panel: type it and press Enter. It is kept in the board's store, so it's there after a reload, and after the board's process restarts (`actors stop`, then `actors start`).
-
-Until the Hub spawns package processes itself, `actors start` marks the board running without running its logic, so step 5's cards need its host process, `@agentorg/sdk/host/runner.js`, run over a pipe the Hub accepts, as `packages/app/test/board.test.ts` does.
 
 ## The app: the person's gateway
 
@@ -124,9 +121,16 @@ Until the Hub spawns package processes itself, `actors start` marks the board ru
 
   A socket holds 256 subscriptions and 64 calls in flight at most (past it, `busy`). A tab's socket must come from the gateway's own `Origin`, and its first message must be `{op: "hello", session}` with a live session, answered `{op: "hello"}`; otherwise it's closed with code 4401, and the tab signs in again. The CLI gets in with the token in `<home>/cli-token` (0600, new at each start) as a bearer. The gateway answers only to `127.0.0.1:<port>` in `Host`, so a page that rebinds DNS to loopback gets nothing.
 - **What the calls reach:**
-  - Calls run through the person's slots: `packages`, `actors`, `bindings`, `grants`, `exports`, `audit`, `store`, and `login` (`account.login@1`, the model's sign-in, which may be unbound).
+  - Calls run through the person's slots: `packages`, `actors`, `bindings`, `grants`, `exports`, `audit`, `store`, and the two the first run binds, either of which may be unbound: `installer` (`installer@1`) and `login` (`account.login@1`, the model's sign-in).
   - `layout` is the person's own export, served by the gateway.
   - With `view: {actor, module}`, a call runs as that view's Actor, through the Hub's view path (`viewCall` and `viewSubscribe`). The Hub refuses a module that isn't one of the Actor's views, or an Actor that isn't running.
+- **The first run,** at every start once the person's store is bound, beside serving: the shell follows the person's bindings as they're made (`firstRun` in `src/model.ts`; `app.firstRun` settles with what it made; `startApp({firstRun: false})` leaves a home as it is):
+  - it adds the bundled packages, `installer`, `chatgpt`, `assistant` and the `board` example, built into `dist/bundled` with the app (`scripts/bundle.js`);
+  - it makes the installer as the person, with its seven bindings (`hub.packages`, `hub.actors`, `hub.grants`, `hub.exports`, `hub.bindings`, `storage.admin` and `person.layout`), starts it, and binds the person's `installer` to it;
+  - once the installer's process is connected, it installs ChatGPT through `installer.install`, with `model.web` to `net.egress` and `model.store` to `storage.kv`, started, and binds the person's `login` to its `model.login`.
+
+  It records the Actors it made in the person's store (`app/first-run`) and trusts only those, never an Actor because of the name its package gives itself. Each step reads what is there first, so a restart, or a first run that stopped half way, converges and makes nothing twice: a recorded Actor that lost one of its slots' bindings gets it again (of the slots its package declares), and one of an older build is kept. A recorded Actor that was closed is made again. A step that fails is logged and tried again at the next start.
+- **`/oauth/chatgpt`:** where ChatGPT sends the browser back after sign-in. It takes `GET` only and hands the whole address, which holds the sign-in's code, to `login.complete`. Then it sends the tab on (303) to `/oauth/chatgpt?result=<outcome>`, so the code leaves the tab's address and history; that page says how it went and links back to the shell. The code is never logged or shown, and no referrer is sent.
 - **`layout@1`:** the person exports it, so a program bound to it places a view as the person does. Each placement records `by`, the Actor that placed it, from the call's caller as the Hub names it (the person, through `/api`); no input sets it. The layout is kept in the person's `store` slot (`kv@1`) under the key `layout`, and the app binds that slot to the built-in `storage` where there is one.
   - `place` takes only a `view` module of a package Actor, with no `after` meaning last.
   - `move` with no `after` means first.
@@ -144,6 +148,6 @@ Until the Hub spawns package processes itself, `actors start` marks the board ru
   - **Agents** are the package Actors with a `chat` view. Selecting one mounts that view in the main container, with the placements beside it whose `actor` is that agent or whose `by` is. Between them, a handle (dragged, or the arrow keys) sets that column's width, from 280 to 640 px and at most half the stage, kept in this browser; an agent with nothing beside it has no column, and its chat takes the width. A placed view, beside an agent or on Home, takes the height its frame reports; one that reports none keeps the default.
   - **Home** shows the open grant requests, with Allow and Decline, then every placement of `layout@1`, in order. Each event (`layout` `changed`, `grants` `requested` and `decided`, and the audit's lifecycle and binding entries) reads its part again.
   - **Settings** reads the Actors, packages and connections through `hub.*`, and the ChatGPT account through `login` when it's bound; the person is "you". **Packages** downloads each archive (`GET /packages/<hash>.agentorg`) and installs one from a file: uploaded to `POST /packages`, then `installer.plan` shows each slot's candidates (a slot's only one preselected), `installer.install` makes it with the person's picks (a connection the person can't grant is named, to leave unconnected), and its views can be placed on home; slots left unconnected and seeds that didn't land are listed. **System** exports the system as one file (`GET /system`), listing what it leaves out, and imports one (`POST /system`): what it made, what isn't as it was, and each management connection, for the person to grant one by one.
-  - **New agent** is offered once a package named `assistant` is added. It creates one with step 5's bindings, less the grants switched off, then starts and opens it.
+  - **New agent** is offered once a package named `assistant` is added. It is `installer.install` of that package with step 5's connections, less the grants switched off, started, all or nothing; then it opens. `installAgent` in `@agentorg/shell/agent-bindings` makes that call, for a test too.
   - **Views** each get their own frame and `FrameHost`. Their calls run with `view: {actor, module}`, `openExternal` opens a new tab with no opener, `signIn` is the shell's ChatGPT sign-in, and their log lines go to their Actor's log (`agentorg call actors logs`). Each frame watches its view's slots while it's open, loads with the bound ones, and passes the frame each change, so a view placed before its Actor runs comes alive when it does.
   - **ChatGPT sign-in** calls `login.start`, opens the consent page in a new tab, and moves on when `login` says `signed_in`. The one-time plan notice is remembered in the person's store under `ui/plan-notice`.
