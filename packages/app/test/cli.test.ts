@@ -81,3 +81,20 @@ test("an unknown command gets the app's usage", async () => {
   assert.match(unknown.stderr, /^Unknown command "nope"\.\nUsage: agentorg \[command\]/);
   assert.match(unknown.stderr, /open +sign a browser in/);
 });
+
+test("without --home or AGENTORG_HUB_HOME, the home is agentorg in the XDG data folder", async () => {
+  const data = mkdtempSync(join(tmpdir(), "agentorg-xdg-"));
+  try {
+    const env: Record<string, string | undefined> = { ...process.env, XDG_DATA_HOME: data };
+    delete env.AGENTORG_HUB_HOME;
+    const result = await new Promise<{ code: number; stderr: string }>((done) =>
+      execFile(process.execPath, [cli, "open"], { env }, (error, _out, stderr) =>
+        done({ code: error ? Number(error.code ?? 1) : 0, stderr }),
+      ),
+    );
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, new RegExp(`isn't running in ${join(data, "agentorg")}\\.`));
+  } finally {
+    rmSync(data, { recursive: true, force: true });
+  }
+});

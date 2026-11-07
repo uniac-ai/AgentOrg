@@ -95,7 +95,7 @@ To read a module's definition, the build runs the module's code in a separate No
   - `agentorg call <slot> <method> [json]`.
 
   While the app runs, they go through it, with the CLI's token in `<home>/cli-token`. Otherwise they connect as the person with `<home>/person-credential`, and never take over a channel something else holds (hello's `replace: false`).
-- **The home** is `--home`, else `$AGENTORG_HUB_HOME`, else `~/.local/share/agentorg-next`.
+- **The home** is `--home`, else `$AGENTORG_HUB_HOME`, else `$XDG_DATA_HOME/agentorg` when `XDG_DATA_HOME` is an absolute path, else `~/.local/share/agentorg`, on Linux and macOS alike.
 - **Output:** results are JSON on stdout. A refusal exits 1 with its reason on stderr, and a usage mistake exits 2.
 
 `@agentorg/sdk`'s own bin is `agentorg-sdk`, with the same commands but no app.
