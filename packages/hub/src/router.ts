@@ -603,11 +603,20 @@ export class Hub {
         );
       admit(header.actorId, header.replace);
       // Taken as the channel is admitted: every change after it reaches the channel as a notice.
-      const bound = this.state
-        .bindings(header.actorId)
-        .filter((b) => b.consumer === header.actorId)
-        .map((b) => b.slot);
-      await answer(writer, result({ actorId: header.actorId, bound }));
+      const mine = this.state.bindings(header.actorId).filter((b) => b.consumer === header.actorId);
+      const bound = mine.map((b) => b.slot);
+      // Slots made at run time come with their exposure, as their notices do.
+      const exposed = Object.fromEntries(
+        mine.filter((b) => b.exposed).map((b) => [b.slot, this.#exposure(b)]),
+      );
+      await answer(
+        writer,
+        result({
+          actorId: header.actorId,
+          bound,
+          ...(Object.keys(exposed).length ? { exposed } : {}),
+        }),
+      );
     } catch (error) {
       await answer(writer, errorBody(error));
       session.close(GO_AWAY.protocolError);
@@ -615,18 +624,29 @@ export class Hub {
   }
 
   /** Tell an Actor's channel and its views' listeners that one of its slots was bound or unbound. */
+  /** A slot made at run time, as its consumer is told of it: the export's interface, and whose it is. */
+  #exposure(binding: BindingRecord) {
+    return {
+      interface: this.state.declaration(binding.consumer, "slot", binding.slot)?.iface,
+      provider: { actor: binding.provider, export: binding.export },
+    };
+  }
+
   #notify(actorId: string, slot: string, bound: boolean) {
     this.#notifyViews(actorId, slot, bound);
     const conn = this.#connections.get(actorId);
     if (!conn) return;
     if (conn.notices >= this.state.slotCount(actorId) + MAX_OPEN_NOTICES)
       return conn.session.close(GO_AWAY.protocolError);
+    // A slot made at run time carries its exposure while bound; unbound, it is gone.
+    const binding = bound ? this.state.binding(actorId, slot) : undefined;
+    const exposed = binding?.exposed ? { exposed: this.#exposure(binding) } : {};
     try {
       const stream = conn.session.open();
       conn.notices++;
       const writer = stream.writable.getWriter();
       void writer
-        .write(encodeFrame({ op: "slot", name: slot, bound }))
+        .write(encodeFrame({ op: "slot", name: slot, bound, ...exposed }))
         .then(() => writer.close())
         .catch(() => {});
       // Nothing comes back; the Actor closing its side ends the read and frees the notice.

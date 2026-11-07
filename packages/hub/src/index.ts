@@ -11,6 +11,7 @@ export {
   type Decision,
   type Declaration,
   type Exit,
+  exposedName,
   HUB,
   HubState,
   NET,

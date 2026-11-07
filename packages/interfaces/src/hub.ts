@@ -80,6 +80,12 @@ export const Actor = z.object({
   host: z.object({ available: z.boolean(), reason: z.string().optional() }).optional(),
   /** For a package Actor: its view modules, which the person's shell can place. */
   views: z.array(z.string()).optional(),
+  /**
+   * The Actor it was created for, when a manager created it on another's behalf (the installer
+   * names its caller). Provenance only: the Hub grants nothing from it; only a rule the person
+   * turned on may act on it.
+   */
+  installedFor: Id.optional(),
 });
 
 /** One line of an Actor's log, from its `ctx.log` or its process's own output. */
@@ -100,12 +106,14 @@ export const hubActors = defineInterface({
     /**
      * With a package, an Actor that runs it; without, an external one, whose credential is returned
      * once. `bindings` wire the new Actor's slots at once, with the caller's export-side authority
-     * (the creation is the slot side's yes), for example to its own `hub.grants@1`.
+     * (the creation is the slot side's yes), for example to its own `hub.grants@1`. `for` names
+     * the Actor it is made for, recorded as `installedFor`; only a manager may give it.
      */
     create: method({
       input: z.object({
         name: z.string().min(1).max(128),
         package: Hash.optional(),
+        for: Id.optional(),
         bindings: z
           .array(z.object({ slot: Name, provider: Id, export: Name }))
           .max(64)
@@ -135,11 +143,18 @@ export const hubActors = defineInterface({
 });
 
 const Wiring = { consumer: Id, slot: Name, provider: Id, export: Name };
+/** A slot made at run time: one segment, at most 48 characters, so tools named from it fit. */
+const SlotName = z
+  .string()
+  .regex(/^[a-z][A-Za-z0-9_]*$/)
+  .max(48);
 export const Binding = z.object({
   ...Wiring,
   interface: z.string(),
   madeBy: Id,
   at: z.string(),
+  /** A slot made at run time by `hub.grants.expose`: it goes with this binding. */
+  exposed: z.literal(true).optional(),
 });
 export const BindingRequest = z.object({
   requestId: Id,
@@ -149,6 +164,11 @@ export const BindingRequest = z.object({
   reason: z.string(),
   requestedBy: Id,
   at: z.string(),
+  /**
+   * A request to expose: `slot` is the name the slot will have on `consumer`, made when it is
+   * approved. Approve it with `expose({provider, export, to: consumer, as: slot})`.
+   */
+  exposed: z.literal(true).optional(),
 });
 
 /**
@@ -173,6 +193,23 @@ export const hubGrants = defineInterface({
     }),
     /** The consumer, the provider or a manager may unbind. */
     unbind: method({ input: z.object({ consumer: Id, slot: Name }), output: Empty }),
+    /**
+     * Expose an `rpc` export to one Actor: a slot made on `to`, typed by the export's interface,
+     * named `as` (by default the provider's name camelCased, `_`, and the export's last part, made
+     * unique on `to`), and bound to the export, in one step. Its authority is a binding's: with
+     * both ends it is made; with one, it is a request to the other end's approvers, who approve it
+     * by calling `expose` with the request's fields. The same export already exposed to `to`
+     * gives that slot back.
+     */
+    expose: method({
+      input: z.object({ provider: Id, export: Name, to: Id, as: SlotName.optional() }),
+      output: z.union([
+        z.object({ exposed: z.literal(true), slot: SlotName }),
+        z.object({ exposed: z.literal(false), slot: SlotName, requestId: Id }),
+      ]),
+    }),
+    /** Remove a slot made by `expose`, with its binding: as `unbind`, the consumer, the provider or a manager may. */
+    unexpose: method({ input: z.object({ to: Id, slot: SlotName }), output: Empty }),
     request: method({
       input: z.object({ ...Wiring, reason: z.string().min(1).max(1000) }),
       output: z.object({ requestId: Id }),
