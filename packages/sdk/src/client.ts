@@ -96,7 +96,10 @@ export interface Channel {
   readonly actorId: string;
   /** The Actor's slots bound now, from hello's snapshot and the Hub's notices; empty once closed. */
   readonly bound: ReadonlySet<string>;
-  /** The slots made for it at run time and bound now, from hello's snapshot and the notices. */
+  /**
+   * The slots made for it at run time and bound now, from the notices: hello names them among
+   * `bound`, and a notice with each one's exposure follows.
+   */
   readonly exposed: ReadonlyMap<string, ChannelExposure>;
   call(slot: string, method: string, value: unknown): Promise<unknown>;
   /** Events from a slot's provider until it ends (`onEnd`) or is stopped; returns how to stop. */
@@ -320,14 +323,8 @@ export async function openChannel(options: ChannelOptions): Promise<Channel> {
     session.close();
     throw errorOf(hello.error, options.actorId);
   }
-  const snapshot = (
-    hello as { result: { bound?: string[]; exposed?: Record<string, ChannelExposure> } }
-  ).result;
-  for (const slot of snapshot.bound ?? []) bound.add(slot);
-  for (const [slot, exposure] of Object.entries(snapshot.exposed ?? {})) {
+  for (const slot of (hello as { result: { bound?: string[] } }).result.bound ?? [])
     bound.add(slot);
-    exposed.set(slot, exposure);
-  }
   ready();
 
   const answered = (body: Body, target: string) => {

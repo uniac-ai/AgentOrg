@@ -165,14 +165,11 @@ function fakeHub(snapshot: unknown) {
   };
 }
 
-test("over a channel, hello's snapshot and the notices make and remove exposed slots on every module", async () => {
+test("over a channel, the notices make and remove exposed slots on every module", async () => {
   const described = describeInterface(quests);
   const exposure = { interface: described, provider: PROVIDER };
-  const hub = fakeHub({
-    actorId: "act_a",
-    bound: ["logic.store"],
-    exposed: { first_quests: exposure },
-  });
+  // Hello names an exposed slot among the bound; its notice, with its exposure, follows.
+  const hub = fakeHub({ actorId: "act_a", bound: ["logic.store", "first_quests"] });
   // Two modules of one Actor, as runHost joins them to one channel.
   const hosts = ["logic", "chat"].map((name) => {
     const definition = defineActor({ start() {} });
@@ -193,6 +190,8 @@ test("over a channel, hello's snapshot and the notices make and remove exposed s
       for (const host of hosts) host.onExposed(name, found);
     },
   });
+  // Its notice arrives before the modules attach: attaching takes it from the channel.
+  await hub.notify({ name: "first_quests", bound: true, exposed: exposure });
   for (const host of hosts) host.attach(channel);
   const names = (host: ModuleHost) => host.runtime.ctx.exposed().map((s) => s.slot);
   for (const host of hosts) assert.deepEqual(names(host), ["first_quests"]);
