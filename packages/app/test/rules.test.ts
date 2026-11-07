@@ -61,7 +61,7 @@ function person() {
   };
   const exposure = (requestId: string, provider: string, to = "act_agent") => ({
     requestId,
-    expose: true,
+    exposed: true,
     provider,
     export: "logic.quests",
     consumer: to,
@@ -93,7 +93,7 @@ test("an exposure request is read from the Hub's request, and a binding request 
     to: "act_agent",
     as: "quests.quests",
   });
-  const { expose: _, ...binding } = p.exposure("r2", "act_quests");
+  const { exposed: _, ...binding } = p.exposure("r2", "act_quests");
   assert.equal(exposureOf(binding), undefined);
 });
 
@@ -134,7 +134,7 @@ test("on, it approves exactly an exposure of what the agent installed, to that a
     p.exposure("r2", "act_closed"), // closed
     p.exposure("r3", "act_plain"), // no provenance at all
     p.exposure("r4", "act_quests", "act_someone"), // to an Actor that didn't install it
-    { ...p.exposure("r5", "act_quests"), expose: undefined }, // a binding, not an exposure
+    { ...p.exposure("r5", "act_quests"), exposed: undefined }, // a binding, not an exposure
   ])
     p.request(request);
   await tick();

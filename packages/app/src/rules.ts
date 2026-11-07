@@ -26,8 +26,8 @@ export interface Request {
  * request shape for exposures.
  */
 export function exposureOf(request: Request): Exposure | undefined {
-  const { expose, provider, export: name, consumer, slot } = request as Record<string, unknown>;
-  if (expose !== true) return undefined;
+  const { exposed, provider, export: name, consumer, slot } = request as Record<string, unknown>;
+  if (exposed !== true) return undefined;
   if (typeof provider !== "string" || typeof name !== "string" || typeof consumer !== "string")
     return undefined;
   return {
