@@ -75,6 +75,10 @@ export async function runHost(options: RunHostOptions): Promise<Host> {
       const found = route(name);
       found?.[0].onSlot(found[1], bound);
     },
+    // A slot made at run time is the Actor's: every host module has it.
+    onExposed(name, exposure) {
+      for (const host of hosts.values()) host.onExposed(name, exposure);
+    },
     serve: {
       call: (serve, value) => {
         const [handlers, local] = routed(serve);

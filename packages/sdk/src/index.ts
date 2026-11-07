@@ -30,6 +30,7 @@ export {
   type EmitOptions,
   type Export,
   type ExportMap,
+  type ExposedSlot,
   type FrameRoot,
   type Handlers,
   type HttpExport,

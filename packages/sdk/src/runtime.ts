@@ -1,10 +1,11 @@
 import { NotConnected, Refused } from "./errors.js";
-import type { Interface, RpcInterface, StreamInterface } from "./interface.js";
+import type { DescribedInterface, Interface, RpcInterface, StreamInterface } from "./interface.js";
 import {
   type CallInfo,
   type Context,
   type Duplex,
   type EmitOptions,
+  type ExposedSlot,
   type FrameRoot,
   type InterfaceMap,
   isFrameInterface,
@@ -24,6 +25,17 @@ export interface SlotProvider {
 /** A bound slot, seen from the host side: it delivers the provider's events to the module. */
 export interface Binding {
   emit(event: string, payload: unknown): void;
+}
+/**
+ * A slot made at run time, as the host side gives it: the export's interface as described, whose
+ * it is, and how to reach it. Values pass as they are: the Hub checks them.
+ */
+export interface ExposedProvider {
+  described: DescribedInterface;
+  provider: { actor: string; export: string };
+  call(method: string, input: unknown): Promise<unknown>;
+  /** Deliver an event's payloads until it ends (`onEnd`); returns how to stop. */
+  subscribe(event: string, onEvent: (payload: unknown) => void, onEnd: () => void): () => void;
 }
 /** A mounted view, seen from the frame runtime's side. */
 export interface MountedView {
@@ -45,6 +57,13 @@ export interface ModuleRuntime<S extends InterfaceMap, X extends InterfaceMap> {
   unbind(slot: string): void;
   /** A bound slot's provider came back after going away: its `onBind` handlers run again. */
   usable(slot: string): void;
+  /**
+   * A slot made at run time is bound. Given again for one already here, it is usable again (its
+   * provider came back): its events resume.
+   */
+  expose(slot: string, provider: ExposedProvider): void;
+  /** A slot made at run time is gone with its binding. */
+  unexpose(slot: string): void;
   /** Call an export's method for `caller`, the calling Actor as the Hub names it. */
   call(exportName: string, method: string, input: unknown, caller: string): Promise<unknown>;
   open(exportName: string, params: unknown, stream: Duplex): Promise<void>;
@@ -112,6 +131,13 @@ interface SlotState {
   binds: Set<() => void>;
   unbinds: Set<() => void>;
   listeners: Map<string, Set<(payload: unknown) => void>>;
+}
+interface ExposedState {
+  source: ExposedProvider;
+  handle: ExposedSlot;
+  gone: boolean;
+  /** Per event: the module's listeners, and the live subscription while there are any. */
+  events: Map<string, { fns: Set<(payload: unknown) => void>; stop?: () => void }>;
 }
 interface ExportState {
   iface: Interface;
@@ -254,6 +280,119 @@ export function createRuntime<S extends InterfaceMap, X extends InterfaceMap>(
     return state.impl as T;
   };
 
+  const exposed = new Map<string, ExposedState>();
+  const exposedWatchers = new Set<() => void>();
+
+  /** Run the `onExposed` handlers; one that throws is logged and the rest still run. */
+  const exposedChanged = () => {
+    const failed = (error: unknown) =>
+      options.log.error("An onExposed handler threw.", { error: String(error) });
+    for (const fn of [...exposedWatchers])
+      try {
+        const done = fn() as unknown;
+        if (done instanceof Promise) done.catch(failed);
+      } catch (error) {
+        failed(error);
+      }
+  };
+
+  /** Subscribe to an exposed slot's event while the module listens and nothing is live. */
+  const listenExposed = (slot: string, state: ExposedState, event: string) => {
+    const entry = state.events.get(event);
+    if (state.gone || !entry || entry.stop || !entry.fns.size) return;
+    // A subscription may end before `subscribe` returns: then nothing is live.
+    let ended = false;
+    let stop: (() => void) | undefined;
+    stop = state.source.subscribe(
+      event,
+      (payload) => {
+        for (const fn of [...entry.fns])
+          try {
+            fn(payload);
+          } catch (error) {
+            options.log.error("An event handler threw.", { slot, event, error: String(error) });
+          }
+      },
+      // Ended by the provider going: the interest stays for when it is usable again.
+      () => {
+        ended = true;
+        if (entry.stop === stop) entry.stop = undefined;
+      },
+    );
+    if (!ended) entry.stop = stop;
+  };
+
+  const exposedHandle = (slot: string, state: ExposedState): ExposedSlot => {
+    const { described, provider } = state.source;
+    return Object.freeze({
+      slot,
+      described,
+      provider: Object.freeze({ actor: provider.actor, export: provider.export }),
+      call: Object.freeze(
+        Object.fromEntries(
+          (described.kind === "rpc" ? Object.keys(described.methods) : []).map((method) => [
+            method,
+            async (input: unknown) => {
+              if (state.gone) throw new NotConnected(slot);
+              return state.source.call(method, input);
+            },
+          ]),
+        ),
+      ),
+      on(event: string, fn: (payload: unknown) => void) {
+        if (described.kind !== "rpc" || !own(described.events, event))
+          throw new TypeError(`${slot} has no event ${event}.`);
+        const entry = state.events.get(event) ?? { fns: new Set() };
+        state.events.set(event, entry);
+        entry.fns.add(fn);
+        listenExposed(slot, state, event);
+        return () => {
+          entry.fns.delete(fn);
+          if (entry.fns.size) return;
+          entry.stop?.();
+          entry.stop = undefined;
+        };
+      },
+    });
+  };
+
+  const unexpose = (slot: string) => {
+    const state = exposed.get(slot);
+    if (!state) return;
+    exposed.delete(slot);
+    state.gone = true;
+    for (const entry of state.events.values()) {
+      entry.stop?.();
+      entry.stop = undefined;
+    }
+    exposedChanged();
+  };
+
+  const expose = (slot: string, source: ExposedProvider) => {
+    const here = exposed.get(slot);
+    if (
+      here &&
+      here.source.described.hash === source.described.hash &&
+      here.source.provider.actor === source.provider.actor &&
+      here.source.provider.export === source.provider.export
+    ) {
+      // Usable again: the same export, its provider back. What was listened to resumes.
+      here.source = source;
+      for (const [event, entry] of here.events) {
+        entry.stop?.();
+        entry.stop = undefined;
+        listenExposed(slot, here, event);
+      }
+      return;
+    }
+    if (here) unexpose(slot);
+    // The handle reads the state, so it is made after; nothing reads it in between.
+    const state = { source, gone: false, events: new Map() } as unknown as ExposedState;
+    state.handle = exposedHandle(slot, state);
+    exposed.set(slot, state);
+    exposedChanged();
+  };
+
   const ctx = {
     slots: Object.fromEntries(
       Object.entries(definition.slots).map(([name, iface]) => [name, slotHandle(name, iface)]),
@@ -280,6 +419,11 @@ export function createRuntime<S extends InterfaceMap, X extends InterfaceMap>(
     ),
     self: options.self,
     log: options.log,
+    exposed: () => Object.freeze([...exposed.values()].map((state) => state.handle)),
+    onExposed(fn: () => void) {
+      exposedWatchers.add(fn);
+      return () => void exposedWatchers.delete(fn);
+    },
   } as unknown as Context<S, X>;
 
   const serving = (exportName: string) => {
@@ -354,6 +498,8 @@ export function createRuntime<S extends InterfaceMap, X extends InterfaceMap>(
       if (!state) throw new TypeError(`No slot ${slot}.`);
       if (state.binding) notify(slot, state.binds);
     },
+    expose,
+    unexpose,
     async call(exportName, method, input, caller) {
       const state = target(exportName, "rpc");
       const spec = own((state.iface as RpcInterface).methods, method);

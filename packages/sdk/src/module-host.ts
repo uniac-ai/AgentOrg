@@ -1,4 +1,4 @@
-import type { Channel, Serve, ServeHandlers } from "./client.js";
+import type { Channel, ChannelExposure, Serve, ServeHandlers } from "./client.js";
 import { NotConnected, OutcomeUnknown, Refused } from "./errors.js";
 import { describeInterface, type Interface } from "./interface.js";
 import type { InterfaceMap, Log } from "./module.js";
@@ -185,6 +185,25 @@ export class ModuleHost {
     this.#resubscribe(slot);
   }
 
+  /**
+   * A notice for a slot made at run time: bound (or usable again) with its exposure, or gone. Its
+   * name is the Actor's, with no module prefix: every module of the Actor has it.
+   */
+  onExposed(slot: string, exposure: ChannelExposure | undefined): void {
+    if (!this.#channel) return;
+    if (!exposure) {
+      this.runtime.unexpose(slot);
+      return;
+    }
+    const open = this.#channel;
+    this.runtime.expose(slot, {
+      described: exposure.interface,
+      provider: exposure.provider,
+      call: (method, value) => open.call(slot, method, value),
+      subscribe: (event, onEvent, onEnd) => open.subscribe(slot, event, onEvent, () => onEnd()),
+    });
+  }
+
   /** How this module serves the Hub's streams, by its local export names. */
   readonly serve: ServeHandlers = {
     call: (serve, value) =>
@@ -227,9 +246,12 @@ export class ModuleHost {
     this.#channel = channel;
     for (const [name, { handle, iface }] of this.#added) this.#offer(channel, name, iface, handle);
     for (const name of channel.bound)
-      if (name.startsWith(this.#prefix)) this.onSlot(name.slice(this.#prefix.length), true);
+      if (name.startsWith(this.#prefix) && !channel.exposed.has(name))
+        this.onSlot(name.slice(this.#prefix.length), true);
+    for (const [name, exposure] of channel.exposed) this.onExposed(name, exposure);
     void channel.closed.then(() => {
       for (const slot of [...this.#bindings.keys()]) this.onSlot(slot, false);
+      for (const { slot } of this.runtime.ctx.exposed()) this.runtime.unexpose(slot);
       for (const ends of this.#subscribers.values()) for (const end of [...ends]) end();
     });
   }

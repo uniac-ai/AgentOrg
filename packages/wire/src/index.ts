@@ -1,6 +1,7 @@
 export { encodeFrame, FrameError, FrameReader, MAX_FRAME } from "./frames.js";
 export {
   type Body,
+  type Exposure,
   eventBody,
   type Header,
   HeaderError,

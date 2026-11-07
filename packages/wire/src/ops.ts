@@ -44,8 +44,12 @@ export type Header =
   /** Offer an export at run time, as a described interface; it lasts until withdrawn or disconnect. */
   | { op: "offer"; name: string; interface: unknown }
   | { op: "withdraw"; name: string }
-  /** From the Hub to an Actor: one of its slots was bound or unbound. */
-  | { op: "slot"; name: string; bound: boolean }
+  /**
+   * From the Hub to an Actor: one of its slots was bound or unbound. A slot made at run time (an
+   * export exposed to this Actor) carries `exposed` while bound: the export's described interface
+   * and which Actor's export it is. Unbound, it is gone.
+   */
+  | { op: "slot"; name: string; bound: boolean; exposed?: Exposure }
   /**
    * From the Hub to a provider: the same four, naming its export, who is calling, and through which
    * of the caller's slots (a provider keeping state per consumer keys it by both).
@@ -60,6 +64,12 @@ export type Header =
       event?: string;
       params?: unknown;
     };
+
+/** A slot made at run time, as the Hub describes it: the export's interface, and whose it is. */
+export interface Exposure {
+  interface: unknown;
+  provider: { actor: string; export: string };
+}
 
 export type WireErrorName = "NotConnected" | "Refused" | "OutcomeUnknown";
 /** How a refusal crosses the wire; the SDK maps it to its error classes. */
@@ -108,9 +118,31 @@ export function parseHeader(value: unknown): Header {
       return { op: "offer", name: text(value, "name"), interface: value.interface };
     case "withdraw":
       return { op: "withdraw", name: text(value, "name") };
-    case "slot":
+    case "slot": {
       if (typeof value.bound !== "boolean") throw new HeaderError("A slot header needs bound.");
-      return { op: "slot", name: text(value, "name"), bound: value.bound };
+      if (!("exposed" in value))
+        return { op: "slot", name: text(value, "name"), bound: value.bound };
+      const exposed = value.exposed;
+      if (
+        !value.bound ||
+        !isRecord(exposed) ||
+        !isRecord(exposed.interface) ||
+        !isRecord(exposed.provider)
+      )
+        throw new HeaderError("A slot header's exposed is a bound slot's {interface, provider}.");
+      return {
+        op: "slot",
+        name: text(value, "name"),
+        bound: true,
+        exposed: {
+          interface: exposed.interface,
+          provider: {
+            actor: text(exposed.provider, "actor"),
+            export: text(exposed.provider, "export"),
+          },
+        },
+      };
+    }
     case "serve": {
       const kind = value.kind;
       if (kind !== "call" && kind !== "subscribe" && kind !== "open" && kind !== "http")
