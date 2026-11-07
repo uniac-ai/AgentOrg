@@ -162,7 +162,7 @@ test("the tools are the bound slots' methods, apart from model and store", async
 test("bound to an installer, the agent can plan and install what it builds", async () => {
   const s = await setup();
   await s.turn("hello");
-  s.actor.bind("installer", { plan: () => ({ slots: [], views: [] }) });
+  s.actor.bind("installer", { plan: () => ({ slots: [], views: [], exposes: [] }) });
   await s.turn("make me a counter");
   // How to make an Actor is told only once it can build one too.
   s.actor.bind("packages", { list: () => ({ packages: [] }) });
