@@ -28,6 +28,8 @@ function errorOf(body: ErrorBody, target: string): Error {
 }
 
 interface Subscription {
+  /** A view's slots watch instead of a slot's events. */
+  slots?: true;
   slot: string;
   event: string;
   view?: View;
@@ -89,7 +91,7 @@ export class Api {
     slot: string,
     event: string,
     send: (payload: unknown) => void,
-    options: { view?: View; end?: () => void } = {},
+    options: { view?: View; end?: () => void; slots?: true } = {},
   ): () => void {
     const subscription: Subscription = { slot, event, send, ...options };
     this.#subscriptions.add(subscription);
@@ -100,6 +102,15 @@ export class Api {
       this.#bySub.delete(subscription.sub);
       this.#send({ op: "unsubscribe", sub: subscription.sub });
     };
+  }
+
+  /**
+   * A view's slots until the returned stop, kept across reconnects: `send` gets `{bound: [slot]}`
+   * first, every slot bound now (again after each reconnect), then `{slot, bound}` per change.
+   * `end` if the gateway ends it, as for a module that isn't a view.
+   */
+  watchSlots(view: View, send: (payload: unknown) => void, end?: () => void): () => void {
+    return this.subscribe("", "", send, { view, slots: true, ...(end ? { end } : {}) });
   }
 
   /** A line for a view's Actor's log; dropped while the socket isn't open. */
@@ -113,7 +124,8 @@ export class Api {
     subscription.sub = sub;
     this.#bySub.set(sub, subscription);
     const { slot, event, view } = subscription;
-    this.#send({ sub, op: "subscribe", slot, event, ...(view ? { view } : {}) });
+    if (subscription.slots) this.#send({ sub, op: "slots", view });
+    else this.#send({ sub, op: "subscribe", slot, event, ...(view ? { view } : {}) });
   }
 
   #send(message: unknown) {

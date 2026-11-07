@@ -116,3 +116,43 @@ test("the board in the shell: a card added in its panel outlives a reload and a 
   }
   assert.equal((await asPanel("store", "logic")).error?.code, "forbidden");
 });
+
+test("a view placed before its Actor's process connects renders once the process is up", async (t) => {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "agentorg-board-early-")));
+  const home = join(dir, "home");
+  const app = await startApp({ home });
+  const person = personOf(app, readFileSync(join(home, "cli-token"), "utf8").trim());
+  const browser = await chromium.launch();
+  t.after(async () => {
+    await browser.close();
+    person.close();
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  const built = await buildPackage(join(root, "examples", "board"), { out: join(dir, "out") });
+  const { hash } = await person.call<{ hash: string }>("packages", "add", { path: built.file });
+  const { actorId } = await person.call<{ actorId: string }>("actors", "create", {
+    name: "Board",
+    package: hash,
+    bindings: [{ slot: "logic.store", provider: "storage", export: "kv" }],
+  });
+  // Placed and open while nothing answers its slot: the panel says so.
+  await person.call("layout", "place", { actor: actorId, module: "panel", title: "Launch" });
+  const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+  await page.goto(app.signInUrl());
+  await page.waitForURL(`${app.url}/`);
+  const panel = page.frameLocator('[aria-label="Launch"] iframe');
+  await panel.getByText("The board isn't answering.").waitFor();
+  assert.equal(app.hub.connected(actorId), false);
+
+  // Its process comes up: the open panel hears its slot is usable and reads the board.
+  await person.call("actors", "start", { actorId });
+  await until(() => app.hub.connected(actorId));
+  // An empty board's meter has no size: attached, not visible.
+  await panel.locator('[aria-label="0 of 0 done"]').waitFor({ state: "attached" });
+  assert.equal(await panel.getByRole("status").textContent(), "");
+  await panel.getByRole("textbox", { name: "New card" }).fill("Write the release notes");
+  await panel.getByRole("textbox", { name: "New card" }).press("Enter");
+  await panel.getByText("Write the release notes").waitFor();
+});

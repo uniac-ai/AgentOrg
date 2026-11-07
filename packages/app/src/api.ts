@@ -33,6 +33,11 @@ export interface ViewCalls {
     send: (payload: unknown) => void,
     end: () => void,
   ): () => void;
+  /**
+   * The view's slots: `onSlot` hears each bound one at once, then every change (bound again when
+   * it's usable again). Returns how to stop. Refused for a module that isn't a view.
+   */
+  slots(view: View, onSlot: (slot: string, bound: boolean) => void): () => void;
   /** A line for the view's Actor's log, which the Hub bounds as it does a frame's. */
   log(
     view: View,
@@ -75,6 +80,9 @@ function errorBody(error: unknown) {
  *   answered `{id, result}` or `{id, error}`.
  * - `{sub, op: "subscribe", slot, event}` (or with `view`): then `{sub, payload}` per event, and
  *   `{sub, end: true}` once it can't go on. `{sub, op: "unsubscribe"}` stops it.
+ * - `{sub, op: "slots", view}`: the view's slots. First `{sub, payload: {bound: [slot]}}`, every
+ *   one bound now, then `{sub, payload: {slot, bound}}` per change, `bound` again for a slot that's
+ *   usable again. `{sub, op: "unsubscribe"}` stops it, as a subscription.
  * - `{op: "log", view, level, message, fields?}`: a line for the view's Actor's log, unanswered.
  *
  * A view's calls run as its Actor, for one of its views only, which the Hub checks. Everything else
@@ -163,6 +171,31 @@ export function serveSocket(
           else subscriptions.set(sub, stop);
         } catch (error) {
           ended = true;
+          send({ sub, end: true, error: errorBody(error) });
+        }
+        return;
+      }
+      case "slots": {
+        const { sub } = message;
+        if (!isId(sub) || subscriptions.has(sub)) return;
+        try {
+          if (subscriptions.size >= MAX_SUBSCRIPTIONS)
+            throw new Refused(
+              "quota",
+              `A socket holds ${MAX_SUBSCRIPTIONS} subscriptions at most.`,
+            );
+          const view = viewOf(message.view);
+          if (!view) throw new Refused("invalid", "A slots watch names its view.");
+          // The Hub tells the bound slots at once, within the call: gathered, they're one snapshot.
+          let snapshot: string[] | undefined = [];
+          const stop = deps.views.slots(view, (slot, bound) => {
+            if (snapshot && bound) snapshot.push(slot);
+            else if (!snapshot) send({ sub, payload: { slot, bound } });
+          });
+          send({ sub, payload: { bound: snapshot } });
+          snapshot = undefined;
+          subscriptions.set(sub, stop);
+        } catch (error) {
           send({ sub, end: true, error: errorBody(error) });
         }
         return;

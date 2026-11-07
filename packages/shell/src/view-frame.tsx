@@ -1,24 +1,9 @@
 import { FrameHost, openFrame } from "@agentorg/sdk/frame/host";
 import { useEffect, useRef, useState } from "react";
 import type { View } from "./api.ts";
-import { api, type Binding, manifestOf, themeTokens, useConnection, useTheme } from "./data.ts";
+import { api, manifestOf, themeTokens, useConnection, useTheme } from "./data.ts";
 import { viewLog } from "./rules.ts";
 import { signIn } from "./sign-in.ts";
-
-/** Which of a view's slots are bound: its module's slots against the Actor's `module.slot` bindings. */
-async function slotsOf(view: View, hash: string): Promise<Record<string, boolean>> {
-  const [manifest, { bindings }] = await Promise.all([
-    manifestOf(hash),
-    api.call<{ bindings: Binding[] }>("bindings", "list", { actor: view.actor }),
-  ]);
-  const bound = new Set(
-    bindings.filter((binding) => binding.consumer === view.actor).map((binding) => binding.slot),
-  );
-  const slots = manifest.modules[view.module]?.slots ?? {};
-  return Object.fromEntries(
-    Object.keys(slots).map((slot) => [slot, bound.has(`${view.module}.${slot}`)]),
-  );
-}
 
 /** How long a view has to load and mount; a frame with no runtime never answers. */
 const LOAD_MS = 15_000;
@@ -80,17 +65,49 @@ function Frame({ actor, module, hash, onFailed }: View & { hash: string; onFaile
     let live = true;
     const stops: (() => void)[] = [];
     void (async () => {
-      let known = await slotsOf(view, hash);
+      const declared = Object.keys((await manifestOf(hash)).modules[module]?.slots ?? {});
+      if (!live) return;
+      // What the frame was told of each slot; until it loads, what to load it with.
+      const known = new Map<string, boolean>();
+      let loaded = false;
+      // The gateway's watch: every slot bound now, at once and again after each reconnect, then
+      // each change; bound again means its provider came back, so the frame is told that too.
+      const first = new Promise<void>((resolve, ended) => {
+        stops.push(
+          api.watchSlots(
+            view,
+            (payload) => {
+              const told = payload as { bound: string[] } | { slot: string; bound: boolean };
+              const changes =
+                "slot" in told
+                  ? [[told.slot, told.bound] as const]
+                  : declared
+                      .map((slot) => [slot, told.bound.includes(slot)] as const)
+                      .filter(([slot, bound]) => bound || known.get(slot) || !loaded);
+              for (const [slot, bound] of changes) {
+                known.set(slot, bound);
+                if (loaded) host.slot(slot, bound);
+              }
+              resolve();
+            },
+            () => ended(new Error("The view's slots aren't watched.")),
+          ),
+        );
+      });
+      await first;
       const themed = document.documentElement.dataset.theme;
       let timer: ReturnType<typeof setTimeout> | undefined;
       await Promise.race([
         (async () => {
-          await host.load({
+          const loading = host.load({
             src: `${location.origin}/frames/${hash}/${module}.js`,
             actorId: actor,
             module,
-            slots: known,
+            slots: Object.fromEntries(declared.map((slot) => [slot, known.get(slot) ?? false])),
           });
+          // Sent: the frame holds what it's told while it loads.
+          loaded = true;
+          await loading;
           await host.mount(themeTokens(), sizeOf(element));
         })(),
         new Promise((_, failed) => {
@@ -117,18 +134,6 @@ function Frame({ actor, module, hash, onFailed }: View & { hash: string; onFaile
       const observer = new ResizeObserver(() => void host.resize(sizeOf(element)).catch(() => {}));
       observer.observe(element);
       stops.push(() => observer.disconnect());
-      // A slot bound or unbound since: the frame is told each change.
-      const recheck = () =>
-        void slotsOf(view, hash).then(
-          (next) => {
-            for (const [slot, bound] of Object.entries(next))
-              if (known[slot] !== bound) host.slot(slot, bound);
-            known = next;
-          },
-          () => {},
-        );
-      stops.push(api.subscribe("exports", "changed", recheck));
-      stops.push(api.subscribe("grants", "decided", recheck));
     })().catch(() => live && failed.current());
     return () => {
       live = false;

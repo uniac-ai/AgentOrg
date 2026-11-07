@@ -234,6 +234,7 @@ export async function startApp(options: AppOptions): Promise<App> {
     call: (view, slot, method, input) => hub.viewCall(view.actor, view.module, slot, method, input),
     subscribe: (view, slot, event, send, end) =>
       hub.viewSubscribe(view.actor, view.module, slot, event, send, () => end()),
+    slots: (view, onSlot) => hub.viewSlots(view.actor, view.module, onSlot),
     log: (view, level, message, fields) =>
       hub.viewLog(view.actor, view.module, {
         level,
