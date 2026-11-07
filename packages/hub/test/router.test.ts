@@ -768,6 +768,33 @@ test("splices end with their binding, and a closed Actor's channel goes", async 
   assert.equal(hub.connected(c.id), false);
 });
 
+test("a call on an unbound slot is audited without a provider, and audit subscribers hear on", async (t) => {
+  const { actor, person, hub } = await setup(t);
+  const heard = person.subscribe("audit", "appended");
+  while (!hub.state.audit(0, 1000).entries.some((e) => e.details.op === "subscribe"))
+    await later(5);
+  const c = await actor("consumer", { slots: { notes } });
+  assert.equal((await c.client.call("notes", "write", { text: "x" })).error?.name, "NotConnected");
+  await person.call("actors", "create", { name: "after" });
+  type Entry = { kind: string; details: Record<string, unknown> };
+  const seen: Entry[] = [];
+  for (;;) {
+    const next = (await heard.next()) as { event?: Entry } | undefined;
+    assert.ok(next?.event, `the subscription goes on: ${JSON.stringify(next)}`);
+    seen.push(next.event);
+    if (next.event.kind === "actor.create" && next.event.details.name === "after") break;
+  }
+  // As it is stored: no provider or export, rather than ones without a value.
+  const unbound = seen.find((e) => e.details.slot === "notes" && e.details.op === "call");
+  assert.deepEqual(unbound?.details, {
+    consumer: c.id,
+    slot: "notes",
+    op: "call",
+    method: "write",
+    outcome: "not_connected",
+  });
+});
+
 test("a subscriber that stops reading is cut off, not buffered for", async (t) => {
   const { person, hub } = await setup(t);
   const sub = person.subscribe("audit", "appended");
