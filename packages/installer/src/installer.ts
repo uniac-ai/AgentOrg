@@ -216,7 +216,13 @@ export default defineActor({
         };
       },
 
-      async exportSystem() {
+      async exportSystem(_, { caller }) {
+        // The whole system, every binding and the person's layout, is a manager's to read.
+        if (!(await grantsOf(caller)).manager)
+          throw new Refused(
+            "forbidden",
+            `${caller} isn't a manager (bound to hub.bindings), so it can't export the system, which lists every binding and the person's layout.`,
+          );
         const [{ actors }, { bindings }, { home }] = await Promise.all([
           ctx.slots.actors.call.list({}),
           ctx.slots.bindings.call.list({}),

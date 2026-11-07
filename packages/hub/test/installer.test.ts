@@ -334,6 +334,18 @@ test("the installer grants nothing its caller couldn't: delegation only narrows"
   assert.equal(hub.state.isManager(anything.actorId), true);
 });
 
+test("only a manager exports the system: an agent holding the installer is refused", async (t) => {
+  const { shell, assistant, bare } = await setup(t);
+  for (const caller of [assistant, bare])
+    await assert.rejects(
+      caller.slots.installer.call.exportSystem({}),
+      (e: Refused) => e.code === "forbidden" && /isn't a manager/.test(e.message),
+    );
+  // A manager, as the person is through its shell.
+  const { composition } = await shell.slots.installer.call.exportSystem({});
+  assert.equal(composition.format, "agentorg.system/1");
+});
+
 test("a system exported from one home is made again in another, by names, with what can't be listed", async (t) => {
   const a = await setup(t);
   const board = await a.add(join(packages, "..", "examples", "board"));

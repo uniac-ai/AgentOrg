@@ -83,7 +83,8 @@ export const installer = defineInterface({
      * The system as it is, as a composition: every package Actor that isn't closed, the
      * connections among them and to the built-in Actors, and the layout. External Actors (a
      * program that connects itself, the person) and connections to them are listed in
-     * `unresolved`, not exported.
+     * `unresolved`, not exported. Only a manager (an Actor bound to `hub.bindings`, as the person
+     * is) may export: a caller that isn't is refused `forbidden`.
      */
     exportSystem: method({
       input: z.object({}),
