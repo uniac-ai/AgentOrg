@@ -15,6 +15,13 @@ export interface Exposure {
   as?: string;
 }
 
+/** An exposure as a request asks for it: by whom, and which side it lacks. */
+export interface Asked extends Exposure {
+  requestedBy?: string;
+  /** The side the requester lacks: `export` when it holds the slot side, as `to` does. */
+  needs?: string;
+}
+
 /** An open request, as `hub.grants` tells it. */
 export interface Request {
   requestId: string;
@@ -25,8 +32,16 @@ export interface Request {
  * The exposure an open request asks for, if it asks for one. The one place that reads the Hub's
  * request shape for exposures.
  */
-export function exposureOf(request: Request): Exposure | undefined {
-  const { exposed, provider, export: name, consumer, slot } = request as Record<string, unknown>;
+export function exposureOf(request: Request): Asked | undefined {
+  const {
+    exposed,
+    provider,
+    export: name,
+    consumer,
+    slot,
+    requestedBy,
+    needs,
+  } = request as Record<string, unknown>;
   if (exposed !== true) return undefined;
   if (typeof provider !== "string" || typeof name !== "string" || typeof consumer !== "string")
     return undefined;
@@ -35,6 +50,8 @@ export function exposureOf(request: Request): Exposure | undefined {
     export: name,
     to: consumer,
     ...(typeof slot === "string" ? { as: slot } : {}),
+    ...(typeof requestedBy === "string" ? { requestedBy } : {}),
+    ...(typeof needs === "string" ? { needs } : {}),
   };
 }
 
@@ -43,7 +60,7 @@ interface Definition {
   name: string;
   says: string;
   /** Whether this rule approves the exposure, read from the Hub as the person. */
-  approves(exposure: Exposure, person: PersonSide): Promise<boolean>;
+  approves(asked: Asked, person: PersonSide): Promise<boolean>;
 }
 
 /** The rules the app knows, in the order Settings lists them. */
@@ -52,13 +69,15 @@ export const DEFINITIONS: readonly Definition[] = [
     id: "agents-use-what-they-install",
     name: "Let an agent use what it installs",
     says: "When an agent asks to use an Actor it installed, approve it.",
-    async approves(exposure, person) {
+    async approves(asked, person) {
+      // The agent asked for itself: it holds its slot side and lacks the export side.
+      if (asked.requestedBy !== asked.to || asked.needs !== "export") return false;
       // Provenance only: who the installer installed it for. The Hub grants nothing from it.
-      const actor = (await person.call("actors", "get", { actorId: exposure.provider })) as {
+      const actor = (await person.call("actors", "get", { actorId: asked.provider })) as {
         state?: string;
         installedFor?: string;
       };
-      return actor.state !== "closed" && actor.installedFor === exposure.to;
+      return actor.state !== "closed" && actor.installedFor === asked.to;
     },
   },
 ];
@@ -84,6 +103,9 @@ export class Rules {
   /** Requests being settled, so an event and a sweep don't settle one twice. */
   readonly #settling = new Set<string>();
   #stop: (() => void) | undefined;
+  #closed = false;
+  /** Turning rules on and off, one at a time, so none is lost. */
+  #setting: Promise<unknown> = Promise.resolve();
 
   constructor(options: RulesOptions) {
     this.#person = options.person;
@@ -111,20 +133,28 @@ export class Rules {
     };
   }
 
-  async set({ id, on }: { id: string; on: boolean }) {
+  set({ id, on }: { id: string; on: boolean }): Promise<Record<string, never>> {
     if (!DEFINITIONS.some((rule) => rule.id === id))
-      throw new Refused("unknown", `There is no rule ${id}.`);
-    const now = await this.#on();
-    if (on) now.add(id);
-    else now.delete(id);
-    await this.#person.call("store", "set", {
-      key: RULES_KEY,
-      value: Object.fromEntries([...now].map((ruleId) => [ruleId, { on: true }])),
+      return Promise.reject(new Refused("unknown", `There is no rule ${id}.`));
+    const done = this.#setting.then(async () => {
+      const now = await this.#on();
+      if (on) now.add(id);
+      else now.delete(id);
+      await this.#person.call("store", "set", {
+        key: RULES_KEY,
+        value: Object.fromEntries([...now].map((ruleId) => [ruleId, { on: true }])),
+      });
+      this.#changed();
+      // Turned on, it settles what already waits for it; a sweep that fails is logged, as the
+      // rule is on either way.
+      if (on)
+        await this.sweep().catch((error: unknown) =>
+          this.#log(`The rules couldn't go through what waits: ${messageOf(error)}`),
+        );
+      return {};
     });
-    this.#changed();
-    // Turned on, it settles what already waits for it.
-    if (on) await this.sweep();
-    return {};
+    this.#setting = done.catch(() => {});
+    return done;
   }
 
   /** Hear each new request, and settle the open ones. */
@@ -134,6 +164,7 @@ export class Rules {
 
   /** Hear each new request, once; heard again after a subscription that ended. */
   #listen() {
+    if (this.#closed) return;
     this.#stop ??= this.#person.subscribe(
       "grants",
       "requested",
@@ -144,7 +175,9 @@ export class Rules {
     );
   }
 
+  /** Stop: nothing more is heard, and a sweep under way approves nothing more. */
   close() {
+    this.#closed = true;
     this.#stop?.();
     this.#stop = undefined;
   }
@@ -152,20 +185,27 @@ export class Rules {
   /** Go through every open request the person could approve. */
   async sweep() {
     this.#listen();
-    const { requests } = (await this.#person.call("grants", "requests", {})) as {
-      requests: Request[];
-    };
-    for (const request of requests) await this.#settle(request);
+    for (const request of await this.#open()) await this.#settle(request);
+  }
+
+  async #open() {
+    if (this.#closed) return [];
+    return ((await this.#person.call("grants", "requests", {})) as { requests: Request[] })
+      .requests;
   }
 
   async #settle(request: Request) {
-    const exposure = exposureOf(request);
-    if (!exposure || this.#settling.has(request.requestId)) return;
+    const asked = exposureOf(request);
+    if (!asked || this.#closed || this.#settling.has(request.requestId)) return;
     this.#settling.add(request.requestId);
     try {
       const on = await this.#on();
       for (const rule of DEFINITIONS) {
-        if (!on.has(rule.id) || !(await rule.approves(exposure, this.#person))) continue;
+        if (!on.has(rule.id) || !(await rule.approves(asked, this.#person))) continue;
+        // Still open just before: one the person declined, or that was settled meanwhile, is left.
+        if (!(await this.#open()).some((open) => open.requestId === request.requestId)) return;
+        const { provider, export: name, to, as } = asked;
+        const exposure: Exposure = { provider, export: name, to, ...(as ? { as } : {}) };
         // As an approver approves: the call the request asked for, checked by the Hub.
         await this.#person.call("grants", "expose", exposure);
         this.#log(
@@ -174,11 +214,11 @@ export class Rules {
         return;
       }
     } catch (error) {
-      this.#log(
-        `A rule couldn't settle request ${request.requestId}: ${error instanceof Error ? error.message : String(error)}`,
-      );
+      this.#log(`A rule couldn't settle request ${request.requestId}: ${messageOf(error)}`);
     } finally {
       this.#settling.delete(request.requestId);
     }
   }
 }
+
+const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
