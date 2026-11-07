@@ -24,6 +24,11 @@ export interface FrameHandlers {
   };
   /** A line for the view's Actor's log. */
   log(level: "info" | "warn" | "error", message: string, fields?: Record<string, unknown>): void;
+  /**
+   * The view's content height, within 120–2,000 px and at most once per 100 ms (the latest one
+   * wins), for a shell that sizes the frame to its content. Without it, sizes are dropped.
+   */
+  size?(height: number): void;
 }
 
 type Size = { width: number; height: number };
@@ -47,6 +52,9 @@ const LOG_WINDOW_MS = 10_000;
 const MAX_SUBSCRIPTIONS = 64;
 /** Calls on its slots one frame may have in flight; past it, `busy`. */
 const MAX_CALLS = 64;
+/** The heights a view's frame may take from its content, and how often it may change. */
+export const FRAME_HEIGHT = { min: 120, max: 2000 };
+const SIZE_MS = 100;
 
 /**
  * A frame's log fields, rebuilt: a fresh object of at most `MAX_FIELDS` plain keys (no prototype
@@ -142,6 +150,8 @@ export class FrameHost {
   #logWindow = { start: 0, lines: 0 };
   #calls = 0;
   #closed = false;
+  /** The latest height not yet passed on, and the wait before the next may be. */
+  #sizing: { height?: number; timer?: ReturnType<typeof setTimeout> } = {};
 
   constructor(port: PortLike, handlers: FrameHandlers) {
     this.#port = port;
@@ -176,6 +186,7 @@ export class FrameHost {
   close() {
     if (this.#closed) return;
     this.#closed = true;
+    clearTimeout(this.#sizing.timer);
     this.#port.onmessage = null;
     for (const { stop } of this.#subscriptions.values()) stop();
     this.#subscriptions.clear();
@@ -184,6 +195,14 @@ export class FrameHost {
       waiting.reject(new OutcomeUnknown("The frame closed."));
     this.#pending.clear();
     this.#port.close();
+  }
+
+  #flushSize() {
+    const { height } = this.#sizing;
+    this.#sizing = {};
+    if (height === undefined || this.#closed) return;
+    this.#handlers.size?.(height);
+    this.#sizing.timer = setTimeout(() => this.#flushSize(), SIZE_MS);
   }
 
   #post(message: ToFrame) {
@@ -278,6 +297,16 @@ export class FrameHost {
         } catch {
           end();
         }
+        return;
+      }
+      case "size": {
+        const { height } = message;
+        if (typeof height !== "number" || !Number.isFinite(height) || !this.#handlers.size) return;
+        this.#sizing.height = Math.round(
+          Math.min(FRAME_HEIGHT.max, Math.max(FRAME_HEIGHT.min, height)),
+        );
+        // The first at once, then at most one per window: the latest at its end.
+        if (!this.#sizing.timer) this.#flushSize();
         return;
       }
       case "unsubscribe": {

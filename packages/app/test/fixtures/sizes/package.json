@@ -1,0 +1,15 @@
+{
+  "name": "sizes",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Views of known heights, for the shell's sizing tests: a chat, a tall list, a short note and one that draws nothing",
+  "type": "module",
+  "agentorg": {
+    "modules": {
+      "chat": "src/chat.js",
+      "tall": "src/tall.js",
+      "short": "src/short.js",
+      "quiet": "src/quiet.js"
+    }
+  }
+}

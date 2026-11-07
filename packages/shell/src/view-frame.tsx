@@ -20,7 +20,19 @@ const sizeOf = (element: HTMLElement) => ({
  * leaves; one that fails to load is a quiet line in its place, tried again when the connection to
  * AgentOrg comes back.
  */
-export function ViewFrame({ actor, module, hash }: View & { hash: string }) {
+/**
+ * `onSize` hears the view's content height, as its frame reports it (bounded and paced by
+ * `FrameHost`), for a placement that sizes to its content; `height` is the height it gave back.
+ */
+type Sizing = { onSize?(height: number): void; height?: number };
+
+export function ViewFrame({
+  actor,
+  module,
+  hash,
+  onSize,
+  height,
+}: View & { hash: string } & Sizing) {
   const [attempt, setAttempt] = useState(0);
   const key = `${actor}\0${module}\0${hash}\0${attempt}`;
   // Failed for this view and this try only: another view, or another try, starts afresh.
@@ -32,11 +44,26 @@ export function ViewFrame({ actor, module, hash }: View & { hash: string }) {
   }, [connection]);
   if (failed === key) return <div className="view-error">This view didn't load.</div>;
   return (
-    <Frame key={key} actor={actor} module={module} hash={hash} onFailed={() => setFailed(key)} />
+    <Frame
+      key={key}
+      actor={actor}
+      module={module}
+      hash={hash}
+      onFailed={() => setFailed(key)}
+      {...(onSize ? { onSize } : {})}
+      {...(height !== undefined ? { height } : {})}
+    />
   );
 }
 
-function Frame({ actor, module, hash, onFailed }: View & { hash: string; onFailed(): void }) {
+function Frame({
+  actor,
+  module,
+  hash,
+  onFailed,
+  onSize,
+  height,
+}: View & { hash: string; onFailed(): void } & Sizing) {
   const frame = useRef<HTMLIFrameElement>(null);
   // Each load of the frame's document, a moved frame's included, gets a fresh port.
   const [loads, setLoads] = useState(0);
@@ -45,6 +72,8 @@ function Frame({ actor, module, hash, onFailed }: View & { hash: string; onFaile
   const theme = useTheme();
   const failed = useRef(onFailed);
   failed.current = onFailed;
+  const sized = useRef(onSize);
+  sized.current = onSize;
 
   useEffect(() => {
     const element = frame.current;
@@ -60,6 +89,7 @@ function Frame({ actor, module, hash, onFailed }: View & { hash: string; onFaile
           signIn,
         },
         log: (level, message, fields) => viewLog(view, level, message, fields),
+        size: (next) => sized.current?.(next),
       },
     );
     let live = true;
@@ -154,6 +184,7 @@ function Frame({ actor, module, hash, onFailed }: View & { hash: string; onFaile
       className="frame"
       title={`${module} view`}
       sandbox="allow-scripts"
+      style={height !== undefined ? { height } : undefined}
       src={`/frames/${hash}/${module}.html`}
       onLoad={() => setLoads((n) => n + 1)}
     />

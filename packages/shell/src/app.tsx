@@ -13,6 +13,7 @@ import {
   useRoute,
   useTheme,
 } from "./data.ts";
+import { Divider, useWidgetsWidth } from "./divider.tsx";
 import { Home, PlacedView } from "./home.tsx";
 import { ChatGptIcon, GearIcon, HomeIcon, MoonIcon, PlusIcon } from "./icons.tsx";
 import { NewAgent } from "./new-agent.tsx";
@@ -183,6 +184,7 @@ function Shell({ login }: { login?: LoginStatus }) {
   const home = useLoad(list<Placement>("layout", "get", "home"), ["layout"]).value ?? [];
   const [menu, setMenu] = useState<string>();
   const [creating, setCreating] = useState(false);
+  const [width, setWidth] = useWidgetsWidth();
 
   const agents = actors.filter(
     (actor) => actor.state !== "closed" && actor.views?.includes("chat"),
@@ -190,6 +192,8 @@ function Shell({ login }: { login?: LoginStatus }) {
   const agent =
     route.screen === "agent" ? actors.find((a) => a.actorId === route.agent) : undefined;
   const assistant = packages.find((pkg) => pkg.name === ASSISTANT);
+  // An agent with nothing beside it: no column, and the chat takes the width.
+  const beside = agent ? besideAgent(home, agent.actorId) : [];
 
   // A menu closes on any click outside it, and on a new screen.
   // biome-ignore lint/correctness/useExhaustiveDependencies: the route closes it too.
@@ -351,15 +355,14 @@ function Shell({ login }: { login?: LoginStatus }) {
               />
             )}
           </section>
+          {beside.length > 0 && <Divider width={width} onWidth={setWidth} />}
           <aside
             className="widgets scroll"
             aria-label="Placed beside this agent"
-            hidden={route.screen !== "agent"}
+            hidden={beside.length === 0}
+            style={{ width }}
           >
-            {agent &&
-              besideAgent(home, agent.actorId).map((p, _, beside) =>
-                placed(p, "container", beside),
-              )}
+            {beside.map((p) => placed(p, "container", beside))}
           </aside>
         </div>
       </div>

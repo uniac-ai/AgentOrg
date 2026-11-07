@@ -342,7 +342,8 @@ a {
   flex: 1;
 }
 .widgets {
-  width: 340px;
+  /* Its width is the divider's, and never more than half the stage. */
+  max-width: 50%;
   flex: none;
   display: flex;
   flex-direction: column;
@@ -351,6 +352,28 @@ a {
 }
 .widgets .container {
   flex: none;
+}
+/* In the gap between the chat and the widgets: it takes no room, and only its line shows. */
+.divider {
+  width: 8px;
+  margin: 0 -8px;
+  flex: none;
+  cursor: col-resize;
+  touch-action: none;
+  display: flex;
+  justify-content: center;
+  outline: 0;
+}
+.divider::after {
+  content: "";
+  width: 2px;
+  border-radius: 1px;
+  background: transparent;
+}
+.divider:hover::after,
+.divider:focus-visible::after,
+.divider:active::after {
+  background: var(--ring);
 }
 
 /* A placed view's frame: its header is the shell's, the body is the view's own DOM. */
@@ -376,6 +399,10 @@ a {
 .view-body {
   padding: 4px 14px 14px;
   height: 260px;
+}
+/* Its view reported its height: the frame takes it, and the body fits the frame. */
+.view-body.sized {
+  height: auto;
 }
 /*
  * A view's own frame. Its color scheme is the frame document's, so the browser paints no backdrop
@@ -679,7 +706,8 @@ tr:hover td {
 }
 
 @media (max-width: 1100px) {
-  .widgets {
+  .widgets,
+  .divider {
     display: none;
   }
 }

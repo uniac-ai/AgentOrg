@@ -25,6 +25,8 @@ export interface FrameOptions {
 export interface Frame {
   /** An error the view didn't catch, for its Actor's log. */
   failed(error: unknown): void;
+  /** The root's content height changed: the shell hears it while the view is mounted. */
+  size(height: number): void;
   close(): void;
 }
 
@@ -261,7 +263,14 @@ export function runFrame(options: FrameOptions): Frame {
     }
   };
 
+  let told: number | undefined;
   return {
+    size(height) {
+      // Empty before mount and after unmount: those aren't the view's size.
+      if (!mounted || height === told) return;
+      told = height;
+      send({ op: "size", height });
+    },
     failed(error) {
       log.error(error instanceof Error ? error.message : String(error), {
         ...(error instanceof Error && error.stack ? { stack: error.stack } : {}),

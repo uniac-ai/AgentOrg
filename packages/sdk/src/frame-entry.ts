@@ -13,9 +13,10 @@ import type { FrameRoot } from "./module.js";
 interface FrameGlobals {
   parent: unknown;
   document: {
-    body: FrameRoot;
+    body: FrameRoot & { getBoundingClientRect(): { height: number } };
     documentElement: { style: { setProperty(name: string, value: string): void } };
   };
+  ResizeObserver: new (callback: () => void) => { observe(target: FrameRoot): void };
   addEventListener(
     type: "message",
     listener: (event: { source: unknown; data: unknown; ports: readonly PortLike[] }) => void,
@@ -46,6 +47,12 @@ self.addEventListener("message", (event) => {
         if (name.startsWith("--")) self.document.documentElement.style.setProperty(name, value);
     },
   });
+  // The body's height is its content's (the frame's document sets no height): the shell hears each
+  // change while the view is mounted, and may size the frame to it.
+  const body = self.document.body;
+  new self.ResizeObserver(() =>
+    frame?.size(Math.ceil(body.getBoundingClientRect().height)),
+  ).observe(body);
 });
 // What the view doesn't catch goes to its Actor's log.
 self.addEventListener("error", (event) => frame?.failed(event.error ?? event.message));
