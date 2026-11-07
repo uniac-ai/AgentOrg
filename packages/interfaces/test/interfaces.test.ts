@@ -6,6 +6,7 @@ import { Ajv2020 } from "ajv/dist/2020.js";
 import { z } from "zod";
 import {
   accountLogin,
+  appRules,
   chat,
   httpEgress,
   hubActors,
@@ -58,8 +59,17 @@ function compiled(iface: Parameters<typeof describeInterface>[0]) {
 
 test("every interface's schemas compile under the Hub's strict validator", () => {
   const hub = [hubPackages, hubActors, hubGrants, hubBindings, hubExports, hubAudit];
-  for (const iface of [...standard, ...hub])
+  for (const iface of [...standard, ...hub, appRules])
     assert.doesNotThrow(() => compiled(iface), describeInterface(iface).id);
+});
+
+test("a named rule's id is lowercase words joined by hyphens", () => {
+  const set = compiled(appRules)["set.input"];
+  assert.ok(set);
+  assert.equal(describeInterface(appRules).id, "app.rules@1");
+  assert.ok(set({ id: "agents-use-what-they-install", on: true }));
+  for (const id of ["", "Agents", "a b", "-a", "a-", "a--b", "x".repeat(65)])
+    assert.equal(set({ id, on: true }), false, JSON.stringify(id));
 });
 
 test("the Hub's schemas hold the rules that matter on the wire", () => {
