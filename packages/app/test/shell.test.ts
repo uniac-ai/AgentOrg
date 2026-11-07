@@ -512,6 +512,7 @@ test("from the first run to a chat: sign in with ChatGPT, New agent, a turn", as
       "logic.actors hub.actors",
       "logic.exports hub.exports",
       "logic.grants hub.grants",
+      `logic.installer ${ran.installer}.installer.installer`,
       "logic.layout person.layout",
       `logic.model ${chatgpt}.model.session`,
       "logic.store storage.kv",
@@ -597,6 +598,11 @@ test("opening a menu, the dialog and a theme switch move nothing", async (t) => 
   const { app, page, person, hashes, create } = await setup(t);
   const planner = await create("Planner", hashes.assistant);
   await person.call("layout", "place", { actor: planner, module: "panel", title: "Notes" });
+  // New agent is offered for the assistant the first run recorded; this home had none.
+  await person.call("store", "set", {
+    key: "app/first-run",
+    value: { assistant: hashes.assistant },
+  });
   await signIn(page, app);
   await page.getByRole("button", { name: "Planner" }).click();
   // Everything read and mounted: what arrives moves nothing after this.

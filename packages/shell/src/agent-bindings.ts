@@ -11,54 +11,88 @@ export const AGENT_GRANTS = [
   { slot: "actors", what: "create and run Actors", iface: "hub.actors@1", fixed: false },
   { slot: "grants", what: "ask for connections", iface: "hub.grants@1", fixed: false },
   { slot: "exports", what: "see what's offered", iface: "hub.exports@1", fixed: false },
+  { slot: "installer", what: "install Actors", iface: "installer@1", fixed: false },
 ] as const;
 
 export type AgentSlot = (typeof AGENT_GRANTS)[number]["slot"];
 
-/** The package New agent installs, and the model's, found by name in `packages.list`. */
-export const ASSISTANT = "assistant";
-export const CHATGPT = "chatgpt";
+/**
+ * Where the app's first run records what it made, in the person's store: its `assistant` is the
+ * package New agent installs, by hash, never a package found by its name.
+ */
+export const FIRST_RUN = "app/first-run";
 
-/** Where each slot is served: the chatgpt Actor's session, the built-ins, the person's layout. */
-const PROVIDERS: Record<AgentSlot, (chatgpt: string) => { provider: string; export: string }> = {
-  model: (chatgpt) => ({ provider: chatgpt, export: "model.session" }),
-  store: () => ({ provider: "storage", export: "kv" }),
-  layout: () => ({ provider: "person", export: "layout" }),
-  packages: () => ({ provider: "hub", export: "packages" }),
-  actors: () => ({ provider: "hub", export: "actors" }),
-  grants: () => ({ provider: "hub", export: "grants" }),
-  exports: () => ({ provider: "hub", export: "exports" }),
-};
+/**
+ * The Actors a new agent's slots reach beside the built-ins: the person's own ChatGPT (what its
+ * `login` is bound to) and installer (what its `installer` is bound to).
+ */
+export interface AgentProviders {
+  chatgpt: string;
+  installer: string;
+}
+
+/** Where each slot is served: ChatGPT's session, the installer, the built-ins, the person's layout. */
+const PROVIDERS: Record<AgentSlot, (ids: AgentProviders) => { provider: string; export: string }> =
+  {
+    model: (ids) => ({ provider: ids.chatgpt, export: "model.session" }),
+    store: () => ({ provider: "storage", export: "kv" }),
+    layout: () => ({ provider: "person", export: "layout" }),
+    packages: () => ({ provider: "hub", export: "packages" }),
+    actors: () => ({ provider: "hub", export: "actors" }),
+    grants: () => ({ provider: "hub", export: "grants" }),
+    exports: () => ({ provider: "hub", export: "exports" }),
+    installer: (ids) => ({ provider: ids.installer, export: "installer.installer" }),
+  };
 
 /**
  * A new agent's connections for `installer.install`: every grant but the ones switched off, which
- * can't be `model` or `store`. `chatgpt` is the chatgpt Actor's id.
+ * can't be `model` or `store`.
  */
 export function agentConnections(
-  chatgpt: string,
+  ids: AgentProviders,
   off: ReadonlySet<string> = new Set(),
 ): Record<string, { actor: string; export: string }> {
   return Object.fromEntries(
     AGENT_GRANTS.filter((grant) => grant.fixed || !off.has(grant.slot)).map((grant) => {
-      const { provider, export: name } = PROVIDERS[grant.slot](chatgpt);
+      const { provider, export: name } = PROVIDERS[grant.slot](ids);
       return [`logic.${grant.slot}`, { actor: provider, export: name }];
     }),
   );
 }
 
+type Call = (slot: string, method: string, input: unknown) => Promise<unknown>;
+
+/**
+ * The person's ChatGPT and installer: the Actors the person's `login` and `installer` are bound to,
+ * as the app's first run binds them (never an Actor found by its package's name).
+ */
+export async function agentProviders(call: Call): Promise<AgentProviders> {
+  const { bindings } = (await call("bindings", "list", { actor: "person" })) as {
+    bindings: { consumer: string; slot: string; provider: string }[];
+  };
+  const of = (slot: string) =>
+    bindings.find((b) => b.consumer === "person" && b.slot === slot)?.provider;
+  const chatgpt = of("login");
+  const installer = of("installer");
+  // Both are bound by the app's first run at its start; one that didn't finish tries again then.
+  if (!chatgpt || !installer)
+    throw new Error("AgentOrg isn't set up yet. Restart it to finish setting up.");
+  return { chatgpt, installer };
+}
+
 /**
  * New agent itself: install the assistant package `assistant` named `name` through the person's
- * `installer`, with `agentConnections`, and start it, all or nothing. `call` is the person's call
- * (the shell's `/api`, or a test's). Returns the new agent's id.
+ * `installer`, with `agentConnections` to the person's own ChatGPT and installer, and start it, all
+ * or nothing. `call` is the person's call (the shell's `/api`, or a test's). Returns its id.
  */
 export async function installAgent(
-  call: (slot: string, method: string, input: unknown) => Promise<unknown>,
-  agent: { assistant: string; name: string; chatgpt: string; off?: ReadonlySet<string> },
+  call: Call,
+  agent: { assistant: string; name: string; off?: ReadonlySet<string> },
 ): Promise<string> {
   const { actorId } = (await call("installer", "install", {
     package: agent.assistant,
     name: agent.name,
-    connections: agentConnections(agent.chatgpt, agent.off),
+    connections: agentConnections(await agentProviders(call), agent.off),
     start: true,
   })) as { actorId: string };
   return actorId;

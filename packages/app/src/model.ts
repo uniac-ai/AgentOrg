@@ -116,7 +116,7 @@ export async function firstRun(
   // What earlier runs made, by role, kept while it isn't closed. Unread, nothing is made: a run that
   // couldn't see its record would make a second installer.
   const read = (await call<{ value?: unknown }>("store", "get", { key: RECORD })).value;
-  const record: { installer?: string; chatgpt?: string } = Object.fromEntries(
+  const record: { installer?: string; chatgpt?: string; assistant?: string } = Object.fromEntries(
     Object.entries((read ?? {}) as Record<string, unknown>).filter(
       ([role, id]) => (role === "installer" || role === "chatgpt") && typeof id === "string",
     ),
@@ -125,6 +125,14 @@ export async function firstRun(
     record[role] = actorId;
     return call("store", "set", { key: RECORD, value: { ...record } });
   };
+  // The assistant New agent installs is this build's, by hash: never a package by its name, which
+  // an agent's own package could take.
+  if (packages.assistant) {
+    record.assistant = packages.assistant;
+    await attempt("recording the assistant", () =>
+      call("store", "set", { key: RECORD, value: { ...record } }),
+    );
+  }
   /** The Actor an earlier run made for `role`, unless it is gone or closed. */
   const madeBefore = async (role: "installer" | "chatgpt") => {
     const id = record[role];

@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { hubActors, layout } from "@agentorg/interfaces";
+import { hubActors, installer, layout } from "@agentorg/interfaces";
 import { describeInterface, OutcomeUnknown, Refused } from "@agentorg/sdk";
 import { createTestContext } from "@agentorg/sdk/testing";
 import { INPUT_BUDGET } from "../src/history.ts";
-import logic from "../src/logic.ts";
+import logic, { BASE_INSTRUCTIONS, INSTRUCTIONS } from "../src/logic.ts";
 import { MAX_OUTPUT } from "../src/tools.ts";
 
 type Item = { type: string; [key: string]: unknown };
@@ -154,6 +154,31 @@ test("the tools are the bound slots' methods, apart from model and store", async
   assert.deepEqual(
     (s.requests[2]?.tools ?? []).map((tool) => tool.name),
     Object.keys(hubActors.methods).map((method) => `actors__${method}`),
+  );
+});
+
+test("bound to an installer, the agent can plan and install what it builds", async () => {
+  const s = await setup();
+  await s.turn("hello");
+  s.actor.bind("installer", { plan: () => ({ slots: [], views: [] }) });
+  await s.turn("make me a counter");
+  // How to make an Actor is told only once it can build one too.
+  s.actor.bind("packages", { list: () => ({ packages: [] }) });
+  await s.turn("now");
+  assert.deepEqual(
+    s.requests.map((r) => r.instructions),
+    [BASE_INSTRUCTIONS, BASE_INSTRUCTIONS, INSTRUCTIONS],
+  );
+  const offered = s.requests[1]?.tools ?? [];
+  assert.deepEqual(
+    offered.map((tool) => tool.name),
+    Object.keys(installer.methods).map((method) => `installer__${method}`),
+  );
+  const described = describeInterface(installer);
+  assert.ok(described.kind === "rpc");
+  assert.deepEqual(
+    offered.find((tool) => tool.name === "installer__install")?.parameters,
+    described.methods.install?.input,
   );
 });
 

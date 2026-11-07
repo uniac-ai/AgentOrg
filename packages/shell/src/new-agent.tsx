@@ -1,30 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import { AGENT_GRANTS, CHATGPT, installAgent } from "./agent-bindings.ts";
-import { type Actor, api, go, manifestOf } from "./data.ts";
-
-/** The chatgpt Actor: the live Actor running the package named `chatgpt`. */
-async function chatgptOf(actors: Actor[]): Promise<string | undefined> {
-  for (const actor of actors) {
-    if (actor.state === "closed" || actor.package === "external" || actor.package === "builtin")
-      continue;
-    if ((await manifestOf(actor.package)).name === CHATGPT) return actor.actorId;
-  }
-  return undefined;
-}
+import { AGENT_GRANTS, installAgent } from "./agent-bindings.ts";
+import { api, go } from "./data.ts";
 
 /**
  * New agent: a name, and what it gets. The installer installs the assistant package with those
  * connections (the switched-off ones left out) and starts it, all or nothing; then it opens.
  */
-export function NewAgent({
-  assistant,
-  actors,
-  onClose,
-}: {
-  assistant: string;
-  actors: Actor[];
-  onClose(): void;
-}) {
+export function NewAgent({ assistant, onClose }: { assistant: string; onClose(): void }) {
   const [name, setName] = useState("");
   const [off, setOff] = useState<ReadonlySet<string>>(new Set());
   const [busy, setBusy] = useState(false);
@@ -40,12 +22,9 @@ export function NewAgent({
   }, []);
 
   const create = async () => {
-    const chatgpt = await chatgptOf(actors);
-    if (!chatgpt) throw new Error("ChatGPT isn't set up yet.");
     const actorId = await installAgent((slot, method, input) => api.call(slot, method, input), {
       assistant,
       name: name.trim(),
-      chatgpt,
       off,
     });
     onClose();

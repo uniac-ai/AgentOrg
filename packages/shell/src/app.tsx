@@ -1,11 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { ASSISTANT } from "./agent-bindings.ts";
+import { FIRST_RUN } from "./agent-bindings.ts";
 import {
   type Actor,
   api,
   type BindingRequest,
   go,
-  type Package,
   setTheme,
   useAction,
   useConnection,
@@ -178,7 +177,6 @@ function Shell({ login }: { login?: LoginStatus }) {
   const connection = useConnection();
   const theme = useTheme();
   const actors = useLoad(list<Actor>("actors", "list", "actors"), ["actors"]).value ?? [];
-  const packages = useLoad(list<Package>("packages", "list", "packages"), ["packages"]).value ?? [];
   const requests =
     useLoad(list<BindingRequest>("grants", "requests", "requests"), ["grants"]).value ?? [];
   const home = useLoad(list<Placement>("layout", "get", "home"), ["layout"]).value ?? [];
@@ -191,7 +189,14 @@ function Shell({ login }: { login?: LoginStatus }) {
   );
   const agent =
     route.screen === "agent" ? actors.find((a) => a.actorId === route.agent) : undefined;
-  const assistant = packages.find((pkg) => pkg.name === ASSISTANT);
+  // The app's own assistant, as its first run recorded it; it adds the package first.
+  const assistant = useLoad(
+    () =>
+      api
+        .call<{ value?: { assistant?: unknown } }>("store", "get", { key: FIRST_RUN })
+        .then(({ value }) => (typeof value?.assistant === "string" ? value.assistant : undefined)),
+    ["packages"],
+  ).value;
   // An agent with nothing beside it: no column, and the chat takes the width.
   const beside = agent ? besideAgent(home, agent.actorId) : [];
 
@@ -367,7 +372,7 @@ function Shell({ login }: { login?: LoginStatus }) {
         </div>
       </div>
       {creating && assistant && (
-        <NewAgent assistant={assistant.hash} actors={actors} onClose={() => setCreating(false)} />
+        <NewAgent assistant={assistant} onClose={() => setCreating(false)} />
       )}
     </div>
   );

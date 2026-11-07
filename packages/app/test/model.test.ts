@@ -120,7 +120,11 @@ test("first run makes the installer and ChatGPT once, bound as the person bound 
   const ran = await firstRun(person, {
     connected: (id) => app.hub.connected(id),
     log: (message) => logged.push(message),
-  });
+  }); // The assistant New agent installs is the bundled one, by hash.
+  assert.deepEqual(
+    ((await person.call("store", "get", { key: "app/first-run" })) as { value: object }).value,
+    { installer: ran.installer, chatgpt: ran.chatgpt, assistant: ran.packages.assistant },
+  );
   assert.deepEqual(Object.keys(ran.packages).sort(), [
     "assistant",
     "board",
@@ -159,11 +163,14 @@ test("first run makes the installer and ChatGPT once, bound as the person bound 
 
 test("New agent from a test: installAgent with what the first run made", async (t) => {
   const { app, person, wiring } = await setup(t);
+  // Before any first run there's no ChatGPT or installer of the person's to connect to.
+  await assert.rejects(installAgent(person.call, { assistant: "x", name: "Early" }), {
+    message: "AgentOrg isn't set up yet. Restart it to finish setting up.",
+  });
   const ran = await firstRun(person, { connected: (id) => app.hub.connected(id) });
   const agent = await installAgent(person.call, {
     assistant: ran.packages.assistant as string,
     name: "Scout",
-    chatgpt: ran.chatgpt as string,
     off: new Set(["packages", "actors"]),
   });
   await until(() => app.hub.connected(agent));
@@ -171,6 +178,7 @@ test("New agent from a test: installAgent with what the first run made", async (
     `chat.chat ${agent}.logic.chat`,
     "logic.exports hub.exports",
     "logic.grants hub.grants",
+    `logic.installer ${ran.installer}.installer.installer`,
     "logic.layout person.layout",
     `logic.model ${ran.chatgpt}.model.session`,
     "logic.store storage.kv",

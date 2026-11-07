@@ -35,7 +35,8 @@ interface Turn {
 }
 
 export function createAgent(options: {
-  instructions: string;
+  /** Read for each model request: what the agent is told can follow what it's bound to. */
+  instructions: () => string;
   model: Slot<typeof llmSession>;
   history: History;
   tools(): Tools;
@@ -118,7 +119,7 @@ export function createAgent(options: {
       try {
         ({ output } = await model.call.respond({
           requestId,
-          instructions: options.instructions,
+          instructions: options.instructions(),
           input,
           tools: [...tools.values()].map((found) => found.tool),
         }));
