@@ -128,10 +128,14 @@ export function createTestContext<S extends InterfaceMap, X extends InterfaceMap
         async call(method, input) {
           const spec = Object.hasOwn(iface.methods, method) ? iface.methods[method] : undefined;
           if (!spec) throw new Refused("unknown", `${slot} has no method ${method}.`);
-          const parsed = check(spec.input, input, `${slot}.${method} input`);
+          // JSON both ways, as through the Hub, and checked as JSON.
+          const parsed = check(
+            spec.input,
+            JSON.parse(JSON.stringify(input ?? null)),
+            `${slot}.${method} input`,
+          );
           const handler = Object.hasOwn(handlers, method) ? handlers[method] : undefined;
           if (!handler) throw new Refused("unimplemented", `${slot}.${method} isn't faked.`);
-          // JSON both ways, as through the Hub.
           const output = check(
             spec.output,
             await handler(parsed, { caller: self }),

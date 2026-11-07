@@ -167,6 +167,8 @@ export async function openChannel(options: ChannelOptions): Promise<Channel> {
   let session: Session;
   const bound = new Set<string>();
   const exposed = new Map<string, ChannelExposure>();
+  /** Set as the session ends: a notice read before then but handled after is dropped. */
+  let ended = false;
   // Notices arrive as streams; their headers are read in arrival order, after hello's snapshot.
   let ready!: () => void;
   let headers = new Promise<void>((resolve) => {
@@ -197,13 +199,16 @@ export async function openChannel(options: ChannelOptions): Promise<Channel> {
 
   async function serveStream(header: Header, stream: YamuxStream, reader: FrameReader) {
     if (header.op === "slot") {
+      if (ended) return;
       if (header.bound) bound.add(header.name);
       else bound.delete(header.name);
       // A slot made at run time is its exposure while bound, and gone when unbound.
       const wasExposed = exposed.delete(header.name);
       const exposure = header.exposed as ChannelExposure | undefined;
       if (exposure) exposed.set(header.name, exposure);
-      await stream.writable.close().catch(() => {});
+      // Told before closing our side, which may wait behind other frames: a channel that ends
+      // meanwhile must not hear of a slot after its close has cleared them.
+      void stream.writable.close().catch(() => {});
       try {
         if (exposure || wasExposed) options.onExposed?.(header.name, exposure);
         else options.onSlot?.(header.name, header.bound);
@@ -338,6 +343,7 @@ export async function openChannel(options: ChannelOptions): Promise<Channel> {
     return next;
   };
   const closed = session.closed.then(() => {
+    ended = true;
     bound.clear();
     exposed.clear();
   });

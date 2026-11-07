@@ -300,7 +300,10 @@ export function createRuntime<S extends InterfaceMap, X extends InterfaceMap>(
   const listenExposed = (slot: string, state: ExposedState, event: string) => {
     const entry = state.events.get(event);
     if (state.gone || !entry || entry.stop || !entry.fns.size) return;
-    const stop = state.source.subscribe(
+    // A subscription may end before `subscribe` returns: then nothing is live.
+    let ended = false;
+    let stop: (() => void) | undefined;
+    stop = state.source.subscribe(
       event,
       (payload) => {
         for (const fn of [...entry.fns])
@@ -312,10 +315,11 @@ export function createRuntime<S extends InterfaceMap, X extends InterfaceMap>(
       },
       // Ended by the provider going: the interest stays for when it is usable again.
       () => {
+        ended = true;
         if (entry.stop === stop) entry.stop = undefined;
       },
     );
-    entry.stop = stop;
+    if (!ended) entry.stop = stop;
   };
 
   const exposedHandle = (slot: string, state: ExposedState): ExposedSlot => {

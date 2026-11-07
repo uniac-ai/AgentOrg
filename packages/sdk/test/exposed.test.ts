@@ -227,3 +227,49 @@ test("over a channel, hello's snapshot and the notices make and remove exposed s
   await tick();
   for (const host of hosts) assert.deepEqual(names(host), []);
 });
+
+test("a subscription that ends at once leaves nothing live, and starts again when the slot is usable", async () => {
+  const runtime = createRuntime(defineActor({ start() {} }), {
+    self: { actorId: "act_a", module: "logic" },
+    log: quiet,
+    onEmit() {},
+  });
+  await runtime.start();
+  let subscribed = 0;
+  const source = {
+    described: describeInterface(quests),
+    provider: PROVIDER,
+    call: async () => ({}),
+    subscribe(_event: string, _onEvent: (payload: unknown) => void, onEnd: () => void) {
+      subscribed++;
+      onEnd();
+      return () => {};
+    },
+  };
+  runtime.expose("q", source);
+  const [slot] = runtime.ctx.exposed();
+  assert.doesNotThrow(() => slot?.on("changed", () => {}));
+  assert.equal(subscribed, 1);
+  runtime.expose("q", source);
+  assert.equal(subscribed, 2);
+});
+
+test("the test context checks an exposed slot's input as JSON, as the Hub does", async () => {
+  const stamped = defineInterface({
+    name: "stamped",
+    major: 1,
+    kind: "rpc",
+    methods: { put: method({ input: z.object({ at: z.string() }), output: z.object({}) }) },
+  });
+  const t = createTestContext(defineActor({ start() {} }));
+  await t.start();
+  const seen: unknown[] = [];
+  t.expose("s", stamped, {
+    put: (input) => {
+      seen.push(input);
+      return {};
+    },
+  });
+  await t.ctx.exposed()[0]?.call.put?.({ at: new Date(0) });
+  assert.deepEqual(seen, [{ at: "1970-01-01T00:00:00.000Z" }]);
+});
