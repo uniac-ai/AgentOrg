@@ -13,6 +13,7 @@ import {
   hubExports,
   hubGrants,
   hubPackages,
+  installer,
   kv,
   layout,
 } from "@agentorg/interfaces";
@@ -23,6 +24,14 @@ import { type PersonSide, serveSocket, type ViewCalls } from "./api.js";
 import { serveFrame } from "./frames.js";
 import { Layout } from "./layout.js";
 import { SignIn } from "./signin.js";
+import {
+  MAX_TRANSFER,
+  packageArchive,
+  pinnedHashes,
+  readSystem,
+  withTemporaryFile,
+  writeSystem,
+} from "./transfer.js";
 
 /**
  * The person's slots the gateway declares: every `hub.*` it holds, its own store, and `login`, the
@@ -37,6 +46,8 @@ const SLOTS = {
   audit: hubAudit,
   store: kv,
   login: accountLogin,
+  /** The installer, bound by the app's first run: plans, installs, exports and imports. */
+  installer,
 };
 const STATIC = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "static");
 /** The shell's built files, `@agentorg/shell`'s `dist`. */
@@ -285,6 +296,14 @@ export async function startApp(options: AppOptions): Promise<App> {
       response.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
       return void response.end(JSON.stringify({ session }));
     }
+    // A package's archive, and a system's file, both ways: for the person's UIs only, a tab by its
+    // session and the CLI by its token, as a bearer, which no other page can send.
+    if (url.pathname.startsWith("/packages") || url.pathname === "/system") {
+      const bearer = /^Bearer (\S+)$/.exec(request.headers.authorization ?? "")?.[1];
+      if (!signIn.isCli(request.headers.authorization) && !signIn.isSession(bearer))
+        return void response.writeHead(401).end();
+      return transfer(request, response, url);
+    }
     if (url.pathname === "/api/code" && request.method === "POST") {
       // The CLI's way to sign a browser in again: a fresh code, for its token only.
       if (!signIn.isCli(request.headers.authorization)) return void response.writeHead(401).end();
@@ -313,6 +332,88 @@ export async function startApp(options: AppOptions): Promise<App> {
       "Cache-Control": "no-cache",
     });
     response.end(request.method === "HEAD" ? undefined : body);
+  };
+  /** Answer a transfer's failure as `/api` answers a call's: `{error}`, with a fitting status. */
+  const failure = (response: ServerResponse, error: unknown) => {
+    const body =
+      error instanceof Refused
+        ? { name: "Refused", message: error.message, code: error.code }
+        : error instanceof Error &&
+            (error.name === "NotConnected" || error.name === "OutcomeUnknown")
+          ? { name: error.name, message: error.message }
+          : { name: "Refused", message: "The gateway couldn't handle this.", code: "internal" };
+    const status =
+      body.code === "too_large"
+        ? 413
+        : body.code === "invalid" || body.code === "unknown"
+          ? 400
+          : 409;
+    response.writeHead(status, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+    response.end(JSON.stringify({ error: body }));
+  };
+  const sendFile = (response: ServerResponse, name: string, bytes: Uint8Array) => {
+    response.writeHead(200, {
+      "Content-Type": "application/octet-stream",
+      "Content-Disposition": `attachment; filename="${name.replace(/[^\w.@-]/g, "_")}"`,
+      "Cache-Control": "no-store",
+      "X-Content-Type-Options": "nosniff",
+    });
+    response.end(bytes);
+  };
+  /**
+   * `GET /packages/<hash>.agentorg`: a stored package's archive. `POST /packages`: an archive to
+   * add, verified by the Hub. `GET /system`: the system's file, its composition and every package
+   * it pins. `POST /system`: a system file, its packages added (each one's hash checked against
+   * its name), then imported with the person's authority.
+   */
+  const transfer = async (request: IncomingMessage, response: ServerResponse, url: URL) => {
+    try {
+      const archive = /^\/packages\/(sha256-[0-9a-f]{64})\.agentorg$/.exec(url.pathname);
+      if (archive && request.method === "GET") {
+        const hash = archive[1] as string;
+        const bytes = packageArchive(home, hash);
+        if (!bytes) throw new Refused("unknown", `No package ${hash}.`);
+        const { manifest } = hub.state.package(hash);
+        return sendFile(response, `${manifest.name}-${manifest.version}.agentorg`, bytes);
+      }
+      if (url.pathname === "/packages" && request.method === "POST") {
+        const bytes = await readBytes(request, MAX_TRANSFER);
+        const added = await withTemporaryFile(home, "upload.agentorg", bytes, (path) =>
+          person.slots.packages.call.add({ path }),
+        );
+        response.writeHead(200, {
+          "Content-Type": "application/json",
+          "Cache-Control": "no-store",
+        });
+        return void response.end(JSON.stringify(added));
+      }
+      if (url.pathname === "/system" && request.method === "GET") {
+        const { composition } = await person.slots.installer.call.exportSystem({});
+        const archives = new Map<string, Uint8Array>();
+        for (const hash of pinnedHashes(composition)) {
+          const bytes = packageArchive(home, hash);
+          if (bytes) archives.set(hash, bytes);
+        }
+        return sendFile(response, "system.agentorg-system", writeSystem(composition, archives));
+      }
+      if (url.pathname === "/system" && request.method === "POST") {
+        const { composition, packages } = readSystem(await readBytes(request, MAX_TRANSFER));
+        // Named by its hash, so the Hub refuses an archive whose hash isn't its name.
+        for (const [hash, bytes] of packages)
+          await withTemporaryFile(home, `${hash}.agentorg`, bytes, (path) =>
+            person.slots.packages.call.add({ path }),
+          );
+        const imported = await person.slots.installer.call.importSystem({ composition });
+        response.writeHead(200, {
+          "Content-Type": "application/json",
+          "Cache-Control": "no-store",
+        });
+        return void response.end(JSON.stringify(imported));
+      }
+      response.writeHead(405).end();
+    } catch (error) {
+      failure(response, error);
+    }
   };
   const bundleOf = (hash: string, module: string) => {
     try {
@@ -463,6 +564,23 @@ function contentType(file: string): string {
   if (file.endsWith(".css")) return "text/css; charset=utf-8";
   if (file.endsWith(".svg")) return "image/svg+xml";
   return "application/octet-stream";
+}
+
+/** A request's body as bytes, up to `max`: past it, `Refused("too_large")`. */
+function readBytes(request: IncomingMessage, max: number): Promise<Uint8Array> {
+  return new Promise((done, failed) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    request.on("data", (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > max) {
+        request.destroy();
+        failed(new Refused("too_large", `A file here is ${max / 1024 / 1024} MiB at most.`));
+      } else chunks.push(chunk);
+    });
+    request.on("end", () => done(new Uint8Array(Buffer.concat(chunks))));
+    request.on("error", failed);
+  });
 }
 
 function readBody(request: IncomingMessage): Promise<string> {

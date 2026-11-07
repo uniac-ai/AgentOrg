@@ -129,6 +129,13 @@ Until the Hub spawns package processes itself, `actors start` marks the board ru
   - `place` takes only a `view` module of a package Actor, with no `after` meaning last.
   - `move` with no `after` means first.
   - Every change tells `changed`.
+- **Packages and systems, as files:** for the person's UIs only, a tab by its session and the CLI by its token, sent as `Authorization: Bearer`, which no other page can send.
+  - `GET /packages/<hash>.agentorg`: a stored package's archive, made again from its stored tree in the SDK's deterministic tar, so the same bytes `agentorg build` writes.
+  - `POST /packages`: an archive to add, through a private temporary file in the home, verified by `hub.packages.add`, then deleted. It's answered with the package's hash and manifest.
+  - `GET /system`: the system's file, `<name>.agentorg-system`, a tar of `composition.json` (the installer's `exportSystem`) and `packages/<hash>.agentorg` for every package it pins.
+  - `POST /system`: a system file. Its entries must be exactly `composition.json` and `packages/sha256-<64 hex>.agentorg`, regular files only. Each package is added under its hash's name, so one whose hash isn't its name is refused. Then the installer's `importSystem` runs with the person's authority.
+  - Files are 64 MiB at most (`too_large`, 413 past it), and failures answer `{error}` as `/api` does.
+  - The person's `installer` slot, bound by the app's first run, serves both.
 - **`/frames/`:** a view's frame, its runtime and its bundle, for `view` modules only, and only by package hash. Every response's policy is `sandbox allow-scripts`, so whatever loads there runs on an opaque origin, even opened as a top page, and never as the shell's origin, where the session is. It allows scripts only from the gateway's `/frames/`, inline styles, and no fetches, forms or windows. The frame's origin is opaque, so its module scripts are CORS requests from `Origin: null`: only those are answered `Access-Control-Allow-Origin: null`, and nothing there reads or needs the session.
 - **The app's own pages** carry a policy of their own: scripts and styles from the app only, framed by nothing.
 - **The shell,** `@agentorg/shell`, is what the gateway serves at `/`: one socket to `/api`, and nothing it decides on its own.

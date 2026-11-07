@@ -9,4 +9,4 @@ export {
   type Verified,
   verifyArchive,
 } from "./manifest.js";
-export { readTar } from "./tar.js";
+export { readTar, writeTar } from "./tar.js";
