@@ -43,18 +43,25 @@ const subscribeVersions = (listener: () => void) => {
 
 /** Audit kinds that change what a topic lists; the Hub has no other event for them. */
 const AUDITED: [RegExp, Topic][] = [
-  [/^actor\./, "actors"],
   [/^package\./, "packages"],
   [/^(bind|unbind)$/, "bindings"],
 ];
-api.subscribe("audit", "appended", (entry) => {
-  const kind = String((entry as { kind?: unknown }).kind ?? "");
+/**
+ * Each topic's events. A subscription the gateway ends is made again (see `Api.subscribe`), and
+ * what it says is read again then, since its events meanwhile are lost.
+ */
+const on = (slot: string, event: string, topics: Topic[], send = () => bump(...topics)) =>
+  api.subscribe(slot, event, send, { again: () => bump(...topics) });
+on("audit", "appended", ["packages", "bindings"], (entry?: unknown) => {
+  const kind = String((entry as { kind?: unknown } | undefined)?.kind ?? "");
   for (const [pattern, topic] of AUDITED) if (pattern.test(kind)) bump(topic);
 });
-api.subscribe("layout", "changed", () => bump("layout"));
-api.subscribe("grants", "requested", () => bump("grants"));
-api.subscribe("grants", "decided", () => bump("grants", "bindings"));
-api.subscribe("login", "changed", () => bump("login"));
+// Made, started, stopped, closed, its process gone, a channel admitted or dropped.
+on("actors", "changed", ["actors"]);
+on("layout", "changed", ["layout"]);
+on("grants", "requested", ["grants"]);
+on("grants", "decided", ["grants", "bindings"]);
+on("login", "changed", ["login"]);
 // A new connection: everything may have changed while it was down.
 api.watch((connection) => {
   if (connection === "open") bump("actors", "packages", "bindings", "layout", "grants", "login");

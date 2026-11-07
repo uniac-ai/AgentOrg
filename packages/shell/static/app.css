@@ -144,6 +144,11 @@ svg {
   text-align: center;
   margin: 0;
 }
+/* Its line says what's happening; room for two, so a longer or shorter one moves nothing. */
+.signin-card .quiet {
+  line-height: 18px;
+  min-height: 36px;
+}
 a {
   color: inherit;
 }

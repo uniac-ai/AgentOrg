@@ -122,27 +122,29 @@ async function standInLogin(
     name: "chatgpt",
   });
   const login = { state: initial };
-  const model = await connect({
-    hubUrl: app.hubUrl,
-    actorId: made.actorId,
-    credential: made.credential,
-    exports: { login: accountLogin },
-    start(ctx) {
-      ctx.exports.login.implement({
-        status: () => ({
-          state: login.state,
-          ...(login.state === "signed_in" ? { account: { plan: "Plus" } } : {}),
-        }),
-        start: ({ redirectUri }) => ({
-          authorizeUrl: `https://auth.example/?redirect=${encodeURIComponent(redirectUri)}`,
-        }),
-        complete: () => ({ account: {} }),
-        logout: () => {
-          throw new Refused("unavailable", "ChatGPT didn't answer.");
-        },
-      });
-    },
-  });
+  const open = () =>
+    connect({
+      hubUrl: app.hubUrl,
+      actorId: made.actorId,
+      credential: made.credential,
+      exports: { login: accountLogin },
+      start(ctx) {
+        ctx.exports.login.implement({
+          status: () => ({
+            state: login.state,
+            ...(login.state === "signed_in" ? { account: { plan: "Plus" } } : {}),
+          }),
+          start: ({ redirectUri }) => ({
+            authorizeUrl: `https://auth.example/?redirect=${encodeURIComponent(redirectUri)}`,
+          }),
+          complete: () => ({ account: {} }),
+          logout: () => {
+            throw new Refused("unavailable", "ChatGPT didn't answer.");
+          },
+        });
+      },
+    });
+  let model = await open();
   t.after(() => model.close());
   const bindIt = () =>
     person.call("grants", "bind", {
@@ -154,7 +156,13 @@ async function standInLogin(
   if (bind) await bindIt();
   return {
     login,
+    id: made.actorId,
     bind: bindIt,
+    /** Its channel dropped, as a process that went; `back` connects it again. */
+    drop: () => model.close(),
+    back: async () => {
+      model = await open();
+    },
     tell: (state: LoginState) => {
       login.state = state;
       model.exports.login.emit("changed", { state });
@@ -601,6 +609,71 @@ test("ChatGPT's first run: sign-in opens in a new tab, and the plan notice shows
   await page.reload();
   await page.getByRole("button", { name: "Settings" }).waitFor();
   assert.equal(await page.getByText("You're using your ChatGPT plan").count(), 0);
+});
+
+test("ChatGPT's sign-in waits for its process, and the shell hears it again once it's back", async (t) => {
+  const { app, page, person } = await setup(t);
+  const model = await standInLogin(t, app, person, "signed_out");
+  // The shell's socket, through the test, which can end a subscription as the gateway would.
+  const subscribed: { sub: number; slot: string; event: string }[] = [];
+  let toShell: ((message: string) => void) | undefined;
+  await page.routeWebSocket(/\/api$/, (ws) => {
+    const gateway = ws.connectToServer();
+    ws.onMessage((message) => {
+      const sent = JSON.parse(String(message));
+      if (sent.op === "subscribe") subscribed.push(sent);
+      gateway.send(message);
+    });
+    gateway.onMessage((message) => ws.send(message));
+    toShell = (message) => ws.send(message);
+  });
+  await signIn(page, app);
+  const button = page.getByRole("button", { name: "Continue with ChatGPT" });
+  await page.getByText("Runs on your ChatGPT plan. Nothing is billed by us.").waitFor();
+  assert.equal(await button.isEnabled(), true);
+  const where = await boxes(page, "#signin button");
+
+  // Its channel drops: the Hub tells `actors.changed`, and sign-in can't start until it's back.
+  model.drop();
+  await page.getByText("ChatGPT is starting…").waitFor();
+  assert.equal(await button.isEnabled(), false);
+  assert.deepEqual(await boxes(page, "#signin button"), where);
+  await model.back();
+  await page.getByText("Runs on your ChatGPT plan. Nothing is billed by us.").waitFor();
+  assert.equal(await button.isEnabled(), true);
+
+  // The gateway ends the shell's `login.changed` (as one refused output once ended every audit
+  // subscription): it's made again after a wait, so a sign-in ChatGPT tells still moves it on.
+  const logins = () => subscribed.filter((s) => s.slot === "login" && s.event === "changed");
+  const ended = logins();
+  assert.ok(ended.length > 0);
+  for (const { sub } of ended) toShell?.(JSON.stringify({ sub, end: true }));
+  for (let waited = 0; logins().length < ended.length * 2; waited += 50) {
+    if (waited > 10_000) assert.fail("the ended subscriptions weren't made again");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  model.tell("signed_in");
+  await page.getByRole("button", { name: "Settings" }).click();
+
+  // External Actors, the person included, show whether they're connected, as it changes.
+  const rows = page.locator("tbody tr");
+  const stateOf = async (name: string) =>
+    (
+      await rows
+        .filter({ has: page.getByRole("cell", { name, exact: true }) })
+        .locator("td")
+        .allInnerTexts()
+    )[2];
+  await page.getByRole("cell", { name: "chatgpt", exact: true }).waitFor();
+  assert.equal(await stateOf("you"), "connected");
+  assert.equal(await stateOf("chatgpt"), "connected");
+  assert.equal(await stateOf("storage"), "running");
+  model.drop();
+  await page.waitForFunction(() =>
+    [...document.querySelectorAll("tbody tr")].some(
+      (row) => row.textContent === "chatgptexternalnot connected–",
+    ),
+  );
 });
 
 test("a login bound after the shell loaded shows, and ineligible is past the first run", async (t) => {

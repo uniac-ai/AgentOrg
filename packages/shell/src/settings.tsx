@@ -148,6 +148,11 @@ function Actors() {
               : actor.package === "builtin"
                 ? "built in"
                 : "external";
+          // An external Actor, the person included, has no process: whether it's connected is its
+          // state. A built-in one runs inside the Hub, with no channel of its own.
+          const external = actor.package === "external";
+          const state = external ? (actor.connected ? "connected" : "not connected") : actor.state;
+          const live = external ? actor.connected : actor.state === "running";
           return [
             <td key="n">{actor.name}</td>,
             <td key="p" className="mono">
@@ -155,8 +160,8 @@ function Actors() {
             </td>,
             <td key="s">
               <span style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>
-                <span className={`glyph${actor.state === "running" ? "" : " idle"}`} />
-                {actor.state}
+                <span className={`glyph${live ? "" : " idle"}`} />
+                {state}
               </span>
             </td>,
             <td key="r" className="mono">

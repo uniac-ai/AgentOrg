@@ -14,6 +14,8 @@ const SESSION = "agentorg.session";
 /** The gateway's close code for a socket with no live session. */
 const SIGN_IN_AGAIN = 4401;
 const BACKOFF_MS = [250, 500, 1000, 2000, 5000];
+/** How long the shell's own subscription waits to be made again after the gateway ends it. */
+const AGAIN_MS = [1000, 2000, 5000, 15_000, 30_000];
 
 interface ErrorBody {
   name?: string;
@@ -51,6 +53,10 @@ interface Subscription {
   send(payload: unknown): void;
   /** For a view's: the gateway ended it, so the frame is told. */
   end?(): void;
+  /** For the shell's own: made again after the gateway ends it, then this, to read what it missed. */
+  again?(): void;
+  /** Ends in a row with no event between, for its wait before it's made again. */
+  ends?: number;
   /** Its id on the current socket. */
   sub?: number;
 }
@@ -101,12 +107,16 @@ export class Api {
     });
   }
 
-  /** Events of a slot until the returned stop, kept across reconnects; `end` if the gateway ends it. */
+  /**
+   * Events of a slot until the returned stop, kept across reconnects. If the gateway ends it, a
+   * view's hears `end`; any other is made again after a wait, and then `again` runs, since what
+   * happened meanwhile wasn't told.
+   */
   subscribe(
     slot: string,
     event: string,
     send: (payload: unknown) => void,
-    options: { view?: View; end?: () => void; slots?: true } = {},
+    options: { view?: View; end?: () => void; again?: () => void; slots?: true } = {},
   ): () => void {
     const subscription: Subscription = { slot, event, send, ...options };
     this.#subscriptions.add(subscription);
@@ -201,11 +211,28 @@ export class Api {
     if (typeof message.sub === "number") {
       const subscription = this.#bySub.get(message.sub);
       if (!subscription) return;
-      if (message.end) {
-        this.#bySub.delete(message.sub);
+      if (!message.end) {
+        subscription.ends = 0;
+        return subscription.send(message.payload);
+      }
+      this.#bySub.delete(message.sub);
+      subscription.sub = undefined;
+      if (subscription.end) {
         this.#subscriptions.delete(subscription);
-        subscription.end?.();
-      } else subscription.send(message.payload);
+        return subscription.end();
+      }
+      // Never silently deaf: made again, unless stopped or already made again on a reconnect.
+      const ends = subscription.ends ?? 0;
+      subscription.ends = ends + 1;
+      setTimeout(
+        () => {
+          if (!this.#subscriptions.has(subscription) || subscription.sub !== undefined) return;
+          if (this.#connection !== "open") return;
+          this.#open(subscription);
+          subscription.again?.();
+        },
+        AGAIN_MS[Math.min(ends, AGAIN_MS.length - 1)],
+      );
     }
   }
 }

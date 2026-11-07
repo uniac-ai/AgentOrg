@@ -18,7 +18,7 @@ import { ChatGptIcon, GearIcon, HomeIcon, MoonIcon, PlusIcon } from "./icons.tsx
 import { NewAgent } from "./new-agent.tsx";
 import { besideAgent, type Placement } from "./rules.ts";
 import { Settings } from "./settings.tsx";
-import { signIn, useSigningIn } from "./sign-in.ts";
+import { signIn, useChatGpt, useSigningIn } from "./sign-in.ts";
 import { ViewFrame } from "./view-frame.tsx";
 
 export interface LoginStatus {
@@ -74,8 +74,12 @@ function SignedOut() {
 }
 
 function SignedIn() {
-  // A binding made or removed may be the login's: read it again then too.
-  const login = useLoad(() => api.call<LoginStatus>("login", "status"), ["login", "bindings"]);
+  // A binding made or removed may be the login's, and ChatGPT's process may have connected since:
+  // read it again then too.
+  const login = useLoad(
+    () => api.call<LoginStatus>("login", "status"),
+    ["login", "bindings", "actors"],
+  );
   const connection = useConnection();
   const waited = useWaited(!login.loaded && connection !== "open");
   // Unbound (or unreachable): no ChatGPT screen and no account row.
@@ -83,6 +87,7 @@ function SignedIn() {
   const signedIn = status?.state === "signed_in";
   // Ineligible is past the first run: signing in again wouldn't change it.
   const past = signedIn || status?.state === "ineligible";
+  const chatgpt = useChatGpt();
   const [passed, setPassed] = useState(false);
   const [notice, setNotice] = useState(false);
   const told = useRef(false);
@@ -110,7 +115,9 @@ function SignedIn() {
         </p>
       </Card>
     ) : null;
-  if (status?.state === "signed_out" && !passed) return <FirstRun />;
+  // Signed out, or not known yet because ChatGPT's process is still starting: its first run.
+  if (!passed && (status?.state === "signed_out" || (!status && chatgpt === "starting")))
+    return <FirstRun ready={chatgpt === "ready"} />;
   return (
     <>
       <Shell login={status} />
@@ -147,21 +154,29 @@ function useWaited(on: boolean, ms = 400): boolean {
 }
 
 /** The first run: ChatGPT's sign-in, before anything else. */
-function FirstRun() {
+function FirstRun({ ready }: { ready: boolean }) {
   const signingIn = useSigningIn();
   const { failed, run } = useAction();
   return (
     <Card>
-      <button type="button" className="primary" disabled={signingIn} onClick={() => run(signIn)}>
+      <button
+        type="button"
+        className="primary"
+        // ChatGPT's process connects a moment after it starts: until then, signing in can't start.
+        disabled={signingIn || !ready}
+        onClick={() => run(signIn)}
+      >
         {signingIn ? <span className="spin" aria-hidden /> : <ChatGptIcon />}
         {signingIn ? "Waiting for ChatGPT…" : "Continue with ChatGPT"}
       </button>
       <p className="quiet" role={failed ? "alert" : undefined}>
         {signingIn
           ? "Approve AgentOrg on ChatGPT's page, then come back here."
-          : failed
-            ? "ChatGPT's sign-in didn't start. Try again."
-            : "Runs on your ChatGPT plan. Nothing is billed by us."}
+          : !ready
+            ? "ChatGPT is starting…"
+            : failed
+              ? "ChatGPT's sign-in didn't start. Try again."
+              : "Runs on your ChatGPT plan. Nothing is billed by us."}
       </p>
     </Card>
   );

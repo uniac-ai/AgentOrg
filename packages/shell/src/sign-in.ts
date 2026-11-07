@@ -1,5 +1,6 @@
+import { NotConnected } from "@agentorg/sdk";
 import { useSyncExternalStore } from "react";
-import { api } from "./data.ts";
+import { api, useLoad } from "./data.ts";
 
 /** Where ChatGPT sends the browser back to; the gateway completes the sign-in there. */
 const CALLBACK = "/oauth/chatgpt";
@@ -26,9 +27,16 @@ export async function signIn() {
   if (signingIn) return;
   set(true);
   try {
-    const { authorizeUrl } = await api.call<{ authorizeUrl: string }>("login", "start", {
-      redirectUri: `${location.origin}${CALLBACK}`,
-    });
+    const { authorizeUrl } = await api
+      .call<{ authorizeUrl: string }>("login", "start", {
+        redirectUri: `${location.origin}${CALLBACK}`,
+      })
+      .catch((error: Error) => {
+        // Its process hasn't connected yet: nothing opens from a wait, so the person tries again.
+        throw error instanceof NotConnected
+          ? new Error("ChatGPT is still starting. Try again in a moment.")
+          : error;
+      });
     // ChatGPT's own page, over https only: anything else isn't opened.
     if (new URL(authorizeUrl).protocol !== "https:")
       throw new Error("The sign-in address isn't https.");
@@ -37,6 +45,25 @@ export async function signIn() {
     set(false);
     throw error;
   }
+}
+
+/**
+ * Where the person's ChatGPT stands: `unbound` (no `login` binding), `starting` (bound, its process
+ * not connected yet, so a sign-in can't start), or `ready`. Read again as Actors change, so it's
+ * `ready` the moment its process connects; until the first read, `undefined`.
+ */
+export function useChatGpt(): "unbound" | "starting" | "ready" | undefined {
+  return useLoad(async () => {
+    const { bindings } = await api.call<{
+      bindings: { consumer: string; slot: string; provider: string }[];
+    }>("bindings", "list", { actor: "person" });
+    const provider = bindings.find((b) => b.consumer === "person" && b.slot === "login")?.provider;
+    if (!provider) return "unbound" as const;
+    const { connected } = await api.call<{ connected: boolean }>("actors", "get", {
+      actorId: provider,
+    });
+    return connected ? ("ready" as const) : ("starting" as const);
+  }, ["bindings", "actors"]).value;
 }
 
 export function useSigningIn(): boolean {
