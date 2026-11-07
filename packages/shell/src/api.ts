@@ -27,6 +27,21 @@ function errorOf(body: ErrorBody, target: string): Error {
   return new Refused(body.code ?? "refused", body.message ?? "Refused.");
 }
 
+/**
+ * A file to or from the gateway (`/packages`, `/system`): the tab's session goes as a bearer, which
+ * no other page can send. A failure is the gateway's `{error}`, as a call's would be.
+ */
+export async function transfer(path: string, body?: Blob): Promise<Response> {
+  const response = await fetch(path, {
+    method: body ? "POST" : "GET",
+    headers: { Authorization: `Bearer ${localStorage.getItem(SESSION) ?? ""}` },
+    ...(body ? { body } : {}),
+  });
+  if (response.ok) return response;
+  const reply = (await response.json().catch(() => ({}))) as { error?: ErrorBody };
+  throw errorOf(reply.error ?? { message: `The gateway answered ${response.status}.` }, path);
+}
+
 interface Subscription {
   /** A view's slots watch instead of a slot's events. */
   slots?: true;

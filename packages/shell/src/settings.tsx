@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { LoginStatus } from "./app.tsx";
 import {
   type Actor,
@@ -10,9 +10,14 @@ import {
   useAction,
   useLoad,
 } from "./data.ts";
+import { DownloadIcon, UploadIcon } from "./icons.tsx";
+import { Install } from "./install.tsx";
 import { signIn, useSigningIn } from "./sign-in.ts";
+import { System, save } from "./system.tsx";
 
-const TABS = ["actors", "packages", "connections"] as const;
+const TABS = ["actors", "packages", "connections", "system"] as const;
+/** The person's own Actor, shown as "you". */
+const PERSON = "person";
 type Tab = (typeof TABS)[number];
 
 const read =
@@ -44,6 +49,7 @@ export function Settings({ login }: { login?: LoginStatus }) {
         {tab === "actors" && <Actors />}
         {tab === "packages" && <Packages />}
         {tab === "connections" && <Connections />}
+        {tab === "system" && <System />}
       </div>
     </div>
   );
@@ -98,7 +104,9 @@ function Account({ login }: { login: LoginStatus }) {
 }
 
 function useNames() {
-  const actors = useLoad(read<Actor>("actors", "actors"), ["actors"]).value ?? [];
+  const actors = (useLoad(read<Actor>("actors", "actors"), ["actors"]).value ?? []).map((actor) =>
+    actor.actorId === PERSON ? { ...actor, name: "you" } : actor,
+  );
   const packages = useLoad(read<Package>("packages", "packages"), ["packages"]).value ?? [];
   return { actors, packages };
 }
@@ -135,9 +143,11 @@ function Actors() {
           const own = actor.package !== "builtin" && actor.package !== "external";
           const pkg = own
             ? (packages.find((p) => p.hash === actor.package)?.name ?? short(actor.package))
-            : actor.package === "builtin"
-              ? "built in"
-              : "external";
+            : actor.actorId === PERSON
+              ? "person"
+              : actor.package === "builtin"
+                ? "built in"
+                : "external";
           return [
             <td key="n">{actor.name}</td>,
             <td key="p" className="mono">
@@ -159,7 +169,10 @@ function Actors() {
 }
 
 function Packages() {
-  const { packages } = useNames();
+  const { actors, packages } = useNames();
+  const [file, setFile] = useState<File>();
+  const picker = useRef<HTMLInputElement>(null);
+  const [failed, setFailed] = useState<string>();
   const topics: Topic[] = ["packages"];
   const modules =
     useLoad(
@@ -171,21 +184,59 @@ function Packages() {
       [packages.map((p) => p.hash).join()],
     ).value ?? new Map<string, string[]>();
   return (
-    <Table
-      head={["Package", "Version", "Hash", "Modules"]}
-      rows={packages.map((p) => [
-        <td key="n">{p.name}</td>,
-        <td key="v" className="mono">
-          {p.version}
-        </td>,
-        <td key="h" className="mono" title={p.hash}>
-          {short(p.hash)}
-        </td>,
-        <td key="m" className="mono">
-          {(modules.get(p.hash) ?? []).join(", ")}
-        </td>,
-      ])}
-    />
+    <>
+      <div className="bar-row" style={{ marginBottom: 8 }}>
+        <span className="grow" role="alert">
+          {failed && <span className="err-line">{failed} wasn't downloaded. Try again.</span>}
+        </span>
+        <input
+          ref={picker}
+          type="file"
+          accept=".agentorg"
+          hidden
+          aria-label="Package file"
+          onChange={(event) => {
+            const picked = event.target.files?.[0];
+            event.target.value = "";
+            if (picked) setFile(picked);
+          }}
+        />
+        <button type="button" className="ghost small" onClick={() => picker.current?.click()}>
+          <UploadIcon />
+          Install from a file
+        </button>
+      </div>
+      <Table
+        head={["Package", "Version", "Hash", "Modules", ""]}
+        rows={packages.map((p) => [
+          <td key="n">{p.name}</td>,
+          <td key="v" className="mono">
+            {p.version}
+          </td>,
+          <td key="h" className="mono" title={p.hash}>
+            {short(p.hash)}
+          </td>,
+          <td key="m" className="mono">
+            {(modules.get(p.hash) ?? []).join(", ")}
+          </td>,
+          <td key="d" style={{ width: 40 }}>
+            <button
+              type="button"
+              className="icon-link"
+              aria-label={`Download ${p.name}`}
+              title="Download"
+              onClick={() => {
+                setFailed(undefined);
+                save(`/packages/${p.hash}.agentorg`).catch(() => setFailed(p.name));
+              }}
+            >
+              <DownloadIcon />
+            </button>
+          </td>,
+        ])}
+      />
+      {file && <Install file={file} actors={actors} onClose={() => setFile(undefined)} />}
+    </>
   );
 }
 

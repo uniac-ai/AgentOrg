@@ -399,6 +399,16 @@ test("settings read the Actors, packages and connections through hub.*", async (
     "running",
     "–",
   ]);
+  // The person is "you".
+  assert.deepEqual(
+    (
+      await rows
+        .filter({ has: page.getByRole("cell", { name: "you", exact: true }) })
+        .locator("td")
+        .allInnerTexts()
+    ).slice(0, 2),
+    ["you", "person"],
+  );
   await page.getByRole("tab", { name: "Packages" }).click();
   await page.getByRole("cell", { name: "logic, chat, panel" }).waitFor();
   assert.equal(
@@ -410,9 +420,9 @@ test("settings read the Actors, packages and connections through hub.*", async (
     `${hashes.assistant.slice(0, 11)}…${hashes.assistant.slice(-4)}`,
   );
   await page.getByRole("tab", { name: "Connections" }).click();
-  await page.getByRole("cell", { name: "person.store" }).waitFor();
-  assert.deepEqual(await rows.filter({ hasText: "person.store" }).locator("td").allInnerTexts(), [
-    "person.store",
+  await page.getByRole("cell", { name: "you.store" }).waitFor();
+  assert.deepEqual(await rows.filter({ hasText: "you.store" }).locator("td").allInnerTexts(), [
+    "you.store",
     "→",
     "storage.kv",
     "kv@1",
