@@ -406,6 +406,105 @@ test("open and http streams are validated, then spliced", async (t) => {
   );
 });
 
+test("a splice delivers a provider's whole answer though its channel goes while the consumer still sends", async (t) => {
+  const { actor, bind, hub } = await setup(t);
+  const size = 384 * 1024; // more than the consumer's window, so some is still in the Hub
+  let answered: () => void = () => {};
+  const done = new Promise<void>((resolve) => {
+    answered = resolve;
+  });
+  const serve: Serve = async (header, stream) => {
+    const writer = stream.writable.getWriter();
+    await writer.write(encodeFrame(result({})));
+    await writer.write(new Uint8Array(size).fill(1));
+    await writer.close();
+    answered();
+  };
+  const p = await actor("provider", { exports: { echo } }, serve);
+  const c = await actor("consumer", { slots: { echo } });
+  await bind(c.id, "echo", p.id, "echo");
+
+  const stream = c.client.session.open();
+  const writer = stream.writable.getWriter();
+  await writer.write(encodeFrame({ op: "open", slot: "echo", params: { prefix: "" } }));
+  const reader = new FrameReader(stream.readable);
+  assert.deepEqual(reply(await reader.next()), { result: {} });
+  // The consumer reads no more for now: the answer waits in its window and in the Hub. The
+  // provider has said all of it, then its channel goes.
+  await done;
+  p.client.close();
+  for (let waited = 0; hub.connected(p.id) && waited < 3000; waited += 5) await later(5);
+  assert.equal(hub.connected(p.id), false);
+  // The consumer still sends, more than a window, so this write ends only if the Hub takes it:
+  // it can't pass it on, which mustn't cost the consumer the answer.
+  await writer.write(new Uint8Array(512 * 1024));
+  let got = 0;
+  for await (const chunk of reader.rest()) got += chunk.length;
+  assert.equal(got, size);
+});
+
+test("a splice delivers a consumer's whole upload though its channel goes while the provider still sends", async (t) => {
+  const { actor, bind, hub } = await setup(t);
+  const size = 384 * 1024; // more than the provider's window, so some is still in the Hub
+  let provider: { stream: YamuxStream; reader: FrameReader } | undefined;
+  const serve: Serve = async (_, stream, reader) => {
+    const writer = stream.writable.getWriter();
+    await writer.write(encodeFrame(result({})));
+    writer.releaseLock();
+    provider = { stream, reader };
+  };
+  const p = await actor("provider", { exports: { echo } }, serve);
+  const c = await actor("consumer", { slots: { echo } });
+  await bind(c.id, "echo", p.id, "echo");
+
+  const stream = c.client.session.open();
+  const writer = stream.writable.getWriter();
+  await writer.write(encodeFrame({ op: "open", slot: "echo", params: { prefix: "" } }));
+  assert.deepEqual(reply(await new FrameReader(stream.readable).next()), { result: {} });
+  // The consumer says all of it while the provider reads nothing yet, then its channel goes.
+  await writer.write(new Uint8Array(size).fill(1));
+  await writer.close();
+  c.client.close();
+  for (let waited = 0; hub.connected(c.id) && waited < 3000; waited += 5) await later(5);
+  assert.equal(hub.connected(c.id), false);
+  assert.ok(provider);
+  // The provider still sends, more than a window, so this write ends only if the Hub takes it:
+  // it can't pass it on, which mustn't cost the provider the upload.
+  const out = provider.stream.writable.getWriter();
+  await out.write(new Uint8Array(512 * 1024));
+  out.releaseLock();
+  let got = 0;
+  for await (const chunk of provider.reader.rest()) got += chunk.length;
+  assert.equal(got, size);
+});
+
+test("a reset after one side has finished still reaches the other side", async (t) => {
+  const { actor, bind } = await setup(t);
+  let ended: unknown;
+  const serve: Serve = async (_, stream) => {
+    const writer = stream.writable.getWriter();
+    await writer.write(encodeFrame(result({})));
+    // Streams until the other end goes.
+    try {
+      for (;;) await writer.write(new Uint8Array(64 * 1024));
+    } catch (error) {
+      ended = error;
+    }
+  };
+  const p = await actor("provider", { exports: { echo } }, serve);
+  const c = await actor("consumer", { slots: { echo } });
+  await bind(c.id, "echo", p.id, "echo");
+  const stream = c.client.session.open();
+  const writer = stream.writable.getWriter();
+  await writer.write(encodeFrame({ op: "open", slot: "echo", params: { prefix: "" } }));
+  // The consumer has said all it will, then goes: the provider's stream is reset, not drained.
+  await writer.close();
+  assert.deepEqual(reply(await new FrameReader(stream.readable).next()), { result: {} });
+  stream.reset();
+  for (let waited = 0; ended === undefined && waited < 3000; waited += 5) await later(5);
+  assert.ok(ended instanceof Error, "the provider's writes end");
+});
+
 test("management goes only through the hub's exports, and requests reach their approvers live", async (t) => {
   const { actor, bind, person, hub } = await setup(t);
   const p = await actor("provider", { exports: { notes } }, notesProvider().serve);
@@ -1568,20 +1667,20 @@ test("compiling has its own budget: a slow first compile passes, a slow check is
 });
 
 test("compiling never runs an Actor's patternProperties regex against its property names", async (t) => {
-  const validators = new Validators({ size: 1, compileBudgetMs: 2000 });
+  // The regex against that name backtracks for far longer than the budget, which would refuse the
+  // compile; a compile that never runs it is accepted however loaded the machine is.
+  const validators = new Validators({ size: 1, compileBudgetMs: 10_000 });
   t.after(() => validators.close());
   const hostile = handMade(
     "matching",
     {
       type: "object",
-      properties: { [`${"a".repeat(28)}!`]: { type: "string" } },
+      properties: { [`${"a".repeat(40)}!`]: { type: "string" } },
       patternProperties: { "^(a+)+$": { type: "string" } },
     },
     { type: "object" },
   );
-  const started = performance.now();
   await validators.prepare("a", hostile);
-  assert.ok(performance.now() - started < 300, `compiling took ${performance.now() - started} ms`);
 });
 
 test("a view module's log lines go to its Actor's log, bounded, and the file rotates", async (t) => {

@@ -25,6 +25,7 @@ import {
   type SessionOptions,
   type WireError,
   wireError,
+  YamuxError,
   type YamuxStream,
 } from "@agentorg/wire";
 import { sweepBuilds } from "./build.js";
@@ -148,6 +149,21 @@ const whenReset = (reader: FrameReader) =>
     () => new Promise<void>(() => {}),
     () => undefined,
   );
+
+/**
+ * One direction of a splice. A source that fails resets the destination, and a destination its
+ * side reset resets the source. A destination that can't take more because its channel went ends
+ * this direction only: cancelling the source would reset its whole stream, and with it the other
+ * direction, which may still carry an answer. What the source still sends is read and dropped
+ * until it ends.
+ */
+const pass = (from: ReadableStream<Uint8Array>, to: { writable: WritableStream; reset(): void }) =>
+  from.pipeTo(to.writable, { preventCancel: true }).catch((error: unknown) => {
+    to.reset();
+    if (error instanceof YamuxError && error.code === "reset")
+      return from.cancel(error).catch(() => {});
+    return from.pipeTo(new WritableStream()).catch(() => {});
+  });
 
 /** A body encoded for the wire; one over the frame limit becomes a refusal saying so. */
 function frameOf(body: Body): { body: Body; frame: Uint8Array } {
@@ -1227,16 +1243,7 @@ export class Hub {
       return provider.reset();
     }
     writer.releaseLock();
-    await Promise.all([
-      reader
-        .rest()
-        .pipeTo(provider.writable)
-        .catch(() => provider.reset()),
-      upstream
-        .rest()
-        .pipeTo(stream.writable)
-        .catch(() => stream.reset()),
-    ]);
+    await Promise.all([pass(reader.rest(), provider), pass(upstream.rest(), stream)]);
     untrack();
   }
 }
