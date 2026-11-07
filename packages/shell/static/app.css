@@ -60,7 +60,7 @@ textarea {
 button {
   cursor: pointer;
 }
-/* Andrew: no visible scroll bars at rest. */
+/* No visible scroll bars at rest. */
 .scroll {
   overflow-y: auto;
   scrollbar-width: none;

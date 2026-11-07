@@ -1,6 +1,7 @@
 {
   "name": "@agentorg/shell",
   "version": "0.0.0",
+  "private": true,
   "description": "The person's web shell for AgentOrg: their agents, their views and their settings.",
   "license": "MIT",
   "type": "module",

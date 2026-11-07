@@ -1,6 +1,7 @@
 {
   "name": "@agentorg/interfaces",
   "version": "0.0.0",
+  "private": true,
   "description": "AgentOrg's standard interfaces.",
   "license": "MIT",
   "type": "module",

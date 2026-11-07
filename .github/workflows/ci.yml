@@ -32,6 +32,8 @@ jobs:
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: Build and test
         run: npm test
+      - name: The packed package installs and runs
+        run: scripts/smoke-packed.sh
       - name: Restrict user namespaces again, as on stock Ubuntu
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=1
       - name: Host Actors can't start, and say why

@@ -1,6 +1,7 @@
 {
   "name": "@agentorg/hub",
   "version": "0.0.0",
+  "private": true,
   "description": "AgentOrg's core: an interface router with bindings as grants.",
   "license": "MIT",
   "type": "module",
