@@ -135,7 +135,14 @@ function handlers(calls: Calls, call?: FrameHandlers["call"]): FrameHandlers {
   };
 }
 
-const tick = () => new Promise((resolve) => setTimeout(resolve, 10));
+/**
+ * Let the frame and its host trade what they have sent. Messages on a port in this thread arrive
+ * in the next turn of the event loop, so this waits turns, not time: a timer may fire before
+ * messages already sent are delivered when the machine is loaded.
+ */
+const tick = async () => {
+  for (let turn = 0; turn < 20; turn++) await new Promise((resolve) => setImmediate(resolve));
+};
 
 /** A frame and its host over a real MessageChannel, with a view to load. */
 function setup(
@@ -572,6 +579,8 @@ test("a frame has 64 calls in flight at most; past it, a call is refused busy", 
 });
 
 test("a frame's height reaches the shell checked, within bounds, and at most once per 100 ms", async (t) => {
+  // The window's time is the test's to move: messages still take real turns of the event loop.
+  t.mock.timers.enable({ apis: ["setTimeout"] });
   const channel = new MessageChannel();
   const sizes: number[] = [];
   const host = new FrameHost(channel.port1 as unknown as PortLike, {
@@ -589,15 +598,17 @@ test("a frame's height reaches the shell checked, within bounds, and at most onc
   post(640.6);
   await tick();
   assert.deepEqual(sizes, [120]);
-  await new Promise((resolve) => setTimeout(resolve, 150));
+  t.mock.timers.tick(100);
   assert.deepEqual(sizes, [120, 641]);
   post(9000);
-  await new Promise((resolve) => setTimeout(resolve, 150));
+  await tick();
+  t.mock.timers.tick(100);
   assert.deepEqual(sizes, [120, 641, 2000]);
-  // Closed: nothing more, and no timer keeps the process alive.
+  // Closed: nothing more.
   post(300);
   host.close();
-  await new Promise((resolve) => setTimeout(resolve, 150));
+  await tick();
+  t.mock.timers.tick(100);
   assert.deepEqual(sizes, [120, 641, 2000]);
 });
 

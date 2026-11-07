@@ -192,10 +192,12 @@ export function fetchOver(
       socket.destroy();
       reject(reason);
     };
+    // Listened for first: node:http settles a request destroyed at once a tick later, with an
+    // error of its own ("socket hang up"), which would otherwise be thrown at the process.
+    outgoing.on("error", reject);
     if (request.signal.aborted) return abort();
     request.signal.addEventListener("abort", abort, { once: true });
     outgoing.once("close", () => request.signal.removeEventListener("abort", abort));
-    outgoing.on("error", reject);
     if (!request.body || noBody(request.method)) return void outgoing.end();
     pipeline(Readable.fromWeb(request.body as NodeReadableStream), outgoing).catch(() => {});
   });

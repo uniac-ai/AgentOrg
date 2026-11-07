@@ -59,6 +59,19 @@ test("serve answers 400 to a request line that isn't absolute, or names another 
   assert.match(sent(), /^HTTP\/1\.1 200 /);
 });
 
+test("a fetch whose signal aborted before it began rejects with the reason, and nothing is left to throw", async () => {
+  // Its stream may take longer to open than the signal's deadline: the request is made already
+  // aborted. node:http still settles it a tick later, which must not reach the process as an
+  // uncaught "socket hang up".
+  const reason = new DOMException("The operation timed out.", "TimeoutError");
+  const request = new Request("https://web/x", { signal: AbortSignal.abort(reason) });
+  await assert.rejects(
+    fetchOver(streamOf("").stream, request, "web"),
+    (e: unknown) => e === reason,
+  );
+  await new Promise((resolve) => setTimeout(resolve, 50));
+});
+
 test("fetch throws an SDK error only for a 502 whose error header names one of the three", async () => {
   const respond = (status: number, header?: string) =>
     `HTTP/1.1 ${status} X\r\n${header === undefined ? "" : `agentorg-error: ${header}\r\n`}content-length: 0\r\n\r\n`;
