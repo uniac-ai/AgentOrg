@@ -401,19 +401,11 @@ export class HubState {
 
   #audit(actor: string, kind: string, details: Record<string, unknown>) {
     const at = now();
-    const stored = JSON.stringify(details);
     const { lastInsertRowid } = this.#db
       .prepare("INSERT INTO audit (at, actor, kind, details) VALUES (?, ?, ?, ?)")
-      .run(at, actor, kind, stored);
-    // Subscribers hear the entry as it is stored and listed: a detail left undefined (a call on an
-    // unbound slot has no provider) is left out, as JSON leaves it, never sent as a value.
-    const entry = {
-      seq: Number(lastInsertRowid),
-      at,
-      actor,
-      kind,
-      details: JSON.parse(stored) as Record<string, unknown>,
-    };
+      .run(at, actor, kind, JSON.stringify(details));
+    // Subscribers hear it through JSON, as the router sends every in-process event: as stored.
+    const entry = { seq: Number(lastInsertRowid), at, actor, kind, details };
     this.#emit(() => this.#events.audited?.(entry));
   }
 

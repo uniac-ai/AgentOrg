@@ -834,6 +834,24 @@ test("a call on an unbound slot is audited without a provider, and audit subscri
   });
 });
 
+test("an in-process event goes as JSON: a property left undefined is left out, not refused", async (t) => {
+  const { person, hub } = await setup(t);
+  const heard = person.subscribe("audit", "appended");
+  while (!hub.state.audit(0, 1000).entries.some((e) => e.details.op === "subscribe"))
+    await later(5);
+  // As a built-in Actor could give it: a detail without a value, then an ordinary one.
+  hub.state.auditHub("probe", { kept: 1, missing: undefined });
+  hub.state.auditHub("probe", { kept: 2 });
+  type Entry = { kind: string; details: Record<string, unknown> };
+  const probes: Entry["details"][] = [];
+  while (probes.length < 2) {
+    const next = (await heard.next()) as { event?: Entry } | undefined;
+    assert.ok(next?.event, `the subscription goes on: ${JSON.stringify(next)}`);
+    if (next.event.kind === "probe") probes.push(next.event.details);
+  }
+  assert.deepEqual(probes, [{ kept: 1 }, { kept: 2 }]);
+});
+
 test("a subscriber that stops reading is cut off, not buffered for", async (t) => {
   const { person, hub } = await setup(t);
   const sub = person.subscribe("audit", "appended");

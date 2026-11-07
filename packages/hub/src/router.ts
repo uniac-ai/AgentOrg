@@ -165,6 +165,13 @@ const pass = (from: ReadableStream<Uint8Array>, to: { writable: WritableStream; 
     return from.pipeTo(new WritableStream()).catch(() => {});
   });
 
+/**
+ * A value as it would cross the wire: what a built-in Actor (the hub, storage) gives in-process is
+ * checked and sent as a channel provider's would be, so a property left undefined is left out,
+ * never a value that fails its schema.
+ */
+const asJson = (value: unknown): unknown => JSON.parse(JSON.stringify(value ?? null));
+
 /** A body encoded for the wire; one over the frame limit becomes a refusal saying so. */
 function frameOf(body: Body): { body: Body; frame: Uint8Array } {
   try {
@@ -886,8 +893,7 @@ export class Hub {
                 method,
                 value as Record<string, unknown>,
               );
-      // Through JSON, as a reply from any other provider would be.
-      return result(JSON.parse(JSON.stringify(out ?? null)));
+      return result(asJson(out));
     } catch (error) {
       return errorBody(error);
     }
@@ -1075,7 +1081,20 @@ export class Hub {
       return delivered;
     };
     if (!provider) {
-      stopProvider = this.#actor.subscribe(binding.export, event, { caller, emit: deliver });
+      stopProvider = this.#actor.subscribe(binding.export, event, {
+        caller,
+        emit: (payload) => {
+          let value: unknown;
+          try {
+            value = asJson(payload);
+          } catch (error) {
+            return end(
+              wireError("Refused", `An event that isn't JSON: ${String(error)}`, "bad_output"),
+            );
+          }
+          void deliver(value);
+        },
+      });
       return end;
     }
     let out: YamuxStream;
