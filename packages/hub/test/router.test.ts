@@ -1418,6 +1418,109 @@ test("a view module's calls and events run as its Actor, through the package's o
   stopRude();
 });
 
+test("a view module's slot changes reach its listeners: bound now, unbound, and usable again", async (t) => {
+  const { hub, url, person, bind } = await setup(t);
+  const board = join(
+    dirname(fileURLToPath(import.meta.url)),
+    "..",
+    "..",
+    "..",
+    "..",
+    "examples",
+    "board",
+  );
+  const out = mkdtempSync(join(tmpdir(), "board-for-view-slots-"));
+  t.after(() => rmSync(out, { recursive: true, force: true }));
+  const built = await buildPackage(board, { out });
+  hub.state.addPackage(PERSON, built.file);
+  const { actorId } = hub.state.createActor(PERSON, { name: "board", package: built.hash });
+  assert.throws(
+    () => hub.viewSlots(actorId, "logic", () => {}),
+    (e: Refused) => e.code === "forbidden",
+    "a host module isn't a view",
+  );
+  assert.throws(
+    () => hub.viewSlots(PERSON, "panel", () => {}),
+    (e: Refused) => e.code === "forbidden",
+  );
+
+  // One that throws, listening first, doesn't keep the others from hearing.
+  const stopRude = hub.viewSlots(actorId, "panel", () => {
+    throw new Error("rude");
+  });
+  // Not running yet: its package's own wiring is bound, and the listener hears it at once.
+  const heard: [string, boolean][] = [];
+  const stop = hub.viewSlots(actorId, "panel", (slot, bound) => {
+    heard.push([slot, bound]);
+  });
+  assert.deepEqual(heard, [["board", true]]);
+
+  // Its own process connects, the provider of panel.board: usable again.
+  hub.state.start(PERSON, actorId);
+  const processOf = async () => {
+    const [hubSide, processSide] = memoryPair();
+    hub.accept(hubSide, { actorId });
+    const session = new Session(processSide, { client: true, onStream: () => {} });
+    t.after(() => session.close());
+    await exchange(session, { op: "hello", actorId });
+  };
+  await processOf();
+  assert.deepEqual(heard, [
+    ["board", true],
+    ["board", true],
+  ]);
+
+  // Unbound, then bound to another Actor offering the same interface, which connects later.
+  heard.length = 0;
+  hub.state.unbind(PERSON, actorId, "panel.board");
+  assert.deepEqual(heard, [["board", false]]);
+  heard.length = 0;
+  const iface = hub.state.declaration(actorId, "export", "logic.board")?.iface;
+  assert.ok(iface);
+  const made = (await person.call("actors", "create", { name: "other board" })) as {
+    result: { actorId: string; credential: string };
+  };
+  const other = made.result.actorId;
+  const first = await connect(url, { ...made.result, declares: { exports: { board: iface } } });
+  first.close();
+  await first.session.closed;
+  for (let waited = 0; hub.connected(other) && waited < 3000; waited += 5) await later(5);
+  const bound = (await bind(actorId, "panel.board", other, "board")) as { error?: unknown };
+  assert.equal(bound.error, undefined);
+  assert.deepEqual(heard, [["board", true]]);
+  // The provider comes back after the view's listener started: usable again.
+  const again = await connect(url, made.result);
+  t.after(() => again.close());
+  assert.deepEqual(heard, [
+    ["board", true],
+    ["board", true],
+  ]);
+  // The view's own Actor comes back (its views call only while it runs): usable again too, though
+  // another Actor provides the slot.
+  heard.length = 0;
+  await processOf();
+  assert.deepEqual(heard, [["board", true]]);
+  // A listener stopped by another during a change doesn't hear that change.
+  heard.length = 0;
+  let stopLate = () => {};
+  const stopEarly = hub.viewSlots(actorId, "panel", () => stopLate());
+  const late: [string, boolean][] = [];
+  stopLate = hub.viewSlots(actorId, "panel", (slot, bound) => {
+    late.push([slot, bound]);
+  });
+  late.length = 0;
+  hub.state.unbind(PERSON, actorId, "panel.board");
+  assert.deepEqual(late, []);
+  assert.deepEqual(heard, [["board", false]]);
+  stopEarly();
+  await bind(actorId, "panel.board", other, "board");
+  heard.length = 0;
+  stop();
+  stopRude();
+  hub.state.unbind(PERSON, actorId, "panel.board");
+  assert.deepEqual(heard, [], "a stopped listener hears nothing");
+});
+
 test("a provider's own error code reaches the subscriber as an error, whatever it is", async (t) => {
   const { actor, bind } = await setup(t);
   const p = await actor("provider", { exports: { notes } }, async (_, stream) => {

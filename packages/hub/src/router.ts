@@ -194,6 +194,11 @@ export class Hub {
   readonly #answerTimeoutMs: number;
   /** Every channel's session, admitted or still in hello. */
   readonly #sessions = new Set<Session>();
+  /** `viewSlots` listeners by Actor: each hears its view module's slot changes. */
+  readonly #viewListeners = new Map<
+    string,
+    Set<{ module: string; onSlot: (slot: string, bound: boolean) => void }>
+  >();
 
   private constructor(home: string, options: HubOptions) {
     this.#helloTimeoutMs = options.helloTimeoutMs ?? 10_000;
@@ -386,6 +391,60 @@ export class Hub {
   }
 
   /**
+   * A view module's slots, for the gateway's frame that shows it: `onSlot` hears each slot (named
+   * within the module, as `viewCall` takes it) that is bound now, at once, then every change:
+   * bound, unbound, and bound again when it is usable again: its provider's channel or the
+   * Actor's own comes back. Refused unless `module` is one of the view modules of the Actor's
+   * package; the Actor needn't be running. Returns how to stop, the only way a listener goes
+   * (closing the Actor unbinds each slot, which it hears, but doesn't stop it).
+   */
+  viewSlots(
+    actorId: string,
+    module: string,
+    onSlot: (slot: string, bound: boolean) => void,
+  ): () => void {
+    this.#viewModule(actorId, module, { running: false });
+    const listener = { module, onSlot };
+    const listeners = this.#viewListeners.get(actorId) ?? new Set();
+    this.#viewListeners.set(actorId, listeners);
+    listeners.add(listener);
+    const prefix = `${module}.`;
+    for (const binding of this.state.bindings(actorId))
+      if (
+        binding.consumer === actorId &&
+        binding.slot.startsWith(prefix) &&
+        listeners.has(listener)
+      )
+        this.#tellView(listener, binding.slot.slice(prefix.length), true);
+    return () => {
+      listeners.delete(listener);
+      if (!listeners.size && this.#viewListeners.get(actorId) === listeners)
+        this.#viewListeners.delete(actorId);
+    };
+  }
+
+  /** A slot change to an Actor's view listeners whose module holds that slot. */
+  #notifyViews(actorId: string, slot: string, bound: boolean) {
+    const listeners = this.#viewListeners.get(actorId);
+    // A copy, so a listener may stop itself or another; one stopped meanwhile hears no more.
+    for (const listener of [...(listeners ?? [])])
+      if (listeners?.has(listener) && slot.startsWith(`${listener.module}.`))
+        this.#tellView(listener, slot.slice(listener.module.length + 1), bound);
+  }
+
+  #tellView(
+    listener: { onSlot: (slot: string, bound: boolean) => void },
+    slot: string,
+    bound: boolean,
+  ) {
+    try {
+      listener.onSlot(slot, bound);
+    } catch {
+      // The gateway's own trouble; other listeners and the change go on.
+    }
+  }
+
+  /**
    * `<module>.<slot>` of a running package Actor, when `module` is one of its view modules. A
    * refusal here is audited as the Actor's, as a refusal while resolving a channel's call is.
    */
@@ -450,6 +509,7 @@ export class Hub {
     this.#processes.close();
     for (const session of [...this.#sessions]) session.close();
     this.#connections.clear();
+    this.#viewListeners.clear();
     this.#validators.close();
     this.#storage.close();
     this.state.close();
@@ -465,13 +525,12 @@ export class Hub {
     const conn = { actorId, session, notices: 0 };
     this.#connections.set(actorId, conn);
     // Its consumers' subscriptions ended when it went; a notice tells each slot it is usable again.
-    // Exports offered at run time went with the old channel, and their bindings with them.
+    // Exports offered at run time went with the old channel, and their bindings with them. Its own
+    // channel is new and learns its slots from hello; its views, served apart and callable only
+    // while it runs, hear that each of their slots is usable again, whoever provides it.
     for (const binding of this.state.bindings(actorId))
-      if (
-        binding.provider === actorId &&
-        binding.consumer !== actorId &&
-        this.state.declaration(actorId, "export", binding.export)?.dynamic === false
-      )
+      if (binding.consumer === actorId) this.#notifyViews(actorId, binding.slot, true);
+      else if (this.state.declaration(actorId, "export", binding.export)?.dynamic === false)
         this.#notify(binding.consumer, binding.slot, true);
     return conn;
   }
@@ -529,8 +588,9 @@ export class Hub {
     }
   }
 
-  /** Tell an Actor's channel that one of its slots was bound or unbound. */
+  /** Tell an Actor's channel and its views' listeners that one of its slots was bound or unbound. */
   #notify(actorId: string, slot: string, bound: boolean) {
+    this.#notifyViews(actorId, slot, bound);
     const conn = this.#connections.get(actorId);
     if (!conn) return;
     if (conn.notices >= this.state.slotCount(actorId) + MAX_OPEN_NOTICES)
