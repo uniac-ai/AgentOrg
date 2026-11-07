@@ -413,7 +413,7 @@ test("a splice delivers a provider's whole answer though its channel goes while 
   const done = new Promise<void>((resolve) => {
     answered = resolve;
   });
-  const serve: Serve = async (header, stream) => {
+  const serve: Serve = async (_, stream) => {
     const writer = stream.writable.getWriter();
     await writer.write(encodeFrame(result({})));
     await writer.write(new Uint8Array(size).fill(1));
@@ -627,6 +627,45 @@ test("a declared interface whose hash doesn't match its schemas is refused at he
   assert.match(greedy?.message ?? "", /at most 256 interfaces/);
   const { client } = await actor("honest", { exports: { notes } });
   assert.ok("result" in client.admitted);
+});
+
+test("an Actor's record says whether it has a channel now", async (t) => {
+  const { url, person } = await setup(t);
+  type Shape = { actorId: string; connected: boolean };
+  const get = async (actorId: string) =>
+    ((await person.call("actors", "get", { actorId })) as { result: Shape }).result.connected;
+  const listed = async (actorId: string) =>
+    (
+      (await person.call("actors", "list", {})) as { result: { actors: Shape[] } }
+    ).result.actors.find((a) => a.actorId === actorId)?.connected;
+  assert.equal(await listed(PERSON), true);
+  assert.equal(await get("hub"), false, "the built-in Actors are the Hub itself: no channel");
+  // Each change is told as hub.actors' changed, for the Actor it is about.
+  const changes = person.subscribe("actors", "changed");
+  const changed = async () => ((await changes.next()) as { event: { actor: string } }).event.actor;
+  const made = (await person.call("actors", "create", { name: "later" })) as {
+    result: { actorId: string; credential: string };
+  };
+  const { actorId } = made.result;
+  assert.equal(await changed(), actorId, "made");
+  assert.equal(await get(actorId), false, "made, not yet said hello");
+  assert.equal(await listed(actorId), false);
+  const client = await connect(url, made.result);
+  assert.equal(await changed(), actorId, "connected");
+  assert.equal(await get(actorId), true);
+  assert.equal(await listed(actorId), true);
+  // A newer channel replaces it: connected all along.
+  const newer = await connect(url, made.result);
+  assert.equal(await get(actorId), true);
+  await client.session.closed;
+  assert.equal(await get(actorId), true, "the old channel's end doesn't count");
+  assert.deepEqual([await changed(), await changed()], [actorId, actorId], "replaced");
+  newer.close();
+  assert.equal(await changed(), actorId, "gone");
+  assert.equal(await get(actorId), false, "gone again");
+  assert.equal(await listed(actorId), false);
+  await person.call("actors", "close", { actorId });
+  assert.equal(await changed(), actorId, "closed");
 });
 
 test("an Actor offers and withdraws exports on its own channel", async (t) => {

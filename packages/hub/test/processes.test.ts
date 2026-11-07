@@ -86,16 +86,27 @@ test("start runs the board's process, stop ends it, and its state outlives both"
     package: hash,
     bindings: [{ slot: "logic.store", provider: STORAGE, export: "kv" }],
   });
+  // Started, then its process connects: both are told as changed.
+  const changed: string[] = [];
+  person.slots.actors.on("changed", ({ actor }) => void changed.push(actor));
   await person.slots.actors.call.start({ actorId });
   await until(() => hub.connected(actorId));
+  await until(() => changed.length >= 2);
+  assert.deepEqual(changed, [actorId, actorId]);
   const got = await person.slots.actors.call.get({ actorId });
   assert.deepEqual(got.host, { available: true });
+  assert.equal(got.connected, true, "its process holds a channel");
   await hub.viewCall(actorId, "panel", "board", "add", { title: "spawned" });
 
+  changed.length = 0;
   await person.slots.actors.call.stop({ actorId });
   assert.equal(hub.connected(actorId), false, "stop returns once the process is gone");
+  // Stopped, its process gone, its exit recorded: each is told.
+  await until(() => changed.length >= 3);
+  assert.ok(changed.every((actor) => actor === actorId));
   const stopped = await person.slots.actors.call.get({ actorId });
   assert.equal(stopped.state, "stopped");
+  assert.equal(stopped.connected, false);
   assert.equal(stopped.restarts, 0, "a stop isn't a crash");
   assert.ok(stopped.lastExit, "the exit is recorded");
 
@@ -166,7 +177,9 @@ test("a process that never says hello is killed at the deadline, which counts as
 });
 
 test("where the sandbox can't run, start is refused and every package Actor says why", async (t) => {
-  const { add, person } = await setup(t, { processes: { sandbox: BROKEN } });
+  // The sandbox's command, changed below to one that runs: what the next probe finds.
+  const sandbox = [...BROKEN];
+  const { add, person } = await setup(t, { processes: { sandbox } });
   const hash = await add("probe");
   const { actorId } = await person.slots.actors.call.create({ name: "probe", package: hash });
   await assert.rejects(
@@ -183,6 +196,16 @@ test("where the sandbox can't run, start is refused and every package Actor says
     1,
     "the status is audited once, when it changes",
   );
+  // The sandbox runs now: the next start's probe finds it, and each package Actor's record (its
+  // host) changes, told as changed even for one nothing else happened to.
+  const { actorId: idle } = await person.slots.actors.call.create({ name: "idle", package: hash });
+  const changed: string[] = [];
+  person.slots.actors.on("changed", ({ actor }) => void changed.push(actor));
+  sandbox.splice(0, sandbox.length, "/bin/sh", "-c", 'exec "$@"', "sandbox");
+  await person.slots.actors.call.start({ actorId });
+  await until(() => changed.includes(idle));
+  assert.equal((await person.slots.actors.call.get({ actorId: idle })).host?.available, true);
+  await person.slots.actors.call.stop({ actorId });
 });
 
 test("Actors running when the Hub stopped get their processes back when it opens again", async (t) => {

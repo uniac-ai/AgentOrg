@@ -59,6 +59,14 @@ export const Actor = z.object({
    */
   package: z.union([Hash, z.literal("external"), z.literal("builtin")]),
   state: ActorState,
+  /**
+   * Whether it has a channel to the Hub now: an external Actor while its program is connected (the
+   * person while the app runs: its gateway holds the person's channel), a package Actor while its
+   * process is. The built-in Actors are the Hub itself and have none. `state` is what was asked
+   * for and this is what is: a running package Actor isn't connected while its process starts or
+   * restarts, and a stopping one stays connected until its process has gone.
+   */
+  connected: z.boolean(),
   /** Times the Hub restarted its process after a crash; 0 for Actors without one. */
   restarts: z.number().int().min(0),
   /** How its process last ended on its own, if it has: an exit code or a signal, and when. */
@@ -116,6 +124,13 @@ export const hubActors = defineInterface({
       input: z.object({ actorId: Id, limit: z.number().int().min(1).max(1000).optional() }),
       output: z.object({ lines: z.array(LogLine) }),
     }),
+  },
+  events: {
+    /**
+     * An Actor's record may differ: it was made, started, stopped or closed, its process exited,
+     * or it connected or went (`connected`). Read it again with `get` or `list`.
+     */
+    changed: event(z.object({ actor: Id })),
   },
 });
 

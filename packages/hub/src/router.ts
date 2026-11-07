@@ -238,6 +238,7 @@ export class Hub {
       requested: (request, approvers) => actor?.requested(request, approvers),
       decided: (request, status, approvers) => actor?.decided(request, status, approvers),
       exportsChanged: (changed) => actor?.exportsChanged(changed),
+      actorChanged: (changed) => actor?.actorChanged(changed),
       audited: (entry) => actor?.audited(entry),
     });
     this.#net = new Net(this.state, options.net);
@@ -248,7 +249,7 @@ export class Hub {
       (channel, admitted) => this.accept(channel, admitted),
       options.processes,
     );
-    actor = this.#actor = new HubActor(this.state, this.#processes);
+    actor = this.#actor = new HubActor(this.state, this.#processes, (id) => this.connected(id));
     try {
       this.#storage = new Storage(home, options.storage);
       // Stores of Actors closed while a delete couldn't run (a crash, a lock) go now.
@@ -540,6 +541,7 @@ export class Hub {
     }
     const conn = { actorId, session, notices: 0 };
     this.#connections.set(actorId, conn);
+    this.#actor.actorChanged(actorId);
     // Its consumers' subscriptions ended when it went; a notice tells each slot it is usable again.
     // Exports offered at run time went with the old channel, and their bindings with them. Its own
     // channel is new and learns its slots from hello; its views, served apart and callable only
@@ -554,6 +556,7 @@ export class Hub {
   #dropped(conn: Connection) {
     if (this.#connections.get(conn.actorId) !== conn) return;
     this.#connections.delete(conn.actorId);
+    this.#actor.actorChanged(conn.actorId);
     try {
       this.state.disconnected(conn.actorId);
     } catch {

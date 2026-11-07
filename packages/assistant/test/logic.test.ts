@@ -424,7 +424,14 @@ test("outputs are capped in bytes, refusals too, and a long reply is shown in pa
     },
   });
   const named = (name: string) => [
-    { actorId: "a", name, package: "external" as const, state: "running" as const, restarts: 0 },
+    {
+      actorId: "a",
+      name,
+      package: "external" as const,
+      state: "running" as const,
+      connected: true,
+      restarts: 0,
+    },
   ];
   s.actor.bind("actors", { list: () => ({ actors: named("é".repeat(60_000)) }) });
   const long = "y".repeat(150_000);
@@ -524,6 +531,7 @@ test("a latest exchange over the budget leaves out its oldest outputs, never a c
           name: "z".repeat(15_000),
           package: "external" as const,
           state: "running" as const,
+          connected: true,
           restarts: 0,
         },
       ],

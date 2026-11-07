@@ -281,11 +281,14 @@ export class Processes {
         };
     if (this.#closed) return status;
     const changed = this.#status?.available !== status.available;
+    // Any difference, a reason's included, is in every package Actor's record (its `host`).
+    const differs = JSON.stringify(this.#status) !== JSON.stringify(status);
     this.#status = status;
     if (changed) {
       this.#state.auditHub("host.status", { ...status });
       if (status.available) this.#resume();
     }
+    if (differs) this.#state.hostChanged();
     return status;
   }
 

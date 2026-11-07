@@ -133,6 +133,8 @@ export interface StateEvents {
   /** A request was approved, declined or closed: to its approvers and its requester. */
   decided?(request: RequestRecord, status: Decision, approvers: string[]): void;
   exportsChanged?(actor: string): void;
+  /** An Actor's record changed: it was made, started, stopped or closed, or its process exited. */
+  actorChanged?(actorId: string): void;
   /** An Actor was closed for good: its channel should go too. */
   closed?(actorId: string): void;
   audited?(entry: AuditRecord): void;
@@ -427,6 +429,7 @@ export class HubState {
         "UPDATE actors SET last_exit = ?, restarts = restarts + ? WHERE id = ? AND package NOT IN ('external', 'builtin')",
       )
       .run(JSON.stringify(exit), restarted ? 1 : 0, actorId);
+    this.#emit(() => this.#events.actorChanged?.(actorId));
   }
 
   /** Record a call's metadata: who, through which binding, which method, and how it ended. */
@@ -461,6 +464,13 @@ export class HubState {
     const actor = this.#actor(actorId);
     if (!actor) throw new Refused("unknown", `No Actor ${actorId}.`);
     return actor;
+  }
+
+  /** The host sandbox's status changed: every package Actor's record (its `host`) differs. */
+  hostChanged(): void {
+    for (const actor of this.actors())
+      if (actor.package !== "external" && actor.package !== "builtin")
+        this.#emit(() => this.#events.actorChanged?.(actor.actorId));
   }
 
   actors(): ActorRecord[] {
@@ -526,6 +536,7 @@ export class HubState {
         name: input.name,
         package: input.package ?? "external",
       });
+      this.#emit(() => this.#events.actorChanged?.(actorId));
       for (const initial of input.bindings ?? []) {
         const wiring = { consumer: actorId, ...initial };
         if (!this.sides(caller, wiring).export)
@@ -581,6 +592,7 @@ export class HubState {
     this.#transaction(() => {
       this.#db.prepare("UPDATE actors SET state = 'running' WHERE id = ?").run(actorId);
       this.#audit(caller, "actor.start", { actorId });
+      this.#emit(() => this.#events.actorChanged?.(actorId));
     });
   }
 
@@ -590,6 +602,7 @@ export class HubState {
     this.#transaction(() => {
       this.#db.prepare("UPDATE actors SET state = 'stopped' WHERE id = ?").run(actorId);
       this.#audit(caller, "actor.stop", { actorId });
+      this.#emit(() => this.#events.actorChanged?.(actorId));
     });
   }
 
@@ -613,6 +626,7 @@ export class HubState {
       for (const open of pending) this.#decide(open, "closed");
       this.#audit(caller, "actor.close", { actorId });
       this.#emit(() => this.#events.exportsChanged?.(actorId));
+      this.#emit(() => this.#events.actorChanged?.(actorId));
       this.#emit(() => this.#events.closed?.(actorId));
     });
   }

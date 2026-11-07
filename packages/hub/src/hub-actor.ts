@@ -35,7 +35,8 @@ export class HubActor {
   /** Callers with a build waiting or running. */
   readonly #builders = new Set<string>();
 
-  constructor(state: HubState, processes: Processes) {
+  /** `connected` says whether an Actor has a channel to the Hub now. */
+  constructor(state: HubState, processes: Processes, connected: (actorId: string) => boolean) {
     /**
      * A package Actor's record with its view modules, which a shell can place, and whether this
      * machine can run its process now.
@@ -55,6 +56,11 @@ export class HubActor {
         views: Object.keys(modules).filter((name) => modules[name]?.placement === "view"),
       };
     };
+    /** An Actor's record as `hub.actors` gives it: with its views, and whether it is connected. */
+    const recordOf = (actor: ActorRecord) => ({
+      ...withViews(actor),
+      connected: connected(actor.actorId),
+    });
     this.#handlers = {
       packages: {
         add: (caller, input) => state.addPackage(caller, String(input.path)),
@@ -100,8 +106,8 @@ export class HubActor {
               ? { bindings: input.bindings as Omit<Wiring, "consumer">[] }
               : {}),
           }),
-        list: () => ({ actors: state.actors().map(withViews) }),
-        get: (_, input) => withViews(state.actor(String(input.actorId))),
+        list: () => ({ actors: state.actors().map(recordOf) }),
+        get: (_, input) => recordOf(state.actor(String(input.actorId))),
         start: async (caller, input) => {
           const actorId = String(input.actorId);
           state.checkStart(caller, actorId);
@@ -204,6 +210,11 @@ export class HubActor {
 
   exportsChanged(actor: string) {
     this.#send("exports.changed", { actor });
+  }
+
+  /** An Actor's record changed, or it connected or went: what `hub.actors` gives for it may differ. */
+  actorChanged(actor: string) {
+    this.#send("actors.changed", { actor });
   }
 
   audited(entry: AuditRecord) {
