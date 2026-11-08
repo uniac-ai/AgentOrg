@@ -326,6 +326,33 @@ test("first run brings what earlier runs made to this build: the same Actors, up
   );
 });
 
+test("bindings an upgrade dropped, recorded by a run that stopped, are made at the next", async (t) => {
+  const { app, person, wiring } = await setup(t);
+  const connected = (id: string) => app.hub.connected(id);
+  const ran = await firstRun(person, { connected });
+  const { actorId: agent } = (await person.call("actors", "create", {
+    name: "John",
+    package: ran.packages.assistant,
+  })) as { actorId: string };
+  const lost = { consumer: agent, slot: "logic.store", provider: "storage", export: "kv" };
+  const { value } = (await person.call("store", "get", { key: "app/first-run" })) as {
+    value: Record<string, unknown>;
+  };
+  // One whose ends don't match yet: kept for the next start.
+  const later = { consumer: agent, slot: "logic.nothing", provider: "storage", export: "kv" };
+  await person.call("store", "set", {
+    key: "app/first-run",
+    value: { ...value, rebind: [lost, later] },
+  });
+  const lines: string[] = [];
+  await firstRun(person, { connected, log: (line) => lines.push(line) });
+  assert.ok((await wiring(agent)).includes("logic.store storage.kv"), lines.join(" | "));
+  const after = (await person.call("store", "get", { key: "app/first-run" })) as {
+    value: Record<string, unknown>;
+  };
+  assert.deepEqual(after.value, { ...value, rebind: [later] });
+});
+
 test("the app runs the first run at start, unless told not to", async (t) => {
   const home = mkdtempSync(join(tmpdir(), "agentorg-first-run-"));
   const app = await startApp({ home });

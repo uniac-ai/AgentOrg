@@ -120,43 +120,59 @@ export async function firstRun(
   // couldn't see its record would make a second installer.
   const read = (await call<{ value?: unknown }>("store", "get", { key: RECORD })).value;
   const kept = (read ?? {}) as Record<string, unknown>;
-  const record: {
-    installer?: string;
-    chatgpt?: string;
-    assistant?: string;
-    assistants?: string[];
-  } = Object.fromEntries(
-    Object.entries(kept).filter(
-      ([role, id]) => (role === "installer" || role === "chatgpt") && typeof id === "string",
-    ),
-  );
-  const remember = (role: "installer" | "chatgpt", actorId: string) => {
-    record[role] = actorId;
-    return call("store", "set", { key: RECORD, value: { ...record } });
-  };
   // Every assistant build a run has bundled, by hash: an agent on one of them is this app's to
   // bring to this build. Never a package by its name, which an agent's own package could take.
   const earlier = [
     ...(Array.isArray(kept.assistants) ? kept.assistants : []),
     kept.assistant,
   ].filter((hash): hash is string => typeof hash === "string");
+  const isWiring = (wiring: unknown): wiring is Binding =>
+    typeof wiring === "object" &&
+    wiring !== null &&
+    ["consumer", "slot", "provider", "export"].every(
+      (key) => typeof (wiring as Record<string, unknown>)[key] === "string",
+    );
+  const record: {
+    installer?: string;
+    chatgpt?: string;
+    assistant?: string;
+    assistants?: string[];
+    /** What upgrades dropped, their interfaces having changed: kept until it is bound again. */
+    rebind?: Binding[];
+  } = {
+    ...Object.fromEntries(
+      Object.entries(kept).filter(
+        ([role, id]) =>
+          (role === "installer" || role === "chatgpt" || role === "assistant") &&
+          typeof id === "string",
+      ),
+    ),
+    ...(earlier.length ? { assistants: [...new Set(earlier)] } : {}),
+    ...(Array.isArray(kept.rebind) && kept.rebind.some(isWiring)
+      ? { rebind: kept.rebind.filter(isWiring) }
+      : {}),
+  };
+  const save = () => call("store", "set", { key: RECORD, value: { ...record } });
+  const remember = (role: "installer" | "chatgpt", actorId: string) => {
+    record[role] = actorId;
+    return save();
+  };
   // The assistant New agent installs is this build's, by hash.
   if (packages.assistant) {
     record.assistant = packages.assistant;
     record.assistants = [...new Set([...earlier, packages.assistant])];
-    await attempt("recording the assistant", () =>
-      call("store", "set", { key: RECORD, value: { ...record } }),
-    );
+    await attempt("recording the assistant", save);
   }
-  /** What upgrades dropped, their interfaces having changed: made again once all are done. */
-  const dropped: Binding[] = [];
   /** Run this build's package as an Actor an earlier run made, keeping its id and its store. */
   const upgrade = async (actor: Actor, hash: string, what: string): Promise<Actor> => {
     const { dropped: lost } = await call<{ dropped: Binding[] }>("actors", "upgrade", {
       actorId: actor.actorId,
       package: hash,
     });
-    dropped.push(...lost);
+    if (lost.length) {
+      record.rebind = [...(record.rebind ?? []), ...lost];
+      await attempt("recording the bindings to make again", save);
+    }
     log(
       `First run: upgraded ${what} (${actor.actorId}) to this build${lost.length ? `; ${lost.length} of its bindings to make again` : ""}.`,
     );
@@ -221,7 +237,12 @@ export async function firstRun(
       actor = { actorId, name: "Installer", package: hash, state: "created" };
     } else {
       const hash = packages[INSTALLER];
-      if (hash && actor.package !== hash) actor = await upgrade(actor, hash, "the installer");
+      const before = actor;
+      if (hash && actor.package !== hash)
+        actor =
+          (await attempt("upgrading the installer", () =>
+            upgrade(before, hash, "the installer"),
+          )) ?? actor;
       await rebind(actor, INSTALLER_BINDINGS);
     }
     await personSlot("installer", { actor: actor.actorId, export: "installer.installer" });
@@ -238,7 +259,10 @@ export async function firstRun(
     let actor = await madeBefore("chatgpt");
     if (actor) {
       const hash = packages[CHATGPT];
-      if (hash && actor.package !== hash) actor = await upgrade(actor, hash, "ChatGPT");
+      const before = actor;
+      if (hash && actor.package !== hash)
+        actor =
+          (await attempt("upgrading ChatGPT", () => upgrade(before, hash, "ChatGPT"))) ?? actor;
       await rebind(actor, chatgptBindings);
       await running(actor);
       return actor.actorId;
@@ -285,14 +309,24 @@ export async function firstRun(
         upgrade(agent, assistant, `the agent ${agent.name}`),
       );
   }
-  // What the upgrades dropped, made again where its slot is still unbound: the ends now match,
-  // both on this build. One whose ends still don't is logged and left.
-  for (const wiring of dropped)
-    await attempt(`binding ${wiring.slot} again`, async () => {
-      if ((await bindingsOf(wiring.consumer)).some((b) => b.slot === wiring.slot)) return;
-      await call("grants", "bind", wiring);
-      log(`First run: bound ${wiring.consumer}'s ${wiring.slot} again.`);
-    });
+  // What upgrades dropped, this run or one that stopped before this, made again where its slot is
+  // still unbound: the ends now match, both on this build. One that can't be yet (an upgrade
+  // failed, or its ends still differ) is logged and kept for the next start.
+  if (record.rebind) {
+    const left: Binding[] = [];
+    for (const wiring of record.rebind) {
+      const made = await attempt(`binding ${wiring.slot} again`, async () => {
+        if ((await bindingsOf(wiring.consumer)).some((b) => b.slot === wiring.slot)) return true;
+        await call("grants", "bind", wiring);
+        log(`First run: bound ${wiring.consumer}'s ${wiring.slot} again.`);
+        return true;
+      });
+      if (!made) left.push(wiring);
+    }
+    if (left.length) record.rebind = left;
+    else delete record.rebind;
+    await attempt("recording the bindings made again", save);
+  }
 
   return {
     packages,

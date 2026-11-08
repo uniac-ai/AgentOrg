@@ -200,11 +200,21 @@ made="$(both_ready "$old/node_modules/.bin/agentorg" "$uphome")" ||
 echo "0.0.3: $made"
 stop_app
 start_on "$agentorg" "$uphome" "$work/up.log"
+# The Hub resumes the old Actors as it opens: wait for the first run to have upgraded both.
+for _ in $(seq 1 120); do
+  grep -q '^First run: upgraded the installer' "$work/up.log" &&
+    grep -q '^First run: upgraded ChatGPT' "$work/up.log" && break
+  kill -0 "$pid" 2>/dev/null || break
+  sleep 0.5
+done
+grep -q '^First run: upgraded the installer' "$work/up.log" &&
+  grep -q '^First run: upgraded ChatGPT' "$work/up.log" ||
+  { echo "This build's first run didn't upgrade both" >&2; cat "$work/up.log" >&2; exit 1; }
+grep '^First run: upgraded' "$work/up.log"
 kept="$(both_ready "$agentorg" "$uphome")" ||
   { echo "This build didn't take the home over" >&2; cat "$work/up.log" >&2; exit 1; }
 echo "this build: $kept"
 [ "$made" = "$kept" ] || { echo "The Installer or ChatGPT is another Actor now" >&2; exit 1; }
-grep '^First run: upgraded' "$work/up.log" || true
 # The upgraded Installer installs: the counter, built by the Hub, with its store.
 "$agentorg" call packages build "$counter" --home "$uphome" >"$work/up-build.json"
 hash="$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).hash)' "$work/up-build.json")"
