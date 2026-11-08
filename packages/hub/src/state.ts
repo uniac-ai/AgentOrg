@@ -491,15 +491,15 @@ export class HubState {
     );
   }
 
-  /** An Actor as a refusal names it: "Name (id)". */
-  #named(actorId: string): string {
+  /** An Actor as a refusal names it: "Name (id)", or the id alone when there's no such Actor. */
+  named(actorId: string): string {
     const actor = this.#actor(actorId);
     return actor ? `${actor.name} (${actor.actorId})` : actorId;
   }
 
   actor(actorId: string): ActorRecord {
     const actor = this.#actor(actorId);
-    if (!actor) throw new Refused("unknown", `No Actor ${actorId}.`);
+    if (!actor) throw new Refused("unknown", `No Actor ${actorId}; hub.actors.list lists them.`);
     return actor;
   }
 
@@ -524,7 +524,10 @@ export class HubState {
 
   #require(caller: string, hubExport: keyof typeof HUB_EXPORTS) {
     if (!this.holds(caller, hubExport))
-      throw new Refused("forbidden", `${caller} isn't bound to hub.${hubExport}@1.`);
+      throw new Refused(
+        "forbidden",
+        `${this.named(caller)} isn't bound to hub.${hubExport}@1; a manager (the person) can bind it, or do this for it.`,
+      );
   }
 
   /** Create an Actor: one that runs a package, or an external one, whose credential comes back once. */
@@ -548,7 +551,7 @@ export class HubState {
       if (!this.isManager(caller))
         throw new Refused(
           "forbidden",
-          `Only a manager says whom an Actor is made for; ${caller} isn't one. Create it without for.`,
+          `Only a manager says whom an Actor is made for; ${this.named(caller)} isn't one. Create it without for.`,
         );
       this.#open(input.for);
     }
@@ -592,7 +595,7 @@ export class HubState {
         if (!this.sides(caller, wiring).export)
           throw new Refused(
             "forbidden",
-            `${caller} can't grant ${initial.provider}'s ${initial.export}.`,
+            `${this.named(caller)} can't grant ${this.named(initial.provider)}'s ${initial.export}. Create it without that binding, then it can ask for it with hub.grants.request, or the provider or a manager can bind it.`,
           );
         if (!input.package && !this.declaration(actorId, "slot", initial.slot)) {
           if (!NAME.test(initial.slot))
@@ -602,7 +605,10 @@ export class HubState {
             );
           const offered = this.declaration(initial.provider, "export", initial.export);
           if (!offered)
-            throw new Refused("unknown", `${initial.provider} offers no ${initial.export}.`);
+            throw new Refused(
+              "unknown",
+              `${this.named(initial.provider)} offers no ${initial.export}; hub.exports.list lists what it offers.`,
+            );
           this.#declare(actorId, "slot", initial.slot, offered.iface, false);
         }
         this.#insertBinding(wiring, caller);
@@ -625,7 +631,10 @@ export class HubState {
     this.#require(caller, "actors");
     const actor = this.actor(actorId);
     if (actor.package === "external" || actor.package === "builtin")
-      throw new Refused("state", `${actorId} isn't a package Actor; it connects itself.`);
+      throw new Refused(
+        "state",
+        `${this.named(actorId)} isn't a package Actor, so the Hub doesn't run its process.`,
+      );
     return actor;
   }
 
@@ -633,7 +642,10 @@ export class HubState {
   checkStart(caller: string, actorId: string): void {
     const actor = this.#packageActor(caller, actorId);
     if (actor.state !== "created" && actor.state !== "stopped")
-      throw new Refused("state", `${actorId} is ${actor.state}.`);
+      throw new Refused(
+        "state",
+        `${this.named(actorId)} is ${actor.state === "running" ? "already running" : "closed and can't start again; make another"}.`,
+      );
   }
 
   /** Start a package Actor: recorded as running; the Hub spawns its process. */
@@ -648,7 +660,8 @@ export class HubState {
 
   stop(caller: string, actorId: string): void {
     const actor = this.#packageActor(caller, actorId);
-    if (actor.state !== "running") throw new Refused("state", `${actorId} is ${actor.state}.`);
+    if (actor.state !== "running")
+      throw new Refused("state", `${this.named(actorId)} is ${actor.state}, not running.`);
     this.#transaction(() => {
       this.#db.prepare("UPDATE actors SET state = 'stopped' WHERE id = ?").run(actorId);
       this.#audit(caller, "actor.stop", { actorId });
@@ -661,7 +674,7 @@ export class HubState {
     this.#require(caller, "actors");
     const actor = this.actor(actorId);
     if (actorId === HUB || actorId === PERSON || actorId === STORAGE || actorId === NET)
-      throw new Refused("forbidden", `${actorId} can't be closed.`);
+      throw new Refused("forbidden", `${this.named(actorId)} is built in and can't be closed.`);
     if (actor.state === "closed") return;
     this.#transaction(() => {
       const pending = this.#pending(
@@ -804,7 +817,8 @@ export class HubState {
 
   #open(actorId: string): ActorRecord {
     const actor = this.actor(actorId);
-    if (actor.state === "closed") throw new Refused("state", `${actorId} is closed.`);
+    if (actor.state === "closed")
+      throw new Refused("state", `${this.named(actorId)} is closed for good; make another.`);
     return actor;
   }
 
@@ -822,7 +836,10 @@ export class HubState {
   ): void {
     const actor = this.#open(actorId);
     if (actor.package !== "external")
-      throw new Refused("forbidden", `${actorId} declares through its package.`);
+      throw new Refused(
+        "forbidden",
+        `${this.named(actorId)} declares through its package; an Actor of another package declares otherwise.`,
+      );
     this.#transaction(() => {
       for (const [side, members] of [
         ["slot", declares.slots],
@@ -900,7 +917,10 @@ export class HubState {
     if (!MEMBER.test(name))
       throw new Refused("invalid", `${JSON.stringify(name)} isn't a valid export name.`);
     if (this.declaration(actorId, "export", name))
-      throw new Refused("conflict", `${actorId} already offers ${name}.`);
+      throw new Refused(
+        "conflict",
+        `${this.named(actorId)} already offers ${name}; offer it under another name${this.declaration(actorId, "export", name)?.dynamic ? ", or withdraw it first" : ""}.`,
+      );
     this.#checked(iface);
     this.#transaction(() => {
       this.#declare(actorId, "export", name, iface, true);
@@ -913,7 +933,10 @@ export class HubState {
   withdraw(actorId: string, name: string): void {
     const declared = this.declaration(actorId, "export", name);
     if (!declared?.dynamic)
-      throw new Refused("unknown", `${actorId} offers no ${name} at run time to withdraw.`);
+      throw new Refused(
+        "unknown",
+        `${this.named(actorId)} offers no ${name} at run time to withdraw; only exports offered at run time can be.`,
+      );
     this.#transaction(() => {
       this.#drop(actorId, "export", name);
       this.#audit(actorId, "export.withdraw", { export: name });
@@ -1045,9 +1068,17 @@ export class HubState {
     this.#open(wiring.consumer);
     this.#open(wiring.provider);
     const slot = this.declaration(wiring.consumer, "slot", wiring.slot);
-    if (!slot) throw new Refused("unknown", `${wiring.consumer} has no slot ${wiring.slot}.`);
+    if (!slot)
+      throw new Refused(
+        "unknown",
+        `${this.named(wiring.consumer)} has no slot ${wiring.slot}; hub.grants.expose makes one at run time.`,
+      );
     const exported = this.declaration(wiring.provider, "export", wiring.export);
-    if (!exported) throw new Refused("unknown", `${wiring.provider} offers no ${wiring.export}.`);
+    if (!exported)
+      throw new Refused(
+        "unknown",
+        `${this.named(wiring.provider)} offers no ${wiring.export}; hub.exports.list lists what it offers.`,
+      );
     const fit = compareInterfaces(slot.iface, exported.iface);
     if (fit === "unrelated")
       throw new Refused(
@@ -1064,7 +1095,7 @@ export class HubState {
     if (this.binding(wiring.consumer, wiring.slot))
       throw new Refused(
         "bound",
-        `${wiring.consumer}'s ${wiring.slot} is already bound; unbind it first.`,
+        `${this.named(wiring.consumer)}'s ${wiring.slot} is already bound; unbind it first.`,
       );
     const at = now();
     this.#db
@@ -1110,7 +1141,10 @@ export class HubState {
   bind(caller: string, wiring: Wiring): { bound: true } | { bound: false; requestId: string } {
     const sides = this.sides(caller, wiring);
     if (!sides.export && !sides.slot)
-      throw new Refused("forbidden", `${caller} holds neither end of this binding.`);
+      throw new Refused(
+        "forbidden",
+        `${this.named(caller)} holds neither end of this binding: the export side is ${this.named(wiring.provider)}, an Actor bound to that export, or a manager; the slot side is ${this.named(wiring.consumer)} or a manager. Ask one of them.`,
+      );
     if (!(sides.export && sides.slot)) {
       const has: Side = sides.export ? "export" : "slot";
       if (!this.#asked(wiring, has))
@@ -1135,9 +1169,12 @@ export class HubState {
   /** Unbind a slot: its consumer, its provider or a manager may. */
   unbind(caller: string, consumer: string, slot: string): void {
     const binding = this.binding(consumer, slot);
-    if (!binding) throw new Refused("unknown", `${consumer}'s ${slot} isn't bound.`);
+    if (!binding) throw new Refused("unknown", `${this.named(consumer)}'s ${slot} isn't bound.`);
     if (caller !== consumer && caller !== binding.provider && !this.isManager(caller))
-      throw new Refused("forbidden", `${caller} can't unbind ${consumer}'s ${slot}.`);
+      throw new Refused(
+        "forbidden",
+        `${this.named(caller)} can't unbind ${this.named(consumer)}'s ${slot}: its consumer, its provider or a manager can.`,
+      );
     this.#transaction(() => {
       this.#removeBindings("consumer = ? AND slot = ?", consumer, slot);
       this.#audit(caller, "unbind", {
@@ -1168,16 +1205,16 @@ export class HubState {
     if (!sides.export && !sides.slot)
       throw new Refused(
         "forbidden",
-        `${this.#named(caller)} can't expose ${input.export} of ${this.#named(provider.actorId)} to ${this.#named(to.actorId)}: that takes the provider's side (it, an Actor bound to that export, or a manager) or ${this.#named(to.actorId)}'s (it, or a manager). Ask one of them to expose it.`,
+        `${this.named(caller)} can't expose ${input.export} of ${this.named(provider.actorId)} to ${this.named(to.actorId)}: that takes the provider's side (it, an Actor bound to that export, or a manager) or ${this.named(to.actorId)}'s (it, or a manager). Ask one of them to expose it.`,
       );
     if (BUILTIN.has(to.actorId))
       throw new Refused(
         "forbidden",
-        `${this.#named(to.actorId)} is the Hub itself and takes no slots.`,
+        `${this.named(to.actorId)} is the Hub itself and takes no slots.`,
       );
     const offered = this.declaration(provider.actorId, "export", input.export);
     if (!offered)
-      throw new Refused("unknown", `${this.#named(provider.actorId)} offers no ${input.export}.`);
+      throw new Refused("unknown", `${this.named(provider.actorId)} offers no ${input.export}.`);
     if (offered.iface.kind !== "rpc")
       throw new Refused(
         "unsupported",
@@ -1209,7 +1246,7 @@ export class HubState {
     if (this.declaration(to.actorId, "slot", slot))
       throw new Refused(
         "conflict",
-        `${this.#named(to.actorId)} already has a slot ${slot}; name another with as.`,
+        `${this.named(to.actorId)} already has a slot ${slot}; name another with as.`,
       );
     const wiring = { ...ends, slot };
     if (!(sides.export && sides.slot)) {
@@ -1221,7 +1258,7 @@ export class HubState {
         if (mine.length >= MAX_OPEN_EXPOSURES)
           throw new Refused(
             "limit",
-            `${this.#named(caller)} has ${MAX_OPEN_EXPOSURES} exposures to ${this.#named(to.actorId)} waiting; wait for them to be decided, or withdraw one by exposing it.`,
+            `${this.named(caller)} has ${MAX_OPEN_EXPOSURES} exposures to ${this.named(to.actorId)} waiting; wait for them to be decided, or withdraw one by exposing it.`,
           );
         const request = this.#ask(caller, wiring, "", other(has), true);
         return { exposed: false, slot, requestId: request.requestId };
@@ -1266,7 +1303,7 @@ export class HubState {
     if (!binding?.exposed)
       throw new Refused(
         "unknown",
-        `${this.#named(to)} has no slot ${slot} made by expose; unbind a declared slot instead.`,
+        `${this.named(to)} has no slot ${slot} made by expose; unbind a declared slot instead.`,
       );
     this.unbind(caller, to, slot);
   }
@@ -1278,9 +1315,12 @@ export class HubState {
   request(caller: string, wiring: Wiring, reason: string): RequestRecord {
     const sides = this.sides(caller, wiring);
     if (!sides.export && !sides.slot)
-      throw new Refused("forbidden", `${caller} holds neither end of this binding.`);
+      throw new Refused(
+        "forbidden",
+        `${this.named(caller)} holds neither end of this binding: the export side is ${this.named(wiring.provider)}, an Actor bound to that export, or a manager; the slot side is ${this.named(wiring.consumer)} or a manager. Ask one of them.`,
+      );
     if (sides.export && sides.slot)
-      throw new Refused("state", `${caller} holds both ends: bind it instead.`);
+      throw new Refused("state", `${this.named(caller)} holds both ends: bind it instead.`);
     const has: Side = sides.export ? "export" : "slot";
     if (this.#asked(wiring, has))
       throw new Refused("state", "The other end has asked already: bind to approve.");
@@ -1310,7 +1350,10 @@ export class HubState {
     // An exposure's slot doesn't exist until it is approved; `expose` checked its ends.
     if (!exposed) this.#ends(wiring);
     if (this.binding(wiring.consumer, wiring.slot))
-      throw new Refused("bound", `${wiring.consumer}'s ${wiring.slot} is already bound.`);
+      throw new Refused(
+        "bound",
+        `${this.named(wiring.consumer)}'s ${wiring.slot} is already bound; unbind it first.`,
+      );
     const open = this.#db
       .prepare(
         "SELECT * FROM requests WHERE status = 'open' AND requested_by = ? AND consumer = ? AND slot = ? AND provider = ? AND export = ?",
@@ -1415,7 +1458,10 @@ export class HubState {
   decline(caller: string, requestId: string): void {
     const request = this.requests(caller).find((r) => r.requestId === requestId);
     if (!request)
-      throw new Refused("unknown", `No open request ${requestId} for ${caller} to decide.`);
+      throw new Refused(
+        "unknown",
+        `No open request ${requestId} for ${this.named(caller)} to decide; hub.grants.requests lists those it can.`,
+      );
     this.#transaction(() => {
       const [pending] = this.#pending("id = ?", requestId);
       if (pending) this.#decide(pending, "declined");

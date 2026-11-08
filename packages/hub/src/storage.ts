@@ -167,7 +167,13 @@ export class Storage {
    * Seed the store of (consumer, slot), all or none, if it holds nothing: `storage.admin@1`'s
    * `seed`. Each entry has kv@1's limits, and together they count toward the consumer's quota.
    */
-  seed(consumer: string, slot: string, entries: { key: string; value: unknown }[]): void {
+  /** `named` is the consumer as a refusal names it: "Name (id)". */
+  seed(
+    consumer: string,
+    slot: string,
+    entries: { key: string; value: unknown }[],
+    named = consumer,
+  ): void {
     const keys = new Set<string>();
     const rows = entries.map(({ key, value }) => {
       checkKey(key);
@@ -189,7 +195,7 @@ export class Storage {
           .prepare("SELECT 1 FROM store WHERE consumer = ? AND slot = ? LIMIT 1")
           .get(consumer, slot)
       )
-        throw new Refused("not_empty", `The store of ${consumer}.${slot} isn't empty.`);
+        throw new Refused("not_empty", `The store of ${named}'s ${slot} isn't empty.`);
       const used = this.#db.prepare("SELECT used FROM usage WHERE consumer = ?").get(consumer) as
         | { used: number }
         | undefined;
