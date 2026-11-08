@@ -64,9 +64,12 @@ test("the assistant builds to its logic and its chat view, each self-contained",
     });
     assert.deepEqual(metafile.inputs["<stdin>"]?.imports, [], entry);
     // And none that esbuild can't name: an import of a computed name, or the module's own address.
-    assert.doesNotMatch(code, /\bimport\s*\(|import\.meta/, entry);
+    // A method named `import` (a call `x.import(…)`, or its definition `import(…){`) isn't one.
+    assert.doesNotMatch(code, /(?<![.\w$])import\s*\((?![^()]*\)\s*\{)|import\.meta/, entry);
     assert.doesNotMatch(code, /\brequire\(/, entry);
     assert.doesNotMatch(code, /["']node:/, entry);
+    // React's mode is decided at build: a frame has no `process` to read it from.
+    assert.doesNotMatch(code, /process\.env\.NODE_ENV/, entry);
   }
 });
 
