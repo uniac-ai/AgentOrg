@@ -209,6 +209,12 @@ test("a widget fills its placement whatever its content, on base styles its own 
   await page.keyboard.press("ArrowLeft");
   const keyed = await width();
   assert.ok(keyed > 280 && keyed < 640, `${keyed} px`);
+  // The width is kept when the panel library reports it, from a ResizeObserver after layout: wait
+  // for that before reloading, or a loaded machine reloads first.
+  await page.waitForFunction(
+    (width) => Math.abs(Number(localStorage.getItem("agentorg.widgets")) - width) <= 1,
+    keyed,
+  );
   await page.reload();
   await aside.locator('[aria-label="Reading list"] iframe').waitFor();
   assert.equal(await width(), keyed);
