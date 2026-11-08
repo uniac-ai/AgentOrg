@@ -77,10 +77,13 @@ type Binding = { consumer: string; slot: string; provider: string; export: strin
  * The first run, at every start after the person's store is bound: add the bundled packages,
  * ensure the installer (made by the person, with its bindings, started), bind the person's
  * `installer` to it, ensure the model Actor installed through it (`web` to `egress`, `store` to
- * storage's `kv`, started), and bind the person's `login` to the model's. What is there already is
- * kept: an installer or model Actor an earlier run made (recorded in the person's store) stays,
- * of whatever build. A step that fails is logged and the rest still runs where it can; the next
- * start tries again.
+ * storage's `kv`, started), and bind the person's `login` to the model's. What earlier runs made
+ * (recorded in the person's store) is kept and brought to this build: an installer or model Actor
+ * on another package is upgraded in place, with its id, its store and its bindings; so is an agent
+ * on an assistant build an earlier run bundled (by the hashes recorded, never by a package's
+ * name). A binding an upgrade drops, its interface having changed, is made again where its ends
+ * match now. A step that fails is logged and the rest still runs where it can; the next start
+ * tries again.
  */
 export async function firstRun(
   person: PersonCalls,
@@ -116,8 +119,14 @@ export async function firstRun(
   // What earlier runs made, by role, kept while it isn't closed. Unread, nothing is made: a run that
   // couldn't see its record would make a second installer.
   const read = (await call<{ value?: unknown }>("store", "get", { key: RECORD })).value;
-  const record: { installer?: string; chatgpt?: string; assistant?: string } = Object.fromEntries(
-    Object.entries((read ?? {}) as Record<string, unknown>).filter(
+  const kept = (read ?? {}) as Record<string, unknown>;
+  const record: {
+    installer?: string;
+    chatgpt?: string;
+    assistant?: string;
+    assistants?: string[];
+  } = Object.fromEntries(
+    Object.entries(kept).filter(
       ([role, id]) => (role === "installer" || role === "chatgpt") && typeof id === "string",
     ),
   );
@@ -125,14 +134,34 @@ export async function firstRun(
     record[role] = actorId;
     return call("store", "set", { key: RECORD, value: { ...record } });
   };
-  // The assistant New agent installs is this build's, by hash: never a package by its name, which
-  // an agent's own package could take.
+  // Every assistant build a run has bundled, by hash: an agent on one of them is this app's to
+  // bring to this build. Never a package by its name, which an agent's own package could take.
+  const earlier = [
+    ...(Array.isArray(kept.assistants) ? kept.assistants : []),
+    kept.assistant,
+  ].filter((hash): hash is string => typeof hash === "string");
+  // The assistant New agent installs is this build's, by hash.
   if (packages.assistant) {
     record.assistant = packages.assistant;
+    record.assistants = [...new Set([...earlier, packages.assistant])];
     await attempt("recording the assistant", () =>
       call("store", "set", { key: RECORD, value: { ...record } }),
     );
   }
+  /** What upgrades dropped, their interfaces having changed: made again once all are done. */
+  const dropped: Binding[] = [];
+  /** Run this build's package as an Actor an earlier run made, keeping its id and its store. */
+  const upgrade = async (actor: Actor, hash: string, what: string): Promise<Actor> => {
+    const { dropped: lost } = await call<{ dropped: Binding[] }>("actors", "upgrade", {
+      actorId: actor.actorId,
+      package: hash,
+    });
+    dropped.push(...lost);
+    log(
+      `First run: upgraded ${what} (${actor.actorId}) to this build${lost.length ? `; ${lost.length} of its bindings to make again` : ""}.`,
+    );
+    return { ...actor, package: hash };
+  };
   /** The Actor an earlier run made for `role`, unless it is gone or closed. */
   const madeBefore = async (role: "installer" | "chatgpt") => {
     const id = record[role];
@@ -191,9 +220,9 @@ export async function firstRun(
       log("First run: made the installer.");
       actor = { actorId, name: "Installer", package: hash, state: "created" };
     } else {
+      const hash = packages[INSTALLER];
+      if (hash && actor.package !== hash) actor = await upgrade(actor, hash, "the installer");
       await rebind(actor, INSTALLER_BINDINGS);
-      if (actor.package !== packages[INSTALLER])
-        log("First run: kept the installer; the bundled build is added, not used.");
     }
     await personSlot("installer", { actor: actor.actorId, export: "installer.installer" });
     await running(actor);
@@ -206,11 +235,11 @@ export async function firstRun(
     { slot: "model.store", provider: "storage", export: "kv" },
   ];
   const chatgpt = await attempt("ChatGPT", async () => {
-    const actor = await madeBefore("chatgpt");
+    let actor = await madeBefore("chatgpt");
     if (actor) {
+      const hash = packages[CHATGPT];
+      if (hash && actor.package !== hash) actor = await upgrade(actor, hash, "ChatGPT");
       await rebind(actor, chatgptBindings);
-      if (actor.package !== packages[CHATGPT])
-        log("First run: kept ChatGPT; the bundled build is added, not used.");
       await running(actor);
       return actor.actorId;
     }
@@ -242,6 +271,28 @@ export async function firstRun(
     await attempt("binding the login", () =>
       personSlot("login", { actor: chatgpt, export: "model.login" }),
     );
+
+  // Agents on an assistant build an earlier run bundled: brought to this build's assistant.
+  const assistant = packages.assistant;
+  if (assistant) {
+    const agents = await attempt("finding agents on earlier builds", async () =>
+      (await call<{ actors: Actor[] }>("actors", "list")).actors.filter(
+        (a) => a.state !== "closed" && a.package !== assistant && earlier.includes(a.package),
+      ),
+    );
+    for (const agent of agents ?? [])
+      await attempt(`upgrading ${agent.name}`, () =>
+        upgrade(agent, assistant, `the agent ${agent.name}`),
+      );
+  }
+  // What the upgrades dropped, made again where its slot is still unbound: the ends now match,
+  // both on this build. One whose ends still don't is logged and left.
+  for (const wiring of dropped)
+    await attempt(`binding ${wiring.slot} again`, async () => {
+      if ((await bindingsOf(wiring.consumer)).some((b) => b.slot === wiring.slot)) return;
+      await call("grants", "bind", wiring);
+      log(`First run: bound ${wiring.consumer}'s ${wiring.slot} again.`);
+    });
 
   return {
     packages,

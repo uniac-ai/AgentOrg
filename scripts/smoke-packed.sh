@@ -47,6 +47,42 @@ built() {
     console.log(`${manifest.name} ${hash}`);
   ' "$1"
 }
+# Start `agentorg` ($1) on a home ($2) in the background as $pid, logging to $3, until it serves.
+start_on() {
+  "$1" --no-open --home "$2" >"$3" 2>&1 &
+  pid=$!
+  for _ in $(seq 1 120); do
+    grep -q '^AgentOrg at http' "$3" && return 0
+    kill -0 "$pid" 2>/dev/null || { cat "$3" >&2; exit 1; }
+    sleep 0.5
+  done
+  echo "No address after 60 s" >&2
+  cat "$3" >&2
+  exit 1
+}
+# The Installer's and ChatGPT's ids on a home ($2), once both run and are connected, by `agentorg`
+# ($1); a failure after 60 s.
+both_ready() {
+  for _ in $(seq 1 120); do
+    if "$1" actors --home "$2" >"$work/ready.json" 2>/dev/null &&
+      node -e '
+        const { actors } = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+        const up = (name) => actors.find((a) => a.name === name && a.state === "running" && a.connected);
+        const [i, c] = [up("Installer"), up("ChatGPT")];
+        if (!i || !c) process.exit(1);
+        console.log(`Installer=${i.actorId} ChatGPT=${c.actorId}`);
+      ' "$work/ready.json"; then
+      return 0
+    fi
+    sleep 0.5
+  done
+  return 1
+}
+stop_app() {
+  kill -TERM "$pid"
+  wait "$pid" || true
+  pid=""
+}
 fixtures="$root/packages/hub/test/fixtures"
 counter="$(source_of "$fixtures/counter" package.json src/counter.ts src/interface.ts)"
 kit="$(source_of "$fixtures/kit-widget" package.json src/panel.tsx)"
@@ -151,4 +187,34 @@ built "$work/gkit.json"
 kill -TERM "$hubpid"
 wait "$hubpid" || true
 hubpid=""
+
+step "an earlier release's home: the published 0.0.3 makes it, this build takes it over"
+old="$work/old"
+mkdir "$old"
+(cd "$old" && echo '{"private":true}' >package.json &&
+  npm install --silent --no-audit --no-fund --cache "$work/cache" @agentorg/cli@0.0.3)
+uphome="$work/uphome"
+start_on "$old/node_modules/.bin/agentorg" "$uphome" "$work/old.log"
+made="$(both_ready "$old/node_modules/.bin/agentorg" "$uphome")" ||
+  { echo "0.0.3's first run didn't finish" >&2; cat "$work/old.log" >&2; exit 1; }
+echo "0.0.3: $made"
+stop_app
+start_on "$agentorg" "$uphome" "$work/up.log"
+kept="$(both_ready "$agentorg" "$uphome")" ||
+  { echo "This build didn't take the home over" >&2; cat "$work/up.log" >&2; exit 1; }
+echo "this build: $kept"
+[ "$made" = "$kept" ] || { echo "The Installer or ChatGPT is another Actor now" >&2; exit 1; }
+grep '^First run: upgraded' "$work/up.log" || true
+# The upgraded Installer installs: the counter, built by the Hub, with its store.
+"$agentorg" call packages build "$counter" --home "$uphome" >"$work/up-build.json"
+hash="$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).hash)' "$work/up-build.json")"
+"$agentorg" call installer install \
+  "{\"package\":\"$hash\",\"name\":\"Counter\",\"connections\":{\"counter.store\":{\"actor\":\"storage\",\"export\":\"kv\"}}}" \
+  --home "$uphome" >"$work/up-install.json"
+node -e '
+  const { actorId } = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+  if (!/^act_/.test(actorId)) process.exit(1);
+  console.log(`installed the counter as ${actorId}`);
+' "$work/up-install.json"
+stop_app
 echo "smoke passed"
