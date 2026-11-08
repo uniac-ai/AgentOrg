@@ -275,6 +275,26 @@ const other = (side: Side): Side => (side === "export" ? "slot" : "export");
  * and the audit trail, in `node:sqlite`. Every method that changes something takes its caller, and
  * each is checked against bindings: there is no other authority.
  */
+/** What a package's Actor declares: each module's slots and exports, by `module.name`. */
+function packageDeclarations(
+  manifest: Manifest,
+): { side: Side; name: string; iface: DescribedInterface }[] {
+  return Object.entries(manifest.modules).flatMap(([module, m]) =>
+    (
+      [
+        ["slot", m.slots],
+        ["export", m.exports],
+      ] as const
+    ).flatMap(([side, members]) =>
+      Object.entries(members).map(([member, id]) => {
+        const entry = manifest.interfaces[id];
+        if (!entry) throw new Refused("invalid", `The package doesn't record ${id}.`);
+        return { side, name: `${module}.${member}`, iface: { id, ...entry } };
+      }),
+    ),
+  );
+}
+
 export class HubState {
   readonly home: string;
   readonly #db: DatabaseSync;
@@ -565,16 +585,8 @@ export class HubState {
       if (input.package) {
         const { manifest } = this.package(input.package);
         insert.run(actorId, input.name, input.package, null, now(), madeFor);
-        for (const [module, m] of Object.entries(manifest.modules))
-          for (const [side, members] of [
-            ["slot", m.slots],
-            ["export", m.exports],
-          ] as const)
-            for (const [member, id] of Object.entries(members)) {
-              const entry = manifest.interfaces[id];
-              if (!entry) throw new Refused("invalid", `The package doesn't record ${id}.`);
-              this.#declare(actorId, side, `${module}.${member}`, { id, ...entry }, false);
-            }
+        for (const { side, name, iface } of packageDeclarations(manifest))
+          this.#declare(actorId, side, name, iface, false);
         // A package's own wiring is applied as it is installed.
         for (const [slot, exported] of manifest.connections)
           this.#insertBinding(
@@ -692,6 +704,94 @@ export class HubState {
       this.#emit(() => this.#events.actorChanged?.(actorId));
       this.#emit(() => this.#events.closed?.(actorId));
     });
+  }
+
+  /**
+   * Drop the bindings through one of an Actor's slots or exports, its interface having changed:
+   * each is audited as `binding.drop`, and the requests through it close. Dropping only takes
+   * access away. Returns what was dropped.
+   */
+  #dropBindingsOf(actorId: string, side: Side, name: string, by: string): Wiring[] {
+    const where = side === "slot" ? "consumer = ? AND slot = ?" : "provider = ? AND export = ?";
+    const dropped = this.bindings(actorId).filter((b) =>
+      side === "slot"
+        ? b.consumer === actorId && b.slot === name
+        : b.provider === actorId && b.export === name,
+    );
+    if (!dropped.length) return [];
+    const pending = this.#pending(where, actorId, name);
+    this.#removeBindings(where, actorId, name);
+    for (const open of pending) this.#decide(open, "closed");
+    const wirings = dropped.map(({ consumer, slot, provider, export: exported }) => ({
+      consumer,
+      slot,
+      provider,
+      export: exported,
+    }));
+    for (const wiring of wirings)
+      this.#audit(by, "binding.drop", { ...wiring, why: "its interface changed" });
+    return wirings;
+  }
+
+  /** Refused unless the caller may upgrade the Actor to the package now; changes nothing. */
+  checkUpgrade(caller: string, actorId: string, hash: string): ActorRecord {
+    this.#require(caller, "actors");
+    const actor = this.actor(actorId);
+    if (actorId === HUB || actorId === PERSON || actorId === STORAGE || actorId === NET)
+      throw new Refused("forbidden", `${this.named(actorId)} is built in and can't be upgraded.`);
+    if (actor.package === "external")
+      throw new Refused(
+        "state",
+        `${this.named(actorId)} isn't a package Actor; it declares what it takes when it connects.`,
+      );
+    if (actor.state === "closed")
+      throw new Refused("state", `${this.named(actorId)} is closed for good; make another.`);
+    packageDeclarations(this.package(hash).manifest);
+    return actor;
+  }
+
+  /**
+   * Run another package as the same Actor: its id, its stores and every binding whose interfaces
+   * still match stay; a binding through a slot or export the new package drops or declares as
+   * another interface is dropped, audited and returned. The new package's own wiring is applied
+   * where its slot is unbound. The process isn't touched here: a running Actor is stopped first
+   * and started after, by whoever runs processes.
+   */
+  upgrade(caller: string, actorId: string, hash: string): Wiring[] {
+    const actor = this.checkUpgrade(caller, actorId, hash);
+    if (actor.package === hash) return [];
+    const { manifest } = this.package(hash);
+    const next = packageDeclarations(manifest);
+    const dropped: Wiring[] = [];
+    this.#transaction(() => {
+      const old = (
+        this.#db
+          .prepare("SELECT side, name, iface FROM declarations WHERE actor = ? AND dynamic = 0")
+          .all(actorId) as Row[]
+      ).map((row) => ({
+        side: row.side as Side,
+        name: String(row.name),
+        iface: JSON.parse(String(row.iface)) as DescribedInterface,
+      }));
+      for (const was of old) {
+        const fresh = next.find((n) => n.side === was.side && n.name === was.name);
+        if (!fresh || compareInterfaces(was.iface, fresh.iface) !== "same")
+          dropped.push(...this.#dropBindingsOf(actorId, was.side, was.name, caller));
+      }
+      this.#db.prepare("DELETE FROM declarations WHERE actor = ? AND dynamic = 0").run(actorId);
+      for (const { side, name, iface } of next) this.#declare(actorId, side, name, iface, false);
+      this.#db.prepare("UPDATE actors SET package = ? WHERE id = ?").run(hash, actorId);
+      for (const [slot, exported] of manifest.connections)
+        if (!this.binding(actorId, slot))
+          this.#insertBinding(
+            { consumer: actorId, slot, provider: actorId, export: exported },
+            HUB,
+          );
+      this.#audit(caller, "actor.upgrade", { actorId, from: actor.package, to: hash, dropped });
+      this.#emit(() => this.#events.exportsChanged?.(actorId));
+      this.#emit(() => this.#events.actorChanged?.(actorId));
+    });
+    return dropped;
   }
 
   // ── Packages ────────────────────────────────────────────────────────────────
@@ -824,8 +924,9 @@ export class HubState {
 
   /**
    * An external Actor's slots and static exports, as it declares them when it connects; they
-   * replace what it declared before. A bound name keeps its interface: redeclaring it as another is
-   * refused. A name it no longer declares is dropped, with its bindings.
+   * replace what it declared before. A name redeclared as another interface loses its bindings
+   * (audited as `binding.drop`), since a binding holds only while both ends declare the same one.
+   * A name it no longer declares is dropped, with its bindings.
    */
   declareExternal(
     actorId: string,
@@ -860,16 +961,11 @@ export class HubState {
             ))
               this.#decide(open, "closed");
           }
+          // A binding holds while both ends declare the same interface: redeclared as another, the
+          // name's bindings are dropped, never kept across the change.
           const known = this.declaration(actorId, side, name);
-          if (
-            known &&
-            this.#isBound(actorId, side, name) &&
-            compareInterfaces(known.iface, iface) !== "same"
-          )
-            throw new Refused(
-              "conflict",
-              `${name} is bound as ${known.iface.id}; it can't change while bound.`,
-            );
+          if (known && compareInterfaces(known.iface, iface) !== "same")
+            this.#dropBindingsOf(actorId, side, name, actorId);
           this.#declare(actorId, side, name, iface, false);
         }
         const kept = Object.keys(members);
@@ -888,16 +984,6 @@ export class HubState {
       }
       this.#emit(() => this.#events.exportsChanged?.(actorId));
     });
-  }
-
-  #isBound(actor: string, side: "slot" | "export", name: string): boolean {
-    return !!this.#db
-      .prepare(
-        side === "slot"
-          ? "SELECT 1 FROM bindings WHERE consumer = ? AND slot = ?"
-          : "SELECT 1 FROM bindings WHERE provider = ? AND export = ?",
-      )
-      .get(actor, name);
   }
 
   /** A declaration gone, and the bindings through it. */

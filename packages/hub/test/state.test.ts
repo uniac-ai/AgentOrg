@@ -288,11 +288,9 @@ test("a slot binds only an export of the same interface and schemas, once", (t) 
     () => state.bind(PERSON, { consumer: holder, slot: "notes", provider, export: "notes" }),
     refused("bound"),
   );
-  // A bound slot can't change its interface underneath.
-  assert.throws(
-    () => state.declareExternal(holder, { slots: { notes: notes(9) }, exports: {} }),
-    refused("conflict"),
-  );
+  // A bound slot redeclared as another interface loses its binding: none holds across the change.
+  state.declareExternal(holder, { slots: { notes: notes(9) }, exports: {} });
+  assert.equal(state.binding(holder, "notes"), undefined);
   assert.throws(
     () =>
       state.declareExternal(holder, {
