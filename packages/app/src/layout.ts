@@ -69,6 +69,14 @@ export class Layout {
     });
   }
 
+  /** An Actor is closed: its own views can't run any more, so they go. */
+  removeActor(actor: string) {
+    return this.#write((home) => ({
+      home: home.filter((placement) => placement.actor !== actor),
+      result: {},
+    }));
+  }
+
   move(input: { id: string; after?: string }) {
     return this.#write((home) => {
       const placement = at(home, input.id);

@@ -2,7 +2,7 @@
 import "./globals.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
-import { Refused } from "@agentorg/sdk";
+import { NotConnected, Refused } from "@agentorg/sdk";
 import { createTestContext } from "@agentorg/sdk/testing";
 import { act } from "react";
 import view from "../src/chat.tsx";
@@ -419,5 +419,80 @@ test("a tool message that carries its call is a card, running then ended", async
     card().querySelector(".kit-tool-body")?.textContent,
     '{"module":"panel"}\n→ {"id":"p1"}',
   );
+  await v.unmount();
+});
+
+test("a chat that isn't there yet says nothing, and is read when it arrives", async () => {
+  let there = false;
+  const v = await mounted({
+    history: () => {
+      if (!there) throw new NotConnected("chat");
+      return [{ id: "1", role: "user" as const, text: "Earlier", at }];
+    },
+  });
+  assert.equal(v.alert(), null, "a new agent's process is still starting: no notice");
+  there = true;
+  await v.bindChat();
+  assert.deepEqual(v.texts(), ["Earlier"]);
+  assert.equal(v.alert(), null);
+  await v.unmount();
+});
+
+test("a good read ends what a failed read said, but not a refusal of a turn", async () => {
+  let failing = true;
+  const v = await mounted({
+    history: () => {
+      if (failing) throw new Refused("failed", "The record couldn't be read.");
+      return [];
+    },
+  });
+  assert.match(v.alert()?.textContent ?? "", /couldn't be read/);
+  failing = false;
+  await v.bindChat();
+  assert.equal(v.alert(), null, "its cause is gone");
+  // A send refused for lack of a chat goes the same way; one refused for a reason doesn't.
+  v.refuse(new NotConnected("chat") as unknown as Refused);
+  await type(v.input(), "Too early.");
+  await click(v.button("Send"));
+  await settle();
+  assert.match(v.alert()?.textContent ?? "", /not connected/);
+  v.refuse(undefined);
+  await v.bindChat();
+  assert.equal(v.alert(), null);
+  v.refuse(new Refused("busy", "A turn is running."));
+  await type(v.input(), "Too soon.");
+  await click(v.button("Send"));
+  await settle();
+  await v.bindChat();
+  assert.match(v.alert()?.textContent ?? "", /A turn is running/);
+  await v.unmount();
+});
+
+test("what the person sends shows at once, and once, whichever of the record and the reply comes first", async () => {
+  const v = await mounted({ history: () => [] });
+  await type(v.input(), "Hello");
+  await click(v.button("Send"));
+  await settle();
+  assert.deepEqual(v.texts(), ["Hello"], "before the record has it");
+  // The reply came first (the send answered "2"): the record's entry takes its place.
+  await v.emit("message", { id: "2", role: "user", text: "Hello", at });
+  assert.deepEqual(v.texts(), ["Hello"]);
+  // The event first: the same.
+  await type(v.input(), "Again");
+  await click(v.button("Send"));
+  await settle();
+  await v.emit("message", { id: "3", role: "user", text: "Again", at });
+  assert.deepEqual(v.texts(), ["Hello", "Again"]);
+  await v.unmount();
+});
+
+test("a refused send leaves the conversation, and Send is back", async () => {
+  const v = await mounted({ history: () => [] });
+  v.refuse(new Refused("busy", "A turn is running."));
+  await type(v.input(), "Too soon.");
+  await click(v.button("Send"));
+  await settle();
+  assert.deepEqual(v.texts(), []);
+  assert.ok(v.button("Send"));
   await v.unmount();
 });

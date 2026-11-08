@@ -22,6 +22,7 @@ import {
   useRoute,
   useTheme,
 } from "./data.ts";
+import { AgentMenu } from "./delete-agent.tsx";
 import { Home, PlacedView } from "./home.tsx";
 import { NewAgent } from "./new-agent.tsx";
 import { besideAgent, type Placement } from "./rules.ts";
@@ -374,6 +375,7 @@ function Shell({ login }: { login?: LoginStatus }) {
             )}
           </nav>
           <span className="spacer" />
+          {agent && agents.includes(agent) && <AgentMenu key={agent.actorId} agent={agent} />}
         </header>
         {/* The chat, and beside it the column its width is the person's to drag: 280–640 px, never
             more than half the stage. The column is there only with something in it, on a screen

@@ -1,0 +1,19 @@
+{
+  "name": "chat-view",
+  "version": "0.0.1",
+  "private": true,
+  "description": "The assistant's real chat view over a scripted chat@1, for the shell's tests in a real frame",
+  "type": "module",
+  "agentorg": {
+    "modules": {
+      "logic": "src/logic.js",
+      "chat": "src/chat.js"
+    },
+    "connections": [
+      [
+        "chat.chat",
+        "logic.chat"
+      ]
+    ]
+  }
+}
