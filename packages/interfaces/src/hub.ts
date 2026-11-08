@@ -38,8 +38,8 @@ export const hubPackages = defineInterface({
     /**
      * Build a package from its source, given as data (`package.json` and files under `src/`, up to
      * 768 KiB), and add it as `add` does. It's `agentorg build`'s build, reading no tsconfig; its
-     * files import only `@agentorg/sdk`, `@agentorg/interfaces` and `zod` by name, and nothing outside
-     * the package's folder, never by a pattern. A build that fails is
+     * files import only `@agentorg/sdk`, `@agentorg/interfaces`, `zod`, `react`, `react-dom` and
+     * `@agentorg/kit` by name, and nothing outside the package's folder, never by a pattern. A build that fails is
      * `Refused("build")` with the build's message, so the source can be fixed and built again.
      */
     build: method({

@@ -9,8 +9,18 @@ import { BuildError, buildPackage } from "@agentorg/sdk/build";
 export const MAX_SOURCE = 768 * 1024;
 /** Files one package's source may have. */
 const MAX_FILES = 256;
-/** What a package built by the Hub may import by name. */
-const ALLOWED = ["@agentorg/sdk", "@agentorg/interfaces", "zod"];
+/**
+ * What a package built by the Hub may import by name: the SDK, the interfaces, zod, and React and
+ * the kit for views (`react/jsx-runtime`, which JSX compiles to, is React's).
+ */
+const ALLOWED = [
+  "@agentorg/sdk",
+  "@agentorg/interfaces",
+  "zod",
+  "react",
+  "react-dom",
+  "@agentorg/kit",
+];
 /** Where those are found: this package's own folder (dist/src/build.js → the package). */
 const FROM = fileURLToPath(new URL("../..", import.meta.url));
 /** A source path: `package.json`, or a source file under `src/` named plainly. */
@@ -75,8 +85,8 @@ function told(message: string, source: string, home: string): string {
 
 /**
  * Build a package from its source, given as data, and add it with `add`: the files are written to
- * a fresh folder in the home, built as `agentorg build` builds (importing only the SDK, the
- * interfaces and zod by name, and nothing outside the folder; reading no tsconfig; at most 16
+ * a fresh folder in the home, built as `agentorg build` builds (importing by name only the SDK,
+ * the interfaces, zod, React, react-dom and the kit, and nothing outside the folder; reading no tsconfig; at most 16
  * modules and 16 MiB built), and the folder is gone after, whatever happened. A build that fails
  * is `Refused("build")` with the build's message, which names no path outside the package.
  */

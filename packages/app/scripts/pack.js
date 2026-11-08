@@ -22,7 +22,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 const root = new URL("../../..", import.meta.url).pathname;
-const BUNDLED = ["wire", "sdk", "interfaces", "hub", "shell"];
+const BUNDLED = ["wire", "sdk", "interfaces", "hub", "shell", "kit"];
 const destination = resolve(process.argv[2] ?? ".");
 
 /** The workspace's `npm pack` of `dir`, unpacked into `into`. */

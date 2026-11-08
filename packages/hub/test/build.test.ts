@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createServer } from "node:net";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -362,4 +362,62 @@ test("where the sandbox can't run, the Hub doesn't build either, and says why", 
     person.slots.packages.call.build({ files: source() }),
     refusedWith("unsupported", /no namespaces here/),
   );
+});
+
+// The kit widget fixture: a view in JSX with the kit's Button and Chat, React and react-dom.
+const kitWidget = join(dirname(fixture), "kit-widget");
+const kitSource = (): Record<string, string> => ({
+  "package.json": readFileSync(join(kitWidget, "package.json"), "utf8"),
+  "src/panel.tsx": readFileSync(join(kitWidget, "src", "panel.tsx"), "utf8"),
+});
+
+test("a view built by the Hub may import React, react-dom and the kit, and nothing past them", async (t) => {
+  const { hub, person, leftovers } = await setup(t);
+  const built = await person.slots.packages.call.build({ files: kitSource() });
+  const modules = hub.state.package(built.hash).manifest.modules as Record<
+    string,
+    { placement: string }
+  >;
+  assert.equal(modules.panel?.placement, "view");
+  // The bundle carries React and the kit, and needs nothing at run time.
+  const bundle = readFileSync(
+    join(hub.state.home, "packages", built.hash, "dist", "panel.js"),
+    "utf8",
+  );
+  assert.ok(bundle.includes("kit-button"), "the kit's Button is in the bundle");
+  assert.doesNotMatch(bundle, /^import .* from ["'](react|@agentorg\/kit)/m);
+  // Where anything is installed is never in a package: a library's wrapped modules are named by
+  // their library and version, so the build is the same wherever the Hub runs.
+  for (const place of [homedir(), realpathSync(hub.state.home), hubFolder])
+    assert.ok(!bundle.includes(place), `the bundle names ${place}`);
+  assert.match(bundle, /"agentorg-library:react@[^/"]+\/cjs\/react\.production\.js"/);
+
+  const importing = (line: string) =>
+    person.slots.packages.call.build({
+      files: { ...kitSource(), "src/panel.tsx": `${line}\nexport default x;` },
+    });
+  // The kit's own dependencies are the kit's: not importable by name from a package.
+  for (const name of ["react-markdown", "@assistant-ui/react", "radix-ui"])
+    await assert.rejects(
+      importing(`import x from "${name}";`),
+      refusedWith(
+        "build",
+        /imports only @agentorg\/sdk, @agentorg\/interfaces, zod, react, react-dom, @agentorg\/kit/,
+      ),
+      name,
+    );
+  // An allowed name can't reach past what its package exports: not the Hub's files, nor another
+  // package's. Each of these packages has an exports map, which closes every other subpath.
+  for (const path of [
+    "@agentorg/kit/../../hub/package.json",
+    "react/../@agentorg/hub/dist/src/state.js",
+    "react-dom/../../../person-credential",
+    "react/cjs/react.production.js",
+  ])
+    await assert.rejects(
+      importing(`import x from "${path}";`),
+      refusedWith("build", /Could not resolve/),
+      path,
+    );
+  assert.deepEqual(leftovers(), []);
 });
