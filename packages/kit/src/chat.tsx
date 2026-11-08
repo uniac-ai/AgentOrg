@@ -239,8 +239,11 @@ function Thinking() {
 function AssistantMessage() {
   const { name, avatar, retry } = useContext(Agent);
   const running = useAuiState(({ message }) => message.status?.type === "running");
+  // Retry runs the last turn again, so only the last reply offers it; earlier replies show their
+  // bar on hover.
+  const last = useAuiState(({ message }) => message.isLast);
   return (
-    <MessagePrimitive.Root className="kit-chat-assistant">
+    <MessagePrimitive.Root className="kit-chat-assistant" {...(last ? { "data-last": "" } : {})}>
       {name && (
         <div className="kit-chat-who">
           {avatar}
@@ -255,7 +258,7 @@ function AssistantMessage() {
             <CopyIcon />
           </IconButton>
         </ActionBarPrimitive.Copy>
-        {retry && (
+        {retry && last && (
           <ActionBarPrimitive.Reload asChild>
             <IconButton label="Retry">
               <RetryIcon />

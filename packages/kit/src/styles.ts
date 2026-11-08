@@ -111,7 +111,7 @@ export const KIT_CSS = `
 .kit-chat-who { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12.5px; }
 .kit-chat-bar { display: flex; gap: 2px; height: 26px; margin-top: -4px; }
 .kit-chat-bar .kit-icon-button { width: 26px; height: 26px; border-radius: 7px; color: var(--faint); }
-.kit-chat-bar[data-hidden] { visibility: hidden; }
+.kit-chat-bar[data-hidden], .kit-chat-assistant:not([data-last]):not(:hover) .kit-chat-bar { visibility: hidden; }
 .kit-chat-thinking { display: flex; align-items: center; gap: 6px; height: 22px; color: var(--muted); }
 .kit-chat-thinking > i { width: 5px; height: 5px; border-radius: 50%; background: currentColor; animation: kit-pulse 1.2s infinite; }
 .kit-chat-thinking > i:nth-child(2) { animation-delay: 0.2s; }
@@ -133,8 +133,8 @@ export const KIT_CSS = `
 .kit-chat-notice { display: flex; flex-direction: column; gap: 6px; max-width: 720px; margin: 0 auto 10px; padding: 10px 12px; border-radius: 12px; background: var(--raised); font-size: 13px; }
 .kit-chat-notice b { font-weight: 600; }
 .kit-chat-composer-wrap { flex: none; padding: 0 20px 16px; }
-.kit-chat-composer { max-width: 720px; margin: 0 auto; padding: 10px 10px 8px 14px; border-radius: 14px; background: var(--raised); }
-.kit-chat-input { display: block; width: 100%; height: 44px; max-height: 160px; padding: 0; border: 0; outline: 0; resize: none; background: transparent; color: inherit; font: inherit; scrollbar-width: none; }
+.kit-chat-composer { display: flex; flex-direction: column; max-width: 720px; margin: 0 auto; padding: 10px 10px 8px 14px; border-radius: 14px; background: var(--raised); }
+.kit-chat-input { display: block; width: 100%; min-height: 44px; max-height: 160px; padding: 0; border: 0; outline: 0; resize: none; background: transparent; color: inherit; font: inherit; scrollbar-width: none; }
 .kit-chat-composer-row { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 12px; }
 .kit-chat-send {
   width: 30px; height: 30px; margin-left: auto; padding: 0; border: 0; border-radius: 50%; cursor: pointer;
@@ -148,7 +148,7 @@ export const KIT_CSS = `
   .kit-chat-who, .kit-tool-name { display: none; }
   .kit-chat-composer-wrap { padding: 0 10px 10px; }
   .kit-chat-composer { padding: 8px 8px 6px 12px; border-radius: 12px; }
-  .kit-chat-input { height: 34px; }
+  .kit-chat-input { min-height: 34px; }
 }
 `;
 

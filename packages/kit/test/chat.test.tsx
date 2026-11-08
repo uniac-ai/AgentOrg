@@ -134,6 +134,8 @@ test("Earlier messages loads the page before, Retry runs the last turn again, an
   let earlier = 0;
   let retries = 0;
   const messages: ChatEntry[] = [
+    { id: "u0", role: "user", text: "Before" },
+    { id: "a0", role: "assistant", text: "An earlier reply" },
     { id: "u1", role: "user", text: "Hi" },
     { id: "a1", role: "assistant", text: "Hello" },
   ];
@@ -152,6 +154,10 @@ test("Earlier messages loads the page before, Retry runs the last turn again, an
   await click(byRole("button", "Earlier messages"));
   await settle();
   assert.equal(earlier, 1);
+  // Only the last reply offers Retry: it runs the last turn again, whichever reply it's under.
+  const retry = [...view.host.querySelectorAll('[aria-label="Retry"]')];
+  assert.equal(retry.length, 1);
+  assert.ok(view.host.querySelectorAll(".kit-chat-assistant")[1]?.contains(retry[0] as Node));
   await click(byRole("button", "Retry"));
   await settle();
   assert.equal(retries, 1);

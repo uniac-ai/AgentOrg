@@ -238,6 +238,11 @@ async function bundle(
       mainFields: ["module", "main"],
       conditions: ["import", "module", "default"],
       target: "es2023",
+      // A view may be written in JSX with React (the kit's components): the automatic runtime,
+      // so no file needs React in scope, and React's production build, since a frame has no
+      // `process` for React to read its mode from.
+      jsx: "automatic",
+      define: { "process.env.NODE_ENV": '"production"' },
       minifyWhitespace: true,
       legalComments: "none",
       write: false,
