@@ -10,7 +10,18 @@ export const MAX_SOURCE = 768 * 1024;
 /** Files one package's source may have. */
 const MAX_FILES = 256;
 /** What a package built by the Hub may import by name. */
-const ALLOWED = ["@agentorg/sdk", "@agentorg/interfaces", "zod"];
+/**
+ * What a package built by the Hub may import by name: the SDK, the interfaces, zod, and React and
+ * the kit for views (`react/jsx-runtime`, which JSX compiles to, is React's).
+ */
+const ALLOWED = [
+  "@agentorg/sdk",
+  "@agentorg/interfaces",
+  "zod",
+  "react",
+  "react-dom",
+  "@agentorg/kit",
+];
 /** Where those are found: this package's own folder (dist/src/build.js → the package). */
 const FROM = fileURLToPath(new URL("../..", import.meta.url));
 /** A source path: `package.json`, or a source file under `src/` named plainly. */

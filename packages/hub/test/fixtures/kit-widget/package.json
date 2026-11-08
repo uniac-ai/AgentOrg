@@ -1,0 +1,11 @@
+{
+  "name": "kit-widget",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "agentorg": {
+    "modules": {
+      "panel": "src/panel.tsx"
+    }
+  }
+}

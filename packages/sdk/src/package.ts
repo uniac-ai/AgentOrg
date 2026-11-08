@@ -2,12 +2,15 @@ import { execFile, spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   type BuildOptions as EsbuildOptions,
   context as esbuildContext,
+  type OnResolveResult,
   type Plugin,
+  type PluginBuild,
+  type ResolveResult,
 } from "esbuild";
 import type { ModuleDescription } from "./describe.js";
 import { compareInterfaces, type DescribedInterface } from "./interface.js";
@@ -230,7 +233,7 @@ async function bundle(
       // loads only what its plugin resolved.
       ...(packages
         ? { plugins: [limitImports(root, packages, loadable)], tsconfigRaw: "{}", metafile: true }
-        : {}),
+        : { plugins: [libraryNames(root)] }),
       absWorkingDir: root,
       bundle: true,
       format: "esm",
@@ -268,6 +271,7 @@ async function bundle(
       for (const input of Object.keys(result.metafile?.inputs ?? {}))
         if (
           input !== (input_.stdin?.sourcefile ?? "<stdin>") &&
+          !loadable.has(input) &&
           !loadable.has(resolve(root, input))
         )
           throw new BuildError("The bundle reached a file the package didn't import.");
@@ -315,6 +319,74 @@ function inPackage(path: string, name: string): boolean {
     }
     if (dirname(dir) === dir) return false;
   }
+}
+
+/** The namespace a library's files are bundled under, by `libraryName`. */
+const LIBRARY = "agentorg-library";
+
+/**
+ * A library's file as the bundle names it: its package's name and version and its path in that
+ * package, never where it is installed. esbuild names each CommonJS module it wraps by its path
+ * from the build's folder, which for an installed library spells out the machine's folders and
+ * changes with them: React's, for one, would carry the builder's home into every package built
+ * with it. Undefined for a file in no named, versioned package.
+ */
+function libraryName(path: string): string | undefined {
+  for (let dir = dirname(path); dirname(dir) !== dir; dir = dirname(dir)) {
+    let manifest: { name?: unknown; version?: unknown } | undefined;
+    try {
+      manifest = JSON.parse(readFileSync(join(dir, "package.json"), "utf8"));
+    } catch {
+      // No package.json here, or not one to read.
+    }
+    if (typeof manifest?.name === "string" && typeof manifest.version === "string")
+      return `${manifest.name}@${manifest.version}/${relative(dir, path).split(sep).join("/")}`;
+  }
+  return undefined;
+}
+
+/** Where a resolved file goes in the bundle: the package's own by its path, a library's by name. */
+function placed(found: ResolveResult, root: string): OnResolveResult {
+  const result = { path: found.path, namespace: found.namespace, external: found.external };
+  if (found.namespace !== "file" || found.external || within(found.path, root)) return result;
+  const name = libraryName(found.path);
+  if (!name) return result;
+  return {
+    path: name,
+    namespace: LIBRARY,
+    pluginData: { file: found.path },
+    sideEffects: found.sideEffects,
+  };
+}
+
+/** Load a library's file named by `placed`, from where it is, its imports resolved from there. */
+function loadLibraries(build: PluginBuild) {
+  build.onLoad({ filter: /.*/, namespace: LIBRARY }, async (args) => {
+    const { file } = args.pluginData as { file: string };
+    return { contents: await readFile(file), loader: "default", resolveDir: dirname(file) };
+  });
+}
+
+/** An unlimited build's resolution, as esbuild's own, with its libraries named by `placed`. */
+function libraryNames(root: string): Plugin {
+  const SKIP = Symbol("resolving");
+  return {
+    name: "agentorg-library-names",
+    setup(build) {
+      build.onResolve({ filter: /.*/ }, async (args) => {
+        if ((args.pluginData as { [SKIP]?: boolean } | undefined)?.[SKIP]) return undefined;
+        const found = await build.resolve(args.path, {
+          kind: args.kind,
+          resolveDir: args.resolveDir,
+          importer: args.importer,
+          pluginData: { [SKIP]: true },
+        });
+        if (found.errors.length) return { errors: found.errors };
+        return placed(found, root);
+      });
+      loadLibraries(build);
+    },
+  };
 }
 
 /**
@@ -377,10 +449,14 @@ function limitImports(
           );
         // A library's own import is its business, but only what was resolved here is loaded.
         if (found.namespace === "file") loadable.add(found.path);
-        return { path: found.path, namespace: found.namespace, external: found.external };
+        const result = placed(found, root);
+        // The bundle's inputs name a library's file by its library name: that is loadable too.
+        if (result.namespace === LIBRARY) loadable.add(`${LIBRARY}:${result.path}`);
+        return result;
       });
       // A file esbuild found any other way (a pattern in a template-string import or require
       // matches files without resolving them) is never read.
+      loadLibraries(build);
       build.onLoad({ filter: /.*/ }, (args) =>
         args.namespace !== "file" || loadable.has(args.path)
           ? undefined
