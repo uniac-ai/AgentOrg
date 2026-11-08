@@ -3,8 +3,11 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { Refused } from "@agentorg/sdk";
+import { hubGrants } from "@agentorg/interfaces";
+import { defineInterface, method, Refused } from "@agentorg/sdk";
+import { connect } from "@agentorg/sdk/client";
 import WebSocket from "ws";
+import { z } from "zod";
 import type { PersonSide } from "../src/api.ts";
 import { startApp } from "../src/index.ts";
 import { exposureOf, RULES_KEY, Rules } from "../src/rules.ts";
@@ -313,4 +316,115 @@ test("the gateway serves the rules on /api: list, set, and changed", async (t) =
   assert.deepEqual(events, [{}]);
   const refused = (await call("set", { id: "Not A Rule", on: true })).error as { code: string };
   assert.equal(refused.code, "invalid");
+});
+
+test("against the Hub: the rule exposes what was installed for the agent that asks, and nothing else", async (t) => {
+  const home = mkdtempSync(join(tmpdir(), "agentorg-rules-hub-"));
+  const app = await startApp({ home, firstRun: false });
+  const socket = new WebSocket(`${app.url.replace("http", "ws")}/api`, {
+    headers: {
+      Authorization: `Bearer ${readFileSync(join(home, "cli-token"), "utf8").trim()}`,
+    },
+  });
+  const clients: { close(): void }[] = [];
+  t.after(async () => {
+    for (const client of clients) client.close();
+    socket.close();
+    await app.close();
+    rmSync(home, { recursive: true, force: true });
+  });
+  await new Promise((done) => socket.once("open", done));
+  const replies = new Map<number, (reply: Record<string, unknown>) => void>();
+  socket.on("message", (data) => {
+    const reply = JSON.parse(String(data)) as Record<string, unknown>;
+    if (typeof reply.id === "number") replies.get(reply.id)?.(reply);
+  });
+  let id = 0;
+  const person = async <T>(slot: string, method: string, input: unknown = {}) => {
+    const reply = await new Promise<Record<string, unknown>>((done) => {
+      replies.set(++id, done);
+      socket.send(JSON.stringify({ id, op: "call", slot, method, input }));
+    });
+    if (reply.error) throw new Error(JSON.stringify(reply.error));
+    return reply.result as T;
+  };
+  const quests = defineInterface({
+    name: "quests",
+    major: 1,
+    kind: "rpc",
+    methods: {
+      get: method({ input: z.object({}), output: z.object({ quests: z.array(z.string()) }) }),
+    },
+  });
+  /** An external Actor offering quests: made by the person, optionally for another, connected here. */
+  const actor = async (name: string, options: { for?: string } = {}) => {
+    const made = await person<{ actorId: string; credential: string }>("actors", "create", {
+      name,
+      ...(options.for ? { for: options.for } : {}),
+    });
+    const client = await connect({
+      hubUrl: app.hubUrl,
+      actorId: made.actorId,
+      credential: made.credential,
+      slots: { grants: hubGrants },
+      exports: { quests },
+      start(ctx) {
+        ctx.exports.quests.implement({ get: () => ({ quests: ["Water"] }) });
+      },
+    });
+    clients.push(client);
+    return { id: made.actorId, client };
+  };
+  const agent = await actor("Agent");
+  await person("grants", "bind", {
+    consumer: agent.id,
+    slot: "grants",
+    provider: "hub",
+    export: "grants",
+  });
+  const installed = await actor("Pocket Side Quests", { for: agent.id });
+  const other = await actor("Someone Else's");
+  const until = async (condition: () => boolean | Promise<boolean>, ms = 10_000) => {
+    const end = Date.now() + ms;
+    while (!(await condition())) {
+      if (Date.now() > end) throw new Error("timed out");
+      await new Promise((done) => setTimeout(done, 50));
+    }
+  };
+  await until(() => agent.client.slots.grants.bound);
+  const open = async () =>
+    (await person<{ requests: { requestId: string; provider: string }[] }>("grants", "requests"))
+      .requests;
+
+  // Off: the agent's request waits for the person.
+  const asked = await agent.client.slots.grants.call.expose({
+    provider: installed.id,
+    export: "quests",
+    to: agent.id,
+  });
+  assert.equal(asked.exposed, false);
+  await new Promise((done) => setTimeout(done, 200));
+  assert.equal((await open()).length, 1);
+  assert.deepEqual(agent.client.exposed(), []);
+
+  // On: what waits is settled, and the agent can use it.
+  await person("rules", "set", { id: RULE, on: true });
+  await until(() => agent.client.exposed().length === 1);
+  const [slot] = agent.client.exposed();
+  assert.deepEqual(slot?.provider, { actor: installed.id, export: "quests" });
+  assert.deepEqual(await slot?.call.get?.({}), { quests: ["Water"] });
+  assert.deepEqual(await open(), []);
+
+  // An Actor not installed for it: the request stays the person's to decide.
+  await agent.client.slots.grants.call.expose({
+    provider: other.id,
+    export: "quests",
+    to: agent.id,
+  });
+  await new Promise((done) => setTimeout(done, 300));
+  assert.deepEqual(
+    (await open()).map((r) => r.provider),
+    [other.id],
+  );
+  assert.equal(agent.client.exposed().length, 1);
 });
