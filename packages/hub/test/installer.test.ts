@@ -160,6 +160,7 @@ test("plan proposes, for each open slot, the running exports of exactly its inte
       { slot: "counter.store", interface: "kv@1", candidates: [{ actor: STORAGE, export: "kv" }] },
     ],
     views: [],
+    exposes: [],
   });
   // An Actor that isn't running doesn't serve: a created counter's export is no candidate.
   const { actorId } = await person.slots.actors.call.create({ name: "idle", package: seeded });
@@ -545,4 +546,127 @@ test("an import grants nothing its caller couldn't, and takes back all it made w
     (e: Refused) => e.code === "invalid",
   );
   assert.equal(hub.state.binding(counterId, "counter.store")?.export, "kv");
+});
+
+test("install exposes what it lists: a manager's now, an agent's to itself as its own request, nothing else", async (t) => {
+  const { hub, shell, assistant, bare, seeded } = await setup(t);
+  const count = () => hub.state.actors().filter((a) => a.state !== "closed").length;
+  const expose = [{ export: "counter.counter", to: assistant.self.actorId }];
+
+  // plan says how each would settle for its caller.
+  assert.deepEqual((await shell.slots.installer.call.plan({ package: seeded, expose })).exposes, [
+    { ...expose[0], settles: "granted" },
+  ]);
+  assert.deepEqual(
+    (await assistant.slots.installer.call.plan({ package: seeded, expose })).exposes,
+    [{ ...expose[0], settles: "request" }],
+  );
+
+  // A manager's is made at once, on the Actor it names.
+  const granted = await shell.slots.installer.call.install({
+    package: seeded,
+    name: "Quest Counter",
+    connections: {},
+    expose,
+  });
+  assert.deepEqual(granted.exposures, [
+    { ...expose[0], settles: "granted", slot: "questCounter_counter" },
+  ]);
+  assert.equal(hub.state.binding(assistant.self.actorId, "questCounter_counter")?.exposed, true);
+  assert.equal(hub.state.actor(granted.actorId).installedFor, shell.self.actorId);
+
+  // An agent's to itself is left for it to file: the exact call, which is its own request.
+  const left = await assistant.slots.installer.call.install({
+    package: seeded,
+    name: "Mine",
+    connections: {},
+    expose,
+  });
+  const call = { provider: left.actorId, export: "counter.counter", to: assistant.self.actorId };
+  assert.deepEqual(left.exposures, [{ ...expose[0], settles: "request", call }]);
+  assert.equal(hub.state.actor(left.actorId).installedFor, assistant.self.actorId);
+  assert.deepEqual(
+    hub.state.bindings(assistant.self.actorId).filter((b) => b.provider === left.actorId),
+    [],
+  );
+  const filed = hub.state.expose(assistant.self.actorId, call);
+  assert.equal(filed.exposed, false);
+  assert.deepEqual(
+    hub.state.mine(assistant.self.actorId).map((r) => [r.exposed, r.provider, r.status]),
+    [[true, left.actorId, "open"]],
+  );
+
+  // Exposing to another Actor takes a manager: refused whole, naming who, and nothing is made.
+  const before = count();
+  await assert.rejects(
+    assistant.slots.installer.call.install({
+      package: seeded,
+      name: "Theirs",
+      connections: {},
+      expose: [{ export: "counter.counter", to: bare.self.actorId }],
+    }),
+    (e: Refused) =>
+      e.code === "forbidden" &&
+      e.message.includes(`assistant (${assistant.self.actorId})`) &&
+      e.message.includes(`bare (${bare.self.actorId})`) &&
+      /nothing was created/.test(e.message),
+  );
+  await assert.rejects(
+    assistant.slots.installer.call.plan({
+      package: seeded,
+      expose: [{ export: "counter.counter", to: bare.self.actorId }],
+    }),
+    (e: Refused) => e.code === "forbidden",
+  );
+  // An export the package doesn't have, or an Actor that isn't there.
+  await assert.rejects(
+    shell.slots.installer.call.install({
+      package: seeded,
+      name: "Wrong",
+      connections: {},
+      expose: [{ export: "counter.store", to: assistant.self.actorId }],
+    }),
+    (e: Refused) => e.code === "invalid" && e.message.includes("counter.counter"),
+  );
+  await assert.rejects(
+    shell.slots.installer.call.install({
+      package: seeded,
+      name: "Nobody",
+      connections: {},
+      expose: [{ export: "counter.counter", to: "act_nobody" }],
+    }),
+    (e: Refused) => e.code === "unknown",
+  );
+  assert.equal(count(), before);
+});
+
+test("only a host module's rpc exports are exposed, never to the Hub's own Actors", async (t) => {
+  const { hub, shell, assistant, seeded, add } = await setup(t);
+  const count = () => hub.state.actors().filter((a) => a.state !== "closed").length;
+  const before = count();
+  // A manager's plan refuses a built-in target as install would, before anything is made.
+  for (const to of [HUB, STORAGE, "net"]) {
+    const expose = [{ export: "counter.counter", to }];
+    await assert.rejects(
+      shell.slots.installer.call.plan({ package: seeded, expose }),
+      (e: Refused) =>
+        e.code === "forbidden" && /takes no slots; nothing was planned/.test(e.message),
+    );
+    await assert.rejects(
+      shell.slots.installer.call.install({ package: seeded, name: "x", connections: {}, expose }),
+      (e: Refused) => e.code === "forbidden" && /nothing was created/.test(e.message),
+    );
+  }
+  // A view's export (the assistant's chat view) runs in its frame: it isn't one to expose.
+  const helper = await add(join(packages, "assistant"));
+  await assert.rejects(
+    shell.slots.installer.call.install({
+      package: helper,
+      name: "Helper",
+      connections: {},
+      expose: [{ export: "chat.view", to: assistant.self.actorId }],
+    }),
+    (e: Refused) => e.code === "invalid" && e.message.includes("logic.chat"),
+  );
+  assert.equal(count(), before);
 });

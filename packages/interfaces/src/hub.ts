@@ -144,7 +144,7 @@ export const hubActors = defineInterface({
 
 const Wiring = { consumer: Id, slot: Name, provider: Id, export: Name };
 /** A slot made at run time: one segment, at most 48 characters, so tools named from it fit. */
-const SlotName = z
+export const SlotName = z
   .string()
   .regex(/^[a-z][A-Za-z0-9_]*$/)
   .max(48);

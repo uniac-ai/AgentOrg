@@ -1,10 +1,18 @@
 import { defineInterface, method } from "@agentorg/sdk";
 import { z } from "zod";
-import { Id, Name } from "./hub.js";
+import { Id, Name, SlotName } from "./hub.js";
 
 const Hash = z.string().regex(/^sha256-[0-9a-f]{64}$/);
 /** An export of a running Actor, by its id and the export's name. */
 const Target = z.object({ actor: Id, export: Name });
+/** One of the new Actor's `rpc` exports (`module.export`), to expose to the Actor `to`. */
+const Exposure = z.object({ export: Name, to: Id });
+/**
+ * How an exposure settles, by the caller's own authority: `granted`, made now (the caller holds
+ * both sides: it is a manager), or `request`, which the caller files itself with
+ * `hub.grants.expose` (it holds `to`'s side: it is `to`). Nothing else is exposed.
+ */
+const Settles = z.enum(["granted", "request"]);
 /** An Actor of a composition, by the name it has there. */
 const ActorName = z.string().min(1).max(128);
 
@@ -53,12 +61,17 @@ export const installer = defineInterface({
      * can place.
      */
     plan: method({
-      input: z.object({ package: Hash }),
+      input: z.object({ package: Hash, expose: z.array(Exposure).max(64).optional() }),
       output: z.object({
         slots: z.array(
           z.object({ slot: Name, interface: z.string(), candidates: z.array(Target) }),
         ),
         views: z.array(z.string()),
+        /**
+         * Each `expose` entry given, with how `install` would settle it for this caller; an entry
+         * `install` would refuse is refused here the same way.
+         */
+        exposes: z.array(Exposure.extend({ settles: Settles })),
       }),
     }),
     /**
@@ -69,6 +82,12 @@ export const installer = defineInterface({
      * slot bound to `storage`'s `kv` gets the package's seed for it (an object of key to value);
      * a seed whose slot isn't is listed in `unseeded`. Then it is started if `start`. If a seed or
      * the start fails, the new Actor is closed. Slots left out stay unbound, listed in `unbound`.
+     * The Actor is recorded as made for the caller (`installedFor`), which grants nothing.
+     *
+     * `expose` lists the new Actor's exports to expose (`rpc` exports of its host modules), each to one Actor, all or none like the
+     * connections: a manager's are made now (`granted`, with the slot); one to the caller itself
+     * is left for the caller to file (`request`, with the exact `hub.grants.expose` call); any
+     * other is refused, and nothing is created. Nothing is exposed that isn't listed.
      */
     install: method({
       input: z.object({
@@ -76,8 +95,22 @@ export const installer = defineInterface({
         name: z.string().min(1).max(128),
         connections: z.record(Name, Target),
         start: z.boolean().optional(),
+        expose: z.array(Exposure).max(64).optional(),
       }),
-      output: z.object({ actorId: Id, unbound: z.array(Name), unseeded: z.array(Name) }),
+      output: z.object({
+        actorId: Id,
+        unbound: z.array(Name),
+        unseeded: z.array(Name),
+        exposures: z.array(
+          z.union([
+            Exposure.extend({ settles: z.literal("granted"), slot: SlotName }),
+            Exposure.extend({
+              settles: z.literal("request"),
+              call: z.object({ provider: Id, export: Name, to: Id }),
+            }),
+          ]),
+        ),
+      }),
     }),
     /**
      * The system as it is, as a composition: every package Actor that isn't closed, the
