@@ -11,6 +11,7 @@ import { MAX_OUTPUT } from "../src/tools.ts";
 type Item = { type: string; [key: string]: unknown };
 type Request = {
   requestId: string;
+  model?: string;
   instructions: string;
   input: Item[];
   tools?: { name: string; parameters: unknown }[];
@@ -84,6 +85,11 @@ function memory(values = new Map<string, unknown>()) {
 }
 
 /** The assistant with an in-memory store and a scripted model. */
+const OFFERED = [
+  { id: "gpt-a", name: "A" },
+  { id: "gpt-b", name: "B" },
+];
+
 async function setup(values = new Map<string, unknown>()) {
   const actor = createTestContext(logic, { actorId: "assistant", module: "logic" });
   await actor.start();
@@ -93,6 +99,7 @@ async function setup(values = new Map<string, unknown>()) {
   const cancels: string[] = [];
   const script: Step[] = [];
   const model = actor.bind("model", {
+    models: () => ({ models: OFFERED }),
     respond: async (request) => {
       requests.push(request as Request);
       const next = script.shift() ?? say("ok");
@@ -312,6 +319,31 @@ test("what is exposed to the agent becomes its tools at the next turn, and goes 
   s.actor.unexpose("pocketSideQuests_quests");
   await s.turn("And now?");
   assert.deepEqual(s.requests.at(-1)?.tools, []);
+});
+
+test("the model is chosen per agent, kept with it, and the provider's default until then", async () => {
+  const values = new Map<string, unknown>();
+  const s = await setup(values);
+  const offered = OFFERED;
+  assert.deepEqual(await s.actor.call("chat", "models", {}), { models: offered });
+  await s.turn("With the default.");
+  assert.equal(s.requests.at(-1)?.model, undefined);
+
+  await s.actor.call("chat", "setModel", { model: "gpt-b" });
+  assert.deepEqual(await s.actor.call("chat", "models", {}), { models: offered, current: "gpt-b" });
+  await s.turn("With the choice.");
+  assert.equal(s.requests.at(-1)?.model, "gpt-b");
+  await assert.rejects(s.actor.call("chat", "setModel", { model: "gpt-z" }), { code: "unknown" });
+
+  // Kept with the agent, across a restart of its process.
+  const again = await setup(values);
+  assert.deepEqual(await again.actor.call("chat", "models", {}), {
+    models: offered,
+    current: "gpt-b",
+  });
+  await again.actor.call("chat", "setModel", {});
+  await again.turn("Back to the default.");
+  assert.equal(again.requests.at(-1)?.model, undefined);
 });
 
 test("a function call runs through its slot, and its result or refusal goes back", async () => {

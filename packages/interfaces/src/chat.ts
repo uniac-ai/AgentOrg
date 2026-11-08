@@ -2,6 +2,7 @@ import { defineInterface, event, method } from "@agentorg/sdk";
 import { z } from "zod";
 
 const MessageId = z.string().min(1).max(128);
+const ChatModelId = z.string().min(1).max(128);
 
 /**
  * A tool call a `tool` message stands for: its name, whether it is `running` or ended `done` or
@@ -73,6 +74,19 @@ export const chat = defineInterface({
      * message has been sent.
      */
     retry: method({ input: z.object({}), output: z.object({ messageId: MessageId }) }),
+    /** The models this agent can use, and the one chosen; none chosen means the provider's default. */
+    models: method({
+      input: z.object({}),
+      output: z.object({
+        models: z.array(z.object({ id: ChatModelId, name: z.string().max(256) })),
+        current: ChatModelId.optional(),
+      }),
+    }),
+    /**
+     * Choose the model for this agent's next requests, kept with the agent; with no `model`, go
+     * back to the provider's default. Refused `unknown` when the model isn't one of `models`.
+     */
+    setModel: method({ input: z.object({ model: ChatModelId.optional() }), output: z.object({}) }),
   },
   events: {
     message: event(ChatMessage),

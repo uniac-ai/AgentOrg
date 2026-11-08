@@ -10,7 +10,7 @@ import {
   layout,
   llmSession,
 } from "@agentorg/interfaces";
-import { defineActor, describeInterface } from "@agentorg/sdk";
+import { defineActor, describeInterface, Refused } from "@agentorg/sdk";
 import { createAgent } from "./agent.js";
 import { createHistory } from "./history.js";
 import { type ToolSlot, toolsOf } from "./tools.js";
@@ -24,6 +24,9 @@ const tools = {
   exports: hubExports,
   installer,
 };
+
+/** Where the agent keeps the model chosen for it, beside its record in the store. */
+const MODEL_KEY = "settings/model";
 
 /** A whole package, as `packages__build` takes it: the instructions' example, built by a test. */
 export const EXAMPLE: Record<string, string> = {
@@ -193,13 +196,33 @@ export default defineActor({
     const history = createHistory(ctx.slots.store.call, ctx.log);
     ctx.slots.store.onBind(() => history.reset());
     ctx.slots.store.onUnbind(() => history.reset());
+    /** The model chosen for this agent, if any; read for each request. */
+    const chosen = async () => {
+      const { value } = await ctx.slots.store.call.get({ key: MODEL_KEY });
+      return typeof value === "string" ? value : undefined;
+    };
+    /** The model slot, with the choice on each request. */
+    const chosenModel: typeof ctx.slots.model = Object.create(ctx.slots.model, {
+      call: {
+        value: {
+          models: (input: Parameters<typeof ctx.slots.model.call.models>[0]) =>
+            ctx.slots.model.call.models(input),
+          cancel: (input: Parameters<typeof ctx.slots.model.call.cancel>[0]) =>
+            ctx.slots.model.call.cancel(input),
+          respond: async (input: Parameters<typeof ctx.slots.model.call.respond>[0]) => {
+            const model = await chosen();
+            return ctx.slots.model.call.respond({ ...input, ...(model ? { model } : {}) });
+          },
+        },
+      },
+    });
     const described = (Object.keys(tools) as (keyof typeof tools)[]).map(
       (name) => [name, describeInterface(tools[name])] as const,
     );
     const agent = createAgent({
       instructions: () =>
         `${ctx.slots.packages.bound && ctx.slots.installer.bound ? INSTRUCTIONS : BASE_INSTRUCTIONS}\n\nYour Actor id is ${ctx.self.actorId}.`,
-      model: ctx.slots.model,
+      model: chosenModel,
       history,
       // Its package's slots, then those exposed to it at run time: every bound slot is tools.
       tools: () =>
@@ -236,6 +259,24 @@ export default defineActor({
       },
       state: () => agent.state(),
       retry: () => agent.retry(),
+      models: async () => {
+        const [{ models }, current] = await Promise.all([
+          ctx.slots.model.call.models({}),
+          chosen(),
+        ]);
+        return { models, ...(current ? { current } : {}) };
+      },
+      setModel: async ({ model }) => {
+        if (!model) {
+          await ctx.slots.store.call.delete({ key: MODEL_KEY });
+          return {};
+        }
+        const { models } = await ctx.slots.model.call.models({});
+        if (!models.some((offered) => offered.id === model))
+          throw new Refused("unknown", `${model} isn't one of the models offered.`);
+        await ctx.slots.store.call.set({ key: MODEL_KEY, value: model });
+        return {};
+      },
     });
   },
 });
