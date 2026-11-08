@@ -693,3 +693,33 @@ test("a request closes when its requester loses the end it brought", (t) => {
   assert.deepEqual(decided, [`${holder}:closed`]);
   assert.deepEqual(state.requests(stranger), []);
 });
+
+test("a refusal names Actors as Name (id) and says what the caller can do", (t) => {
+  const { state } = open(t);
+  const { provider, holder, stranger } = cast(state);
+  const named = (id: string) => `${state.actor(id).name} (${id})`;
+  const says =
+    (code: string, ...parts: string[]) =>
+    (e: unknown) =>
+      e instanceof Refused && e.code === code && parts.every((part) => e.message.includes(part));
+  const wiring = { consumer: holder, slot: "notes", provider, export: "notes" };
+  assert.throws(
+    () => state.bind(stranger, wiring),
+    says("forbidden", named(stranger), named(provider), named(holder), "Ask one of them"),
+  );
+  state.bind(PERSON, wiring);
+  assert.throws(
+    () => state.unbind(stranger, holder, "notes"),
+    says("forbidden", named(stranger), named(holder), "its consumer, its provider or a manager"),
+  );
+  assert.throws(() => state.actor("act_nobody"), says("unknown", "hub.actors.list"));
+  assert.throws(
+    () => state.bind(PERSON, { ...wiring, slot: "nope" }),
+    says("unknown", named(holder), "hub.grants.expose"),
+  );
+  state.closeActor(PERSON, stranger);
+  assert.throws(
+    () => state.offer(stranger, "x", other),
+    says("state", named(stranger), "make another"),
+  );
+});
