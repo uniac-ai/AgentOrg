@@ -40,14 +40,22 @@ export function capped(text: string): string {
   return `${head}… (cut)`;
 }
 
-/** The tools the bound slots give right now, by name. */
+/** What a function tool's name may be. */
+const TOOL_NAME = /^[A-Za-z0-9_-]{1,64}$/;
+
+/**
+ * The tools the bound slots give right now, by name: `<slot>__<method>`, with a dotted slot's dot
+ * as `_`. A name a function tool can't have (past 64 characters) is left out.
+ */
 export function toolsOf(slots: Record<string, { described: DescribedInterface; slot: ToolSlot }>) {
   const tools: Tools = new Map();
   for (const [name, { described, slot }] of Object.entries(slots)) {
     if (!slot.bound || described.kind !== "rpc") continue;
     for (const [method, { input }] of Object.entries(described.methods)) {
+      const toolName = `${name.replaceAll(".", "_")}__${method}`;
+      if (!TOOL_NAME.test(toolName)) continue;
       const tool = {
-        name: `${name}__${method}`,
+        name: toolName,
         description: `${method} on ${name} (${described.id})`,
         // A described schema is JSON by construction.
         parameters: input as Record<string, z.core.util.JSONType>,

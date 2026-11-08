@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { hubActors, installer, layout } from "@agentorg/interfaces";
-import { describeInterface, OutcomeUnknown, Refused } from "@agentorg/sdk";
+import { defineInterface, describeInterface, method, OutcomeUnknown, Refused } from "@agentorg/sdk";
 import { createTestContext } from "@agentorg/sdk/testing";
+import { z } from "zod";
 import { INPUT_BUDGET } from "../src/history.ts";
 import logic, { BASE_INSTRUCTIONS, INSTRUCTIONS } from "../src/logic.ts";
 import { MAX_OUTPUT } from "../src/tools.ts";
@@ -169,7 +170,10 @@ test("bound to an installer, the agent can plan and install what it builds", asy
   await s.turn("now");
   assert.deepEqual(
     s.requests.map((r) => r.instructions),
-    [BASE_INSTRUCTIONS, BASE_INSTRUCTIONS, INSTRUCTIONS],
+    // Each ends with the agent's own id, which it names as an exposure's `to`.
+    [BASE_INSTRUCTIONS, BASE_INSTRUCTIONS, INSTRUCTIONS].map(
+      (told) => `${told}\n\nYour Actor id is assistant.`,
+    ),
   );
   const offered = s.requests[1]?.tools ?? [];
   assert.deepEqual(
@@ -261,6 +265,53 @@ test("how each call ended outlives a restart, and a call ends shown even if its 
   }
   const states = [...last.values()].filter((m) => m.role === "tool").map((m) => m.tool?.state);
   assert.deepEqual(states, ["done", "done"]);
+});
+
+test("what is exposed to the agent becomes its tools at the next turn, and goes when removed", async () => {
+  const quests = defineInterface({
+    name: "pocket.quests",
+    major: 1,
+    kind: "rpc",
+    methods: {
+      list: method({ input: z.object({}), output: z.object({ quests: z.array(z.string()) }) }),
+      complete: method({ input: z.object({ quest: z.string() }), output: z.object({}) }),
+    },
+  });
+  const s = await setup();
+  const done: string[] = [];
+  s.actor.expose(
+    "pocketSideQuests_quests",
+    quests,
+    {
+      list: () => ({ quests: ["Water the plants"] }),
+      complete: ({ quest }) => {
+        done.push(quest);
+        return {};
+      },
+    },
+    { actor: "act_quests", export: "logic.quests" },
+  );
+  // A name a function tool can't have is left out, not sent.
+  s.actor.expose("x".repeat(60), quests, { list: () => ({ quests: [] }) });
+  s.script.push(
+    calls(callTool("pocketSideQuests_quests__complete", { quest: "Water the plants" }, "c1")),
+    say("Done."),
+  );
+  await s.turn("Mark the plants done.");
+  assert.deepEqual(
+    (s.requests[0]?.tools ?? []).map((tool) => tool.name),
+    ["pocketSideQuests_quests__list", "pocketSideQuests_quests__complete"],
+  );
+  assert.deepEqual(
+    s.requests[0]?.tools?.find((tool) => tool.name === "pocketSideQuests_quests__complete")
+      ?.parameters,
+    (describeInterface(quests) as { methods: Record<string, { input: unknown }> }).methods.complete
+      ?.input,
+  );
+  assert.deepEqual(done, ["Water the plants"]);
+  s.actor.unexpose("pocketSideQuests_quests");
+  await s.turn("And now?");
+  assert.deepEqual(s.requests.at(-1)?.tools, []);
 });
 
 test("a function call runs through its slot, and its result or refusal goes back", async () => {

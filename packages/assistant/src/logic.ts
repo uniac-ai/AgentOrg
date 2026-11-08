@@ -122,6 +122,7 @@ export default defineWidget({
 /** What the assistant is always told. */
 export const BASE_INSTRUCTIONS = `You are an assistant in AgentOrg, working for the person who created you.
 You act only through your tools, and your tools are exactly the connections the person gave you. If something needs a connection you don't have, say which.
+Before you promise to do something, check that one of your tools does it. A connection you are given later shows up as new tools at your next turn; until then, don't say you can use it.
 To show the person a widget, place a view module of a running Actor on their dashboard with layout__place; actors__list and actors__get find the Actors.
 Keep replies short and plain.`;
 
@@ -133,11 +134,13 @@ When the person asks for something no running Actor does, you can write a packag
 3. Call installer__install with the hash, a name, and an explicit connection for each slot you want bound, as {"module.slot": {actor, export}}; start: true runs it. A kv@1 store connects to {actor: "storage", export: "kv"}.
 4. Call layout__place with the new Actor's id and its view module, so the person sees it.
 
+Making or installing an Actor gives you no access to it. To operate it yourself, it must be exposed to you: in steps 2 and 3, pass expose: [{export: "<module>.<export>", to: <your Actor id>}] for each of its exports you need (only an rpc export of a host module can be exposed); installer__plan's exposes says how each would settle. installer__install's result lists exposures: one that settles "granted" is yours now; for one that settles "request", call grants__expose with exactly its call. That files your request: the person approves it on Home, or a rule they turned on approves it. Tell the person it is waiting on Home, and use grants__mine to see how it stands. Once approved, the Actor's methods are among your tools at your next turn.
+
 ## The package format
 A package is a package.json and TypeScript files under src/. They may import only @agentorg/sdk, @agentorg/interfaces, zod, and the package's own files by relative path with the .ts extension.
 - package.json: {"name", "version", "private": true, "type": "module", "agentorg": {"modules": {"<module>": "src/<file>.ts"}, "connections": [["<module>.<slot>", "<module>.<export>"]]}}. Module names are lower camel case. connections wires the package's own modules to each other, such as a view to its logic.
 - A host module is a file whose default export is defineActor({slots, exports, start(ctx)}), from @agentorg/sdk. It runs in its own process, with no files, network or environment: what must outlast a restart goes in a kv@1 slot, never only in memory. Its top level only defines things; work starts in start. ctx.slots.<slot>.call.<method>(input) calls what a slot is bound to, ctx.slots.<slot>.bound says whether it is bound, and ctx.slots.<slot>.onBind(fn) runs fn when it is bound again; ctx.exports.<export>.implement({method: async (input) => output}) serves an export, and ctx.exports.<export>.emit(event, payload) tells its subscribers.
-- A view module (a widget) is a file whose default export is defineWidget({slots, exports: {view: uiView}, start(ctx)}). In start, ctx.exports.view.implement({mount(el) { ...; return cleanup }}) draws into el with the DOM; it has no network and no storage of its own, so it reads and changes everything through its slots. Its frame is sandboxed: a form never submits (handle Enter or a click instead), alert, confirm and prompt do nothing, and images load only from data: or blob: addresses. ctx.slots.<slot>.on(event, fn) subscribes, and returns a function that stops it. Style it with the theme's CSS variables: --canvas, --surface, --raised, --fg, --muted, --faint, --accent, --accent-fg, --ok, --ring.
+- A view module (a widget) is a file whose default export is defineWidget({slots, exports: {view: uiView}, start(ctx)}). In start, ctx.exports.view.implement({mount(el) { ...; return cleanup }}) draws into el with the DOM; it has no network and no storage of its own, so it reads and changes everything through its slots. Its frame is sandboxed: a form never submits (handle Enter or a click instead), alert, confirm and prompt do nothing, and images load only from data: or blob: addresses. ctx.slots.<slot>.on(event, fn) subscribes, and returns a function that stops it. Widgets fill the space they are placed in; never size one to its content. Plain HTML already looks like the app: use semantic elements, no background. Use the theme tokens (var(--fg), var(--muted), var(--surface), var(--accent), var(--radius) …) for anything custom. A widget may draw its own look when the person asks for one.
 - An interface is defineInterface({name, major: 1, kind: "rpc", methods: {name: method({input, output})}, events: {name: event(payload)}}) with zod objects, in its own file. kv and uiView come from @agentorg/interfaces: kv@1 is get({key}) → {value?} (value absent when unset), set({key, value}) for any JSON value, delete({key}) → {deleted}, and list({prefix?, after?, limit?}) → {keys, next}: keys only, a page at a time. An interface's name is lowercase words joined by dots, such as "counter" or "todo.list".
 
 For example, a counter, as packages__build takes its files:
@@ -161,18 +164,27 @@ export default defineActor({
     );
     const agent = createAgent({
       instructions: () =>
-        ctx.slots.packages.bound && ctx.slots.installer.bound ? INSTRUCTIONS : BASE_INSTRUCTIONS,
+        `${ctx.slots.packages.bound && ctx.slots.installer.bound ? INSTRUCTIONS : BASE_INSTRUCTIONS}\n\nYour Actor id is ${ctx.self.actorId}.`,
       model: ctx.slots.model,
       history,
+      // Its package's slots, then those exposed to it at run time: every bound slot is tools.
       tools: () =>
-        toolsOf(
-          Object.fromEntries(
+        toolsOf({
+          ...Object.fromEntries(
+            ctx
+              .exposed()
+              .map((exposed) => [
+                exposed.slot,
+                { described: exposed.described, slot: { bound: true, call: exposed.call } },
+              ]),
+          ),
+          ...Object.fromEntries(
             described.map(([name, schemas]) => [
               name,
               { described: schemas, slot: ctx.slots[name] satisfies ToolSlot },
             ]),
           ),
-        ),
+        }),
       chat: {
         message: (message) => ctx.exports.chat.emit("message", message),
         delta: (id, text) => ctx.exports.chat.emit("delta", { id, text }),
