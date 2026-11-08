@@ -13,6 +13,7 @@
     "packages/hub",
     "packages/installer",
     "packages/chatgpt",
+    "packages/kit",
     "packages/assistant",
     "packages/shell",
     "examples/board-interfaces",
