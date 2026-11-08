@@ -1203,8 +1203,9 @@ test("another Actor's call waits for the checks already running during a flood, 
   // Let the flood reach the Hub and queue before the other Actor calls.
   await later(600);
   const before = answered;
-  // The flood must still be queued behind the running checks, or this proves nothing.
-  assert.ok(12 - before >= 4, `only ${12 - before} flood calls were left to queue`);
+  // The flood must still be queued behind the running checks, enough of it that waiting for the
+  // whole queue (arrival order) would pass the bound below, or this proves nothing.
+  assert.ok(12 - before >= 7, `only ${12 - before} flood calls were left to queue`);
   const listed = await person.call("exports", "list", {});
   const during = answered - before;
   assert.ok("result" in listed);
@@ -1244,7 +1245,7 @@ test("a slow caller of a shared provider doesn't hold up its other callers", asy
   );
   await later(600);
   const before = answered;
-  assert.ok(12 - before >= 4, `only ${12 - before} flood calls were left to queue`);
+  assert.ok(12 - before >= 7, `only ${12 - before} flood calls were left to queue`);
   const reply = await quick.client.call("unique", "run", { small: true });
   const during = answered - before;
   assert.deepEqual(reply, { result: { items: [] } });
