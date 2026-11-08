@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { buildPackage, verifyPackage } from "@agentorg/sdk/build";
 import { readTar } from "@agentorg/sdk/manifest";
 import { build } from "esbuild";
-import { EXAMPLE, INSTRUCTIONS } from "../src/logic.ts";
+import { EXAMPLE, INSTRUCTIONS, KIT_EXAMPLE } from "../src/logic.ts";
 
 // dist/test/build.test.js → the package folder.
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -101,4 +101,55 @@ test("the instructions' example builds as packages__build builds it, to a logic 
     },
   });
   assert.deepEqual(manifest.connections, [["panel.counter", "logic.counter"]]);
+});
+
+/** What a Hub build lets a package import by name (its ALLOWED), views' React and kit included. */
+const HUB_ALLOWED = [
+  "@agentorg/sdk",
+  "@agentorg/interfaces",
+  "zod",
+  "react",
+  "react-dom",
+  "@agentorg/kit",
+];
+
+test("the instructions name the kit, and only components it has", async () => {
+  const kit = await readFile(join(root, "..", "kit", "src", "index.ts"), "utf8");
+  const named = /import from @agentorg\/kit \(([^)]*)\)/.exec(INSTRUCTIONS)?.[1];
+  assert.ok(named, "the instructions name the kit's components");
+  for (const component of named.split(", "))
+    assert.match(kit, new RegExp(`\\b${component}\\b`), `${component} is the kit's`);
+  assert.match(INSTRUCTIONS, /may import only [^.]*react, react-dom and @agentorg\/kit/);
+  assert.ok(INSTRUCTIONS.includes(KIT_EXAMPLE));
+});
+
+test("the instructions' kit view builds as packages__build builds it", async (t) => {
+  const dir = await realpath(await mkdtemp(join(tmpdir(), "assistant-kit-")));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const files: Record<string, string> = {
+    "package.json": JSON.stringify({
+      name: "pressed",
+      version: "0.1.0",
+      private: true,
+      type: "module",
+      agentorg: { modules: { panel: "src/panel.tsx" } },
+    }),
+    "src/panel.tsx": KIT_EXAMPLE,
+  };
+  for (const [path, text] of Object.entries(files)) {
+    await mkdir(dirname(join(dir, "source", path)), { recursive: true });
+    await writeFile(join(dir, "source", path), text);
+  }
+  const { manifest } = await buildPackage(join(dir, "source"), {
+    out: join(dir, "out"),
+    packages: { allowed: HUB_ALLOWED, from: root },
+  });
+  assert.deepEqual(manifest.modules, {
+    panel: {
+      placement: "view",
+      entry: "dist/panel.js",
+      slots: {},
+      exports: { view: "ui.view@1" },
+    },
+  });
 });
