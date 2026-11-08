@@ -302,7 +302,10 @@ export class Hub {
     if (admitted) {
       const actor = this.state.actor(admitted.actorId);
       if (actor.package === "external" || actor.package === "builtin" || actor.state === "closed")
-        throw new Refused("state", `${actor.actorId} isn't a live package Actor.`);
+        throw new Refused(
+          "state",
+          `${this.state.named(actor.actorId)} isn't a live package Actor; start it with hub.actors.start.`,
+        );
     }
     let conn: Connection | undefined;
     let admit!: () => void;
@@ -324,11 +327,17 @@ export class Hub {
             // Closed while its hello was on the way (a pipe made before a close, or declares
             // being checked): a closed Actor is never admitted.
             if (this.state.actor(actorId).state === "closed")
-              throw new Refused("state", `${actorId} is closed.`);
+              throw new Refused(
+                "state",
+                `${this.state.named(actorId)} is closed for good; make another.`,
+              );
             // Checked again as the channel is admitted: one may have connected while declares
             // were checked.
             if (replace === false && this.#connections.has(actorId))
-              throw new Refused("connected", `${actorId} already has a channel to this Hub.`);
+              throw new Refused(
+                "connected",
+                `${this.state.named(actorId)} already has a channel to this Hub; close that one first.`,
+              );
             conn = this.#admit(actorId, session);
             admit();
             options.maxStreams = MAX_STREAMS;
@@ -496,12 +505,18 @@ export class Hub {
   #viewModule(actorId: string, module: string, options: { running: boolean }) {
     const actor = this.state.actor(actorId);
     if (actor.package === "external" || actor.package === "builtin")
-      throw new Refused("forbidden", `${actorId} has no package, so no views.`);
+      throw new Refused("forbidden", `${this.state.named(actorId)} has no package, so no views.`);
     if (options.running && actor.state !== "running")
-      throw new Refused("state", `${actorId} isn't running.`);
+      throw new Refused(
+        "state",
+        `${this.state.named(actorId)} isn't running; start it with hub.actors.start.`,
+      );
     const { manifest } = this.state.package(actor.package);
     if (!Object.hasOwn(manifest.modules, module) || manifest.modules[module]?.placement !== "view")
-      throw new Refused("forbidden", `${module} isn't a view module of ${actorId}'s package.`);
+      throw new Refused(
+        "forbidden",
+        `${module} isn't a view module of ${this.state.named(actorId)}'s package; hub.actors.get lists its views.`,
+      );
   }
 
   /**
@@ -586,7 +601,7 @@ export class Hub {
       if (pipe) {
         // The pipe is the proof: it was made for this one Actor's process.
         if (header.actorId !== pipe.actorId)
-          throw new Refused("forbidden", `This channel is ${pipe.actorId}'s.`);
+          throw new Refused("forbidden", `This channel is ${this.state.named(pipe.actorId)}'s.`);
         if (header.declares !== undefined)
           throw new Refused("invalid", "A package Actor declares through its manifest.");
       } else if (
@@ -595,7 +610,10 @@ export class Hub {
       )
         throw new Refused("forbidden", "No such Actor, or the credential is wrong.");
       if (header.replace === false && this.#connections.has(header.actorId))
-        throw new Refused("connected", `${header.actorId} already has a channel to this Hub.`);
+        throw new Refused(
+          "connected",
+          `${this.state.named(header.actorId)} already has a channel to this Hub; close that one first.`,
+        );
       if (header.declares !== undefined)
         this.state.declareExternal(
           header.actorId,
@@ -865,7 +883,7 @@ export class Hub {
     if (method !== "seed")
       throw new Refused("unimplemented", `storage.admin@1 has no method ${method}.`);
     if (this.state.actor(input.consumer).state === "closed")
-      throw new Refused("state", `${input.consumer} is closed.`);
+      throw new Refused("state", `${this.state.named(String(input.consumer))} is closed for good.`);
     // Only a store the consumer can reach: its slot, bound to storage's kv.
     const bound = this.state.binding(input.consumer, input.slot);
     if (bound?.provider !== STORAGE || bound.export !== "kv")
