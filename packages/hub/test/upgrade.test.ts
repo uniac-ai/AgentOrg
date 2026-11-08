@@ -145,6 +145,38 @@ test("upgrade keeps the Actor, its store and the bindings that still match, and 
   assert.deepEqual(state.upgrade(PERSON, actorId, another), []);
 });
 
+test("upgrade closes requests through what it changes, and ends what the Actor offered at run time", async (t) => {
+  const state = open(t);
+  const v1 = state.addPackage(PERSON, await build(t)).hash;
+  const another = state.addPackage(PERSON, await build(t, { reset: true })).hash;
+  const { actorId } = state.createActor(PERSON, { name: "Counter", package: v1 });
+  const { actorId: user } = state.createActor(PERSON, { name: "User" });
+  const offered = state.declaration(actorId, "export", "counter.counter")?.iface;
+  assert.ok(offered);
+  state.declareExternal(user, { slots: { counter: offered, extra: notes(1) }, exports: {} });
+  // The user asks for the counter, holding only its own slot's side.
+  const asked = state.request(
+    user,
+    { consumer: user, slot: "counter", provider: actorId, export: "counter.counter" },
+    "to count",
+  );
+  // An export its process offered at run time, bound.
+  state.offer(actorId, "counter.extra", notes(1));
+  state.bind(PERSON, { consumer: user, slot: "extra", provider: actorId, export: "counter.extra" });
+
+  const dropped = state.upgrade(PERSON, actorId, another);
+  assert.deepEqual(dropped, [
+    { consumer: user, slot: "extra", provider: actorId, export: "counter.extra" },
+  ]);
+  assert.equal(state.declaration(actorId, "export", "counter.extra"), undefined);
+  assert.equal(state.binding(user, "extra"), undefined);
+  assert.equal(
+    state.mine(user).find((r) => r.requestId === asked.requestId)?.status,
+    "closed",
+    "the request through the retyped export closed",
+  );
+});
+
 test("only a package Actor that isn't closed is upgraded, by whoever may close it, to a package here", async (t) => {
   const state = open(t);
   const v1 = state.addPackage(PERSON, await build(t)).hash;

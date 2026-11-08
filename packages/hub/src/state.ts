@@ -270,11 +270,6 @@ const requestOf = (row: Row): RequestRecord => ({
 });
 const other = (side: Side): Side => (side === "export" ? "slot" : "export");
 
-/**
- * The core's state in its home folder: Actors, packages, declarations, bindings, binding requests
- * and the audit trail, in `node:sqlite`. Every method that changes something takes its caller, and
- * each is checked against bindings: there is no other authority.
- */
 /** What a package's Actor declares: each module's slots and exports, by `module.name`. */
 function packageDeclarations(
   manifest: Manifest,
@@ -295,6 +290,11 @@ function packageDeclarations(
   );
 }
 
+/**
+ * The core's state in its home folder: Actors, packages, declarations, bindings, binding requests
+ * and the audit trail, in `node:sqlite`. Every method that changes something takes its caller, and
+ * each is checked against bindings: there is no other authority.
+ */
 export class HubState {
   readonly home: string;
   readonly #db: DatabaseSync;
@@ -707,21 +707,24 @@ export class HubState {
   }
 
   /**
-   * Drop the bindings through one of an Actor's slots or exports, its interface having changed:
-   * each is audited as `binding.drop`, and the requests through it close. Dropping only takes
+   * Drop the bindings through one of an Actor's slots or exports, its interface having changed,
+   * but those `keeps` says still match: each is audited as `binding.drop`. Dropping only takes
    * access away. Returns what was dropped.
    */
-  #dropBindingsOf(actorId: string, side: Side, name: string, by: string): Wiring[] {
-    const where = side === "slot" ? "consumer = ? AND slot = ?" : "provider = ? AND export = ?";
-    const dropped = this.bindings(actorId).filter((b) =>
-      side === "slot"
-        ? b.consumer === actorId && b.slot === name
-        : b.provider === actorId && b.export === name,
+  #dropBindingsOf(
+    actorId: string,
+    side: Side,
+    name: string,
+    by: string,
+    keeps: (binding: Wiring) => boolean = () => false,
+  ): Wiring[] {
+    const dropped = this.bindings(actorId).filter(
+      (b) =>
+        (side === "slot"
+          ? b.consumer === actorId && b.slot === name
+          : b.provider === actorId && b.export === name) && !keeps(b),
     );
-    if (!dropped.length) return [];
-    const pending = this.#pending(where, actorId, name);
-    this.#removeBindings(where, actorId, name);
-    for (const open of pending) this.#decide(open, "closed");
+    for (const b of dropped) this.#removeBindings("consumer = ? AND slot = ?", b.consumer, b.slot);
     const wirings = dropped.map(({ consumer, slot, provider, export: exported }) => ({
       consumer,
       slot,
@@ -731,6 +734,12 @@ export class HubState {
     for (const wiring of wirings)
       this.#audit(by, "binding.drop", { ...wiring, why: "its interface changed" });
     return wirings;
+  }
+
+  /** Close the open requests to bind through one of an Actor's slots or exports. */
+  #closeRequestsThrough(actorId: string, side: Side, name: string) {
+    const where = side === "slot" ? "consumer = ? AND slot = ?" : "provider = ? AND export = ?";
+    for (const open of this.#pending(where, actorId, name)) this.#decide(open, "closed");
   }
 
   /** Refused unless the caller may upgrade the Actor to the package now; changes nothing. */
@@ -762,8 +771,33 @@ export class HubState {
     if (actor.package === hash) return [];
     const { manifest } = this.package(hash);
     const next = packageDeclarations(manifest);
+    const declared = (side: Side, name: string) =>
+      next.find((n) => n.side === side && n.name === name)?.iface;
     const dropped: Wiring[] = [];
     this.#transaction(() => {
+      // What it offered at run time was its process's, which this restarts: it goes, with the
+      // bindings to it, which are returned with the rest.
+      for (const row of this.#db
+        .prepare(
+          "SELECT name FROM declarations WHERE actor = ? AND side = 'export' AND dynamic = 1",
+        )
+        .all(actorId) as Row[]) {
+        dropped.push(...this.#dropBindingsOf(actorId, "export", String(row.name), caller));
+        this.#drop(actorId, "export", String(row.name));
+      }
+      // A binding stays while its two ends declare the same interface: this Actor's end as the
+      // new package declares it, the other end as it is declared now.
+      const keeps = (b: Wiring) => {
+        const slot =
+          b.consumer === actorId
+            ? declared("slot", b.slot)
+            : this.declaration(b.consumer, "slot", b.slot)?.iface;
+        const exported =
+          b.provider === actorId
+            ? declared("export", b.export)
+            : this.declaration(b.provider, "export", b.export)?.iface;
+        return !!slot && !!exported && compareInterfaces(slot, exported) === "same";
+      };
       const old = (
         this.#db
           .prepare("SELECT side, name, iface FROM declarations WHERE actor = ? AND dynamic = 0")
@@ -774,9 +808,11 @@ export class HubState {
         iface: JSON.parse(String(row.iface)) as DescribedInterface,
       }));
       for (const was of old) {
-        const fresh = next.find((n) => n.side === was.side && n.name === was.name);
-        if (!fresh || compareInterfaces(was.iface, fresh.iface) !== "same")
-          dropped.push(...this.#dropBindingsOf(actorId, was.side, was.name, caller));
+        dropped.push(...this.#dropBindingsOf(actorId, was.side, was.name, caller, keeps));
+        // A request through a name the package no longer declares as it was can't be made.
+        const fresh = declared(was.side, was.name);
+        if (!fresh || compareInterfaces(was.iface, fresh) !== "same")
+          this.#closeRequestsThrough(actorId, was.side, was.name);
       }
       this.#db.prepare("DELETE FROM declarations WHERE actor = ? AND dynamic = 0").run(actorId);
       for (const { side, name, iface } of next) this.#declare(actorId, side, name, iface, false);
@@ -961,11 +997,20 @@ export class HubState {
             ))
               this.#decide(open, "closed");
           }
-          // A binding holds while both ends declare the same interface: redeclared as another, the
-          // name's bindings are dropped, never kept across the change.
+          // A binding holds while both ends declare the same interface: redeclared as another,
+          // the name's bindings whose other end doesn't declare it are dropped, and its requests
+          // close.
           const known = this.declaration(actorId, side, name);
-          if (known && compareInterfaces(known.iface, iface) !== "same")
-            this.#dropBindingsOf(actorId, side, name, actorId);
+          if (known && compareInterfaces(known.iface, iface) !== "same") {
+            this.#dropBindingsOf(actorId, side, name, actorId, (b) => {
+              const other =
+                side === "slot"
+                  ? this.declaration(b.provider, "export", b.export)?.iface
+                  : this.declaration(b.consumer, "slot", b.slot)?.iface;
+              return !!other && compareInterfaces(iface, other) === "same";
+            });
+            this.#closeRequestsThrough(actorId, side, name);
+          }
           this.#declare(actorId, side, name, iface, false);
         }
         const kept = Object.keys(members);
