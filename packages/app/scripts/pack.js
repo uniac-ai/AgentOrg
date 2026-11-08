@@ -1,9 +1,12 @@
 // Pack @agentorg/cli for publishing: the app's own files, with the repository's other @agentorg
-// packages, which aren't published, bundled inside it at node_modules/@agentorg/<name>, each as
-// its own `npm pack` gives it. The code finds them there as it finds them in the workspace, by
-// name from its own location, and so do the paths read at run time: the shell's files, the frame
+// packages, which aren't published, inside it at dist/node_modules/@agentorg/<name>, each as its
+// own `npm pack` gives it. They're plain files of the cli, not bundleDependencies: npm treats
+// everything in a bundling package's own node_modules as bundled, and a global install nests the
+// cli's dependencies there, so it never extracted esbuild and its install script failed. The code
+// finds them as it finds them in the workspace, by name from its own location (dist/src walks up
+// to dist/node_modules), and so do the paths read at run time: the shell's files, the frame
 // runtime, the host runner, the ajv worker and what a Hub build imports. Their third-party
-// dependencies are the cli's own. Run after `npm run build`:
+// dependencies are the cli's own, found further up. Run after `npm run build`:
 // `node packages/app/scripts/pack.js <destination>`, which prints the tarball's path.
 import { execFileSync } from "node:child_process";
 import {
@@ -40,7 +43,6 @@ function unpack(dir, into, work) {
   return JSON.parse(readFileSync(join(into, "package.json"), "utf8"));
 }
 
-// By its real path: staged under a symlink (macOS's /var), npm packs without the bundled packages.
 const work = realpathSync(mkdtempSync(join(tmpdir(), "agentorg-pack-")));
 try {
   const stage = join(work, "package");
@@ -48,8 +50,13 @@ try {
   for (const file of ["README.md", "LICENSE"]) copyFileSync(join(root, file), join(stage, file));
   const bundled = [];
   for (const name of BUNDLED) {
-    const own = unpack(`packages/${name}`, join(stage, "node_modules", "@agentorg", name), work);
-    cli.dependencies[own.name] = own.version;
+    const own = unpack(
+      `packages/${name}`,
+      join(stage, "dist", "node_modules", "@agentorg", name),
+      work,
+    );
+    // Shipped as files, never fetched: not a dependency of the published cli.
+    delete cli.dependencies[own.name];
     bundled.push(own.name);
     // What each needs from the registry, the cli must have: it's found from there.
     for (const [dep, range] of Object.entries({ ...own.dependencies, ...own.peerDependencies }))
@@ -58,7 +65,7 @@ try {
           `${own.name} needs ${dep}@${range}; the cli's dependencies must say so too.`,
         );
   }
-  cli.bundleDependencies = bundled;
+  cli.files = [...cli.files, "dist/node_modules"];
   delete cli.devDependencies;
   delete cli.scripts;
   writeFileSync(join(stage, "package.json"), `${JSON.stringify(cli, null, 2)}\n`);
@@ -69,7 +76,7 @@ try {
     }),
   );
   for (const name of bundled)
-    if (!files.some(({ path }) => path === `node_modules/${name}/package.json`))
+    if (!files.some(({ path }) => path === `dist/node_modules/${name}/package.json`))
       throw new Error(`${filename} doesn't hold ${name}.`);
   console.log(join(destination, filename));
 } finally {

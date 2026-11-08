@@ -3,17 +3,29 @@ import { type ChildProcess, execFile, spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import test from "node:test";
+import test, { after } from "node:test";
 import { fileURLToPath } from "node:url";
 
 // dist/test/cli.test.js → the app's built command.
 const cli = join(dirname(fileURLToPath(import.meta.url)), "..", "src", "cli.js");
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..");
 
+// Never the person's own home: a command that wrongly starts the app does it in a throwaway
+// one, and is killed rather than left running.
+const scratchHome = mkdtempSync(join(tmpdir(), "agentorg-cli-home-"));
+after(() => rmSync(scratchHome, { recursive: true, force: true }));
 const run = (...args: string[]) =>
   new Promise<{ code: number; stdout: string; stderr: string }>((done) =>
-    execFile(process.execPath, [cli, ...args], (error, stdout, stderr) =>
-      done({ code: error ? Number(error.code ?? 1) : 0, stdout, stderr }),
+    execFile(
+      process.execPath,
+      [cli, ...args],
+      {
+        env: { ...process.env, AGENTORG_HUB_HOME: scratchHome, XDG_DATA_HOME: scratchHome },
+        timeout: 30_000,
+        killSignal: "SIGKILL",
+      },
+      (error, stdout, stderr) =>
+        done({ code: error ? Number(error.code ?? 1) : 0, stdout, stderr }),
     ),
   );
 
@@ -80,6 +92,27 @@ test("an unknown command gets the app's usage", async () => {
   assert.equal(unknown.code, 2);
   assert.match(unknown.stderr, /^Unknown command "nope"\.\nUsage: agentorg \[command\]/);
   assert.match(unknown.stderr, /open +sign a browser in/);
+});
+
+test("an unknown option gets the usage and starts nothing; --version prints the version", async () => {
+  // Each is refused before anything runs: none of them may start the app on the default home.
+  for (const args of [
+    ["--nope"],
+    ["--version", "--nope"],
+    ["actors", "--bogus"],
+    ["--home"],
+    ["--home", "--no-open"],
+    ["call", "s", "m", "-1"],
+  ]) {
+    const result = await run(...args);
+    assert.equal(result.code, 2, args.join(" "));
+    assert.match(result.stderr, /Usage: agentorg \[command\]/, args.join(" "));
+    assert.equal(result.stdout, "", args.join(" "));
+  }
+  const version = await run("--version");
+  assert.equal(version.code, 0);
+  const own = JSON.parse(readFileSync(join(dirname(cli), "..", "..", "package.json"), "utf8"));
+  assert.equal(version.stdout, `${own.version}\n`);
 });
 
 test("without --home or AGENTORG_HUB_HOME, the home is agentorg in the XDG data folder", async () => {

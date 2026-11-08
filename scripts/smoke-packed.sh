@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # The published package as a person gets it: @agentorg/cli packed, with the other @agentorg
-# packages bundled inside it, installed from its tarball into an empty folder with a cache of its
-# own, and `agentorg` run from there on a fresh home. First run must make the Installer and
-# ChatGPT, both running and connected; the gateway must serve the shell, the sign-in page and the
-# frame runtime; and the Hub must build an agent's source, which resolves the SDK, the interfaces
-# and zod from the installed package. Run after `npm run build`.
+# packages inside it (dist/node_modules), installed from its tarball into an empty folder with a
+# cache of its own, and globally with a prefix of its own. Then `agentorg` runs on a fresh home:
+# first run must make the Installer and ChatGPT, both running and connected; the gateway must
+# serve the shell, the sign-in page and the frame runtime; and the Hub must build an agent's
+# source, which resolves the SDK, the interfaces and zod from the installed package. Run after
+# `npm run build`.
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -28,17 +29,32 @@ step() { echo "== $*"; }
 
 step "pack the cli"
 tarball="$(node "$root/packages/app/scripts/pack.js" "$work/packs")"
-tar -tzf "$tarball" | sed 's#^package/##' | awk -F/ '{ print ($1 == "node_modules" ? $1 "/" $2 "/" $3 : NF > 1 ? $1 "/" $2 : $1) }' | sort | uniq -c
+tar -tzf "$tarball" | sed 's#^package/##' | awk -F/ '{ print ($2 == "node_modules" ? $1 "/" $2 "/" $3 "/" $4 : NF > 1 ? $1 "/" $2 : $1) }' | sort | uniq -c
 
 step "install the one tarball into an empty folder"
 mkdir "$work/install"
 (cd "$work/install" && echo '{"private":true}' >package.json &&
   npm install --silent --no-audit --no-fund --cache "$work/cache" "$tarball")
 agentorg="$work/install/node_modules/.bin/agentorg"
-# Every @agentorg package is the one bundled in the cli: none came from the registry.
-(cd "$work/install" && npm ls --all --cache "$work/cache" | grep '@agentorg/' | sed 's/^[^@]*//' | sort | uniq -c)
+# Every other @agentorg package is the one inside the cli: none came from the registry.
 top="$(ls "$work/install/node_modules/@agentorg")"
 [ "$top" = cli ] || { echo "Installed beside the cli: $top" >&2; exit 1; }
+ls "$work/install/node_modules/@agentorg/cli/dist/node_modules/@agentorg"
+"$agentorg" --version
+
+step "install it globally, with a prefix of its own"
+# A global install nests the cli's dependencies in its own folder, esbuild's install script
+# included: it must find esbuild there, and the packages inside the cli must find their own.
+global="$work/global"
+npm install --global --silent --no-audit --no-fund --prefix "$global" --cache "$work/cache" \
+  "$tarball"
+"$global/bin/agentorg" --version
+node -e '
+  const { createRequire } = require("node:module");
+  const sdk = process.argv[1];
+  const esbuild = createRequire(`${sdk}/package.json`)("esbuild");
+  console.log(`esbuild ${esbuild.version} from the cli'"'"'s sdk: ${esbuild.transformSync("let a: number = 1", { loader: "ts" }).code.trim()}`);
+' "$(ls -d "$global"/lib/node_modules/@agentorg/cli/dist/node_modules/@agentorg/sdk)"
 
 step "run agentorg --no-open on a fresh home"
 home="$work/home"

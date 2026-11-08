@@ -86,6 +86,7 @@ To read a module's definition, the build runs the module's code in a separate No
 `@agentorg/cli` provides `agentorg`.
 
 - **`agentorg`**, with no command, runs AgentOrg: a Hub in its home, the person's gateway and the shell, on `127.0.0.1` (`--port N`, else any free port). It opens the browser already signed in, and prints only its address, never a sign-in code. `--no-open` doesn't open a browser. The code is in the address it hands the system's opener; on Linux, other local users can see that program's arguments for the moment it runs, and the code works for 60 s.
+- **`agentorg --version`** prints the version. An option the command doesn't know is refused with the usage (exit 2); it never starts the app.
 - **`agentorg open`** signs a browser in to the running app again.
 - **`agentorg build [dir]`** builds a package, as the SDK's build does, in a checkout of this repository. Installed from npm, build with `agentorg call packages build '{"files": {…}}'`, the Hub's build.
 - **`agentorg hub [--port N]`** runs a bare Hub in its home, without the gateway or the shell, serving WebSocket on loopback, and writes the address to `<home>/url`.
