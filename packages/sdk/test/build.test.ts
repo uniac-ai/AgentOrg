@@ -296,3 +296,45 @@ test("the archive is deterministic and its reader refuses what a package can't h
   assert.throws(() => readTar(prefixed), /Corrupt tar header|no name prefix/);
   assert.throws(() => readTar(archive.slice(0, 700)), /runs past the end|end marker/);
 });
+
+test("a library's wrapped modules are named by library, never by where it is installed", async (t) => {
+  // React (CommonJS) from the repository's node_modules, outside the package, and libraries in
+  // the package's own node_modules with paths esbuild has to escape, and a top-level await.
+  const logic = `import { defineActor } from "@agentorg/sdk";
+import react from "react";
+import a from "../node_modules/acc-é/x.cjs";
+import c from '../node_modules/dq"x/a.cjs';
+const lazy = () => import("../node_modules/tla/index.js");
+export default defineActor({ start() { void react; void a; void c; void lazy; } });
+`;
+  const f = await fixture(t, { "logic.js": logic }, { modules: { logic: "src/logic.js" } });
+  const library = async (folder: string, manifest: object, file: string, text: string) => {
+    await mkdir(join(f.dir, "node_modules", folder), { recursive: true });
+    await writeFile(join(f.dir, "node_modules", folder, "package.json"), JSON.stringify(manifest));
+    await writeFile(join(f.dir, "node_modules", folder, file), text);
+  };
+  await library("acc-é", { name: "acc", version: "1.0.0" }, "x.cjs", "module.exports = 1;");
+  await library('dq"x', { name: "dq", version: "2.0.0" }, "a.cjs", "module.exports = 2;");
+  await library(
+    "tla",
+    { name: "tla", version: "3.0.0", type: "module" },
+    "index.js",
+    "export const t = await Promise.resolve(3);",
+  );
+  const built = await f.build();
+  const bundle = await readFile(join(built.dir, "dist", "logic.js"), "utf8");
+  const keys = bundle.match(/__(?:commonJS|esm)\d*\(\{(?:async)?(["'])[^"']*\1/g) ?? [];
+  for (const name of ["react@", "acc@1.0.0/x.cjs", "dq@2.0.0/a.cjs", "tla@3.0.0/index.js"])
+    assert.ok(
+      keys.some((key) => key.includes(`agentorg-library:${name}`)),
+      name,
+    );
+  for (const key of keys) assert.doesNotMatch(key, /node_modules|\.\.\//, key);
+  // So it builds the same deeper down, though the repository's node_modules is further away.
+  const deep = join(fixtures, `deep-lib-${process.pid}`, "a", "b");
+  await mkdir(deep, { recursive: true });
+  t.after(() => rm(join(fixtures, `deep-lib-${process.pid}`), { recursive: true, force: true }));
+  await cp(f.dir, join(deep, "pkg"), { recursive: true });
+  const again = await buildPackage(join(deep, "pkg"), { out: join(deep, "out") });
+  assert.equal(again.hash, built.hash);
+});

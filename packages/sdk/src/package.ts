@@ -319,14 +319,14 @@ function inPackage(path: string, name: string): boolean {
 
 /** The name a library's file is given in the bundle, after this prefix. */
 const LIBRARY = "agentorg-library:";
-/** Each folder's package, once looked up: its name and version and folder, or none. */
-const packageOfFolder = new Map<string, { name: string; version: string; dir: string } | null>();
+/** Each folder's package, as one build looked it up: its name, version and folder, or none. */
+type Packages = Map<string, { name: string; version: string; dir: string } | null>;
 
 /**
  * A library's file as the bundle names it: its package's name and version and its path in that
  * package, never where it is installed. Undefined for a file in no named, versioned package.
  */
-function libraryName(path: string): string | undefined {
+function libraryName(path: string, packageOfFolder: Packages): string | undefined {
   const seen: string[] = [];
   let found: { name: string; version: string; dir: string } | null = null;
   for (let dir = dirname(path); dirname(dir) !== dir; dir = dirname(dir)) {
@@ -363,24 +363,53 @@ function libraryName(path: string): string | undefined {
  */
 function nameLibraries(code: Uint8Array, inputs: string[], root: string): Uint8Array {
   const names = new Map<string, string>();
+  const packages: Packages = new Map();
   for (const input of inputs) {
     const path = resolve(root, input);
     // The package's own files keep their paths; a library is named, even one installed inside.
     if (within(path, root) && !path.slice(root.length).split(sep).includes("node_modules"))
       continue;
-    const name = libraryName(path);
+    const name = libraryName(path, packages);
     if (name) names.set(input, `${LIBRARY}${name}`);
   }
   if (!names.size) return code;
   const text = new TextDecoder().decode(code);
+  // A wrapper's key: the method name after `__commonJS({` or `__esm({` (`async` before it for a
+  // module with top-level await), in either quote, followed by its parameter list.
   const named = text.replace(
-    /(\b__(?:commonJS|esm)\d*\(\{)("(?:[^"\\\n]|\\.)*")/g,
+    /(\b__(?:commonJS|esm)\d*\(\{(?:async\s*)?)("(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*')(?=\()/g,
     (whole, call: string, literal: string) => {
-      const name = names.get(JSON.parse(literal) as string);
+      const name = names.get(stringOf(literal));
       return name ? `${call}${JSON.stringify(name)}` : whole;
     },
   );
   return new TextEncoder().encode(named);
+}
+
+/** A JavaScript string literal's value, as esbuild prints one: its escapes read, never thrown. */
+function stringOf(literal: string): string {
+  return literal
+    .slice(1, -1)
+    .replace(
+      /\\(u\{([0-9a-fA-F]+)\}|u([0-9a-fA-F]{4})|x([0-9a-fA-F]{2})|([0-7]{1,3})|\r\n|[\s\S])/g,
+      (_, sequence: string, point?: string, unit?: string, byte?: string, octal?: string) => {
+        const code = point ?? unit ?? byte;
+        if (code !== undefined) return String.fromCodePoint(Number.parseInt(code, 16));
+        if (octal !== undefined) return String.fromCharCode(Number.parseInt(octal, 8));
+        const simple: Record<string, string> = {
+          n: "\n",
+          r: "\r",
+          t: "\t",
+          b: "\b",
+          f: "\f",
+          v: "\v",
+        };
+        // A line continuation is nothing; any other escaped character is itself.
+        return sequence === "\n" || sequence === "\r\n" || sequence === "\r"
+          ? ""
+          : (simple[sequence] ?? sequence);
+      },
+    );
 }
 
 /**
@@ -443,13 +472,15 @@ function limitImports(
           );
         // A library's own import is its business, but only what was resolved here is loaded.
         if (found.namespace === "file") loadable.add(found.path);
-        // As resolved, with what tree-shaking reads: the limit changes nothing it allows.
+        // A library's own import is resolved again by esbuild itself, to the same file, so it
+        // keeps what only esbuild's resolution carries: the module type ("type": "module").
+        if (!ours) return undefined;
+        // As resolved, with what tree-shaking reads.
         return {
           path: found.path,
           namespace: found.namespace,
           external: found.external,
           sideEffects: found.sideEffects,
-          suffix: found.suffix,
         };
       });
       // A file esbuild found any other way (a pattern in a template-string import or require
