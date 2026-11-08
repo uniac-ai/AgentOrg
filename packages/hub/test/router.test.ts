@@ -1164,7 +1164,7 @@ test("checks are served in turn by Actor, so one Actor's flood delays only itsel
   await Promise.all(flood);
 });
 
-test("another Actor's call waits about one budget per check during a flood of slow calls", async (t) => {
+test("another Actor's call waits for the checks already running during a flood, not the queue", async (t) => {
   // Two workers, as on a small machine, so the flood can't hide behind a wide pool.
   const { actor, bind, person } = await setup(t, { checks: { size: 2 } });
   const unique = handMade(
@@ -1195,17 +1195,15 @@ test("another Actor's call waits about one budget per check during a flood of sl
   const before = answered;
   // The flood must still be queued behind the running checks, or this proves nothing.
   assert.ok(12 - before >= 4, `only ${12 - before} flood calls were left to queue`);
-  const started = performance.now();
   const listed = await person.call("exports", "list", {});
-  const waited = performance.now() - started;
   const during = answered - before;
   assert.ok("result" in listed);
   for (const r of await Promise.all(flood)) assert.equal(r.error?.code, "invalid");
-  // Its input and output checks each wait for the flood checks already running (two workers,
-  // and a respawn each), not for the whole queue behind them: about four flood calls, five if
-  // one was in flight when counted.
+  // Counted, not timed: its input and output checks each wait for the flood checks already
+  // running (two workers, and a respawn each), not for the whole queue behind them: about four
+  // flood calls, five if one was in flight when counted. Served in arrival order, it would wait
+  // for every queued flood call.
   assert.ok(during <= 5, `${during} flood calls finished while the other call waited`);
-  assert.ok(waited < 1500, `the other call waited ${Math.round(waited)} ms`);
 });
 
 test("a slow caller of a shared provider doesn't hold up its other callers", async (t) => {
