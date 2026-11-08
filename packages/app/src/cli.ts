@@ -52,9 +52,18 @@ if (command !== "build" && command !== "hub") {
   const unknown = Object.keys(values).find(
     (name) => !["home", "port", "no-open", "help", "version"].includes(name),
   );
-  if (unknown !== undefined) usage(`Unknown option --${unknown}.`);
-  if (typeof values.home === "boolean") usage("--home takes a directory.");
-  if (typeof values.port === "boolean") usage("--port takes a port number.");
+  if (unknown !== undefined)
+    usage(
+      `Unknown option ${unknown.length === 1 ? "-" : "--"}${unknown}. An argument that starts with - goes after --.`,
+    );
+  // A value is a word of its own: an option in its place means the value is missing.
+  for (const [name, what] of [
+    ["home", "a directory"],
+    ["port", "a port number"],
+  ] as const) {
+    const value = values[name];
+    if (typeof value === "boolean" || value?.startsWith("-")) usage(`--${name} takes ${what}.`);
+  }
 }
 if (values.version && command === undefined) {
   const own = new URL("../../package.json", import.meta.url);

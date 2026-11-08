@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # The published package as a person gets it: @agentorg/cli packed, with the other @agentorg
 # packages inside it (dist/node_modules), installed from its tarball into an empty folder with a
-# cache of its own, and globally with a prefix of its own, and `agentorg` run on a fresh home. First run must make the Installer and
-# ChatGPT, both running and connected; the gateway must serve the shell, the sign-in page and the
-# frame runtime; and the Hub must build an agent's source, which resolves the SDK, the interfaces
-# and zod from the installed package. Run after `npm run build`.
+# cache of its own, and globally with a prefix of its own. Then `agentorg` runs on a fresh home:
+# first run must make the Installer and ChatGPT, both running and connected; the gateway must
+# serve the shell, the sign-in page and the frame runtime; and the Hub must build an agent's
+# source, which resolves the SDK, the interfaces and zod from the installed package. Run after
+# `npm run build`.
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
