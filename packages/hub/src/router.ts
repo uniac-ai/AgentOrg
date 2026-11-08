@@ -304,7 +304,7 @@ export class Hub {
       if (actor.package === "external" || actor.package === "builtin" || actor.state === "closed")
         throw new Refused(
           "state",
-          `${this.state.named(actor.actorId)} isn't a live package Actor; start it with hub.actors.start.`,
+          `${this.state.named(actor.actorId)} isn't a live package Actor.`,
         );
     }
     let conn: Connection | undefined;
@@ -509,7 +509,7 @@ export class Hub {
     if (options.running && actor.state !== "running")
       throw new Refused(
         "state",
-        `${this.state.named(actorId)} isn't running; start it with hub.actors.start.`,
+        `${this.state.named(actorId)} is ${actor.state}${actor.state === "closed" ? "" : "; start it with hub.actors.start"}.`,
       );
     const { manifest } = this.state.package(actor.package);
     if (!Object.hasOwn(manifest.modules, module) || manifest.modules[module]?.placement !== "view")
@@ -883,15 +883,15 @@ export class Hub {
     if (method !== "seed")
       throw new Refused("unimplemented", `storage.admin@1 has no method ${method}.`);
     if (this.state.actor(input.consumer).state === "closed")
-      throw new Refused("state", `${this.state.named(String(input.consumer))} is closed for good.`);
+      throw new Refused("state", `${this.state.named(input.consumer)} is closed for good.`);
     // Only a store the consumer can reach: its slot, bound to storage's kv.
     const bound = this.state.binding(input.consumer, input.slot);
     if (bound?.provider !== STORAGE || bound.export !== "kv")
       throw new Refused(
         "invalid",
-        `${input.consumer}.${input.slot} isn't a slot bound to storage.kv.`,
+        `${this.state.named(input.consumer)}'s ${input.slot} isn't a slot bound to storage.kv; bind it there first.`,
       );
-    this.#storage.seed(input.consumer, input.slot, input.entries);
+    this.#storage.seed(input.consumer, input.slot, input.entries, this.state.named(input.consumer));
     // The seed is done; an audit that fails now (the Hub closing) doesn't undo or hide it.
     try {
       this.state.auditHub(

@@ -595,7 +595,7 @@ export class HubState {
         if (!this.sides(caller, wiring).export)
           throw new Refused(
             "forbidden",
-            `${this.named(caller)} can't grant ${this.named(initial.provider)}'s ${initial.export}. Create it without that binding, then have it or a manager ask for it with hub.grants.request.`,
+            `${this.named(caller)} can't grant ${this.named(initial.provider)}'s ${initial.export}. Create it without that binding, then it can ask for it with hub.grants.request, or the provider or a manager can bind it.`,
           );
         if (!input.package && !this.declaration(actorId, "slot", initial.slot)) {
           if (!NAME.test(initial.slot))
@@ -605,7 +605,10 @@ export class HubState {
             );
           const offered = this.declaration(initial.provider, "export", initial.export);
           if (!offered)
-            throw new Refused("unknown", `${initial.provider} offers no ${initial.export}.`);
+            throw new Refused(
+              "unknown",
+              `${this.named(initial.provider)} offers no ${initial.export}; hub.exports.list lists what it offers.`,
+            );
           this.#declare(actorId, "slot", initial.slot, offered.iface, false);
         }
         this.#insertBinding(wiring, caller);
@@ -630,7 +633,7 @@ export class HubState {
     if (actor.package === "external" || actor.package === "builtin")
       throw new Refused(
         "state",
-        `${this.named(actorId)} isn't a package Actor; it connects itself, so its own program starts and stops it.`,
+        `${this.named(actorId)} isn't a package Actor, so the Hub doesn't run its process.`,
       );
     return actor;
   }
@@ -641,7 +644,7 @@ export class HubState {
     if (actor.state !== "created" && actor.state !== "stopped")
       throw new Refused(
         "state",
-        `${this.named(actorId)} is ${actor.state}${actor.state === "running" ? "; stop it first" : "; it can't start again"}.`,
+        `${this.named(actorId)} is ${actor.state === "running" ? "already running" : "closed and can't start again; make another"}.`,
       );
   }
 
@@ -671,10 +674,7 @@ export class HubState {
     this.#require(caller, "actors");
     const actor = this.actor(actorId);
     if (actorId === HUB || actorId === PERSON || actorId === STORAGE || actorId === NET)
-      throw new Refused(
-        "forbidden",
-        `${this.named(actorId)} is part of the Hub and can't be closed.`,
-      );
+      throw new Refused("forbidden", `${this.named(actorId)} is built in and can't be closed.`);
     if (actor.state === "closed") return;
     this.#transaction(() => {
       const pending = this.#pending(
@@ -838,7 +838,7 @@ export class HubState {
     if (actor.package !== "external")
       throw new Refused(
         "forbidden",
-        `${this.named(actorId)} declares through its package; a new package version declares otherwise.`,
+        `${this.named(actorId)} declares through its package; an Actor of another package declares otherwise.`,
       );
     this.#transaction(() => {
       for (const [side, members] of [
@@ -919,7 +919,7 @@ export class HubState {
     if (this.declaration(actorId, "export", name))
       throw new Refused(
         "conflict",
-        `${this.named(actorId)} already offers ${name}; withdraw it first, or offer another name.`,
+        `${this.named(actorId)} already offers ${name}; offer it under another name${this.declaration(actorId, "export", name)?.dynamic ? ", or withdraw it first" : ""}.`,
       );
     this.#checked(iface);
     this.#transaction(() => {
@@ -1169,11 +1169,7 @@ export class HubState {
   /** Unbind a slot: its consumer, its provider or a manager may. */
   unbind(caller: string, consumer: string, slot: string): void {
     const binding = this.binding(consumer, slot);
-    if (!binding)
-      throw new Refused(
-        "unknown",
-        `${this.named(consumer)}'s ${slot} isn't bound; hub.bindings.list lists what is.`,
-      );
+    if (!binding) throw new Refused("unknown", `${this.named(consumer)}'s ${slot} isn't bound.`);
     if (caller !== consumer && caller !== binding.provider && !this.isManager(caller))
       throw new Refused(
         "forbidden",
