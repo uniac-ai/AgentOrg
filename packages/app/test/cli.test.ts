@@ -82,6 +82,20 @@ test("an unknown command gets the app's usage", async () => {
   assert.match(unknown.stderr, /open +sign a browser in/);
 });
 
+test("an unknown option gets the usage and starts nothing; --version prints the version", async () => {
+  // Each is refused before anything runs: none of them may start the app on the default home.
+  for (const args of [["--nope"], ["--version", "--nope"], ["actors", "--bogus"], ["--home"]]) {
+    const result = await run(...args);
+    assert.equal(result.code, 2, args.join(" "));
+    assert.match(result.stderr, /Usage: agentorg \[command\]/, args.join(" "));
+    assert.equal(result.stdout, "", args.join(" "));
+  }
+  const version = await run("--version");
+  assert.equal(version.code, 0);
+  const own = JSON.parse(readFileSync(join(dirname(cli), "..", "..", "package.json"), "utf8"));
+  assert.equal(version.stdout, `${own.version}\n`);
+});
+
 test("without --home or AGENTORG_HUB_HOME, the home is agentorg in the XDG data folder", async () => {
   const data = mkdtempSync(join(tmpdir(), "agentorg-xdg-"));
   try {

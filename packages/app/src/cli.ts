@@ -7,6 +7,7 @@ import { hubHome, personCall, UsageError } from "@agentorg/sdk/person-commands";
 import WebSocket from "ws";
 
 const USAGE = `Usage: agentorg [command] [--home DIR]
+       agentorg --version
 
   (no command) [--port N] [--no-open]       run AgentOrg: the Hub, your gateway and the shell
   open                                      sign a browser in to the running app
@@ -39,11 +40,27 @@ const { values, positionals } = parseArgs({
     port: { type: "string" },
     "no-open": { type: "boolean" },
     help: { type: "boolean", short: "h" },
+    version: { type: "boolean" },
   },
   allowPositionals: true,
   strict: false,
 });
 const [command, ...rest] = positionals as string[];
+// `build` and `hub` are the SDK's, which reads their options itself, strictly. Everything else is
+// this command's: an option it doesn't know is a mistake, never a reason to start the app.
+if (command !== "build" && command !== "hub") {
+  const unknown = Object.keys(values).find(
+    (name) => !["home", "port", "no-open", "help", "version"].includes(name),
+  );
+  if (unknown !== undefined) usage(`Unknown option --${unknown}.`);
+  if (typeof values.home === "boolean") usage("--home takes a directory.");
+  if (typeof values.port === "boolean") usage("--port takes a port number.");
+}
+if (values.version && command === undefined) {
+  const own = new URL("../../package.json", import.meta.url);
+  write(process.stdout, (JSON.parse(readFileSync(own, "utf8")) as { version: string }).version);
+  process.exit(0);
+}
 if (values.help && command === undefined) {
   process.stdout.write(USAGE);
   process.exit(0);
