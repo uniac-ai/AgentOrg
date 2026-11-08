@@ -105,6 +105,7 @@ export class HubActor {
             ...(Array.isArray(input.bindings)
               ? { bindings: input.bindings as Omit<Wiring, "consumer">[] }
               : {}),
+            ...(typeof input.for === "string" ? { for: input.for } : {}),
           }),
         list: () => ({ actors: state.actors().map(recordOf) }),
         get: (_, input) => recordOf(state.actor(String(input.actorId))),
@@ -147,6 +148,14 @@ export class HubActor {
       grants: {
         bind: (caller, input) => state.bind(caller, wiring(input)),
         unbind: (caller, input) => state.unbind(caller, String(input.consumer), String(input.slot)),
+        expose: (caller, input) =>
+          state.expose(caller, {
+            provider: String(input.provider),
+            export: String(input.export),
+            to: String(input.to),
+            ...(typeof input.as === "string" ? { as: input.as } : {}),
+          }),
+        unexpose: (caller, input) => state.unexpose(caller, String(input.to), String(input.slot)),
         request: (caller, input) => ({
           requestId: state.request(caller, wiring(input), String(input.reason)).requestId,
         }),

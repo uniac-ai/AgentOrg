@@ -68,6 +68,8 @@ export interface ActorRecord {
   /** Times its process was restarted after a crash. */
   restarts: number;
   lastExit?: Exit;
+  /** The Actor a manager made it for: provenance, never authority. */
+  installedFor?: string;
 }
 export interface Wiring {
   consumer: string;
@@ -79,6 +81,8 @@ export interface BindingRecord extends Wiring {
   interface: string;
   madeBy: string;
   at: string;
+  /** Its slot was made at run time by `expose`, and goes with it. */
+  exposed?: true;
 }
 /** The two ends of a binding: the export side gives the export, the slot side takes it. */
 export type Side = "export" | "slot";
@@ -94,6 +98,8 @@ export interface RequestRecord extends Wiring {
   reason: string;
   requestedBy: string;
   at: string;
+  /** A request to expose: `slot` is made on `consumer` when it is approved. */
+  exposed?: true;
 }
 export interface AuditRecord {
   seq: number;
@@ -141,6 +147,28 @@ export interface StateEvents {
 }
 
 const NAME = /^[a-z][A-Za-z0-9_]*$/;
+/** The longest name of a slot made at run time, so a tool named `<slot>__<method>` fits. */
+const EXPOSED_MAX = 48;
+/** Exposure requests one Actor may have open toward one other at a time. */
+const MAX_OPEN_EXPOSURES = 32;
+/** The Actors that are the Hub itself: they take no slots. */
+const BUILTIN = new Set(["hub", "storage", "net"]);
+
+/**
+ * The default name of a slot exposing `exportName` of the Actor named `providerName`: the name's
+ * ASCII words camelCased, `_`, and the export's last part; the export's part alone when the name
+ * has no ASCII letters.
+ */
+export function exposedName(providerName: string, exportName: string): string {
+  const words = (providerName.match(/[A-Za-z0-9]+/g) ?? []).map((word) => word.toLowerCase());
+  const joined = words
+    .map((word, i) => (i ? word[0]?.toUpperCase() + word.slice(1) : word))
+    .join("");
+  const letters = joined.replace(/^[^A-Za-z]+/, "");
+  const camel = letters && (letters[0] ?? "").toLowerCase() + letters.slice(1);
+  const part = exportName.slice(exportName.lastIndexOf(".") + 1);
+  return (camel ? `${camel}_${part}` : part).slice(0, EXPOSED_MAX);
+}
 const MEMBER = /^[a-z][A-Za-z0-9_]*(\.[a-z][A-Za-z0-9_]*)?$/;
 const now = () => new Date().toISOString();
 const digest = (secret: string) => createHash("sha256").update(secret).digest();
@@ -171,6 +199,9 @@ const MIGRATIONS = [
    CREATE TABLE audit (
      seq INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, actor TEXT NOT NULL,
      kind TEXT NOT NULL, details TEXT NOT NULL);`,
+  // Exposure: an Actor made for another (provenance only), and requests to expose.
+  `ALTER TABLE actors ADD COLUMN installed_for TEXT;
+   ALTER TABLE requests ADD COLUMN exposed INTEGER NOT NULL DEFAULT 0;`,
 ];
 
 /** Whether a process with this pid runs now. */
@@ -220,7 +251,11 @@ const bindingOf = (row: Row): BindingRecord => ({
   interface: String(row.interface),
   madeBy: String(row.made_by),
   at: String(row.at),
+  ...(row.exposed ? { exposed: true as const } : {}),
 });
+/** A binding's columns, with whether its slot was made at run time. */
+const BINDING = `b.*, (SELECT d.dynamic FROM declarations d
+  WHERE d.actor = b.consumer AND d.side = 'slot' AND d.name = b.slot) AS exposed`;
 const requestOf = (row: Row): RequestRecord => ({
   requestId: String(row.id),
   consumer: String(row.consumer),
@@ -231,6 +266,7 @@ const requestOf = (row: Row): RequestRecord => ({
   requestedBy: String(row.requested_by),
   at: String(row.at),
   needs: row.needs === "slot" ? "slot" : "export",
+  ...(row.exposed ? { exposed: true as const } : {}),
 });
 const other = (side: Side): Side => (side === "export" ? "slot" : "export");
 
@@ -438,7 +474,9 @@ export class HubState {
 
   #actor(actorId: string): ActorRecord | undefined {
     const row = this.#db
-      .prepare("SELECT id, name, package, state, restarts, last_exit FROM actors WHERE id = ?")
+      .prepare(
+        "SELECT id, name, package, state, restarts, last_exit, installed_for FROM actors WHERE id = ?",
+      )
       .get(actorId) as Row | undefined;
     return (
       row && {
@@ -448,8 +486,15 @@ export class HubState {
         state: row.state as ActorState,
         restarts: Number(row.restarts),
         ...(row.last_exit ? { lastExit: JSON.parse(String(row.last_exit)) as Exit } : {}),
+        ...(row.installed_for ? { installedFor: String(row.installed_for) } : {}),
       }
     );
+  }
+
+  /** An Actor as a refusal names it: "Name (id)". */
+  #named(actorId: string): string {
+    const actor = this.#actor(actorId);
+    return actor ? `${actor.name} (${actor.actorId})` : actorId;
   }
 
   actor(actorId: string): ActorRecord {
@@ -494,18 +539,29 @@ export class HubState {
        * export's interface, and its hello must declare it the same way to keep it.
        */
       bindings?: Omit<Wiring, "consumer">[];
+      /** The Actor it is made for: given only by a manager, recorded as provenance. */
+      for?: string;
     },
   ): { actorId: string; credential?: string } {
     this.#require(caller, "actors");
+    if (input.for !== undefined) {
+      if (!this.isManager(caller))
+        throw new Refused(
+          "forbidden",
+          `Only a manager says whom an Actor is made for; ${caller} isn't one. Create it without for.`,
+        );
+      this.#open(input.for);
+    }
     const actorId = `act_${randomBytes(8).toString("hex")}`;
     const credential = input.package ? undefined : randomBytes(32).toString("base64url");
     const insert = this.#db.prepare(
-      "INSERT INTO actors (id, name, package, state, credential, created_at) VALUES (?, ?, ?, 'created', ?, ?)",
+      "INSERT INTO actors (id, name, package, state, credential, created_at, installed_for) VALUES (?, ?, ?, 'created', ?, ?, ?)",
     );
+    const madeFor = input.for ?? null;
     this.#transaction(() => {
       if (input.package) {
         const { manifest } = this.package(input.package);
-        insert.run(actorId, input.name, input.package, null, now());
+        insert.run(actorId, input.name, input.package, null, now(), madeFor);
         for (const [module, m] of Object.entries(manifest.modules))
           for (const [side, members] of [
             ["slot", m.slots],
@@ -522,11 +578,13 @@ export class HubState {
             { consumer: actorId, slot, provider: actorId, export: exported },
             HUB,
           );
-      } else insert.run(actorId, input.name, "external", digest(credential as string), now());
+      } else
+        insert.run(actorId, input.name, "external", digest(credential as string), now(), madeFor);
       this.#audit(caller, "actor.create", {
         actorId,
         name: input.name,
         package: input.package ?? "external",
+        ...(input.for === undefined ? {} : { for: input.for }),
       });
       this.#emit(() => this.#events.actorChanged?.(actorId));
       for (const initial of input.bindings ?? []) {
@@ -774,6 +832,17 @@ export class HubState {
           if (!NAME.test(name))
             throw new Refused("invalid", `${JSON.stringify(name)} isn't a valid name.`);
           this.#checked(iface);
+          if (side === "slot") {
+            // The Actor's own slots are its to name: an exposure under the same name yields,
+            // with its binding, and requests to make one under it close.
+            if (this.declaration(actorId, side, name)?.dynamic) this.#drop(actorId, side, name);
+            for (const open of this.#pending(
+              "consumer = ? AND slot = ? AND exposed = 1",
+              actorId,
+              name,
+            ))
+              this.#decide(open, "closed");
+          }
           const known = this.declaration(actorId, side, name);
           if (
             known &&
@@ -895,7 +964,7 @@ export class HubState {
 
   binding(consumer: string, slot: string): BindingRecord | undefined {
     const row = this.#db
-      .prepare("SELECT * FROM bindings WHERE consumer = ? AND slot = ?")
+      .prepare(`SELECT ${BINDING} FROM bindings b WHERE consumer = ? AND slot = ?`)
       .get(consumer, slot) as Row | undefined;
     return row && bindingOf(row);
   }
@@ -917,9 +986,11 @@ export class HubState {
   bindings(actor?: string): BindingRecord[] {
     const rows = actor
       ? this.#db
-          .prepare("SELECT * FROM bindings WHERE consumer = ? OR provider = ? ORDER BY rowid")
+          .prepare(
+            `SELECT ${BINDING} FROM bindings b WHERE consumer = ? OR provider = ? ORDER BY b.rowid`,
+          )
           .all(actor, actor)
-      : this.#db.prepare("SELECT * FROM bindings ORDER BY rowid").all();
+      : this.#db.prepare(`SELECT ${BINDING} FROM bindings b ORDER BY b.rowid`).all();
     return (rows as Row[]).map(bindingOf);
   }
 
@@ -1008,10 +1079,10 @@ export class HubState {
 
   #removeBindings(where: string, ...params: string[]) {
     const removed = (
-      this.#db.prepare(`SELECT * FROM bindings WHERE ${where}`).all(...params) as Row[]
+      this.#db.prepare(`SELECT ${BINDING} FROM bindings b WHERE ${where}`).all(...params) as Row[]
     ).map(bindingOf);
     if (!removed.length) return;
-    if (removed.some((b) => b.consumer === PERSON && b.provider === HUB))
+    if (removed.some((b) => b.consumer === PERSON && b.provider === HUB && !b.exposed))
       throw new Refused(
         "forbidden",
         "The person's hub bindings stay, so someone can always manage the Hub.",
@@ -1019,6 +1090,12 @@ export class HubState {
     // Requests whose requester held its end through these bindings can't be approved any more.
     const open = this.#pending("1 = 1");
     this.#db.prepare(`DELETE FROM bindings WHERE ${where}`).run(...params);
+    // A slot made at run time goes with its binding.
+    const dropExposed = this.#db.prepare(
+      "DELETE FROM declarations WHERE actor = ? AND side = 'slot' AND name = ? AND dynamic = 1",
+    );
+    for (const binding of removed)
+      if (binding.exposed) dropExposed.run(binding.consumer, binding.slot);
     this.#emit(() => this.#events.unbound?.(removed));
     for (const pending of open)
       if (!this.#standing(pending.request)) this.#decide(pending, "closed");
@@ -1073,6 +1150,128 @@ export class HubState {
   }
 
   /**
+   * Expose an export to one Actor: a slot made on `to` at run time, typed by the export's
+   * interface and bound to it, in one step. The authority is a binding's, with `to` as the
+   * consumer: with both ends it is made (approving any open request for it); with one, it is a
+   * request to the other end's approvers, who approve by exposing the same; with neither, it is
+   * refused. The same export already exposed to `to` gives that slot back.
+   */
+  expose(
+    caller: string,
+    input: { provider: string; export: string; to: string; as?: string },
+  ): { exposed: true; slot: string } | { exposed: false; slot: string; requestId: string } {
+    const to = this.#open(input.to);
+    const provider = this.#open(input.provider);
+    // Authority first, as bind's: a caller with neither end learns nothing more.
+    const ends = { consumer: to.actorId, provider: provider.actorId, export: input.export };
+    const sides = this.sides(caller, { ...ends, slot: "" });
+    if (!sides.export && !sides.slot)
+      throw new Refused(
+        "forbidden",
+        `${this.#named(caller)} can't expose ${input.export} of ${this.#named(provider.actorId)} to ${this.#named(to.actorId)}: that takes the provider's side (it, an Actor bound to that export, or a manager) or ${this.#named(to.actorId)}'s (it, or a manager). Ask one of them to expose it.`,
+      );
+    if (BUILTIN.has(to.actorId))
+      throw new Refused(
+        "forbidden",
+        `${this.#named(to.actorId)} is the Hub itself and takes no slots.`,
+      );
+    const offered = this.declaration(provider.actorId, "export", input.export);
+    if (!offered)
+      throw new Refused("unknown", `${this.#named(provider.actorId)} offers no ${input.export}.`);
+    if (offered.iface.kind !== "rpc")
+      throw new Refused(
+        "unsupported",
+        `Only an rpc export can be exposed; ${input.export} is ${offered.iface.kind}.`,
+      );
+    const same = (row: { provider: string; export: string }) =>
+      row.provider === provider.actorId && row.export === input.export;
+    const already = this.bindings(to.actorId).find(
+      (b) => b.consumer === to.actorId && b.exposed && same(b),
+    );
+    if (already && (input.as === undefined || input.as === already.slot))
+      return { exposed: true, slot: already.slot };
+    const requested = (
+      this.#db
+        .prepare("SELECT * FROM requests WHERE status = 'open' AND exposed = 1 AND consumer = ?")
+        .all(to.actorId) as Row[]
+    ).map(requestOf);
+    // An open request's name for this export is taken again, so approving needs no `as`.
+    const slot =
+      input.as ??
+      requested.find(same)?.slot ??
+      this.#freeName(to.actorId, exposedName(provider.name, input.export), requested);
+    if (!NAME.test(slot) || slot.length > EXPOSED_MAX)
+      throw new Refused(
+        "invalid",
+        `${JSON.stringify(slot)} isn't a slot name: one word of letters, digits and _, at most ${EXPOSED_MAX}.`,
+      );
+    // A request reserves no name: the first exposure made under it has it, and the rest close.
+    if (this.declaration(to.actorId, "slot", slot))
+      throw new Refused(
+        "conflict",
+        `${this.#named(to.actorId)} already has a slot ${slot}; name another with as.`,
+      );
+    const wiring = { ...ends, slot };
+    if (!(sides.export && sides.slot)) {
+      const has: Side = sides.export ? "export" : "slot";
+      if (!this.#asked(wiring, has)) {
+        const mine = requested.filter(
+          (r) => r.requestedBy === caller && !(same(r) && r.slot === slot),
+        );
+        if (mine.length >= MAX_OPEN_EXPOSURES)
+          throw new Refused(
+            "limit",
+            `${this.#named(caller)} has ${MAX_OPEN_EXPOSURES} exposures to ${this.#named(to.actorId)} waiting; wait for them to be decided, or withdraw one by exposing it.`,
+          );
+        const request = this.#ask(caller, wiring, "", other(has), true);
+        return { exposed: false, slot, requestId: request.requestId };
+      }
+    }
+    this.#transaction(() => {
+      // Settled: this slot's requests (approved if for this export), and this export's requests
+      // to `to` under other names, which can't be made any more.
+      const pending = this.#pending(
+        "consumer = ? AND (slot = ? OR (exposed = 1 AND provider = ? AND export = ?))",
+        wiring.consumer,
+        wiring.slot,
+        wiring.provider,
+        wiring.export,
+      );
+      this.#declare(to.actorId, "slot", slot, offered.iface, true);
+      this.#insertBinding(wiring, caller);
+      for (const open of pending)
+        this.#decide(
+          open,
+          same(open.request) && open.request.slot === slot ? "approved" : "closed",
+        );
+      this.#audit(caller, "expose", { ...wiring });
+    });
+    return { exposed: true, slot };
+  }
+
+  /** A name free on `to`: `base`, else `base_2`, `base_3`…, each within the longest name. */
+  #freeName(to: string, base: string, requested: RequestRecord[]): string {
+    const taken = (name: string) =>
+      !!this.declaration(to, "slot", name) || requested.some((r) => r.slot === name);
+    for (let n = 1; ; n++) {
+      const suffix = n === 1 ? "" : `_${n}`;
+      const name = base.slice(0, EXPOSED_MAX - suffix.length) + suffix;
+      if (!taken(name)) return name;
+    }
+  }
+
+  /** Remove a slot made by `expose`, with its binding: its consumer, its provider or a manager may. */
+  unexpose(caller: string, to: string, slot: string): void {
+    const binding = this.binding(to, slot);
+    if (!binding?.exposed)
+      throw new Refused(
+        "unknown",
+        `${this.#named(to)} has no slot ${slot} made by expose; unbind a declared slot instead.`,
+      );
+    this.unbind(caller, to, slot);
+  }
+
+  /**
    * Ask for a binding the caller holds one end of; it goes to the other end's approvers. Asking
    * again for the same wiring while a request is open returns that request.
    */
@@ -1101,8 +1300,15 @@ export class HubState {
       .some((request) => this.#standing(request));
   }
 
-  #ask(caller: string, wiring: Wiring, reason: string, needs: Side): RequestRecord {
-    this.#ends(wiring);
+  #ask(
+    caller: string,
+    wiring: Wiring,
+    reason: string,
+    needs: Side,
+    exposed = false,
+  ): RequestRecord {
+    // An exposure's slot doesn't exist until it is approved; `expose` checked its ends.
+    if (!exposed) this.#ends(wiring);
     if (this.binding(wiring.consumer, wiring.slot))
       throw new Refused("bound", `${wiring.consumer}'s ${wiring.slot} is already bound.`);
     const open = this.#db
@@ -1118,11 +1324,12 @@ export class HubState {
       reason,
       requestedBy: caller,
       at: now(),
+      ...(exposed ? { exposed: true as const } : {}),
     };
     this.#transaction(() => {
       this.#db
         .prepare(
-          "INSERT INTO requests (id, consumer, slot, provider, export, reason, requested_by, at, status, needs) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)",
+          "INSERT INTO requests (id, consumer, slot, provider, export, reason, requested_by, at, status, needs, exposed) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)",
         )
         .run(
           request.requestId,
@@ -1134,8 +1341,14 @@ export class HubState {
           caller,
           request.at,
           needs,
+          exposed ? 1 : 0,
         );
-      this.#audit(caller, "request", { ...wiring, needs, requestId: request.requestId });
+      this.#audit(caller, "request", {
+        ...wiring,
+        needs,
+        requestId: request.requestId,
+        ...(exposed ? { exposed: true } : {}),
+      });
       const approvers = this.approvers(request).filter((a) => a !== caller);
       this.#emit(() => this.#events.requested?.(request, approvers));
     });
