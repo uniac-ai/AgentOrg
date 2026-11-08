@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -7,14 +7,50 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { accountLogin } from "@agentorg/interfaces";
 import { Refused } from "@agentorg/sdk";
-import { verifyPackage } from "@agentorg/sdk/build";
+import { buildPackage, verifyPackage } from "@agentorg/sdk/build";
 import { connect } from "@agentorg/sdk/client";
 import { installAgent } from "@agentorg/shell/agent-bindings";
 import WebSocket from "ws";
 import { type App, firstRun, startApp } from "../src/index.ts";
 
-// dist/test/model.test.js → dist/bundled, the app's bundled packages.
+// dist/test/model.test.js → dist/bundled, the app's bundled packages; the app's folder; the root.
 const bundled = join(dirname(fileURLToPath(import.meta.url)), "..", "bundled");
+const appFolder = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+const root = join(appFolder, "..", "..");
+
+/**
+ * The bundle an earlier release shipped, as far as a first run can tell: the installer, ChatGPT
+ * and the assistant built again under another version, so each is another package, and the board.
+ */
+async function earlierBundle(t: test.TestContext) {
+  const dir = join(appFolder, ".test-fixtures", `earlier-${process.pid}-${Date.now()}`);
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const out = join(dir, "bundled");
+  mkdirSync(out, { recursive: true });
+  const index = JSON.parse(readFileSync(join(bundled, "index.json"), "utf8")) as Record<
+    string,
+    string
+  >;
+  const earlier: Record<string, string> = {};
+  for (const name of ["installer", "chatgpt", "assistant"]) {
+    const source = join(dir, name);
+    cpSync(join(root, "packages", name), source, {
+      recursive: true,
+      filter: (path) => !/\/(node_modules|dist|agentorg-build)(\/|$)/.test(path),
+    });
+    const manifest = JSON.parse(readFileSync(join(source, "package.json"), "utf8"));
+    writeFileSync(
+      join(source, "package.json"),
+      JSON.stringify({ ...manifest, version: `${manifest.version}-earlier` }),
+    );
+    const built = await buildPackage(source, { out: join(dir, `${name}-out`) });
+    cpSync(built.file, join(out, `${built.hash}.agentorg`));
+    earlier[name] = `${built.hash}.agentorg`;
+  }
+  cpSync(join(bundled, index.board as string), join(out, index.board as string));
+  writeFileSync(join(out, "index.json"), JSON.stringify({ ...earlier, board: index.board }));
+  return out;
+}
 const until = async (condition: () => boolean, ms = 15_000) => {
   const end = Date.now() + ms;
   while (!condition()) {
@@ -123,7 +159,13 @@ test("first run makes the installer and ChatGPT once, bound as the person bound 
   }); // The assistant New agent installs is the bundled one, by hash.
   assert.deepEqual(
     ((await person.call("store", "get", { key: "app/first-run" })) as { value: object }).value,
-    { installer: ran.installer, chatgpt: ran.chatgpt, assistant: ran.packages.assistant },
+    {
+      installer: ran.installer,
+      chatgpt: ran.chatgpt,
+      assistant: ran.packages.assistant,
+      // Every assistant build a run bundled, so an agent on one is known as the app's.
+      assistants: [ran.packages.assistant],
+    },
   );
   assert.deepEqual(Object.keys(ran.packages).sort(), [
     "assistant",
@@ -235,6 +277,53 @@ test("first run trusts only the Actors it made: never one by its package's name"
   assert.equal(again.installer, ran.installer);
   assert.ok(again.chatgpt && again.chatgpt !== ran.chatgpt);
   assert.ok((await wiring("person")).includes(`login ${again.chatgpt}.model.login`));
+});
+
+test("first run brings what earlier runs made to this build: the same Actors, upgraded", async (t) => {
+  const { app, person, actors, wiring } = await setup(t);
+  const connected = (id: string) => app.hub.connected(id);
+  const before = await firstRun(person, { bundled: await earlierBundle(t), connected });
+  assert.ok(before.installer && before.chatgpt && before.packages.assistant);
+  // An agent on the earlier assistant build, with its store, and an Actor on another package.
+  const { actorId: agent } = (await person.call("actors", "create", {
+    name: "John",
+    package: before.packages.assistant,
+    bindings: [{ slot: "logic.store", provider: "storage", export: "kv" }],
+  })) as { actorId: string };
+  const { actorId: board } = (await person.call("actors", "create", {
+    name: "Board",
+    package: before.packages.board,
+  })) as { actorId: string };
+
+  const made = (await actors()).length;
+  const lines: string[] = [];
+  const after = await firstRun(person, { connected, log: (line) => lines.push(line) });
+  // The same Actors, each on this build's package.
+  assert.equal(after.installer, before.installer);
+  assert.equal(after.chatgpt, before.chatgpt);
+  const packageOf = async (id: string) =>
+    ((await person.call("actors", "get", { actorId: id })) as { package: string }).package;
+  assert.equal(await packageOf(before.installer), after.packages.installer);
+  assert.equal(await packageOf(before.chatgpt), after.packages.chatgpt);
+  assert.equal(await packageOf(agent), after.packages.assistant);
+  assert.notEqual(after.packages.assistant, before.packages.assistant);
+  assert.equal(await packageOf(board), before.packages.board);
+  // Their bindings, and the person's, are there; no Actor was made.
+  assert.ok((await wiring(agent)).includes("logic.store storage.kv"));
+  assert.ok((await wiring("person")).includes(`installer ${before.installer}.installer.installer`));
+  assert.equal((await actors()).length, made);
+  for (const what of ["the installer", "ChatGPT", "the agent John"])
+    assert.ok(
+      lines.some((line) => line.startsWith(`First run: upgraded ${what} (`)),
+      `${what}: ${lines.join(" | ")}`,
+    );
+  // Run again: nothing more to upgrade.
+  const quiet: string[] = [];
+  await firstRun(person, { connected, log: (line) => quiet.push(line) });
+  assert.deepEqual(
+    quiet.filter((line) => line.includes("upgraded")),
+    [],
+  );
 });
 
 test("the app runs the first run at start, unless told not to", async (t) => {
