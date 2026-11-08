@@ -151,7 +151,11 @@ type Client = Awaited<ReturnType<typeof connect>>;
 
 async function setup(
   t: test.TestContext,
-  options: { answerTimeoutMs?: number; helloTimeoutMs?: number; checks?: { size?: number } } = {},
+  options: {
+    answerTimeoutMs?: number;
+    helloTimeoutMs?: number;
+    checks?: { size?: number; compileBudgetMs?: number };
+  } = {},
 ) {
   const home = join(mkdtempSync(join(tmpdir(), "agentorg-router-")), "home");
   // The Hub's own hello deadline unless a test watches it close a channel: a short one fails
@@ -1165,8 +1169,14 @@ test("checks are served in turn by Actor, so one Actor's flood delays only itsel
 });
 
 test("another Actor's call waits for the checks already running during a flood, not the queue", async (t) => {
-  // Two workers, as on a small machine, so the flood can't hide behind a wide pool.
-  const { actor, bind, person } = await setup(t, { checks: { size: 2 } });
+  // One worker, so only taking turns can let the other Actor's checks past the flood: with a
+  // second one, flood checks it finishes while the other Actor's checks run would count too, and
+  // how many depends on the machine. A wide compile budget, so a freshly respawned worker
+  // compiling the other Actor's schemas on a loaded machine isn't refused; the flood's checks
+  // still run into the 250 ms check budget.
+  const { actor, bind, person } = await setup(t, {
+    checks: { size: 1, compileBudgetMs: 10_000 },
+  });
   const unique = handMade(
     "unique",
     { type: "object", properties: { items: { type: "array", uniqueItems: true } } },
@@ -1199,15 +1209,16 @@ test("another Actor's call waits for the checks already running during a flood, 
   const during = answered - before;
   assert.ok("result" in listed);
   for (const r of await Promise.all(flood)) assert.equal(r.error?.code, "invalid");
-  // Counted, not timed: its input and output checks each wait for the flood checks already
-  // running (two workers, and a respawn each), not for the whole queue behind them: about four
-  // flood calls, five if one was in flight when counted. Served in arrival order, it would wait
-  // for every queued flood call.
+  // Counted, not timed, and bounded by turns alone: each of its two checks waits for the flood
+  // check running and at most the one the flood's turn puts ahead of it, so four flood calls
+  // finish, five if one that finished at the Hub was still on its way when counted. Served in
+  // arrival order, it would wait for every queued flood call.
   assert.ok(during <= 5, `${during} flood calls finished while the other call waited`);
 });
 
 test("a slow caller of a shared provider doesn't hold up its other callers", async (t) => {
-  const { actor, bind } = await setup(t, { checks: { size: 2 } });
+  // One worker and a wide compile budget, as in the flood test above: turns alone bound the count.
+  const { actor, bind } = await setup(t, { checks: { size: 1, compileBudgetMs: 10_000 } });
   const unique = handMade(
     "unique",
     { type: "object" },
