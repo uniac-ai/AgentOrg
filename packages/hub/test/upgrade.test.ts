@@ -193,6 +193,23 @@ test("only a package Actor that isn't closed is upgraded, by whoever may close i
   );
   // An Actor that can't close it can't upgrade it.
   assert.throws(() => state.upgrade(external, actorId, v1), refused("forbidden"));
+  // Nor can one that may create and close Actors but isn't a manager: upgrading would run its
+  // own package as an Actor that keeps its grants, here the store.
+  const store = state.createActor(PERSON, {
+    name: "Stored",
+    package: v1,
+    bindings: [{ slot: "counter.store", provider: "storage", export: "kv" }],
+  }).actorId;
+  const agent = state.createActor(PERSON, {
+    name: "Agent",
+    bindings: [{ slot: "actors", provider: "hub", export: "actors" }],
+  }).actorId;
+  const own = state.addPackage(PERSON, await build(t, { step: 7 })).hash;
+  assert.throws(
+    () => state.upgrade(agent, store, own),
+    refused("forbidden", /Only a manager may upgrade/),
+  );
+  assert.equal(state.actor(store).package, v1);
   state.closeActor(PERSON, actorId);
   assert.throws(() => state.upgrade(PERSON, actorId, v1), refused("state", /closed/));
 });

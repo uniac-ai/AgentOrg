@@ -745,6 +745,13 @@ export class HubState {
   /** Refused unless the caller may upgrade the Actor to the package now; changes nothing. */
   checkUpgrade(caller: string, actorId: string, hash: string): ActorRecord {
     this.#require(caller, "actors");
+    // An upgrade runs new code as an Actor that keeps its bindings and its store: whatever it was
+    // granted, the new code holds. Only a manager, who could grant all of it anyway, may.
+    if (!this.isManager(caller))
+      throw new Refused(
+        "forbidden",
+        `Only a manager may upgrade an Actor, since the new package keeps its bindings and its store; ${this.named(caller)} isn't one.`,
+      );
     const actor = this.actor(actorId);
     if (actorId === HUB || actorId === PERSON || actorId === STORAGE || actorId === NET)
       throw new Refused("forbidden", `${this.named(actorId)} is built in and can't be upgraded.`);

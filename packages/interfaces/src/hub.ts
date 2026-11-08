@@ -131,8 +131,9 @@ export const hubActors = defineInterface({
      * Run another package as the same package Actor: its id, its stores and every binding whose
      * interfaces still match stay. A binding through a slot or export the new package drops, or
      * declares as another interface, is dropped and listed in `dropped`; the new package's own
-     * wiring is made where its slot is unbound. A running Actor restarts on the new package. Who
-     * may close it may upgrade it.
+     * wiring is made where its slot is unbound. A running Actor restarts on the new package.
+     * Only a manager may upgrade: the new package runs as the Actor and keeps what it was granted
+     * (its bindings and its store), which only a manager could grant anyway.
      */
     upgrade: method({
       input: z.object({ actorId: Id, package: Hash }),
