@@ -198,6 +198,19 @@ start_on "$old/node_modules/.bin/agentorg" "$uphome" "$work/old.log"
 made="$(both_ready "$old/node_modules/.bin/agentorg" "$uphome")" ||
   { echo "0.0.3's first run didn't finish" >&2; cat "$work/old.log" >&2; exit 1; }
 echo "0.0.3: $made"
+# An agent made on 0.0.3: an interface that changed under the same major must not strand it.
+"$old/node_modules/.bin/agentorg" call store get '{"key":"app/first-run"}' --home "$uphome" >"$work/old-record.json"
+agent_input="$(node -e '
+  const { value } = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+  const chatgpt = /ChatGPT=(\S+)/.exec(process.argv[2])[1];
+  console.log(JSON.stringify({ package: value.assistant, name: "Agent", start: true, connections: {
+    "logic.model": { actor: chatgpt, export: "model.session" },
+    "logic.store": { actor: "storage", export: "kv" },
+  } }));
+' "$work/old-record.json" "$made")"
+agent="$("$old/node_modules/.bin/agentorg" call installer install "$agent_input" --home "$uphome" |
+  node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).actorId))')"
+echo "0.0.3's agent: $agent"
 stop_app
 start_on "$agentorg" "$uphome" "$work/up.log"
 # The Hub resumes the old Actors as it opens: wait for the first run to have upgraded both.
@@ -215,6 +228,32 @@ kept="$(both_ready "$agentorg" "$uphome")" ||
   { echo "This build didn't take the home over" >&2; cat "$work/up.log" >&2; exit 1; }
 echo "this build: $kept"
 [ "$made" = "$kept" ] || { echo "The Installer or ChatGPT is another Actor now" >&2; exit 1; }
+# The agent came over: the same Actor, on this build's assistant, running, its connections kept.
+"$agentorg" call store get '{"key":"app/first-run"}' --home "$uphome" >"$work/up-record.json"
+for _ in $(seq 1 120); do
+  "$agentorg" actors --home "$uphome" >"$work/up-actors.json" 2>/dev/null &&
+    node -e '
+      const fs = require("fs");
+      const [actors, record, id] = process.argv.slice(1);
+      const { value } = JSON.parse(fs.readFileSync(record, "utf8"));
+      const agent = JSON.parse(fs.readFileSync(actors, "utf8")).actors.find((a) => a.actorId === id);
+      if (!agent || agent.package !== value.assistant || agent.state !== "running" || !agent.connected)
+        process.exit(1);
+    ' "$work/up-actors.json" "$work/up-record.json" "$agent" && break
+  kill -0 "$pid" 2>/dev/null || break
+  sleep 0.5
+  false
+done || { echo "The agent didn't come over on this build" >&2; cat "$work/up.log" >&2; exit 1; }
+"$agentorg" call bindings list "{\"actor\":\"$agent\"}" --home "$uphome" >"$work/up-bindings.json"
+node -e '
+  const { bindings } = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+  for (const slot of ["chat.chat", "logic.model", "logic.store"])
+    if (!bindings.some((b) => b.slot === slot)) {
+      console.error(`The agent lost ${slot}`);
+      process.exit(1);
+    }
+  console.log("the agent kept its chat and model connections");
+' "$work/up-bindings.json"
 # The upgraded Installer installs: the counter, built by the Hub, with its store.
 "$agentorg" call packages build "$counter" --home "$uphome" >"$work/up-build.json"
 hash="$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).hash)' "$work/up-build.json")"

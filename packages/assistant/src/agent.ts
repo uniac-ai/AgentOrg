@@ -34,6 +34,8 @@ export function createAgent(options: {
   /** Read for each model request: what the agent is told can follow what it's bound to. */
   instructions: () => string;
   model: Slot<typeof llmSession>;
+  /** The model chosen for this agent, read for each request; none means the provider's default. */
+  chosenModel(): Promise<string | undefined>;
   history: History;
   tools(): Tools;
   chat: Chat;
@@ -133,6 +135,7 @@ export function createAgent(options: {
       status(current, { state: "thinking" });
       const tools = options.tools();
       const input = await history.input();
+      const chosen = await options.chosenModel();
       if (current.cancelled) return;
       const requestId = crypto.randomUUID();
       const replyId = crypto.randomUUID();
@@ -142,6 +145,7 @@ export function createAgent(options: {
       try {
         ({ output } = await model.call.respond({
           requestId,
+          ...(chosen ? { model: chosen } : {}),
           instructions: options.instructions(),
           input,
           tools: [...tools.values()].map((found) => found.tool),
