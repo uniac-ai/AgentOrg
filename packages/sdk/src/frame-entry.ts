@@ -1,5 +1,6 @@
 import { type Frame, runFrame } from "./frame.js";
 import { FRAME_BASE } from "./frame-base.js";
+import { installClipboard } from "./frame-clipboard.js";
 import { FRAME_HELLO, type PortLike } from "./frame-protocol.js";
 import type { FrameRoot } from "./module.js";
 
@@ -40,6 +41,7 @@ let frame: Frame | undefined;
 const base = self.document.createElement("style");
 base.textContent = FRAME_BASE;
 self.document.head.prepend(base);
+installClipboard(self as unknown as Parameters<typeof installClipboard>[0]);
 
 self.addEventListener("message", (event) => {
   const port = event.ports[0];

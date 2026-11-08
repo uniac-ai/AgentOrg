@@ -129,6 +129,24 @@ test("a sent message shows at once, once, and in the same place when the record 
   await close();
 });
 
+test("Copy puts a reply on the clipboard from inside the frame", async () => {
+  const { page, chat, close } = await open("Copier");
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"], { origin: app.url });
+  const input = chat.getByRole("textbox", { name: "Message" });
+  await input.fill("copy me");
+  await input.press("Enter");
+  await chat.getByText("Echo: copy me").waitFor();
+  await page.evaluate(() => navigator.clipboard.writeText("before"));
+  await chat.getByRole("button", { name: "Copy" }).click();
+  for (let waited = 0; ; waited += 50) {
+    if ((await page.evaluate(() => navigator.clipboard.readText())) !== "before") break;
+    assert.ok(waited < 5000, "nothing was copied");
+    await new Promise((done) => setTimeout(done, 50));
+  }
+  assert.equal(await page.evaluate(() => navigator.clipboard.readText()), "Echo: copy me");
+  await close();
+});
+
 test("a refused send goes from the conversation, and its text is back in the box", async () => {
   const { chat, close } = await open("Refused");
   const input = chat.getByRole("textbox", { name: "Message" });

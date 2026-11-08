@@ -93,6 +93,9 @@ const kept = (entry: Entry): Entry => ({
   }),
 });
 
+/** Stored messages read at once when the record is first loaded. */
+const READS = 16;
+
 interface Kept {
   key: string;
   entry: Entry;
@@ -115,16 +118,22 @@ export function createHistory(
       let after: string | undefined;
       do {
         const page = await store.list({ prefix: PREFIX, limit: 1000, ...(after ? { after } : {}) });
-        for (const key of page.keys) {
-          last = Math.max(last, Number(key.slice(PREFIX.length)) || 0);
-          const parsed = Entry.safeParse((await store.get({ key })).value);
-          if (!parsed.success) {
-            log.warn("A stored message didn't read back; it is left out.", { key });
-            continue;
-          }
-          const record = { key, entry: parsed.data, bytes: size(parsed.data) };
-          records.push(record);
-          bytes += record.bytes;
+        // A few at a time, in order: a long record shouldn't hold up the first send one read at
+        // a time, nor flood the Hub.
+        for (let at = 0; at < page.keys.length; at += READS) {
+          const keys = page.keys.slice(at, at + READS);
+          const values = await Promise.all(keys.map((key) => store.get({ key })));
+          keys.forEach((key, i) => {
+            last = Math.max(last, Number(key.slice(PREFIX.length)) || 0);
+            const parsed = Entry.safeParse(values[i]?.value);
+            if (!parsed.success) {
+              log.warn("A stored message didn't read back; it is left out.", { key });
+              return;
+            }
+            const record = { key, entry: parsed.data, bytes: size(parsed.data) };
+            records.push(record);
+            bytes += record.bytes;
+          });
         }
         after = page.next ?? undefined;
       } while (after);
@@ -183,6 +192,21 @@ export function createHistory(
         );
       }
       return record.entry;
+    },
+    /** Forget everything after the message `id`: a retry takes the place of what followed it. */
+    async dropAfter(id: string) {
+      const state = await load();
+      const at = state.records.findLastIndex((record) => record.entry.id === id);
+      if (at === -1) return;
+      for (const gone of state.records.splice(at + 1)) {
+        state.bytes -= gone.bytes;
+        await store.delete({ key: gone.key }).catch((error: unknown) =>
+          log.warn("A replaced message couldn't be deleted.", {
+            key: gone.key,
+            error: String(error),
+          }),
+        );
+      }
     },
     /** The person's last message, if any. */
     async lastUser(): Promise<Entry | undefined> {
