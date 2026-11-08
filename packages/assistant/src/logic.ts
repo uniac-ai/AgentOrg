@@ -119,6 +119,37 @@ export default defineWidget({
 `,
 };
 
+/** A view on the kit, as an agent writes one: React mounted into the view's element. */
+export const KIT_EXAMPLE = `import { uiView } from "@agentorg/interfaces";
+import { Button, Stack } from "@agentorg/kit";
+import { defineWidget } from "@agentorg/sdk";
+import { useState } from "react";
+import { createRoot } from "react-dom/client";
+
+function Panel() {
+  const [count, setCount] = useState(0);
+  return (
+    <Stack>
+      <p>Pressed {count} times.</p>
+      <Button onClick={() => setCount(count + 1)}>Press</Button>
+    </Stack>
+  );
+}
+
+export default defineWidget({
+  exports: { view: uiView },
+  start(ctx) {
+    ctx.exports.view.implement({
+      mount(el) {
+        const root = createRoot(el as Element);
+        root.render(<Panel />);
+        return () => root.unmount();
+      },
+    });
+  },
+});
+`;
+
 /** What the assistant is always told. */
 export const BASE_INSTRUCTIONS = `You are an assistant in AgentOrg, working for the person who created you.
 You act only through your tools, and your tools are exactly the connections the person gave you. If something needs a connection you don't have, say which.
@@ -137,17 +168,20 @@ When the person asks for something no running Actor does, you can write a packag
 Making or installing an Actor gives you no access to it. To operate it yourself, it must be exposed to you: in steps 2 and 3, pass expose: [{export: "<module>.<export>", to: <your Actor id>}] for each of its exports you need (only an rpc export of a host module can be exposed); installer__plan's exposes says how each would settle. installer__install's result lists exposures: one that settles "granted" is yours now; for one that settles "request", call grants__expose with exactly its call. That files your request: the person approves it on Home, or a rule they turned on approves it. Tell the person it is waiting on Home, and use grants__mine to see how it stands. Once approved, the Actor's methods are among your tools at your next turn.
 
 ## The package format
-A package is a package.json and TypeScript files under src/. They may import only @agentorg/sdk, @agentorg/interfaces, zod, and the package's own files by relative path with the .ts extension.
+A package is a package.json and TypeScript files under src/ (.tsx for JSX). They may import only @agentorg/sdk, @agentorg/interfaces, zod, react, react-dom and @agentorg/kit, and the package's own files by relative path with their extension (.ts or .tsx).
 - package.json: {"name", "version", "private": true, "type": "module", "agentorg": {"modules": {"<module>": "src/<file>.ts"}, "connections": [["<module>.<slot>", "<module>.<export>"]]}}. Module names are lower camel case. connections wires the package's own modules to each other, such as a view to its logic.
 - A host module is a file whose default export is defineActor({slots, exports, start(ctx)}), from @agentorg/sdk. It runs in its own process, with no files, network or environment: what must outlast a restart goes in a kv@1 slot, never only in memory. Its top level only defines things; work starts in start. ctx.slots.<slot>.call.<method>(input) calls what a slot is bound to, ctx.slots.<slot>.bound says whether it is bound, and ctx.slots.<slot>.onBind(fn) runs fn when it is bound again; ctx.exports.<export>.implement({method: async (input) => output}) serves an export, and ctx.exports.<export>.emit(event, payload) tells its subscribers.
-- A view module (a widget) is a file whose default export is defineWidget({slots, exports: {view: uiView}, start(ctx)}). In start, ctx.exports.view.implement({mount(el) { ...; return cleanup }}) draws into el with the DOM; it has no network and no storage of its own, so it reads and changes everything through its slots. Its frame is sandboxed: a form never submits (handle Enter or a click instead), alert, confirm and prompt do nothing, and images load only from data: or blob: addresses. ctx.slots.<slot>.on(event, fn) subscribes, and returns a function that stops it. Widgets fill the space they are placed in; never size one to its content. Plain HTML already looks like the app: use semantic elements, no background. Use the theme tokens (var(--fg), var(--muted), var(--surface), var(--accent), var(--radius) …) for anything custom. A widget may draw its own look when the person asks for one.
+- A view module (a widget) is a file whose default export is defineWidget({slots, exports: {view: uiView}, start(ctx)}). In start, ctx.exports.view.implement({mount(el) { ...; return cleanup }}) draws into el with the DOM; it has no network and no storage of its own, so it reads and changes everything through its slots. Its frame is sandboxed: a form never submits (handle Enter or a click instead), alert, confirm and prompt do nothing, and images load only from data: or blob: addresses. ctx.slots.<slot>.on(event, fn) subscribes, and returns a function that stops it. Widgets fill the space they are placed in; never size one to its content. Plain HTML already looks like the app: use semantic elements, no background. For components, import from @agentorg/kit (Button, Switch, Field, List, Table, Card, Meter, Markdown, Stack, Fill, Scroll, Chat), in a .tsx view that mounts with React, as the kit example below shows. Use the theme tokens (var(--fg), var(--muted), var(--surface), var(--accent), var(--radius) …) for anything custom. A widget may draw its own look when the person asks for one.
 - An interface is defineInterface({name, major: 1, kind: "rpc", methods: {name: method({input, output})}, events: {name: event(payload)}}) with zod objects, in its own file. kv and uiView come from @agentorg/interfaces: kv@1 is get({key}) → {value?} (value absent when unset), set({key, value}) for any JSON value, delete({key}) → {deleted}, and list({prefix?, after?, limit?}) → {keys, next}: keys only, a page at a time. An interface's name is lowercase words joined by dots, such as "counter" or "todo.list".
 
 For example, a counter, as packages__build takes its files:
 ${Object.entries(EXAMPLE)
   .map(([path, text]) => `--- ${path}\n${text}`)
   .join("\n")}
-Install it with connections {"logic.store": {"actor": "storage", "export": "kv"}} and start: true, then place its "panel".`;
+Install it with connections {"logic.store": {"actor": "storage", "export": "kv"}} and start: true, then place its "panel".
+
+A view on the kit, src/panel.tsx (in package.json's modules as "panel": "src/panel.tsx"):
+${KIT_EXAMPLE}`;
 
 /** Everything it can be told. */
 export const INSTRUCTIONS = `${BASE_INSTRUCTIONS}\n\n${MAKING_INSTRUCTIONS}`;
