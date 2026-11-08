@@ -7,10 +7,7 @@ import { pathToFileURL } from "node:url";
 import {
   type BuildOptions as EsbuildOptions,
   context as esbuildContext,
-  type OnResolveResult,
   type Plugin,
-  type PluginBuild,
-  type ResolveResult,
 } from "esbuild";
 import type { ModuleDescription } from "./describe.js";
 import { compareInterfaces, type DescribedInterface } from "./interface.js";
@@ -231,9 +228,9 @@ async function bundle(
       ...input,
       // A limited build reads no tsconfig or jsconfig (one could name any file to read), and
       // loads only what its plugin resolved.
-      ...(packages
-        ? { plugins: [limitImports(root, packages, loadable)], tsconfigRaw: "{}", metafile: true }
-        : { plugins: [libraryNames(root)] }),
+      ...(packages ? { plugins: [limitImports(root, packages, loadable)], tsconfigRaw: "{}" } : {}),
+      // Its inputs, by the names the bundle gives them: a library's are renamed after.
+      metafile: true,
       absWorkingDir: root,
       bundle: true,
       format: "esm",
@@ -271,13 +268,12 @@ async function bundle(
       for (const input of Object.keys(result.metafile?.inputs ?? {}))
         if (
           input !== (input_.stdin?.sourcefile ?? "<stdin>") &&
-          !loadable.has(input) &&
           !loadable.has(resolve(root, input))
         )
           throw new BuildError("The bundle reached a file the package didn't import.");
-    return (
-      ((result.outputFiles ?? []) as { contents: Uint8Array }[])[0]?.contents ?? new Uint8Array()
-    );
+    const code =
+      ((result.outputFiles ?? []) as { contents: Uint8Array }[])[0]?.contents ?? new Uint8Array();
+    return nameLibraries(code, Object.keys(result.metafile?.inputs ?? {}), root);
   } catch (error) {
     if (error instanceof BuildError) throw error;
     const errors = (
@@ -321,72 +317,70 @@ function inPackage(path: string, name: string): boolean {
   }
 }
 
-/** The namespace a library's files are bundled under, by `libraryName`. */
-const LIBRARY = "agentorg-library";
+/** The name a library's file is given in the bundle, after this prefix. */
+const LIBRARY = "agentorg-library:";
+/** Each folder's package, once looked up: its name and version and folder, or none. */
+const packageOfFolder = new Map<string, { name: string; version: string; dir: string } | null>();
 
 /**
  * A library's file as the bundle names it: its package's name and version and its path in that
- * package, never where it is installed. esbuild names each CommonJS module it wraps by its path
- * from the build's folder, which for an installed library spells out the machine's folders and
- * changes with them: React's, for one, would carry the builder's home into every package built
- * with it. Undefined for a file in no named, versioned package.
+ * package, never where it is installed. Undefined for a file in no named, versioned package.
  */
 function libraryName(path: string): string | undefined {
+  const seen: string[] = [];
+  let found: { name: string; version: string; dir: string } | null = null;
   for (let dir = dirname(path); dirname(dir) !== dir; dir = dirname(dir)) {
+    const known = packageOfFolder.get(dir);
+    if (known !== undefined) {
+      found = known;
+      break;
+    }
+    seen.push(dir);
     let manifest: { name?: unknown; version?: unknown } | undefined;
     try {
       manifest = JSON.parse(readFileSync(join(dir, "package.json"), "utf8"));
     } catch {
       // No package.json here, or not one to read.
     }
-    if (typeof manifest?.name === "string" && typeof manifest.version === "string")
-      return `${manifest.name}@${manifest.version}/${relative(dir, path).split(sep).join("/")}`;
+    if (typeof manifest?.name === "string" && typeof manifest.version === "string") {
+      found = { name: manifest.name, version: manifest.version, dir };
+      break;
+    }
   }
-  return undefined;
+  for (const dir of seen) packageOfFolder.set(dir, found);
+  return found
+    ? `${found.name}@${found.version}/${relative(found.dir, path).split(sep).join("/")}`
+    : undefined;
 }
 
-/** Where a resolved file goes in the bundle: the package's own by its path, a library's by name. */
-function placed(found: ResolveResult, root: string): OnResolveResult {
-  const result = { path: found.path, namespace: found.namespace, external: found.external };
-  if (found.namespace !== "file" || found.external || within(found.path, root)) return result;
-  const name = libraryName(found.path);
-  if (!name) return result;
-  return {
-    path: name,
-    namespace: LIBRARY,
-    pluginData: { file: found.path },
-    sideEffects: found.sideEffects,
-  };
-}
-
-/** Load a library's file named by `placed`, from where it is, its imports resolved from there. */
-function loadLibraries(build: PluginBuild) {
-  build.onLoad({ filter: /.*/, namespace: LIBRARY }, async (args) => {
-    const { file } = args.pluginData as { file: string };
-    return { contents: await readFile(file), loader: "default", resolveDir: dirname(file) };
-  });
-}
-
-/** An unlimited build's resolution, as esbuild's own, with its libraries named by `placed`. */
-function libraryNames(root: string): Plugin {
-  const SKIP = Symbol("resolving");
-  return {
-    name: "agentorg-library-names",
-    setup(build) {
-      build.onResolve({ filter: /.*/ }, async (args) => {
-        if ((args.pluginData as { [SKIP]?: boolean } | undefined)?.[SKIP]) return undefined;
-        const found = await build.resolve(args.path, {
-          kind: args.kind,
-          resolveDir: args.resolveDir,
-          importer: args.importer,
-          pluginData: { [SKIP]: true },
-        });
-        if (found.errors.length) return { errors: found.errors };
-        return placed(found, root);
-      });
-      loadLibraries(build);
+/**
+ * The bundle with each wrapped library module named by its library, not by where it sits.
+ * esbuild names each CommonJS (and lazily run ESM) module it wraps by its path from the build's
+ * folder, which for an installed library spells out the machine's folders and changes with them:
+ * React's, for one, would carry the builder's home into every package built with it. Only those
+ * names change, and only for a library's files: in a named, versioned package, outside the
+ * package's folder or in a node_modules within it.
+ */
+function nameLibraries(code: Uint8Array, inputs: string[], root: string): Uint8Array {
+  const names = new Map<string, string>();
+  for (const input of inputs) {
+    const path = resolve(root, input);
+    // The package's own files keep their paths; a library is named, even one installed inside.
+    if (within(path, root) && !path.slice(root.length).split(sep).includes("node_modules"))
+      continue;
+    const name = libraryName(path);
+    if (name) names.set(input, `${LIBRARY}${name}`);
+  }
+  if (!names.size) return code;
+  const text = new TextDecoder().decode(code);
+  const named = text.replace(
+    /(\b__(?:commonJS|esm)\d*\(\{)("(?:[^"\\\n]|\\.)*")/g,
+    (whole, call: string, literal: string) => {
+      const name = names.get(JSON.parse(literal) as string);
+      return name ? `${call}${JSON.stringify(name)}` : whole;
     },
-  };
+  );
+  return new TextEncoder().encode(named);
 }
 
 /**
@@ -449,14 +443,17 @@ function limitImports(
           );
         // A library's own import is its business, but only what was resolved here is loaded.
         if (found.namespace === "file") loadable.add(found.path);
-        const result = placed(found, root);
-        // The bundle's inputs name a library's file by its library name: that is loadable too.
-        if (result.namespace === LIBRARY) loadable.add(`${LIBRARY}:${result.path}`);
-        return result;
+        // As resolved, with what tree-shaking reads: the limit changes nothing it allows.
+        return {
+          path: found.path,
+          namespace: found.namespace,
+          external: found.external,
+          sideEffects: found.sideEffects,
+          suffix: found.suffix,
+        };
       });
       // A file esbuild found any other way (a pattern in a template-string import or require
       // matches files without resolving them) is never read.
-      loadLibraries(build);
       build.onLoad({ filter: /.*/ }, (args) =>
         args.namespace !== "file" || loadable.has(args.path)
           ? undefined

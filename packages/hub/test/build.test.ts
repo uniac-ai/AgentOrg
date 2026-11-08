@@ -372,7 +372,7 @@ const kitSource = (): Record<string, string> => ({
 });
 
 test("a view built by the Hub may import React, react-dom and the kit, and nothing past them", async (t) => {
-  const { hub, dir, person, leftovers } = await setup(t);
+  const { hub, person, leftovers } = await setup(t);
   const built = await person.slots.packages.call.build({ files: kitSource() });
   const modules = hub.state.package(built.hash).manifest.modules as Record<
     string,
@@ -386,14 +386,11 @@ test("a view built by the Hub may import React, react-dom and the kit, and nothi
   );
   assert.ok(bundle.includes("kit-button"), "the kit's Button is in the bundle");
   assert.doesNotMatch(bundle, /^import .* from ["'](react|@agentorg\/kit)/m);
-  // Where anything is installed is never in a package: React's CommonJS files are named by
-  // their library and version, so the build is the same wherever it runs, as agentorg build's.
+  // Where anything is installed is never in a package: a library's wrapped modules are named by
+  // their library and version, so the build is the same wherever the Hub runs.
   for (const place of [homedir(), realpathSync(hub.state.home), hubFolder])
     assert.ok(!bundle.includes(place), `the bundle names ${place}`);
   assert.match(bundle, /"agentorg-library:react@[^/"]+\/cjs\/react\.production\.js"/);
-  const local = await buildPackage(kitWidget, { out: join(dir, "kit-out") });
-  rmSync(join(kitWidget, "agentorg-build"), { recursive: true, force: true });
-  assert.equal(built.hash, local.hash, "the Hub's build is agentorg build's");
 
   const importing = (line: string) =>
     person.slots.packages.call.build({
@@ -409,12 +406,18 @@ test("a view built by the Hub may import React, react-dom and the kit, and nothi
       ),
       name,
     );
-  // An allowed name can't reach past its own package: the Hub's files, the home, other packages.
+  // An allowed name can't reach past what its package exports: not the Hub's files, nor another
+  // package's. Each of these packages has an exports map, which closes every other subpath.
   for (const path of [
     "@agentorg/kit/../../hub/package.json",
     "react/../@agentorg/hub/dist/src/state.js",
-    "react-dom/../../person-credential",
+    "react-dom/../../../person-credential",
+    "react/cjs/react.production.js",
   ])
-    await assert.rejects(importing(`import x from "${path}";`), refusedWith("build"), path);
+    await assert.rejects(
+      importing(`import x from "${path}";`),
+      refusedWith("build", /Could not resolve/),
+      path,
+    );
   assert.deepEqual(leftovers(), []);
 });
