@@ -18,8 +18,8 @@ import type {
 const cx = (...names: (string | false | undefined)[]) => names.filter(Boolean).join(" ");
 
 export type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
-  /** `primary` is the accent; `quiet` reads as a link. */
-  variant?: "primary" | "quiet";
+  /** `primary` is the accent; `danger` can't be undone; `quiet` reads as a link. */
+  variant?: "primary" | "danger" | "quiet";
 };
 export function Button({ variant, className, type = "button", ...props }: ButtonProps) {
   return (

@@ -11,6 +11,7 @@ export const KIT_CSS = `
 }
 .kit-button:hover { background: var(--selected); }
 .kit-button.kit-primary { background: var(--accent); color: var(--accent-fg); font-weight: 600; }
+.kit-button.kit-danger { background: var(--bad); color: white; font-weight: 600; }
 .kit-button.kit-quiet { height: auto; padding: 0; background: none; color: inherit; text-decoration: underline; text-underline-offset: 2px; }
 .kit-button:disabled { opacity: 0.6; cursor: default; }
 .kit-icon-button {
@@ -102,7 +103,7 @@ export const KIT_CSS = `
 .kit-md td { padding: 6px 14px 6px 0; border-top: 1px solid var(--line); }
 .kit-md a { color: inherit; text-underline-offset: 2px; }
 .kit-chat { container-type: inline-size; display: flex; flex-direction: column; height: 100%; min-height: 0; color: var(--fg); }
-.kit-chat-viewport { flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: none; padding: 8px 20px 0; }
+.kit-chat-viewport { flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: none; padding: 28px 20px 0; }
 .kit-chat-viewport::-webkit-scrollbar { display: none; }
 .kit-chat-thread { display: flex; flex-direction: column; gap: 22px; max-width: 720px; margin: 0 auto; padding-bottom: 16px; }
 .kit-chat-earlier { align-self: center; height: 28px; border: 0; background: none; color: var(--muted); font: inherit; font-size: 12.5px; cursor: pointer; }
@@ -142,7 +143,7 @@ export const KIT_CSS = `
 }
 .kit-chat-send:disabled { opacity: 0.35; cursor: default; }
 @container (max-width: 460px) {
-  .kit-chat-viewport { padding: 6px 12px 0; }
+  .kit-chat-viewport { padding: 16px 12px 0; }
   .kit-chat-thread { gap: 14px; }
   .kit-chat-user { max-width: 88%; padding: 7px 11px; }
   .kit-chat-who, .kit-tool-name { display: none; }

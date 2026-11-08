@@ -42,20 +42,37 @@ export default defineWidget({
 
 const busyOf = (state: string) => state === "thinking" || state === "tool";
 
+/**
+ * A notice, and whether a good read of the record ends it: a failed read, or the chat not being
+ * there. Those say nothing about a turn, so they can't outlast their cause.
+ */
+type Shown = Notice & { untilRead?: boolean };
+
+/** A message the person sent that the record doesn't have yet; `messageId` once `send` says it. */
+interface Sending {
+  id: string;
+  text: string;
+  messageId?: string;
+}
+
 function ChatView({ ctx }: { ctx: ViewContext }) {
   const slot = ctx.slots.chat;
   /** The record, in order, and the text still streaming by id. */
   const [messages, setMessages] = useState<ChatEntry[]>([]);
   const [streaming, setStreaming] = useState<ReadonlyMap<string, string>>(new Map());
   const [busy, setBusy] = useState(false);
-  const [notice, setNotice] = useState<Notice>();
+  const [notice, setNotice] = useState<Shown>();
+  /** What the person sent, shown at once, until the record has it. */
+  const [sending, setSending] = useState<readonly Sending[]>([]);
   /** Whether older messages remain before the first one shown. */
   const [hasEarlier, setHasEarlier] = useState(false);
   // What the async reads below merge into: always the latest.
   const shown = useRef(messages);
   shown.current = messages;
+  const sends = useRef(0);
 
-  const failed = (error: unknown) => setNotice(noticeOf(codeOf(error)));
+  const failed = (error: unknown) =>
+    setNotice({ ...noticeOf(codeOf(error)), untilRead: error instanceof NotConnected });
 
   useEffect(() => {
     let live = true;
@@ -73,9 +90,19 @@ function ChatView({ ctx }: { ctx: ViewContext }) {
           setMessages([...page, ...shown.current.slice(since).filter((m) => !known.has(m.id))]);
           setHasEarlier(more);
           setBusy(busyOf(now.state));
-          if (now.state === "error" && now.detail) setNotice(noticeOf(now.detail));
+          setNotice((was) =>
+            now.state === "error" && now.detail
+              ? noticeOf(now.detail)
+              : was?.untilRead
+                ? undefined
+                : was,
+          );
         })
-        .catch((error) => live && setNotice(noticeOf(codeOf(error))));
+        .catch((error) => {
+          // Not there yet (its process is still starting, say): `onBind` reads again when it is.
+          if (live && !(error instanceof NotConnected))
+            setNotice({ ...noticeOf(codeOf(error)), untilRead: true });
+        });
     };
     const off = [
       slot.on("message", (message) => {
@@ -85,6 +112,12 @@ function ChatView({ ctx }: { ctx: ViewContext }) {
           next.delete(message.id);
           return next;
         });
+        // The record has what the person sent: it takes the place of the one shown at once.
+        if (message.role === "user")
+          setSending((was) => {
+            const at = was.findIndex((m) => m.text === message.text);
+            return at === -1 ? was : was.filter((_, i) => i !== at);
+          });
         // The latest word on an id replaces the earlier: a tool call running, then ended.
         setMessages((was) => {
           const at = was.findIndex((m) => m.id === message.id);
@@ -141,18 +174,25 @@ function ChatView({ ctx }: { ctx: ViewContext }) {
   const action = notice?.action;
   // Retry needs a message of the person's to run again.
   const offered = action && (action.run !== "retry" || messages.some((m) => m.role === "user"));
+  const recorded = new Set(messages.map((m) => m.id));
+  const unrecorded = sending.filter((m) => !m.messageId || !recorded.has(m.messageId));
   return (
     <Chat
       messages={[
         ...messages,
+        ...unrecorded.map(({ id, text }) => ({ id, role: "user" as const, text })),
         ...[...streaming].map(([id, text]) => ({ id, role: "assistant" as const, text })),
       ]}
-      running={busy}
+      running={busy || sending.some((m) => !m.messageId)}
       onSend={async (text) => {
         setNotice(undefined);
+        const id = `sending-${++sends.current}`;
+        setSending((was) => [...was, { id, text }]);
         try {
-          await slot.call.send({ text });
+          const { messageId } = await slot.call.send({ text });
+          setSending((was) => was.map((m) => (m.id === id ? { ...m, messageId } : m)));
         } catch (error) {
+          setSending((was) => was.filter((m) => m.id !== id));
           failed(error);
           throw error;
         }

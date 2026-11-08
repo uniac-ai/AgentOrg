@@ -192,6 +192,12 @@ export async function startApp(options: AppOptions): Promise<App> {
         throw error;
       });
 
+  // However an Actor is closed, here or by an agent, its views leave the layout.
+  person.slots.actors.on("changed", ({ actor }) => {
+    if (hub.state.actor(actor).state === "closed")
+      void layoutLogic.removeActor(actor).catch(() => {});
+  });
+
   /** The person's side of `/api`: its slots, and `layout`, its own export, served here. */
   const personSide: PersonSide = {
     async call(slot, method, input) {

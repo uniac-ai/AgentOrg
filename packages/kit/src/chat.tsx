@@ -156,12 +156,7 @@ function Thread({
         )}
         <div className="kit-chat-composer-wrap">
           <ComposerPrimitive.Root className="kit-chat-composer">
-            <ComposerPrimitive.Input
-              className="kit-chat-input"
-              aria-label={label}
-              placeholder={name ? `Message ${name}` : label}
-              submitMode="enter"
-            />
+            <Input label={label} placeholder={name ? `Message ${name}` : label} />
             <Restore kept={kept} />
             <div className="kit-chat-composer-row">
               {footer}
@@ -179,6 +174,31 @@ function Thread({
         </div>
       </ThreadPrimitive.Root>
     </Agent.Provider>
+  );
+}
+
+/**
+ * The field. Enter sends through the composer itself, not the form: a frame sandboxed without
+ * allow-forms never fires a form's submit. Shift+Enter is a new line, Enter mid-composition
+ * belongs to the input method, and during a turn Enter does nothing: Stop is a deliberate click.
+ */
+function Input({ label, placeholder }: { label: string; placeholder: string }) {
+  const aui = useAui();
+  return (
+    <ComposerPrimitive.Input
+      className="kit-chat-input"
+      aria-label={label}
+      placeholder={placeholder}
+      submitMode="none"
+      onKeyDown={(event) => {
+        if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
+        event.preventDefault();
+        if (aui.thread.getState().isRunning) return;
+        // The field's own text, for the composer's state can lag it on a busy machine.
+        aui.composer.setText(event.currentTarget.value);
+        aui.composer.send();
+      }}
+    />
   );
 }
 
