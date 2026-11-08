@@ -138,6 +138,36 @@ export class HubActor {
           await processes.stop(actorId);
           state.closeActor(caller, actorId);
         },
+        // A running Actor is stopped as `stop` does it, upgraded, and started again: on the new
+        // package, or on its own if the upgrade is refused. The machine's check comes first, so
+        // one that can't run it never has it stopped by an upgrade.
+        upgrade: async (caller, input) => {
+          const actorId = String(input.actorId);
+          const hash = String(input.package);
+          const actor = state.checkUpgrade(caller, actorId, hash);
+          if (actor.package === hash) return { dropped: [] };
+          const running = actor.state === "running";
+          if (running) {
+            await processes.ready();
+            state.stop(caller, actorId);
+            await processes.stop(actorId);
+          }
+          const restart = () => {
+            // Started meanwhile, by another call: it runs already.
+            if (!running || state.actor(actorId).state === "running") return;
+            state.start(caller, actorId);
+            processes.start(actorId);
+          };
+          let dropped: Wiring[];
+          try {
+            dropped = state.upgrade(caller, actorId, hash);
+          } catch (error) {
+            restart();
+            throw error;
+          }
+          restart();
+          return { dropped };
+        },
         logs: (_, input) => {
           // The Actor must exist; its lines are its process's output and its views' lines.
           const { actorId } = state.actor(String(input.actorId));
