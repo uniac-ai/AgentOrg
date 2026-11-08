@@ -1,4 +1,14 @@
-import { useEffect, useRef, useState } from "react";
+import {
+  ChatGptIcon,
+  GearIcon,
+  HomeIcon,
+  MoonIcon,
+  PlusIcon,
+  ResizableGroup,
+  ResizablePanel,
+  ResizeHandle,
+} from "@agentorg/kit";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { FIRST_RUN } from "./agent-bindings.ts";
 import {
   type Actor,
@@ -12,14 +22,13 @@ import {
   useRoute,
   useTheme,
 } from "./data.ts";
-import { Divider, useWidgetsWidth } from "./divider.tsx";
 import { Home, PlacedView } from "./home.tsx";
-import { ChatGptIcon, GearIcon, HomeIcon, MoonIcon, PlusIcon } from "./icons.tsx";
 import { NewAgent } from "./new-agent.tsx";
 import { besideAgent, type Placement } from "./rules.ts";
 import { Settings } from "./settings.tsx";
 import { signIn, useChatGpt, useSigningIn } from "./sign-in.ts";
 import { ViewFrame } from "./view-frame.tsx";
+import { keepWidth, storedWidth, WIDGETS } from "./widths.ts";
 
 export interface LoginStatus {
   state: "signed_out" | "signed_in" | "ineligible";
@@ -187,6 +196,19 @@ const list =
   () =>
     api.call<Record<string, T[]>>(slot, method).then((reply) => reply[key] ?? []);
 
+/** Whether the screen is wide enough for the widgets beside an agent: 1,100 px and more. */
+const WIDE = "(min-width: 1100px)";
+function useWide(): boolean {
+  return useSyncExternalStore(
+    (changed) => {
+      const query = matchMedia(WIDE);
+      query.addEventListener("change", changed);
+      return () => query.removeEventListener("change", changed);
+    },
+    () => matchMedia(WIDE).matches,
+  );
+}
+
 function Shell({ login }: { login?: LoginStatus }) {
   const route = useRoute();
   const connection = useConnection();
@@ -197,7 +219,7 @@ function Shell({ login }: { login?: LoginStatus }) {
   const home = useLoad(list<Placement>("layout", "get", "home"), ["layout"]).value ?? [];
   const [menu, setMenu] = useState<string>();
   const [creating, setCreating] = useState(false);
-  const [width, setWidth] = useWidgetsWidth();
+  const wide = useWide();
 
   const agents = actors.filter(
     (actor) => actor.state !== "closed" && actor.views?.includes("chat"),
@@ -215,22 +237,15 @@ function Shell({ login }: { login?: LoginStatus }) {
   // An agent with nothing beside it: no column, and the chat takes the width.
   const beside = agent ? besideAgent(home, agent.actorId) : [];
 
-  // A menu closes on any click outside it, and on a new screen.
+  // A menu closes on a click outside it (the kit's), on a new screen, and when focus moves into a
+  // view's frame, which blurs the window: a click there reaches no listener of this document.
   // biome-ignore lint/correctness/useExhaustiveDependencies: the route closes it too.
   useEffect(() => setMenu(undefined), [route.screen, route.screen === "agent" && route.agent]);
   useEffect(() => {
     if (!menu) return;
-    const close = (event: MouseEvent) => {
-      if (!(event.target as Element).closest?.(".menu, [data-menu]")) setMenu(undefined);
-    };
-    // Focus moving into a view's frame blurs the window: that's a click elsewhere too.
     const blur = () => setMenu(undefined);
-    document.addEventListener("click", close);
     window.addEventListener("blur", blur);
-    return () => {
-      document.removeEventListener("click", close);
-      window.removeEventListener("blur", blur);
-    };
+    return () => window.removeEventListener("blur", blur);
   }, [menu]);
 
   const placed = (placement: Placement, kind: "placed" | "container", shown: Placement[]) => (
@@ -243,7 +258,7 @@ function Shell({ login }: { login?: LoginStatus }) {
       actors={actors}
       agents={agents}
       menuOpen={menu === placement.id}
-      onMenu={() => setMenu(menu === placement.id ? undefined : placement.id)}
+      onMenu={(open) => setMenu(open ? placement.id : undefined)}
     />
   );
 
@@ -360,31 +375,45 @@ function Shell({ login }: { login?: LoginStatus }) {
           </nav>
           <span className="spacer" />
         </header>
-        <div className="stage">
-          <section className="container main" aria-label={agent?.name ?? undefined}>
-            {route.screen === "home" && (
-              <Home requests={requests} home={home} actors={actors} placed={placed} />
-            )}
-            {route.screen === "settings" && <Settings login={login} />}
-            {agent && agent.package !== "external" && agent.package !== "builtin" && (
-              <ViewFrame
-                key={agent.actorId}
-                actor={agent.actorId}
-                module="chat"
-                hash={agent.package}
-              />
-            )}
-          </section>
-          {beside.length > 0 && <Divider width={width} onWidth={setWidth} />}
-          <aside
-            className="widgets scroll"
-            aria-label="Placed beside this agent"
-            hidden={beside.length === 0}
-            style={{ width }}
-          >
-            {beside.map((p) => placed(p, "container", beside))}
-          </aside>
-        </div>
+        {/* The chat, and beside it the column its width is the person's to drag: 280–640 px, never
+            more than half the stage. The column is there only with something in it, on a screen
+            wide enough. */}
+        <ResizableGroup className="stage" orientation="horizontal">
+          <ResizablePanel id="main" minSize="50%" className="panel">
+            <section className="container main" aria-label={agent?.name ?? undefined}>
+              {route.screen === "home" && (
+                <Home requests={requests} home={home} actors={actors} placed={placed} />
+              )}
+              {route.screen === "settings" && <Settings login={login} />}
+              {agent && agent.package !== "external" && agent.package !== "builtin" && (
+                <ViewFrame
+                  key={agent.actorId}
+                  actor={agent.actorId}
+                  module="chat"
+                  hash={agent.package}
+                />
+              )}
+            </section>
+          </ResizablePanel>
+          {beside.length > 0 && wide && (
+            <>
+              <ResizeHandle label="Resize the widgets" />
+              <ResizablePanel
+                id="widgets"
+                defaultSize={storedWidth()}
+                minSize={WIDGETS.min}
+                maxSize={WIDGETS.max}
+                className="panel"
+                groupResizeBehavior="preserve-pixel-size"
+                onResize={(size, _id, before) => before && keepWidth(size.inPixels)}
+              >
+                <aside className="widgets scroll" aria-label="Placed beside this agent">
+                  {beside.map((p) => placed(p, "container", beside))}
+                </aside>
+              </ResizablePanel>
+            </>
+          )}
+        </ResizableGroup>
       </div>
       {creating && assistant && (
         <NewAgent assistant={assistant} onClose={() => setCreating(false)} />

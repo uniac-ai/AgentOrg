@@ -333,8 +333,21 @@ a {
 .stage {
   flex: 1;
   min-height: 0;
-  display: flex;
   gap: 8px;
+}
+/* The resizable panels hold the chat and the column: what's inside fills them. */
+.panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.panel > * {
+  flex: 1;
+  min-height: 0;
+}
+/* In the gap between the chat and the widgets: it takes no room, and only its line shows. */
+.stage > .kit-resize-handle {
+  margin: 0 -8px;
 }
 .container {
   background: var(--surface);
@@ -349,40 +362,16 @@ a {
   flex: 1;
 }
 .widgets {
-  /* Its width is the divider's, and never more than half the stage. */
-  max-width: 50%;
-  flex: none;
   display: flex;
   flex-direction: column;
   gap: 8px;
   min-height: 0;
 }
+/* The column's height is shared: each widget fills its share, at least 220 px, never its content's. */
 .widgets .container {
-  flex: none;
+  flex: 1 1 0;
+  min-height: 220px;
 }
-/* In the gap between the chat and the widgets: it takes no room, and only its line shows. */
-.divider {
-  width: 8px;
-  margin: 0 -8px;
-  flex: none;
-  cursor: col-resize;
-  touch-action: none;
-  display: flex;
-  justify-content: center;
-  outline: 0;
-}
-.divider::after {
-  content: "";
-  width: 2px;
-  border-radius: 1px;
-  background: transparent;
-}
-.divider:hover::after,
-.divider:focus-visible::after,
-.divider:active::after {
-  background: var(--ring);
-}
-
 /* A placed view's frame: its header is the shell's, the body is the view's own DOM. */
 .view-head {
   height: 40px;
@@ -398,14 +387,16 @@ a {
   color: var(--muted);
   font-weight: 400;
 }
-.view-head .icon-btn {
+.view-head .kit-icon-button {
   margin-left: auto;
   width: 26px;
   height: 26px;
 }
+/* The frame fills what its placement leaves under the header. */
 .view-body {
   padding: 4px 14px 14px;
-  height: 260px;
+  flex: 1;
+  min-height: 0;
 }
 /*
  * A view's own frame. Its color scheme is the frame document's, so the browser paints no backdrop
@@ -430,36 +421,11 @@ a {
   color: var(--muted);
   font-size: 13px;
 }
-.menu {
-  position: absolute;
-  right: 8px;
-  top: 38px;
-  background: var(--raised);
-  border-radius: 10px;
-  padding: 4px;
-  min-width: 150px;
-  z-index: 5;
-  box-shadow: 0 12px 28px rgb(0 0 0 / 0.35);
-}
-.menu button {
-  display: block;
-  width: 100%;
-  text-align: left;
-  border: 0;
-  background: transparent;
-  padding: 7px 10px;
-  border-radius: 7px;
-  font-size: 13px;
-}
-.menu button:hover {
-  background: var(--hover);
-}
-.menu button:disabled,
 .ghost:disabled {
   opacity: 0.6;
   cursor: default;
 }
-.menu-note {
+.kit-menu .menu-note {
   text-align: left;
   padding: 4px 10px 6px;
   max-width: 200px;
@@ -474,10 +440,14 @@ a {
   align-content: start;
   align-items: start;
 }
+/* Home's placements have a height of their own; the view fills it. */
 .home .placed {
   background: var(--card);
   border-radius: 12px;
   position: relative;
+  height: 300px;
+  display: flex;
+  flex-direction: column;
 }
 .home-empty {
   margin: auto;
@@ -533,28 +503,6 @@ a {
   flex: 1;
   min-height: 0;
 }
-.tabs {
-  display: inline-flex;
-  gap: 2px;
-  background: var(--hover);
-  padding: 3px;
-  border-radius: 10px;
-  align-self: flex-start;
-}
-.tabs button {
-  border: 0;
-  background: transparent;
-  padding: 5px 12px;
-  border-radius: 8px;
-  font-size: 13px;
-  color: var(--muted);
-}
-.tabs button[aria-selected="true"] {
-  background: var(--surface);
-  color: var(--fg);
-  font-weight: 600;
-  box-shadow: 0 1px 2px rgb(0 0 0 / 0.2);
-}
 table {
   width: 100%;
   border-collapse: collapse;
@@ -599,29 +547,6 @@ tr:hover td {
 }
 
 /* ---------- Dialog ---------- */
-.scrim {
-  position: fixed;
-  inset: 0;
-  background: rgb(0 0 0 / 0.5);
-  display: grid;
-  place-items: center;
-  z-index: 20;
-  padding: 16px;
-}
-.dialog {
-  width: min(440px, 100%);
-  background: var(--surface);
-  border-radius: 18px;
-  padding: 20px;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  box-shadow: 0 24px 60px rgb(0 0 0 / 0.45);
-}
-.dialog h2 {
-  margin: 0;
-  font-size: 16px;
-}
 .field {
   height: 38px;
   border-radius: 10px;
@@ -654,38 +579,6 @@ tr:hover td {
 .grants .mono {
   margin-left: auto;
 }
-.toggle {
-  width: 30px;
-  height: 18px;
-  border-radius: 9px;
-  background: var(--raised);
-  border: 0;
-  position: relative;
-  padding: 0;
-  flex: none;
-}
-.toggle::after {
-  content: "";
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: var(--faint);
-  transition: left 0.12s;
-}
-.toggle[aria-checked="true"] {
-  background: var(--ok);
-}
-.toggle[aria-checked="true"]::after {
-  left: 14px;
-  background: white;
-}
-.toggle:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
 .actions {
   display: flex;
   justify-content: flex-end;
@@ -708,12 +601,6 @@ tr:hover td {
   font-size: 13px;
 }
 
-@media (max-width: 1100px) {
-  .widgets,
-  .divider {
-    display: none;
-  }
-}
 @media (max-width: 760px) {
   .sidebar {
     display: none;
@@ -854,7 +741,7 @@ tr:hover td {
   color: var(--muted);
   font-size: 13px;
 }
-.dialog .steps {
+.kit-dialog .steps {
   display: flex;
   flex-direction: column;
   gap: 14px;

@@ -1,3 +1,4 @@
+import { DownloadIcon, Tabs, UploadIcon } from "@agentorg/kit";
 import { useRef, useState } from "react";
 import type { LoginStatus } from "./app.tsx";
 import {
@@ -10,7 +11,6 @@ import {
   useAction,
   useLoad,
 } from "./data.ts";
-import { DownloadIcon, UploadIcon } from "./icons.tsx";
 import { Install } from "./install.tsx";
 import { signIn, useSigningIn } from "./sign-in.ts";
 import { System, save } from "./system.tsx";
@@ -32,25 +32,18 @@ export function Settings({ login }: { login?: LoginStatus }) {
   return (
     <div className="settings">
       {login && <Account login={login} />}
-      <div className="tabs" role="tablist" aria-label="Settings">
-        {TABS.map((name) => (
-          <button
-            key={name}
-            type="button"
-            role="tab"
-            aria-selected={tab === name}
-            onClick={() => setTab(name)}
-          >
-            {name[0]?.toUpperCase() + name.slice(1)}
-          </button>
-        ))}
-      </div>
-      <div className="scroll" style={{ flex: 1, minHeight: 0 }} role="tabpanel">
+      <Tabs<Tab>
+        className="kit-fill"
+        label="Settings"
+        tabs={TABS.map((name) => [name, name[0]?.toUpperCase() + name.slice(1)] as const)}
+        value={tab}
+        onChange={setTab}
+      >
         {tab === "actors" && <Actors />}
         {tab === "packages" && <Packages />}
         {tab === "connections" && <Connections />}
         {tab === "system" && <System />}
-      </div>
+      </Tabs>
     </div>
   );
 }

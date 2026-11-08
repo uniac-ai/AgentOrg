@@ -52,7 +52,7 @@ const filled = () => [
   Math.round(document.body.getBoundingClientRect().height),
 ];
 
-test("a widget fills its placement whatever its content, on base styles its own rules outrank, and the column beside an agent is the person's to size", async (t) => {
+test("a widget fills its placement whatever its content, on base styles its own rules outrank; the column beside an agent shares its height and its width is the person's", async (t) => {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "agentorg-layout-")));
   const home = join(dir, "home");
   const app = await startApp({ home, firstRun: false });
@@ -70,6 +70,7 @@ test("a widget fills its placement whatever its content, on base styles its own 
   const actor = async (name: string) =>
     (await person.call<{ actorId: string }>("actors", "create", { name, package: hash })).actorId;
   const writer = await actor("Writer");
+  const solo = await actor("Solo");
   const alone = await actor("Alone");
   for (const [module, title] of [
     ["tall", "Reading list"],
@@ -77,8 +78,10 @@ test("a widget fills its placement whatever its content, on base styles its own 
     ["quiet", "Quiet"],
   ] as const)
     await person.call("layout", "place", { actor: writer, module, title });
+  await person.call("layout", "place", { actor: solo, module: "quiet", title: "Only" });
 
-  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  // Wide enough that the column's own bound, 640 px, comes before half the stage.
+  const page = await browser.newPage({ viewport: { width: 1600, height: 900 } });
   await page.goto(app.signInUrl());
   await page.waitForURL(`${app.url}/`);
   await page.goto(`${app.url}/#/a/${encodeURIComponent(writer)}`);
@@ -89,20 +92,38 @@ test("a widget fills its placement whatever its content, on base styles its own 
     .waitFor();
   await page.frameLocator('[aria-label="Reading list"] iframe').getByText("Tall line 14").waitFor();
 
-  // Every frame is its placement's height (the body's 260 px less its padding), whatever it
-  // draws: fourteen lines, a few controls, or nothing. Its document and body fill it.
-  const placement = 260 - 18;
+  // The column's height is shared: each placement takes a third, whatever it draws (fourteen
+  // lines, a few controls, or nothing), and its frame fills what its header and padding leave.
+  // Its document and body fill the frame.
+  const shares = async (titles: string[]) => {
+    const column = await aside.evaluate((el) => el.getBoundingClientRect().height);
+    const heights = await Promise.all(
+      titles.map((title) =>
+        aside
+          .locator(`[aria-label="${title}"]`)
+          .evaluate((el) => el.getBoundingClientRect().height),
+      ),
+    );
+    const gaps = 8 * (titles.length - 1);
+    for (const height of heights)
+      assert.ok(Math.abs(height - (column - gaps) / titles.length) <= 1, `${height} of ${column}`);
+    return Math.round(heights[0] ?? 0) - 40 - 18;
+  };
+  const placement = await shares(["Reading list", "Today", "Quiet"]);
+  assert.ok(placement > 200, `${placement} px`);
   for (const title of ["Reading list", "Today", "Quiet"]) {
-    assert.equal(await frameHeight(page, title), placement, title);
-    assert.deepEqual(await inFrame(page, title, filled), [placement, placement, placement], title);
+    assert.ok(Math.abs((await frameHeight(page, title)) - placement) <= 1, title);
+    const [frame, ...inside] = await inFrame(page, title, filled);
+    assert.deepEqual(inside, [frame, frame], title);
   }
   // Content that grows scrolls inside its frame: the frame keeps its height, nothing below moves.
   const below = () =>
     aside.locator('[aria-label="Today"]').evaluate((el) => el.getBoundingClientRect().top);
   const before = await below();
+  const tall = await frameHeight(page, "Reading list");
   await page.frameLocator('[aria-label="Reading list"] iframe').getByText("Tall line 14").click();
   await page.frameLocator('[aria-label="Reading list"] iframe').getByText("Tall line 15").waitFor();
-  assert.equal(await frameHeight(page, "Reading list"), placement);
+  assert.equal(await frameHeight(page, "Reading list"), tall);
   assert.equal(await below(), before);
   assert.deepEqual(
     await inFrame(page, "Reading list", () => [
@@ -111,7 +132,7 @@ test("a widget fills its placement whatever its content, on base styles its own 
       getComputedStyle(document.body).overflowY,
       getComputedStyle(document.body).scrollbarWidth,
     ]),
-    [15 * 24, placement, "auto", "none"],
+    [15 * 24, tall, "auto", "none"],
   );
 
   // Plain HTML on the base styles, in the shell's tokens, on a transparent document; the view's
@@ -151,9 +172,14 @@ test("a widget fills its placement whatever its content, on base styles its own 
     },
   );
 
-  // The handle: dragged left, the column widens; bounded; kept in this browser.
+  // The handle: dragged left, the column widens; bounded; kept in this browser. Its widgets fill
+  // the new width.
   const handle = page.getByRole("separator", { name: "Resize the widgets" });
   const width = () => aside.evaluate((el) => Math.round(el.getBoundingClientRect().width));
+  const frameWidth = () =>
+    aside
+      .locator('[aria-label="Today"] iframe')
+      .evaluate((el) => Math.round(el.getBoundingClientRect().width));
   assert.equal(await width(), 340);
   const main = page.locator(".container.main");
   const boxes = async () => JSON.stringify([await main.boundingBox(), await aside.boundingBox()]);
@@ -172,17 +198,25 @@ test("a widget fills its placement whatever its content, on base styles its own 
   };
   await dragBy(-120);
   assert.equal(await width(), 460);
-  assert.equal(await handle.getAttribute("aria-valuenow"), "460");
+  assert.equal(await frameWidth(), 460 - 28);
   await dragBy(-1000);
-  assert.equal(await handle.getAttribute("aria-valuenow"), "640");
+  assert.equal(await width(), 640);
   await dragBy(1000);
-  assert.equal(await handle.getAttribute("aria-valuenow"), "280");
+  assert.equal(await width(), 280);
+  assert.equal(await frameWidth(), 280 - 28);
+  // The arrow keys move it too.
   await handle.focus();
   await page.keyboard.press("ArrowLeft");
-  assert.equal(await width(), 296);
+  const keyed = await width();
+  assert.ok(keyed > 280 && keyed < 640, `${keyed} px`);
   await page.reload();
   await aside.locator('[aria-label="Reading list"] iframe').waitFor();
-  assert.equal(await width(), 296);
+  assert.equal(await width(), keyed);
+
+  // One placement beside an agent fills the whole column.
+  await page.goto(`${app.url}/#/a/${encodeURIComponent(solo)}`);
+  await aside.locator('[aria-label="Only"] iframe').waitFor();
+  await shares(["Only"]);
 
   // An agent with nothing beside it: no column, no handle, and the chat takes the stage.
   await page.goto(`${app.url}/#/a/${encodeURIComponent(alone)}`);
@@ -192,12 +226,13 @@ test("a widget fills its placement whatever its content, on base styles its own 
   const stage = await page.locator(".stage").boundingBox();
   assert.equal(Math.round((await main.boundingBox())?.width ?? 0), Math.round(stage?.width ?? -1));
 
-  // Home's placements fill the same way.
+  // Home's placements are 300 px high, and their frames fill what the header and padding leave.
   await page.goto(`${app.url}/#/`);
   await page
     .frameLocator('[aria-label="Today"] iframe')
     .getByRole("button", { name: "Add" })
     .waitFor();
-  for (const title of ["Reading list", "Today", "Quiet"])
-    assert.deepEqual(await inFrame(page, title, filled), [placement, placement, placement], title);
+  const cell = 300 - 40 - 18;
+  for (const title of ["Reading list", "Today", "Quiet", "Only"])
+    assert.deepEqual(await inFrame(page, title, filled), [cell, cell, cell], title);
 });

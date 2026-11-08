@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { Dialog, Switch } from "@agentorg/kit";
+import { useState } from "react";
 import { AGENT_GRANTS, installAgent } from "./agent-bindings.ts";
 import { api, go } from "./data.ts";
 
@@ -37,15 +38,6 @@ export function NewAgent({ assistant, onClose }: { assistant: string; onClose():
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string>();
   const [made, setMade] = useState<Made>();
-  const input = useRef<HTMLInputElement>(null);
-  const close = useRef(onClose);
-  close.current = onClose;
-  useEffect(() => {
-    input.current?.focus();
-    const onKey = (event: KeyboardEvent) => event.key === "Escape" && close.current();
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, []);
 
   const open = (actorId: string) => {
     onClose();
@@ -66,124 +58,111 @@ export function NewAgent({ assistant, onClose }: { assistant: string; onClose():
     setMade({ actorId: answer.actorId, name: name.trim(), unbound, unseeded: answer.unseeded });
   };
 
-  return (
-    // biome-ignore lint/a11y/noStaticElementInteractions: the scrim closes on a click; Escape does too.
-    // biome-ignore lint/a11y/useKeyWithClickEvents: Escape is handled on the document.
-    <div className="scrim" onClick={(event) => event.target === event.currentTarget && onClose()}>
-      {made ? (
-        <div className="dialog" role="dialog" aria-modal="true" aria-labelledby="new-agent">
-          <h2 id="new-agent">New agent</h2>
-          <div className="bar-row">
-            <span className="done-mark">✓</span>
-            <span>
-              <b>{made.name}</b> is created and running.
-            </span>
-          </div>
-          {made.unbound.length > 0 && (
-            <div>
-              <div className="group-head">Not connected</div>
-              <ul className="list">
-                {made.unbound.map((slot) => (
-                  <li key={slot}>
-                    <span className="mono" style={{ color: "var(--fg)" }}>
-                      {slot}
-                    </span>
-                    <span className="why">connect it later in Connections</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-          {made.unseeded.length > 0 && (
-            <div>
-              <div className="group-head">Starts empty</div>
-              <ul className="list">
-                {made.unseeded.map((slot) => (
-                  <li key={slot}>
-                    <span className="mono" style={{ color: "var(--fg)" }}>
-                      {slot}
-                    </span>
-                    <span className="why">its store isn't connected, so its seed didn't land</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-          <div className="actions">
-            <button
-              type="button"
-              className="primary"
-              style={{ height: 34 }}
-              onClick={() => open(made.actorId)}
-            >
-              Open
-            </button>
-          </div>
-        </div>
-      ) : (
-        <form
-          className="dialog"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="new-agent"
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (!name.trim() || busy) return;
-            setBusy(true);
-            setProblem(undefined);
-            create().catch((error: Error) => {
-              setBusy(false);
-              setProblem(refusal(error));
-            });
-          }}
-        >
-          <h2 id="new-agent">New agent</h2>
-          <input
-            ref={input}
-            className="field"
-            aria-label="Name"
-            placeholder="Name"
-            required
-            maxLength={128}
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-          />
-          <ul className="grants">
-            {AGENT_GRANTS.map((grant) => (
-              <li key={grant.slot}>
-                <button
-                  type="button"
-                  className="toggle"
-                  role="switch"
-                  aria-checked={!isOff(grant, off)}
-                  aria-label={grant.what}
-                  // One it needs is off: so is this, until that one is back on.
-                  disabled={grant.fixed || ("needs" in grant && off.has(grant.needs))}
-                  onClick={() => {
-                    const next = new Set(off);
-                    if (!next.delete(grant.slot)) next.add(grant.slot);
-                    setOff(next);
-                  }}
-                />
-                <span>{grant.what}</span>
-                <span className="mono">{grant.iface}</span>
+  // The kit's dialog: it takes focus (the name, first), and Escape or a click outside closes it.
+  return made ? (
+    <Dialog title="New agent" onClose={onClose}>
+      <div className="bar-row">
+        <span className="done-mark">✓</span>
+        <span>
+          <b>{made.name}</b> is created and running.
+        </span>
+      </div>
+      {made.unbound.length > 0 && (
+        <div>
+          <div className="group-head">Not connected</div>
+          <ul className="list">
+            {made.unbound.map((slot) => (
+              <li key={slot}>
+                <span className="mono" style={{ color: "var(--fg)" }}>
+                  {slot}
+                </span>
+                <span className="why">connect it later in Connections</span>
               </li>
             ))}
           </ul>
-          {/* Its room kept, so the buttons stay put when it says something. */}
-          <p className="err-line" role="alert">
-            {problem}
-          </p>
-          <div className="actions">
-            <button type="button" className="ghost" onClick={onClose}>
-              Cancel
-            </button>
-            <button type="submit" className="primary" style={{ height: 34 }} disabled={busy}>
-              Create
-            </button>
-          </div>
-        </form>
+        </div>
       )}
-    </div>
+      {made.unseeded.length > 0 && (
+        <div>
+          <div className="group-head">Starts empty</div>
+          <ul className="list">
+            {made.unseeded.map((slot) => (
+              <li key={slot}>
+                <span className="mono" style={{ color: "var(--fg)" }}>
+                  {slot}
+                </span>
+                <span className="why">its store isn't connected, so its seed didn't land</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      <div className="actions">
+        <button
+          type="button"
+          className="primary"
+          style={{ height: 34 }}
+          onClick={() => open(made.actorId)}
+        >
+          Open
+        </button>
+      </div>
+    </Dialog>
+  ) : (
+    <Dialog
+      title="New agent"
+      onClose={onClose}
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (!name.trim() || busy) return;
+        setBusy(true);
+        setProblem(undefined);
+        create().catch((error: Error) => {
+          setBusy(false);
+          setProblem(refusal(error));
+        });
+      }}
+    >
+      <input
+        className="field"
+        aria-label="Name"
+        placeholder="Name"
+        required
+        maxLength={128}
+        value={name}
+        onChange={(event) => setName(event.target.value)}
+      />
+      <ul className="grants">
+        {AGENT_GRANTS.map((grant) => (
+          <li key={grant.slot}>
+            <Switch
+              checked={!isOff(grant, off)}
+              label={grant.what}
+              // One it needs is off: so is this, until that one is back on.
+              disabled={grant.fixed || ("needs" in grant && off.has(grant.needs))}
+              onChange={() => {
+                const next = new Set(off);
+                if (!next.delete(grant.slot)) next.add(grant.slot);
+                setOff(next);
+              }}
+            />
+            <span>{grant.what}</span>
+            <span className="mono">{grant.iface}</span>
+          </li>
+        ))}
+      </ul>
+      {/* Its room kept, so the buttons stay put when it says something. */}
+      <p className="err-line" role="alert">
+        {problem}
+      </p>
+      <div className="actions">
+        <button type="button" className="ghost" onClick={onClose}>
+          Cancel
+        </button>
+        <button type="submit" className="primary" style={{ height: 34 }} disabled={busy}>
+          Create
+        </button>
+      </div>
+    </Dialog>
   );
 }

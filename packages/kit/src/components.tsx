@@ -9,6 +9,7 @@ import {
 import type {
   ButtonHTMLAttributes,
   CSSProperties,
+  FormEvent,
   InputHTMLAttributes,
   ReactNode,
   SelectHTMLAttributes,
@@ -83,26 +84,37 @@ export function Select({ className, ...props }: SelectHTMLAttributes<HTMLSelectE
 
 /**
  * A modal dialog: focus held inside, Escape and a click outside close it, and focus goes back to
- * what opened it. `title` names it.
+ * what opened it. `title` names it. With `onSubmit` the dialog is a form, so Enter submits it.
  */
 export function Dialog({
   open = true,
   onClose,
+  onSubmit,
   title,
   children,
 }: {
   open?: boolean;
   onClose(): void;
+  onSubmit?(event: FormEvent<HTMLFormElement>): void;
   title: ReactNode;
   children: ReactNode;
 }) {
+  const inner = (
+    <>
+      <RadixDialog.Title className="kit-dialog-title">{title}</RadixDialog.Title>
+      {children}
+    </>
+  );
   return (
     <RadixDialog.Root open={open} onOpenChange={(next) => !next && onClose()}>
       <RadixDialog.Portal>
         <RadixDialog.Overlay className="kit-scrim" />
-        <RadixDialog.Content className="kit-dialog" aria-describedby={undefined}>
-          <RadixDialog.Title className="kit-dialog-title">{title}</RadixDialog.Title>
-          {children}
+        <RadixDialog.Content
+          className="kit-dialog"
+          aria-describedby={undefined}
+          asChild={!!onSubmit}
+        >
+          {onSubmit ? <form onSubmit={onSubmit}>{inner}</form> : inner}
         </RadixDialog.Content>
       </RadixDialog.Portal>
     </RadixDialog.Root>
@@ -147,12 +159,13 @@ export function Menu({
   );
 }
 
+/** An item: choosing it closes the menu, unless `onSelect` calls `event.preventDefault()`. */
 export function MenuItem({
   onSelect,
   disabled,
   children,
 }: {
-  onSelect(): void;
+  onSelect(event: Event): void;
   disabled?: boolean;
   children: ReactNode;
 }) {
@@ -170,7 +183,9 @@ export function Tabs<T extends string>({
   value,
   onChange,
   children,
+  className,
 }: {
+  className?: string;
   label: string;
   tabs: readonly (readonly [NoInfer<T>, ReactNode])[];
   value: T;
@@ -181,7 +196,7 @@ export function Tabs<T extends string>({
     <RadixTabs.Root
       value={value}
       onValueChange={(next) => onChange(next as T)}
-      className="kit-stack"
+      className={cx("kit-stack", className)}
     >
       <RadixTabs.List className="kit-tabs-list" aria-label={label}>
         {tabs.map(([key, name]) => (

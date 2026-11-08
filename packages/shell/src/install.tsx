@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { Dialog, Switch } from "@agentorg/kit";
+import { useEffect, useState } from "react";
 import { transfer } from "./api.ts";
 import { type Actor, api, go } from "./data.ts";
 
@@ -41,13 +42,6 @@ export function Install({
   const [added, setAdded] = useState<{ added: Added; plan: Plan }>();
   const [problem, setProblem] = useState<string>();
   const [installed, setInstalled] = useState<Installed>();
-  const close = useRef(onClose);
-  close.current = onClose;
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => event.key === "Escape" && close.current();
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, []);
   useEffect(() => {
     let live = true;
     (async () => {
@@ -61,39 +55,34 @@ export function Install({
   }, [file]);
 
   return (
-    // biome-ignore lint/a11y/noStaticElementInteractions: the scrim closes on a click; Escape does too.
-    // biome-ignore lint/a11y/useKeyWithClickEvents: Escape is handled on the document.
-    <div className="scrim" onClick={(event) => event.target === event.currentTarget && onClose()}>
-      <div className="dialog" role="dialog" aria-modal="true" aria-labelledby="install">
-        <h2 id="install">Install a package</h2>
-        {installed ? (
-          <Place installed={installed} onClose={onClose} />
-        ) : added ? (
-          <Choose
-            added={added.added}
-            plan={added.plan}
-            actors={actors}
-            onClose={onClose}
-            onInstalled={setInstalled}
-          />
-        ) : problem ? (
-          <>
-            <p className="err-line" role="alert">
-              {file.name} wasn't installed: {problem}
-            </p>
-            <div className="actions">
-              <button type="button" className="ghost" onClick={onClose}>
-                Close
-              </button>
-            </div>
-          </>
-        ) : (
-          <div className="bar-row checking">
-            <span className="spin" aria-hidden="true" /> Checking {file.name}…
+    <Dialog title="Install a package" onClose={onClose}>
+      {installed ? (
+        <Place installed={installed} onClose={onClose} />
+      ) : added ? (
+        <Choose
+          added={added.added}
+          plan={added.plan}
+          actors={actors}
+          onClose={onClose}
+          onInstalled={setInstalled}
+        />
+      ) : problem ? (
+        <>
+          <p className="err-line" role="alert">
+            {file.name} wasn't installed: {problem}
+          </p>
+          <div className="actions">
+            <button type="button" className="ghost" onClick={onClose}>
+              Close
+            </button>
           </div>
-        )}
-      </div>
-    </div>
+        </>
+      ) : (
+        <div className="bar-row checking">
+          <span className="spin" aria-hidden="true" /> Checking {file.name}…
+        </div>
+      )}
+    </Dialog>
   );
 }
 
@@ -230,14 +219,7 @@ function Choose({
         </div>
       )}
       <div className="bar-row" style={{ fontSize: 13 }}>
-        <button
-          type="button"
-          className="toggle"
-          role="switch"
-          aria-checked={start}
-          aria-label="Start it"
-          onClick={() => setStart(!start)}
-        />
+        <Switch checked={start} label="Start it" onChange={setStart} />
         Start it
       </div>
       <p className="err-line" role="alert">
@@ -322,13 +304,10 @@ function Place({ installed, onClose }: { installed: Installed; onClose(): void }
             <ul className="list">
               {installed.views.map((module) => (
                 <li key={module}>
-                  <button
-                    type="button"
-                    className="toggle"
-                    role="switch"
-                    aria-checked={!off.has(module)}
-                    aria-label={`Place ${module}`}
-                    onClick={() => {
+                  <Switch
+                    checked={!off.has(module)}
+                    label={`Place ${module}`}
+                    onChange={() => {
                       const next = new Set(off);
                       if (!next.delete(module)) next.add(module);
                       setOff(next);

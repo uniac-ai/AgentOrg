@@ -86,6 +86,8 @@ export const KIT_CSS = `
   content: ""; position: absolute; left: 3px; top: 0; bottom: 0; width: 2px; border-radius: 1px; background: transparent;
 }
 .kit-resize-handle:hover::after, .kit-resize-handle:focus-visible::after, .kit-resize-handle[data-separator="active"]::after { background: var(--ring); }
+/* While a handle is dragged, frames under the pointer take no events, so the drag keeps them all. */
+:root:has(.kit-resize-handle[data-separator="active"]) iframe { pointer-events: none; }
 .kit-md > :first-child { margin-top: 0; }
 .kit-md > :last-child { margin-bottom: 0; }
 .kit-md p { margin: 0 0 10px; }

@@ -1,7 +1,7 @@
+import { IconButton, Menu as KitMenu, MenuItem, MoreIcon } from "@agentorg/kit";
 import type { ReactNode } from "react";
 import { Avatar } from "./app.tsx";
 import { type Actor, api, type BindingRequest, go, useAction, useLoad } from "./data.ts";
-import { MoreIcon } from "./icons.tsx";
 import type { Placement } from "./rules.ts";
 import { ViewFrame } from "./view-frame.tsx";
 
@@ -119,7 +119,7 @@ export function PlacedView({
   actors: Actor[];
   agents: Actor[];
   menuOpen: boolean;
-  onMenu(): void;
+  onMenu(open: boolean): void;
 }) {
   const actor = actors.find((a) => a.actorId === placement.actor);
   // Until the Actors are read, no name rather than an id.
@@ -145,26 +145,15 @@ export function PlacedView({
         {kind === "placed" && (agent?.name ?? name) && (
           <span className="who">· {agent?.name ?? name}</span>
         )}
-        <button
-          type="button"
-          className="icon-btn"
-          data-menu
-          aria-label={`${title} options`}
-          aria-haspopup="menu"
-          aria-expanded={menuOpen}
-          onClick={onMenu}
-        >
-          <MoreIcon />
-        </button>
-      </div>
-      {menuOpen && (
         <Menu
+          title={title}
+          menuOpen={menuOpen}
+          onMenu={onMenu}
           open={kind === "placed" ? agent : undefined}
-          close={onMenu}
           moveUp={moveUp}
           remove={() => api.call("layout", "remove", { id: placement.id })}
         />
-      )}
+      </div>
       <div className="view-body">
         {hash ? (
           <ViewFrame actor={placement.actor} module={placement.module} hash={hash} />
@@ -178,39 +167,52 @@ export function PlacedView({
 
 /** A placed view's menu. It stays open while its call runs, and says so if it fails. */
 function Menu({
+  title,
+  menuOpen,
+  onMenu,
   open,
-  close,
   moveUp,
   remove,
 }: {
+  title: string;
+  menuOpen: boolean;
+  onMenu(open: boolean): void;
   open?: Actor;
-  close(): void;
   moveUp(): Promise<unknown>;
   remove(): Promise<unknown>;
 }) {
   const { busy, failed, run } = useAction();
+  /** The item's call, with the menu held open until it's done. */
+  const item = (call: () => Promise<unknown>) => (event: Event) => {
+    event.preventDefault();
+    run(call, () => onMenu(false));
+  };
   return (
-    <div className="menu" role="menu">
+    <KitMenu
+      open={menuOpen}
+      onOpenChange={onMenu}
+      trigger={
+        <IconButton label={`${title} options`}>
+          <MoreIcon />
+        </IconButton>
+      }
+    >
       {open && (
-        <button
-          type="button"
-          role="menuitem"
-          onClick={() => go({ screen: "agent", agent: open.actorId })}
-        >
+        <MenuItem onSelect={() => go({ screen: "agent", agent: open.actorId })}>
           Open {open.name}
-        </button>
+        </MenuItem>
       )}
-      <button type="button" role="menuitem" disabled={busy} onClick={() => run(moveUp, close)}>
+      <MenuItem disabled={busy} onSelect={item(moveUp)}>
         Move up
-      </button>
-      <button type="button" role="menuitem" disabled={busy} onClick={() => run(remove, close)}>
+      </MenuItem>
+      <MenuItem disabled={busy} onSelect={item(remove)}>
         Remove
-      </button>
+      </MenuItem>
       {failed && (
         <p className="quiet menu-note" role="alert">
           {FAILED}
         </p>
       )}
-    </div>
+    </KitMenu>
   );
 }
