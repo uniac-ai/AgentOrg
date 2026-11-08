@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { Hub, listen, PERSON, STORAGE } from "@agentorg/hub";
 import {
   accountLogin,
+  appRules,
   hubActors,
   hubAudit,
   hubBindings,
@@ -24,6 +25,7 @@ import { type PersonSide, serveSocket, type ViewCalls } from "./api.js";
 import { serveFrame } from "./frames.js";
 import { Layout } from "./layout.js";
 import { type FirstRun, type FirstRunOptions, firstRun, oauthRoute } from "./model.js";
+import { Rules } from "./rules.js";
 import { SignIn } from "./signin.js";
 import {
   MAX_TRANSFER,
@@ -127,6 +129,8 @@ export async function startApp(options: AppOptions): Promise<App> {
 
   const signIn = new SignIn();
   const changes = new Set<() => void>();
+  /** Who hears that a rule was turned on or off. */
+  const ruleChanges = new Set<() => void>();
   let emitChanged = () => {};
   const isView = (actorId: string, module: string) => {
     try {
@@ -191,6 +195,24 @@ export async function startApp(options: AppOptions): Promise<App> {
   /** The person's side of `/api`: its slots, and `layout`, its own export, served here. */
   const personSide: PersonSide = {
     async call(slot, method, input) {
+      if (slot === "rules") {
+        // The person's named rules, the gateway's own, checked as a call through the Hub would be.
+        const spec = Object.hasOwn(appRules.methods, method)
+          ? appRules.methods[method as keyof typeof appRules.methods]
+          : undefined;
+        if (!spec) throw new Refused("invalid", `rules has no method ${method}.`);
+        const parsed = spec.input.safeParse(input);
+        if (!parsed.success)
+          throw new Refused("invalid", `rules.${method}: ${parsed.error.message}`);
+        const result =
+          method === "set"
+            ? await rules.set(parsed.data as { id: string; on: boolean })
+            : await rules.list();
+        const checked = spec.output.safeParse(result);
+        if (!checked.success)
+          throw new Refused("bad_output", `rules.${method}: ${checked.error.message}`);
+        return checked.data;
+      }
       if (slot === "layout") {
         const spec = Object.hasOwn(layout.methods, method)
           ? layout.methods[method as keyof typeof layout.methods]
@@ -220,6 +242,12 @@ export async function startApp(options: AppOptions): Promise<App> {
       return call(input);
     },
     subscribe(slot, event, send) {
+      if (slot === "rules") {
+        if (event !== "changed") throw new Refused("invalid", "rules has one event, changed.");
+        const tell = () => send({});
+        ruleChanges.add(tell);
+        return () => void ruleChanges.delete(tell);
+      }
       if (slot === "layout") {
         if (event !== "changed") throw new Refused("invalid", "layout has one event, changed.");
         const tell = () => send({});
@@ -266,6 +294,22 @@ export async function startApp(options: AppOptions): Promise<App> {
           );
           return undefined;
         });
+
+  // The person's named rules: off until turned on; their engine starts once the first run is done.
+  const rules = new Rules({
+    person: personSide,
+    log: (message) => process.stderr.write(`${message}\n`),
+    changed: () => {
+      for (const tell of [...ruleChanges]) tell();
+    },
+  });
+  void Promise.resolve(ran)
+    .then(() => rules.start())
+    .catch((error: unknown) =>
+      process.stderr.write(
+        `The rules didn't start: ${error instanceof Error ? error.message : String(error)}\n`,
+      ),
+    );
 
   /** The app's own pages: scripts and styles from here only, framed by nothing. */
   const appCsp = [
@@ -531,6 +575,7 @@ export async function startApp(options: AppOptions): Promise<App> {
     closing ??= (async () => {
       // A first run still going finishes first, so it isn't cut off half way.
       await ran;
+      rules.close();
       const ours = (file: string, text: string) => {
         if (file === "cli-token") return text.trim() === signIn.cliToken;
         if (file === "url") return text.trim() === listener.url;
