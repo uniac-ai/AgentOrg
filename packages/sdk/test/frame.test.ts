@@ -578,41 +578,7 @@ test("a frame has 64 calls in flight at most; past it, a call is refused busy", 
   for (const done of release) done();
 });
 
-test("a frame's height reaches the shell checked, within bounds, and at most once per 100 ms", async (t) => {
-  // The window's time is the test's to move: messages still take real turns of the event loop.
-  t.mock.timers.enable({ apis: ["setTimeout"] });
-  const channel = new MessageChannel();
-  const sizes: number[] = [];
-  const host = new FrameHost(channel.port1 as unknown as PortLike, {
-    ...handlers({ calls: [], subscribed: [], opened: [], signIns: 0, logs: [] }),
-    size: (height) => void sizes.push(height),
-  });
-  t.after(() => host.close());
-  const post = (height: unknown) => channel.port2.postMessage({ op: "size", height });
-  for (const odd of ["300", null, Number.NaN, Number.POSITIVE_INFINITY]) post(odd);
-  await tick();
-  assert.deepEqual(sizes, [], "only a finite number");
-  // The first at once, clamped; the rest of the window's, only the latest, at its end.
-  post(40);
-  post(5000);
-  post(640.6);
-  await tick();
-  assert.deepEqual(sizes, [120]);
-  t.mock.timers.tick(100);
-  assert.deepEqual(sizes, [120, 641]);
-  post(9000);
-  await tick();
-  t.mock.timers.tick(100);
-  assert.deepEqual(sizes, [120, 641, 2000]);
-  // Closed: nothing more.
-  post(300);
-  host.close();
-  await tick();
-  t.mock.timers.tick(100);
-  assert.deepEqual(sizes, [120, 641, 2000]);
-});
-
-test("a shell that doesn't size frames drops their heights", async (t) => {
+test("a frame can't size itself: its placement decides, and a size message is dropped", async (t) => {
   const raw = rawFrame(t);
   raw.post({ op: "size", height: 300 });
   await tick();

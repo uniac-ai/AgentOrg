@@ -42,16 +42,17 @@ const frameHeight = (page: Page, title: string) =>
   page
     .locator(`[aria-label="${title}"] iframe`)
     .evaluate((frame) => Math.round(frame.getBoundingClientRect().height));
-const until = async (read: () => Promise<unknown>, expected: unknown) => {
-  for (let waited = 0; ; waited += 50) {
-    const value = await read();
-    if (value === expected) return;
-    if (waited > 10_000) assert.equal(value, expected);
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
-};
+/** In a placement's frame: how its document sits in it, and what the base styles drew. */
+const inFrame = <T>(page: Page, title: string, read: () => T) =>
+  page.frameLocator(`[aria-label="${title}"] iframe`).locator("html").evaluate(read);
+/** The frame's height, and its document's and body's, which fill it. */
+const filled = () => [
+  innerHeight,
+  Math.round(document.documentElement.getBoundingClientRect().height),
+  Math.round(document.body.getBoundingClientRect().height),
+];
 
-test("widgets size to their content, and the column beside an agent is the person's to size", async (t) => {
+test("a widget fills its placement whatever its content, on base styles its own rules outrank, and the column beside an agent is the person's to size", async (t) => {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "agentorg-layout-")));
   const home = join(dir, "home");
   const app = await startApp({ home, firstRun: false });
@@ -64,7 +65,7 @@ test("widgets size to their content, and the column beside an agent is the perso
     rmSync(dir, { recursive: true, force: true });
   });
 
-  const built = await buildPackage(join(here, "fixtures", "sizes"), { out: join(dir, "out") });
+  const built = await buildPackage(join(here, "fixtures", "fill"), { out: join(dir, "out") });
   const { hash } = await person.call<{ hash: string }>("packages", "add", { path: built.file });
   const actor = async (name: string) =>
     (await person.call<{ actorId: string }>("actors", "create", { name, package: hash })).actorId;
@@ -72,7 +73,7 @@ test("widgets size to their content, and the column beside an agent is the perso
   const alone = await actor("Alone");
   for (const [module, title] of [
     ["tall", "Reading list"],
-    ["short", "Today"],
+    ["plain", "Today"],
     ["quiet", "Quiet"],
   ] as const)
     await person.call("layout", "place", { actor: writer, module, title });
@@ -82,20 +83,73 @@ test("widgets size to their content, and the column beside an agent is the perso
   await page.waitForURL(`${app.url}/`);
   await page.goto(`${app.url}/#/a/${encodeURIComponent(writer)}`);
   const aside = page.getByRole("complementary", { name: "Placed beside this agent" });
-  await aside.locator('[aria-label="Reading list"] iframe').waitFor();
+  await page
+    .frameLocator('[aria-label="Today"] iframe')
+    .getByRole("button", { name: "Add" })
+    .waitFor();
+  await page.frameLocator('[aria-label="Reading list"] iframe').getByText("Tall line 14").waitFor();
 
-  // Fourteen lines of 24 px; two, which is under the floor; and one that reports nothing, which
-  // keeps the default body (260 px, less its padding).
-  await until(() => frameHeight(page, "Reading list"), 14 * 24);
-  await until(() => frameHeight(page, "Today"), 120);
-  assert.equal(await frameHeight(page, "Quiet"), 260 - 18);
-  // Its content grows: so does its frame, and what's below it moves down with it.
+  // Every frame is its placement's height (the body's 260 px less its padding), whatever it
+  // draws: fourteen lines, a few controls, or nothing. Its document and body fill it.
+  const placement = 260 - 18;
+  for (const title of ["Reading list", "Today", "Quiet"]) {
+    assert.equal(await frameHeight(page, title), placement, title);
+    assert.deepEqual(await inFrame(page, title, filled), [placement, placement, placement], title);
+  }
+  // Content that grows scrolls inside its frame: the frame keeps its height, nothing below moves.
   const below = () =>
     aside.locator('[aria-label="Today"]').evaluate((el) => el.getBoundingClientRect().top);
   const before = await below();
   await page.frameLocator('[aria-label="Reading list"] iframe').getByText("Tall line 14").click();
-  await until(() => frameHeight(page, "Reading list"), 15 * 24);
-  assert.equal(await below(), before + 24);
+  await page.frameLocator('[aria-label="Reading list"] iframe').getByText("Tall line 15").waitFor();
+  assert.equal(await frameHeight(page, "Reading list"), placement);
+  assert.equal(await below(), before);
+  assert.deepEqual(
+    await inFrame(page, "Reading list", () => [
+      document.body.scrollHeight,
+      document.body.clientHeight,
+      getComputedStyle(document.body).overflowY,
+      getComputedStyle(document.body).scrollbarWidth,
+    ]),
+    [15 * 24, placement, "auto", "none"],
+  );
+
+  // Plain HTML on the base styles, in the shell's tokens, on a transparent document; the view's
+  // own rule outranks them.
+  const tokens = await page.evaluate(() => {
+    const style = getComputedStyle(document.documentElement);
+    const color = (name: string) => {
+      const probe = document.createElement("i");
+      probe.style.color = style.getPropertyValue(name);
+      document.body.append(probe);
+      const value = getComputedStyle(probe).color;
+      probe.remove();
+      return value;
+    };
+    return { accent: color("--accent"), raised: color("--raised"), fg: color("--fg") };
+  });
+  assert.deepEqual(
+    await inFrame(page, "Today", () => {
+      const of = (selector: string) =>
+        getComputedStyle(document.querySelector(selector) as Element);
+      return {
+        page: of("html").backgroundColor,
+        body: of("body").backgroundColor,
+        text: of("body").color,
+        submit: of("button[type=submit]").backgroundColor,
+        item: of("li").backgroundColor,
+        own: of(".own").backgroundColor,
+      };
+    }),
+    {
+      page: "rgba(0, 0, 0, 0)",
+      body: "rgba(0, 0, 0, 0)",
+      text: tokens.fg,
+      submit: tokens.accent,
+      item: tokens.raised,
+      own: "rgb(1, 2, 3)",
+    },
+  );
 
   // The handle: dragged left, the column widens; bounded; kept in this browser.
   const handle = page.getByRole("separator", { name: "Resize the widgets" });
@@ -138,8 +192,12 @@ test("widgets size to their content, and the column beside an agent is the perso
   const stage = await page.locator(".stage").boundingBox();
   assert.equal(Math.round((await main.boundingBox())?.width ?? 0), Math.round(stage?.width ?? -1));
 
-  // Home's cards size the same way: fresh frames, so fourteen lines again.
+  // Home's placements fill the same way.
   await page.goto(`${app.url}/#/`);
-  await until(() => frameHeight(page, "Reading list"), 14 * 24);
-  await until(() => frameHeight(page, "Today"), 120);
+  await page
+    .frameLocator('[aria-label="Today"] iframe')
+    .getByRole("button", { name: "Add" })
+    .waitFor();
+  for (const title of ["Reading list", "Today", "Quiet"])
+    assert.deepEqual(await inFrame(page, title, filled), [placement, placement, placement], title);
 });
