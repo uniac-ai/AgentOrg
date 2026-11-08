@@ -33,6 +33,7 @@ async function mounted(
   let cancels = 0;
   let retries = 0;
   let refuse: Refused | undefined;
+  let refuseRetry: Refused | undefined;
   const history =
     options.history ?? (() => [{ id: "1", role: "user" as const, text: "Earlier", at }]);
   const bindChat = () =>
@@ -50,6 +51,7 @@ async function mounted(
       },
       state: () => options.state ?? { state: "idle" },
       retry: () => {
+        if (refuseRetry) throw refuseRetry;
         retries++;
         return { messageId: "1" };
       },
@@ -96,6 +98,9 @@ async function mounted(
     },
     refuse: (error: Refused | undefined) => {
       refuse = error;
+    },
+    refuseRetry: (error: Refused | undefined) => {
+      refuseRetry = error;
     },
     sent,
     shell,
@@ -494,5 +499,27 @@ test("a refused send leaves the conversation, and Send is back", async () => {
   await settle();
   assert.deepEqual(v.texts(), []);
   assert.ok(v.button("Send"));
+  await v.unmount();
+});
+
+test("Retry takes away what followed the person's message at once, and a refused one puts it back", async () => {
+  const v = await mounted({
+    history: () => [
+      { id: "1", role: "user" as const, text: "Hello", at },
+      { id: "2", role: "assistant" as const, text: "The first answer", at },
+    ],
+  });
+  assert.deepEqual(v.texts(), ["Hello", "The first answer"]);
+  await click(v.button("Retry"));
+  await settle();
+  assert.equal(v.retries(), 1);
+  assert.deepEqual(v.texts(), ["Hello"], "the old reply is gone before the new one comes");
+  await v.emit("message", { id: "3", role: "assistant", text: "The second answer", at });
+  assert.deepEqual(v.texts(), ["Hello", "The second answer"]);
+  v.refuseRetry(new Refused("busy", "A turn is running."));
+  await click(v.button("Retry"));
+  await settle();
+  assert.deepEqual(v.texts(), ["Hello", "The second answer"]);
+  assert.match(v.alert()?.textContent ?? "", /A turn is running/);
   await v.unmount();
 });

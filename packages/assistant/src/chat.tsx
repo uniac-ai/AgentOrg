@@ -149,9 +149,16 @@ function ChatView({ ctx }: { ctx: ViewContext }) {
     if (action === "manage") ctx.slots.shell.call.openExternal({ url: MANAGE_USAGE }).catch(failed);
     else if (action === "signIn") ctx.slots.shell.call.signIn({}).catch(failed);
     else {
-      // Retry runs the last turn again, without sending the message a second time.
+      // Retry runs the last turn again, without sending the message a second time; the new reply
+      // takes the place of what followed the person's message.
       setNotice(undefined);
-      slot.call.retry({}).catch(failed);
+      const before = shown.current;
+      setMessages(before.slice(0, before.findLastIndex((m) => m.role === "user") + 1));
+      setStreaming(new Map());
+      slot.call.retry({}).catch((error) => {
+        setMessages(before);
+        failed(error);
+      });
     }
   };
   /** The page before the oldest message shown. */

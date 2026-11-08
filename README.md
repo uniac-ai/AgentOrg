@@ -37,6 +37,8 @@ A shell runs each view module in its own sandboxed frame, with an opaque origin 
 - **Logs:** the view's `ctx.log` and any error it doesn't catch go to the shell, for its Actor's log.
 - **Size and base styles:** the placement decides a frame's size, never its content: the view learns it from `mount` and `resize`. Before the view loads, the frame runtime puts a base stylesheet first in the document (`FRAME_BASE`): the document and body fill the frame on a transparent background, content that grows scrolls inside with no visible scrollbar, and plain HTML (text, headings, lists, buttons, inputs, checkboxes, tables, code) is drawn in the theme's tokens. Every rule is in `:where()`, so any rule the view writes outranks it.
 
+A frame's permissions policy blocks the Clipboard API, so the runtime makes `navigator.clipboard.writeText` use the copy command, which needs only the person's click: copying text is the same call in a view as anywhere else.
+
 The frame isn't trusted: `FrameHost` checks every message, drops what doesn't fit, and refuses what it can't serve. A frame holds one subscription per slot and event, 64 at most, and 64 calls in flight, past which a call is refused `busy`; its log lines are cut, their fields rebuilt as a small fresh object, and past 50 lines in 10 s the rest are dropped.
 
 ## Building a package

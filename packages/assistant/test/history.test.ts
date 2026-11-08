@@ -61,3 +61,44 @@ test("text is cut at a character and says so", () => {
   assert.match(cut, /… \(cut\)$/);
   assert.doesNotMatch(cut, /[\uD800-\uDBFF]… \(cut\)$/);
 });
+
+test("the record is first read a few at a time, in order", async () => {
+  const s = store();
+  const writer = createHistory(s.calls as never, log);
+  for (let i = 1; i <= 50; i++) await writer.append(user(`m${i}`));
+  let reading = 0;
+  let most = 0;
+  const get = s.calls.get;
+  s.calls.get = async (input) => {
+    most = Math.max(most, ++reading);
+    await new Promise((done) => setTimeout(done, 1));
+    reading--;
+    return get(input);
+  };
+  const page = await createHistory(s.calls as never, log).page(undefined, 100);
+  assert.deepEqual(
+    page.messages.map((m) => m.text),
+    Array.from({ length: 50 }, (_, i) => `m${i + 1}`),
+  );
+  assert.ok(most > 1 && most <= 16, `${most} at once`);
+});
+
+test("dropAfter forgets what followed a message, in memory and in the store", async () => {
+  const s = store();
+  const history = createHistory(s.calls as never, log);
+  const kept = await history.append(user("kept"));
+  await history.append(user("gone 1"));
+  await history.append(user("gone 2"));
+  await history.dropAfter(kept.id);
+  assert.equal(s.values.size, 1);
+  assert.deepEqual(
+    (await history.page(undefined, 100)).messages.map((m) => m.text),
+    ["kept"],
+  );
+  // And a new message after it isn't given a number that was used.
+  await history.append(user("next"));
+  assert.deepEqual(
+    (await createHistory(s.calls as never, log).page(undefined, 100)).messages.map((m) => m.text),
+    ["kept", "next"],
+  );
+});

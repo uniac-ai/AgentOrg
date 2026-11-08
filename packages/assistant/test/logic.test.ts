@@ -843,3 +843,26 @@ test("retry runs the last turn again without recording the message twice", async
   await assert.rejects(s.actor.call("chat", "retry", {}), { code: "busy" });
   late.open(say("Done."));
 });
+
+test("retry replaces what followed the person's message, in the record and the model's input", async () => {
+  const s = await setup();
+  s.script.push(() => say("The first answer."));
+  await s.actor.call("chat", "send", { text: "Hello." });
+  await s.ended(0);
+  assert.deepEqual(s.messages(), ["user: Hello.", "assistant: The first answer."]);
+  const from = s.actor.emitted.length;
+  s.script.push(() => say("The second answer."));
+  await s.actor.call("chat", "retry", {});
+  await s.ended(from);
+  // The model isn't sent the reply it is being asked to replace.
+  const input = s.requests.at(-1)?.input ?? [];
+  assert.equal(input.filter((item) => item.content === "The first answer.").length, 0);
+  assert.equal(input.filter((item) => item.content === "Hello.").length, 1);
+  const { messages } = (await s.actor.call("chat", "history", {})) as {
+    messages: { role: string; text: string }[];
+  };
+  assert.deepEqual(
+    messages.map((m) => `${m.role}: ${m.text}`),
+    ["user: Hello.", "assistant: The second answer."],
+  );
+});

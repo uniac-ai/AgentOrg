@@ -210,7 +210,10 @@ export function createAgent(options: {
         throw error;
       }
     },
-    /** Run the last turn again from the record, without recording the person's message again. */
+    /**
+     * Run the last turn again, without recording the person's message again. What followed it goes
+     * from the record, so the new reply takes its place; what its tools did stays done.
+     */
     async retry() {
       if (turn) throw new Refused("busy", "A turn is running. Wait for it, or cancel it.");
       const current: Turn = { cancelled: false };
@@ -220,6 +223,7 @@ export function createAgent(options: {
         draining = undefined;
         const last = await history.lastUser();
         if (!last) throw new Refused("nothing_to_retry", "No message has been sent yet.");
+        await history.dropAfter(last.id);
         begin(current);
         return { messageId: last.id };
       } catch (error) {
