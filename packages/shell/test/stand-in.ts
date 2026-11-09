@@ -27,6 +27,9 @@ const PERSON = "person";
 type Message = z.output<typeof chatInterface.events.message.payload>;
 type Status = z.output<typeof chatInterface.methods.state.output>;
 type Creatable = z.output<typeof agentsInterface.methods.creatable.output>["creatables"][number];
+type Units = z.output<typeof agentsInterface.methods.units.output>;
+type Template = z.output<typeof agentsInterface.methods.templates.output>["templates"][number];
+type StackProblem = z.output<typeof agentsInterface.methods.check.output>["problems"][number];
 type AgentStatus = z.output<typeof agentsInterface.methods.list.output>["agents"][number]["status"];
 type Connection = {
   connection: string;
@@ -42,6 +45,7 @@ export interface Agent {
   creatable: string;
   skills: { name: string; description: string }[];
   mcp: { slot: string; connection: string }[];
+  purpose?: string;
   chat: { status: Status; messages: Message[]; current?: string };
 }
 
@@ -192,6 +196,175 @@ const CREATABLES: Creatable[] = [
   },
 ];
 
+const IDENTITY = { provider: "units", providerName: "AgentOrg" };
+const SKILLS = (...names: string[]) => names.map((name) => ({ name, files: ["SKILL.md"] }));
+const UNITS: Units["units"] = [
+  {
+    ...IDENTITY,
+    id: "computer",
+    title: "Computer",
+    description: "Terminal, files and a browser",
+    needs: [],
+    gives: { slots: [], skills: [], results: ["computer"] },
+    form: [
+      {
+        id: "where",
+        type: "choice",
+        value: "string",
+        title: "Where it runs",
+        required: true,
+        options: [
+          { value: "local", title: "This computer", description: "It acts as you on this Mac." },
+          {
+            value: "container",
+            title: "Its own container",
+            description: "Isolated from your files.",
+          },
+        ],
+      },
+      {
+        id: "access",
+        type: "choice",
+        value: "string",
+        title: "Files and commands",
+        required: true,
+        options: [
+          { value: "none", title: "None", description: "No file tools and no terminal." },
+          {
+            value: "read",
+            title: "Read files",
+            description:
+              "Reads files in the working directory. Cannot change them or run anything.",
+            adds: { slots: [{ name: "computer" }], skills: SKILLS("files", "computer") },
+          },
+          {
+            value: "terminal",
+            title: "Files and terminal",
+            description: "Runs any command, so it reaches every file and program you can.",
+            adds: {
+              slots: [{ name: "computer" }],
+              skills: SKILLS("terminal", "files", "computer"),
+            },
+          },
+        ],
+      },
+      {
+        id: "browser",
+        type: "toggle",
+        value: "boolean",
+        title: "Browser",
+        default: false,
+        description: "A browser of its own. It can open any site.",
+        adds: { slots: [{ name: "browser" }], skills: SKILLS("browser") },
+      },
+      {
+        id: "workspace",
+        type: "directory",
+        value: "string",
+        title: "Working directory",
+        required: true,
+        description: "The folder it works in. It is never deleted.",
+        visible: { field: "access", in: ["read", "terminal"] },
+      },
+      {
+        id: "image",
+        type: "text",
+        value: "string",
+        title: "Image",
+        default: "agentorg/computer",
+        visible: { field: "where", in: ["container"] },
+      },
+    ],
+  },
+  {
+    ...IDENTITY,
+    id: "web",
+    title: "Web",
+    description: "Search and fetch",
+    needs: [],
+    gives: { slots: [{ name: "web" }], skills: SKILLS("web-research"), results: [] },
+    form: [
+      {
+        id: "service",
+        type: "choice",
+        value: "string",
+        title: "Search service",
+        default: "exa",
+        options: [
+          { value: "exa", title: "Exa", description: "No key needed." },
+          { value: "tavily", title: "Tavily", description: "Needs your key." },
+        ],
+      },
+      {
+        id: "key",
+        type: "secret",
+        value: "secret",
+        title: "Key",
+        required: true,
+        visible: { field: "service", in: ["tavily"] },
+      },
+    ],
+  },
+  {
+    ...IDENTITY,
+    id: "control",
+    title: "Agent control",
+    description: "Lets it make agents",
+    needs: ["computer"],
+    gives: { slots: [{ name: "agents" }], skills: [], results: [] },
+    form: [
+      {
+        id: "limit",
+        type: "number",
+        value: "number",
+        title: "Agents alive",
+        min: 1,
+        max: 20,
+        default: 3,
+        unit: "at once",
+      },
+      {
+        id: "places",
+        type: "choices",
+        value: "strings",
+        title: "Where they work",
+        options: [
+          { value: "own", title: "Its own computer" },
+          { value: "new", title: "A new computer" },
+        ],
+      },
+      {
+        id: "shared",
+        type: "connection",
+        value: "string",
+        title: "Place",
+        visible: { field: "places", in: ["new"] },
+      },
+      { id: "colour", type: "colour-wheel", value: "string", title: "Colour" },
+      { id: "ceiling", type: "dial", value: "number", title: "Ceiling" },
+    ],
+  },
+];
+const TEMPLATES: Template[] = [
+  {
+    id: "assistant",
+    title: "Assistant",
+    description: "Does what you ask on a computer",
+    base: { provider: "AgentOrg", creatable: "assistant" },
+    units: [
+      { provider: "AgentOrg", unit: "computer", values: { access: "terminal", browser: true } },
+      { provider: "AgentOrg", unit: "web" },
+    ],
+  },
+  {
+    id: "old",
+    title: "From elsewhere",
+    description: "Made on another home",
+    base: { provider: "AgentOrg", creatable: "assistant" },
+    units: [{ provider: "Gone", unit: "mystery" }],
+  },
+];
+
 interface Spec {
   input: z.ZodType;
   output: z.ZodType;
@@ -230,6 +403,7 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
     event: string;
   }>();
   const creatables = options.creatables ?? CREATABLES;
+  let problems: StackProblem[] = [];
 
   const emit = (slot: string, event: string, payload: unknown) => {
     for (const s of subscribers)
@@ -242,12 +416,13 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
     if (!agent) throw new Refusal("unknown", "No such agent.");
     return agent;
   };
-  const entry = ({ agent, name, status, provider, creatable }: Agent) => ({
+  const entry = ({ agent, name, status, provider, creatable, purpose }: Agent) => ({
     agent,
     name,
     status,
     provider,
     creatable,
+    ...(purpose ? { purpose } : {}),
   });
   const chatSlot = (agent: string) => `chat_${agent.replaceAll("-", "_")}`;
 
@@ -270,16 +445,26 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
           units: [],
         };
       },
+      units: () => ({
+        bases: creatables.map((c) => ({ ...c, providerName: "AgentOrg" })),
+        units: UNITS,
+      }),
+      templates: () => ({ templates: TEMPLATES }),
+      check: () => ({ problems }),
       create: (input) => {
         const made = `a-${agents.size + 1}`;
+        const { base } = input.stack as unknown as {
+          base: { provider: string; creatable: string };
+        };
         agents.set(made, {
           agent: made,
           name: String(input.name),
           status: { state: "starting" },
-          provider: String(input.provider),
-          creatable: String(input.creatable),
+          provider: base.provider,
+          creatable: base.creatable,
           skills: [],
           mcp: [],
+          ...(input.purpose ? { purpose: String(input.purpose) } : {}),
           chat: { status: { state: "idle" }, messages: [] },
         });
         changed();
@@ -597,6 +782,10 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
     agents,
     connections,
     calls,
+    /** What `agents.check` finds wrong from now on. */
+    findProblems: (found: StackProblem[]) => {
+      problems = found;
+    },
     /** The next call of `slot.method` is refused. */
     refuseNext: (name: string, code: string, reason: string) =>
       refusals.set(name, new Refusal(code, reason)),

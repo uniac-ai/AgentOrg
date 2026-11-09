@@ -1,6 +1,6 @@
 // The fixed frontend: agents on the left and in the middle, Settings at the bottom.
-import { MessageCircleIcon, PlusIcon, SettingsIcon } from "lucide-react";
-import { Fragment, useLayoutEffect, useState } from "react";
+import { MessageCircleIcon, SettingsIcon } from "lucide-react";
+import { Fragment, useLayoutEffect } from "react";
 import type { LoginStatus } from "../app.tsx";
 import { go, type Route, useRoute } from "../data.ts";
 import {
@@ -16,9 +16,10 @@ import { TooltipProvider } from "../ui/tooltip.tsx";
 import { AgentPage } from "./agent-page.tsx";
 import { AgentSettingsPage } from "./agent-settings-page.tsx";
 import { AgentsPage } from "./agents-page.tsx";
+import { BuildPanel, CreateMenu } from "./build.tsx";
+import { BuildingProvider } from "./building.tsx";
 import { ChatPanel } from "./chat.tsx";
 import { ChatsProvider, useChats } from "./chats.tsx";
-import { CreateDialog } from "./create.tsx";
 import { McpsPage } from "./mcps-page.tsx";
 import { StateDot } from "./parts.tsx";
 import { SettingsPage } from "./settings-page.tsx";
@@ -33,7 +34,9 @@ export function FixedShell({ login }: { login?: LoginStatus }) {
     <AgentsProvider>
       <TooltipProvider>
         <ChatsProvider>
-          <Frame login={login} />
+          <BuildingProvider>
+            <Frame login={login} />
+          </BuildingProvider>
         </ChatsProvider>
       </TooltipProvider>
     </AgentsProvider>
@@ -57,16 +60,10 @@ function Frame({ login }: { login?: LoginStatus }) {
   const route = useRoute();
   const { list, byId } = useAgents();
   const chats = useChats();
-  const [creating, setCreating] = useState(false);
   const current = "agent" in route ? route.agent : undefined;
   const name = list.find((a) => a.agent === current)?.name ?? "";
   const row = (on: boolean) =>
     `flex h-8 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-[13px] hover:bg-[var(--hover)] ${on ? "bg-[var(--selected)] font-semibold" : "text-muted-foreground"}`;
-  const create = (
-    <Button variant="ghost" size="icon-sm" aria-label="Create" onClick={() => setCreating(true)}>
-      <PlusIcon />
-    </Button>
-  );
   const crumbs = crumbsOf(route, name);
   return (
     <div
@@ -86,7 +83,7 @@ function Frame({ login }: { login?: LoginStatus }) {
           >
             Agents
           </button>
-          {create}
+          <CreateMenu />
         </div>
         <ul className="no-bar mt-1 flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto">
           {list.map((agent) => (
@@ -139,7 +136,9 @@ function Frame({ login }: { login?: LoginStatus }) {
             </BreadcrumbList>
           </Breadcrumb>
           <div className="flex shrink-0 items-center gap-0.5">
-            <span className="wide:hidden">{create}</span>
+            <span className="wide:hidden">
+              <CreateMenu />
+            </span>
             <Button
               variant="ghost"
               size="icon-sm"
@@ -181,9 +180,9 @@ function Frame({ login }: { login?: LoginStatus }) {
             {route.screen === "settings" && <SettingsPage tab={route.tab} login={login} />}
           </main>
           <ChatPanel />
+          <BuildPanel />
         </div>
       </div>
-      <CreateDialog open={creating} onClose={() => setCreating(false)} />
     </div>
   );
 }

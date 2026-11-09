@@ -85,56 +85,6 @@ test(
 );
 
 test(
-  "Create offers what `agents.creatable` returns and asks only what the choice needs",
-  withGateway(async (gateway) => {
-    const page = await open(gateway);
-    await page.getByRole("button", { name: "Create" }).click();
-    const dialog = page.getByRole("dialog");
-    await dialog.getByRole("button", { name: /^Assistant/ }).waitFor();
-    await page.waitForTimeout(250);
-    const size = await box(dialog);
-    await dialog.getByRole("button", { name: /^Assistant/ }).click();
-    assert.deepEqual(await dialog.locator('[data-slot="field-label"]').allInnerTexts(), ["Name"]);
-    assert.deepEqual(await box(dialog), size, "the dialog keeps its box");
-    await dialog.getByRole("button", { name: "Back" }).click();
-
-    await dialog.getByRole("button", { name: /^Code reviewer/ }).click();
-    assert.deepEqual(await dialog.locator('[data-slot="field-label"]').allInnerTexts(), [
-      "Name",
-      "Repository",
-      "Note",
-    ]);
-    const create = dialog.getByRole("button", { name: "Create" });
-    assert.equal(await create.isDisabled(), true, "an ask with no answer holds it back");
-    await dialog.getByLabel("Repository").fill("acme/storefront");
-    await create.click();
-    await page.waitForURL(/#\/a\/a-6$/);
-    assert.deepEqual(gateway.calls.find((c) => c.method === "create")?.input, {
-      provider: "bundled",
-      creatable: "reviewer",
-      name: "Code reviewer",
-      answers: { repo: "acme/storefront" },
-    });
-    await page.close();
-  }),
-);
-
-test(
-  "a refused Create stays open and says why",
-  withGateway(async (gateway) => {
-    gateway.refuseNext("agents.create", "failed", "The provider isn't connected.");
-    const page = await open(gateway);
-    await page.getByRole("button", { name: "Create" }).click();
-    const dialog = page.getByRole("dialog");
-    await dialog.getByRole("button", { name: /^Assistant/ }).click();
-    await dialog.getByRole("button", { name: "Create" }).click();
-    await dialog.getByRole("alert").getByText("The provider isn't connected.").waitFor();
-    assert.equal(await dialog.getByLabel("Name").inputValue(), "Assistant");
-    await page.close();
-  }),
-);
-
-test(
   "the agent page shows each MCP's place and origin, its skills, and its activity",
   withGateway(async (gateway) => {
     const page = await open(gateway, "#/a/a-research/settings");
@@ -253,7 +203,7 @@ test(
     const settings = await nav.getByRole("button", { name: "Settings" }).boundingBox();
     assert.ok(settings && settings.y + settings.height > 860, "at the bottom");
     await nav.getByRole("button", { name: "Create" }).click();
-    await page.getByRole("dialog", { name: "Create" }).waitFor();
+    await page.getByRole("menuitem", { name: "Empty" }).waitFor();
     await page.keyboard.press("Escape");
 
     const weekly = row(page, "Weekly report");
