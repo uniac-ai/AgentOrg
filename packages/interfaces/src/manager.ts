@@ -11,12 +11,86 @@ import {
   ConnectionStatus,
   ConnectionTarget,
 } from "./mcp-provider.js";
+import { FieldValues, Problem, ResultKind, Unit, UnitId } from "./units.js";
 
 const Time = z.string().max(64);
 const ActorName = z.string().min(1).max(128);
 const OnAgent = z.object({ agent: Id });
 const OnConnection = z.object({ connection: Id });
 const OnSkill = z.object({ name: SkillName });
+const Purpose = z.string().max(2000);
+
+/** A template's id. */
+export const TemplateId = z
+  .string()
+  .regex(/^[a-z][a-z0-9-]*$/)
+  .max(64);
+/** What a stack starts on: one base from an agent provider, with what it asks. */
+export const StackBase = z.strictObject({
+  provider: Id,
+  creatable: CreatableId,
+  answers: Answers.optional(),
+});
+/**
+ * One unit of a stack, top to bottom. `needs` picks, by kind, which earlier unit (its position in
+ * `units`) gives what this one needs; a kind exactly one earlier unit gives needs no pick.
+ */
+export const StackUnit = z.strictObject({
+  provider: Id,
+  unit: UnitId,
+  values: FieldValues.optional(),
+  needs: z.record(ResultKind, z.number().int().min(0)).optional(),
+});
+/** A stack as it is created: each unit may also carry secrets, used once and never saved. */
+const FilledUnit = StackUnit.extend({ secrets: ConnectionSecrets.optional() });
+/** `template` notes the template it started from, for display only. */
+export const Stack = z.strictObject({
+  base: StackBase,
+  units: z.array(FilledUnit).max(64),
+  template: TemplateId.optional(),
+});
+/** A provider in a template: by its Actor's name, so a template works on another home. */
+const ProviderName = z.string().min(1).max(128);
+/**
+ * A saved stack of prefills: nothing in it is locked, and no secret is in it; management refuses a
+ * value for a secret field. A required field with no value must still be filled at creation.
+ * `from` notes the template it was copied from, for display only: later changes to that one don't
+ * reach this one.
+ */
+export const Template = z.strictObject({
+  id: TemplateId,
+  title: z.string().min(1).max(128),
+  description: z.string().max(2000),
+  from: TemplateId.optional(),
+  base: StackBase.extend({ provider: ProviderName }),
+  units: z.array(StackUnit.extend({ provider: ProviderName })).max(64),
+});
+/** What is filled in for one unit of a template, by its position: prefills it replaces, and secrets. */
+const Fill = z.strictObject({
+  values: FieldValues.optional(),
+  secrets: ConnectionSecrets.optional(),
+});
+/** A unit to add to a living agent: `needs` names, by kind, the instance to take each result from. */
+const AddUnit = {
+  agent: Id,
+  unit: FilledUnit.omit({ needs: true }),
+  needs: z.record(ResultKind, Id).optional(),
+};
+/** A problem with a stack: on one unit (its position), or, with neither, on the whole. */
+const StackProblem = Problem.extend({ unit: z.number().int().min(0).optional() });
+/**
+ * One unit as an agent has it: what was filled in, never a secret. `instance` is management's own
+ * id for it, and `needs` names, by kind, the instance it took each result from.
+ */
+const AppliedUnit = z.object({
+  instance: Id,
+  provider: Id,
+  unit: UnitId,
+  title: z.string().min(1).max(128),
+  values: FieldValues,
+  needs: z.record(ResultKind, Id),
+  status: z.object({ state: ConnectionState, detail: z.string().max(2000).optional() }),
+});
 
 /** Where a connection came from, written once when it was made. */
 export const ConnectionOrigin = z.object({
@@ -37,6 +111,10 @@ const AgentEntry = z.object({
   status: AgentStatus,
   provider: Id,
   creatable: CreatableId,
+  /** What it's for, as whoever made it said. */
+  purpose: Purpose.optional(),
+  /** The template it started from, for display only. */
+  template: TemplateId.optional(),
 });
 
 /**
@@ -58,19 +136,53 @@ export const agents = defineInterface({
       input: z.object({}),
       output: z.object({ providers: z.array(z.object({ provider: Id, name: ActorName })) }),
     }),
+    /** Every base and unit the connected providers offer, each naming its provider. */
+    units: method({
+      input: z.object({}),
+      output: z.object({
+        bases: z.array(Creatable.extend({ provider: Id, providerName: ActorName })),
+        units: z.array(Unit.extend({ provider: Id, providerName: ActorName })),
+      }),
+    }),
+    /** The templates: what the app ships and what the person saved. */
+    templates: method({
+      input: z.object({}),
+      output: z.object({ templates: z.array(Template) }),
+    }),
+    /** Save a template, replacing the one of its id. A saved template holds no secret. */
+    saveTemplate: method({ input: Template, output: z.object({}) }),
+    removeTemplate: method({ input: z.object({ id: TemplateId }), output: z.object({}) }),
+    /** Check a stack, or a unit to add to a living agent, before anything runs. It changes nothing. */
+    check: method({
+      input: z.union([z.strictObject({ stack: Stack }), z.strictObject(AddUnit)]),
+      output: z.object({ problems: z.array(StackProblem).max(256) }),
+    }),
     /**
-     * Make an agent of a creatable, with what it asks and a connection for each of its `pick`
-     * needs, by slot. All or none: if any step fails, what this creation made is removed. A skill
-     * it comes with whose name is already here keeps the one here.
+     * Make an agent, from a stack, or from a template with what is filled in for each of its units
+     * by position; nothing in a template is locked, so a caller changing more sends the stack. All
+     * or none: if any step fails, what this creation made is removed, last first.
+     *
+     * The third form is the older one, from a creatable alone: it goes once the pages use stacks.
      */
     create: method({
-      input: z.object({
-        provider: Id,
-        creatable: CreatableId,
-        name: ActorName,
-        answers: Answers,
-        connections: z.record(SlotName, Id).optional(),
-      }),
+      input: z.union([
+        z.strictObject({ stack: Stack, name: ActorName, purpose: Purpose.optional() }),
+        z.strictObject({
+          template: TemplateId,
+          fill: z.array(Fill).max(64).optional(),
+          answers: Answers.optional(),
+          name: ActorName,
+          purpose: Purpose.optional(),
+        }),
+        z.strictObject({
+          provider: Id,
+          creatable: CreatableId,
+          name: ActorName,
+          answers: Answers,
+          connections: z.record(SlotName, Id).optional(),
+          purpose: Purpose.optional(),
+        }),
+      ]),
       output: OnAgent,
     }),
     list: method({ input: z.object({}), output: z.object({ agents: z.array(AgentEntry) }) }),
@@ -79,15 +191,19 @@ export const agents = defineInterface({
       input: OnAgent,
       output: AgentEntry.extend({
         instructions: z.string().max(200_000),
-        skills: z.array(SkillEntry),
+        /** Which unit gave each is its `instance`; none when it was exposed directly. */
+        skills: z.array(SkillEntry.extend({ instance: Id.optional() })),
         mcp: z.array(
           z.object({
             slot: SlotName,
             connection: Id,
             origin: ConnectionOrigin.optional(),
             status: ConnectionStatus,
+            instance: Id.optional(),
           }),
         ),
+        /** Its stack, top to bottom. */
+        units: z.array(AppliedUnit),
       }),
     }),
     start: method({ input: OnAgent, output: z.object({}) }),
@@ -108,7 +224,11 @@ export const agents = defineInterface({
       ]),
       output: z.object({}),
     }),
-    /** Final: removes the agent and the connections made for it. */
+    /** Add a unit to a living agent, below those it has; it takes effect at the next request. */
+    addUnit: method({ input: z.strictObject(AddUnit), output: z.object({ instance: Id }) }),
+    /** Remove a unit from a living agent: what it made goes. Refused `state` while another needs it. */
+    removeUnit: method({ input: z.object({ agent: Id, instance: Id }), output: z.object({}) }),
+    /** Final: removes the units, last first, then the agent, and the connections made for it. */
     remove: method({ input: OnAgent, output: z.object({}) }),
   },
 });

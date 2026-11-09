@@ -24,6 +24,7 @@ const AgentRecord = z.object({
   creatable: z.string(),
   instructions: z.string(),
   skills: z.array(z.string()),
+  purpose: z.string().optional(),
 });
 const Records = z.object({
   agents: z.record(z.string(), AgentRecord),
@@ -56,6 +57,10 @@ export interface Manager {
 
 const quiet: Log = { info() {}, warn() {}, error() {} };
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
+/** Stacks, templates and units: declared, not served yet. */
+const notYet = (): never => {
+  throw new Refused("unimplemented", "Stacks of units aren't served yet.");
+};
 const alreadyGone = (error: unknown) => error instanceof Refused && error.code === "unknown";
 
 /**
@@ -262,8 +267,29 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
           ),
         }),
 
+        units: async () => ({
+          bases: (
+            await fromEach(agentProviders(), async ({ actor, call }) => {
+              const providerName = await nameOf(actor);
+              return (await call.creatable({})).creatables.map((one) => ({
+                ...one,
+                provider: actor,
+                providerName,
+              }));
+            })
+          ).flat(),
+          units: [],
+        }),
+        templates: async () => ({ templates: [] }),
+        saveTemplate: notYet,
+        removeTemplate: notYet,
+        check: notYet,
+        addUnit: notYet,
+        removeUnit: notYet,
+
         async create(input, { caller }) {
-          const { creatable: id, name, answers, connections: picked = {} } = input;
+          if (!("creatable" in input)) return notYet();
+          const { creatable: id, name, answers, connections: picked = {}, purpose } = input;
           const provider = named(agentProviders(), input.provider, "agent provider");
           const creatable = (await provider.call.creatable({})).creatables.find((c) => c.id === id);
           if (!creatable) throw new Refused("unknown", `${input.provider} offers no ${id}.`);
@@ -282,6 +308,7 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
               creatable: id,
               instructions: creatable.instructions,
               skills: [],
+              ...(purpose ? { purpose } : {}),
             };
             creating.set(agent, record);
             undo.push(() => creating.delete(agent));
@@ -374,6 +401,7 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
                         status,
                         provider: record.provider,
                         creatable: record.creatable,
+                        ...(record.purpose ? { purpose: record.purpose } : {}),
                       })),
                     ]
                   : [];
@@ -406,9 +434,11 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
             status,
             provider: record.provider,
             creatable: record.creatable,
+            ...(record.purpose ? { purpose: record.purpose } : {}),
             instructions: record.instructions,
             skills: record.skills.flatMap((skill) => library.entry(skill) ?? []),
             mcp,
+            units: [],
           };
         },
         async start({ agent }) {

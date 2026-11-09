@@ -28,7 +28,17 @@ export {
 } from "./hub.js";
 export { kv } from "./kv.js";
 export { Item, llmSession, OutputItem, Tool } from "./llm-session.js";
-export { agents, ConnectionOrigin, connections, skills } from "./manager.js";
+export {
+  agents,
+  ConnectionOrigin,
+  connections,
+  Stack,
+  StackBase,
+  StackUnit,
+  skills,
+  Template,
+  TemplateId,
+} from "./manager.js";
 export {
   ConnectionKind,
   ConnectionParams,
@@ -40,3 +50,16 @@ export {
   mcpProvider,
 } from "./mcp-provider.js";
 export { ToolEntry, tools } from "./tools.js";
+export {
+  Field,
+  FieldId,
+  FieldValue,
+  FieldValues,
+  Form,
+  Problem,
+  ResultKind,
+  Unit,
+  UnitId,
+  UnitResult,
+  unitProvider,
+} from "./units.js";

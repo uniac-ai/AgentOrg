@@ -21,6 +21,7 @@ import {
   mcpProvider,
   skills,
   tools,
+  unitProvider,
 } from "../src/index.ts";
 
 const standard = [kv, chat, llmSession, accountLogin];
@@ -55,7 +56,16 @@ test("every interface's schemas compile under the Hub's strict validator", () =>
     assert.doesNotThrow(() => compiled(iface), describeInterface(iface).id);
 });
 
-const management = [tools, agentSettings, mcpProvider, agentProvider, agents, connections, skills];
+const management = [
+  tools,
+  agentSettings,
+  mcpProvider,
+  agentProvider,
+  agents,
+  connections,
+  skills,
+  unitProvider,
+];
 
 test("the agent management interfaces are named, versioned and compile strictly", () => {
   assert.deepEqual(
@@ -68,6 +78,7 @@ test("the agent management interfaces are named, versioned and compile strictly"
       "agents@1",
       "connections@1",
       "skills@1",
+      "unit.provider@1",
     ],
   );
   for (const iface of management)
@@ -162,6 +173,152 @@ test("an agent's status tells stopped by the person from down", () => {
   const agent = { agent: "act_1", name: "A", provider: "act_2", creatable: "assistant" };
   assert.ok(listed?.({ agents: [{ ...agent, status: { state: "down", detail: "x" } }] }));
   assert.equal(listed?.({ agents: [agent] }), false);
+});
+
+const computer = {
+  id: "computer",
+  title: "Computer",
+  description: "Where the agent works.",
+  form: [
+    {
+      id: "where",
+      type: "choice",
+      value: "string",
+      title: "Where it runs",
+      required: true,
+      options: [{ value: "local", title: "This computer", description: "Runs as you." }],
+    },
+    {
+      id: "access",
+      type: "choice",
+      value: "string",
+      title: "Files and commands",
+      options: [
+        { value: "none", title: "None" },
+        {
+          value: "read",
+          title: "Read files",
+          adds: {
+            slots: [{ name: "computer" }],
+            skills: [{ name: "files", files: ["SKILL.md"] }],
+          },
+        },
+      ],
+    },
+    {
+      id: "browser",
+      type: "toggle",
+      value: "boolean",
+      title: "Browser",
+      adds: { slots: [{ name: "browser" }], skills: [] },
+    },
+    {
+      id: "workspace",
+      type: "directory",
+      value: "string",
+      title: "Folder",
+      required: true,
+      visible: { field: "access", in: ["read", "files", "terminal"] },
+    },
+    {
+      id: "image",
+      type: "text",
+      value: "string",
+      title: "Image",
+      default: "agentorg/computer",
+      visible: { field: "where", in: ["container"] },
+    },
+  ],
+  needs: [],
+  gives: {
+    slots: [{ name: "computer" }],
+    skills: [{ name: "terminal", files: ["SKILL.md"] }],
+    results: ["computer"],
+  },
+};
+
+test("a unit carries its form as data, and a new field type needs no new contract", () => {
+  const units = compiled(unitProvider)["units.output"];
+  assert.ok(units);
+  assert.ok(units({ units: [computer] }));
+  const withType = (type: string) => ({
+    units: [
+      { ...computer, form: [{ id: "spot", type, value: "string", title: "A spot on a map" }] },
+    ],
+  });
+  assert.ok(units(withType("map-point")), "an open name");
+  assert.equal(units(withType("Not A Name")), false);
+  assert.ok(
+    units({
+      units: [{ ...computer, form: [{ id: "k", type: "api-key", value: "secret", title: "K" }] }],
+    }),
+    "a secret by its value kind, whatever its type",
+  );
+  const badKind = { id: "x", type: "text", value: "object", title: "X" };
+  assert.equal(units({ units: [{ ...computer, form: [badKind] }] }), false);
+  // A slot's name is fixed, or the value of a field; a unit doesn't say both.
+  const named = (slots: unknown[]) => ({
+    units: [{ ...computer, gives: { ...computer.gives, slots } }],
+  });
+  assert.ok(units(named([{ field: "where" }])));
+  assert.equal(units(named([{ name: "a", field: "where" }])), false);
+  // So is a skill's, for a unit that gives one the person chose.
+  const skills = [{ field: "where" }];
+  assert.ok(units({ units: [{ ...computer, gives: { ...computer.gives, skills } }] }));
+});
+
+test("a unit's apply takes secrets apart from its values, and check never sees them", () => {
+  const provider = compiled(unitProvider);
+  const apply = {
+    unit: "computer",
+    values: { where: "local", limit: 3, on: true, several: ["a", "b"] },
+    secrets: { key: "k" },
+    needs: { computer: "handle" },
+    agent: "act_1",
+    name: "Fay",
+  };
+  assert.ok(provider["apply.input"]?.(apply));
+  assert.equal(provider["apply.input"]?.({ ...apply, values: { where: { deep: 1 } } }), false);
+  assert.ok(provider["check.input"]?.({ unit: "computer", values: {}, secrets: ["key"] }));
+  assert.ok(provider["check.output"]?.({ problems: [{ field: "where", message: "No." }] }));
+  assert.equal(
+    provider["status.output"]?.({ state: "connected", connections: [], token: "x" }),
+    false,
+  );
+});
+
+test("a stack carries secrets at creation, and a template can never hold one", () => {
+  const manage = compiled(agents);
+  const base = { provider: "act_b", creatable: "assistant" };
+  const unit = { provider: "act_u", unit: "computer", values: { where: "local" } };
+  const create = manage["create.input"];
+  assert.ok(create);
+  const stack = { base, units: [{ ...unit, secrets: { key: "k" }, needs: { computer: 0 } }] };
+  assert.ok(create({ stack, name: "Fay", purpose: "Keeps the docs tidy." }));
+  assert.ok(create({ template: "assistant", fill: [{ values: { where: "local" } }], name: "Fay" }));
+  assert.ok(create({ provider: "act_b", creatable: "assistant", name: "Fay", answers: {} }));
+  assert.equal(create({ name: "Fay" }), false);
+  assert.equal(create({ stack, template: "assistant", name: "Fay" }), false);
+  const named = { ...base, provider: "Local" };
+  const template = { id: "mine", title: "Mine", description: "", from: "assistant", base: named };
+  const save = manage["saveTemplate.input"];
+  const inTemplate = { ...unit, provider: "Local" };
+  assert.ok(save?.({ ...template, units: [inTemplate] }));
+  assert.equal(save?.({ ...template, units: [{ ...inTemplate, secrets: { key: "k" } }] }), false);
+  assert.equal(create({ template: "assistant", fill: [{ value: 1 }], name: "Fay" }), false);
+  assert.equal(create({ stack: { ...stack, base: { ...base, secrets: {} } }, name: "Fay" }), false);
+  // A unit added to a living agent is checked the same way, and takes results by instance.
+  const add = {
+    agent: "act_a",
+    unit: { provider: "act_u", unit: "browser" },
+    needs: { computer: "i1" },
+  };
+  assert.ok(manage["check.input"]?.(add));
+  assert.ok(manage["addUnit.input"]?.(add));
+  assert.equal(
+    manage["addUnit.input"]?.({ ...add, unit: { ...add.unit, needs: { computer: 0 } } }),
+    false,
+  );
 });
 
 test("management exposes a skill or a connection, and adds a skill from a folder or as files", () => {

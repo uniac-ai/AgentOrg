@@ -279,6 +279,7 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
             const found = connections.get(connection) as Connection;
             return { slot, connection, origin: found.origin, status: found.status };
           }),
+          units: [],
         };
       },
       create: (input) => {

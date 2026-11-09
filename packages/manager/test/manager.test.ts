@@ -642,6 +642,33 @@ test("removing an agent takes the connections made for it, and leaves those it w
   assert.ok(!(await s.bindingsOf(PERSON)).some((b) => b.provider === agent));
 });
 
+test("an agent keeps what it's for, and stacks aren't served yet", async (t) => {
+  const s = await setup(t);
+  const { agent } = await s.calls.agents.create({
+    provider: s.agentActor.actorId,
+    creatable: "plain",
+    name: "Pat",
+    answers: {},
+    purpose: "Keeps the docs tidy.",
+  });
+  assert.equal((await s.calls.agents.get({ agent })).purpose, "Keeps the docs tidy.");
+  assert.equal((await s.calls.agents.list({})).agents[0]?.purpose, "Keeps the docs tidy.");
+  const { bases, units } = await s.calls.agents.units({});
+  assert.deepEqual(
+    bases.map((one) => one.id),
+    ["plain", "full"],
+  );
+  assert.deepEqual(units, []);
+  assert.deepEqual((await s.calls.agents.templates({})).templates, []);
+  await assert.rejects(
+    s.calls.agents.create({
+      stack: { base: { provider: s.agentActor.actorId, creatable: "plain" }, units: [] },
+      name: "Stacked",
+    }),
+    refused("unimplemented"),
+  );
+});
+
 test("exposing a connection is a Hub binding and nothing else; removing one takes its exposures", async (t) => {
   const s = await setup(t);
   const { agent } = await s.calls.agents.create({
