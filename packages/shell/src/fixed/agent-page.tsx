@@ -70,7 +70,9 @@ export function AgentPage({ agent: id }: { agent: string }) {
         <div className="flex items-start gap-4 tight:flex-col tight:gap-3">
           <div className="min-w-0 flex-1">
             <h1 className="text-[22px] leading-7 font-semibold">{entry.name}</h1>
-            <p className="mt-1 text-[15px] text-muted-foreground">{creatable?.description}</p>
+            <p className="mt-1 text-[15px] text-muted-foreground">
+              {entry.purpose ?? creatable?.description}
+            </p>
           </div>
           <div className="flex shrink-0 items-center gap-1">
             <Button size="sm" onClick={() => chatWith(id)}>

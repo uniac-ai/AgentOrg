@@ -51,7 +51,9 @@ function AgentRow({ agent }: { agent: AgentEntry }) {
         className="w-56 shrink-0 text-left tight:w-auto tight:min-w-0 tight:flex-1"
       >
         <span className="block truncate font-medium">{agent.name}</span>
-        <span className="block truncate text-[13px] text-muted-foreground">{purpose}</span>
+        <span className="block truncate text-[13px] text-muted-foreground">
+          {agent.purpose ?? purpose}
+        </span>
       </button>
       <span
         className={`min-w-0 flex-1 truncate text-[13px] tight:order-last tight:basis-full tight:pl-6 ${failed || now?.tone === "trouble" ? "text-[var(--bad)]" : "text-muted-foreground"}`}
