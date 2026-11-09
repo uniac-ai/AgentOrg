@@ -13,7 +13,6 @@
     "packages/hub",
     "packages/mcp",
     "packages/manager",
-    "packages/installer",
     "packages/chatgpt",
     "packages/kit",
     "packages/assistant",

@@ -1,7 +1,6 @@
 /**
- * The engine: one agent's chat, its loop, and what a request says and offers. It runs on whatever
- * hosts it, a sandboxed module or an ordinary program, which says where the record is kept and what
- * the agent is told when no `settings` is bound.
+ * The engine: one agent's chat, its loop, and what a request says and offers. Its host says where
+ * the record is kept and what the agent is told when no `settings` is bound.
  */
 import type { agentSettings, chat, kv, llmSession } from "@agentorg/interfaces";
 import { type Context, Refused, type Slot } from "@agentorg/sdk";
@@ -24,8 +23,6 @@ export function startEngine(
     store: Slot<typeof kv>["call"];
     /** What the agent is told while no `settings` is bound. */
     instructions(): string;
-    /** The tools the host gives of its own, ahead of what is exposed. */
-    ownTools(): Candidate[];
   },
 ) {
   const { store } = options;
@@ -50,10 +47,7 @@ export function startEngine(
     const told = settings
       ? instructionsWith(settings.instructions, settings.skills)
       : { instructions: options.instructions(), leftOut: [] };
-    const own: Candidate[] = [
-      ...(settings?.skills.length ? [skillTool(ctx.slots.settings)] : []),
-      ...options.ownTools(),
-    ];
+    const own: Candidate[] = settings?.skills.length ? [skillTool(ctx.slots.settings)] : [];
     // In the order they came, each asked at once so one slow server delays only itself.
     const exposed = await Promise.all(
       ctx.exposed().map(async (slot) =>
@@ -108,8 +102,6 @@ export function startEngine(
     },
   });
   return {
-    /** Read the store again, as after it was bound to another one. */
-    reset: () => history.reset(),
     /** Stop the turn in progress. */
     cancel: () => agent.cancel(),
     /** Settles when the latest turn has written all it will. */

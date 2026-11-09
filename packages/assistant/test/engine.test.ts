@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { hubActors, installer, layout, tools } from "@agentorg/interfaces";
+import { hubActors, layout, tools } from "@agentorg/interfaces";
 import {
   defineInterface,
   describeInterface,
@@ -12,9 +12,9 @@ import {
 import { createTestContext } from "@agentorg/sdk/testing";
 import { z } from "zod";
 import { INPUT_BUDGET } from "../src/history.ts";
-import logic, { BASE_INSTRUCTIONS, INSTRUCTIONS } from "../src/logic.ts";
 import { MAX_INSTRUCTIONS } from "../src/settings.ts";
 import { MAX_OUTPUT, MAX_TOOLS, TOOLS_BUDGET } from "../src/tools.ts";
+import engine, { INSTRUCTIONS } from "./engine-actor.ts";
 
 type Item = { type: string; [key: string]: unknown };
 type Request = {
@@ -99,7 +99,7 @@ const OFFERED = [
 ];
 
 async function setup(values = new Map<string, unknown>()) {
-  const actor = createTestContext(logic, { actorId: "assistant", module: "logic" });
+  const actor = createTestContext(engine, { actorId: "assistant", module: "logic" });
   await actor.start();
   const store = memory(values);
   actor.bind("store", store.handlers);
@@ -149,63 +149,9 @@ async function setup(values = new Map<string, unknown>()) {
   return { actor, store, requests, cancels, script, model, turn, ended, statuses, messages };
 }
 
-test("the tools are the bound slots' methods, apart from model and store", async () => {
-  const s = await setup();
-  await s.turn("hello");
-  assert.deepEqual(s.requests[0]?.tools, []);
-  s.actor.bind("layout", { place: () => ({ id: "p1" }) });
-  await s.turn("again");
-  const offered = s.requests[1]?.tools ?? [];
-  assert.deepEqual(
-    offered.map((tool) => tool.name),
-    ["layout__get", "layout__place", "layout__remove", "layout__move"],
-  );
-  const place = describeInterface(layout);
-  assert.ok(place.kind === "rpc");
-  assert.deepEqual(
-    offered.find((tool) => tool.name === "layout__place")?.parameters,
-    place.methods.place?.input,
-  );
-  s.actor.bind("actors", { list: () => ({ actors: [] }) });
-  s.actor.unbind("layout");
-  await s.turn("and again");
-  assert.deepEqual(
-    (s.requests[2]?.tools ?? []).map((tool) => tool.name),
-    Object.keys(hubActors.methods).map((method) => `actors__${method}`),
-  );
-});
-
-test("bound to an installer, the agent can plan and install what it builds", async () => {
-  const s = await setup();
-  await s.turn("hello");
-  s.actor.bind("installer", { plan: () => ({ slots: [], views: [], exposes: [] }) });
-  await s.turn("make me a counter");
-  // How to make an Actor is told only once it can build one too.
-  s.actor.bind("packages", { list: () => ({ packages: [] }) });
-  await s.turn("now");
-  assert.deepEqual(
-    s.requests.map((r) => r.instructions),
-    // Each ends with the agent's own id, which it names as an exposure's `to`.
-    [BASE_INSTRUCTIONS, BASE_INSTRUCTIONS, INSTRUCTIONS].map(
-      (told) => `${told}\n\nYour Actor id is assistant.`,
-    ),
-  );
-  const offered = s.requests[1]?.tools ?? [];
-  assert.deepEqual(
-    offered.map((tool) => tool.name),
-    Object.keys(installer.methods).map((method) => `installer__${method}`),
-  );
-  const described = describeInterface(installer);
-  assert.ok(described.kind === "rpc");
-  assert.deepEqual(
-    offered.find((tool) => tool.name === "installer__install")?.parameters,
-    described.methods.install?.input,
-  );
-});
-
 test("a tool message says its call running, then how it ended, under one id; the record keeps it", async () => {
   const s = await setup();
-  s.actor.bind("layout", {
+  s.actor.expose("layout", layout, {
     place: () => ({ id: "p1" }),
     remove: () => {
       throw new Refused("unknown", "No such placement.");
@@ -256,7 +202,7 @@ test("a tool message says its call running, then how it ended, under one id; the
 test("how each call ended outlives a restart, and a call ends shown even if its record fails", async () => {
   const values = new Map<string, unknown>();
   const s = await setup(values);
-  s.actor.bind("layout", {
+  s.actor.expose("layout", layout, {
     place: () => ({ id: "p1" }),
     // The store goes while this call runs: its record can't be written.
     remove: () => {
@@ -463,7 +409,7 @@ test("bound to settings, instructions and skills come from it, read at each requ
   const told = String(s.requests[0]?.instructions);
   assert.ok(told.startsWith("You keep the docs."));
   assert.ok(told.includes("- review: Review a change."));
-  assert.ok(!told.includes(BASE_INSTRUCTIONS));
+  assert.ok(!told.includes(INSTRUCTIONS));
   assert.deepEqual(offeredNames(s.requests[0]), ["settings__skill"]);
 
   // Removed: gone at the next request, and with no skills there's nothing to read them with.
@@ -523,11 +469,10 @@ test("bound settings that can't answer end the turn rather than run it without i
   assert.equal(s.requests.length, 0);
 });
 
-test("with settings unbound, the instructions are today's", async () => {
+test("with settings unbound, the instructions are the host's", async () => {
   const s = await setup();
   await s.turn("hello");
-  assert.ok(String(s.requests[0]?.instructions).startsWith(BASE_INSTRUCTIONS));
-  assert.ok(String(s.requests[0]?.instructions).endsWith("Your Actor id is assistant."));
+  assert.equal(s.requests[0]?.instructions, INSTRUCTIONS);
 });
 
 test("the model is chosen per agent, kept with it, and the provider's default until then", async () => {
@@ -558,7 +503,7 @@ test("the model is chosen per agent, kept with it, and the provider's default un
 test("a function call runs through its slot, and its result or refusal goes back", async () => {
   const s = await setup();
   const placed: unknown[] = [];
-  s.actor.bind("layout", {
+  s.actor.expose("layout", layout, {
     place: (input) => {
       placed.push(input);
       if (input.module === "logic") throw new Refused("invalid", "logic isn't a view module.");
@@ -581,9 +526,9 @@ test("a function call runs through its slot, and its result or refusal goes back
       { type: "function_call", callId: "c4", name: "layout__get", arguments: "{oops" },
       callTool("layout__get", {}, "c5"),
     ),
-    (request) => {
+    (_request) => {
       // The slot goes away between the tool list and the call.
-      s.actor.unbind("layout");
+      s.actor.unexpose("layout");
       return calls({ ...callTool("layout__remove", { id: "p1" }, "c6") });
     },
     say("Placed the board."),
@@ -623,7 +568,7 @@ test("a function call runs through its slot, and its result or refusal goes back
 test("a turn makes at most 20 tool calls, and says so as its error", async () => {
   const s = await setup();
   let runs = 0;
-  s.actor.bind("layout", {
+  s.actor.expose("layout", layout, {
     get: () => {
       runs++;
       return { home: [] };
@@ -697,7 +642,7 @@ test("cancel during a tool call keeps its real result and skips the calls after 
   const running = gate();
   const release = gate();
   let entered = 0;
-  s.actor.bind("layout", {
+  s.actor.expose("layout", layout, {
     place: async () => {
       entered++;
       running.open();
@@ -791,7 +736,7 @@ test("a refusal from the model ends the turn with its code, and no idle after", 
 
 test("outputs are capped in bytes, refusals too, and a long reply is shown in part", async () => {
   const s = await setup();
-  s.actor.bind("layout", {
+  s.actor.expose("layout", layout, {
     remove: () => {
       throw new Refused("invalid", "x".repeat(250_000));
     },
@@ -806,7 +751,7 @@ test("outputs are capped in bytes, refusals too, and a long reply is shown in pa
       restarts: 0,
     },
   ];
-  s.actor.bind("actors", { list: () => ({ actors: named("é".repeat(60_000)) }) });
+  s.actor.expose("actors", hubActors, { list: () => ({ actors: named("é".repeat(60_000)) }) });
   const long = "y".repeat(150_000);
   s.script.push(
     calls(callTool("actors__list", {}, "a"), callTool("layout__remove", { id: "x" }, "b")),
@@ -874,7 +819,7 @@ test("history pages back, survives a restart, and skips what doesn't read back",
 
 test("the model gets the newest whole exchanges that fit, and a call keeps its output", async () => {
   const s = await setup();
-  s.actor.bind("layout", { get: () => ({ home: [] }) });
+  s.actor.expose("layout", layout, { get: () => ({ home: [] }) });
   s.script.push(calls(callTool("layout__get", {}, "first")));
   await s.turn("Message 1.");
   const bigs = Array.from({ length: 5 }, (_, i) => `${i}${"x".repeat(95_000)}`);
@@ -896,7 +841,7 @@ test("the model gets the newest whole exchanges that fit, and a call keeps its o
 
 test("a latest exchange over the budget leaves out its oldest outputs, never a call", async () => {
   const s = await setup();
-  s.actor.bind("actors", {
+  s.actor.expose("actors", hubActors, {
     list: () => ({
       actors: [
         {
@@ -920,19 +865,11 @@ test("a latest exchange over the budget leaves out its oldest outputs, never a c
   assert.ok(outputs.some((item) => String(item.output).startsWith("(Left out")));
 });
 
-test("binding another store reads that one", async () => {
-  const s = await setup();
-  await s.turn("In the first store.");
-  s.actor.bind("store", memory().handlers);
-  const page = (await s.actor.call("chat", "history", {})) as { messages: unknown[] };
-  assert.deepEqual(page.messages, []);
-});
-
 test("a cancelled turn's running call is recorded before the next message", async () => {
   const s = await setup();
   const release = gate();
   let entered = false;
-  s.actor.bind("layout", {
+  s.actor.expose("layout", layout, {
     get: async () => {
       entered = true;
       await release.shut;
@@ -959,7 +896,7 @@ test("a cancelled turn's running call is recorded before the next message", asyn
 
 test("thousands of calls in one reply cost a handful of writes", async () => {
   const s = await setup();
-  s.actor.bind("layout", { get: () => ({ home: [] }) });
+  s.actor.expose("layout", layout, { get: () => ({ home: [] }) });
   s.script.push(
     calls(...Array.from({ length: 2000 }, (_, i) => callTool("layout__get", {}, `x${i}`))),
   );
@@ -973,7 +910,7 @@ test("thousands of calls in one reply cost a handful of writes", async () => {
 
 test("a long message is stored once, under storage's value limit, and a big call is still kept", async () => {
   const s = await setup();
-  s.actor.bind("layout", { get: () => ({ home: [] }) });
+  s.actor.expose("layout", layout, { get: () => ({ home: [] }) });
   // 45,000 CJK characters are 135 KB of UTF-8: stored twice, they would pass 256 KiB.
   assert.deepEqual(await s.turn("漢".repeat(45_000)), { state: "idle" });
   const big = { pad: "x".repeat(190_000) };
@@ -994,7 +931,7 @@ test("a long message is stored once, under storage's value limit, and a big call
 
 test("calls with large arguments never take a request past its budget", async () => {
   const s = await setup();
-  s.actor.bind("layout", { get: () => ({ home: [] }) });
+  s.actor.expose("layout", layout, { get: () => ({ home: [] }) });
   // Arguments, not outputs, fill this exchange: only leaving out old arguments keeps it in budget.
   for (let i = 0; i < 20; i++)
     s.script.push(calls(callTool("layout__get", { pad: "y".repeat(15_000) }, `a${i}`)));
