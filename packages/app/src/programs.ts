@@ -32,8 +32,7 @@ export interface Programs {
 
 /**
  * Close every Actor that runs a package, as an earlier release's do: the programs replace them.
- * Before the Hub opens, which would otherwise start the ones recorded as running. Each stays
- * listed as closed; the files it left in the home stay too, unread.
+ * Before the Hub opens. Each stays listed as closed; the files it left in the home stay too, unread.
  */
 export function closePackageActors(home: string) {
   if (!existsSync(join(home, "hub.db"))) return;

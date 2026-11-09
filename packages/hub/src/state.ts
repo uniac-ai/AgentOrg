@@ -11,19 +11,9 @@ import {
   writeFileSync,
   writeSync,
 } from "node:fs";
-import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import {
-  httpEgress,
-  hubActors,
-  hubAudit,
-  hubBindings,
-  hubExports,
-  hubGrants,
-  hubPackages,
-  kv,
-  storageAdmin,
-} from "@agentorg/interfaces";
+import { hubActors, hubAudit, hubBindings, hubExports, hubGrants } from "@agentorg/interfaces";
 import {
   compareInterfaces,
   type DescribedInterface,
@@ -32,19 +22,13 @@ import {
   type InterfaceSchemas,
   Refused,
 } from "@agentorg/sdk";
-import { type Manifest, readTar, treeHash, verifyArchive } from "@agentorg/sdk/manifest";
 
 /** The built-in Actor that exports management. */
 export const HUB = "hub";
-/** The built-in Actor that keeps state: `kv@1`, one store per consumer slot. */
-export const STORAGE = "storage";
-/** The built-in Actor that reaches the public internet: `http.egress@1`, over HTTPS only. */
-export const NET = "net";
 /** The person's Actor, created at first start with every `hub.*` binding. */
 export const PERSON = "person";
 /** The hub's exports, each the authority for its own part of management. */
 const HUB_EXPORTS = {
-  packages: hubPackages,
   actors: hubActors,
   bindings: hubBindings,
   grants: hubGrants,
@@ -53,21 +37,12 @@ const HUB_EXPORTS = {
 };
 
 export type ActorState = "created" | "running" | "stopped" | "closed";
-/** How a process ended on its own: its exit code or signal, and when. */
-export interface Exit {
-  code: number | null;
-  signal: string | null;
-  at: string;
-}
 export interface ActorRecord {
   actorId: string;
   name: string;
-  /** A package hash, `external` for a program that connects itself, or `builtin` for the hub. */
+  /** `external` for a program that connects itself, `builtin` for the hub; an earlier release's package Actor keeps its hash. */
   package: string;
   state: ActorState;
-  /** Times its process was restarted after a crash. */
-  restarts: number;
-  lastExit?: Exit;
   /** The Actor a manager made it for: provenance, never authority. */
   installedFor?: string;
 }
@@ -139,7 +114,7 @@ export interface StateEvents {
   /** A request was approved, declined or closed: to its approvers and its requester. */
   decided?(request: RequestRecord, status: Decision, approvers: string[]): void;
   exportsChanged?(actor: string): void;
-  /** An Actor's record changed: it was made, started, stopped or closed, or its process exited. */
+  /** An Actor's record changed: it was made or closed. */
   actorChanged?(actorId: string): void;
   /** An Actor was closed for good: its channel should go too. */
   closed?(actorId: string): void;
@@ -151,8 +126,6 @@ const NAME = /^[a-z][A-Za-z0-9_]*$/;
 const EXPOSED_MAX = 48;
 /** Exposure requests one Actor may have open toward one other at a time. */
 const MAX_OPEN_EXPOSURES = 32;
-/** The Actors that are the Hub itself: they take no slots. */
-const BUILTIN = new Set(["hub", "storage", "net"]);
 
 /**
  * The default name of a slot exposing `exportName` of the Actor named `providerName`: the name's
@@ -202,6 +175,14 @@ const MIGRATIONS = [
   // Exposure: an Actor made for another (provenance only), and requests to expose.
   `ALTER TABLE actors ADD COLUMN installed_for TEXT;
    ALTER TABLE requests ADD COLUMN exposed INTEGER NOT NULL DEFAULT 0;`,
+  // The built-in storage and network and the package store are gone; an earlier home's records
+  // of them go too. The packages table stays, unread.
+  `DELETE FROM bindings WHERE provider IN ('storage', 'net');
+   DELETE FROM bindings WHERE provider = 'hub' AND export = 'packages';
+   DELETE FROM declarations WHERE actor = 'hub' AND side = 'export' AND name = 'packages';
+   DELETE FROM declarations WHERE actor = 'person' AND side = 'slot' AND name = 'packages';
+   DELETE FROM declarations WHERE actor IN ('storage', 'net');
+   UPDATE actors SET state = 'closed' WHERE id IN ('storage', 'net');`,
 ];
 
 /** Whether a process with this pid runs now. */
@@ -270,28 +251,8 @@ const requestOf = (row: Row): RequestRecord => ({
 });
 const other = (side: Side): Side => (side === "export" ? "slot" : "export");
 
-/** What a package's Actor declares: each module's slots and exports, by `module.name`. */
-function packageDeclarations(
-  manifest: Manifest,
-): { side: Side; name: string; iface: DescribedInterface }[] {
-  return Object.entries(manifest.modules).flatMap(([module, m]) =>
-    (
-      [
-        ["slot", m.slots],
-        ["export", m.exports],
-      ] as const
-    ).flatMap(([side, members]) =>
-      Object.entries(members).map(([member, id]) => {
-        const entry = manifest.interfaces[id];
-        if (!entry) throw new Refused("invalid", `The package doesn't record ${id}.`);
-        return { side, name: `${module}.${member}`, iface: { id, ...entry } };
-      }),
-    ),
-  );
-}
-
 /**
- * The core's state in its home folder: Actors, packages, declarations, bindings, binding requests
+ * The core's state in its home folder: Actors, declarations, bindings, binding requests
  * and the audit trail, in `node:sqlite`. Every method that changes something takes its caller, and
  * each is checked against bindings: there is no other authority.
  */
@@ -305,7 +266,6 @@ export class HubState {
   private constructor(home: string, events: StateEvents) {
     this.home = home;
     this.#events = events;
-    mkdirSync(join(home, "packages"), { recursive: true, mode: 0o700 });
     chmodSync(home, 0o700);
     const file = join(home, "hub.db");
     this.#db = new DatabaseSync(file);
@@ -388,21 +348,6 @@ export class HubState {
         }
         this.#audit(HUB, "bootstrap", { person: PERSON });
       }
-      if (!this.#actor(STORAGE))
-        this.#db
-          .prepare(
-            "INSERT INTO actors (id, name, package, state, credential, created_at) VALUES (?, 'storage', 'builtin', 'running', NULL, ?)",
-          )
-          .run(STORAGE, now());
-      this.#declare(STORAGE, "export", "kv", describeInterface(kv), false);
-      this.#declare(STORAGE, "export", "admin", describeInterface(storageAdmin), false);
-      if (!this.#actor(NET))
-        this.#db
-          .prepare(
-            "INSERT INTO actors (id, name, package, state, credential, created_at) VALUES (?, 'net', 'builtin', 'running', NULL, ?)",
-          )
-          .run(NET, now());
-      this.#declare(NET, "export", "egress", describeInterface(httpEgress), false);
       for (const [name, iface] of Object.entries(HUB_EXPORTS)) {
         const described = describeInterface(iface);
         this.#declare(HUB, "export", name, described, false);
@@ -465,21 +410,6 @@ export class HubState {
     this.#emit(() => this.#events.audited?.(entry));
   }
 
-  /** Record something the Hub itself saw happen, such as the host sandbox's status changing. */
-  auditHub(kind: string, details: Record<string, unknown>, actor: string = HUB): void {
-    this.#transaction(() => this.#audit(actor, kind, details));
-  }
-
-  /** A package Actor's process exited: kept as its `lastExit`, and counted when it is restarted. */
-  recordExit(actorId: string, exit: Exit, restarted: boolean): void {
-    this.#db
-      .prepare(
-        "UPDATE actors SET last_exit = ?, restarts = restarts + ? WHERE id = ? AND package NOT IN ('external', 'builtin')",
-      )
-      .run(JSON.stringify(exit), restarted ? 1 : 0, actorId);
-    this.#emit(() => this.#events.actorChanged?.(actorId));
-  }
-
   /** Record a call's metadata: who, through which binding, which method, and how it ended. */
   auditCall(
     caller: string,
@@ -494,9 +424,7 @@ export class HubState {
 
   #actor(actorId: string): ActorRecord | undefined {
     const row = this.#db
-      .prepare(
-        "SELECT id, name, package, state, restarts, last_exit, installed_for FROM actors WHERE id = ?",
-      )
+      .prepare("SELECT id, name, package, state, installed_for FROM actors WHERE id = ?")
       .get(actorId) as Row | undefined;
     return (
       row && {
@@ -504,8 +432,6 @@ export class HubState {
         name: String(row.name),
         package: String(row.package),
         state: row.state as ActorState,
-        restarts: Number(row.restarts),
-        ...(row.last_exit ? { lastExit: JSON.parse(String(row.last_exit)) as Exit } : {}),
         ...(row.installed_for ? { installedFor: String(row.installed_for) } : {}),
       }
     );
@@ -521,13 +447,6 @@ export class HubState {
     const actor = this.#actor(actorId);
     if (!actor) throw new Refused("unknown", `No Actor ${actorId}; hub.actors.list lists them.`);
     return actor;
-  }
-
-  /** The host sandbox's status changed: every package Actor's record (its `host`) differs. */
-  hostChanged(): void {
-    for (const actor of this.actors())
-      if (actor.package !== "external" && actor.package !== "builtin")
-        this.#emit(() => this.#events.actorChanged?.(actor.actorId));
   }
 
   actors(): ActorRecord[] {
@@ -550,12 +469,11 @@ export class HubState {
       );
   }
 
-  /** Create an Actor: one that runs a package, or an external one, whose credential comes back once. */
+  /** Create an Actor: a program that connects itself, with a credential that comes back once. */
   createActor(
     caller: string,
     input: {
       name: string;
-      package?: string;
       /**
        * Initial bindings for the new Actor's slots, made with the caller's export-side authority;
        * the creation is the slot side's yes. An external Actor's slot is declared with the
@@ -565,7 +483,7 @@ export class HubState {
       /** The Actor it is made for: given only by a manager, recorded as provenance. */
       for?: string;
     },
-  ): { actorId: string; credential?: string } {
+  ): { actorId: string; credential: string } {
     this.#require(caller, "actors");
     if (input.for !== undefined) {
       if (!this.isManager(caller))
@@ -576,29 +494,16 @@ export class HubState {
       this.#open(input.for);
     }
     const actorId = `act_${randomBytes(8).toString("hex")}`;
-    const credential = input.package ? undefined : randomBytes(32).toString("base64url");
+    const credential = randomBytes(32).toString("base64url");
     const insert = this.#db.prepare(
       "INSERT INTO actors (id, name, package, state, credential, created_at, installed_for) VALUES (?, ?, ?, 'created', ?, ?, ?)",
     );
     const madeFor = input.for ?? null;
     this.#transaction(() => {
-      if (input.package) {
-        const { manifest } = this.package(input.package);
-        insert.run(actorId, input.name, input.package, null, now(), madeFor);
-        for (const { side, name, iface } of packageDeclarations(manifest))
-          this.#declare(actorId, side, name, iface, false);
-        // A package's own wiring is applied as it is installed.
-        for (const [slot, exported] of manifest.connections)
-          this.#insertBinding(
-            { consumer: actorId, slot, provider: actorId, export: exported },
-            HUB,
-          );
-      } else
-        insert.run(actorId, input.name, "external", digest(credential as string), now(), madeFor);
+      insert.run(actorId, input.name, "external", digest(credential), now(), madeFor);
       this.#audit(caller, "actor.create", {
         actorId,
         name: input.name,
-        package: input.package ?? "external",
         ...(input.for === undefined ? {} : { for: input.for }),
       });
       this.#emit(() => this.#events.actorChanged?.(actorId));
@@ -609,7 +514,7 @@ export class HubState {
             "forbidden",
             `${this.named(caller)} can't grant ${this.named(initial.provider)}'s ${initial.export}. Create it without that binding, then it can ask for it with hub.grants.request, or the provider or a manager can bind it.`,
           );
-        if (!input.package && !this.declaration(actorId, "slot", initial.slot)) {
+        if (!this.declaration(actorId, "slot", initial.slot)) {
           if (!NAME.test(initial.slot))
             throw new Refused(
               "invalid",
@@ -626,7 +531,7 @@ export class HubState {
         this.#insertBinding(wiring, caller);
       }
     });
-    return credential ? { actorId, credential } : { actorId };
+    return { actorId, credential };
   }
 
   /** Whether an external Actor's credential is right, compared in constant time. */
@@ -639,53 +544,11 @@ export class HubState {
     return timingSafeEqual(Buffer.from(row.credential), digest(credential));
   }
 
-  #packageActor(caller: string, actorId: string): ActorRecord {
-    this.#require(caller, "actors");
-    const actor = this.actor(actorId);
-    if (actor.package === "external" || actor.package === "builtin")
-      throw new Refused(
-        "state",
-        `${this.named(actorId)} isn't a package Actor, so the Hub doesn't run its process.`,
-      );
-    return actor;
-  }
-
-  /** Refused unless the caller may start the Actor and it can be started now; changes nothing. */
-  checkStart(caller: string, actorId: string): void {
-    const actor = this.#packageActor(caller, actorId);
-    if (actor.state !== "created" && actor.state !== "stopped")
-      throw new Refused(
-        "state",
-        `${this.named(actorId)} is ${actor.state === "running" ? "already running" : "closed and can't start again; make another"}.`,
-      );
-  }
-
-  /** Start a package Actor: recorded as running; the Hub spawns its process. */
-  start(caller: string, actorId: string): void {
-    this.checkStart(caller, actorId);
-    this.#transaction(() => {
-      this.#db.prepare("UPDATE actors SET state = 'running' WHERE id = ?").run(actorId);
-      this.#audit(caller, "actor.start", { actorId });
-      this.#emit(() => this.#events.actorChanged?.(actorId));
-    });
-  }
-
-  stop(caller: string, actorId: string): void {
-    const actor = this.#packageActor(caller, actorId);
-    if (actor.state !== "running")
-      throw new Refused("state", `${this.named(actorId)} is ${actor.state}, not running.`);
-    this.#transaction(() => {
-      this.#db.prepare("UPDATE actors SET state = 'stopped' WHERE id = ?").run(actorId);
-      this.#audit(caller, "actor.stop", { actorId });
-      this.#emit(() => this.#events.actorChanged?.(actorId));
-    });
-  }
-
   /** Close an Actor for good: its bindings both ways, its declarations and its open requests go. */
   closeActor(caller: string, actorId: string): void {
     this.#require(caller, "actors");
     const actor = this.actor(actorId);
-    if (actorId === HUB || actorId === PERSON || actorId === STORAGE || actorId === NET)
+    if (actorId === HUB || actorId === PERSON)
       throw new Refused("forbidden", `${this.named(actorId)} is built in and can't be closed.`);
     if (actor.state === "closed") return;
     this.#transaction(() => {
@@ -740,175 +603,6 @@ export class HubState {
   #closeRequestsThrough(actorId: string, side: Side, name: string) {
     const where = side === "slot" ? "consumer = ? AND slot = ?" : "provider = ? AND export = ?";
     for (const open of this.#pending(where, actorId, name)) this.#decide(open, "closed");
-  }
-
-  /** Refused unless the caller may upgrade the Actor to the package now; changes nothing. */
-  checkUpgrade(caller: string, actorId: string, hash: string): ActorRecord {
-    this.#require(caller, "actors");
-    // An upgrade runs new code as an Actor that keeps its bindings and its store: whatever it was
-    // granted, the new code holds. Only a manager, who could grant all of it anyway, may.
-    if (!this.isManager(caller))
-      throw new Refused(
-        "forbidden",
-        `Only a manager may upgrade an Actor, since the new package keeps its bindings and its store; ${this.named(caller)} isn't one.`,
-      );
-    const actor = this.actor(actorId);
-    if (actorId === HUB || actorId === PERSON || actorId === STORAGE || actorId === NET)
-      throw new Refused("forbidden", `${this.named(actorId)} is built in and can't be upgraded.`);
-    if (actor.package === "external")
-      throw new Refused(
-        "state",
-        `${this.named(actorId)} isn't a package Actor; it declares what it takes when it connects.`,
-      );
-    if (actor.state === "closed")
-      throw new Refused("state", `${this.named(actorId)} is closed for good; make another.`);
-    packageDeclarations(this.package(hash).manifest);
-    return actor;
-  }
-
-  /**
-   * Run another package as the same Actor: its id, its stores and every binding whose interfaces
-   * still match stay; a binding through a slot or export the new package drops or declares as
-   * another interface is dropped, audited and returned. The new package's own wiring is applied
-   * where its slot is unbound. The process isn't touched here: a running Actor is stopped first
-   * and started after, by whoever runs processes.
-   */
-  upgrade(caller: string, actorId: string, hash: string): Wiring[] {
-    const actor = this.checkUpgrade(caller, actorId, hash);
-    if (actor.package === hash) return [];
-    const { manifest } = this.package(hash);
-    const next = packageDeclarations(manifest);
-    const declared = (side: Side, name: string) =>
-      next.find((n) => n.side === side && n.name === name)?.iface;
-    const dropped: Wiring[] = [];
-    this.#transaction(() => {
-      // What it offered at run time was its process's, which this restarts: it goes, with the
-      // bindings to it, which are returned with the rest.
-      for (const row of this.#db
-        .prepare(
-          "SELECT name FROM declarations WHERE actor = ? AND side = 'export' AND dynamic = 1",
-        )
-        .all(actorId) as Row[]) {
-        dropped.push(...this.#dropBindingsOf(actorId, "export", String(row.name), caller));
-        this.#drop(actorId, "export", String(row.name));
-      }
-      // A binding stays while its two ends declare the same interface: this Actor's end as the
-      // new package declares it, the other end as it is declared now.
-      const keeps = (b: Wiring) => {
-        const slot =
-          b.consumer === actorId
-            ? declared("slot", b.slot)
-            : this.declaration(b.consumer, "slot", b.slot)?.iface;
-        const exported =
-          b.provider === actorId
-            ? declared("export", b.export)
-            : this.declaration(b.provider, "export", b.export)?.iface;
-        return !!slot && !!exported && compareInterfaces(slot, exported) === "same";
-      };
-      const old = (
-        this.#db
-          .prepare("SELECT side, name, iface FROM declarations WHERE actor = ? AND dynamic = 0")
-          .all(actorId) as Row[]
-      ).map((row) => ({
-        side: row.side as Side,
-        name: String(row.name),
-        iface: JSON.parse(String(row.iface)) as DescribedInterface,
-      }));
-      for (const was of old) {
-        dropped.push(...this.#dropBindingsOf(actorId, was.side, was.name, caller, keeps));
-        // A request through a name the package no longer declares as it was can't be made.
-        const fresh = declared(was.side, was.name);
-        if (!fresh || compareInterfaces(was.iface, fresh) !== "same")
-          this.#closeRequestsThrough(actorId, was.side, was.name);
-      }
-      this.#db.prepare("DELETE FROM declarations WHERE actor = ? AND dynamic = 0").run(actorId);
-      for (const { side, name, iface } of next) this.#declare(actorId, side, name, iface, false);
-      this.#db.prepare("UPDATE actors SET package = ? WHERE id = ?").run(hash, actorId);
-      for (const [slot, exported] of manifest.connections)
-        if (!this.binding(actorId, slot))
-          this.#insertBinding(
-            { consumer: actorId, slot, provider: actorId, export: exported },
-            HUB,
-          );
-      this.#audit(caller, "actor.upgrade", { actorId, from: actor.package, to: hash, dropped });
-      this.#emit(() => this.#events.exportsChanged?.(actorId));
-      this.#emit(() => this.#events.actorChanged?.(actorId));
-    });
-    return dropped;
-  }
-
-  // ── Packages ────────────────────────────────────────────────────────────────
-
-  /** Add a `.agentorg` archive from a path on this machine, verified; adding it again is a no-op. */
-  addPackage(caller: string, path: string): { hash: string; manifest: Manifest } {
-    this.#require(caller, "packages");
-    let bytes: Uint8Array;
-    try {
-      bytes = new Uint8Array(readFileSync(path));
-    } catch {
-      throw new Refused("unknown", `No package file at ${path}.`);
-    }
-    let expected = /^(sha256-[0-9a-f]{64})\.agentorg$/.exec(basename(path))?.[1];
-    if (!expected)
-      try {
-        expected = treeHash(readTar(bytes));
-      } catch (error) {
-        throw new Refused("invalid", error instanceof Error ? error.message : String(error));
-      }
-    const verified = verifyArchive(bytes, expected);
-    if (!verified.ok) throw new Refused("invalid", verified.problems.join("\n"));
-    const { hash, manifest, files } = verified;
-    if (this.#db.prepare("SELECT 1 FROM packages WHERE hash = ?").get(hash))
-      return { hash, manifest };
-    const dir = join(this.home, "packages", hash);
-    for (const [file, data] of files) {
-      const target = resolve(dir, file);
-      // verifyArchive allows only agentorg.json and dist/<module>.js; this keeps it so.
-      if (relative(dir, target).startsWith(`..${sep}`))
-        throw new Refused("invalid", `Unsafe path ${file}.`);
-      mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
-      writeFileSync(target, data, { mode: 0o600 });
-    }
-    this.#transaction(() => {
-      this.#db
-        .prepare(
-          "INSERT INTO packages (hash, name, version, manifest, added_by, added_at) VALUES (?, ?, ?, ?, ?, ?)",
-        )
-        .run(hash, manifest.name, manifest.version, JSON.stringify(manifest), caller, now());
-      this.#audit(caller, "package.add", { hash, name: manifest.name, version: manifest.version });
-    });
-    return { hash, manifest };
-  }
-
-  packages(): { hash: string; name: string; version: string }[] {
-    const rows = this.#db
-      .prepare("SELECT hash, name, version FROM packages ORDER BY added_at, hash")
-      .all() as Row[];
-    return rows.map((row) => ({
-      hash: String(row.hash),
-      name: String(row.name),
-      version: String(row.version),
-    }));
-  }
-
-  package(hash: string): { hash: string; manifest: Manifest } {
-    const row = this.#db.prepare("SELECT manifest FROM packages WHERE hash = ?").get(hash) as
-      | Row
-      | undefined;
-    if (!row) throw new Refused("unknown", `No package ${hash}.`);
-    return { hash, manifest: JSON.parse(String(row.manifest)) as Manifest };
-  }
-
-  /** Remove a package no live Actor runs. Its files stay until a later clean-up. */
-  removePackage(caller: string, hash: string): void {
-    this.#require(caller, "packages");
-    this.package(hash);
-    if (this.#db.prepare("SELECT 1 FROM actors WHERE package = ? AND state != 'closed'").get(hash))
-      throw new Refused("in_use", `An Actor runs ${hash}.`);
-    this.#transaction(() => {
-      this.#db.prepare("DELETE FROM packages WHERE hash = ?").run(hash);
-      this.#audit(caller, "package.remove", { hash });
-    });
   }
 
   // ── Declarations: what each Actor takes and offers ──────────────────────────
@@ -978,12 +672,7 @@ export class HubState {
       exports: Record<string, DescribedInterface>;
     },
   ): void {
-    const actor = this.#open(actorId);
-    if (actor.package !== "external")
-      throw new Refused(
-        "forbidden",
-        `${this.named(actorId)} declares through its package; an Actor of another package declares otherwise.`,
-      );
+    this.#open(actorId);
     this.#transaction(() => {
       for (const [side, members] of [
         ["slot", declares.slots],
@@ -1345,7 +1034,7 @@ export class HubState {
         "forbidden",
         `${this.named(caller)} can't expose ${input.export} of ${this.named(provider.actorId)} to ${this.named(to.actorId)}: that takes the provider's side (it, an Actor bound to that export, or a manager) or ${this.named(to.actorId)}'s (it, or a manager). Ask one of them to expose it.`,
       );
-    if (BUILTIN.has(to.actorId))
+    if (to.actorId === HUB)
       throw new Refused(
         "forbidden",
         `${this.named(to.actorId)} is the Hub itself and takes no slots.`,

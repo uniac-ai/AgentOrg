@@ -6,7 +6,6 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { defineInterface, method } from "@agentorg/sdk";
-import { buildPackage } from "@agentorg/sdk/build";
 import { connect, openChannel } from "@agentorg/sdk/client";
 import { z } from "zod";
 
@@ -65,15 +64,8 @@ test("the person's commands map one to one onto the hub's methods", async (t) =>
   assert.equal(actors.code, 0, actors.err);
   assert.deepEqual(
     (JSON.parse(actors.out) as { actors: { actorId: string }[] }).actors.map((a) => a.actorId),
-    ["hub", "person", "storage", "net"],
+    ["hub", "person"],
   );
-
-  const out = mkdtempSync(join(tmpdir(), "board-for-cli-"));
-  t.after(() => rmSync(out, { recursive: true, force: true }));
-  const built = await buildPackage(join(root, "examples", "board"), { out });
-  const added = await run("add", built.file, "--home", home);
-  assert.equal(added.code, 0, added.err);
-  assert.equal((JSON.parse(added.out) as { hash: string }).hash, built.hash);
 
   // Two external Actors made by `call`, connected with a slot and an export, then bound by `bind`.
   const make = async (name: string) => {

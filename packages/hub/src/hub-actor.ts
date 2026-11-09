@@ -1,7 +1,4 @@
 import { Refused } from "@agentorg/sdk";
-import { buildSource, checkSource } from "./build.js";
-import { readLogs } from "./logs.js";
-import type { Processes } from "./processes.js";
 import type {
   ActorRecord,
   AuditRecord,
@@ -30,78 +27,19 @@ const wiring = (input: Input): Wiring => ({
 export class HubActor {
   readonly #listeners = new Map<string, Set<Listener>>();
   readonly #handlers: Record<string, Record<string, Handler>>;
-  /** The build running now, if any; the next one waits for it. */
-  #building: Promise<unknown> = Promise.resolve();
-  /** Callers with a build waiting or running. */
-  readonly #builders = new Set<string>();
 
   /** `connected` says whether an Actor has a channel to the Hub now. */
-  constructor(state: HubState, processes: Processes, connected: (actorId: string) => boolean) {
-    /**
-     * A package Actor's record with its view modules, which a shell can place, and whether this
-     * machine can run its process now.
-     */
-    const withViews = (actor: ActorRecord) => {
-      if (actor.package === "external" || actor.package === "builtin") return actor;
-      const host = processes.status;
-      const record = host ? { ...actor, host } : actor;
-      let modules: Record<string, { placement: string }>;
-      try {
-        ({ modules } = state.package(actor.package).manifest);
-      } catch {
-        return record; // A closed Actor's package may be gone.
-      }
-      return {
-        ...record,
-        views: Object.keys(modules).filter((name) => modules[name]?.placement === "view"),
-      };
-    };
-    /** An Actor's record as `hub.actors` gives it: with its views, and whether it is connected. */
+  constructor(state: HubState, connected: (actorId: string) => boolean) {
+    /** An Actor's record as `hub.actors` gives it, with whether it is connected. */
     const recordOf = (actor: ActorRecord) => ({
-      ...withViews(actor),
+      ...actor,
       connected: connected(actor.actorId),
     });
     this.#handlers = {
-      packages: {
-        add: (caller, input) => state.addPackage(caller, String(input.path)),
-        list: () => ({ packages: state.packages() }),
-        get: (_, input) => state.package(String(input.hash)),
-        remove: (caller, input) => state.removePackage(caller, String(input.hash)),
-        // One build at a time: each runs esbuild and a describer process. The source is checked
-        // before it waits, and a caller has one build waiting or running at most.
-        build: async (caller, input) => {
-          const entries = checkSource(input.files);
-          // A build runs the source's code in the OS sandbox: where host processes can't run,
-          // neither can a build, and the reason is the same.
-          await processes.ready();
-          if (this.#builders.has(caller))
-            throw new Refused("busy", "A build of yours is already waiting or running.");
-          this.#builders.add(caller);
-          const sandbox = (paths: string[]) => {
-            const command = processes.sandboxCommand(paths);
-            if (!command) throw new Refused("unsupported", "Host Actors can't start here.");
-            return command;
-          };
-          const next = this.#building.then(() =>
-            buildSource(state.home, entries, sandbox, (file) => {
-              const added = state.addPackage(caller, file);
-              state.auditHub(
-                "package.build",
-                { hash: added.hash, name: added.manifest.name, version: added.manifest.version },
-                caller,
-              );
-              return added;
-            }),
-          );
-          this.#building = next.catch(() => {});
-          return next.finally(() => this.#builders.delete(caller));
-        },
-      },
       actors: {
         create: (caller, input) =>
           state.createActor(caller, {
             name: String(input.name),
-            ...(typeof input.package === "string" ? { package: input.package } : {}),
             ...(Array.isArray(input.bindings)
               ? { bindings: input.bindings as Omit<Wiring, "consumer">[] }
               : {}),
@@ -109,71 +47,7 @@ export class HubActor {
           }),
         list: () => ({ actors: state.actors().map(recordOf) }),
         get: (_, input) => recordOf(state.actor(String(input.actorId))),
-        start: async (caller, input) => {
-          const actorId = String(input.actorId);
-          state.checkStart(caller, actorId);
-          // Probed again each time, so a change on the machine shows.
-          await processes.ready();
-          state.start(caller, actorId);
-          processes.start(actorId);
-        },
-        // The state changes first, so the exit that follows is never taken for a crash.
-        stop: async (caller, input) => {
-          const actorId = String(input.actorId);
-          state.stop(caller, actorId);
-          await processes.stop(actorId);
-        },
-        // A running Actor is stopped first, as `stop` does it: recorded as stopped, so nothing
-        // waiting to start it runs it again, then its process is let go with stop's grace. Then
-        // the Actor is closed.
-        close: async (caller, input) => {
-          const actorId = String(input.actorId);
-          const actor = state.actor(actorId);
-          if (
-            actor.state === "running" &&
-            actor.package !== "external" &&
-            actor.package !== "builtin"
-          )
-            state.stop(caller, actorId);
-          await processes.stop(actorId);
-          state.closeActor(caller, actorId);
-        },
-        // A running Actor is stopped as `stop` does it, upgraded, and started again: on the new
-        // package, or on its own if the upgrade is refused. The machine's check comes first, so
-        // one that can't run it never has it stopped by an upgrade.
-        upgrade: async (caller, input) => {
-          const actorId = String(input.actorId);
-          const hash = String(input.package);
-          const actor = state.checkUpgrade(caller, actorId, hash);
-          if (actor.package === hash) return { dropped: [] };
-          const running = actor.state === "running";
-          if (running) {
-            await processes.ready();
-            state.stop(caller, actorId);
-            await processes.stop(actorId);
-          }
-          const restart = () => {
-            // Started meanwhile, by another call: it runs already.
-            if (!running || state.actor(actorId).state === "running") return;
-            state.start(caller, actorId);
-            processes.start(actorId);
-          };
-          let dropped: Wiring[];
-          try {
-            dropped = state.upgrade(caller, actorId, hash);
-          } catch (error) {
-            restart();
-            throw error;
-          }
-          restart();
-          return { dropped };
-        },
-        logs: (_, input) => {
-          // The Actor must exist; its lines are its process's output and its views' lines.
-          const { actorId } = state.actor(String(input.actorId));
-          const limit = typeof input.limit === "number" ? input.limit : 100;
-          return { lines: readLogs(state.home, actorId, limit) };
-        },
+        close: (caller, input) => state.closeActor(caller, String(input.actorId)),
       },
       grants: {
         bind: (caller, input) => state.bind(caller, wiring(input)),

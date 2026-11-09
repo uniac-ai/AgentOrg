@@ -11,7 +11,6 @@ const USAGE = `Usage: agentorg <command> [--home DIR]
 
   build [package-dir]                       build a package into a .agentorg archive
   hub [--port N]                            run a Hub, serving on loopback
-  add <file.agentorg>                       hub.packages.add
   actors | bindings | exports | audit       each one's list
   bind <consumer.slot> <provider.export>    hub.grants.bind
   call <slot> <method> [json]               call one of the person's slots
