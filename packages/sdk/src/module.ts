@@ -8,10 +8,7 @@ import type {
   StreamInterface,
 } from "./interface.js";
 
-/** Where a module runs: `host` in its own process, `view` in a sandboxed frame. */
-export type Placement = "host" | "view";
-
-/** A byte stream both ways, the same in a host process and in a view. */
+/** A byte stream both ways. */
 export interface Duplex {
   readonly readable: ReadableStream<Uint8Array>;
   readonly writable: WritableStream<Uint8Array>;
@@ -91,44 +88,14 @@ export interface HttpExport {
   serve(handler: (request: Request) => Response | Promise<Response>): void;
 }
 
-/**
- * The element a view renders into: the DOM's `Element` where the DOM library is in scope (a
- * widget's code), and `object` elsewhere, so host-only code needs no DOM types.
- */
-export type FrameRoot = typeof globalThis extends { Element: { prototype: infer E } } ? E : object;
-
-/**
- * The export handle of `ui.view@1`, the one in-frame interface, and so the one interface whose
- * handle isn't derived from its methods. A view renders into its own frame's DOM, which no wire
- * message can carry: the view implements `mount(el, options)` against its frame's root element,
- * and the frame runtime maps the wire methods `mount`, `resize` and `unmount` onto it. No other
- * interface should take this shape; anything else crosses the wire as schemas.
- */
-export interface ViewExport<MountOptions, Size> {
-  implement(view: {
-    /** Render into `el`; the function returned, if any, runs at unmount. */
-    // biome-ignore lint/suspicious/noConfusingVoidType: a mount that cleans up nothing returns nothing.
-    mount(el: FrameRoot, options: MountOptions): (() => void) | void;
-    resize?(size: Size): void;
-  }): void;
-}
 export type Export<I extends Interface> =
-  I extends RpcInterface<"ui.view", infer M, Events, 1>
-    ? "mount" extends keyof M
-      ? "resize" extends keyof M
-        ? ViewExport<
-            z.output<M["mount"]["input"]>,
-            z.output<M["resize"]["input"]> extends { size: infer Size } ? Size : never
-          >
-        : RpcExport<M, Events>
-      : RpcExport<M, Events>
-    : I extends RpcInterface<string, infer M, infer E>
-      ? RpcExport<M, E>
-      : I extends StreamInterface<string, infer O>
-        ? StreamExport<O>
-        : HttpExport;
+  I extends RpcInterface<string, infer M, infer E>
+    ? RpcExport<M, E>
+    : I extends StreamInterface<string, infer O>
+      ? StreamExport<O>
+      : HttpExport;
 
-/** Structured log lines, readable through the Hub by grant. */
+/** Structured log lines. */
 export interface Log {
   info(message: string, fields?: Record<string, unknown>): void;
   warn(message: string, fields?: Record<string, unknown>): void;
@@ -139,14 +106,9 @@ export interface Log {
 export type InterfaceMap = Record<string, Interface>;
 export type ExportMap = InterfaceMap;
 
-/** Whether an interface is `ui.view@1`, the one in-frame interface, with its own export handle. */
-export function isFrameInterface(iface: Interface): boolean {
-  return iface.kind === "rpc" && iface.name === "ui.view" && iface.major === 1;
-}
-
 /**
  * A slot made at run time: another Actor's export, exposed to this Actor with `hub.grants.expose`
- * rather than declared by its package. It is here exactly while it is bound. Its values are JSON,
+ * rather than declared by this Actor. It is here exactly while it is bound. Its values are JSON,
  * checked against `described` by the Hub both ways, not here, so a misfit comes back as
  * `Refused` (code `invalid`). A call on a slot that's gone, or whose provider isn't running, throws
  * `NotConnected`, as a declared slot's does.
@@ -164,30 +126,24 @@ export interface ExposedSlot {
   on(event: string, fn: (payload: unknown) => void): () => void;
 }
 
-/** Everything a module gets. There are no files, network, environment or Hub access besides. */
+/** Everything a program gets from the Hub. */
 export interface Context<S extends InterfaceMap, X extends InterfaceMap> {
   readonly slots: { readonly [K in keyof S]: Slot<S[K]> };
   readonly exports: { readonly [K in keyof X]: Export<X[K]> };
   readonly self: { readonly actorId: string; readonly module: string };
   readonly log: Log;
   /**
-   * The slots made for this Actor at run time and bound now, in the order they came. Every host
-   * module of the Actor sees them all; a view module sees none.
+   * The slots made for this Actor at run time and bound now, in the order they came.
    */
   exposed(): readonly ExposedSlot[];
   /** Runs after one is added or removed, so `exposed()` is read again; returns how to stop it. */
   onExposed(fn: () => void): () => void;
 }
 
-/** The marker the build looks for on a module's default export. */
-export const MODULE = "agentorg.module/1";
-
 export interface ModuleDefinition<
   S extends InterfaceMap = InterfaceMap,
   X extends InterfaceMap = InterfaceMap,
 > {
-  readonly agentorg: typeof MODULE;
-  readonly placement: Placement;
   readonly slots: S;
   readonly exports: X;
   start(ctx: Context<S, X>): void | Promise<void>;
@@ -204,8 +160,8 @@ export interface ModuleSpec<S extends InterfaceMap, X extends InterfaceMap> {
 
 const NAME = /^[a-z][A-Za-z0-9_]*$/;
 
-function define<S extends InterfaceMap, X extends InterfaceMap>(
-  placement: Placement,
+/** A program's handles, by name: what `connect` runs. */
+export function defineActor<const S extends InterfaceMap = None, const X extends ExportMap = None>(
   spec: ModuleSpec<S, X>,
 ): ModuleDefinition<S, X> {
   const slots = spec.slots ?? ({} as S);
@@ -217,27 +173,5 @@ function define<S extends InterfaceMap, X extends InterfaceMap>(
     for (const name of names)
       if (!NAME.test(name))
         throw new TypeError(`${JSON.stringify(name)} isn't a valid ${what} name.`);
-  return { agentorg: MODULE, placement, slots, exports, start: spec.start };
-}
-
-/** A host module: the Actor's logic, in its own process. */
-export function defineActor<const S extends InterfaceMap = None, const X extends ExportMap = None>(
-  spec: ModuleSpec<S, X>,
-): ModuleDefinition<S, X> {
-  return define("host", spec);
-}
-
-/** A view module: a widget, in a sandboxed frame. Same shape as an Actor's module. */
-export function defineWidget<const S extends InterfaceMap = None, const X extends ExportMap = None>(
-  spec: ModuleSpec<S, X>,
-): ModuleDefinition<S, X> {
-  return define("view", spec);
-}
-
-export function isModuleDefinition(value: unknown): value is ModuleDefinition {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    (value as { agentorg?: unknown }).agentorg === MODULE
-  );
+  return { slots, exports, start: spec.start };
 }

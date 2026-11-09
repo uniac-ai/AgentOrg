@@ -189,8 +189,7 @@ export function createSession(options: {
       }
     } catch (error) {
       if (signal?.aborted) throw cancelled();
-      if (error instanceof Refused || (error instanceof Error && error.name === "NotConnected"))
-        throw error;
+      if (error instanceof Refused) throw error;
       throw new Refused("unavailable", "OpenAI couldn't be reached. Try again later.");
     }
     if (!response.ok) {

@@ -7,9 +7,7 @@
  *   closes the channel too. Without `declares` the Actor keeps what it declared before; with it,
  *   `declares` replaces that. The result is `{actorId, bound}`: the Actor's slots bound now. A
  *   newer channel for an Actor replaces its older one; with `replace: false` the hello is refused
- *   instead (`Refused`, code `connected`) while the Actor has a live channel. On a pipe the Hub
- *   made for a package Actor's process, the hello names that Actor and carries no credential (the
- *   pipe is the proof) and no `declares` (a package declares through its manifest).
+ *   instead (`Refused`, code `connected`) while the Actor has a live channel.
  * - `slot`: from the Hub, one of the Actor's slots was bound or unbound after its channel's hello
  *   result was taken. The header is the whole message: the Hub closes its side, and the Actor
  *   closes its side once it has read it (an open notice counts against its streams). Applied in
@@ -29,8 +27,8 @@
  */
 export type Header =
   /**
-   * Admits a channel; its first stream. An external client's carries its credential and may
-   * declare (the Hub validates `declares`); a pipe's names its Actor only.
+   * Admits a channel; its first stream. It carries the Actor's credential and may declare (the
+   * Hub validates `declares`).
    */
   | { op: "hello"; actorId: string; credential?: string; declares?: unknown; replace?: false }
   | { op: "call"; slot: string; method: string }

@@ -24,10 +24,10 @@ jobs:
       # other workflow runs can write.
       - name: Install
         run: npm ci
-      - name: Install the headless browser for the sandbox tests
+      - name: Install the headless browser for the shell tests
         run: npx playwright install --only-shell chromium
-      # Host processes sandbox themselves in a user namespace, which stock Ubuntu's AppArmor
-      # restricts: allowed here, as in CI, so the tests run on the namespace path.
+      # The published 0.0.5 the smoke starts sandboxes its Actors in a user namespace, which stock
+      # Ubuntu's AppArmor restricts: allowed here, as in CI.
       - name: Allow unprivileged user namespaces
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: Build and test

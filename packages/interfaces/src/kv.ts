@@ -4,8 +4,8 @@ import { z } from "zod";
 const Key = z.string().min(1).max(1024);
 
 /**
- * `kv@1`: a key-value store of JSON values, the state slot a host module uses. A storage provider
- * keeps one store per consumer slot, so the store is the slot's own; `list` pages through its keys.
+ * `kv@1`: a key-value store of JSON values, the shape of the engine's and the app's local stores;
+ * `list` pages through its keys.
  */
 export const kv = defineInterface({
   name: "kv",

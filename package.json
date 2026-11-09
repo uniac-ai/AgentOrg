@@ -14,11 +14,8 @@
     "packages/mcp",
     "packages/manager",
     "packages/chatgpt",
-    "packages/kit",
     "packages/assistant",
     "packages/shell",
-    "examples/board-interfaces",
-    "examples/board",
     "packages/app"
   ],
   "scripts": {

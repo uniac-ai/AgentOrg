@@ -124,7 +124,7 @@ export function defineInterface(spec: {
 }
 
 export type JsonSchema = Record<string, unknown>;
-/** An interface's identity and JSON Schemas, as the manifest records them. */
+/** An interface's identity and JSON Schemas. */
 export type InterfaceSchemas = { id: string } & (
   | {
       kind: "rpc";
@@ -249,13 +249,13 @@ function interfaceSchemas(iface: Interface): InterfaceSchemas {
 /**
  * The hash of an interface: SHA-256 over the canonical JSON of its identity and normalized JSON
  * Schemas. Everything in those schemas is contract, `.describe()` text included, so a reader can
- * recompute the hash from the manifest alone.
+ * recompute the hash from them alone.
  */
 export function hashInterface(schemas: InterfaceSchemas): string {
   return hashOf(schemas);
 }
 
-/** The interface as the manifest records it: identity, JSON Schemas and hash. */
+/** The interface as it crosses the wire: identity, JSON Schemas and hash. */
 export function describeInterface(iface: Interface): DescribedInterface {
   const schemas = interfaceSchemas(iface);
   return { ...schemas, hash: hashInterface(schemas) };

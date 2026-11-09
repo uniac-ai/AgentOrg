@@ -2,7 +2,7 @@
   "name": "@agentorg/sdk",
   "version": "0.0.0",
   "private": true,
-  "description": "Define interfaces, Actors and widgets, and build AgentOrg packages.",
+  "description": "Define interfaces and Actors, and connect them to the Hub.",
   "license": "MIT",
   "type": "module",
   "exports": {
@@ -14,31 +14,10 @@
       "types": "./dist/src/testing.d.ts",
       "default": "./dist/src/testing.js"
     },
-    "./build": {
-      "types": "./dist/src/build.d.ts",
-      "default": "./dist/src/build.js"
-    },
-    "./describe": {
-      "types": "./dist/src/describe.d.ts",
-      "default": "./dist/src/describe.js"
-    },
-    "./manifest": {
-      "types": "./dist/src/manifest-api.d.ts",
-      "default": "./dist/src/manifest-api.js"
-    },
     "./client": {
       "types": "./dist/src/client.d.ts",
       "default": "./dist/src/client.js"
     },
-    "./frame": {
-      "types": "./dist/src/frame.d.ts",
-      "default": "./dist/src/frame.js"
-    },
-    "./frame/host": {
-      "types": "./dist/src/frame-host.d.ts",
-      "default": "./dist/src/frame-host.js"
-    },
-    "./frame/runtime.js": "./dist/frame/runtime.js",
     "./cli": {
       "types": "./dist/src/cli.d.ts",
       "default": "./dist/src/cli.js"
@@ -50,20 +29,13 @@
     "./http": {
       "types": "./dist/src/client-http.d.ts",
       "default": "./dist/src/client-http.js"
-    },
-    "./host": {
-      "types": "./dist/src/host.d.ts",
-      "default": "./dist/src/host.js"
-    },
-    "./host/runner.js": "./dist/host/runner.js"
+    }
   },
   "files": [
-    "dist/src",
-    "dist/frame",
-    "dist/host"
+    "dist/src"
   ],
   "scripts": {
-    "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.json && node scripts/bundle-frame.js && node scripts/bundle-runner.js",
+    "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.json",
     "test": "node --test --test-timeout=60000 \"dist/test/**/*.test.js\""
   },
   "peerDependencies": {
@@ -73,7 +45,6 @@
     "zod": "^4.6.7"
   },
   "dependencies": {
-    "esbuild": "0.28.2",
     "@agentorg/wire": "0.0.0"
   },
   "bin": {

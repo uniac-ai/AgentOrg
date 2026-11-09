@@ -22,7 +22,7 @@ jobs:
           cache: npm
       - name: Install
         run: npm ci
-      - name: Install the headless browser for the sandbox tests
+      - name: Install the headless browser for the shell tests
         run: npx playwright install --only-shell chromium
       - name: Lint and format
         run: npm run check

@@ -1,16 +1,14 @@
 import { NotConnected, Refused } from "./errors.js";
 import type { DescribedInterface, Interface, RpcInterface, StreamInterface } from "./interface.js";
-import {
-  type CallInfo,
-  type Context,
-  type Duplex,
-  type EmitOptions,
-  type ExposedSlot,
-  type FrameRoot,
-  type InterfaceMap,
-  isFrameInterface,
-  type Log,
-  type ModuleDefinition,
+import type {
+  CallInfo,
+  Context,
+  Duplex,
+  EmitOptions,
+  ExposedSlot,
+  InterfaceMap,
+  Log,
+  ModuleDefinition,
 } from "./module.js";
 
 /**
@@ -37,12 +35,6 @@ export interface ExposedProvider {
   /** Deliver an event's payloads until it ends (`onEnd`); returns how to stop. */
   subscribe(event: string, onEvent: (payload: unknown) => void, onEnd: () => void): () => void;
 }
-/** A mounted view, seen from the frame runtime's side. */
-export interface MountedView {
-  resize(size: unknown): void;
-  unmount(): void;
-}
-
 /**
  * One module's context and the host side of it: bind providers to its slots and drive its
  * exports. The test context and the real runtimes are both built on this, so a module behaves the
@@ -75,7 +67,6 @@ export interface ModuleRuntime<S extends InterfaceMap, X extends InterfaceMap> {
   fetch(exportName: string, request: Request): Promise<Response>;
   /** The checking half of `fetch`: refuses at once, or returns what serves each request. */
   serving(exportName: string): (request: Request) => Promise<Response>;
-  mount(exportName: string, el: FrameRoot, options: unknown): MountedView;
 }
 
 export interface RuntimeOptions {
@@ -222,7 +213,6 @@ export function createRuntime<S extends InterfaceMap, X extends InterfaceMap>(
     const store = (impl: unknown) => {
       state.impl = impl;
     };
-    if (isFrameInterface(iface)) return { implement: store };
     switch (iface.kind) {
       case "rpc":
         return {
@@ -246,14 +236,10 @@ export function createRuntime<S extends InterfaceMap, X extends InterfaceMap>(
   };
 
   /** A connected export of the expected kind; implemented or not is checked after its input. */
-  const target = (name: string, kind: "rpc" | "stream" | "http" | "frame") => {
+  const target = (name: string, kind: "rpc" | "stream" | "http") => {
     const state = exported.get(name);
     if (!state) throw new NotConnected(name);
-    const frame = isFrameInterface(state.iface);
-    if (frame !== (kind === "frame") || (!frame && state.iface.kind !== kind))
-      throw new TypeError(
-        `${name} isn't ${kind === "frame" ? "a ui.view@1" : `an ${kind}`} export.`,
-      );
+    if (state.iface.kind !== kind) throw new TypeError(`${name} isn't an ${kind} export.`);
     return state;
   };
   const implemented = <T>(state: ExportState, name: string): T => {
@@ -490,31 +476,6 @@ export function createRuntime<S extends InterfaceMap, X extends InterfaceMap>(
     serving,
     async fetch(exportName, request) {
       return serving(exportName)(request);
-    },
-    mount(exportName, el, options) {
-      const state = target(exportName, "frame");
-      const methods = (state.iface as RpcInterface).methods;
-      const parsed = check(methods.mount?.input, options, `${exportName} mount`);
-      const view = implemented<{
-        mount(el: FrameRoot, options: unknown): (() => void) | undefined;
-        resize?(size: unknown): void;
-      }>(state, exportName);
-      const cleanup = view.mount(el, parsed);
-      return {
-        resize(size) {
-          const { size: checked } = check(
-            methods.resize?.input,
-            { size },
-            `${exportName} resize`,
-          ) as {
-            size: unknown;
-          };
-          view.resize?.(checked);
-        },
-        unmount() {
-          cleanup?.();
-        },
-      };
     },
   };
 }

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { hubActors, layout, tools } from "@agentorg/interfaces";
+import { hubActors, tools } from "@agentorg/interfaces";
 import {
   defineInterface,
   describeInterface,
@@ -15,6 +15,21 @@ import { INPUT_BUDGET } from "../src/history.ts";
 import { MAX_INSTRUCTIONS } from "../src/settings.ts";
 import { MAX_OUTPUT, MAX_TOOLS, TOOLS_BUDGET } from "../src/tools.ts";
 import engine, { INSTRUCTIONS } from "./engine-actor.ts";
+
+/** A typed interface for an exposed slot, whose methods become tools. */
+const layout = defineInterface({
+  name: "layout",
+  major: 1,
+  kind: "rpc",
+  methods: {
+    get: method({ input: z.object({}), output: z.object({ home: z.array(z.json()) }) }),
+    place: method({
+      input: z.object({ actor: z.string(), module: z.string() }),
+      output: z.object({ id: z.string() }),
+    }),
+    remove: method({ input: z.object({ id: z.string() }), output: z.object({}) }),
+  },
+});
 
 type Item = { type: string; [key: string]: unknown };
 type Request = {

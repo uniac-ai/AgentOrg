@@ -1,21 +1,19 @@
 #!/usr/bin/env node
 import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { join, relative } from "node:path";
+import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { openChannel } from "./client.js";
 import { NotConnected, OutcomeUnknown, Refused } from "./errors.js";
-import { BuildError, buildPackage } from "./package.js";
 import { hubHome, personCall, UsageError } from "./person-commands.js";
 
 const USAGE = `Usage: agentorg <command> [--home DIR]
 
-  build [package-dir]                       build a package into a .agentorg archive
   hub [--port N]                            run a Hub, serving on loopback
   actors | bindings | exports | audit       each one's list
   bind <consumer.slot> <provider.export>    hub.grants.bind
   call <slot> <method> [json]               call one of the person's slots
 
-Commands other than build and hub act as the person, with the Hub home's person-credential.
+Commands other than hub act as the person, with the Hub home's person-credential.
 The home is --home, else $AGENTORG_HUB_HOME, else
 $XDG_DATA_HOME/agentorg, else ~/.local/share/agentorg.
 `;
@@ -48,27 +46,6 @@ if (values.help) {
   process.exit(0);
 }
 const home = hubHome(values.home);
-
-async function build() {
-  try {
-    const built = await buildPackage(rest[0] ?? ".");
-    write(
-      process.stdout,
-      `${built.manifest.name}@${built.manifest.version} ${built.hash}\n${relative(process.cwd(), built.file)}`,
-    );
-  } catch (error) {
-    // A BuildError says what to fix; anything else is a bug, so its stack is shown.
-    write(
-      process.stderr,
-      error instanceof BuildError
-        ? error.message
-        : error instanceof Error
-          ? (error.stack ?? error.message)
-          : String(error),
-    );
-    process.exit(1);
-  }
-}
 
 /** Run a Hub in the home, and leave its address in `<home>/url` for the other commands. */
 async function hub() {
@@ -179,7 +156,6 @@ try {
   if (!(error instanceof UsageError)) throw error;
   usage(error.message);
 }
-if (command === "build") await build();
-else if (command === "hub") await hub();
+if (command === "hub") await hub();
 else if (call) await asPerson(call.slot, call.method, call.input);
 else usage(command ? `Unknown command ${JSON.stringify(command)}.` : undefined);

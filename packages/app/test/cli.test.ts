@@ -8,7 +8,6 @@ import { fileURLToPath } from "node:url";
 
 // dist/test/cli.test.js → the app's built command.
 const cli = join(dirname(fileURLToPath(import.meta.url)), "..", "src", "cli.js");
-const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..");
 
 // Never the person's own home: a command that wrongly starts the app does it in a throwaway
 // one, and is killed rather than left running.
@@ -76,15 +75,6 @@ test("agentorg runs the app; while it runs, the person's commands go through it"
   app.kill("SIGTERM");
   await exited;
   assert.throws(() => readFileSync(join(home, "app.json")));
-});
-
-test("agentorg build is the SDK's build", async (t) => {
-  const out = mkdtempSync(join(tmpdir(), "agentorg-cli-build-"));
-  t.after(() => rmSync(out, { recursive: true, force: true }));
-  const built = await run("build", join(root, "examples", "board"));
-  assert.equal(built.code, 0, built.stderr);
-  assert.match(built.stdout, /^board@0\.1\.0 sha256-[0-9a-f]{64}\n/);
-  rmSync(join(root, "examples", "board", "agentorg-build"), { recursive: true, force: true });
 });
 
 test("an unknown command gets the app's usage", async () => {

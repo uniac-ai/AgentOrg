@@ -168,4 +168,4 @@ export function createTestContext<S extends InterfaceMap, X extends InterfaceMap
   };
 }
 
-export type { Binding, MountedView } from "./runtime.js";
+export type { Binding } from "./runtime.js";

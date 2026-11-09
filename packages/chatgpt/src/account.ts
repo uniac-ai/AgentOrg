@@ -26,7 +26,7 @@ import {
 } from "./oauth.js";
 
 type State = z.output<typeof LoginState>;
-/** Where the sign-in is kept: the Actor's `kv@1` slot, or the program's own file. */
+/** Where the sign-in is kept: the program's own file. */
 export type Store = Pick<Slot<typeof kv>["call"], "get" | "set" | "delete">;
 /** This host's registration: its own opaque id, and the client id OpenAI issued it. */
 interface Registration {

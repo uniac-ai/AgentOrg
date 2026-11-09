@@ -1,6 +1,6 @@
 /**
- * Marks an SDK error class's prototype with its name. A package's bundles and the runner each carry
- * their own copy of the SDK, so `instanceof` on these three classes checks this mark rather than
+ * Marks an SDK error class's prototype with its name. Programs may carry their own copy of the SDK,
+ * so `instanceof` on these three classes checks this mark rather than
  * the class, and an error made by one copy is the same error to the other. A subclass is checked
  * as usual.
  */

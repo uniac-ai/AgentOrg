@@ -14,7 +14,6 @@ export {
   SkillPath,
 } from "./agent-settings.js";
 export { ChatMessage, ChatState, ChatStatus, ChatTool, chat } from "./chat.js";
-export { httpEgress } from "./http-egress.js";
 export {
   Actor,
   ActorState,
@@ -27,9 +26,7 @@ export {
   hubExports,
   hubGrants,
 } from "./hub.js";
-export { Composition, installer } from "./installer.js";
 export { kv } from "./kv.js";
-export { layout, Placement } from "./layout.js";
 export { Item, llmSession, OutputItem, Tool } from "./llm-session.js";
 export { agents, ConnectionOrigin, connections, skills } from "./manager.js";
 export {
@@ -42,7 +39,4 @@ export {
   ConnectionTool,
   mcpProvider,
 } from "./mcp-provider.js";
-export { appRules, Rule } from "./rules.js";
 export { ToolEntry, tools } from "./tools.js";
-export { uiShell } from "./ui-shell.js";
-export { uiView } from "./ui-view.js";
