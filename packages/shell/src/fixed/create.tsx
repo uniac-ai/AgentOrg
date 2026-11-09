@@ -82,9 +82,6 @@ function Choose({ onPick }: { onPick(choice: Creatable): void }) {
   );
 }
 
-/** Connections the person made can be picked; one made for another agent goes with that agent. */
-const pickable = (all: readonly ConnectionEntry[]) => all.filter((c) => !c.origin?.madeFor);
-
 function Details({
   choice,
   onBack,
@@ -95,10 +92,8 @@ function Details({
   onCreated(agent: string): void;
 }) {
   const taken = useLoad(listAgents, ["actors"]).value;
-  const connections = pickable(useLoad(listConnections, ["actors"]).value ?? []);
   const [typed, setTyped] = useState<string>();
   const [answers, setAnswers] = useState<Record<string, string>>({});
-  const [picks, setPicks] = useState<Record<string, string>>({});
   const act = useAct();
 
   let suggested = choice.title;
@@ -106,10 +101,8 @@ function Details({
   for (let n = 2; names.has(suggested); n++) suggested = `${choice.title} ${n}`;
   const name = typed ?? suggested;
 
-  const needs = choice.mcp.flatMap((need) => (need.how === "pick" ? [need] : []));
-  const picked = (slot: string) => picks[slot] ?? connections[0]?.connection;
   const answered = choice.asks.every((ask) => ask.optional || answers[ask.id]?.trim());
-  const ready = name.trim() && answered && needs.every((need) => picked(need.slot));
+  const ready = name.trim() && answered;
 
   const submit = () => {
     if (!ready) return;
@@ -121,13 +114,6 @@ function Details({
           creatable: choice.id,
           name: name.trim(),
           answers: given,
-          ...(needs.length > 0
-            ? {
-                connections: Object.fromEntries(
-                  needs.map((need) => [need.slot, picked(need.slot)]),
-                ),
-              }
-            : {}),
         })
         .then(({ agent }) => onCreated(agent)),
     );
@@ -172,53 +158,7 @@ function Details({
               {ask.description && <FieldDescription>{ask.description}</FieldDescription>}
             </Field>
           ))}
-          {needs.map((need) => (
-            <Field key={need.slot}>
-              <FieldLabel>{need.title}</FieldLabel>
-              {connections.length > 0 ? (
-                <Select
-                  value={picked(need.slot) ?? ""}
-                  onValueChange={(id) => setPicks({ ...picks, [need.slot]: id })}
-                >
-                  <SelectTrigger aria-label={need.title} className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {connections.map((c) => (
-                      <SelectItem key={c.connection} value={c.connection}>
-                        {c.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              ) : (
-                <FieldDescription>
-                  <Jump to={{ screen: "mcps", adding: true }}>Connect an MCP first</Jump>
-                </FieldDescription>
-              )}
-            </Field>
-          ))}
         </FieldGroup>
-
-        {(choice.skills.length > 0 || choice.mcp.length > 0) && (
-          <div className="mt-5 flex flex-col gap-2 border-t pt-4 text-[13px]">
-            {choice.skills.length > 0 && (
-              <div className="flex items-center gap-2 text-muted-foreground">
-                <SparklesIcon className="size-3.5 shrink-0" />
-                <span className="truncate">{choice.skills.map((s) => s.name).join(", ")}</span>
-              </div>
-            )}
-            {choice.mcp.map((need) => (
-              <div key={need.slot} className="flex items-center gap-2">
-                {need.how === "create" && <WhereIcon kind={need.kind} />}
-                <span>{need.slot}</span>
-                <span className="ml-auto truncate text-muted-foreground">
-                  {need.how === "create" ? "Created for this agent" : "Connected by you"}
-                </span>
-              </div>
-            ))}
-          </div>
-        )}
       </div>
       <DialogFooter className="items-center">
         {act.failed && (

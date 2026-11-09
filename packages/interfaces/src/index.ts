@@ -25,6 +25,7 @@ export {
   hubBindings,
   hubExports,
   hubGrants,
+  SlotName,
 } from "./hub.js";
 export { kv } from "./kv.js";
 export { Item, llmSession, OutputItem, Tool } from "./llm-session.js";

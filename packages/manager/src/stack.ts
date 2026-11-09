@@ -1,0 +1,876 @@
+/**
+ * An agent built as a stack of units on a base: checking one, applying it all or none, keeping its
+ * instances, removing them last first, and the templates that prefill one.
+ */
+import {
+  type agentProvider,
+  type agents,
+  ConnectionOrigin,
+  type ConnectionStatus,
+  FieldValues,
+  type Problem,
+  ResultKind,
+  SkillName,
+  SlotName,
+  Template,
+  type Unit,
+  UnitResult,
+  type unitProvider,
+} from "@agentorg/interfaces";
+import { type Log, Refused, type Slot } from "@agentorg/sdk";
+import { z } from "zod";
+import { formProblems, settle, type Worked, workedOut } from "./form.js";
+import type { SkillFiles, Skills } from "./skills.js";
+
+/** A unit an agent has: what its provider made, and what was filled in. Never a secret. */
+const UnitRecord = z.object({
+  /** Management's own id for it. */
+  instance: z.string(),
+  provider: z.string(),
+  /** The provider's id for it. */
+  providerInstance: z.string(),
+  unit: z.string(),
+  title: z.string(),
+  values: FieldValues,
+  /** By kind, the instance it took each result from. */
+  needs: z.record(ResultKind, z.string()),
+  results: z.array(UnitResult),
+  connections: z.array(z.object({ slot: z.string(), connection: z.string() })),
+  skills: z.array(z.string()),
+});
+/** What only management knows of an agent: where it came from, what it is told, and its skills. */
+export const AgentRecord = z.object({
+  provider: z.string(),
+  creatable: z.string(),
+  instructions: z.string(),
+  skills: z.array(z.string()),
+  purpose: z.string().optional(),
+  template: z.string().optional(),
+  units: z.array(UnitRecord).default([]),
+});
+export const Records = z.object({
+  agents: z.record(z.string(), AgentRecord),
+  connections: z.record(z.string(), ConnectionOrigin),
+  templates: z.record(z.string(), Template).default({}),
+});
+
+type TheAgent = z.infer<typeof AgentRecord>;
+type TheRecords = z.infer<typeof Records>;
+type TheUnitRecord = z.infer<typeof UnitRecord>;
+type TheTemplate = z.infer<typeof Template>;
+type Origin = z.infer<typeof ConnectionOrigin>;
+type TheUnit = z.infer<typeof Unit>;
+type TheProblem = z.infer<typeof Problem>;
+type Values = z.infer<typeof FieldValues>;
+type Agents = Slot<typeof agentProvider>["call"];
+type Units = Slot<typeof unitProvider>["call"];
+type AgentCalls = Slot<typeof agents>["call"];
+type CreateInput = Parameters<AgentCalls["create"]>[0];
+type CheckInput = Parameters<AgentCalls["check"]>[0];
+type AddInput = Parameters<AgentCalls["addUnit"]>[0];
+type StackInput = Extract<CreateInput, { stack: unknown }>["stack"];
+type FilledUnit = StackInput["units"][number];
+type StackBase = StackInput["base"];
+type Provided<T> = { actor: string; call: T };
+
+/** Management's own units. They ask no provider: each is an exposure and is read back as one. */
+const SKILL_UNIT = "skill";
+const CONNECTION_UNIT = "connection";
+const skillInstance = (name: string) => `skill:${name}`;
+const slotInstance = (slot: string) => `slot:${slot}`;
+
+const MAX_MESSAGE = 2000;
+const MAX_OPTIONS = 256;
+const MAX_PROBLEMS = 256;
+const MAX_NAME = 128;
+const TOOLS = "tools@1";
+
+interface Offer {
+  unit: TheUnit;
+  provider: string;
+  providerName: string;
+  /** None for management's own. */
+  call?: Units;
+}
+/** A unit that passed its check, ready to apply. `needs` refers to earlier units by `Giver.ref`. */
+interface Placed {
+  offer: Offer;
+  values: Values;
+  secrets: Record<string, string>;
+  worked: Worked;
+  needs: Record<string, number | string>;
+}
+/** An earlier unit: by position in a stack, by instance on a living agent. */
+interface Giver {
+  ref: number | string;
+  provider: string;
+  results: string[];
+}
+/** What the units so far already give. */
+interface Taken {
+  slots: Set<string>;
+  skills: Set<string>;
+  givers: Giver[];
+}
+/** One application under way: what it made goes in `undo`, and origins are kept at the end. */
+interface Work {
+  agent: string;
+  name: string;
+  caller: string;
+  record: TheAgent;
+  undo: (() => unknown)[];
+  origins: Record<string, Origin>;
+}
+
+export interface StackParts {
+  self: string;
+  hub: {
+    actors: { close(input: { actorId: string }): Promise<unknown> };
+    grants: {
+      bind(input: {
+        consumer: string;
+        slot: string;
+        provider: string;
+        export: string;
+      }): Promise<unknown>;
+      expose(input: { provider: string; export: string; to: string }): Promise<unknown>;
+      unexpose(input: { to: string; slot: string }): Promise<unknown>;
+    };
+    bindings: {
+      list(input: { actor: string }): Promise<{
+        bindings: { consumer: string; interface: string; slot: string; provider: string }[];
+      }>;
+    };
+  };
+  records: TheRecords;
+  save(): void;
+  library: Skills;
+  creating: Map<string, TheAgent>;
+  log: Log;
+  /** Shipped with the app; one the person saves under the same id is the one used. */
+  shipped: TheTemplate[];
+  agentProviders(): Provided<Agents>[];
+  unitProviders(): Provided<Units>[];
+  recordOf(agent: string): TheAgent;
+  openActors(): Promise<Map<string, unknown>>;
+  nameOf(actor: string): Promise<string>;
+  changed(agent: string): void;
+  fromEach<T, R>(list: T[], read: (one: T) => Promise<R>): Promise<R[]>;
+  exposeConnection(agent: string, connection: string, as?: string): Promise<string>;
+  closing(what: string, remove: () => Promise<void>): Promise<void>;
+  removeAgent(agent: string, provider: string): Promise<void>;
+}
+
+const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
+const alreadyGone = (error: unknown) => error instanceof Refused && error.code === "unknown";
+const refusal = (problems: TheProblem[]) =>
+  new Refused(
+    "invalid",
+    problems
+      .map((p) => p.message)
+      .join(" ")
+      .slice(0, MAX_MESSAGE),
+  );
+
+export function createStacks(parts: StackParts) {
+  const { self, hub, records, save, library, creating, log, changed, recordOf } = parts;
+
+  const queues = new Map<string, Promise<void>>();
+  /** One change to an agent at a time, in the order they came: each spans many calls. */
+  const serial = <T>(agent: string, work: () => T | Promise<T>): Promise<T> => {
+    const running = (queues.get(agent) ?? Promise.resolve()).then(work);
+    const done = () => {
+      if (queues.get(agent) === settled) queues.delete(agent);
+    };
+    const settled: Promise<void> = running.then(done, done);
+    queues.set(agent, settled);
+    return running;
+  };
+
+  const ownUnits = (): TheUnit[] => [
+    {
+      id: SKILL_UNIT,
+      title: "Skill",
+      description: "A skill from the library.",
+      form: [
+        {
+          id: "skill",
+          type: "choice",
+          value: "string",
+          title: "Skill",
+          required: true,
+          options: library
+            .list()
+            .slice(0, MAX_OPTIONS)
+            .map(({ name, description }) => ({ value: name, title: name, description })),
+        },
+      ],
+      needs: [],
+      gives: { slots: [], skills: [{ field: "skill" }], results: [] },
+    },
+    {
+      id: CONNECTION_UNIT,
+      title: "Connection",
+      description: "A connection that already exists, under a name the agent sees.",
+      form: [
+        {
+          id: "connection",
+          type: "connection",
+          value: "string",
+          title: "Connection",
+          required: true,
+        },
+        { id: "slot", type: "text", value: "string", title: "Name", required: true },
+      ],
+      needs: [],
+      gives: { slots: [{ field: "slot" }], skills: [], results: [] },
+    },
+  ];
+
+  /** Every unit on offer now; a provider that doesn't answer offers none. */
+  const catalog = async (): Promise<Offer[]> => {
+    const [providerName, others] = await Promise.all([
+      parts.nameOf(self),
+      parts.fromEach(parts.unitProviders(), async ({ actor, call }) => {
+        const name = await parts.nameOf(actor);
+        return (await call.units({})).units.map(
+          (unit): Offer => ({ unit, provider: actor, providerName: name, call }),
+        );
+      }),
+    ]);
+    return [
+      ...ownUnits().map((unit) => ({ unit, provider: self, providerName })),
+      ...others.flat(),
+    ];
+  };
+
+  const baseOf = async (base: StackBase) => {
+    const provider = parts.agentProviders().find((one) => one.actor === base.provider);
+    if (!provider)
+      throw new Refused("unknown", `${base.provider} isn't a connected agent provider.`);
+    const { creatables } = await provider.call.creatable({});
+    const creatable = creatables.find((one) => one.id === base.creatable);
+    if (!creatable) throw new Refused("unknown", `${base.provider} offers no ${base.creatable}.`);
+    return { provider, creatable };
+  };
+
+  /** The unit's own logic on what was filled in; one that can't say is a problem. */
+  const unitProblems = async (
+    offer: Offer,
+    values: Values,
+    secrets: string[],
+  ): Promise<TheProblem[]> => {
+    if (!offer.call) {
+      if (offer.unit.id !== CONNECTION_UNIT) return [];
+      return (await parts.openActors()).has(String(values.connection))
+        ? []
+        : [{ field: "connection", message: "That connection doesn't exist." }];
+    }
+    try {
+      return (await offer.call.check({ unit: offer.unit.id, values, secrets })).problems;
+    } catch (error) {
+      return [
+        { message: `This unit couldn't check it: ${messageOf(error)}`.slice(0, MAX_MESSAGE) },
+      ];
+    }
+  };
+
+  /** Everything that can be known about one unit before anything runs. `taken` grows by it. */
+  const place = async (
+    filled: Pick<FilledUnit, "provider" | "unit" | "values" | "secrets">,
+    picks: Record<string, number | string>,
+    taken: Taken,
+    offers: Offer[],
+    ref: number | undefined,
+  ): Promise<{ problems: TheProblem[]; placed?: Placed }> => {
+    const offer = offers.find(
+      (one) => one.provider === filled.provider && one.unit.id === filled.unit,
+    );
+    if (!offer)
+      return { problems: [{ message: `${filled.provider} offers no unit ${filled.unit}.` }] };
+    const { unit } = offer;
+    const malformed = formProblems(unit.form);
+    if (malformed.length) return { problems: malformed.map((message) => ({ message })) };
+
+    const given = filled.secrets ?? {};
+    const settled = settle(unit.form, filled.values ?? {}, Object.keys(given));
+    const problems = [...settled.problems];
+
+    const needs: Placed["needs"] = {};
+    for (const kind of Object.keys(picks))
+      if (!unit.needs.includes(kind))
+        problems.push({ message: `${unit.title} doesn't need ${kind}.` });
+    for (const kind of unit.needs) {
+      const able = taken.givers.filter(
+        (giver) => giver.provider === offer.provider && giver.results.includes(kind),
+      );
+      const pick = picks[kind];
+      const giver =
+        pick === undefined
+          ? able.length === 1
+            ? able[0]
+            : undefined
+          : able.find((one) => one.ref === pick);
+      if (giver) needs[kind] = giver.ref;
+      else
+        problems.push({
+          message:
+            pick !== undefined
+              ? `${unit.title} can't take ${kind} from the unit picked.`
+              : able.length
+                ? `${unit.title} needs one ${kind}: pick which.`
+                : `${unit.title} needs a ${kind} from a unit above it.`,
+        });
+    }
+
+    const worked = workedOut(unit, settled.values);
+    for (const slot of worked.slots) {
+      if (!SlotName.safeParse(slot).success)
+        problems.push({ message: `${slot} can't name a connection.` });
+      if (taken.slots.has(slot)) problems.push({ message: `The name ${slot} is already taken.` });
+      taken.slots.add(slot);
+    }
+    for (const skill of worked.skills) {
+      if (!SkillName.safeParse(skill.name).success)
+        problems.push({ message: `${skill.name} can't name a skill.` });
+      else if (!skill.files && !library.has(skill.name))
+        problems.push({ message: `There is no skill ${skill.name}.` });
+      if (taken.skills.has(skill.name))
+        problems.push({ message: `Two units give the skill ${skill.name}.` });
+      taken.skills.add(skill.name);
+    }
+    if (ref !== undefined)
+      taken.givers.push({ ref, provider: offer.provider, results: unit.gives.results });
+
+    if (settled.problems.length === 0)
+      problems.push(...(await unitProblems(offer, settled.values, settled.secrets)));
+    const secrets = Object.fromEntries(
+      Object.entries(given).filter(([name]) => settled.secrets.includes(name)),
+    );
+    return {
+      problems: problems.map((one) => ({ ...one, message: one.message.slice(0, MAX_MESSAGE) })),
+      placed: { offer, values: settled.values, secrets, worked, needs },
+    };
+  };
+
+  const plan = async (units: FilledUnit[]) => {
+    const offers = await catalog();
+    const taken: Taken = { slots: new Set(), skills: new Set(), givers: [] };
+    const placed: Placed[] = [];
+    const problems: (TheProblem & { unit: number })[] = [];
+    for (const [position, unit] of units.entries()) {
+      const one = await place(unit, unit.needs ?? {}, taken, offers, position);
+      problems.push(...one.problems.map((problem) => ({ ...problem, unit: position })));
+      if (one.placed) placed.push(one.placed);
+    }
+    return { placed, problems };
+  };
+
+  /** The connections a living agent has now; what is exposed to it is the Hub's to say. */
+  const toolsOf = async (agent: string) =>
+    (await hub.bindings.list({ actor: agent })).bindings.filter(
+      (binding) => binding.consumer === agent && binding.interface === TOOLS,
+    );
+
+  const placeOnAgent = async (input: AddInput) => {
+    const record = recordOf(input.agent);
+    const taken: Taken = {
+      slots: new Set(
+        (await hub.bindings.list({ actor: input.agent })).bindings
+          .filter((binding) => binding.consumer === input.agent)
+          .map((binding) => binding.slot),
+      ),
+      skills: new Set(record.skills),
+      givers: record.units.map((unit) => ({
+        ref: unit.instance,
+        provider: unit.provider,
+        results: unit.results.map((result) => result.kind),
+      })),
+    };
+    return place(input.unit, input.needs ?? {}, taken, await catalog(), undefined);
+  };
+
+  const unwind = async (undo: (() => unknown)[]) => {
+    for (const step of undo.reverse())
+      await Promise.resolve()
+        .then(step)
+        .catch((failed) => log.error(`Undoing a creation: ${messageOf(failed)}`));
+  };
+
+  const closeAll = async (connections: { connection: string }[]) => {
+    for (const { connection } of connections) await hub.actors.close({ actorId: connection });
+  };
+
+  /** Run one placed unit for the agent, and give it what it gives. */
+  const run = async (
+    work: Work,
+    placed: Placed,
+    earlier: (ref: number | string) => TheUnitRecord | undefined,
+  ) => {
+    const { offer, values, worked } = placed;
+    const { agent, record, undo } = work;
+    let made: TheUnitRecord | undefined;
+    if (offer.call) {
+      const { call } = offer;
+      const needs: Record<string, string> = {};
+      const handles: Record<string, string> = {};
+      for (const [kind, ref] of Object.entries(placed.needs)) {
+        const giver = earlier(ref);
+        const handle = giver?.results.find((result) => result.kind === kind)?.handle;
+        if (!giver || !handle)
+          throw new Refused("failed", `The unit above didn't give ${kind} as it said it would.`);
+        needs[kind] = giver.instance;
+        handles[kind] = handle;
+      }
+      const applied = await call.apply({
+        unit: offer.unit.id,
+        values,
+        secrets: placed.secrets,
+        needs: handles,
+        agent,
+        name: `${work.name}: ${offer.unit.title}`.slice(0, MAX_NAME),
+      });
+      undo.push(async () => {
+        try {
+          await call.remove({ instance: applied.instance });
+        } catch (error) {
+          log.warn(`Removing a unit: ${messageOf(error)}`);
+          await closeAll(applied.connections);
+        }
+      });
+      const slots = applied.connections.map((one) => one.slot).sort();
+      if (slots.join() !== [...worked.slots].sort().join())
+        throw new Refused(
+          "failed",
+          `${offer.unit.title} didn't give the connections it said it would.`,
+        );
+      const results = applied.results.map((result) => result.kind);
+      if (offer.unit.gives.results.some((kind) => !results.includes(kind)))
+        throw new Refused(
+          "failed",
+          `${offer.unit.title} didn't give the results it said it would.`,
+        );
+      for (const { slot, connection, target } of applied.connections) {
+        await parts.exposeConnection(agent, connection, slot);
+        work.origins[connection] = {
+          provider: offer.provider,
+          kind: offer.unit.id,
+          target,
+          madeBy: work.caller,
+          madeFor: agent,
+          at: new Date().toISOString(),
+        };
+      }
+      made = {
+        instance: `uni_${crypto.randomUUID().replaceAll("-", "")}`,
+        provider: offer.provider,
+        providerInstance: applied.instance,
+        unit: offer.unit.id,
+        title: offer.unit.title,
+        values,
+        needs,
+        results: applied.results,
+        connections: applied.connections.map(({ slot, connection }) => ({ slot, connection })),
+        skills: worked.skills.map((skill) => skill.name),
+      };
+    } else if (offer.unit.id === CONNECTION_UNIT) {
+      const slot = values.slot as string;
+      await parts.exposeConnection(agent, values.connection as string, slot);
+      undo.push(() => hub.grants.unexpose({ to: agent, slot }));
+    }
+
+    for (const { name, files } of worked.skills) {
+      if (!library.has(name)) {
+        if (!files || !offer.call) throw new Refused("unknown", `There is no skill ${name}.`);
+        const copied: SkillFiles = {};
+        for (const path of files)
+          copied[path] = (await offer.call.skill({ unit: offer.unit.id, name, path })).text;
+        library.add(copied, name);
+        // Another agent may have been given it meanwhile, and then it stays.
+        undo.push(() => {
+          if (
+            ![...Object.values(records.agents), ...creating.values()].some((one) =>
+              one.skills.includes(name),
+            )
+          )
+            library.remove(name);
+        });
+      }
+      record.skills.push(name);
+      undo.push(() => {
+        record.skills = record.skills.filter((skill) => skill !== name);
+      });
+    }
+
+    if (made) {
+      const instance = made.instance;
+      record.units.push(made);
+      undo.push(() => {
+        record.units = record.units.filter((unit) => unit.instance !== instance);
+      });
+    }
+    return made;
+  };
+
+  const keepOrigins = (work: Work) => {
+    Object.assign(records.connections, work.origins);
+    work.undo.push(() => {
+      for (const connection of Object.keys(work.origins)) delete records.connections[connection];
+    });
+  };
+
+  /** What a stack is, whichever way the caller said it. */
+  const stackOf = async (input: CreateInput): Promise<StackInput> => {
+    if ("stack" in input) return input.stack;
+    if ("creatable" in input)
+      return {
+        base: { provider: input.provider, creatable: input.creatable, answers: input.answers },
+        units: [],
+      };
+    const template = templates().find((one) => one.id === input.template);
+    if (!template) throw new Refused("unknown", `There is no template ${input.template}.`);
+    const fill = input.fill ?? [];
+    if (fill.length > template.units.length)
+      throw new Refused("invalid", `The template has ${template.units.length} units.`);
+    const offers = await catalog();
+    const base = await baseProviderNamed(template.base.provider);
+    return {
+      base: {
+        provider: base,
+        creatable: template.base.creatable,
+        answers: { ...template.base.answers, ...input.answers },
+      },
+      units: template.units.map((unit, position) => {
+        const offer = offerNamed(offers, unit.provider, unit.unit);
+        const filled = fill[position];
+        return {
+          provider: offer.provider,
+          unit: unit.unit,
+          values: { ...unit.values, ...filled?.values },
+          ...(unit.needs ? { needs: unit.needs } : {}),
+          ...(filled?.secrets ? { secrets: filled.secrets } : {}),
+        };
+      }),
+      template: template.id,
+    };
+  };
+
+  const baseProviderNamed = async (name: string) => {
+    for (const { actor } of parts.agentProviders())
+      if ((await parts.nameOf(actor)) === name) return actor;
+    throw new Refused("unknown", `No connected agent provider is called ${name}.`);
+  };
+  const offerNamed = (offers: Offer[], providerName: string, unit: string) => {
+    const offer = offers.find((one) => one.providerName === providerName && one.unit.id === unit);
+    if (!offer) throw new Refused("unknown", `${providerName} offers no unit ${unit}.`);
+    return offer;
+  };
+  const templates = () =>
+    Object.values({
+      ...Object.fromEntries(parts.shipped.map((one) => [one.id, one])),
+      ...records.templates,
+    });
+
+  /** Remove a unit and what it made; a provider that has lost it leaves only the connections. */
+  const dropUnit = async (record: TheAgent, unit: TheUnitRecord) => {
+    const provider = parts.unitProviders().find((one) => one.actor === unit.provider);
+    let removed = false;
+    try {
+      if (provider) {
+        await provider.call.remove({ instance: unit.providerInstance });
+        removed = true;
+      }
+    } catch (error) {
+      if (!alreadyGone(error)) throw error;
+    }
+    if (!removed) await closeAll(unit.connections);
+    for (const { connection } of unit.connections) delete records.connections[connection];
+    record.skills = record.skills.filter((skill) => !unit.skills.includes(skill));
+    record.units = record.units.filter((one) => one.instance !== unit.instance);
+    save();
+  };
+
+  /** Which unit made a connection, if one did. */
+  const unitMaking = (connection: string) => {
+    for (const record of Object.values(records.agents))
+      for (const unit of record.units)
+        if (unit.connections.some((one) => one.connection === connection)) return unit;
+    return undefined;
+  };
+  const statusOf = async (unit: TheUnitRecord) =>
+    parts
+      .unitProviders()
+      .find((one) => one.actor === unit.provider)
+      ?.call.status({ instance: unit.providerInstance });
+  const DOWN = { state: "down" as const, detail: "Its provider can't be reached." };
+
+  const fromUnit = (record: TheAgent, given: { slot: string } | { skill: string }) =>
+    record.units.some((unit) =>
+      "slot" in given
+        ? unit.connections.some((one) => one.slot === given.slot)
+        : unit.skills.includes(given.skill),
+    );
+
+  return {
+    serial,
+    fromUnit,
+    unitMaking,
+    /** How one connection a unit made stands, as its unit says. */
+    async connectionStatus(
+      unit: TheUnitRecord,
+      connection: string,
+    ): Promise<z.infer<typeof ConnectionStatus>> {
+      try {
+        const found = (await statusOf(unit))?.connections.find(
+          (one) => one.connection === connection,
+        );
+        if (found) {
+          const { connection: _, ...status } = found;
+          return status;
+        }
+      } catch (error) {
+        log.warn(`A unit's status: ${messageOf(error)}`);
+      }
+      return { ...DOWN, tools: [] };
+    },
+
+    /** The agent's stack, top to bottom: its exposures as units, then what providers made. */
+    async read(
+      agent: string,
+      record: TheAgent,
+      connectionStatus: (connection: string) => Promise<z.infer<typeof ConnectionStatus>>,
+    ) {
+      const tools = await toolsOf(agent);
+      const instanceOfSkill = (name: string) =>
+        record.units.find((unit) => unit.skills.includes(name))?.instance ?? skillInstance(name);
+      const instanceOfSlot = (slot: string) =>
+        record.units.find((unit) => unit.connections.some((one) => one.slot === slot))?.instance ??
+        slotInstance(slot);
+      const own = (
+        unit: string,
+        title: string,
+        instance: string,
+        values: Values,
+        status: Pick<z.infer<typeof ConnectionStatus>, "state" | "detail">,
+      ) => ({ instance, provider: self, unit, title, values, needs: {}, status });
+      const units = [
+        ...record.skills
+          .filter((name) => instanceOfSkill(name) === skillInstance(name))
+          .map((name) =>
+            own(SKILL_UNIT, "Skill", skillInstance(name), { skill: name }, { state: "connected" }),
+          ),
+        ...(await Promise.all(
+          tools
+            .filter(({ slot }) => instanceOfSlot(slot) === slotInstance(slot))
+            .map(async ({ slot, provider }) => {
+              const { state, detail } = await connectionStatus(provider);
+              return own(
+                CONNECTION_UNIT,
+                "Connection",
+                slotInstance(slot),
+                { connection: provider, slot },
+                { state, ...(detail ? { detail } : {}) },
+              );
+            }),
+        )),
+        ...(await Promise.all(
+          record.units.map(async (unit) => {
+            let status: { state: "connecting" | "connected" | "down"; detail?: string } = DOWN;
+            try {
+              const answer = await statusOf(unit);
+              if (answer)
+                status = {
+                  state: answer.state,
+                  ...(answer.detail ? { detail: answer.detail } : {}),
+                };
+            } catch (error) {
+              log.warn(`A unit's status: ${messageOf(error)}`);
+            }
+            return {
+              instance: unit.instance,
+              provider: unit.provider,
+              unit: unit.unit,
+              title: unit.title,
+              values: unit.values,
+              needs: unit.needs,
+              status,
+            };
+          }),
+        )),
+      ];
+      return { units, tools, instanceOfSkill, instanceOfSlot };
+    },
+
+    async units() {
+      const [bases, offers] = await Promise.all([
+        parts.fromEach(parts.agentProviders(), async ({ actor, call }) => {
+          const providerName = await parts.nameOf(actor);
+          return (await call.creatable({})).creatables.map((one) => ({
+            ...one,
+            provider: actor,
+            providerName,
+          }));
+        }),
+        catalog(),
+      ]);
+      return {
+        bases: bases.flat(),
+        units: offers.map(({ unit, provider, providerName }) => ({
+          ...unit,
+          provider,
+          providerName,
+        })),
+      };
+    },
+    templates: () => ({ templates: templates() }),
+    async saveTemplate(template: TheTemplate) {
+      await baseProviderNamed(template.base.provider);
+      const offers = await catalog();
+      for (const unit of template.units)
+        for (const field of offerNamed(offers, unit.provider, unit.unit).unit.form)
+          if (field.value === "secret" && unit.values?.[field.id] !== undefined)
+            throw new Refused("invalid", `${field.title} is a secret: a template holds none.`);
+      records.templates[template.id] = template;
+      save();
+      return {};
+    },
+    removeTemplate({ id }: { id: string }) {
+      if (!records.templates[id]) throw new Refused("unknown", `No saved template ${id}.`);
+      delete records.templates[id];
+      save();
+      return {};
+    },
+
+    async check(input: CheckInput) {
+      const problems: (TheProblem & { unit?: number })[] = [];
+      if ("stack" in input) {
+        await baseOf(input.stack.base).catch((error) =>
+          problems.push({ message: messageOf(error).slice(0, MAX_MESSAGE) }),
+        );
+        problems.push(...(await plan(input.stack.units)).problems);
+      } else problems.push(...(await placeOnAgent(input)).problems);
+      return { problems: problems.slice(0, MAX_PROBLEMS) };
+    },
+
+    /** All or none: what this made is undone, last first, if a step fails. */
+    async create(input: CreateInput, caller: string) {
+      const stack = await stackOf(input);
+      const { provider, creatable } = await baseOf(stack.base);
+      const { placed, problems } = await plan(stack.units);
+      if (problems.length) throw refusal(problems);
+
+      const undo: Work["undo"] = [];
+      try {
+        const made = await provider.call.create({
+          creatable: creatable.id,
+          name: input.name,
+          answers: stack.base.answers ?? {},
+        });
+        const { agent } = made;
+        undo.push(() => parts.closing(agent, () => parts.removeAgent(agent, provider.actor)));
+        const record: TheAgent = {
+          provider: provider.actor,
+          creatable: creatable.id,
+          instructions: creatable.instructions,
+          skills: [],
+          units: [],
+          ...(input.purpose ? { purpose: input.purpose } : {}),
+          ...(stack.template ? { template: stack.template } : {}),
+        };
+        creating.set(agent, record);
+        undo.push(() => creating.delete(agent));
+        await hub.grants.bind({
+          consumer: agent,
+          slot: made.settings,
+          provider: self,
+          export: "settings",
+        });
+
+        const work: Work = { agent, name: input.name, caller, record, undo, origins: {} };
+        const applied = new Map<number | string, TheUnitRecord>();
+        for (const [position, one] of placed.entries()) {
+          const unit = await run(work, one, (ref) => applied.get(ref));
+          if (unit) applied.set(position, unit);
+        }
+
+        await hub.grants.expose({ provider: agent, export: made.chat, to: "person" });
+        records.agents[agent] = record;
+        undo.push(() => delete records.agents[agent]);
+        keepOrigins(work);
+        save();
+        creating.delete(agent);
+        return { agent };
+      } catch (error) {
+        await unwind(undo);
+        throw error;
+      }
+    },
+
+    async addUnit(input: AddInput, caller: string) {
+      const { agent } = input;
+      const record = recordOf(agent);
+      const { placed, problems } = await placeOnAgent(input);
+      if (problems.length || !placed) throw refusal(problems);
+      const undo: Work["undo"] = [];
+      const work: Work = {
+        agent,
+        name: await parts.nameOf(agent),
+        caller,
+        record,
+        undo,
+        origins: {},
+      };
+      try {
+        const unit = await run(work, placed, (ref) =>
+          record.units.find((one) => one.instance === ref),
+        );
+        keepOrigins(work);
+        save();
+        changed(agent);
+        if (unit) return { instance: unit.instance };
+        return {
+          instance:
+            placed.offer.unit.id === SKILL_UNIT
+              ? skillInstance(placed.values.skill as string)
+              : slotInstance(placed.values.slot as string),
+        };
+      } catch (error) {
+        await unwind(undo);
+        throw error;
+      }
+    },
+
+    async removeUnit({ agent, instance }: { agent: string; instance: string }) {
+      const record = recordOf(agent);
+      const unit = record.units.find((one) => one.instance === instance);
+      if (unit) {
+        const needing = record.units.find((one) => Object.values(one.needs).includes(instance));
+        if (needing) throw new Refused("state", `${needing.title} needs this unit.`);
+        await dropUnit(record, unit);
+        changed(agent);
+        return {};
+      }
+      // What a provider's unit gave isn't a unit of its own, so it can't be taken off alone.
+      const skill = record.skills.find(
+        (name) => skillInstance(name) === instance && !fromUnit(record, { skill: name }),
+      );
+      if (skill) {
+        record.skills = record.skills.filter((name) => name !== skill);
+        save();
+        changed(agent);
+        return {};
+      }
+      const tool = (await toolsOf(agent)).find(
+        ({ slot }) => slotInstance(slot) === instance && !fromUnit(record, { slot }),
+      );
+      if (!tool) throw new Refused("unknown", `${agent} has no unit ${instance}.`);
+      await hub.grants.unexpose({ to: agent, slot: tool.slot });
+      return {};
+    },
+
+    /** Every unit, last first: if one can't go, what is left can be tried again. */
+    async removeAll(record: TheAgent) {
+      for (const unit of [...record.units].reverse()) await dropUnit(record, unit);
+    },
+  };
+}

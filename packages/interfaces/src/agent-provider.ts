@@ -1,8 +1,6 @@
 import { defineInterface, method } from "@agentorg/sdk";
 import { z } from "zod";
-import { SKILL_FILE_MAX, SkillName, SkillPath } from "./agent-settings.js";
-import { Id, Name, SlotName } from "./hub.js";
-import { ConnectionKind, ConnectionParams } from "./mcp-provider.js";
+import { Id, Name } from "./hub.js";
 
 const Title = z.string().min(1).max(128);
 const Description = z.string().max(2000);
@@ -25,35 +23,13 @@ const Ask = z.object({
   description: Description.optional(),
   optional: z.literal(true).optional(),
 });
-/**
- * An MCP connection an agent of this creatable needs, exposed to it as `slot`. With `pick`, the
- * person picks one they have. With `create`, one is made for the agent through a connected provider
- * offering `kind`, with `params`, each top-level parameter in `fromAnswers` set to the answer it
- * names.
- */
-const McpNeed = z.discriminatedUnion("how", [
-  z.object({ how: z.literal("pick"), slot: SlotName, title: Title }),
-  z.object({
-    how: z.literal("create"),
-    slot: SlotName,
-    title: Title,
-    kind: ConnectionKind,
-    params: ConnectionParams,
-    fromAnswers: z.record(z.string(), AskId).optional(),
-  }),
-]);
-/**
- * A predefined set an agent is made from. Its skills are listed by name and files, `SKILL.md` among
- * them; `skill` reads each file.
- */
+/** What an agent is made on: the execution layer's instructions and what it asks the person. */
 export const Creatable = z.object({
   id: CreatableId,
   title: Title,
   description: Description,
   instructions: z.string().max(200_000),
   asks: z.array(Ask).max(32),
-  skills: z.array(z.object({ name: SkillName, files: z.array(SkillPath).min(1).max(256) })).max(64),
-  mcp: z.array(McpNeed).max(32),
 });
 
 const OnAgent = z.object({ agent: Id });
@@ -80,11 +56,6 @@ export const agentProvider = defineInterface({
     creatable: method({
       input: z.object({}),
       output: z.object({ creatables: z.array(Creatable) }),
-    }),
-    /** A file of a skill a creatable comes with. Refused `unknown` when there is no such file. */
-    skill: method({
-      input: z.object({ creatable: CreatableId, name: SkillName, path: SkillPath }),
-      output: z.object({ text: z.string().max(SKILL_FILE_MAX) }),
     }),
     /**
      * Make and start an agent of a creatable, named `name`. `settings` is the agent's slot typed

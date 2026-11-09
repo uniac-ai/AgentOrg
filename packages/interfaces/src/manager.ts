@@ -179,7 +179,6 @@ export const agents = defineInterface({
           creatable: CreatableId,
           name: ActorName,
           answers: Answers,
-          connections: z.record(SlotName, Id).optional(),
           purpose: Purpose.optional(),
         }),
       ]),
@@ -191,7 +190,7 @@ export const agents = defineInterface({
       input: OnAgent,
       output: AgentEntry.extend({
         instructions: z.string().max(200_000),
-        /** Which unit gave each is its `instance`; none when it was exposed directly. */
+        /** Which unit gave each is its `instance`. */
         skills: z.array(SkillEntry.extend({ instance: Id.optional() })),
         mcp: z.array(
           z.object({

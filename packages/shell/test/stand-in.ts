@@ -178,8 +178,6 @@ const CREATABLES: Creatable[] = [
     description: "Chats and uses what you connect",
     instructions: "Help.",
     asks: [],
-    skills: [],
-    mcp: [],
   },
   {
     provider: "bundled",
@@ -190,17 +188,6 @@ const CREATABLES: Creatable[] = [
     asks: [
       { id: "repo", title: "Repository", description: "Owner and name" },
       { id: "note", title: "Note", optional: true },
-    ],
-    skills: [{ name: "review-a-diff", files: ["SKILL.md"] }],
-    mcp: [
-      { how: "pick", slot: "github", title: "GitHub" },
-      {
-        how: "create",
-        slot: "notes",
-        title: "Notes",
-        kind: "command",
-        params: { command: "notes-server" },
-      },
     ],
   },
 ];
@@ -285,27 +272,6 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
       },
       create: (input) => {
         const made = `a-${agents.size + 1}`;
-        const choice = creatables.find((c) => c.id === input.creatable) as Creatable;
-        const picked = (input.connections ?? {}) as Record<string, string>;
-        const mcp = choice.mcp.map((need) => {
-          if (need.how === "pick")
-            return { slot: need.slot, connection: picked[need.slot] as string };
-          const connection = `c-for-${made}`;
-          connections.set(connection, {
-            connection,
-            name: `${need.title} for ${input.name}`,
-            origin: {
-              provider: "local",
-              kind: need.kind,
-              target: "notes-server",
-              madeBy: "management",
-              madeFor: made,
-              at: at(0),
-            },
-            status: { state: "connecting", tools: [] },
-          });
-          return { slot: need.slot, connection };
-        });
         agents.set(made, {
           agent: made,
           name: String(input.name),
@@ -313,7 +279,7 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
           provider: String(input.provider),
           creatable: String(input.creatable),
           skills: [],
-          mcp,
+          mcp: [],
           chat: { status: { state: "idle" }, messages: [] },
         });
         changed();

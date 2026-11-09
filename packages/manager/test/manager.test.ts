@@ -26,6 +26,7 @@ import {
   mcpProvider,
   skills,
   tools,
+  unitProvider,
 } from "@agentorg/interfaces";
 import { Refused } from "@agentorg/sdk";
 import { connect } from "@agentorg/sdk/client";
@@ -43,35 +44,58 @@ const SKILL = (name: string, text = "Use it well.") =>
   `---\nname: ${name}\ndescription: The ${name} skill.\n---\n${text}\n`;
 
 const CREATABLES = [
+  { id: "plain", title: "Plain", description: "No needs.", instructions: "Be plain.", asks: [] },
   {
-    id: "plain",
-    title: "Plain",
-    description: "No needs.",
-    instructions: "Be plain.",
-    asks: [],
-    skills: [],
-    mcp: [],
-  },
-  {
-    id: "full",
-    title: "Full",
-    description: "Every kind of need.",
-    instructions: "Be full.",
+    id: "asking",
+    title: "Asking",
+    description: "Asks one thing.",
+    instructions: "Be asked.",
     asks: [{ id: "folder", title: "Folder" }],
-    skills: [{ name: "notes", files: ["SKILL.md", "more/guide.md"] }],
-    mcp: [
-      {
-        how: "create" as const,
-        slot: "files",
-        title: "Files",
-        kind: "stand-in",
-        params: { fixed: "yes" },
-        fromAnswers: { cwd: "folder" },
-      },
-      { how: "pick" as const, slot: "search", title: "Search" },
-    ],
   },
 ];
+
+const NONE = { slots: [], skills: [] };
+/** The stand-in provider's units: one with a form, one giving a result, one needing it. */
+const UNITS = [
+  {
+    id: "files",
+    title: "Files",
+    description: "A folder.",
+    form: [
+      { id: "folder", type: "directory", value: "string", title: "Folder", required: true },
+      { id: "token", type: "secret", value: "secret", title: "Token" },
+      {
+        id: "extra",
+        type: "toggle",
+        value: "boolean",
+        title: "Extra",
+        adds: { slots: [{ name: "extra" }], skills: [] },
+      },
+    ],
+    needs: [],
+    gives: {
+      slots: [{ name: "files" }],
+      skills: [{ name: "notes", files: ["SKILL.md", "more/guide.md"] }],
+      results: [],
+    },
+  },
+  {
+    id: "computer",
+    title: "Computer",
+    description: "Somewhere to work.",
+    form: [],
+    needs: [],
+    gives: { ...NONE, results: ["computer"] },
+  },
+  {
+    id: "terminal",
+    title: "Terminal",
+    description: "A terminal on the computer.",
+    form: [],
+    needs: ["computer"],
+    gives: { slots: [{ name: "terminal" }], skills: [], results: [] },
+  },
+] as const;
 
 /** A real Hub, management on it, one who calls it, and stand-in providers that can fail on cue. */
 async function setup(t: test.TestContext) {
@@ -104,12 +128,14 @@ async function setup(t: test.TestContext) {
       export: slot,
     })),
   });
-  const manager = await startManager({
-    hubUrl: server.url,
-    actorId: management.actorId,
-    credential: management.credential as string,
-    dir,
-  });
+  const startManagement = () =>
+    startManager({
+      hubUrl: server.url,
+      actorId: management.actorId,
+      credential: management.credential as string,
+      dir,
+    });
+  let manager = await startManagement();
   leaving.push(() => manager.close());
 
   /** What the stand-ins should do wrong, and what they were given. */
@@ -120,13 +146,27 @@ async function setup(t: test.TestContext) {
     chat?: string;
     noTools?: boolean;
     skillName?: string;
-    /** Run while a connection is being made, in the middle of a creation. */
+    /** The slot a unit says it made, instead of the one it declared. */
+    wrongSlot?: string;
+    /** A unit that gives no result, though it said it would. */
+    noResults?: boolean;
+    /** Problems the unit's own check finds. */
+    problems?: { field?: string; message: string }[];
+    /** Run while a unit is being applied, in the middle of a creation. */
     during?: () => Promise<void>;
   } = {};
-  const given: { secrets: unknown[]; params: unknown[]; removed: string[] } = {
+  const given: {
+    secrets: unknown[];
+    params: unknown[];
+    removed: string[];
+    applied: { unit: string; values: object; secrets: object; needs: object; agent: string }[];
+    checked: { unit: string; values: object; secrets: string[] }[];
+  } = {
     secrets: [],
     params: [],
     removed: [],
+    applied: [],
+    checked: [],
   };
   const failing = (step: string) => {
     if (script.fail === step || script.alsoFail === step)
@@ -150,10 +190,6 @@ async function setup(t: test.TestContext) {
     start(ctx) {
       ctx.exports.provider.implement({
         creatable: () => ({ creatables: CREATABLES }),
-        skill: ({ path }) => {
-          failing("skill");
-          return { text: path === "SKILL.md" ? SKILL(script.skillName ?? "notes") : "A guide." };
-        },
         async create({ name }) {
           failing("agent");
           const { actorId, credential } = await ctx.slots.actors.call.create({ name });
@@ -220,8 +256,6 @@ async function setup(t: test.TestContext) {
           kinds: [{ kind: "stand-in", title: "Stand-in", params: {}, secrets: {} }],
         }),
         async create({ params, secrets, name }) {
-          await script.during?.();
-          failing("connection");
           given.params.push(params);
           given.secrets.push(secrets);
           const { actorId, credential } = await ctx.slots.actors.call.create({ name });
@@ -252,8 +286,97 @@ async function setup(t: test.TestContext) {
   });
   leaving.push(() => mcpClient.close());
 
+  // A stand-in unit provider: an instance holds the connections it made, each an Actor.
+  const unitsActor = hub.state.createActor(PERSON, {
+    name: "Units",
+    bindings: [{ slot: "actors", provider: "hub", export: "actors" }],
+  });
+  const unitsClient = await connect({
+    hubUrl: server.url,
+    actorId: unitsActor.actorId,
+    credential: unitsActor.credential as string,
+    slots: { actors: hubActors },
+    exports: { provider: unitProvider },
+    start(ctx) {
+      const held = new Map<string, { connection: string; client: { close(): void } }[]>();
+      ctx.exports.provider.implement({
+        units: () => ({ units: UNITS as never }),
+        skill: ({ path }) => {
+          failing("skill");
+          return { text: path === "SKILL.md" ? SKILL(script.skillName ?? "notes") : "A guide." };
+        },
+        check: (input) => {
+          given.checked.push(input);
+          return { problems: script.problems ?? [] };
+        },
+        async apply({ unit, values, secrets, needs, agent, name }) {
+          await script.during?.();
+          failing("apply");
+          given.applied.push({ unit, values, secrets, needs, agent });
+          const slots =
+            unit === "files"
+              ? ["files", ...(values.extra ? ["extra"] : [])]
+              : unit === "terminal"
+                ? ["terminal"]
+                : [];
+          const made = [];
+          for (const slot of slots) {
+            const { actorId, credential } = await ctx.slots.actors.call.create({ name });
+            const client = await connect({
+              hubUrl: server.url,
+              actorId,
+              credential: credential as string,
+              exports: script.noTools ? {} : { tools },
+            });
+            leaving.push(() => client.close());
+            made.push({ slot: script.wrongSlot ?? slot, connection: actorId, client });
+          }
+          const instance = `inst-${crypto.randomUUID()}`;
+          held.set(instance, made);
+          return {
+            instance,
+            connections: made.map(({ slot, connection }) => ({
+              slot,
+              connection,
+              target: "a stand-in server",
+            })),
+            results:
+              unit === "computer" && !script.noResults
+                ? [{ kind: "computer", handle: "computer-handle" }]
+                : [],
+          };
+        },
+        status: ({ instance }) => {
+          const made = held.get(instance);
+          if (!made) throw new Refused("unknown", "Not held.");
+          return {
+            state: "connected" as const,
+            connections: made.map(({ connection }) => ({
+              connection,
+              state: "connected" as const,
+              tools: [{ name: "read" }],
+            })),
+          };
+        },
+        async remove({ instance }) {
+          const made = held.get(instance);
+          if (!made) throw new Refused("unknown", "Not held.");
+          failing("unit.remove");
+          given.removed.push(instance);
+          for (const { connection, client } of made) {
+            client.close();
+            await ctx.slots.actors.call.close({ actorId: connection });
+          }
+          held.delete(instance);
+          return {};
+        },
+      });
+    },
+  });
+  leaving.push(() => unitsClient.close());
+
   // A provider is connected by exposing its export to management; nothing else says so.
-  for (const actor of [agentActor.actorId, mcpActor.actorId])
+  for (const actor of [agentActor.actorId, mcpActor.actorId, unitsActor.actorId])
     await person.slots.grants.call.expose({
       provider: actor,
       export: "provider",
@@ -278,8 +401,13 @@ async function setup(t: test.TestContext) {
   await until(
     () => caller.slots.agents.bound && caller.slots.connections.bound && caller.slots.skills.bound,
   );
-  for (let i = 0; (await caller.slots.agents.call.providers({})).providers.length < 1; i++) {
-    assert.ok(i < 300, "the provider never showed");
+  for (
+    let i = 0;
+    (await caller.slots.agents.call.providers({})).providers.length < 1 ||
+    (await caller.slots.agents.call.units({})).units.length < 2 + UNITS.length;
+    i++
+  ) {
+    assert.ok(i < 300, "the providers never showed");
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
 
@@ -313,17 +441,43 @@ async function setup(t: test.TestContext) {
         };
       };
     };
-  const makeFull = async (connection: string, name = "Fay") =>
-    (
-      await caller.slots.agents.call.create({
-        provider: agentActor.actorId,
-        creatable: "full",
-        name,
-        answers: { folder: "/work" },
-        connections: { search: connection },
-      })
-    ).agent;
+  const base = { provider: agentActor.actorId, creatable: "plain" };
+  const unit = (id: string, values?: Record<string, string | boolean>, more?: object) => ({
+    provider: unitsActor.actorId,
+    unit: id,
+    ...(values ? { values } : {}),
+    ...more,
+  });
+  const own = (id: string, values: object) => ({
+    provider: management.actorId,
+    unit: id,
+    values,
+  });
+  const makeStack = async (units: object[], name = "Fay", more: object = {}) =>
+    (await caller.slots.agents.call.create({ stack: { base, units }, name, ...more } as never))
+      .agent;
+  /** A unit that makes a connection and comes with a skill, and a connection the person made. */
+  const makeFull = (connection: string, name = "Fay") =>
+    makeStack(
+      [unit("files", { folder: "/work" }), own("connection", { connection, slot: "search" })],
+      name,
+    );
+  /** Management stopped and started on its records, as a new release would be. */
+  const restart = async (edit: (kept: Record<string, never>) => void) => {
+    await manager.close();
+    const path = join(dir, "manager.json");
+    const kept = JSON.parse(readFileSync(path, "utf8"));
+    edit(kept);
+    writeFileSync(path, JSON.stringify(kept));
+    manager = await startManagement();
+    await until(() => caller.slots.agents.bound);
+    for (let i = 0; (await caller.slots.agents.call.units({})).units.length < 5; i++) {
+      assert.ok(i < 300, "the units never came back");
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+  };
   return {
+    restart,
     hub,
     person,
     dir,
@@ -332,7 +486,12 @@ async function setup(t: test.TestContext) {
     heard,
     agentActor,
     mcpActor,
+    unitsActor,
     management,
+    base,
+    unit,
+    own,
+    makeStack,
     calls: {
       agents: caller.slots.agents.call,
       connections: caller.slots.connections.call,
@@ -356,7 +515,7 @@ test("a provider counts once it has exposed its export to management", async (t)
     creatables.map((c) => [c.id, c.provider]),
     [
       ["plain", s.agentActor.actorId],
-      ["full", s.agentActor.actorId],
+      ["asking", s.agentActor.actorId],
     ],
   );
   const mcp = await s.calls.connections.providers({});
@@ -374,26 +533,49 @@ test("a provider counts once it has exposed its export to management", async (t)
   }
 });
 
-test("creating with a create need and a pick: bound, exposed, recorded, chat to the person", async (t) => {
+test("a stack is made, bound, exposed and recorded, with its chat to the person", async (t) => {
   const s = await setup(t);
   const search = await s.picked();
   const agent = await s.makeFull(search);
-  assert.deepEqual(s.given.params.at(-1), { fixed: "yes", cwd: "/work" }, "fromAnswers");
+  assert.deepEqual(s.given.applied.at(-1), {
+    unit: "files",
+    values: { folder: "/work" },
+    secrets: {},
+    needs: {},
+    agent,
+  });
 
   const read = await s.calls.agents.get({ agent });
   assert.equal(read.name, "Fay");
   assert.equal(read.provider, s.agentActor.actorId);
-  assert.equal(read.creatable, "full");
-  assert.equal(read.instructions, "Be full.");
+  assert.equal(read.creatable, "plain");
+  assert.equal(read.instructions, "Be plain.");
   assert.deepEqual(read.status, { state: "running" });
-  assert.deepEqual(read.skills, [{ name: "notes", description: "The notes skill." }]);
+  const files = read.units.find((one) => one.unit === "files");
+  assert.deepEqual(read.skills, [
+    { name: "notes", description: "The notes skill.", instance: files?.instance },
+  ]);
+  assert.deepEqual(files?.values, { folder: "/work" });
+  assert.deepEqual(files?.status, { state: "connected" });
   const bySlot = Object.fromEntries(read.mcp.map((m) => [m.slot, m]));
   assert.equal(bySlot.search?.connection, search);
   assert.equal(bySlot.search?.origin?.madeFor, undefined, "picked, so it isn't the agent's");
+  assert.equal(bySlot.search?.instance, "slot:search");
   assert.equal(bySlot.files?.origin?.madeFor, agent);
   assert.equal(bySlot.files?.origin?.madeBy, s.callerActor.actorId);
+  assert.equal(bySlot.files?.origin?.kind, "files");
   assert.equal(bySlot.files?.origin?.target, "a stand-in server");
+  assert.equal(bySlot.files?.instance, files?.instance);
   assert.deepEqual(bySlot.files?.status, { state: "connected", tools: [{ name: "read" }] });
+  assert.deepEqual(
+    read.units.map((one) => one.unit),
+    ["connection", "files"],
+  );
+  // What a unit made goes with the unit.
+  await assert.rejects(
+    s.calls.connections.remove({ connection: bySlot.files?.connection as string }),
+    refused("state"),
+  );
 
   assert.ok((await s.bindingsOf(PERSON)).some((b) => b.provider === agent && b.export === "chat"));
   const held = await s.bindingsOf(agent);
@@ -401,12 +583,17 @@ test("creating with a create need and a pick: bound, exposed, recorded, chat to 
 
   // The record is what only management knows: no status, no exposure of a connection.
   const kept = JSON.parse(readFileSync(join(s.dir, "manager.json"), "utf8"));
-  assert.deepEqual(kept.agents[agent], {
-    provider: s.agentActor.actorId,
-    creatable: "full",
-    instructions: "Be full.",
-    skills: ["notes"],
-  });
+  assert.deepEqual(
+    { ...kept.agents[agent], units: kept.agents[agent].units.length },
+    {
+      provider: s.agentActor.actorId,
+      creatable: "plain",
+      instructions: "Be plain.",
+      skills: ["notes"],
+      units: 1,
+    },
+  );
+  assert.equal(kept.agents[agent].units[0].values.folder, "/work");
   assert.deepEqual(readdirSync(join(s.dir, "skills", "notes")).sort(), ["SKILL.md", "more"]);
   assert.equal(statSync(s.dir).mode & 0o777, 0o700);
 
@@ -423,7 +610,8 @@ const FAILURES: [string, (s: Awaited<ReturnType<typeof setup>>) => void][] = [
   ["the provider making the agent", (s) => (s.script.fail = "agent")],
   ["binding its settings", (s) => (s.script.settings = "nothing")],
   ["reading a skill's file", (s) => (s.script.fail = "skill")],
-  ["making the connection", (s) => (s.script.fail = "connection")],
+  ["applying the unit", (s) => (s.script.fail = "apply")],
+  ["the unit making other connections than it said", (s) => (s.script.wrongSlot = "other")],
   ["exposing a connection", (s) => (s.script.noTools = true)],
   ["exposing its chat", (s) => (s.script.chat = "nothing")],
 ];
@@ -469,7 +657,7 @@ test("mid-creation the agent can't be seen or saved, and its settings are alread
       if ((await s.bindingsOf(actor)).some((b) => b.consumer === actor && b.slot === "settings"))
         settingsBound = true;
   };
-  s.script.fail = "connection";
+  s.script.fail = "apply";
   await assert.rejects(s.makeFull(search));
   assert.deepEqual(listed, [bystander]);
   assert.equal(settingsBound, true);
@@ -481,7 +669,7 @@ test("undoing closes the agent even when its provider won't remove it", async (t
   const s = await setup(t);
   const search = await s.picked();
   const actors = await s.openActors();
-  s.script.fail = "connection";
+  s.script.fail = "apply";
   s.script.alsoFail = "agent.remove";
   await assert.rejects(s.makeFull(search));
   assert.deepEqual(await s.openActors(), actors);
@@ -504,13 +692,15 @@ test("a skill an undone creation added stays if another agent was given it meanw
     name: "Other",
     answers: {},
   });
-  const search = await s.picked();
+  // The skill arrives with the first unit; the second is where it fails.
   s.script.during = async () => {
-    delete s.script.during;
-    await s.calls.agents.expose({ agent: other, skill: "notes" });
+    s.script.during = async () => {
+      delete s.script.during;
+      await s.calls.agents.expose({ agent: other, skill: "notes" });
+      throw new Refused("failed", "On cue.");
+    };
   };
-  s.script.fail = "connection";
-  await assert.rejects(s.makeFull(search));
+  await assert.rejects(s.makeStack([s.unit("files", { folder: "/a" }), s.unit("computer")]));
   assert.deepEqual((await s.calls.skills.get({ name: "notes" })).agents, [other]);
 });
 
@@ -518,7 +708,7 @@ test("a connection or agent whose provider has gone can still be removed", async
   const s = await setup(t);
   const connection = await s.picked();
   const agent = await s.makeFull(connection);
-  for (const provider of [s.mcpActor.actorId, s.agentActor.actorId]) {
+  for (const provider of [s.mcpActor.actorId, s.unitsActor.actorId, s.agentActor.actorId]) {
     const { bindings } = await s.person.slots.bindings.call.list({ actor: s.management.actorId });
     const slot = bindings.find((b) => b.provider === provider)?.slot as string;
     await s.person.slots.grants.call.unexpose({ to: s.management.actorId, slot });
@@ -531,19 +721,15 @@ test("a connection or agent whose provider has gone can still be removed", async
   assert.deepEqual((await s.calls.connections.list({})).connections, []);
 });
 
-test("a pick that names no connection refuses before anything is made", async (t) => {
+test("what can't be made refuses before anything is made", async (t) => {
   const s = await setup(t);
   const actors = await s.openActors();
+  await assert.rejects(s.makeFull("act_nothing"), refused("invalid"));
+  await assert.rejects(s.makeStack([s.unit("files")]), refused("invalid"));
   await assert.rejects(
-    s.calls.agents.create({
-      provider: s.agentActor.actorId,
-      creatable: "full",
-      name: "Fay",
-      answers: { folder: "/work" },
-    }),
+    s.makeStack([{ provider: s.unitsActor.actorId, unit: "nothing" }]),
     refused("invalid"),
   );
-  await assert.rejects(s.makeFull("act_nothing"));
   assert.deepEqual(await s.openActors(), actors);
   await assert.rejects(
     s.calls.agents.create({
@@ -560,11 +746,11 @@ test("a pick that names no connection refuses before anything is made", async (t
   );
 });
 
-test("a creatable's skill whose name is here keeps the one here, and survives a failure", async (t) => {
+test("a unit's skill whose name is here keeps the one here, and survives a failure", async (t) => {
   const s = await setup(t);
   await s.calls.skills.add({ files: { "SKILL.md": SKILL("notes", "The person's own.") } });
   const search = await s.picked();
-  s.script.fail = "connection";
+  s.script.fail = "apply";
   await assert.rejects(s.makeFull(search));
   assert.match((await s.calls.skills.get({ name: "notes" })).text, /person's own/);
   delete s.script.fail;
@@ -623,14 +809,28 @@ test("an agent sees only its own settings, and only it hears that they changed",
   assert.equal(s.heard.get(b) ?? 0, 0);
 });
 
-test("removing an agent takes the connections made for it, and leaves those it was given", async (t) => {
+test("removing an agent takes its units last first, and leaves what it was given", async (t) => {
   const s = await setup(t);
   const search = await s.picked();
-  const agent = await s.makeFull(search);
-  const made = (await s.calls.agents.get({ agent })).mcp.find((m) => m.slot === "files")
-    ?.connection as string;
+  const agent = await s.makeStack([
+    s.unit("computer"),
+    s.unit("terminal"),
+    s.own("connection", { connection: search, slot: "search" }),
+  ]);
+  const read = await s.calls.agents.get({ agent });
+  const made = read.mcp.find((m) => m.slot === "terminal")?.connection as string;
+  assert.deepEqual(s.given.applied.at(-1)?.needs, { computer: "computer-handle" });
+  const [computer, terminal] = read.units.filter((one) => one.provider === s.unitsActor.actorId);
+  assert.deepEqual(terminal?.needs, { computer: computer?.instance });
+  // A unit another needs can't go, and the one that needs it can.
+  await assert.rejects(
+    s.calls.agents.removeUnit({ agent, instance: computer?.instance as string }),
+    refused("state"),
+  );
+
   await s.calls.agents.remove({ agent });
-  assert.deepEqual(s.given.removed, [made, agent]);
+  assert.equal(s.given.removed.length, 3);
+  assert.equal(s.given.removed[2], agent, "the base goes last");
   const open = await s.openActors();
   assert.ok(!open.includes(agent) && !open.includes(made) && open.includes(search));
   assert.deepEqual((await s.calls.agents.list({})).agents, []);
@@ -642,7 +842,18 @@ test("removing an agent takes the connections made for it, and leaves those it w
   assert.ok(!(await s.bindingsOf(PERSON)).some((b) => b.provider === agent));
 });
 
-test("an agent keeps what it's for, and stacks aren't served yet", async (t) => {
+test("a unit that can't go leaves the agent to be tried again", async (t) => {
+  const s = await setup(t);
+  const agent = await s.makeStack([s.unit("computer"), s.unit("terminal")]);
+  s.script.fail = "unit.remove";
+  await assert.rejects(s.calls.agents.remove({ agent }));
+  assert.equal((await s.calls.agents.get({ agent })).units.length, 2);
+  delete s.script.fail;
+  await s.calls.agents.remove({ agent });
+  assert.deepEqual((await s.calls.agents.list({})).agents, []);
+});
+
+test("an agent is told what it's for", async (t) => {
   const s = await setup(t);
   const { agent } = await s.calls.agents.create({
     provider: s.agentActor.actorId,
@@ -652,21 +863,433 @@ test("an agent keeps what it's for, and stacks aren't served yet", async (t) => 
     purpose: "Keeps the docs tidy.",
   });
   assert.equal((await s.calls.agents.get({ agent })).purpose, "Keeps the docs tidy.");
+  assert.equal((await s.calls.agents.get({ agent })).instructions, "Be plain.");
   assert.equal((await s.calls.agents.list({})).agents[0]?.purpose, "Keeps the docs tidy.");
+  const channel = s.agentChannel(agent);
+  await until(() => channel.slots.settings.bound);
+  assert.equal(
+    (await channel.slots.settings.call.get({})).instructions,
+    "Be plain.\n\nWhat you are for: Keeps the docs tidy.",
+  );
+});
+
+test("every unit on offer is listed, management's own among them", async (t) => {
+  const s = await setup(t);
   const { bases, units } = await s.calls.agents.units({});
   assert.deepEqual(
-    bases.map((one) => one.id),
-    ["plain", "full"],
+    bases.map((one) => [one.id, one.providerName]),
+    [
+      ["plain", "Agents"],
+      ["asking", "Agents"],
+    ],
   );
-  assert.deepEqual(units, []);
-  assert.deepEqual((await s.calls.agents.templates({})).templates, []);
+  assert.deepEqual(
+    units.map((one) => [one.id, one.providerName]),
+    [
+      ["skill", "Management"],
+      ["connection", "Management"],
+      ["files", "Units"],
+      ["computer", "Units"],
+      ["terminal", "Units"],
+    ],
+  );
+  await s.calls.skills.add({ files: { "SKILL.md": SKILL("library-one") } });
+  const again = (await s.calls.agents.units({})).units[0];
+  assert.deepEqual(
+    again?.form[0]?.options?.map((one) => one.value),
+    ["library-one"],
+  );
+});
+
+test("a stack is checked before anything runs, each problem on its unit", async (t) => {
+  const s = await setup(t);
+  const check = async (units: object[]) =>
+    (await s.calls.agents.check({ stack: { base: s.base, units } } as never)).problems;
+  assert.deepEqual(await check([s.unit("files", { folder: "/a" })]), []);
+  assert.deepEqual(s.given.checked.at(-1), {
+    unit: "files",
+    values: { folder: "/a" },
+    secrets: [],
+  });
+
+  // What the form says.
+  assert.deepEqual(await check([s.unit("files")]), [
+    { field: "folder", message: "Folder must be filled in.", unit: 0 },
+  ]);
+  assert.match(
+    (await check([s.unit("files", { folder: "/a", token: "x" })]))[0]?.message as string,
+    /secret/,
+  );
+  // The same connection from two units, and what an answer adds counts.
+  assert.match(
+    (
+      await check([
+        s.unit("files", { folder: "/a", extra: true }),
+        s.own("connection", { connection: s.management.actorId, slot: "extra" }),
+      ])
+    )[0]?.message as string,
+    /The name extra is already taken/,
+  );
+  // What a unit needs must come from above it.
+  assert.match((await check([s.unit("terminal")]))[0]?.message as string, /from a unit above/);
+  assert.match(
+    (await check([s.unit("terminal"), s.unit("computer")]))[0]?.message as string,
+    /from a unit above/,
+  );
+  assert.match(
+    (await check([s.unit("computer"), s.unit("computer"), s.unit("terminal")]))[0]
+      ?.message as string,
+    /pick which/,
+  );
+  assert.deepEqual(
+    await check([
+      s.unit("computer"),
+      s.unit("computer"),
+      s.unit("terminal", undefined, { needs: { computer: 1 } }),
+    ]),
+    [],
+  );
+  assert.match(
+    (
+      await check([
+        s.unit("computer"),
+        s.unit("files", { folder: "/a" }, { needs: { computer: 0 } }),
+      ])
+    )[0]?.message as string,
+    /doesn't need computer/,
+  );
+  // The unit's own logic, by what it says; it sees a secret's name only.
+  s.script.problems = [{ field: "folder", message: "No such folder." }];
+  assert.deepEqual(
+    await check([{ ...s.unit("files", { folder: "/a" }), secrets: { token: "hidden" } }]),
+    [{ field: "folder", message: "No such folder.", unit: 0 }],
+  );
+  assert.deepEqual(s.given.checked.at(-1)?.secrets, ["token"]);
+  delete s.script.problems;
+  // And the base.
+  assert.match(
+    (
+      await s.calls.agents.check({
+        stack: { base: { ...s.base, creatable: "nothing" }, units: [] },
+      })
+    ).problems[0]?.message as string,
+    /offers no/,
+  );
+});
+
+test("what an answer adds is made, confirmed and recorded", async (t) => {
+  const s = await setup(t);
+  const agent = await s.makeStack([s.unit("files", { folder: "/a", extra: true })]);
+  assert.deepEqual((await s.calls.agents.get({ agent })).mcp.map((m) => m.slot).sort(), [
+    "extra",
+    "files",
+  ]);
+});
+
+test("a unit that doesn't give the result it declared undoes the creation", async (t) => {
+  const s = await setup(t);
+  const actors = await s.openActors();
+  s.script.noResults = true;
+  await assert.rejects(s.makeStack([s.unit("computer"), s.unit("terminal")]), refused("failed"));
+  assert.deepEqual(await s.openActors(), actors);
+});
+
+test("the Skill and Connection units are exposures, and read back as units", async (t) => {
+  const s = await setup(t);
+  await s.calls.skills.add({ files: { "SKILL.md": SKILL("handy") } });
+  const connection = await s.picked();
+  const agent = await s.makeStack([
+    s.own("skill", { skill: "handy" }),
+    s.own("connection", { connection, slot: "search" }),
+  ]);
+  const read = await s.calls.agents.get({ agent });
+  assert.deepEqual(
+    read.units.map((one) => [one.instance, one.unit, one.values]),
+    [
+      ["skill:handy", "skill", { skill: "handy" }],
+      ["slot:search", "connection", { connection, slot: "search" }],
+    ],
+  );
+  // No record of a unit: it is what is exposed. An exposure made by hand reads the same way.
+  const kept = JSON.parse(readFileSync(join(s.dir, "manager.json"), "utf8"));
+  assert.deepEqual(kept.agents[agent].units, []);
+
+  await s.calls.agents.removeUnit({ agent, instance: "skill:handy" });
+  await s.calls.agents.removeUnit({ agent, instance: "slot:search" });
+  const after = await s.calls.agents.get({ agent });
+  assert.deepEqual([after.units, after.skills, after.mcp], [[], [], []]);
   await assert.rejects(
-    s.calls.agents.create({
-      stack: { base: { provider: s.agentActor.actorId, creatable: "plain" }, units: [] },
-      name: "Stacked",
-    }),
-    refused("unimplemented"),
+    s.calls.agents.removeUnit({ agent, instance: "slot:settings" }),
+    refused("unknown"),
+    "its other slots aren't units",
   );
+  assert.ok((await s.bindingsOf(agent)).some((b) => b.slot === "settings"));
+  await assert.rejects(s.makeStack([s.own("skill", { skill: "nothing" })]), refused("invalid"));
+});
+
+test("a unit can be added to a living agent and removed, with what it made", async (t) => {
+  const s = await setup(t);
+  const agent = await s.makeStack([s.unit("computer")]);
+  const channel = s.agentChannel(agent);
+  await until(() => channel.slots.settings.bound);
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  const computer = (await s.calls.agents.get({ agent })).units[0]?.instance as string;
+
+  const { instance } = await s.calls.agents.addUnit({
+    agent,
+    unit: s.unit("terminal"),
+    needs: { computer },
+  });
+  assert.deepEqual(s.given.applied.at(-1)?.needs, { computer: "computer-handle" });
+  const read = await s.calls.agents.get({ agent });
+  assert.equal(read.mcp[0]?.slot, "terminal");
+  assert.equal(read.mcp[0]?.instance, instance);
+  await assert.rejects(
+    s.calls.agents.addUnit({ agent, unit: s.unit("terminal") }),
+    refused("invalid"),
+    "that connection is already there",
+  );
+  assert.deepEqual(
+    (await s.calls.agents.check({ agent, unit: s.unit("terminal") })).problems.map(
+      (p) => p.message,
+    ),
+    ["The name terminal is already taken."],
+  );
+
+  const added = await s.calls.agents.addUnit({ agent, unit: s.unit("files", { folder: "/a" }) });
+  await until(() => (s.heard.get(agent) ?? 0) >= 2);
+  assert.deepEqual(
+    (await channel.slots.settings.call.get({})).skills.map((one) => one.name),
+    ["notes"],
+  );
+  const actors = await s.openActors();
+  await s.calls.agents.removeUnit({ agent, instance: added.instance });
+  assert.equal((await s.openActors()).length, actors.length - 1);
+  assert.deepEqual((await channel.slots.settings.call.get({})).skills, []);
+  await s.calls.agents.removeUnit({ agent, instance });
+  await s.calls.agents.removeUnit({ agent, instance: computer });
+  assert.deepEqual((await s.calls.agents.get({ agent })).units, []);
+  await assert.rejects(s.calls.agents.removeUnit({ agent, instance }), refused("unknown"));
+});
+
+test("adding a unit is all or none on the living agent", async (t) => {
+  const s = await setup(t);
+  const agent = await s.makeStack([]);
+  const actors = await s.openActors();
+  const records = readFileSync(join(s.dir, "manager.json"), "utf8");
+  s.script.noTools = true;
+  await assert.rejects(s.calls.agents.addUnit({ agent, unit: s.unit("files", { folder: "/a" }) }));
+  delete s.script.noTools;
+  assert.deepEqual(await s.openActors(), actors);
+  assert.equal(readFileSync(join(s.dir, "manager.json"), "utf8"), records);
+  s.script.fail = "skill";
+  await assert.rejects(s.calls.agents.addUnit({ agent, unit: s.unit("files", { folder: "/a" }) }));
+  assert.deepEqual(await s.openActors(), actors);
+  assert.equal(readFileSync(join(s.dir, "manager.json"), "utf8"), records);
+  assert.deepEqual((await s.calls.agents.get({ agent })).units, []);
+});
+
+test("a template prefills a stack, nothing in it is locked, and it holds no secret", async (t) => {
+  const s = await setup(t);
+  const template = {
+    id: "reader",
+    title: "Reader",
+    description: "Reads.",
+    base: { provider: "Agents", creatable: "plain" },
+    units: [{ provider: "Units", unit: "files", values: { folder: "/prefilled" } }],
+  };
+  await s.calls.agents.saveTemplate(template);
+  assert.deepEqual((await s.calls.agents.templates({})).templates, [template]);
+
+  const secret = `secret-${crypto.randomUUID()}`;
+  const { agent } = await s.calls.agents.create({
+    template: "reader",
+    name: "From it",
+    fill: [{ values: { extra: true }, secrets: { token: secret } }],
+  });
+  assert.deepEqual(s.given.applied.at(-1)?.values, { folder: "/prefilled", extra: true });
+  assert.deepEqual(s.given.applied.at(-1)?.secrets, { token: secret });
+  assert.equal((await s.calls.agents.get({ agent })).template, "reader");
+  assert.equal((await s.calls.agents.list({})).agents[0]?.template, "reader");
+  const { agent: changed } = await s.calls.agents.create({
+    template: "reader",
+    name: "Changed",
+    fill: [{ values: { folder: "/mine" } }],
+  });
+  assert.deepEqual((await s.calls.agents.get({ agent: changed })).units[0]?.values, {
+    folder: "/mine",
+  });
+
+  // A copy changes without its source being touched.
+  await s.calls.agents.saveTemplate({ ...template, id: "copy", from: "reader", units: [] });
+  await s.calls.agents.removeTemplate({ id: "reader" });
+  assert.deepEqual(
+    (await s.calls.agents.templates({})).templates.map((one) => [one.id, one.from]),
+    [["copy", "reader"]],
+  );
+  await assert.rejects(s.calls.agents.removeTemplate({ id: "reader" }), refused("unknown"));
+
+  await assert.rejects(
+    s.calls.agents.saveTemplate({
+      ...template,
+      units: [{ provider: "Units", unit: "files", values: { token: "kept" } }],
+    }),
+    refused("invalid"),
+  );
+  await assert.rejects(
+    s.calls.agents.saveTemplate({
+      ...template,
+      units: [{ provider: "Units", unit: "nothing" }],
+    }),
+    refused("unknown"),
+  );
+  await assert.rejects(
+    s.calls.agents.create({ template: "nothing", name: "X" }),
+    refused("unknown"),
+  );
+  await assert.rejects(
+    s.calls.agents.create({ template: "copy", name: "X", fill: [{}] }),
+    refused("invalid"),
+  );
+
+  const everything = [
+    readFileSync(join(s.dir, "manager.json"), "utf8"),
+    JSON.stringify(await s.calls.agents.get({ agent })),
+    JSON.stringify(s.hub.state.audit(0, 100_000)),
+  ].join("\n");
+  assert.ok(!everything.includes(secret));
+});
+
+test("a problem with a long value still comes back", async (t) => {
+  const s = await setup(t);
+  const { problems } = await s.calls.agents.check({
+    stack: {
+      base: s.base,
+      units: [s.own("connection", { connection: s.management.actorId, slot: "x".repeat(3000) })],
+    },
+  } as never);
+  assert.ok(problems.length > 0);
+  assert.ok(problems.every((one) => one.message.length <= 2000));
+});
+
+test("an empty name is no name", async (t) => {
+  const s = await setup(t);
+  const agent = await s.makeStack([]);
+  const connection = await s.picked();
+  const unit = s.own("connection", { connection, slot: "" });
+  assert.deepEqual((await s.calls.agents.check({ agent, unit } as never)).problems, [
+    { field: "slot", message: "Name must be filled in." },
+  ]);
+});
+
+test("a name the agent already holds is refused in the check", async (t) => {
+  const s = await setup(t);
+  const agent = await s.makeStack([]);
+  const connection = await s.picked();
+  const unit = s.own("connection", { connection, slot: "settings" });
+  assert.deepEqual(
+    (await s.calls.agents.check({ agent, unit } as never)).problems.map((one) => one.message),
+    ["The name settings is already taken."],
+  );
+});
+
+test("changes to one agent happen one at a time", async (t) => {
+  const s = await setup(t);
+  await s.calls.skills.add({ files: { "SKILL.md": SKILL("handy") } });
+  const agent = await s.makeStack([]);
+  const skill = s.own("skill", { skill: "handy" });
+  const [one, two] = await Promise.allSettled([
+    s.calls.agents.addUnit({ agent, unit: skill } as never),
+    s.calls.agents.addUnit({ agent, unit: skill } as never),
+  ]);
+  assert.equal(one.status, "fulfilled");
+  assert.equal(two.status, "rejected");
+  assert.equal((await s.calls.agents.get({ agent })).skills.length, 1);
+
+  // Removing the agent waits for the unit being added, so the unit goes with it.
+  const added = s.calls.agents.addUnit({ agent, unit: s.unit("computer") });
+  await s.calls.agents.remove({ agent });
+  await added;
+  assert.equal(s.given.removed.length, 2);
+  assert.equal(s.given.removed[1], agent);
+});
+
+test("a creation that fails leaves a skill another creation is using", async (t) => {
+  const s = await setup(t);
+  const stack = [s.unit("files", { folder: "/a" }), s.unit("computer")];
+  let calls = 0;
+  let held = false;
+  let release = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let second: Promise<string> | undefined;
+  s.script.during = async () => {
+    calls++;
+    if (calls === 2) {
+      second = s.makeStack(stack, "Second");
+      await until(() => held);
+      throw new Refused("failed", "On cue.");
+    }
+    if (calls === 4) {
+      held = true;
+      await gate;
+    }
+  };
+  await assert.rejects(s.makeStack(stack, "First"));
+  release();
+  const agent = (await second) as string;
+  assert.deepEqual((await s.calls.skills.get({ name: "notes" })).agents, [agent]);
+});
+
+test("what came with a unit goes with the unit", async (t) => {
+  const s = await setup(t);
+  const agent = await s.makeStack([s.unit("files", { folder: "/a" })]);
+  await assert.rejects(s.calls.agents.unexpose({ agent, slot: "files" }), refused("state"));
+  await assert.rejects(s.calls.agents.unexpose({ agent, skill: "notes" }), refused("state"));
+  assert.equal((await s.calls.agents.get({ agent })).mcp.length, 1);
+  // The library is the person's: a skill taken out of it leaves the unit's list too.
+  await s.calls.skills.remove({ name: "notes" });
+  const kept = JSON.parse(readFileSync(join(s.dir, "manager.json"), "utf8"));
+  assert.deepEqual(kept.agents[agent].units[0].skills, []);
+});
+
+test("a Connection unit stands as its connection does", async (t) => {
+  const s = await setup(t);
+  const connection = await s.picked();
+  const agent = await s.makeStack([s.own("connection", { connection, slot: "search" })]);
+  assert.equal((await s.calls.agents.get({ agent })).units[0]?.status.state, "connected");
+  const { bindings } = await s.person.slots.bindings.call.list({ actor: s.management.actorId });
+  const slot = bindings.find((b) => b.provider === s.mcpActor.actorId)?.slot as string;
+  await s.person.slots.grants.call.unexpose({ to: s.management.actorId, slot });
+  for (let i = 0; (await s.calls.agents.get({ agent })).units[0]?.status.state !== "down"; i++) {
+    assert.ok(i < 300, "it never read as down");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+});
+
+test("an agent from before units reads and goes as it did", async (t) => {
+  const s = await setup(t);
+  const { agent } = await s.calls.agents.create({
+    provider: s.agentActor.actorId,
+    creatable: "plain",
+    name: "Old",
+    answers: {},
+  });
+  const connection = await s.picked();
+  await s.calls.agents.expose({ agent, connection, as: "search" });
+  await s.restart((kept) => {
+    delete kept.templates;
+    delete (kept.agents as unknown as Record<string, { units?: unknown }>)[agent]?.units;
+  });
+  const read = await s.calls.agents.get({ agent });
+  assert.deepEqual(
+    read.units.map((one) => one.instance),
+    ["slot:search"],
+  );
+  assert.deepEqual((await s.calls.agents.templates({})).templates, []);
+  await s.calls.agents.remove({ agent });
+  assert.deepEqual((await s.calls.agents.list({})).agents, []);
 });
 
 test("exposing a connection is a Hub binding and nothing else; removing one takes its exposures", async (t) => {

@@ -188,15 +188,11 @@ test("it offers Assistant, and refuses what it doesn't have", async (t) => {
   const s = await setup(t);
   const { creatables } = await s.agents.creatable({});
   assert.deepEqual(
-    creatables.map((one) => [one.id, one.title, one.asks, one.skills, one.mcp]),
-    [["assistant", "Assistant", [], [], []]],
+    creatables.map((one) => [one.id, one.title, one.asks]),
+    [["assistant", "Assistant", []]],
   );
   await assert.rejects(
     s.agents.create({ creatable: "other", name: "X", answers: {} }),
-    refused("unknown"),
-  );
-  await assert.rejects(
-    s.agents.skill({ creatable: "assistant", name: "review", path: "SKILL.md" }),
     refused("unknown"),
   );
   for (const call of [s.agents.status, s.agents.start, s.agents.stop, s.agents.remove])
