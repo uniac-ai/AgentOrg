@@ -11,8 +11,6 @@ const USAGE = `Usage: agentorg [command] [--home DIR]
 
   (no command) [--port N] [--no-open]       run AgentOrg: the Hub, your gateway and the shell
   open                                      sign a browser in to the running app
-  build [package-dir]                       build a package into a .agentorg archive, in a
-                                            checkout of this repository
   hub [--port N]                            run a bare Hub, without the shell
   actors | bindings | exports | audit       each one's list
   bind <consumer.slot> <provider.export>    hub.grants.bind
@@ -44,9 +42,9 @@ const { values, positionals } = parseArgs({
   strict: false,
 });
 const [command, ...rest] = positionals as string[];
-// `build` and `hub` are the SDK's, which reads their options itself, strictly. Everything else is
+// `hub` is the SDK's, which reads its options itself, strictly. Everything else is
 // this command's: an option it doesn't know is a mistake, never a reason to start the app.
-if (command !== "build" && command !== "hub") {
+if (command !== "hub") {
   const unknown = Object.keys(values).find(
     (name) => !["home", "port", "no-open", "help", "version"].includes(name),
   );
@@ -216,7 +214,7 @@ else if (command === "open") {
     write(process.stderr, "No browser could be opened here.");
     process.exit(1);
   }
-} else if (command === "build" || command === "hub") await import("@agentorg/sdk/cli");
+} else if (command === "hub") await import("@agentorg/sdk/cli");
 else {
   let call: ReturnType<typeof personCall>;
   try {

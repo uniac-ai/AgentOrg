@@ -37,8 +37,7 @@ const quiet: Log = { info() {}, warn() {}, error() {} };
 
 /**
  * Run the built-in MCP provider as an Actor exporting `mcp.provider@1` as `provider`. It offers two
- * kinds, `url` and `command`; a server it starts runs with this process's rights, outside the
- * Hub's sandbox. Connections made earlier are joined again at the start.
+ * kinds, `url` and `command`; a server it starts runs with this process's rights. Connections made earlier are joined again at the start.
  */
 export async function startMcpProvider(options: McpProviderOptions): Promise<McpProvider> {
   const log = options.log ?? quiet;

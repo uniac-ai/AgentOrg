@@ -1,11 +1,24 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { accountLogin, llmSession } from "@agentorg/interfaces";
+import { defineActor } from "@agentorg/sdk";
 import { createTestContext } from "@agentorg/sdk/testing";
-import model from "../src/model.ts";
+import type { Store } from "../src/account.ts";
+import type { Fetch } from "../src/oauth.ts";
+import { serveChatGPT } from "../src/serve.ts";
 import { completed, delta, type FakeOpenAI, fakeOpenAI, text } from "./fake-openai.ts";
 
 const REDIRECT = "http://127.0.0.1:4321/oauth/chatgpt";
-type Model = ReturnType<typeof createTestContext<typeof model.slots, typeof model.exports>>;
+/** ChatGPT's own code, on a way out and a store a test can change. */
+const modelOf = (web: { fetch: Fetch }, store: Store) =>
+  defineActor({
+    exports: { login: accountLogin, session: llmSession },
+    start(ctx) {
+      serveChatGPT(ctx.exports, { fetch: (request) => web.fetch(request), store, log: ctx.log });
+    },
+  });
+type Definition = ReturnType<typeof modelOf>;
+type Model = ReturnType<typeof createTestContext<Definition["slots"], Definition["exports"]>>;
 /** The fields of the replies these tests read. */
 interface Reply {
   authorizeUrl: string;
@@ -13,21 +26,21 @@ interface Reply {
   output: unknown[];
 }
 
-/** The model Actor with the fake bound to `web` and an in-memory store bound to `store`. */
+/** ChatGPT with the fake as its way out and an in-memory store. */
 async function setup(t: test.TestContext, openai?: FakeOpenAI) {
   const fake = openai ?? (await fakeOpenAI());
   const values = new Map<string, unknown>();
-  const actor = createTestContext(model, { actorId: "chatgpt", module: "model" });
-  await actor.start();
-  actor.bind("web", (request) => fake.handle(request));
-  actor.bind("store", {
-    get: ({ key }) => (values.has(key) ? { value: values.get(key) as never } : {}),
-    set: ({ key, value }) => {
+  const web: { fetch: Fetch } = { fetch: (request) => fake.handle(request) };
+  const store: Store = {
+    get: async ({ key }) => (values.has(key) ? { value: values.get(key) as never } : {}),
+    set: async ({ key, value }) => {
       values.set(key, value);
       return {};
     },
-    delete: ({ key }) => ({ deleted: values.delete(key) }),
-  });
+    delete: async ({ key }) => ({ deleted: values.delete(key) }),
+  };
+  const actor = createTestContext(modelOf(web, store), { actorId: "chatgpt", module: "model" });
+  await actor.start();
   // Every test ends by checking no token the fake issued reached anything outside the Actor.
   const seen: unknown[] = [];
   t.after(() => assertNoSecrets(fake, [actor.emitted, actor.logs, seen]));
@@ -41,7 +54,7 @@ async function setup(t: test.TestContext, openai?: FakeOpenAI) {
       throw error;
     }
   };
-  return { actor, fake, values, call };
+  return { actor, fake, values, call, web };
 }
 
 function assertNoSecrets(fake: FakeOpenAI, outside: unknown[]) {
@@ -392,7 +405,7 @@ test("cancel stops a response that is still streaming", async (t) => {
   const requested = new Promise<void>((resolve) => {
     seen = resolve;
   });
-  s.actor.bind("web", async (request) => {
+  s.web.fetch = async (request) => {
     const response = await handle(request);
     if (!request.url.endsWith("/v1/responses")) return response;
     seen();
@@ -408,7 +421,7 @@ test("cancel stops a response that is still streaming", async (t) => {
       }),
       { headers: response.headers },
     );
-  });
+  };
   const reply = s.call("session", "respond", {
     requestId: "slow",
     model: "gpt-test",
@@ -428,12 +441,12 @@ test("each consumer gets its own streamed text, and cancels only its own request
   await signIn(s);
   const handle = s.fake.handle;
   const release = new Map<string, () => void>();
-  s.actor.bind("web", async (request) => {
+  s.web.fetch = async (request) => {
     if (!request.url.endsWith("/v1/responses")) return handle(request);
     const who = JSON.parse(await request.clone().text()).instructions as string;
     await new Promise<void>((resolve) => release.set(who, resolve));
     return handle(request);
-  });
+  };
   s.fake.script(
     { events: [delta("for alice"), completed([text("for alice")])] },
     { events: [delta("for bob"), completed([text("for bob")])] },
@@ -460,24 +473,6 @@ test("each consumer gets its own streamed text, and cancels only its own request
   assert.deepEqual(
     deltas.map((e) => [e.to, (e.payload as { text: string }).text]),
     [["alice", "for alice"]],
-  );
-});
-
-test("a store or web slot left unbound fails clean", async (t) => {
-  const actor = createTestContext(model, { actorId: "chatgpt", module: "model" });
-  await actor.start();
-  await assert.rejects(actor.call("login", "status", {}), { name: "NotConnected" });
-  const s = await setup(t);
-  await signIn(s);
-  s.actor.unbind("web");
-  await assert.rejects(
-    s.call("session", "respond", {
-      requestId: "r",
-      model: "gpt-test",
-      instructions: "",
-      input: [],
-    }),
-    { name: "NotConnected" },
   );
 });
 
@@ -551,7 +546,7 @@ test("a cancel before OpenAI answers is a cancel, not an outage", async (t) => {
   const requested = new Promise<void>((resolve) => {
     seen = resolve;
   });
-  s.actor.bind("web", (request) => {
+  s.web.fetch = (request) => {
     if (!request.url.endsWith("/v1/responses")) return handle(request);
     seen();
     // OpenAI hasn't answered yet: the fetch ends only when the request is aborted.
@@ -560,7 +555,7 @@ test("a cancel before OpenAI answers is a cancel, not an outage", async (t) => {
         reject(new DOMException("aborted", "AbortError")),
       ),
     );
-  });
+  };
   const reply = s.call("session", "respond", {
     requestId: "early",
     model: "gpt-test",

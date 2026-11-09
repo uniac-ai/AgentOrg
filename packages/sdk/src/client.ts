@@ -48,16 +48,10 @@ export interface ServeHandlers {
   serveHttp(serve: Serve): (stream: Duplex) => Promise<void>;
 }
 
-/**
- * Where the channel goes: the Hub's WebSocket address with the Actor's credential, or a pipe the
- * Hub made for this Actor's process, whose hello needs no credential.
- */
-export type ChannelOptions = ChannelBase &
-  (
-    | { hubUrl: string; credential: string; channel?: never }
-    | { channel: Duplex; hubUrl?: never; credential?: never }
-  );
-interface ChannelBase {
+export interface ChannelOptions {
+  /** The Hub's WebSocket address. */
+  hubUrl: string;
+  credential: string;
   actorId: string;
   /**
    * Whether this channel may replace one the Actor already has (the default). With `false`, a
@@ -175,10 +169,7 @@ export async function openChannel(options: ChannelOptions): Promise<Channel> {
     ready = resolve;
   });
   try {
-    const bytes =
-      options.channel !== undefined
-        ? options.channel
-        : await webSocketChannel(new WebSocket(options.hubUrl) as unknown as WebSocketLike);
+    const bytes = await webSocketChannel(new WebSocket(options.hubUrl) as unknown as WebSocketLike);
     session = new Session(bytes, {
       client: true,
       onStream(stream) {
@@ -194,7 +185,7 @@ export async function openChannel(options: ChannelOptions): Promise<Channel> {
       },
     });
   } catch {
-    throw new NotConnected(`the Hub at ${options.hubUrl ?? "its pipe"}`);
+    throw new NotConnected(`the Hub at ${options.hubUrl}`);
   }
 
   async function serveStream(header: Header, stream: YamuxStream, reader: FrameReader) {
@@ -310,7 +301,7 @@ export async function openChannel(options: ChannelOptions): Promise<Channel> {
     {
       op: "hello",
       actorId: options.actorId,
-      ...(options.credential === undefined ? {} : { credential: options.credential }),
+      credential: options.credential,
       ...(options.declares ? { declares: options.declares } : {}),
       ...(options.replace === false ? { replace: false } : {}),
     },
@@ -460,7 +451,7 @@ export async function connect<
   const log = options.log ?? quiet;
   // defineActor checks the names, as it does for a module.
   const definition = defineActor<S, X>({ slots, exports, start: options.start ?? (() => {}) });
-  const host = new ModuleHost("", slots, log);
+  const host = new ModuleHost(slots, log);
   const runtime = createRuntime(definition, {
     self: { actorId: options.actorId, module: "client" },
     log,

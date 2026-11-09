@@ -2,7 +2,7 @@
 // expect-error marker, and an unused marker is itself an error, so a wrong call that starts to
 // compile fails the test.
 import { z } from "zod";
-import { defineActor, defineInterface, defineWidget, event, method } from "../src/index.ts";
+import { defineActor, defineInterface, event, method } from "../src/index.ts";
 import { createTestContext } from "../src/testing.ts";
 
 const Card = z.object({ id: z.string(), title: z.string(), done: z.boolean() });
@@ -24,21 +24,6 @@ const shell = defineInterface({
   open: z.object({ cols: z.number(), rows: z.number() }),
 });
 const site = defineInterface({ name: "site", major: 1, kind: "http" });
-const Size = z.object({ width: z.number(), height: z.number() });
-const uiView = defineInterface({
-  name: "ui.view",
-  major: 1,
-  kind: "rpc",
-  methods: {
-    mount: method({
-      input: z.object({ theme: z.record(z.string(), z.string()), size: Size }),
-      output: z.object({}),
-    }),
-    resize: method({ input: z.object({ size: Size }), output: z.object({}) }),
-    unmount: method({ input: z.object({}), output: z.object({}) }),
-  },
-});
-
 export const actor = defineActor({
   slots: { board, shell, site },
   exports: { board },
@@ -94,29 +79,6 @@ defineActor({
   start(ctx) {
     // @ts-expect-error: `implement` needs a handler for every method.
     ctx.exports.board.implement({ list: async () => ({ cards: [] }) });
-  },
-});
-
-export const widget = defineWidget({
-  slots: { board },
-  exports: { view: uiView },
-  start(ctx) {
-    ctx.exports.view.implement({
-      mount(el, { size }) {
-        el.textContent = `${size.width}`;
-        return () => {};
-      },
-      resize(size) {
-        void size.height;
-      },
-    });
-    const wire = {
-      mount: async () => ({}),
-      resize: async () => ({}),
-      unmount: async () => ({}),
-    };
-    // @ts-expect-error: ui.view@1 is implemented with mount(el, options), not wire handlers.
-    ctx.exports.view.implement(wire);
   },
 });
 

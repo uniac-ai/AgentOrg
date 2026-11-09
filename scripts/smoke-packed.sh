@@ -3,8 +3,7 @@
 # packages inside it (dist/node_modules), installed from its tarball into an empty folder with a
 # cache of its own, and globally with a prefix of its own. Then `agentorg` runs on a fresh home:
 # first run must make ChatGPT, both providers and management, all connected; an agent must be made
-# with `agentorg call agents create`; the gateway must serve the shell and the sign-in page; and the Hub must build an agent's source, which resolves the SDK, the interfaces
-# and zod from the installed package. Last, this build must start on a home the published 0.0.5
+# with `agentorg call agents create`; and the gateway must serve the shell and the sign-in page. Last, this build must start on a home the published 0.0.5
 # made: its old Actors closed, and `agents create` working. Run after `npm run build`.
 set -euo pipefail
 
@@ -82,18 +81,12 @@ ls "$work/install/node_modules/@agentorg/cli/dist/node_modules/@agentorg"
 "$agentorg" --version
 
 step "install it globally, with a prefix of its own"
-# A global install nests the cli's dependencies in its own folder, esbuild's install script
-# included: it must find esbuild there, and the packages inside the cli must find their own.
+# A global install nests the cli's dependencies in its own folder: the packages inside the cli
+# must find their own there.
 global="$work/global"
 npm install --global --silent --no-audit --no-fund --prefix "$global" --cache "$work/cache" \
   "$tarball"
 "$global/bin/agentorg" --version
-node -e '
-  const { createRequire } = require("node:module");
-  const sdk = process.argv[1];
-  const esbuild = createRequire(`${sdk}/package.json`)("esbuild");
-  console.log(`esbuild ${esbuild.version} from the cli'"'"'s sdk: ${esbuild.transformSync("let a: number = 1", { loader: "ts" }).code.trim()}`);
-' "$(ls -d "$global"/lib/node_modules/@agentorg/cli/dist/node_modules/@agentorg/sdk)"
 
 step "run agentorg --no-open on a fresh home"
 home="$work/home"

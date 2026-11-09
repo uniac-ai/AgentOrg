@@ -10,13 +10,10 @@ interface Sender {
 }
 
 /**
- * One module's runtime, joined to a channel. Its slots and exports are named on the wire with a
- * prefix: none for a program that connects itself, `<module>.` for a module in a package Actor's
- * process, where several share one channel. It binds slots as the Hub's notices say, subscribes
+ * A program's runtime, joined to its channel. It binds slots as the Hub's notices say, subscribes
  * `on` handlers while a slot is usable, and serves the Hub's streams to its exports.
  */
 export class ModuleHost {
-  readonly #prefix: string;
   readonly #slots: InterfaceMap;
   readonly #log: Log;
   #runtime?: ModuleRuntime<InterfaceMap, InterfaceMap>;
@@ -29,15 +26,9 @@ export class ModuleHost {
   readonly #listened = new Map<string, Map<string, (() => void) | undefined>>();
   readonly #bindings = new Map<string, Binding>();
 
-  constructor(prefix: string, slots: InterfaceMap, log: Log) {
-    this.#prefix = prefix;
+  constructor(slots: InterfaceMap, log: Log) {
     this.#slots = slots;
     this.#log = log;
-  }
-
-  /** A local name as the Hub knows it. */
-  #wire(name: string): string {
-    return `${this.#prefix}${name}`;
   }
 
   get runtime(): ModuleRuntime<InterfaceMap, InterfaceMap> {
@@ -78,7 +69,7 @@ export class ModuleHost {
     const binding = this.#bindings.get(slot);
     if (!this.#channel || !binding || events.get(event)) return;
     const stop = this.#channel.subscribe(
-      this.#wire(slot),
+      slot,
       event,
       (payload) => {
         try {
@@ -128,15 +119,14 @@ export class ModuleHost {
       return;
     }
     const open = this.#channel;
-    const name = this.#wire(slot);
+    const name = slot;
     this.#bindings.set(
       slot,
       runtime.bind(slot, {
         call: (method, value) => open.call(name, method, value),
         open: (params) => open.open(name, params),
         fetch: async (request) => {
-          // HTTP/1.1 is spoken with node:http, loaded when an http slot is first used (a bundle
-          // such as the runner has it inlined).
+          // HTTP/1.1 is spoken with node:http, loaded when an http slot is first used.
           const { fetchOver } = await import("./client-http.js");
           const stream = await open.http(name);
           try {
@@ -162,8 +152,7 @@ export class ModuleHost {
   }
 
   /**
-   * A notice for a slot made at run time: bound (or usable again) with its exposure, or gone. Its
-   * name is the Actor's, with no module prefix: every module of the Actor has it.
+   * A notice for a slot made at run time: bound (or usable again) with its exposure, or gone.
    */
   onExposed(slot: string, exposure: ChannelExposure | undefined): void {
     if (!this.#channel) return;
@@ -219,9 +208,7 @@ export class ModuleHost {
    */
   attach(channel: Channel): void {
     this.#channel = channel;
-    for (const name of channel.bound)
-      if (name.startsWith(this.#prefix) && !channel.exposed.has(name))
-        this.onSlot(name.slice(this.#prefix.length), true);
+    for (const name of channel.bound) if (!channel.exposed.has(name)) this.onSlot(name, true);
     for (const [name, exposure] of channel.exposed) this.onExposed(name, exposure);
     void channel.closed.then(() => {
       for (const slot of [...this.#bindings.keys()]) this.onSlot(slot, false);
@@ -230,10 +217,3 @@ export class ModuleHost {
     });
   }
 }
-
-/** A `serve` stream renamed to a module's local export name. */
-export const localServe = (serve: Serve, local: string): Serve => ({ ...serve, export: local });
-
-/** A refusal for a name that names no module here. */
-export const noModule = (name: string) =>
-  new Refused("unknown", `${name} names no host module of this Actor.`);

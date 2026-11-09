@@ -4,11 +4,7 @@ import { z } from "zod";
 import {
   defineActor,
   defineInterface,
-  defineWidget,
   event,
-  type FrameRoot,
-  isFrameInterface,
-  isModuleDefinition,
   method,
   NotConnected,
   Refused,
@@ -36,37 +32,15 @@ const pipe = defineInterface({
   open: z.object({ name: z.string() }),
 });
 const site = defineInterface({ name: "site", major: 1, kind: "http" });
-const Size = z.object({ width: z.number(), height: z.number() });
-const frame = <const V extends number>(major: V) =>
-  defineInterface({
-    name: "ui.view",
-    major,
-    kind: "rpc",
-    methods: {
-      mount: method({
-        input: z.object({ theme: z.record(z.string(), z.string()), size: Size }),
-        output: z.object({}),
-      }),
-      resize: method({ input: z.object({ size: Size }), output: z.object({}) }),
-      unmount: method({ input: z.object({}), output: z.object({}) }),
-    },
-  });
-const view = frame(1);
-
 const pair = () => {
   const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
   return { readable, writable };
 };
 
-test("defineActor and defineWidget share one shape and record the placement", () => {
+test("defineActor keeps its slots and exports", () => {
   const start = () => {};
   const actor = defineActor({ slots: { notes }, exports: { site }, start });
-  const widget = defineWidget({ slots: { notes }, exports: { view }, start });
-  assert.equal(actor.placement, "host");
-  assert.equal(widget.placement, "view");
   assert.deepEqual(Object.keys(actor.slots), ["notes"]);
-  assert.ok(isModuleDefinition(actor) && isModuleDefinition(widget));
-  assert.equal(isModuleDefinition({ placement: "host" }), false);
   assert.deepEqual(defineActor({ start }).slots, {});
 });
 
@@ -75,12 +49,6 @@ test("slot and export names are checked", () => {
   assert.throws(() => defineActor({ slots: { "my-notes": notes }, start }), /valid slot name/);
   assert.throws(() => defineActor({ exports: { Notes: notes }, start }), /valid export name/);
   // The types refuse it too; this is the check for code that bypasses them.
-});
-
-test("only ui.view@1 is the in-frame interface", () => {
-  assert.equal(isFrameInterface(view), true);
-  assert.equal(isFrameInterface(frame(2)), false);
-  assert.equal(isFrameInterface(notes), false);
 });
 
 test("an rpc slot calls its bound provider, validates both ways, and fails clean when unbound", async () => {
@@ -238,40 +206,6 @@ test("stream and http slots and exports carry bytes and requests", async () => {
   assert.deepEqual(opened, [{ name: "b" }]);
   assert.equal(await (await t.fetch("web", new Request("http://x/hello"))).text(), "/hello");
   await assert.rejects(t.call("web", "read", {}), /isn't an rpc export/);
-});
-
-test("a ui.view@1 export mounts into an element, resizes and unmounts with validated input", async () => {
-  const seen: unknown[] = [];
-  const t = createTestContext(
-    defineWidget({
-      exports: { view },
-      start(ctx) {
-        ctx.exports.view.implement({
-          mount(el, options) {
-            seen.push(["mount", el, options]);
-            return () => seen.push("unmount");
-          },
-          resize(size) {
-            seen.push(["resize", size]);
-          },
-        });
-      },
-    }),
-  );
-  await t.start();
-  const el = {} as FrameRoot;
-  const options = { theme: { "--fg": "#000" }, size: { width: 300, height: 200 } };
-  const mounted = t.mount("view", el, options);
-  mounted.resize({ width: 10, height: 20 });
-  assert.throws(() => mounted.resize({ width: 10 }), Refused);
-  mounted.unmount();
-  assert.deepEqual(seen, [
-    ["mount", el, options],
-    ["resize", { width: 10, height: 20 }],
-    "unmount",
-  ]);
-  assert.throws(() => t.mount("view", el, { theme: {} }), Refused);
-  await assert.rejects(t.call("view", "mount", options), /isn't an rpc export/);
 });
 
 test("a handler learns who called, and an event can go to one subscriber", async () => {

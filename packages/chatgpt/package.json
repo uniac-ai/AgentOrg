@@ -22,11 +22,6 @@
     "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.json",
     "test": "node --test \"dist/test/**/*.test.js\""
   },
-  "agentorg": {
-    "modules": {
-      "model": "src/model.ts"
-    }
-  },
   "dependencies": {
     "@agentorg/interfaces": "0.0.0",
     "@agentorg/sdk": "0.0.0",

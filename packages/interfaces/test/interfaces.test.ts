@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { defineActor, defineWidget, describeInterface } from "@agentorg/sdk";
+import { defineActor, describeInterface } from "@agentorg/sdk";
 import { createTestContext } from "@agentorg/sdk/testing";
 import { Ajv2020 } from "ajv/dist/2020.js";
 import { z } from "zod";
@@ -9,40 +9,26 @@ import {
   agentProvider,
   agentSettings,
   agents,
-  appRules,
   chat,
   connections,
-  httpEgress,
   hubActors,
   hubAudit,
   hubBindings,
   hubExports,
   hubGrants,
   kv,
-  layout,
   llmSession,
   mcpProvider,
   skills,
   tools,
-  uiShell,
-  uiView,
 } from "../src/index.ts";
 
-const standard = [kv, uiView, chat, llmSession, accountLogin, httpEgress, layout, uiShell];
+const standard = [kv, chat, llmSession, accountLogin];
 
 test("each standard interface is named, versioned and describable", () => {
   assert.deepEqual(
     standard.map((i) => describeInterface(i).id),
-    [
-      "kv@1",
-      "ui.view@1",
-      "chat@1",
-      "llm.session@1",
-      "account.login@1",
-      "http.egress@1",
-      "layout@1",
-      "ui.shell@1",
-    ],
+    ["kv@1", "chat@1", "llm.session@1", "account.login@1"],
   );
   for (const i of standard) assert.match(describeInterface(i).hash, /^sha256-[0-9a-f]{64}$/);
 });
@@ -65,7 +51,7 @@ function compiled(iface: Parameters<typeof describeInterface>[0]) {
 
 test("every interface's schemas compile under the Hub's strict validator", () => {
   const hub = [hubActors, hubGrants, hubBindings, hubExports, hubAudit];
-  for (const iface of [...standard, ...hub, appRules])
+  for (const iface of [...standard, ...hub])
     assert.doesNotThrow(() => compiled(iface), describeInterface(iface).id);
 });
 
@@ -195,15 +181,6 @@ test("management exposes a skill or a connection, and adds a skill from a folder
   assert.equal(add({ path: "/tmp/notes", files: { "SKILL.md": "x" } }), false);
 });
 
-test("a named rule's id is lowercase words joined by hyphens", () => {
-  const set = compiled(appRules)["set.input"];
-  assert.ok(set);
-  assert.equal(describeInterface(appRules).id, "app.rules@1");
-  assert.ok(set({ id: "agents-use-what-they-install", on: true }));
-  for (const id of ["", "Agents", "a b", "-a", "a-", "a--b", "x".repeat(65)])
-    assert.equal(set({ id, on: true }), false, JSON.stringify(id));
-});
-
 test("the Hub's schemas hold the rules that matter on the wire", () => {
   const login = compiled(accountLogin);
   const start = login["start.input"];
@@ -232,13 +209,12 @@ test("the Hub's schemas hold the rules that matter on the wire", () => {
     }),
     false,
   );
-  assert.equal(compiled(uiShell)["openExternal.input"]?.({ url: "http://example.com" }), false);
   // Credentials can't ride along: outputs and events are closed to extra fields.
   assert.equal(login["changed.event"]?.({ state: "signed_in", token: "x" }), false);
   assert.equal(login["status.output"]?.({ state: "signed_in", account: { token: "x" } }), false);
 });
 
-/** A small Actor that keeps notes in its `kv@1` state slot, and its widget. */
+/** A small Actor that keeps notes in its `kv@1` state slot. */
 const Notes = z.array(z.string());
 const logic = defineActor({
   slots: { store: kv },
@@ -252,18 +228,7 @@ const logic = defineActor({
     });
   },
 });
-const panel = defineWidget({
-  exports: { view: uiView },
-  start(ctx) {
-    ctx.exports.view.implement({
-      mount(el, { size }) {
-        (el as Element).textContent = `${size.width}x${size.height}`;
-      },
-    });
-  },
-});
-
-test("an Actor uses kv@1 through its slot, and a widget renders through ui.view@1", async () => {
+test("an Actor uses kv@1 through its slot", async () => {
   const values = new Map<string, unknown>();
   const t = createTestContext(logic);
   await t.start();
@@ -280,12 +245,6 @@ test("an Actor uses kv@1 through its slot, and a widget renders through ui.view@
   assert.deepEqual(await t.ctx.slots.store.call.get({ key: "missing" }), {});
   values.set("empty", null);
   assert.deepEqual(await t.ctx.slots.store.call.get({ key: "empty" }), { value: null });
-
-  const view = createTestContext(panel);
-  await view.start();
-  const el = { textContent: "" } as Element;
-  view.mount("view", el, { theme: {}, size: { width: 320, height: 240 } }).unmount();
-  assert.equal(el.textContent, "320x240");
 });
 
 /** A module that uses the model, sign-in and chat interfaces through its slots. */
