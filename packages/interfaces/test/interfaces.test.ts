@@ -6,8 +6,12 @@ import { Ajv2020 } from "ajv/dist/2020.js";
 import { z } from "zod";
 import {
   accountLogin,
+  agentProvider,
+  agentSettings,
+  agents,
   appRules,
   chat,
+  connections,
   httpEgress,
   hubActors,
   hubAudit,
@@ -18,6 +22,9 @@ import {
   kv,
   layout,
   llmSession,
+  mcpProvider,
+  skills,
+  tools,
   uiShell,
   uiView,
 } from "../src/index.ts";
@@ -61,6 +68,129 @@ test("every interface's schemas compile under the Hub's strict validator", () =>
   const hub = [hubPackages, hubActors, hubGrants, hubBindings, hubExports, hubAudit];
   for (const iface of [...standard, ...hub, appRules])
     assert.doesNotThrow(() => compiled(iface), describeInterface(iface).id);
+});
+
+const management = [tools, agentSettings, mcpProvider, agentProvider, agents, connections, skills];
+
+test("the agent management interfaces are named, versioned and compile strictly", () => {
+  assert.deepEqual(
+    management.map((i) => describeInterface(i).id),
+    [
+      "tools@1",
+      "agent.settings@1",
+      "mcp.provider@1",
+      "agent.provider@1",
+      "agents@1",
+      "connections@1",
+      "skills@1",
+    ],
+  );
+  for (const iface of management)
+    assert.doesNotThrow(() => compiled(iface), describeInterface(iface).id);
+});
+
+test("tools@1 carries any tool's arguments, and a failure only as a flag", () => {
+  const t = compiled(tools);
+  assert.ok(t["call.input"]?.({ name: "read", arguments: { path: "a", deep: { x: [1] } } }));
+  assert.equal(t["call.input"]?.({ name: "read" }), false);
+  assert.ok(t["call.output"]?.({ output: "no such file", failed: true }));
+  assert.equal(t["call.output"]?.({ output: "x", failed: false }), false);
+  assert.equal(t["call.output"]?.({ output: "x".repeat(200_001) }), false);
+  assert.ok(t["changed.event"]?.({}));
+});
+
+test("a skill's name and paths stay inside its folder", () => {
+  const skill = compiled(agentSettings)["skill.input"];
+  assert.ok(skill);
+  for (const path of ["SKILL.md", "references/guide.md", "a/b.c/d", ".hidden/x", "a..b/c"])
+    assert.ok(skill({ name: "pdf-tools", path }), path);
+  assert.ok(skill({ name: "pdf-tools" }));
+  for (const path of [
+    "",
+    "..",
+    ".",
+    "../x",
+    "a/../b",
+    "a/..",
+    "/etc/passwd",
+    "a\\b",
+    "a\0b",
+    "a\n/../../x",
+    "a\u2028/../x",
+    "a//b",
+    "a/",
+    "./a",
+  ])
+    assert.equal(skill({ name: "pdf-tools", path }), false, JSON.stringify(path));
+  for (const name of ["", "PDF", "a b", "-a", "a-", "a--b", "x".repeat(65)])
+    assert.equal(skill({ name }), false, JSON.stringify(name));
+});
+
+test("a connection's status can't carry extra fields, and a creatable's needs say how they're met", () => {
+  const provider = compiled(mcpProvider);
+  assert.equal(provider["status.output"]?.({ state: "connected", tools: [], token: "x" }), false);
+  assert.equal(provider["status.output"]?.({ state: "up", tools: [] }), false);
+  assert.equal(
+    provider["create.output"]?.({ connection: "act_1", target: "https://x", token: "y" }),
+    false,
+  );
+  const creatables = compiled(agentProvider)["creatable.output"];
+  assert.ok(creatables);
+  const creatable = {
+    id: "files",
+    title: "Files",
+    description: "",
+    instructions: "",
+    asks: [{ id: "folder", title: "Folder" }],
+    skills: [{ name: "notes", files: ["SKILL.md"] }],
+    mcp: [
+      { how: "pick", slot: "search", title: "Search" },
+      {
+        how: "create",
+        slot: "files",
+        title: "Files",
+        kind: "command",
+        params: { command: "server" },
+        fromAnswers: { cwd: "folder" },
+      },
+    ],
+  };
+  assert.ok(creatables({ creatables: [creatable] }));
+  assert.equal(
+    creatables({
+      creatables: [{ ...creatable, mcp: [{ how: "create", slot: "files", title: "Files" }] }],
+    }),
+    false,
+  );
+});
+
+test("an agent's status tells stopped by the person from down", () => {
+  const status = compiled(agentProvider)["status.output"];
+  assert.ok(status);
+  assert.ok(status({ state: "stopped" }));
+  assert.ok(status({ state: "down", detail: "It exited." }));
+  assert.equal(status({ state: "idle" }), false);
+  const listed = compiled(agents)["list.output"];
+  const agent = { agent: "act_1", name: "A", provider: "act_2", creatable: "assistant" };
+  assert.ok(listed?.({ agents: [{ ...agent, status: { state: "down", detail: "x" } }] }));
+  assert.equal(listed?.({ agents: [agent] }), false);
+});
+
+test("management exposes a skill or a connection, and adds a skill from a folder or as files", () => {
+  const expose = compiled(agents)["expose.input"];
+  assert.ok(expose);
+  assert.ok(expose({ agent: "act_1", skill: "notes" }));
+  assert.ok(expose({ agent: "act_1", connection: "act_2", as: "files" }));
+  assert.equal(expose({ agent: "act_1" }), false);
+  assert.equal(expose({ agent: "act_1", skill: "notes", connection: "act_2" }), false);
+  assert.equal(expose({ agent: "act_1", connection: "act_2", as: "not.one" }), false);
+  const add = compiled(skills)["add.input"];
+  assert.ok(add);
+  assert.ok(add({ path: "/tmp/notes" }));
+  assert.ok(add({ files: { "SKILL.md": "x" } }));
+  assert.equal(add({ files: { "../SKILL.md": "x" } }), false);
+  assert.equal(add({}), false);
+  assert.equal(add({ path: "/tmp/notes", files: { "SKILL.md": "x" } }), false);
 });
 
 test("a named rule's id is lowercase words joined by hyphens", () => {
