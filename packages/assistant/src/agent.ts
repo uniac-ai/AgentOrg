@@ -31,13 +31,12 @@ interface Turn {
 }
 
 export function createAgent(options: {
-  /** Read for each model request: what the agent is told can follow what it's bound to. */
-  instructions: () => string;
+  /** Read for each model request: what it's told and what it can call follow what it's bound to. */
+  request(): Promise<{ instructions: string; tools: Tools }>;
   model: Slot<typeof llmSession>;
   /** The model chosen for this agent, read for each request; none means the provider's default. */
   chosenModel(): Promise<string | undefined>;
   history: History;
-  tools(): Tools;
   chat: Chat;
   log: Log;
 }) {
@@ -133,7 +132,7 @@ export function createAgent(options: {
     let calls = 0;
     for (;;) {
       status(current, { state: "thinking" });
-      const tools = options.tools();
+      const { instructions, tools } = await options.request();
       const input = await history.input();
       const chosen = await options.chosenModel();
       if (current.cancelled) return;
@@ -146,7 +145,7 @@ export function createAgent(options: {
         ({ output } = await model.call.respond({
           requestId,
           ...(chosen ? { model: chosen } : {}),
-          instructions: options.instructions(),
+          instructions,
           input,
           tools: [...tools.values()].map((found) => found.tool),
         }));
