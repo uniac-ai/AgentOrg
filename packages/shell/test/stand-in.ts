@@ -266,7 +266,14 @@ const UNITS: Units["units"] = [
         title: "Working directory",
         required: true,
         description: "The folder it works in. It is never deleted.",
-        visible: { field: "access", in: ["read", "terminal"] },
+        visible: { field: "where", in: ["local"] },
+      },
+      {
+        id: "inside",
+        type: "text",
+        value: "string",
+        title: "Path in the container",
+        visible: { field: "where", in: ["container"] },
       },
       {
         id: "image",

@@ -170,8 +170,6 @@ export function FormField({
 }) {
   const control = controlOf(field);
   const [browsing, setBrowsing] = useState(false);
-  // A container's folders aren't this machine's: its path is typed.
-  const browsable = control === "directory" && values.where !== "container";
   const value = fieldValue(field, values);
   const text = typeof value === "string" || typeof value === "number" ? String(value) : "";
   const list = Array.isArray(value) ? value : [];
@@ -260,7 +258,7 @@ export function FormField({
             value={text}
             onChange={(e) => onChange(e.target.value)}
           />
-          {browsable && (
+          {control === "directory" && (
             <Button
               type="button"
               variant="ghost"

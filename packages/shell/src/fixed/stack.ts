@@ -254,8 +254,14 @@ export function partsOf(values: Values, form: readonly Field[]): string[] {
   });
 }
 
-/** The answer to `where`, if the unit asks it: what says where a computer is, and what that means. */
-export function whereOf(form: readonly Field[], values: Values) {
-  const field = form.find((f) => f.id === "where");
-  return field?.options?.find((o) => o.value === fieldValue(field, values));
+/** What each chosen option means, in the unit's own words, in the form's order. */
+export function chosenNotes(values: Values, form: readonly Field[]): string[] {
+  return form.flatMap((field) => {
+    if (!isShown(field, form, values)) return [];
+    const value = fieldValue(field, values);
+    const chosen = Array.isArray(value) ? value : [value];
+    return (field.options ?? []).flatMap((o) =>
+      chosen.includes(o.value) && o.description ? [o.description] : [],
+    );
+  });
 }

@@ -89,12 +89,18 @@ test(
     const computer = card(page, "Computer");
     const create = panel(page).getByRole("button", { name: "Create", exact: true });
     await panel(page).getByLabel("Name").fill("Foreman");
-    assert.equal(await create.isDisabled(), true, "where and the folder are still open");
+    assert.equal(await create.isDisabled(), true, "where is still open");
+    const folder = computer.getByLabel("Working directory", { exact: true });
+    assert.equal(await folder.count(), 0);
+    await choose(page, "Where it runs", /^This computer/);
+    assert.equal(await create.isDisabled(), true, "the folder is required once it's shown");
+    await folder.fill("/work/x");
+    assert.equal(await create.isDisabled(), false);
     await choose(page, "Where it runs", /^Its own container/);
     await computer.getByLabel("Image").waitFor();
-    await choose(page, "Files and commands", /^None/);
-    assert.equal(await computer.getByLabel("Working directory", { exact: true }).count(), 0);
-    assert.equal(await create.isDisabled(), false, "with no access there's no folder to ask for");
+    await computer.getByLabel("Path in the container").waitFor();
+    assert.equal(await folder.count(), 0);
+    assert.equal(await create.isDisabled(), false, "a field that isn't shown asks for nothing");
     await page.close();
   }),
 );
@@ -345,7 +351,10 @@ test(
       .getByRole("main")
       .getByText("Computer: This computer, Files and terminal, Browser, /work/foreman")
       .waitFor();
-    await page.getByRole("main").getByText("It acts as you on this Mac.").waitFor();
+    await page
+      .getByRole("main")
+      .getByText("It acts as you on this Mac. Runs any command")
+      .waitFor();
     await page.getByRole("button", { name: "Foreman settings" }).click();
     await page
       .getByRole("region", { name: "MCPs" })
@@ -360,11 +369,12 @@ test(
 );
 
 test(
-  "the directory field walks this machine's folders, and a container's path stays typed",
+  "a directory field walks this machine's folders, and goes when the unit stops showing it",
   withGateway(async (gateway) => {
     const page = await open(gateway);
     await fromTemplate(page, "Assistant");
     const computer = card(page, "Computer");
+    await choose(page, "Where it runs", /^This computer/);
     const browse = computer.getByRole("button", { name: "Browse for Working directory" });
     await browse.click();
     const dialog = page.getByRole("dialog", { name: "Working directory" });
@@ -402,7 +412,7 @@ test(
 
     await choose(page, "Where it runs", /^Its own container/);
     assert.equal(await browse.count(), 0);
-    await computer.getByLabel("Working directory", { exact: true }).fill("/work/typed");
+    await computer.getByLabel("Path in the container").fill("/work/typed");
     await page.close();
   }),
 );
