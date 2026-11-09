@@ -176,9 +176,10 @@ test(
     assert.deepEqual(await page.getByRole("menuitem").allInnerTexts(), [
       "Linear",
       "Postgres analytics",
+      "Connect a new MCP…",
     ]);
     await page.getByRole("menuitem", { name: "Postgres analytics" }).click();
-    await mcps.getByText("postgres", { exact: true }).waitFor();
+    await mcps.getByText("postgres_analytics", { exact: true }).waitFor();
 
     await page.getByRole("button", { name: "Add a skill" }).click();
     await page.getByRole("menuitem", { name: "weekly-numbers" }).click();
@@ -188,9 +189,9 @@ test(
     await page.getByRole("button", { name: "Remove weekly-numbers" }).click();
     await skills.getByText("weekly-numbers").waitFor({ state: "detached" });
 
-    await mcps.getByRole("button", { name: "postgres tools" }).click();
+    await mcps.getByRole("button", { name: "postgres_analytics tools" }).click();
     await mcps.getByRole("button", { name: "Remove from Reviewer" }).last().click();
-    await mcps.getByText("postgres", { exact: true }).waitFor({ state: "detached" });
+    await mcps.getByText("postgres_analytics", { exact: true }).waitFor({ state: "detached" });
     await page.close();
   }),
 );

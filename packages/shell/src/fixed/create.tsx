@@ -14,7 +14,7 @@ import {
   listConnections,
   useAct,
 } from "./data.ts";
-import { Nothing, WhereIcon } from "./parts.tsx";
+import { Jump, Nothing, WhereIcon } from "./parts.tsx";
 
 /** Create: a choice among what can be created, then only what that choice asks. */
 export function CreateDialog({ open, onClose }: { open: boolean; onClose(): void }) {
@@ -192,7 +192,9 @@ function Details({
                   </SelectContent>
                 </Select>
               ) : (
-                <FieldDescription>Connect an MCP first.</FieldDescription>
+                <FieldDescription>
+                  <Jump to={{ screen: "mcps", adding: true }}>Connect an MCP first</Jump>
+                </FieldDescription>
               )}
             </Field>
           ))}
