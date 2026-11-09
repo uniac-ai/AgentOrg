@@ -364,7 +364,7 @@ export async function standIn(
                 title: "A server at an address",
                 params: {
                   type: "object",
-                  properties: { url: { type: "string", format: "uri" } },
+                  properties: { url: { type: "string", format: "uri", title: "Address" } },
                   required: ["url"],
                   additionalProperties: false,
                 },
@@ -397,6 +397,13 @@ export async function standIn(
           },
         ],
       }),
+      remove: ({ connection }) => {
+        connections.delete(String(connection));
+        for (const agent of agents.values())
+          agent.mcp = agent.mcp.filter((m) => m.connection !== connection);
+        changed();
+        return {};
+      },
       get: ({ connection }) => {
         const found = connections.get(String(connection));
         if (!found) throw new Refusal("unknown", "No such connection.");
@@ -436,6 +443,15 @@ export async function standIn(
     },
     skills: {
       list: () => ({ skills }),
+      remove: ({ name }) => {
+        skills.splice(
+          skills.findIndex((s) => s.name === name),
+          1,
+        );
+        for (const agent of agents.values())
+          agent.skills = agent.skills.filter((s) => s.name !== name);
+        return {};
+      },
       add: ({ path }) => {
         const name = String(path).split("/").at(-1) as string;
         const added = { name, description: "Writes a changelog" };
