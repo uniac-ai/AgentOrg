@@ -1,7 +1,7 @@
 /*
  * The shell's stylesheet, compiled by scripts/build.js. Layers, lowest first: every rule is in one,
- * because an unlayered rule would outrank every utility whatever its specificity. The older pages'
- * styles sit below the components, until those pages go.
+ * because an unlayered rule would outrank every utility whatever its specificity. The tokens and
+ * the sign-in page's styles sit below the components.
  */
 @layer theme, base, legacy, components, utilities;
 @import "tailwindcss/theme" layer(theme);
@@ -9,7 +9,6 @@
 @import "tw-animate-css";
 @import "streamdown/styles.css";
 @import "../static/app.css" layer(legacy);
-@import "../static/kit-overrides.css";
 
 @source "./**/*.tsx";
 @source "../../../node_modules/streamdown/dist/*.js";
@@ -163,7 +162,7 @@
   --edge: rgb(0 0 0 / 0.1);
 }
 
-/* What the fixed pages start from; the older pages keep the browser's defaults. */
+/* What the pages start from. */
 @layer base {
   :where([data-ui="fixed"]) :where(*, *::before, *::after) {
     border-color: var(--line);

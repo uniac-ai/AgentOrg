@@ -2,22 +2,17 @@
   "name": "@agentorg/shell",
   "version": "0.0.0",
   "private": true,
-  "description": "The person's web shell for AgentOrg: their agents, their views and their settings.",
+  "description": "The person's web shell for AgentOrg: their agents, what each is made of, and their settings.",
   "license": "MIT",
   "type": "module",
   "engines": {
     "node": ">=22.15"
   },
   "exports": {
-    "./package.json": "./package.json",
-    "./agent-bindings": {
-      "types": "./src/agent-bindings.ts",
-      "default": "./dist/agent-bindings.js"
-    }
+    "./package.json": "./package.json"
   },
   "files": [
-    "dist",
-    "src/agent-bindings.ts"
+    "dist"
   ],
   "scripts": {
     "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.json && tsc -p tsconfig.test.json && node scripts/build.js",
@@ -25,7 +20,6 @@
   },
   "devDependencies": {
     "@agentorg/interfaces": "0.0.0",
-    "@agentorg/kit": "0.0.0",
     "@agentorg/sdk": "0.0.0",
     "@playwright/test": "1.64.1",
     "@shadcn/react": "0.3.1",

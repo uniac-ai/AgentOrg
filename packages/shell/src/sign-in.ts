@@ -20,7 +20,7 @@ function set(value: boolean) {
 api.subscribe("login", "changed", () => set(false));
 
 /**
- * The shell's ChatGPT sign-in, for its own buttons and `ui.shell@1.signIn`: ChatGPT's page opens
+ * The shell's ChatGPT sign-in, for its own buttons: ChatGPT's page opens
  * in a new tab, and the shell moves on when `login` says it is signed in.
  */
 export async function signIn() {

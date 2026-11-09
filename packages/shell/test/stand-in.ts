@@ -226,9 +226,7 @@ export interface Call {
   input: Record<string, unknown>;
 }
 
-export async function standIn(
-  options: { older?: boolean; unbound?: boolean; creatables?: Creatable[] } = {},
-) {
+export async function standIn(options: { creatables?: Creatable[] } = {}) {
   let sendDelayMs = 0;
   const { agents, connections } = seed();
   const skills = [
@@ -522,12 +520,6 @@ export async function standIn(
 
   const person = (slot: string, method: string, input: Record<string, unknown>): unknown => {
     if (management[slot]) {
-      if (options.older) throw new Refusal("invalid", `The person has no slot ${slot}.`);
-      if (options.unbound) {
-        const error = new Refusal("not_connected", "Nothing is bound.");
-        error.name = "NotConnected";
-        throw error;
-      }
       const iface = INTERFACES[slot] as Interface;
       const spec = iface.methods[method] as Spec;
       const parsed = spec.input.parse(input) as Input;
@@ -572,9 +564,6 @@ export async function standIn(
       return { state: "signed_in", account: { email: "sam@example.com", plan: "Plus" } };
     }
     if (slot === "store") return {};
-    if (slot === "actors" && method === "list") return { actors: [] };
-    if (slot === "grants") return { requests: [] };
-    if (slot === "layout") return { home: [] };
     throw new Refusal("invalid", `The stand-in has no ${slot}.${method}.`);
   };
 

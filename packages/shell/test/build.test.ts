@@ -31,7 +31,7 @@ function topLevel(text: string): string[] {
 
 const bare = css.replace(/\/\*[\s\S]*?\*\//g, "");
 
-test("the older pages' styles sit below the components", () => {
+test("the older styles sit below the components", () => {
   // Compiled, the order is that of each layer's first appearance.
   const order = topLevel(bare).flatMap((prelude) =>
     prelude.startsWith("@layer ") ? prelude.slice(7).split(/,\s*/) : [],
@@ -45,9 +45,7 @@ test("the older pages' styles sit below the components", () => {
 });
 
 test("no style rule is outside a layer, where it would outrank every utility", () => {
-  const loose = topLevel(bare).filter(
-    (prelude) => !/^@(layer|property|keyframes)/.test(prelude) && !prelude.includes(".kit-"),
-  );
+  const loose = topLevel(bare).filter((prelude) => !/^@(layer|property|keyframes)/.test(prelude));
   assert.deepEqual(loose, []);
 });
 

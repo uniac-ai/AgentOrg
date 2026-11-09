@@ -1,11 +1,5 @@
 import { NotConnected, OutcomeUnknown, Refused } from "@agentorg/sdk";
 
-/** A view the shell has open: an Actor's `view` module, whose calls run as that Actor. */
-export interface View {
-  actor: string;
-  module: string;
-}
-
 /** Where the socket stands: saying hello, open, or with no live session (`agentorg open` again). */
 export type Connection = "connecting" | "open" | "signed-out";
 
@@ -22,38 +16,18 @@ interface ErrorBody {
   message?: string;
   code?: string;
 }
-/** A reply's error as the SDK's error, so a view's frame gets the same refusal back. */
+/** A reply's error as the SDK's error. */
 function errorOf(body: ErrorBody, target: string): Error {
   if (body.name === "NotConnected") return new NotConnected(target);
   if (body.name === "OutcomeUnknown") return new OutcomeUnknown(body.message);
   return new Refused(body.code ?? "refused", body.message ?? "Refused.");
 }
 
-/**
- * A file to or from the gateway (`/packages`, `/system`): the tab's session goes as a bearer, which
- * no other page can send. A failure is the gateway's `{error}`, as a call's would be.
- */
-export async function transfer(path: string, body?: Blob): Promise<Response> {
-  const response = await fetch(path, {
-    method: body ? "POST" : "GET",
-    headers: { Authorization: `Bearer ${localStorage.getItem(SESSION) ?? ""}` },
-    ...(body ? { body } : {}),
-  });
-  if (response.ok) return response;
-  const reply = (await response.json().catch(() => ({}))) as { error?: ErrorBody };
-  throw errorOf(reply.error ?? { message: `The gateway answered ${response.status}.` }, path);
-}
-
 interface Subscription {
-  /** A view's slots watch instead of a slot's events. */
-  slots?: true;
   slot: string;
   event: string;
-  view?: View;
   send(payload: unknown): void;
-  /** For a view's: the gateway ended it, so the frame is told. */
-  end?(): void;
-  /** For the shell's own: made again after the gateway ends it, then this, to read what it missed. */
+  /** Made again after the gateway ends it, then this, to read what it missed. */
   again?(): void;
   /** Ends in a row with no event between, for its wait before it's made again. */
   ends?: number;
@@ -94,29 +68,26 @@ export class Api {
     return () => void this.#watchers.delete(fn);
   }
 
-  /** A call on one of the person's slots, or with `view`, on that view's. */
-  call<T = unknown>(slot: string, method: string, input: unknown = {}, view?: View): Promise<T> {
+  /** A call on one of the person's slots. */
+  call<T = unknown>(slot: string, method: string, input: unknown = {}): Promise<T> {
     const socket = this.#socket;
     if (this.#connection !== "open" || !socket) return Promise.reject(new NotConnected(slot));
     const id = ++this.#nextId;
     return new Promise<T>((resolve, reject) => {
       this.#pending.set(id, { target: slot, resolve: resolve as (v: unknown) => void, reject });
-      socket.send(
-        JSON.stringify({ id, op: "call", slot, method, input, ...(view ? { view } : {}) }),
-      );
+      socket.send(JSON.stringify({ id, op: "call", slot, method, input }));
     });
   }
 
   /**
-   * Events of a slot until the returned stop, kept across reconnects. If the gateway ends it, a
-   * view's hears `end`; any other is made again after a wait, and then `again` runs, since what
-   * happened meanwhile wasn't told.
+   * Events of a slot until the returned stop, kept across reconnects. If the gateway ends it, it is
+   * made again after a wait, and then `again` runs, since what happened meanwhile wasn't told.
    */
   subscribe(
     slot: string,
     event: string,
     send: (payload: unknown) => void,
-    options: { view?: View; end?: () => void; again?: () => void; slots?: true } = {},
+    options: { again?: () => void } = {},
   ): () => void {
     const subscription: Subscription = { slot, event, send, ...options };
     this.#subscriptions.add(subscription);
@@ -129,28 +100,12 @@ export class Api {
     };
   }
 
-  /**
-   * A view's slots until the returned stop, kept across reconnects: `send` gets `{bound: [slot]}`
-   * first, every slot bound now (again after each reconnect), then `{slot, bound}` per change.
-   * `end` if the gateway ends it, as for a module that isn't a view.
-   */
-  watchSlots(view: View, send: (payload: unknown) => void, end?: () => void): () => void {
-    return this.subscribe("", "", send, { view, slots: true, ...(end ? { end } : {}) });
-  }
-
-  /** A line for a view's Actor's log; dropped while the socket isn't open. */
-  log(view: View, level: "info" | "warn" | "error", message: string, fields?: unknown) {
-    if (this.#connection !== "open") return;
-    this.#send({ op: "log", view, level, message, ...(fields ? { fields } : {}) });
-  }
-
   #open(subscription: Subscription) {
     const sub = ++this.#nextId;
     subscription.sub = sub;
     this.#bySub.set(sub, subscription);
-    const { slot, event, view } = subscription;
-    if (subscription.slots) this.#send({ sub, op: "slots", view });
-    else this.#send({ sub, op: "subscribe", slot, event, ...(view ? { view } : {}) });
+    const { slot, event } = subscription;
+    this.#send({ sub, op: "subscribe", slot, event });
   }
 
   #send(message: unknown) {
@@ -217,10 +172,6 @@ export class Api {
       }
       this.#bySub.delete(message.sub);
       subscription.sub = undefined;
-      if (subscription.end) {
-        this.#subscriptions.delete(subscription);
-        return subscription.end();
-      }
       // Never silently deaf: made again, unless stopped or already made again on a reconnect.
       const ends = subscription.ends ?? 0;
       subscription.ends = ends + 1;
