@@ -9,7 +9,7 @@ import { startMcpProvider } from "@agentorg/mcp";
 import type { Log } from "@agentorg/sdk";
 import { startAgentProvider } from "assistant/provider";
 import { startChatGPT } from "chatgpt";
-import type { PersonCalls } from "./model.js";
+import type { PersonCalls } from "./oauth.js";
 
 export interface ProgramsOptions {
   home: string;

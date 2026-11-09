@@ -1,12 +1,6 @@
 import { NotConnected, OutcomeUnknown, Refused } from "@agentorg/sdk";
 
-/** A view the person has open: an Actor's `view` module. */
-export interface View {
-  actor: string;
-  module: string;
-}
-
-/** The person's own side: its slots, and `layout`, its own export, which the gateway serves. */
+/** The person's own side: the slots the gateway serves `/api` from. */
 export interface PersonSide {
   call(slot: string, method: string, input: unknown): Promise<unknown>;
   /** Events until the returned stop; `end` when the subscription can't go on. */
@@ -16,35 +10,6 @@ export interface PersonSide {
     send: (payload: unknown) => void,
     end: () => void,
   ): () => void;
-}
-
-/**
- * Calls run as a view's Actor through its `module.slot` bindings: the Hub's in-process view path
- * (`hub.viewCall` and `hub.viewSubscribe`), validated and audited like any call. The Hub refuses a
- * module that isn't one of the Actor's views, so any view of the Actor's package is open to the
- * person, and nothing else is.
- */
-export interface ViewCalls {
-  call(view: View, slot: string, method: string, input: unknown): Promise<unknown>;
-  subscribe(
-    view: View,
-    slot: string,
-    event: string,
-    send: (payload: unknown) => void,
-    end: () => void,
-  ): () => void;
-  /**
-   * The view's slots: `onSlot` hears each bound one at once, then every change (bound again when
-   * it's usable again). Returns how to stop. Refused for a module that isn't a view.
-   */
-  slots(view: View, onSlot: (slot: string, bound: boolean) => void): () => void;
-  /** A line for the view's Actor's log, which the Hub bounds as it does a frame's. */
-  log(
-    view: View,
-    level: "info" | "warn" | "error",
-    message: string,
-    fields?: Record<string, unknown>,
-  ): void;
 }
 
 /** The socket a tab or the CLI holds: text messages in, text messages out. */
@@ -76,21 +41,15 @@ function errorBody(error: unknown) {
 /**
  * One `/api` socket: the same calls a channel carries, as JSON.
  *
- * - `{id, op: "call", slot, method, input}`, or with `view: {actor, module}` for a view's slot;
- *   answered `{id, result}` or `{id, error}`.
- * - `{sub, op: "subscribe", slot, event}` (or with `view`): then `{sub, payload}` per event, and
- *   `{sub, end: true}` once it can't go on. `{sub, op: "unsubscribe"}` stops it.
- * - `{sub, op: "slots", view}`: the view's slots. First `{sub, payload: {bound: [slot]}}`, every
- *   one bound now, then `{sub, payload: {slot, bound}}` per change, `bound` again for a slot that's
- *   usable again. `{sub, op: "unsubscribe"}` stops it, as a subscription.
- * - `{op: "log", view, level, message, fields?}`: a line for the view's Actor's log, unanswered.
+ * - `{id, op: "call", slot, method, input}`: answered `{id, result}` or `{id, error}`.
+ * - `{sub, op: "subscribe", slot, event}`: then `{sub, payload}` per event, and `{sub, end: true}`
+ *   once it can't go on. `{sub, op: "unsubscribe"}` stops it.
  *
- * A view's calls run as its Actor, for one of its views only, which the Hub checks. Everything else
- * runs as the person: through its own slots, and `layout`, its own export.
+ * Everything runs as the person, through their slots.
  */
 export function serveSocket(
   socket: Socket,
-  deps: { person: PersonSide; views: ViewCalls },
+  deps: { person: PersonSide },
 ): { receive(text: string): void; closed(): void } {
   const subscriptions = new Map<number, () => void>();
   let calls = 0;
@@ -101,13 +60,6 @@ export function serveSocket(
       // The socket is gone; its close stops the rest.
     }
   };
-  const viewOf = (value: unknown): View | undefined => {
-    if (value === undefined) return undefined;
-    if (!isRecord(value) || !isName(value.actor) || !isName(value.module))
-      throw new Refused("invalid", "A view is {actor, module}.");
-    return { actor: value.actor, module: value.module };
-  };
-
   const receive = (text: string) => {
     let message: Record<string, unknown>;
     try {
@@ -129,10 +81,7 @@ export function serveSocket(
         void (async () => {
           if (!isName(slot) || !isName(method))
             throw new Refused("invalid", "A call names its slot and method.");
-          const view = viewOf(message.view);
-          return view
-            ? deps.views.call(view, slot, method, input)
-            : deps.person.call(slot, method, input);
+          return deps.person.call(slot, method, input);
         })()
           .then(
             (result) => send({ id, result }),
@@ -160,55 +109,15 @@ export function serveSocket(
               "quota",
               `A socket holds ${MAX_SUBSCRIPTIONS} subscriptions at most.`,
             );
-          const view = viewOf(message.view);
           const forward = (payload: unknown) => {
             if (!ended) send({ sub, payload });
           };
-          const stop = view
-            ? deps.views.subscribe(view, slot, event, forward, end)
-            : deps.person.subscribe(slot, event, forward, end);
+          const stop = deps.person.subscribe(slot, event, forward, end);
           if (ended) stop();
           else subscriptions.set(sub, stop);
         } catch (error) {
           ended = true;
           send({ sub, end: true, error: errorBody(error) });
-        }
-        return;
-      }
-      case "slots": {
-        const { sub } = message;
-        if (!isId(sub) || subscriptions.has(sub)) return;
-        try {
-          if (subscriptions.size >= MAX_SUBSCRIPTIONS)
-            throw new Refused(
-              "quota",
-              `A socket holds ${MAX_SUBSCRIPTIONS} subscriptions at most.`,
-            );
-          const view = viewOf(message.view);
-          if (!view) throw new Refused("invalid", "A slots watch names its view.");
-          // The Hub tells the bound slots at once, within the call: gathered, they're one snapshot.
-          let snapshot: string[] | undefined = [];
-          const stop = deps.views.slots(view, (slot, bound) => {
-            if (snapshot && bound) snapshot.push(slot);
-            else if (!snapshot) send({ sub, payload: { slot, bound } });
-          });
-          send({ sub, payload: { bound: snapshot } });
-          snapshot = undefined;
-          subscriptions.set(sub, stop);
-        } catch (error) {
-          send({ sub, end: true, error: errorBody(error) });
-        }
-        return;
-      }
-      case "log": {
-        const { level, message: text, fields } = message;
-        if (level !== "info" && level !== "warn" && level !== "error") return;
-        if (typeof text !== "string") return;
-        try {
-          const view = viewOf(message.view);
-          if (view) deps.views.log(view, level, text, isRecord(fields) ? fields : undefined);
-        } catch {
-          // Not one of an Actor's views: nothing is logged, and nothing answers.
         }
         return;
       }

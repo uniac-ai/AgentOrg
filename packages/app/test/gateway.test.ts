@@ -3,21 +3,15 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs
 import { request } from "node:http";
 import { connect as connectTcp } from "node:net";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
-import { layout } from "@agentorg/interfaces";
-import { buildPackage } from "@agentorg/sdk/build";
 import { connect } from "@agentorg/sdk/client";
 import WebSocket from "ws";
 import { type App, SignIn, startApp } from "../src/index.ts";
 
-// dist/test/gateway.test.js → the repository root.
-const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..");
-
 async function setup(t: test.TestContext) {
   const home = mkdtempSync(join(tmpdir(), "agentorg-app-"));
-  const app = await startApp({ home, firstRun: false });
+  const app = await startApp({ home, firstRun: { log: () => {} } });
   t.after(async () => {
     await app.close();
     rmSync(home, { recursive: true, force: true });
@@ -66,18 +60,11 @@ function api(app: App, headers: Record<string, string>) {
     close: () => socket.close(),
     send: (message: unknown) =>
       socket.send(typeof message === "string" ? message : JSON.stringify(message)),
-    call: (
-      slot: string,
-      method: string,
-      input: unknown = {},
-      view?: { actor: string; module: string },
-    ) =>
+    call: (slot: string, method: string, input: unknown = {}) =>
       new Promise<{ result?: unknown; error?: { code?: string; name: string } }>((done) => {
         const n = ++id;
         waiting.set(n, done);
-        socket.send(
-          JSON.stringify({ id: n, op: "call", slot, method, input, ...(view ? { view } : {}) }),
-        );
+        socket.send(JSON.stringify({ id: n, op: "call", slot, method, input }));
       }),
     subscribe: (sub: number, slot: string, event: string) =>
       socket.send(JSON.stringify({ sub, op: "subscribe", slot, event })),
@@ -204,161 +191,6 @@ test("the app leaves its address and the CLI's token in the home, readable by it
   assert.equal(JSON.parse(readFileSync(join(home, "app.json"), "utf8")).url, app.url);
 });
 
-/** The board package, built and added, and an Actor that runs it. */
-async function board(t: test.TestContext, cli: ReturnType<typeof api>) {
-  const out = mkdtempSync(join(tmpdir(), "agentorg-board-"));
-  t.after(() => rmSync(out, { recursive: true, force: true }));
-  const built = await buildPackage(join(root, "examples", "board"), { out });
-  const added = (await cli.call("packages", "add", { path: built.file })).result as {
-    hash: string;
-  };
-  const created = (await cli.call("actors", "create", { name: "Board", package: added.hash }))
-    .result as { actorId: string };
-  return { hash: added.hash, actorId: created.actorId };
-}
-
-test("layout@1 places, moves and removes views, keeps them in the person's store, and tells of each change", async (t) => {
-  const { app, token } = await setup(t);
-  const cli = api(app, { Authorization: `Bearer ${token}` });
-  t.after(cli.close);
-  await cli.opened;
-  const { actorId } = await board(t, cli);
-  cli.subscribe(1, "layout", "changed");
-  const placed = (
-    await cli.call("layout", "place", { actor: actorId, module: "panel", title: "Launch" })
-  ).result as { id: string };
-  const second = (await cli.call("layout", "place", { actor: actorId, module: "panel" }))
-    .result as {
-    id: string;
-  };
-  const ids = async () =>
-    ((await cli.call("layout", "get")).result as { home: { id: string }[] }).home.map((p) => p.id);
-  assert.deepEqual(await ids(), [placed.id, second.id]);
-  // Through /api, the person placed them; an input can't say otherwise.
-  const byOf = async () =>
-    ((await cli.call("layout", "get")).result as { home: { by?: string }[] }).home.map((p) => p.by);
-  assert.deepEqual(await byOf(), ["person", "person"]);
-  // With no `after`, a move goes first; with one, after it.
-  await cli.call("layout", "move", { id: second.id });
-  assert.deepEqual(await ids(), [second.id, placed.id]);
-  await cli.call("layout", "move", { id: second.id, after: placed.id });
-  assert.deepEqual(await ids(), [placed.id, second.id]);
-  await cli.call("layout", "remove", { id: placed.id });
-  assert.deepEqual(await ids(), [second.id]);
-  // Kept in the person's own store, the built-in storage's.
-  const kept = (await cli.call("store", "get", { key: "layout" })).result as {
-    value: { id: string }[];
-  };
-  assert.deepEqual(
-    kept.value.map((p) => p.id),
-    [second.id],
-  );
-  await until(() => cli.events.filter((e) => e.sub === 1 && e.payload).length === 5);
-  // Only a view module of a package Actor: not its host module, not an unknown Actor.
-  for (const input of [
-    { actor: actorId, module: "logic" },
-    { actor: "nobody", module: "panel" },
-    { actor: "person", module: "panel" },
-  ]) {
-    const refused = await cli.call("layout", "place", input);
-    assert.equal(refused.error?.code, "invalid", JSON.stringify(input));
-  }
-  assert.equal((await cli.call("layout", "remove", { id: "gone" })).error?.code, "unknown");
-  // A `by` in the input is no input of place's: dropped, and the caller recorded.
-  await cli.call("layout", "place", { actor: actorId, module: "panel", by: "someone" });
-  assert.equal((await byOf()).at(-1), "person");
-  assert.equal((await cli.call("layout", "nope")).error?.code, "invalid");
-});
-
-test("a program bound to the person's layout places a view as the person does", async (t) => {
-  const { app, token } = await setup(t);
-  const cli = api(app, { Authorization: `Bearer ${token}` });
-  t.after(cli.close);
-  await cli.opened;
-  const { actorId } = await board(t, cli);
-  const made = (await cli.call("actors", "create", { name: "agent" })).result as {
-    actorId: string;
-    credential: string;
-  };
-  const agent = await connect({
-    hubUrl: app.hubUrl,
-    actorId: made.actorId,
-    credential: made.credential,
-    slots: { layout },
-  });
-  t.after(() => agent.close());
-  const bound = await cli.call("grants", "bind", {
-    consumer: made.actorId,
-    slot: "layout",
-    provider: "person",
-    export: "layout",
-  });
-  assert.deepEqual(bound.result, { bound: true });
-  await until(() => agent.slots.layout.bound);
-  const { id } = await agent.slots.layout.call.place({ actor: actorId, module: "panel" });
-  const home = (await cli.call("layout", "get")).result as { home: { id: string; by?: string }[] };
-  // Placed by the agent, as the Hub named the caller.
-  assert.deepEqual(
-    home.home.map((p) => [p.id, p.by]),
-    [[id, made.actorId]],
-  );
-});
-
-test("a view's call goes to the Hub as its Actor's, which refuses one with no package or not running", async (t) => {
-  const { app, token } = await setup(t);
-  const cli = api(app, { Authorization: `Bearer ${token}` });
-  t.after(cli.close);
-  await cli.opened;
-  const { actorId } = await board(t, cli);
-  const asView = (actor: string, module: string) =>
-    cli.call("board", "list", {}, { actor, module });
-  // The Hub decides: an Actor with no package has no views; a package Actor's must be running.
-  assert.equal((await asView("person", "panel")).error?.code, "forbidden");
-  assert.equal((await asView(actorId, "panel")).error?.code, "state");
-  assert.equal((await asView("", "panel")).error?.code, "invalid");
-});
-
-test("/frames/ serves a view's bundle under the frame policy, and nothing else", async (t) => {
-  const { app, token } = await setup(t);
-  const cli = api(app, { Authorization: `Bearer ${token}` });
-  t.after(cli.close);
-  await cli.opened;
-  const { hash } = await board(t, cli);
-  const runtime = await fetch(`${app.url}/frames/runtime.js`);
-  assert.equal(runtime.status, 200);
-  // Readable across origins by a sandboxed frame only, whose Origin is null: no page needs it.
-  assert.equal(runtime.headers.get("access-control-allow-origin"), null);
-  for (const path of ["/frames/runtime.js", `/frames/${hash}/panel.js`]) {
-    const allowed = async (from: string) =>
-      (await fetch(`${app.url}${path}`, { headers: { Origin: from } })).headers.get(
-        "access-control-allow-origin",
-      );
-    assert.equal(await allowed("null"), "null", path);
-    assert.equal(await allowed(app.url), null, path);
-    assert.equal(await allowed("https://example.com"), null, path);
-  }
-  const csp = runtime.headers.get("content-security-policy") ?? "";
-  assert.match(csp, /default-src 'none'/);
-  assert.match(csp, new RegExp(`script-src ${app.url}/frames/(;|$)`));
-  assert.match(csp, /connect-src 'none'/);
-  const page = await fetch(`${app.url}/frames/${hash}/panel.html`);
-  assert.equal(page.status, 200);
-  assert.match(await page.text(), /src="\/frames\/runtime.js"/);
-  const bundle = await fetch(`${app.url}/frames/${hash}/panel.js`);
-  assert.equal(bundle.status, 200);
-  assert.match(bundle.headers.get("cache-control") ?? "", /immutable/);
-  for (const path of [
-    `/frames/${hash}/logic.js`,
-    `/frames/${hash}/logic.html`,
-    `/frames/${hash}/../agentorg.json`,
-    "/frames/sha256-0/panel.js",
-    `/frames/${hash}/..%2fagentorg.json`,
-  ])
-    assert.equal(await raw(app, path), 404, path);
-  // Its own policy sandboxes the frame document, however it is opened.
-  assert.match(page.headers.get("content-security-policy") ?? "", /; sandbox allow-scripts$/);
-});
-
 test("the app's pages carry their policy, and the shell's tree can't be left", async (t) => {
   const { app } = await setup(t);
   for (const path of ["/", "/signin", "/signin.js"]) {
@@ -380,16 +212,16 @@ test("a socket's subscriptions end when asked, and it holds 256 at most", async 
   const cli = api(app, { Authorization: `Bearer ${token}` });
   t.after(cli.close);
   await cli.opened;
-  cli.subscribe(1, "layout", "changed");
-  for (let sub = 2; sub <= 257; sub++) cli.subscribe(sub, "layout", "changed");
+  cli.subscribe(1, "actors", "changed");
+  for (let sub = 2; sub <= 257; sub++) cli.subscribe(sub, "actors", "changed");
   await until(() => cli.events.some((e) => e.sub === 257));
   assert.deepEqual(
     cli.events.filter((e) => e.end).map((e) => e.sub),
     [257],
   );
   for (let sub = 1; sub <= 256; sub++) cli.send({ sub, op: "unsubscribe" });
-  const { actorId } = await board(t, cli);
-  await cli.call("layout", "place", { actor: actorId, module: "panel" });
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  await cli.call("actors", "create", { name: "Heard by nobody" });
   await new Promise((resolve) => setTimeout(resolve, 100));
   assert.equal(cli.events.filter((e) => e.payload).length, 0);
 });

@@ -3,14 +3,13 @@
 # packages inside it (dist/node_modules), installed from its tarball into an empty folder with a
 # cache of its own, and globally with a prefix of its own. Then `agentorg` runs on a fresh home:
 # first run must make ChatGPT, both providers and management, all connected; an agent must be made
-# with `agentorg call agents create`; the gateway must serve the shell, the sign-in page and the
-# frame runtime; and the Hub must build an agent's source, which resolves the SDK, the interfaces
+# with `agentorg call agents create`; the gateway must serve the shell and the sign-in page; and the Hub must build an agent's source, which resolves the SDK, the interfaces
 # and zod from the installed package. Last, this build must start on a home the published 0.0.5
 # made: its old Actors closed, and `agents create` working. Run after `npm run build`.
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
-if [ ! -f "$root/packages/app/dist/bundled/index.json" ]; then
+if [ ! -f "$root/packages/app/dist/src/cli.js" ]; then
   echo "Build first: npm run build" >&2
   exit 1
 fi
@@ -173,8 +172,8 @@ node -e '
   console.log(`Scout is ${scout.status.state}`);
 ' "$work/agents.json"
 
-step "the gateway serves the shell, the sign-in page and the frame runtime"
-for path in / /app.js /app.css /signin /signin.js /frames/runtime.js; do
+step "the gateway serves the shell and the sign-in page"
+for path in / /app.js /app.css /signin /signin.js; do
   status="$(curl -s -o /dev/null -w '%{http_code}' "$url$path")"
   echo "$status $path"
   [ "$status" = 200 ] || exit 1

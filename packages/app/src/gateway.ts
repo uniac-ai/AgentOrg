@@ -8,7 +8,6 @@ import { Hub, listen, PERSON } from "@agentorg/hub";
 import {
   accountLogin,
   agents,
-  appRules,
   connections,
   hubActors,
   hubAudit,
@@ -16,34 +15,21 @@ import {
   hubExports,
   hubGrants,
   hubPackages,
-  installer,
-  layout,
   skills,
 } from "@agentorg/interfaces";
 import { Refused } from "@agentorg/sdk";
 import { connect } from "@agentorg/sdk/client";
 import { WebSocketServer } from "ws";
-import { type PersonSide, serveSocket, type ViewCalls } from "./api.js";
-import { serveFrame } from "./frames.js";
-import { Layout } from "./layout.js";
-import { oauthRoute } from "./model.js";
+import { type PersonSide, serveSocket } from "./api.js";
 import { Notes } from "./notes.js";
+import { oauthRoute } from "./oauth.js";
 import {
   closePackageActors,
   type Programs,
   type ProgramsOptions,
   startPrograms,
 } from "./programs.js";
-import { Rules } from "./rules.js";
 import { SignIn } from "./signin.js";
-import {
-  MAX_TRANSFER,
-  packageArchive,
-  pinnedHashes,
-  readSystem,
-  withTemporaryFile,
-  writeSystem,
-} from "./transfer.js";
 
 /**
  * The person's slots the gateway declares: every `hub.*` it holds, and what the first run binds
@@ -60,8 +46,6 @@ const SLOTS = {
   agents,
   connections,
   skills,
-  /** The installer: nothing binds it now; what still names it goes with the package system. */
-  installer,
 };
 const STATIC = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "static");
 /** The shell's built files, `@agentorg/shell`'s `dist`. */
@@ -89,9 +73,9 @@ export interface AppOptions {
   /** Where the shell's static files are; `@agentorg/shell`'s build by default. */
   shell?: string;
   /**
-   * The first run, at each start: on by default; `false` leaves the home as it is.
+   * How the first run, at each start, logs and reaches ChatGPT: the app's own by default.
    */
-  firstRun?: Pick<ProgramsOptions, "fetch" | "log"> | false;
+  firstRun?: Pick<ProgramsOptions, "fetch" | "log">;
 }
 
 export interface App {
@@ -100,8 +84,8 @@ export interface App {
   /** Where external Actors reach the Hub. */
   readonly hubUrl: string;
   readonly hub: Hub;
-  /** This start's first run: the programs it started, once it's done; none when it was off. */
-  readonly firstRun?: Promise<Programs | undefined>;
+  /** This start's first run: the programs it started, once it's done. */
+  readonly firstRun: Promise<Programs | undefined>;
   /** A fresh one-time sign-in address, `<url>/signin#<code>`. */
   signInUrl(): string;
   /** Serve `path` with `route`, for another part of the app. */
@@ -125,14 +109,14 @@ function writePrivate(file: string, text: string) {
  * The app: a Hub in this process, and the person's gateway, its single running instance. The
  * gateway holds the person's one channel to the Hub. Browser tabs and the CLI are the person's UIs,
  * not channels: they reach the gateway at `/api`, and their calls run through the person's slots,
- * or as a view's Actor for a view's. The gateway exports `layout@1`, kept in the person's store.
+ * and the person's notes are the app's own file.
  */
 export async function startApp(options: AppOptions): Promise<App> {
   const home = resolve(options.home);
   mkdirSync(home, { recursive: true, mode: 0o700 });
-  if (options.firstRun !== false) closePackageActors(home);
-  // With the first run on, nothing uses the built-in storage, and `storage.db` is never opened.
-  const hub = Hub.open(home, { builtinStorage: options.firstRun === false });
+  closePackageActors(home);
+  // Nothing uses the built-in storage, and `storage.db` is never opened.
+  const hub = Hub.open(home, { builtinStorage: false });
   const listener = await listen(hub, {}).catch((error) => {
     hub.close();
     throw error;
@@ -140,108 +124,25 @@ export async function startApp(options: AppOptions): Promise<App> {
   writePrivate(join(home, "url"), `${listener.url}\n`);
 
   const signIn = new SignIn();
-  const changes = new Set<() => void>();
-  /** Who hears that a rule was turned on or off. */
-  const ruleChanges = new Set<() => void>();
-  let emitChanged = () => {};
-  const isView = (actorId: string, module: string) => {
-    try {
-      const actor = hub.state.actor(actorId);
-      if (actor.package === "external" || actor.package === "builtin" || actor.state === "closed")
-        return false;
-      const { modules } = hub.state.package(actor.package).manifest;
-      return Object.hasOwn(modules, module) && modules[module]?.placement === "view";
-    } catch {
-      return false;
-    }
-  };
-
   const credential = readFileSync(join(home, "person-credential"), "utf8").trim();
-  /** The app's own notes: the layout, the rules, what the shell remembers. */
+  /** The app's own notes: what the shell remembers. */
   const notes = new Notes(join(home, "app-notes.json"));
-  let logic: Layout | undefined;
   const person = await connect({
     hubUrl: listener.url,
     actorId: PERSON,
     credential,
     slots: SLOTS,
-    exports: { layout },
-    start(ctx) {
-      logic = new Layout({
-        store: () => ({
-          get: async (key) => notes.get(key),
-          set: async (key, value) => notes.set(key, value),
-        }),
-        isView,
-        changed: () => emitChanged(),
-      });
-      const served = logic;
-      ctx.exports.layout.implement({
-        get: () => served.get(),
-        // Who placed it is the caller the Hub names, never the input.
-        place: (input, { caller }) => served.place(input, caller),
-        remove: (input) => served.remove(input),
-        move: (input) => served.move(input),
-      });
-      emitChanged = () => {
-        ctx.exports.layout.emit("changed", {});
-        for (const tell of [...changes]) tell();
-      };
-    },
   }).catch((error) => {
     void listener.close();
     hub.close();
     throw error;
   });
-  const layoutLogic = logic as Layout;
-  // However an Actor is closed, here or by an agent, its views leave the layout.
-  person.slots.actors.on("changed", ({ actor }) => {
-    if (hub.state.actor(actor).state === "closed")
-      void layoutLogic.removeActor(actor).catch(() => {});
-  });
 
-  /** The person's side of `/api`: its slots, and `layout`, its own export, served here. */
   /** A slot exposed to the person at run time: here exactly while it is bound. */
   const exposedSlot = (slot: string) => person.exposed().find((one) => one.slot === slot);
   const personSide: PersonSide = {
     async call(slot, method, input) {
       if (slot === "store") return notes.call(method, input);
-      if (slot === "rules") {
-        // The person's named rules, the gateway's own, checked as a call through the Hub would be.
-        const spec = Object.hasOwn(appRules.methods, method)
-          ? appRules.methods[method as keyof typeof appRules.methods]
-          : undefined;
-        if (!spec) throw new Refused("invalid", `rules has no method ${method}.`);
-        const parsed = spec.input.safeParse(input);
-        if (!parsed.success)
-          throw new Refused("invalid", `rules.${method}: ${parsed.error.message}`);
-        const result =
-          method === "set"
-            ? await rules.set(parsed.data as { id: string; on: boolean })
-            : await rules.list();
-        const checked = spec.output.safeParse(result);
-        if (!checked.success)
-          throw new Refused("bad_output", `rules.${method}: ${checked.error.message}`);
-        return checked.data;
-      }
-      if (slot === "layout") {
-        const spec = Object.hasOwn(layout.methods, method)
-          ? layout.methods[method as keyof typeof layout.methods]
-          : undefined;
-        if (!spec) throw new Refused("invalid", `layout has no method ${method}.`);
-        const parsed = spec.input.safeParse(input);
-        if (!parsed.success)
-          throw new Refused("invalid", `layout.${method}: ${parsed.error.message}`);
-        // Through /api, the caller is the person.
-        const result = await (
-          layoutLogic[method as keyof typeof layout.methods] as (i: unknown, by: string) => unknown
-        )(parsed.data, PERSON);
-        // Checked as a call through the Hub would be: what's stored may not fit.
-        const checked = spec.output.safeParse(result);
-        if (!checked.success)
-          throw new Refused("bad_output", `layout.${method}: ${checked.error.message}`);
-        return checked.data;
-      }
       const exposed = Object.hasOwn(SLOTS, slot) ? undefined : exposedSlot(slot);
       if (!exposed && !Object.hasOwn(SLOTS, slot))
         throw new Refused("invalid", `The person has no slot ${slot}.`);
@@ -254,18 +155,6 @@ export async function startApp(options: AppOptions): Promise<App> {
       return call(input);
     },
     subscribe(slot, event, send) {
-      if (slot === "rules") {
-        if (event !== "changed") throw new Refused("invalid", "rules has one event, changed.");
-        const tell = () => send({});
-        ruleChanges.add(tell);
-        return () => void ruleChanges.delete(tell);
-      }
-      if (slot === "layout") {
-        if (event !== "changed") throw new Refused("invalid", "layout has one event, changed.");
-        const tell = () => send({});
-        changes.add(tell);
-        return () => void changes.delete(tell);
-      }
       const exposed = Object.hasOwn(SLOTS, slot) ? undefined : exposedSlot(slot);
       if (!exposed && !Object.hasOwn(SLOTS, slot))
         throw new Refused("invalid", `The person has no slot ${slot}.`);
@@ -279,51 +168,19 @@ export async function startApp(options: AppOptions): Promise<App> {
       }
     },
   };
-  const views: ViewCalls = {
-    call: (view, slot, method, input) => hub.viewCall(view.actor, view.module, slot, method, input),
-    subscribe: (view, slot, event, send, end) =>
-      hub.viewSubscribe(view.actor, view.module, slot, event, send, () => end()),
-    slots: (view, onSlot) => hub.viewSlots(view.actor, view.module, onSlot),
-    log: (view, level, message, fields) =>
-      hub.viewLog(view.actor, view.module, {
-        level,
-        message,
-        ...(fields ? { data: fields } : {}),
-      }),
-  };
-
   // The first run, beside serving: the shell follows the person's bindings as they're made, so it
   // needn't wait. What it can't do is logged and tried at the next start.
-  const ran =
-    options.firstRun === false
-      ? undefined
-      : startPrograms(personSide, {
-          home,
-          hubUrl: listener.url,
-          log: (message) => process.stderr.write(`${message}\n`),
-          ...options.firstRun,
-        }).catch((error: unknown) => {
-          process.stderr.write(
-            `First run didn't work: ${error instanceof Error ? error.message : String(error)}\n`,
-          );
-          return undefined;
-        });
-
-  // The person's named rules: off until turned on; their engine starts once the first run is done.
-  const rules = new Rules({
-    person: personSide,
+  const ran = startPrograms(personSide, {
+    home,
+    hubUrl: listener.url,
     log: (message) => process.stderr.write(`${message}\n`),
-    changed: () => {
-      for (const tell of [...ruleChanges]) tell();
-    },
-  });
-  void Promise.resolve(ran)
-    .then(() => rules.start())
-    .catch((error: unknown) =>
-      process.stderr.write(
-        `The rules didn't start: ${error instanceof Error ? error.message : String(error)}\n`,
-      ),
+    ...options.firstRun,
+  }).catch((error: unknown) => {
+    process.stderr.write(
+      `First run didn't work: ${error instanceof Error ? error.message : String(error)}\n`,
     );
+    return undefined;
+  });
 
   /** The app's own pages: scripts and styles from here only, framed by nothing. */
   const appCsp = [
@@ -332,7 +189,7 @@ export async function startApp(options: AppOptions): Promise<App> {
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data:",
     "connect-src 'self'",
-    "frame-src 'self'",
+    "frame-src 'none'",
     "object-src 'none'",
     "base-uri 'none'",
     "form-action 'self'",
@@ -355,15 +212,6 @@ export async function startApp(options: AppOptions): Promise<App> {
     const url = new URL(request.url ?? "/", origin);
     const route = routes.get(url.pathname);
     if (route) return route(request, response, url);
-    if (url.pathname.startsWith("/frames/")) {
-      const served =
-        request.method === "GET"
-          ? serveFrame(url.pathname, origin, bundleOf, request.headers.origin)
-          : undefined;
-      if (!served) return void response.writeHead(404).end();
-      response.writeHead(served.status, served.headers).end(served.body);
-      return;
-    }
     if (url.pathname === "/api/session" && request.method === "POST") {
       // Same-origin only: a cross-site form can't trade a code it saw.
       if (request.headers.origin !== origin) return void response.writeHead(403).end();
@@ -379,14 +227,6 @@ export async function startApp(options: AppOptions): Promise<App> {
       // In the body, for the shell's own storage: a cookie would reach every port on 127.0.0.1.
       response.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
       return void response.end(JSON.stringify({ session }));
-    }
-    // A package's archive, and a system's file, both ways: for the person's UIs only, a tab by its
-    // session and the CLI by its token, as a bearer, which no other page can send.
-    if (url.pathname.startsWith("/packages") || url.pathname === "/system") {
-      const bearer = /^Bearer (\S+)$/.exec(request.headers.authorization ?? "")?.[1];
-      if (!signIn.isCli(request.headers.authorization) && !signIn.isSession(bearer))
-        return void response.writeHead(401).end();
-      return transfer(request, response, url);
     }
     if (url.pathname === "/api/code" && request.method === "POST") {
       // The CLI's way to sign a browser in again: a fresh code, for its token only.
@@ -417,100 +257,6 @@ export async function startApp(options: AppOptions): Promise<App> {
     });
     response.end(request.method === "HEAD" ? undefined : body);
   };
-  /** Answer a transfer's failure as `/api` answers a call's: `{error}`, with a fitting status. */
-  const failure = (response: ServerResponse, error: unknown) => {
-    const body =
-      error instanceof Refused
-        ? { name: "Refused", message: error.message, code: error.code }
-        : error instanceof Error &&
-            (error.name === "NotConnected" || error.name === "OutcomeUnknown")
-          ? { name: error.name, message: error.message }
-          : { name: "Refused", message: "The gateway couldn't handle this.", code: "internal" };
-    const status =
-      body.code === "too_large"
-        ? 413
-        : body.code === "invalid" || body.code === "unknown"
-          ? 400
-          : 409;
-    response.writeHead(status, { "Content-Type": "application/json", "Cache-Control": "no-store" });
-    response.end(JSON.stringify({ error: body }));
-  };
-  const sendFile = (response: ServerResponse, name: string, bytes: Uint8Array) => {
-    response.writeHead(200, {
-      "Content-Type": "application/octet-stream",
-      "Content-Disposition": `attachment; filename="${name.replace(/[^\w.@-]/g, "_")}"`,
-      "Cache-Control": "no-store",
-      "X-Content-Type-Options": "nosniff",
-    });
-    response.end(bytes);
-  };
-  /**
-   * `GET /packages/<hash>.agentorg`: a stored package's archive. `POST /packages`: an archive to
-   * add, verified by the Hub. `GET /system`: the system's file, its composition and every package
-   * it pins. `POST /system`: a system file, its packages added (each one's hash checked against
-   * its name), then imported with the person's authority.
-   */
-  const transfer = async (request: IncomingMessage, response: ServerResponse, url: URL) => {
-    try {
-      const archive = /^\/packages\/(sha256-[0-9a-f]{64})\.agentorg$/.exec(url.pathname);
-      if (archive && request.method === "GET") {
-        const hash = archive[1] as string;
-        const bytes = packageArchive(home, hash);
-        if (!bytes) throw new Refused("unknown", `No package ${hash}.`);
-        const { manifest } = hub.state.package(hash);
-        return sendFile(response, `${manifest.name}-${manifest.version}.agentorg`, bytes);
-      }
-      if (url.pathname === "/packages" && request.method === "POST") {
-        const bytes = await readBytes(request, MAX_TRANSFER);
-        const added = await withTemporaryFile(home, "upload.agentorg", bytes, (path) =>
-          person.slots.packages.call.add({ path }),
-        );
-        response.writeHead(200, {
-          "Content-Type": "application/json",
-          "Cache-Control": "no-store",
-        });
-        return void response.end(JSON.stringify(added));
-      }
-      if (url.pathname === "/system" && request.method === "GET") {
-        const { composition } = await person.slots.installer.call.exportSystem({});
-        const archives = new Map<string, Uint8Array>();
-        for (const hash of pinnedHashes(composition)) {
-          const bytes = packageArchive(home, hash);
-          if (bytes) archives.set(hash, bytes);
-        }
-        return sendFile(response, "system.agentorg-system", writeSystem(composition, archives));
-      }
-      if (url.pathname === "/system" && request.method === "POST") {
-        const { composition, packages } = readSystem(await readBytes(request, MAX_TRANSFER));
-        // Named by its hash, so the Hub refuses an archive whose hash isn't its name.
-        for (const [hash, bytes] of packages)
-          await withTemporaryFile(home, `${hash}.agentorg`, bytes, (path) =>
-            person.slots.packages.call.add({ path }),
-          );
-        const imported = await person.slots.installer.call.importSystem({ composition });
-        response.writeHead(200, {
-          "Content-Type": "application/json",
-          "Cache-Control": "no-store",
-        });
-        return void response.end(JSON.stringify(imported));
-      }
-      response.writeHead(405).end();
-    } catch (error) {
-      failure(response, error);
-    }
-  };
-  const bundleOf = (hash: string, module: string) => {
-    try {
-      const entry = hub.state.package(hash).manifest.modules[module];
-      if (entry?.placement !== "view") return undefined;
-      const dir = join(home, "packages", hash);
-      const file = resolve(dir, entry.entry);
-      return file.startsWith(dir + sep) ? file : undefined;
-    } catch {
-      return undefined;
-    }
-  };
-
   const sockets = new WebSocketServer({ noServer: true, maxPayload: MAX_MESSAGE });
   server.on("upgrade", (request, socket, head) => {
     // An upgraded socket has no error handler of its own: a client that resets would crash the app.
@@ -530,7 +276,7 @@ export async function startApp(options: AppOptions): Promise<App> {
       const serve = () => {
         served = serveSocket(
           { send: (text) => ws.send(text), close: (code, reason) => ws.close(code, reason) },
-          { person: personSide, views },
+          { person: personSide },
         );
       };
       // The CLI is in by its token; a tab says its session first, or is closed.
@@ -575,13 +321,14 @@ export async function startApp(options: AppOptions): Promise<App> {
 
   let closing: Promise<void> | undefined;
   let stopped = () => {};
+  let lost = false;
   const closed = new Promise<{ lost: boolean }>((done) => {
-    stopped = () => done({ lost: false });
+    stopped = () => done({ lost });
     // The person's channel gone (taken over, or the Hub gone): the gateway can't serve, so it stops.
     void person.closed.then(() => {
       if (!closing) {
+        lost = true;
         void close();
-        done({ lost: true });
       }
     });
   });
@@ -589,7 +336,6 @@ export async function startApp(options: AppOptions): Promise<App> {
     closing ??= (async () => {
       // A first run still going finishes first, so it isn't cut off half way.
       const programs = await ran;
-      rules.close();
       const ours = (file: string, text: string) => {
         if (file === "cli-token") return text.trim() === signIn.cliToken;
         if (file === "url") return text.trim() === listener.url;
@@ -626,7 +372,7 @@ export async function startApp(options: AppOptions): Promise<App> {
     url: origin,
     hubUrl: listener.url,
     hub,
-    ...(ran ? { firstRun: ran } : {}),
+    firstRun: ran,
     signInUrl: () => `${origin}/signin#${signIn.code()}`,
     route: (path, route) => void routes.set(path, route),
     close,
@@ -653,23 +399,6 @@ function contentType(file: string): string {
   if (file.endsWith(".css")) return "text/css; charset=utf-8";
   if (file.endsWith(".svg")) return "image/svg+xml";
   return "application/octet-stream";
-}
-
-/** A request's body as bytes, up to `max`: past it, `Refused("too_large")`. */
-function readBytes(request: IncomingMessage, max: number): Promise<Uint8Array> {
-  return new Promise((done, failed) => {
-    const chunks: Buffer[] = [];
-    let size = 0;
-    request.on("data", (chunk: Buffer) => {
-      size += chunk.length;
-      if (size > max) {
-        request.destroy();
-        failed(new Refused("too_large", `A file here is ${max / 1024 / 1024} MiB at most.`));
-      } else chunks.push(chunk);
-    });
-    request.on("end", () => done(new Uint8Array(Buffer.concat(chunks))));
-    request.on("error", failed);
-  });
 }
 
 function readBody(request: IncomingMessage): Promise<string> {

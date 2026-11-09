@@ -64,10 +64,10 @@ test("agentorg runs the app; while it runs, the person's commands go through it"
   for (const end = Date.now() + 30_000; listed.join() !== want.join() && Date.now() < end; )
     listed = await names();
   assert.deepEqual(listed, want);
-  // layout@1 is the gateway's own, kept in the person's store.
-  const layout = await run("call", "layout", "get", "--home", home);
-  assert.equal(layout.code, 0, layout.stderr);
-  assert.deepEqual(JSON.parse(layout.stdout), { home: [] });
+  // The person's notes are the gateway's own.
+  const notes = await run("call", "store", "get", '{"key":"none"}', "--home", home);
+  assert.equal(notes.code, 0, notes.stderr);
+  assert.deepEqual(JSON.parse(notes.stdout), {});
   const refused = await run("call", "actors", "get", '{"actorId":"nobody"}', "--home", home);
   assert.equal(refused.code, 1);
   assert.match(refused.stderr, /^Refused \(unknown\)/);

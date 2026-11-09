@@ -23,11 +23,10 @@
   },
   "files": [
     "dist/src",
-    "dist/bundled",
     "static"
   ],
   "scripts": {
-    "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.json && node scripts/bundle.js",
+    "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.json",
     "test": "node --test --test-timeout=60000 \"dist/test/**/*.test.js\""
   },
   "dependencies": {
