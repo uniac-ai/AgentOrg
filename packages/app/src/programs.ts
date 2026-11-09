@@ -29,6 +29,9 @@ export interface Programs {
   close(): Promise<void>;
 }
 
+/** A program's private folder under the home. */
+export const programDir = (home: string, name: string) => join(home, "programs", name);
+
 /** The Hub's exports each program holds. */
 const hubBinding = (name: string) => ({ slot: name, provider: "hub", export: name });
 interface Identity {
@@ -59,7 +62,7 @@ export async function startPrograms(
     warn() {},
     error: (message) => log(message),
   };
-  const dirOf = (name: string) => join(root, name);
+  const dirOf = (name: string) => programDir(options.home, name);
   const identityFile = (name: string) => join(root, `${name}.identity`);
 
   /** The program's Actor: the one kept for it unless that is closed, or a new one. */

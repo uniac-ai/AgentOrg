@@ -32,6 +32,10 @@ const ASSISTANT = {
 const Stored = z.object({ credential: z.string(), stopped: z.boolean() });
 const FILE = "agents.json";
 
+/** An agent's own record, in the folder a provider was given; for carrying an earlier one in. */
+export const agentRecord = (dir: string, agent: string) =>
+  createLocalStore(join(dir, "agents", agent));
+
 export interface AgentProviderOptions {
   hubUrl: string;
   /** The provider's own Actor, bound to `hub.actors@1` at `actors` and to the model at `model`. */

@@ -24,6 +24,7 @@ import { Refused } from "@agentorg/sdk";
 import { connect } from "@agentorg/sdk/client";
 import { WebSocketServer } from "ws";
 import { type PersonSide, serveSocket, type ViewCalls } from "./api.js";
+import { prepareCarry } from "./carry.js";
 import { serveFrame } from "./frames.js";
 import { Layout } from "./layout.js";
 import { oauthRoute } from "./model.js";
@@ -125,8 +126,19 @@ function writePrivate(file: string, text: string) {
 export async function startApp(options: AppOptions): Promise<App> {
   const home = resolve(options.home);
   mkdirSync(home, { recursive: true, mode: 0o700 });
-  const hub = Hub.open(home);
+  const say = (message: string) => process.stderr.write(`${message}\n`);
+  // Before the Hub opens, so an earlier release's Actors are closed before it can run them.
+  const carry = options.firstRun === false ? undefined : prepareCarry(home);
+  let hub: Hub;
+  try {
+    // With the first run on, nothing uses the built-in storage, and `storage.db` is left alone.
+    hub = Hub.open(home, { builtinStorage: options.firstRun === false });
+  } catch (error) {
+    carry?.discard();
+    throw error;
+  }
   const listener = await listen(hub, {}).catch((error) => {
+    carry?.discard();
     hub.close();
     throw error;
   });
@@ -290,17 +302,23 @@ export async function startApp(options: AppOptions): Promise<App> {
   const ran =
     options.firstRun === false
       ? undefined
-      : startPrograms(personSide, {
-          home,
-          hubUrl: listener.url,
-          log: (message) => process.stderr.write(`${message}\n`),
-          ...options.firstRun,
-        }).catch((error: unknown) => {
-          process.stderr.write(
-            `First run didn't work: ${error instanceof Error ? error.message : String(error)}\n`,
-          );
-          return undefined;
-        });
+      : (async () => {
+          try {
+            const programs = await startPrograms(personSide, {
+              home,
+              hubUrl: listener.url,
+              log: say,
+              ...options.firstRun,
+            });
+            await carry?.finish(personSide, (options.firstRun || undefined)?.log ?? say);
+            return programs;
+          } catch (error) {
+            say(`First run didn't work: ${error instanceof Error ? error.message : String(error)}`);
+            return undefined;
+          } finally {
+            carry?.discard();
+          }
+        })();
 
   // The person's named rules: off until turned on; their engine starts once the first run is done.
   const rules = new Rules({
