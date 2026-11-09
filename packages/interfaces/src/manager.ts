@@ -115,6 +115,8 @@ const AgentEntry = z.object({
   purpose: Purpose.optional(),
   /** The template it started from, for display only. */
   template: TemplateId.optional(),
+  /** The agent that made it; `gone` once that agent has been removed. It is the person's either way. */
+  parent: z.object({ agent: Id, name: ActorName, gone: z.literal(true).optional() }).optional(),
 });
 
 /**
