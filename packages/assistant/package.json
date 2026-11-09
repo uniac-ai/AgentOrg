@@ -5,6 +5,12 @@
   "description": "An agent that chats, and acts through the connections it's given",
   "license": "MIT",
   "type": "module",
+  "exports": {
+    "./provider": {
+      "types": "./dist/src/provider.d.ts",
+      "default": "./dist/src/provider.js"
+    }
+  },
   "scripts": {
     "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.json",
     "test": "node --test \"dist/test/**/*.test.js\""
