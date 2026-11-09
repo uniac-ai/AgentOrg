@@ -1,5 +1,5 @@
-// Creating an agent: a template or nothing, then units in a stack on the right, each drawn from
-// its form. Finished, a stack comes to MCP exposures and skills.
+// Creating an agent, in a popup: a template or nothing, then units in a stack, each drawn from its
+// form. Finished, a stack comes to MCP exposures and skills.
 import {
   BotIcon,
   ChevronRightIcon,
@@ -18,7 +18,6 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "../ui/dropdown-menu.tsx";
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "../ui/field.tsx";
@@ -27,7 +26,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { useBuilding } from "./building.tsx";
 import { useAct } from "./data.ts";
 import { FormField } from "./form.tsx";
-import { SidePanel } from "./parts.tsx";
 import {
   type CatalogUnit,
   type DraftUnit,
@@ -39,60 +37,84 @@ import {
   toStack,
 } from "./stack.ts";
 
-/** The plus: a stack in progress first, then an empty one, then the templates. */
-export function CreateMenu() {
-  const { catalog, draft, open, show, start } = useBuilding();
+/** The plus: it opens the popup, on the stack in progress if there is one. */
+export function CreateButton() {
+  const { draft, open, show } = useBuilding();
   const waiting = draft && !open;
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          aria-label={waiting ? "Create, one in progress" : "Create"}
-          className="relative"
-        >
-          <PlusIcon />
-          {waiting && (
-            <span
-              aria-hidden
-              className="absolute top-1 right-1 size-1.5 rounded-full bg-[var(--unread)]"
-            />
-          )}
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="w-72">
-        {waiting && (
-          <>
-            <DropdownMenuItem onSelect={show}>
-              Continue {draft.name || draft.from?.title || "the one you started"}
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-          </>
-        )}
-        <DropdownMenuItem onSelect={() => start()}>Empty</DropdownMenuItem>
-        {catalog.templates.length > 0 && <DropdownMenuSeparator />}
-        {catalog.templates.map((t) => (
-          <DropdownMenuItem
-            key={t.id}
-            onSelect={() => start(t)}
-            className="flex-col items-start gap-0"
-          >
-            <span>{t.title}</span>
-            <span className="text-xs text-muted-foreground">{t.description}</span>
-          </DropdownMenuItem>
-        ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
+    <Button
+      variant="ghost"
+      size="icon-sm"
+      aria-label={waiting ? "Create, one in progress" : "Create"}
+      className="relative"
+      onClick={show}
+    >
+      <PlusIcon />
+      {waiting && (
+        <span
+          aria-hidden
+          className="absolute top-1 right-1 size-1.5 rounded-full bg-[var(--unread)]"
+        />
+      )}
+    </Button>
   );
 }
 
-export function BuildPanel() {
+/**
+ * Create, in one box from choosing to finishing. A click outside does nothing while there's a
+ * stack, and closing puts it away for the plus to bring back: only Discard loses it.
+ */
+export function BuildDialog() {
+  const { draft, open, hide } = useBuilding();
+  return (
+    <Dialog open={open} onOpenChange={(next) => !next && hide()}>
+      <DialogContent
+        className="window flex h-[min(720px,calc(100dvh-2rem))] flex-col gap-0 overflow-hidden p-0 ring-0 sm:max-w-xl"
+        onInteractOutside={(event) => {
+          if (draft) event.preventDefault();
+        }}
+        aria-describedby={undefined}
+      >
+        {draft ? <Stack /> : <Choose />}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function Choose() {
+  const { catalog, start } = useBuilding();
+  const row =
+    "flex min-h-12 w-full flex-col justify-center rounded-xl px-3 py-1.5 text-left hover:bg-[var(--hover)]";
+  return (
+    <>
+      <div className="flex h-11 shrink-0 items-center pr-10 pl-4">
+        <DialogTitle className="text-[13px] font-semibold">Create</DialogTitle>
+      </div>
+      <ul aria-label="Start from" className="no-bar min-h-0 flex-1 overflow-y-auto px-2 pb-2">
+        <li>
+          <button type="button" className={row} onClick={() => start()}>
+            <span className="text-sm font-medium">Empty</span>
+          </button>
+        </li>
+        {catalog.templates.map((t) => (
+          <li key={t.id}>
+            <button type="button" className={row} onClick={() => start(t)}>
+              <span className="text-sm font-medium">{t.title}</span>
+              <span className="truncate text-[13px] text-muted-foreground">{t.description}</span>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </>
+  );
+}
+
+function Stack() {
   const building = useBuilding();
-  const { catalog, draft, open, hide, discard, saveTemplate, setText, setProblems } = building;
+  const { catalog, draft, discard, done, saveTemplate, setText, setProblems } = building;
   const act = useAct();
   const [saving, setSaving] = useState(false);
-  if (!open || !draft) return null;
+  if (!draft) return null;
   const ready = isReady(draft);
   const isTemplate = draft.mode === "template";
   const finish = () => {
@@ -101,7 +123,7 @@ export function BuildPanel() {
     if (isTemplate) {
       act.run(async () => {
         await saveTemplate(draft.name.trim(), purpose);
-        discard();
+        done();
         go({ screen: "settings", tab: "templates" });
       });
       return;
@@ -120,13 +142,13 @@ export function BuildPanel() {
         name: draft.name.trim(),
         ...(purpose ? { purpose } : {}),
       });
-      discard();
+      done();
       go({ screen: "agent", agent });
     });
   };
   const overall = draft.problems.filter((p) => p.unit === undefined);
   return (
-    <SidePanel label="Build">
+    <>
       <form
         className="flex min-h-0 flex-1 flex-col"
         onSubmit={(event) => {
@@ -134,13 +156,13 @@ export function BuildPanel() {
           finish();
         }}
       >
-        <header className="flex h-11 shrink-0 items-center gap-1 pr-2 pl-4">
-          <h2 className="min-w-0 flex-1 truncate text-[13px] font-semibold">
+        <header className="flex h-11 shrink-0 items-center gap-1 pr-10 pl-4">
+          <DialogTitle className="min-w-0 flex-1 truncate text-[13px] font-semibold">
             {isTemplate ? "New template" : "New agent"}
             {draft.from && (
               <span className="font-normal text-muted-foreground"> from {draft.from.title}</span>
             )}
-          </h2>
+          </DialogTitle>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button type="button" variant="ghost" size="icon-sm" aria-label="Build options">
@@ -158,9 +180,6 @@ export function BuildPanel() {
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
-          <Button type="button" variant="ghost" size="icon-sm" aria-label="Close" onClick={hide}>
-            <XIcon />
-          </Button>
         </header>
         <div className="no-bar min-h-0 flex-1 overflow-y-auto px-3.5 pb-3">
           <FieldGroup className="gap-3">
@@ -231,7 +250,7 @@ export function BuildPanel() {
         </footer>
       </form>
       <SaveTemplate open={saving} onClose={() => setSaving(false)} />
-    </SidePanel>
+    </>
   );
 }
 
