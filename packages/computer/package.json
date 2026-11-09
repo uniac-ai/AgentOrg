@@ -23,6 +23,7 @@
     "@agentorg/interfaces": "0.0.0",
     "@agentorg/mcp": "0.0.0",
     "@agentorg/sdk": "0.0.0",
+    "@playwright/mcp": "0.0.84",
     "zod": "^4.6.7"
   },
   "devDependencies": {

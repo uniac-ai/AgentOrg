@@ -3,18 +3,19 @@
 import type { Unit } from "@agentorg/interfaces";
 import type { z } from "zod";
 
-export const UNIT_ID = "computer";
-export const SLOT = "computer";
+export const COMPUTER = "computer";
+export const WEB = "web";
+export const BROWSER_SLOT = "browser";
 const SKILL = "SKILL.md";
 const skill = (name: string) => ({ name, files: [SKILL] });
 
 export type Access = "read" | "files" | "terminal";
-const WITH_FILES = { slots: [{ name: SLOT }], skills: [skill("files"), skill("computer")] };
+const WITH_FILES = { slots: [{ name: COMPUTER }], skills: [skill("files"), skill("computer")] };
 
 export const COMPUTER_UNIT: z.input<typeof Unit> = {
-  id: UNIT_ID,
+  id: COMPUTER,
   title: "Computer",
-  description: "A place for the agent to work: a folder, and how far it can act on it.",
+  description: "A place for the agent to work: a folder, how far it can act on it, and a browser.",
   form: [
     {
       id: "where",
@@ -57,11 +58,20 @@ export const COMPUTER_UNIT: z.input<typeof Unit> = {
           title: "Files and terminal",
           description: "It can run any command, so it can reach every file and program you can.",
           adds: {
-            slots: [{ name: SLOT }],
+            slots: [{ name: COMPUTER }],
             skills: [skill("terminal"), skill("files"), skill("computer")],
           },
         },
       ],
+    },
+    {
+      id: "browser",
+      type: "toggle",
+      value: "boolean",
+      title: "Browser",
+      description: "It can open web pages and act on them, in a browser of its own.",
+      default: false,
+      adds: { slots: [{ name: BROWSER_SLOT }], skills: [skill("browser")] },
     },
     {
       id: "workspace",
@@ -85,5 +95,33 @@ export const COMPUTER_UNIT: z.input<typeof Unit> = {
   gives: { slots: [], skills: [], results: [] },
 };
 
-/** The skills the unit can give, by name. */
-export const SKILLS = ["terminal", "files", "computer"];
+export const WEB_UNIT: z.input<typeof Unit> = {
+  id: WEB,
+  title: "Web",
+  description: "Search the web and read pages.",
+  form: [
+    {
+      id: "service",
+      type: "choice",
+      value: "string",
+      title: "Service",
+      required: true,
+      default: "exa",
+      options: [
+        {
+          value: "exa",
+          title: "Exa",
+          description: "It searches and reads pages through Exa, which sees what it looks for.",
+        },
+      ],
+    },
+  ],
+  needs: [],
+  gives: { slots: [{ name: WEB }], skills: [skill("web-research")], results: [] },
+};
+
+/** The skills each unit can give, by name. */
+export const SKILLS: Record<string, string[]> = {
+  [COMPUTER]: ["terminal", "files", "computer", "browser"],
+  [WEB]: ["web-research"],
+};
