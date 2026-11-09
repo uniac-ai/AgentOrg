@@ -1,0 +1,32 @@
+{
+  "name": "@agentorg/computer",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The computer unit: a terminal and files for an agent, on a machine the person chooses",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    }
+  },
+  "files": [
+    "dist/src",
+    "skills"
+  ],
+  "scripts": {
+    "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.json",
+    "test": "node --test \"dist/test/**/*.test.js\""
+  },
+  "dependencies": {
+    "@agentorg/interfaces": "0.0.0",
+    "@agentorg/mcp": "0.0.0",
+    "@agentorg/sdk": "0.0.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@agentorg/hub": "0.0.0",
+    "@modelcontextprotocol/server": "2.4.0"
+  }
+}

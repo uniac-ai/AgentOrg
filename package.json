@@ -13,6 +13,7 @@
     "packages/hub",
     "packages/mcp",
     "packages/manager",
+    "packages/computer",
     "packages/chatgpt",
     "packages/assistant",
     "packages/shell",
