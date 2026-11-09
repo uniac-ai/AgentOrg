@@ -1,12 +1,24 @@
 // First run on a fresh home: the programs made once and started in this process, and the person
 // reaching management and each agent's chat through `/api`, as `agentorg call` does.
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { once } from "node:events";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
+import { Computer } from "@agentorg/computer";
 import { HubState } from "@agentorg/hub";
 import WebSocket from "ws";
 import { type App, startApp } from "../src/index.ts";
@@ -83,12 +95,15 @@ const chatSlot = async (person: Person, agent: string) => {
   return bindings.find((b) => b.provider === agent && b.export === "chat")?.slot as string;
 };
 
-async function open(t: test.TestContext) {
+async function open(t: test.TestContext, computer?: { dataFolder: string; webUrl: string }) {
   const home = mkdtempSync(join(tmpdir(), "agentorg-programs-"));
   t.after(() => rmSync(home, { recursive: true, force: true }));
   const started: { app: App; person: Person }[] = [];
   const start = async () => {
-    const app = await startApp({ home, firstRun: { log: () => {} } });
+    const app = await startApp({
+      home,
+      firstRun: { log: () => {}, ...(computer ? { computer } : {}) },
+    });
     const person = personOf(app, home);
     started.push({ app, person });
     return { app, person, ran: await app.firstRun };
@@ -122,8 +137,9 @@ const createAssistant = async (person: Person, name: string) => {
 test("first run makes the programs once, connected to each other, with no installer", async (t) => {
   const s = await open(t);
   const { person, ran, app } = await s.start();
-  const { chatgpt, agents, mcp, management } = ran as NonNullable<typeof ran>;
-  for (const id of [chatgpt, agents, mcp, management]) assert.ok(id && app.hub.connected(id));
+  const { chatgpt, agents, mcp, computer, management } = ran as NonNullable<typeof ran>;
+  for (const id of [chatgpt, agents, mcp, computer, management])
+    assert.ok(id && app.hub.connected(id));
   assert.deepEqual(await wiring(person, agents as string), [
     "actors hub.actors",
     `model ${chatgpt}.session`,
@@ -294,4 +310,93 @@ test("a home an earlier release ran starts as a fresh one: its package Actors cl
   assert.deepEqual((await person.call<{ agents: unknown[] }>("agents", "list")).agents, []);
   assert.ok(await createAssistant(person, "New agent"));
   assert.equal(sha(), stored);
+});
+
+test("the bundled Assistant is a computer and the web, and its computer goes with it", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "agentorg-assistant-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const data = join(root, "service");
+  const workspace = join(root, "workspace");
+  mkdirSync(workspace);
+  const s = await open(t, { dataFolder: data, webUrl: "http://127.0.0.1:9/mcp" });
+  const { person } = await s.start();
+  const { templates } = await person.call<{
+    templates: { id: string; units: { unit: string }[] }[];
+  }>("agents", "templates");
+  assert.deepEqual(
+    templates.map((one) => [one.id, one.units.map((unit) => unit.unit)]),
+    [["assistant", ["computer", "web"]]],
+  );
+  // With no service found, the app says what to do. It starts nothing.
+  const { units } = await person.call<{
+    units: { id: string; provider: string }[];
+  }>("agents", "units");
+  const computers = units.find((one) => one.id === "computer")?.provider as string;
+  const { bases } = await person.call<{ bases: { id: string; provider: string }[] }>(
+    "agents",
+    "units",
+  );
+  const base = { provider: bases[0]?.provider, creatable: "assistant" };
+  const unit = {
+    provider: computers,
+    unit: "computer",
+    values: { service: "local", access: "read" },
+  };
+  const { problems } = await person.call<{ problems: { message: string }[] }>("agents", "check", {
+    stack: { base, units: [unit] },
+  });
+  assert.match(problems[0]?.message ?? "", /agentcomputer serve/);
+  assert.equal(existsSync(join(data, "server.json")), false);
+
+  const service = spawn(
+    process.execPath,
+    [
+      join(
+        dirname(createRequire(import.meta.url).resolve("@agentorg/computer")),
+        "agentcomputer.js",
+      ),
+      "serve",
+      "--listen",
+      "127.0.0.1:0",
+      "--data",
+      data,
+    ],
+    { stdio: "ignore" },
+  );
+  t.after(async () => {
+    if (service.exitCode === null) {
+      service.kill("SIGTERM");
+      await once(service, "exit");
+    }
+  });
+  await until(() => existsSync(join(data, "server.json")), "the service to start");
+  const reached = {
+    apiUrl: JSON.parse(readFileSync(join(data, "server.json"), "utf8")).url as string,
+    apiKey: readFileSync(join(data, "control-token"), "utf8").trim(),
+  };
+
+  const { agent } = await person.call<{ agent: string }>("agents", "create", {
+    template: "assistant",
+    fill: [{ values: { service: "local", workspace } }],
+    name: "Helper",
+  });
+  const read = await person.call<{
+    template: string;
+    mcp: { slot: string }[];
+    skills: { name: string }[];
+  }>("agents", "get", { agent });
+  assert.equal(read.template, "assistant");
+  assert.deepEqual(read.mcp.map((one) => one.slot).sort(), ["browser", "computer", "web"]);
+  assert.deepEqual(read.skills.map((one) => one.name).sort(), [
+    "browser",
+    "computer",
+    "files",
+    "terminal",
+    "web-research",
+  ]);
+  assert.equal((await Computer.list(reached)).length, 1);
+
+  await person.call("agents", "remove", { agent });
+  assert.equal((await Computer.list(reached)).length, 0);
+  assert.ok(existsSync(workspace), "the named folder stays");
 });

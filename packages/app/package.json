@@ -30,6 +30,7 @@
     "test": "node --test --test-timeout=60000 \"dist/test/**/*.test.js\""
   },
   "dependencies": {
+    "@agentorg/computer-connector": "0.0.0",
     "@agentorg/hub": "0.0.0",
     "@agentorg/interfaces": "0.0.0",
     "@agentorg/manager": "0.0.0",
@@ -46,6 +47,7 @@
     "zod": "^4.6.7"
   },
   "devDependencies": {
+    "@agentorg/computer": "0.0.3",
     "@playwright/test": "1.64.1",
     "@types/ws": "^8.18.2"
   },

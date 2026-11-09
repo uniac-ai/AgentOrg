@@ -2,7 +2,7 @@
 # The published package as a person gets it: @agentorg/cli packed, with the other @agentorg
 # packages inside it (dist/node_modules), installed from its tarball into an empty folder with a
 # cache of its own, and globally with a prefix of its own. Then `agentorg` runs on a fresh home:
-# first run must make ChatGPT, both providers and management, all connected; an agent must be made
+# first run must make ChatGPT, the providers and management, all connected; an agent must be made
 # with `agentorg call agents create`; and the gateway must serve the shell and the sign-in page. Last, this build must start on a home the published 0.0.5
 # made: its old Actors closed, and `agents create` working; and on a home the published 0.0.6 made,
 # with a connection that must still answer. Run after `npm run build`.
@@ -78,6 +78,10 @@ agentorg="$work/install/node_modules/.bin/agentorg"
 # Every other @agentorg package is the one inside the cli: none came from the registry.
 top="$(ls "$work/install/node_modules/@agentorg")"
 [ "$top" = cli ] || { echo "Installed beside the cli: $top" >&2; exit 1; }
+# The AgentComputer SDK is inside; the service beside it in that package is not.
+sdk="$work/install/node_modules/@agentorg/cli/dist/node_modules/@agentorg/computer"
+[ -f "$sdk/dist/sdk.js" ] || { echo "No AgentComputer SDK in the cli" >&2; exit 1; }
+[ ! -e "$sdk/dist/agentcomputer.js" ] || { echo "The cli ships the service" >&2; exit 1; }
 ls "$work/install/node_modules/@agentorg/cli/dist/node_modules/@agentorg"
 "$agentorg" --version
 
@@ -111,7 +115,7 @@ for _ in $(seq 1 120); do
     node -e '
       const { actors } = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
       const up = (name) => actors.some((a) => a.name === name && a.connected);
-      process.exit(["ChatGPT", "AgentOrg", "Local", "Management"].every(up) ? 0 : 1);
+      process.exit(["ChatGPT", "AgentOrg", "Local", "Computers", "Management"].every(up) ? 0 : 1);
     ' "$work/actors.json"; then
     ready=1
     break

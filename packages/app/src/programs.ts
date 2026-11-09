@@ -1,10 +1,11 @@
-// The app's programs: ChatGPT, the agent provider, the MCP provider and management, each an Actor
+// The app's programs: ChatGPT, the agent provider, the MCP provider, the computer connector and management, each an Actor
 // of its own that this process runs on its own channel, with its own private folder under the home.
 // Every step reads what is there before it acts, so each start converges on the same system.
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { startComputerProvider } from "@agentorg/computer-connector";
 import { HubState, PERSON } from "@agentorg/hub";
-import { startManager } from "@agentorg/manager";
+import { type ManagerOptions, startManager } from "@agentorg/manager";
 import { startMcpProvider } from "@agentorg/mcp";
 import type { Log } from "@agentorg/sdk";
 import { startAgentProvider } from "assistant/provider";
@@ -18,6 +19,8 @@ export interface ProgramsOptions {
   log?: (message: string) => void;
   /** How ChatGPT's requests leave, instead of the network. For tests. */
   fetch?: (request: Request, init: RequestInit) => Promise<Response>;
+  /** Where the computer connector looks for a local service, and the web unit's server. For tests. */
+  computer?: { dataFolder?: string; webUrl?: string };
 }
 
 export interface Programs {
@@ -25,6 +28,7 @@ export interface Programs {
   chatgpt?: string;
   agents?: string;
   mcp?: string;
+  computer?: string;
   management?: string;
   /** Leave the Hub, in the order that lets each finish. What each keeps stays. */
   close(): Promise<void>;
@@ -45,6 +49,18 @@ export function closePackageActors(home: string) {
     state.close();
   }
 }
+
+/** The bundled Assistant: the base, a computer on a service the person chooses, and the web. */
+const ASSISTANT_TEMPLATE: NonNullable<ManagerOptions["templates"]>[number] = {
+  id: "assistant",
+  title: "Assistant",
+  description: "An agent with a computer of its own and the web.",
+  base: { provider: "AgentOrg", creatable: "assistant" },
+  units: [
+    { provider: "Computers", unit: "computer", values: { access: "terminal", browser: true } },
+    { provider: "Computers", unit: "web", values: { service: "exa" } },
+  ],
+};
 
 /** The Hub's exports each program holds. */
 const hubBinding = (name: string) => ({ slot: name, provider: "hub", export: name });
@@ -171,6 +187,20 @@ export async function startPrograms(
     return actorId;
   });
 
+  const computer = await attempt("the computer connector", async () => {
+    const { actorId, credential } = await identity("computer", "Computers", [hubBinding("actors")]);
+    const running = await startComputerProvider({
+      hubUrl,
+      actorId,
+      credential,
+      dir: dirOf("computer"),
+      log: programLog,
+      ...options.computer,
+    });
+    closers.unshift(() => running.close());
+    return actorId;
+  });
+
   const management = await attempt("management", async () => {
     const { actorId, credential } = await identity("management", "Management", [
       hubBinding("actors"),
@@ -184,6 +214,7 @@ export async function startPrograms(
       credential,
       dir: dirOf("management"),
       log: programLog,
+      templates: [ASSISTANT_TEMPLATE],
     });
     closers.push(() => running.close());
     for (const [slot, exported] of [
@@ -196,7 +227,7 @@ export async function startPrograms(
   });
 
   if (management)
-    for (const provider of [agents, mcp])
+    for (const provider of [agents, mcp, computer])
       if (provider)
         await attempt("connecting a provider to management", () =>
           call("grants", "expose", { provider, export: "provider", to: management }),
@@ -206,6 +237,7 @@ export async function startPrograms(
     ...(chatgpt ? { chatgpt } : {}),
     ...(agents ? { agents } : {}),
     ...(mcp ? { mcp } : {}),
+    ...(computer ? { computer } : {}),
     ...(management ? { management } : {}),
     async close() {
       for (const close of closers)

@@ -62,6 +62,7 @@ export const AgentRecord = z.object({
   computer: z
     .object({
       access: z.string(),
+      service: z.string().optional(),
       browser: z.boolean(),
       connections: z.array(z.object({ slot: z.string(), connection: z.string() })),
       skills: z.array(z.string()),
