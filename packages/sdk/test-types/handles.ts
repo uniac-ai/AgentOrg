@@ -60,9 +60,6 @@ export const actor = defineActor({
     });
     ctx.exports.board.emit("changed", { id: "1" });
     ctx.exports.board.emit("changed", { id: "1" }, { to: "actor" });
-    ctx.exports.board.withdraw();
-    const extra = ctx.exports.add("extra", board);
-    extra.emit("changed", { id: "2" });
     ctx.log.info("started", { cards: cards.length });
     const id: string = ctx.self.actorId;
     void [first, done, off, bound, id];
@@ -136,9 +133,6 @@ export const servers = defineActor({
     ctx.exports.web.serve(() => "text");
   },
 });
-
-// @ts-expect-error: `add` is reserved for exports.add.
-defineActor({ exports: { add: board }, start() {} });
 
 const harness = createTestContext(actor);
 harness.bind("board", { list: async () => ({ cards: [] }) });

@@ -112,9 +112,6 @@ export interface Channel {
   open(slot: string, params: unknown): Promise<Duplex>;
   /** A stream to an `http` slot's provider, carrying HTTP/1.1 once it accepts. */
   http(slot: string): Promise<Duplex>;
-  /** Offer and withdraw run-time exports; they reach the Hub in the order they were made. */
-  offer(name: string, iface: DescribedInterface): Promise<void>;
-  withdraw(name: string): Promise<void>;
   close(): void;
   /** Settles when the channel ends. */
   readonly closed: Promise<void>;
@@ -332,13 +329,6 @@ export async function openChannel(options: ChannelOptions): Promise<Channel> {
     if (!("result" in body)) throw new Refused("bad_output", "The Hub's answer isn't a result.");
     return body.result;
   };
-  // Offers and withdrawals go one at a time, so the Hub sees them in the order they were made.
-  let changes: Promise<unknown> = Promise.resolve();
-  const inOrder = <T>(work: () => Promise<T>): Promise<T> => {
-    const next = changes.then(work, work);
-    changes = next.catch(() => {});
-    return next;
-  };
   const closed = session.closed.then(() => {
     ended = true;
     bound.clear();
@@ -390,14 +380,6 @@ export async function openChannel(options: ChannelOptions): Promise<Channel> {
     },
     open: (slot, params) => splice({ op: "open", slot, params }, slot),
     http: (slot) => splice({ op: "http", slot }, slot),
-    offer: (name, iface) =>
-      inOrder(async () => {
-        answered(await exchange({ op: "offer", name, interface: iface }, name), name);
-      }),
-    withdraw: (name) =>
-      inOrder(async () => {
-        answered(await exchange({ op: "withdraw", name }, name), name);
-      }),
     close: () => session.close(),
     closed,
   };
@@ -466,7 +448,7 @@ type None = Record<never, Interface>;
  * `start`, and use slots from `onBind`. `start` runs before the channel opens, so the Hub never
  * reaches an export before it is implemented. A slot is bound when the Hub says so; `onBind` runs
  * when it becomes usable (bound, or its provider back), and `on` handlers subscribe while it is
- * usable. `exports.add` and `withdraw()` offer and withdraw over the channel. `http` slots and
+ * usable. `http` slots and
  * exports speak HTTP/1.1 over the Hub's stream, one request per stream, with `node:http`.
  */
 export async function connect<

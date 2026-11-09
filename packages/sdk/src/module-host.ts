@@ -1,6 +1,5 @@
 import type { Channel, ChannelExposure, Serve, ServeHandlers } from "./client.js";
 import { NotConnected, OutcomeUnknown, Refused } from "./errors.js";
-import { describeInterface, type Interface } from "./interface.js";
 import type { InterfaceMap, Log } from "./module.js";
 import type { Binding, ModuleRuntime, RuntimeOptions } from "./runtime.js";
 
@@ -14,8 +13,7 @@ interface Sender {
  * One module's runtime, joined to a channel. Its slots and exports are named on the wire with a
  * prefix: none for a program that connects itself, `<module>.` for a module in a package Actor's
  * process, where several share one channel. It binds slots as the Hub's notices say, subscribes
- * `on` handlers while a slot is usable, serves the Hub's streams to its exports, and offers and
- * withdraws run-time exports.
+ * `on` handlers while a slot is usable, and serves the Hub's streams to its exports.
  */
 export class ModuleHost {
   readonly #prefix: string;
@@ -25,13 +23,11 @@ export class ModuleHost {
   #channel?: Channel;
   /** The Hub's subscriptions to this module's exports, by export and event, each with its caller. */
   readonly #senders = new Map<string, Set<Sender>>();
-  /** The same subscriptions by export, each ended when its export is withdrawn. */
+  /** The same subscriptions by export, each ended when the channel goes. */
   readonly #subscribers = new Map<string, Set<() => void>>();
   /** Slot events the module listens to, each with its live subscription, if any. */
   readonly #listened = new Map<string, Map<string, (() => void) | undefined>>();
   readonly #bindings = new Map<string, Binding>();
-  /** Run-time exports by name, so a refused offer withdraws the right handle. */
-  readonly #added = new Map<string, { handle: { withdraw(): void }; iface: Interface }>();
 
   constructor(prefix: string, slots: InterfaceMap, log: Log) {
     this.#prefix = prefix;
@@ -54,7 +50,7 @@ export class ModuleHost {
   }
 
   /** The runtime's hooks for this host: pass them to `createRuntime`. */
-  hooks(): Pick<RuntimeOptions, "onEmit" | "onListen" | "onAdd" | "onWithdraw"> {
+  hooks(): Pick<RuntimeOptions, "onEmit" | "onListen"> {
     return {
       onEmit: (exportName, event, payload, to?: string) => {
         // An event addressed to one caller goes only to that caller's subscriptions; one
@@ -72,27 +68,7 @@ export class ModuleHost {
         }
       },
       onListen: (slot, event) => this.#subscribeSlot(slot, event),
-      onAdd: (name, iface, handle) => {
-        this.#added.set(name, { handle, iface });
-        // Added during start, before the channel opens: offered once it does.
-        if (this.#channel) this.#offer(this.#channel, name, iface, handle);
-      },
-      onWithdraw: (name) => {
-        for (const end of [...(this.#subscribers.get(name) ?? [])]) end();
-        // Only exports offered at run time can be withdrawn at the Hub; static ones just stop here.
-        if (!this.#added.has(name)) return;
-        this.#added.delete(name);
-        void this.#channel?.withdraw(this.#wire(name)).catch(() => {});
-      },
     };
-  }
-
-  /** Offer a run-time export; one the Hub refuses is withdrawn here too. */
-  #offer(channel: Channel, name: string, iface: Interface, handle: { withdraw(): void }) {
-    void channel.offer(this.#wire(name), describeInterface(iface)).catch((error) => {
-      this.#log.error("The Hub refused an export.", { export: name, error: String(error) });
-      if (this.#added.get(name)?.handle === handle) handle.withdraw();
-    });
   }
 
   #subscribeSlot(slot: string, event: string) {
@@ -209,7 +185,6 @@ export class ModuleHost {
     call: (serve, value) =>
       this.runtime.call(serve.export, serve.method ?? "", value, serve.caller),
     subscribe: (serve, sendTo, end) => {
-      if (this.runtime.withdrawn(serve.export)) throw new NotConnected(serve.export);
       const key = `${serve.export}\0${serve.event ?? ""}`;
       const set = this.#senders.get(key) ?? new Set();
       this.#senders.set(key, set);
@@ -219,13 +194,13 @@ export class ModuleHost {
       this.#subscribers.set(serve.export, ends);
       const stop = () => {
         set.delete(sender);
-        ends.delete(withdrawn);
+        ends.delete(ended);
       };
-      const withdrawn = () => {
+      const ended = () => {
         stop();
         end(new NotConnected(serve.export));
       };
-      ends.add(withdrawn);
+      ends.add(ended);
       return stop;
     },
     accept: (serve) => this.runtime.accepting(serve.export, serve.params),
@@ -239,12 +214,11 @@ export class ModuleHost {
   };
 
   /**
-   * Join the opened channel: offer what was added during start, bind the slots the Hub's hello
-   * said are bound, and leave nothing usable once the channel goes.
+   * Join the opened channel: bind the slots the Hub's hello said are bound, and leave nothing
+   * usable once the channel goes.
    */
   attach(channel: Channel): void {
     this.#channel = channel;
-    for (const [name, { handle, iface }] of this.#added) this.#offer(channel, name, iface, handle);
     for (const name of channel.bound)
       if (name.startsWith(this.#prefix) && !channel.exposed.has(name))
         this.onSlot(name.slice(this.#prefix.length), true);

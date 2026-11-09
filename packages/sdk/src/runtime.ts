@@ -76,7 +76,6 @@ export interface ModuleRuntime<S extends InterfaceMap, X extends InterfaceMap> {
   /** The checking half of `fetch`: refuses at once, or returns what serves each request. */
   serving(exportName: string): (request: Request) => Promise<Response>;
   mount(exportName: string, el: FrameRoot, options: unknown): MountedView;
-  withdrawn(exportName: string): boolean;
 }
 
 export interface RuntimeOptions {
@@ -86,10 +85,6 @@ export interface RuntimeOptions {
   onEmit(exportName: string, event: string, payload: unknown, to: string | undefined): void;
   /** Called when the module listens to a slot's event, so a remote host can subscribe. */
   onListen?(slot: string, event: string): void;
-  /** Called when the module offers an export at run time with `exports.add`, with its handle. */
-  onAdd?(name: string, iface: Interface, handle: { withdraw(): void }): void;
-  /** Called when the module withdraws an export. */
-  onWithdraw?(name: string): void;
 }
 
 type Schema = {
@@ -120,7 +115,6 @@ export function check(
   );
 }
 
-const NAME = /^[a-z][A-Za-z0-9_]*$/;
 const own = <T>(record: Record<string, T>, key: string): T | undefined =>
   Object.hasOwn(record, key) ? record[key] : undefined;
 
@@ -142,7 +136,6 @@ interface ExposedState {
 interface ExportState {
   iface: Interface;
   impl?: unknown;
-  withdrawn: boolean;
 }
 
 export function createRuntime<S extends InterfaceMap, X extends InterfaceMap>(
@@ -224,27 +217,17 @@ export function createRuntime<S extends InterfaceMap, X extends InterfaceMap>(
   };
 
   const exportHandle = (name: string, iface: Interface) => {
-    const state: ExportState = { iface, withdrawn: false };
+    const state: ExportState = { iface };
     exported.set(name, state);
-    const live = () => {
-      if (state.withdrawn) throw new NotConnected(name);
-    };
-    const withdraw = () => {
-      if (state.withdrawn) return;
-      state.withdrawn = true;
-      options.onWithdraw?.(name);
-    };
     const store = (impl: unknown) => {
-      live();
       state.impl = impl;
     };
-    if (isFrameInterface(iface)) return { implement: store, withdraw };
+    if (isFrameInterface(iface)) return { implement: store };
     switch (iface.kind) {
       case "rpc":
         return {
           implement: store,
           emit(event: string, payload: unknown, emitting?: EmitOptions) {
-            live();
             const spec = own(iface.events, event);
             if (!spec) throw new TypeError(`${name} has no event ${event}.`);
             options.onEmit(
@@ -254,19 +237,18 @@ export function createRuntime<S extends InterfaceMap, X extends InterfaceMap>(
               emitting?.to,
             );
           },
-          withdraw,
         };
       case "stream":
-        return { accept: store, withdraw };
+        return { accept: store };
       case "http":
-        return { serve: store, withdraw };
+        return { serve: store };
     }
   };
 
   /** A connected export of the expected kind; implemented or not is checked after its input. */
   const target = (name: string, kind: "rpc" | "stream" | "http" | "frame") => {
     const state = exported.get(name);
-    if (!state || state.withdrawn) throw new NotConnected(name);
+    if (!state) throw new NotConnected(name);
     const frame = isFrameInterface(state.iface);
     if (frame !== (kind === "frame") || (!frame && state.iface.kind !== kind))
       throw new TypeError(
@@ -397,25 +379,8 @@ export function createRuntime<S extends InterfaceMap, X extends InterfaceMap>(
     slots: Object.fromEntries(
       Object.entries(definition.slots).map(([name, iface]) => [name, slotHandle(name, iface)]),
     ),
-    exports: Object.assign(
-      Object.fromEntries(
-        Object.entries(definition.exports).map(([name, iface]) => [
-          name,
-          exportHandle(name, iface),
-        ]),
-      ),
-      {
-        add(name: string, iface: Interface) {
-          if (!NAME.test(name) || name === "add")
-            throw new TypeError(`${JSON.stringify(name)} isn't a valid export name.`);
-          const existing = exported.get(name);
-          if (existing && !existing.withdrawn)
-            throw new TypeError(`An export named ${name} is already offered.`);
-          const handle = exportHandle(name, iface);
-          options.onAdd?.(name, iface, handle);
-          return handle;
-        },
-      },
+    exports: Object.fromEntries(
+      Object.entries(definition.exports).map(([name, iface]) => [name, exportHandle(name, iface)]),
     ),
     self: options.self,
     log: options.log,
@@ -550,9 +515,6 @@ export function createRuntime<S extends InterfaceMap, X extends InterfaceMap>(
           cleanup?.();
         },
       };
-    },
-    withdrawn(exportName) {
-      return exported.get(exportName)?.withdrawn ?? false;
     },
   };
 }

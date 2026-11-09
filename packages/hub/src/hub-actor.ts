@@ -1,12 +1,5 @@
 import { Refused } from "@agentorg/sdk";
-import type {
-  ActorRecord,
-  AuditRecord,
-  Decision,
-  HubState,
-  RequestRecord,
-  Wiring,
-} from "./state.js";
+import type { ActorRecord, AuditRecord, HubState, Wiring } from "./state.js";
 
 type Input = Record<string, unknown>;
 type Handler = (caller: string, input: Input) => unknown;
@@ -43,7 +36,6 @@ export class HubActor {
             ...(Array.isArray(input.bindings)
               ? { bindings: input.bindings as Omit<Wiring, "consumer">[] }
               : {}),
-            ...(typeof input.for === "string" ? { for: input.for } : {}),
           }),
         list: () => ({ actors: state.actors().map(recordOf) }),
         get: (_, input) => recordOf(state.actor(String(input.actorId))),
@@ -60,14 +52,6 @@ export class HubActor {
             ...(typeof input.as === "string" ? { as: input.as } : {}),
           }),
         unexpose: (caller, input) => state.unexpose(caller, String(input.to), String(input.slot)),
-        request: (caller, input) => ({
-          requestId: state.request(caller, wiring(input), String(input.reason)).requestId,
-        }),
-        requests: (caller) => ({ requests: state.requests(caller) }),
-        mine: (caller, input) => ({
-          requests: state.mine(caller, typeof input.limit === "number" ? input.limit : 100),
-        }),
-        decline: (caller, input) => state.decline(caller, String(input.requestId)),
       },
       bindings: {
         list: (_, input) => ({
@@ -109,16 +93,6 @@ export class HubActor {
   #send(key: string, payload: unknown, to?: (caller: string) => boolean) {
     for (const listener of [...(this.#listeners.get(key) ?? [])])
       if (!to || to(listener.caller)) listener.emit(payload);
-  }
-
-  /** A request, to the subscribers who could approve it. */
-  requested(request: RequestRecord, approvers: string[]) {
-    this.#send("grants.requested", request, (caller) => approvers.includes(caller));
-  }
-
-  /** A decision, to the subscribers its request went to and its requester. */
-  decided(request: RequestRecord, status: Decision, approvers: string[]) {
-    this.#send("grants.decided", { request, status }, (caller) => approvers.includes(caller));
   }
 
   exportsChanged(actor: string) {

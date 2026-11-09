@@ -184,14 +184,13 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
         return found;
       };
       const exposeConnection = async (agent: string, connection: string, as?: string) => {
-        const made = await hub.grants.expose({
+        const { slot } = await hub.grants.expose({
           provider: connection,
           export: TOOLS_EXPORT,
           to: agent,
           ...(as ? { as } : {}),
         });
-        if (!made.exposed) throw new Refused("failed", `${connection} wasn't exposed to ${agent}.`);
-        return made.slot;
+        return slot;
       };
       /** Remove a connection through its provider; one that has lost it leaves only the Actor. */
       const removeConnection = async (connection: string, provider: string) => {
@@ -288,13 +287,12 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
             undo.push(() => creating.delete(agent));
             const origins: Record<string, Origin> = {};
 
-            const bound = await hub.grants.bind({
+            await hub.grants.bind({
               consumer: agent,
               slot: made.settings,
               provider: options.actorId,
               export: "settings",
             });
-            if (!bound.bound) throw new Refused("failed", `${agent}'s settings weren't bound.`);
 
             for (const skill of creatable.skills) {
               if (!library.has(skill.name)) {
@@ -339,12 +337,11 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
               await exposeConnection(agent, connection as string, need.slot);
             }
 
-            const shown = await hub.grants.expose({
+            await hub.grants.expose({
               provider: agent,
               export: made.chat,
               to: PERSON,
             });
-            if (!shown.exposed) throw new Refused("failed", `${agent}'s chat wasn't exposed.`);
             records.agents[agent] = record;
             Object.assign(records.connections, origins);
             undo.push(() => {

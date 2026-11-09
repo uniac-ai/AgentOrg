@@ -20,7 +20,6 @@ export {
   ActorState,
   AuditEntry,
   Binding,
-  BindingRequest,
   ExportEntry,
   hubActors,
   hubAudit,

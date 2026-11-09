@@ -17,8 +17,6 @@
  *   they give each slot's state. A `bound: true` for a slot already bound means its provider came
  *   back after going away: the slot is usable again, and what was subscribed must be again. A
  *   provider going away sends nothing; calls meanwhile are `NotConnected`.
- * - `offer` and `withdraw`: the channel's own Actor offers an export at run time, or withdraws
- *   one it offered; one body (`{result: {}}` or `{error}`) answers, then the stream closes.
  * - `call`: the caller sends one `{input}` body and closes its side; the answer is one `{result}`
  *   or `{error}` body, then the stream closes.
  * - `subscribe`: `{event}` bodies flow until the subscriber resets the stream, or the provider
@@ -41,9 +39,6 @@ export type Header =
   | { op: "open"; slot: string; params: unknown }
   /** HTTP/1.1 bytes. */
   | { op: "http"; slot: string }
-  /** Offer an export at run time, as a described interface; it lasts until withdrawn or disconnect. */
-  | { op: "offer"; name: string; interface: unknown }
-  | { op: "withdraw"; name: string }
   /**
    * From the Hub to an Actor: one of its slots was bound or unbound. A slot made at run time (an
    * export exposed to this Actor) carries `exposed` while bound: the export's described interface
@@ -113,11 +108,6 @@ export function parseHeader(value: unknown): Header {
       return { op: "open", slot: text(value, "slot"), params: value.params };
     case "http":
       return { op: "http", slot: text(value, "slot") };
-    case "offer":
-      if (!isRecord(value.interface)) throw new HeaderError("An offer header needs an interface.");
-      return { op: "offer", name: text(value, "name"), interface: value.interface };
-    case "withdraw":
-      return { op: "withdraw", name: text(value, "name") };
     case "slot": {
       if (typeof value.bound !== "boolean") throw new HeaderError("A slot header needs bound.");
       if (!("exposed" in value))

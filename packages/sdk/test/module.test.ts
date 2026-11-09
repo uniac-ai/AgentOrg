@@ -70,12 +70,11 @@ test("defineActor and defineWidget share one shape and record the placement", ()
   assert.deepEqual(defineActor({ start }).slots, {});
 });
 
-test("slot and export names are checked, and `add` is reserved", () => {
+test("slot and export names are checked", () => {
   const start = () => {};
   assert.throws(() => defineActor({ slots: { "my-notes": notes }, start }), /valid slot name/);
   assert.throws(() => defineActor({ exports: { Notes: notes }, start }), /valid export name/);
   // The types refuse it too; this is the check for code that bypasses them.
-  assert.throws(() => defineActor({ exports: { add: notes } as never, start }), /reserved/);
 });
 
 test("only ui.view@1 is the in-frame interface", () => {
@@ -185,7 +184,7 @@ test("names that every object has are not methods or events", async () => {
   assert.throws(() => t.ctx.exports.notes.emit("constructor" as never, {} as never), /no event/);
 });
 
-test("an rpc export is called through its handlers, emits validated events, and stops when withdrawn", async () => {
+test("an rpc export is called through its handlers and emits validated events", async () => {
   const t = createTestContext(
     defineActor({
       exports: { notes },
@@ -214,39 +213,6 @@ test("an rpc export is called through its handlers, emits validated events, and 
     (e: Refused) => e.code === "invalid",
   );
   assert.deepEqual(t.logs, [{ level: "info", message: "ready", fields: { exports: 1 } }]);
-  t.ctx.exports.notes.withdraw();
-  assert.equal(t.withdrawn("notes"), true);
-  await assert.rejects(t.call("notes", "read", { key: "a" }), NotConnected);
-  assert.throws(() => t.ctx.exports.notes.emit("written", { key: "k" }), NotConnected);
-  assert.throws(
-    () => t.ctx.exports.notes.implement({ read: () => ({ text: "" }), write: () => ({}) }),
-    NotConnected,
-  );
-});
-
-test("exports can be added at run time under a free, valid name, including a withdrawn one", async () => {
-  const t = createTestContext(
-    defineActor({
-      exports: { notes },
-      start(ctx) {
-        ctx.exports.add("extra", notes).implement({
-          read: () => ({ text: "extra" }),
-          write: () => ({}),
-        });
-      },
-    }),
-  );
-  await t.start();
-  assert.deepEqual(await t.call("extra", "read", { key: "x" }), { text: "extra" });
-  assert.throws(() => t.ctx.exports.add("extra", notes), /already offered/);
-  assert.throws(() => t.ctx.exports.add("notes", notes), /already offered/);
-  assert.throws(() => t.ctx.exports.add("add", notes), /valid export name/);
-  assert.throws(() => t.ctx.exports.add("Bad Name!", notes), /valid export name/);
-  t.ctx.exports.notes.withdraw();
-  t.ctx.exports
-    .add("notes", notes)
-    .implement({ read: () => ({ text: "again" }), write: () => ({}) });
-  assert.deepEqual(await t.call("notes", "read", { key: "x" }), { text: "again" });
 });
 
 test("stream and http slots and exports carry bytes and requests", async () => {
@@ -306,8 +272,6 @@ test("a ui.view@1 export mounts into an element, resizes and unmounts with valid
   ]);
   assert.throws(() => t.mount("view", el, { theme: {} }), Refused);
   await assert.rejects(t.call("view", "mount", options), /isn't an rpc export/);
-  t.ctx.exports.view.withdraw();
-  assert.throws(() => t.mount("view", el, options), NotConnected);
 });
 
 test("a handler learns who called, and an event can go to one subscriber", async () => {

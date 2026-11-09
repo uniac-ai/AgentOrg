@@ -14,7 +14,7 @@ import {
 } from "@agentorg/sdk";
 import { type ConnectOptions, connect } from "@agentorg/sdk/client";
 import { z } from "zod";
-import { HUB, Hub, listen, PERSON } from "../src/index.ts";
+import { Hub, listen, PERSON } from "../src/index.ts";
 
 const notes = defineInterface({
   name: "notes",
@@ -288,69 +288,6 @@ test("errors come back as the SDK's", async (t) => {
   await assert.rejects(connect({ hubUrl: "not a url", ...c }), NotConnected);
 });
 
-test("run-time exports: offered in order, withdrawn with their bindings and subscriptions, or refused", async (t) => {
-  const { url, makeActor, bind, person, as, hub } = await setup(t);
-  const p = await makeActor("provider");
-  const c = await makeActor("consumer");
-  const provider = await connect({ hubUrl: url, ...p });
-  const consumer = await connect({ hubUrl: url, ...c, slots: { notes } });
-  t.after(() => {
-    provider.close();
-    consumer.close();
-  });
-  const listed = async () => (await person.slots.exports.call.list({ actor: p.actorId })).exports;
-  // Withdrawn and offered again at once: the Hub sees them in order, and ends with it offered.
-  provider.exports.add("extra", notes).withdraw();
-  const extra = provider.exports.add("extra", notes);
-  extra.implement({ write: async () => ({ n: 7 }) });
-  // All three reached the Hub, in order: offer, withdraw, offer.
-  const changes = () =>
-    hub.state
-      .audit(0, 1000)
-      .entries.filter((e) => e.actor === p.actorId && e.kind.startsWith("export."))
-      .map((e) => e.kind);
-  await until(() => changes().length === 3);
-  assert.deepEqual(changes(), ["export.offer", "export.withdraw", "export.offer"]);
-  assert.deepEqual(
-    (await listed()).map((e) => [e.export, e.dynamic]),
-    [["extra", true]],
-  );
-  await bind(c.actorId, "notes", p.actorId, "extra");
-  await until(() => consumer.slots.notes.bound);
-  assert.deepEqual(await consumer.slots.notes.call.write({ text: "hi" }), { n: 7 });
-  const heard: string[] = [];
-  let ended = false;
-  consumer.slots.notes.onUnbind(() => {
-    ended = true;
-  });
-  consumer.slots.notes.on("written", (payload) => heard.push(payload.text));
-  await emitUntilHeard(
-    () => extra.emit("written", { text: "live" }),
-    () => heard.length > 0,
-  );
-  extra.withdraw();
-  await until(() => ended && !consumer.slots.notes.bound);
-  await assert.rejects(consumer.slots.notes.call.write({ text: "hi" }), NotConnected);
-  assert.deepEqual(await listed(), []);
-
-  // An offer the Hub refuses is withdrawn here too. This Actor declared `notes` on an earlier
-  // channel; connecting again without declaring keeps it, so offering the name again conflicts.
-  const r = await makeActor("redeclared");
-  const earlier = await connect({ hubUrl: url, ...r, exports: { notes } });
-  earlier.close();
-  await earlier.closed;
-  const again = await as(r, { declare: false });
-  const clash = again.exports.add("notes", notes);
-  await until(() => {
-    try {
-      clash.emit("written", { text: "x" });
-      return false;
-    } catch (error) {
-      return error instanceof NotConnected;
-    }
-  });
-});
-
 test("a stream export accepts an open, refuses one it can't take, and an http export with no handler refuses", async (t) => {
   const { url, makeActor, bind } = await setup(t);
   const p = await makeActor("provider");
@@ -390,43 +327,6 @@ test("a stream export accepts an open, refuses one it can't take, and an http ex
     consumer.slots.web.fetch(new Request("http://x/")),
     (e: Refused) => e.code === "unimplemented",
   );
-});
-
-test("a requester learns its outcome from decided, and from mine after a reconnect", async (t) => {
-  const { url, makeActor, bind, hub } = await setup(t);
-  const p = await makeActor("provider");
-  const grants = { slot: "grants", provider: HUB, export: "grants" };
-  const c = await makeActor("consumer", [grants]);
-  const provider = await connect({ hubUrl: url, ...p, exports: { notes } });
-  const consumer = await connect({ hubUrl: url, ...c, slots: { notes, grants: hubGrants } });
-  t.after(() => provider.close());
-  provider.exports.notes.implement({ write: async () => ({ n: 1 }) });
-  await until(() => consumer.slots.grants.bound);
-  const decided: string[] = [];
-  consumer.slots.grants.on("decided", ({ status }) => decided.push(status));
-  const wiring = { consumer: c.actorId, slot: "notes", provider: p.actorId, export: "notes" };
-  await until(() =>
-    hub.state
-      .audit(0, 1000)
-      .entries.some((e) => e.actor === c.actorId && e.details.op === "subscribe"),
-  );
-  const asked = await consumer.slots.grants.call.bind(wiring);
-  if (asked.bound) assert.fail("the consumer alone holds only the slot side");
-  await bind(c.actorId, "notes", p.actorId, "notes");
-  await until(() => consumer.slots.notes.bound && decided.length === 1);
-  assert.deepEqual(decided, ["approved"]);
-  assert.deepEqual(await consumer.slots.notes.call.write({ text: "ok" }), { n: 1 });
-
-  consumer.close();
-  await consumer.closed;
-  const again = await connect({ hubUrl: url, ...c, slots: { notes, grants: hubGrants } });
-  t.after(() => again.close());
-  const mine = await again.slots.grants.call.mine({});
-  assert.deepEqual(
-    mine.requests.map((r) => [r.requestId, r.status]),
-    [[asked.requestId, "approved"]],
-  );
-  assert.equal(again.slots.notes.bound, true, "hello's snapshot");
 });
 
 test("an Actor that declares nothing keeps what it declared before", async (t) => {

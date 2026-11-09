@@ -205,8 +205,6 @@ export class Hub {
         }
       },
       closed: (actorId) => this.#connections.get(actorId)?.session.close(),
-      requested: (request, approvers) => actor?.requested(request, approvers),
-      decided: (request, status, approvers) => actor?.decided(request, status, approvers),
       exportsChanged: (changed) => actor?.exportsChanged(changed),
       actorChanged: (changed) => actor?.actorChanged(changed),
       audited: (entry) => actor?.audited(entry),
@@ -295,14 +293,9 @@ export class Hub {
     this.#connections.set(actorId, conn);
     this.#actor.actorChanged(actorId);
     // Its consumers' subscriptions ended when it went; a notice tells each slot it is usable again.
-    // Exports offered at run time went with the old channel, and their bindings with them. Its
-    // channel is new and learns its slots from hello.
+    // Its channel is new and learns its slots from hello.
     for (const binding of this.state.bindings(actorId))
-      if (
-        binding.consumer !== actorId &&
-        this.state.declaration(actorId, "export", binding.export)?.dynamic === false
-      )
-        this.#notify(binding.consumer, binding.slot, true);
+      if (binding.consumer !== actorId) this.#notify(binding.consumer, binding.slot, true);
     return conn;
   }
 
@@ -310,11 +303,6 @@ export class Hub {
     if (this.#connections.get(conn.actorId) !== conn) return;
     this.#connections.delete(conn.actorId);
     this.#actor.actorChanged(conn.actorId);
-    try {
-      this.state.disconnected(conn.actorId);
-    } catch {
-      // The state is closed: the Hub is shutting down.
-    }
   }
 
   async #hello(
@@ -463,18 +451,6 @@ export class Hub {
         case "open":
         case "http":
           return await this.#splice(conn, header, stream, reader, writer);
-        case "offer":
-          this.state.offer(
-            conn.actorId,
-            header.name,
-            await this.#described(conn.actorId, header.interface, "interface"),
-          );
-          await answer(writer, result({}));
-          return drain(reader);
-        case "withdraw":
-          this.state.withdraw(conn.actorId, header.name);
-          await answer(writer, result({}));
-          return drain(reader);
         default:
           throw new Refused("invalid", `A ${header.op} stream can't be opened here.`);
       }
