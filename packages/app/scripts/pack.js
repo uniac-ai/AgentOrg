@@ -11,6 +11,7 @@
 import { execFileSync } from "node:child_process";
 import {
   copyFileSync,
+  cpSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -32,7 +33,10 @@ const BUNDLED = [
   "manager",
   "chatgpt",
   "assistant",
+  "computer",
 ];
+/** The AgentComputer SDK, without the service beside it in that package: the app never ships one. */
+const COMPUTER_SDK = "@agentorg/computer";
 const destination = resolve(process.argv[2] ?? ".");
 
 /** The workspace's `npm pack` of `dir`, unpacked into `into`. */
@@ -74,6 +78,31 @@ try {
           `${own.name} needs ${dep}@${range}; the cli's dependencies must say so too.`,
         );
   }
+  const sdk = join(root, "node_modules", COMPUTER_SDK);
+  const sdkInto = join(stage, "dist", "node_modules", COMPUTER_SDK);
+  const { version, license, type } = JSON.parse(readFileSync(join(sdk, "package.json"), "utf8"));
+  for (const path of [
+    "dist/sdk.js",
+    "dist/types",
+    "dist/THIRD_PARTY_LICENSES.txt",
+    "NOTICE",
+    "LICENSE",
+  ])
+    cpSync(join(sdk, path), join(sdkInto, path), { recursive: true });
+  writeFileSync(
+    join(sdkInto, "package.json"),
+    `${JSON.stringify(
+      {
+        name: COMPUTER_SDK,
+        version,
+        license,
+        type,
+        exports: { ".": { types: "./dist/types/sdk.d.ts", default: "./dist/sdk.js" } },
+      },
+      null,
+      2,
+    )}\n`,
+  );
   cli.files = [...cli.files, "dist/node_modules"];
   delete cli.devDependencies;
   delete cli.scripts;

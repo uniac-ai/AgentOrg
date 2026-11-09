@@ -12,6 +12,7 @@ const UrlParams = z.strictObject({
     .url({ protocol: /^https?$/ })
     .max(4096)
     .refine((url) => {
+      if (!URL.canParse(url)) return true; // Said already, by `z.url`.
       const { username, password } = new URL(url);
       return !username && !password;
     }, "An address can't hold a user or a password: give a token as a secret.")

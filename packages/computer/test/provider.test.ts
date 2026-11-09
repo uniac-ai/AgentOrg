@@ -1,11 +1,13 @@
-// The computer unit against a real Hub. Its server is a stand-in for AgentExec unless
-// AGENTEXEC_BUILD names a built file, which adds the tests that need the real tools.
+// The connector against a real Hub and a real AgentComputer: the published service, on a port and
+// in a folder of each test's own, driving the headless shell Playwright installed.
 import assert from "node:assert/strict";
+import { type ChildProcess, spawn } from "node:child_process";
 import { once } from "node:events";
 import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -13,50 +15,103 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createServer } from "node:http";
+import { createRequire } from "node:module";
 import type { AddressInfo } from "node:net";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
+import { Computer } from "@agentorg/computer";
 import { Hub, listen, PERSON } from "@agentorg/hub";
 import { tools, Unit, unitProvider } from "@agentorg/interfaces";
 import { Refused } from "@agentorg/sdk";
 import { connect } from "@agentorg/sdk/client";
 import { startComputerProvider } from "../src/index.ts";
 
-const fixtures = join(dirname(fileURLToPath(import.meta.url)), "fixtures");
-const standIn = join(fixtures, "agentexec.js");
-const browserStandIn = join(fixtures, "playwright.js");
-const real = process.env.AGENTEXEC_BUILD;
-const liveWeb = process.env.AGENTORG_LIVE_WEB === "1";
-/** A real Playwright MCP and browser, as `{cli, args}` in JSON, for the test that needs them. */
-const realBrowser = process.env.AGENTORG_PLAYWRIGHT
-  ? (JSON.parse(process.env.AGENTORG_PLAYWRIGHT) as { cli: string; args: string[] })
-  : undefined;
 const refused = (code: string) => (error: unknown) =>
   error instanceof Refused && error.code === code;
-const until = async (condition: () => boolean | Promise<boolean>, ms = 20_000) => {
+const until = async (condition: () => boolean | Promise<boolean>, ms = 30_000) => {
   for (let waited = 0; !(await condition()); waited += 20) {
     if (waited > ms) throw new Error("timed out waiting");
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
 };
+const SERVICE = join(
+  dirname(createRequire(import.meta.url).resolve("@agentorg/computer")),
+  "agentcomputer.js",
+);
+/** The browser Playwright installed for the tests. */
+function headlessShell(): string {
+  const root =
+    process.env.PLAYWRIGHT_BROWSERS_PATH ??
+    (process.platform === "darwin"
+      ? join(homedir(), "Library", "Caches", "ms-playwright")
+      : join(homedir(), ".cache", "ms-playwright"));
+  for (const entry of readdirSync(root).filter((one) => one.startsWith("chromium_headless_shell")))
+    for (const inner of readdirSync(join(root, entry), { withFileTypes: true }))
+      if (inner.isDirectory())
+        for (const file of ["chrome-headless-shell", "headless_shell"])
+          if (existsSync(join(root, entry, inner.name, file)))
+            return join(root, entry, inner.name, file);
+  throw new Error(
+    `No headless shell under ${root}: run npx playwright install --only-shell chromium`,
+  );
+}
 
-async function setup(t: test.TestContext, agentexec = standIn, webUrl?: string) {
+interface Service {
+  data: string;
+  apiUrl: string;
+  apiKey: string;
+  stop(): Promise<void>;
+}
+/** A real service, as the person would start it, stopped by the process this made. */
+async function startService(data: string): Promise<Service> {
+  const child: ChildProcess = spawn(
+    process.execPath,
+    [
+      SERVICE,
+      "serve",
+      "--listen",
+      "127.0.0.1:0",
+      "--data",
+      data,
+      "--browser-path",
+      headlessShell(),
+    ],
+    { stdio: "ignore" },
+  );
+  const record = join(data, "server.json");
+  await until(() => existsSync(record));
+  const { url } = JSON.parse(readFileSync(record, "utf8")) as { url: string };
+  return {
+    data,
+    apiUrl: url,
+    apiKey: readFileSync(join(data, "control-token"), "utf8").trim(),
+    async stop() {
+      if (child.exitCode !== null) return;
+      child.kill("SIGTERM");
+      await once(child, "exit");
+    },
+  };
+}
+
+async function setup(t: test.TestContext, { service = true, webUrl = "" } = {}) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "agentorg-computer-")));
   const dir = join(root, "provider");
+  const data = join(root, "service");
   const workspace = join(root, "workspace");
   mkdirSync(workspace);
   writeFileSync(join(workspace, "seen.txt"), "the person's file\n");
+  const leaving: (() => void | Promise<void>)[] = [];
   const hub = Hub.open(join(root, "home"));
   const server = await listen(hub);
-  const leaving: (() => void | Promise<void>)[] = [];
   t.after(async () => {
     for (const leave of leaving.reverse()) await leave();
     await server.close();
     hub.close();
     rmSync(root, { recursive: true, force: true });
   });
+  const running = service ? await startService(data) : undefined;
+  if (running) leaving.push(() => running.stop());
   const made = hub.state.createActor(PERSON, {
     name: "Computers",
     bindings: [{ slot: "actors", provider: "hub", export: "actors" }],
@@ -67,8 +122,7 @@ async function setup(t: test.TestContext, agentexec = standIn, webUrl?: string) 
       actorId: made.actorId,
       credential: made.credential as string,
       dir,
-      agentexec,
-      playwright: realBrowser ?? { cli: browserStandIn, args: ["--browser", "stand-in"] },
+      dataFolder: data,
       ...(webUrl ? { webUrl } : {}),
       timing: { firstDelayMs: 50, pingEveryMs: 200 },
     });
@@ -87,18 +141,23 @@ async function setup(t: test.TestContext, agentexec = standIn, webUrl?: string) 
   leaving.push(() => caller.close());
   await until(() => caller.slots.units.bound);
   const units = caller.slots.units.call;
-  const values = (access: string) => ({ where: "local", access, workspace });
-  const apply = (access: string, more: Record<string, boolean> = {}) =>
+  const apply = (values: Record<string, unknown>, secrets: Record<string, string> = {}) =>
     units.apply({
       unit: "computer",
-      values: { ...values(access), ...more },
-      secrets: {},
+      values: values as never,
+      secrets,
       needs: {},
       agent: "act_agent",
       name: "Scout's computer",
     });
+  const local = (access: string, more: object = {}) => ({
+    service: "local",
+    access,
+    workspace,
+    ...more,
+  });
   /** What management does next: expose the connection, here to a stand-in agent. */
-  const asAgentSlot = async (connection: string) => {
+  const asAgent = async (connection: string) => {
     const agent = hub.state.createActor(PERSON, {
       name: "Agent",
       bindings: [{ slot: "computer", provider: connection, export: "tools" }],
@@ -119,222 +178,295 @@ async function setup(t: test.TestContext, agentexec = standIn, webUrl?: string) 
     await provider.current.close();
     provider.current = await start();
   };
-  const asAgent = asAgentSlot;
-  return { hub, units, values, apply, asAgent, asAgentSlot, connected, restart, workspace, dir };
+  return { hub, units, apply, local, asAgent, connected, restart, workspace, dir, running, root };
 }
 
-test("the unit's form says what each answer grants and adds, with nothing preselected", async (t) => {
+const form = (unit: { form: { id: string }[] } | undefined, id: string) =>
+  unit?.form.find((field) => field.id === id) as
+    | {
+        id: string;
+        value: string;
+        required?: true;
+        visible?: { field: string; in: unknown[] };
+        options?: { value: string; description?: string; adds?: { skills: { name: string }[] } }[];
+      }
+    | undefined;
+
+test("the form says which service, found when it is read, and what each answer grants", async (t) => {
   const { units } = await setup(t);
-  const { units: offered } = await units.units({});
-  assert.deepEqual(
-    offered.map((unit) => unit.id),
-    ["computer", "web"],
-  );
-  const [unit] = offered;
+  const unit = (await units.units({})).units.find((one) => one.id === "computer");
   Unit.parse(unit);
-  const field = (id: string) => unit?.form.find((one) => one.id === id);
-  // Never preselected: neither has a default, and both must be answered.
-  for (const id of ["where", "access"]) {
-    assert.equal(field(id)?.default, undefined);
-    assert.equal(field(id)?.required, true);
-  }
-  const option = (value: string) => field("access")?.options?.find((one) => one.value === value);
-  assert.match(option("terminal")?.description ?? "", /reach every file and program you can/);
-  assert.match(option("read")?.description ?? "", /can't change them or run anything/);
-  assert.deepEqual(option("none")?.adds, undefined);
-  assert.deepEqual(option("read")?.adds?.slots, [{ name: "computer" }]);
+  const service = form(unit, "service");
+  assert.equal(service?.required, true);
   assert.deepEqual(
-    option("read")?.adds?.skills.map((skill) => ("name" in skill ? skill.name : "")),
-    ["files", "computer"],
+    service?.options?.map((one) => one.value),
+    ["local", "another"],
   );
+  assert.match(service?.options?.[0]?.description ?? "", /No isolation: it acts as you/);
+  assert.deepEqual(form(unit, "address")?.visible, { field: "service", in: ["another"] });
+  assert.equal(form(unit, "token")?.value, "secret");
+  assert.deepEqual(form(unit, "workspace")?.visible, { field: "service", in: ["local"] });
+  assert.deepEqual(form(unit, "path")?.visible, { field: "service", in: ["another"] });
+  assert.equal(form(unit, "where"), undefined);
   assert.deepEqual(
-    option("terminal")?.adds?.skills.map((skill) => ("name" in skill ? skill.name : "")),
+    form(unit, "access")
+      ?.options?.at(-1)
+      ?.adds?.skills.map((one) => one.name),
     ["terminal", "files", "computer"],
   );
-  // Each shown by `where`, so no host needs to know a field by name.
-  assert.equal(field("workspace")?.type, "directory");
-  // `check` asks for each, since being needed depends on two answers and `visible` takes one.
-  assert.equal(field("workspace")?.required, undefined);
-  assert.equal(field("containerPath")?.required, undefined);
-  assert.deepEqual(field("workspace")?.visible, { field: "where", in: ["local"] });
-  assert.equal(field("containerPath")?.type, "text");
-  assert.deepEqual(field("containerPath")?.visible, { field: "where", in: ["container"] });
 });
 
 test("each skill the form names can be read, and an unknown one is refused", async (t) => {
-  const { units } = await setup(t);
-  for (const name of ["terminal", "files", "computer"]) {
-    const { text } = await units.skill({ unit: "computer", name, path: "SKILL.md" });
-    assert.match(text, new RegExp(`^---\\nname: ${name}\\ndescription: .+\\n---\\n`));
-  }
+  const { units } = await setup(t, { service: false });
+  for (const name of ["terminal", "files", "computer", "browser"])
+    assert.match(
+      (await units.skill({ unit: "computer", name, path: "SKILL.md" })).text,
+      new RegExp(`name: ${name}`),
+    );
+  assert.match(
+    (await units.skill({ unit: "computer", name: "computer", path: "SKILL.md" })).text,
+    /another machine/,
+  );
   await assert.rejects(
-    units.skill({ unit: "computer", name: "web-research", path: "SKILL.md" }),
+    units.skill({ unit: "computer", name: "nothing", path: "SKILL.md" }),
     refused("unknown"),
   );
-  for (const [unit, name] of [
-    ["computer", "browser"],
-    ["web", "web-research"],
-  ] as const) {
-    const { text } = await units.skill({ unit, name, path: "SKILL.md" });
-    assert.match(text, new RegExp(`^---\\nname: ${name}\\n`));
-  }
-  await assert.rejects(
-    units.skill({ unit: "computer", name: "files", path: "other.md" }),
-    refused("unknown"),
+});
+
+test("with no service here, it says what to install and start, and nothing is made", async (t) => {
+  const { units, apply, local, hub } = await setup(t, { service: false });
+  const unit = (await units.units({})).units.find((one) => one.id === "computer");
+  assert.match(form(unit, "service")?.options?.[0]?.description ?? "", /npm install -g/);
+  const { problems } = await units.check({
+    unit: "computer",
+    values: local("terminal"),
+    secrets: [],
+  });
+  assert.deepEqual(
+    problems.map((one) => one.field),
+    ["service"],
   );
+  assert.match(problems[0]?.message ?? "", /agentcomputer serve/);
+  const before = hub.state.actors().length;
+  await assert.rejects(apply(local("terminal")), refused("invalid"));
+  assert.equal(hub.state.actors().length, before);
 });
 
 test("check says what's wrong by field, and changes nothing", async (t) => {
-  const { units, values, workspace } = await setup(t);
-  const check = (filled: Record<string, string | boolean>) =>
-    units.check({ unit: "computer", values: filled, secrets: [] });
-  assert.deepEqual(await check(values("terminal")), { problems: [] });
-  const fields = async (filled: Record<string, string>) =>
-    (await check(filled)).problems.map((problem) => problem.field);
-  assert.deepEqual(await fields({ ...values("read"), where: "elsewhere" }), ["where"]);
-  // The folder is asked for only when there is something to do in it.
-  assert.deepEqual(await fields({ where: "local", access: "none" }), ["access"]);
-  const browserOnly = { where: "local", access: "none", browser: true };
-  assert.deepEqual(
-    (await units.check({ unit: "computer", values: browserOnly, secrets: [] })).problems,
-    [],
-  );
-  assert.deepEqual(await fields({ where: "local", access: "read" }), ["workspace"]);
-  assert.deepEqual(await fields({ where: "local", access: "read", workspace: "" }), ["workspace"]);
-  assert.deepEqual(await fields({ where: "container", access: "read" }), [
-    "where",
-    "containerPath",
-  ]);
-  assert.deepEqual(await fields({ where: "container", access: "read", containerPath: "/work" }), [
-    "where",
-  ]);
-  assert.deepEqual(await fields({ ...values("read"), workspace: "relative/path" }), ["workspace"]);
-  assert.deepEqual(await fields({ ...values("read"), workspace: `${workspace}/nope` }), [
-    "workspace",
-  ]);
-  assert.deepEqual(await fields({ ...values("read"), workspace: `${workspace}/seen.txt` }), [
-    "workspace",
-  ]);
-  await assert.rejects(units.check({ unit: "other", values: {}, secrets: [] }), refused("unknown"));
-});
-
-for (const [access, listed] of [
-  ["read", ["read", "list", "search"]],
-  ["files", ["read", "list", "search", "edit"]],
-  ["terminal", ["read", "list", "search", "edit", "exec_command", "write_stdin"]],
-] as const)
-  test(`applied at ${access}, its connection offers those tools in the chosen folder`, async (t) => {
-    const { apply, asAgent, connected, units, workspace } = await setup(t);
-    const { instance, connections, results } = await apply(access);
-    assert.deepEqual(results, []);
-    assert.equal(connections.length, 1);
-    const [made] = connections;
-    assert.equal(made?.slot, "computer");
-    assert.ok(made?.target.includes(workspace));
-    assert.match(made?.target ?? "", /this computer, as you/);
-    await connected(instance);
-    const status = await units.status({ instance });
-    assert.deepEqual(
-      status.connections[0]?.tools.map((tool) => tool.name),
-      listed,
+  const { units, running } = await setup(t);
+  const fields = async (values: object, secrets: string[] = []) =>
+    (await units.check({ unit: "computer", values: values as never, secrets })).problems.map(
+      (one) => one.field,
     );
-    const computer = await asAgent(made?.connection as string);
-    const { output } = await computer.call({ name: "read", arguments: {} });
-    assert.ok(output.includes(workspace) && output.includes("the person's file"));
-  });
-
-const toolNames = (status: { connections: { tools: { name: string }[] }[] }, at: number) =>
-  status.connections[at]?.tools.map((tool) => tool.name);
-
-test("the browser switch adds its slot and skill, and nothing runs without it", async (t) => {
-  const { units, apply, connected, hub } = await setup(t);
-  const [unit] = (await units.units({})).units;
-  const toggle = unit?.form.find((one) => one.id === "browser");
-  assert.equal(toggle?.default, false);
-  assert.deepEqual(toggle?.adds?.slots, [{ name: "browser" }]);
-
-  const without = await apply("files");
+  assert.deepEqual(await fields({ service: "local", access: "terminal" }), []);
+  assert.deepEqual(await fields({ service: "local", access: "none" }), ["access"]);
+  assert.deepEqual(await fields({ service: "local", access: "none", browser: true }), []);
   assert.deepEqual(
-    without.connections.map((one) => one.slot),
-    ["computer"],
+    await fields({ service: "local", access: "terminal", workspace: "/nothing/x" }),
+    ["workspace"],
   );
-  assert.equal(hub.state.actors().filter((actor) => actor.name.includes("(browser)")).length, 0);
-
-  const both = await apply("terminal", { browser: true });
-  assert.deepEqual(
-    both.connections.map((one) => one.slot),
-    ["computer", "browser"],
-  );
-  await connected(both.instance);
-  assert.ok(
-    toolNames(await units.status({ instance: both.instance }), 1)?.includes("browser_navigate"),
-  );
-});
-
-test("the tool that runs code is hidden below a terminal, and can't be called", async (t) => {
-  const { apply, asAgentSlot, connected, units } = await setup(t);
-  const below = await apply("files", { browser: true });
-  await connected(below.instance);
-  assert.deepEqual(toolNames(await units.status({ instance: below.instance }), 1), [
-    "browser_navigate",
-    "browser_snapshot",
+  assert.deepEqual(await fields({ service: "other", access: "read" }), ["service"]);
+  const away = { service: "another", access: "read" };
+  assert.deepEqual(await fields({ ...away, address: "not an address" }, ["token"]), ["address"]);
+  assert.deepEqual(await fields({ ...away, address: "http://far.example/" }, ["token"]), [
+    "address",
   ]);
-  const browser = await asAgentSlot(below.connections[1]?.connection as string);
+  assert.deepEqual(await fields({ ...away, address: "https://far.example/" }, ["token"]), []);
   await assert.rejects(
-    browser.call({ name: "browser_run_code_unsafe", arguments: {} }),
+    units.check({ unit: "nothing", values: {}, secrets: [] }),
     refused("unknown"),
   );
-
-  const full = await apply("terminal", { browser: true });
-  await connected(full.instance);
-  assert.ok(
-    toolNames(await units.status({ instance: full.instance }), 1)?.includes(
-      "browser_run_code_unsafe",
-    ),
-  );
+  const reached = running as Service;
+  assert.deepEqual(await Computer.list(reached), []);
 });
 
-test("a browser-only computer works in a folder of its own, gone with it, and the workspace is never asked", async (t) => {
-  const { units, connected, asAgentSlot, dir } = await setup(t);
-  const { instance, connections } = await units.apply({
-    unit: "computer",
-    values: { where: "local", access: "none", browser: true },
-    secrets: {},
-    needs: {},
-    agent: "act_agent",
-    name: "Reader's computer",
+test("on a real service, an agent runs a command and edits a file, through tools", async (t) => {
+  const { apply, local, asAgent, connected, workspace, units } = await setup(t);
+  const { instance, connections } = await apply(local("terminal"));
+  assert.deepEqual(
+    connections.map((one) => one.slot),
+    ["computer"],
+  );
+  assert.match(connections[0]?.target ?? "", /this machine, no isolation: files and terminal/);
+  await connected(instance);
+  const computer = await asAgent(connections[0]?.connection as string);
+  const ran = await computer.call({
+    name: "exec_command",
+    arguments: { cmd: "cat seen.txt && echo from-the-agent > made.txt" },
   });
+  assert.equal(ran.failed, undefined);
+  assert.match(ran.output, /the person's file/);
+  assert.equal(readFileSync(join(workspace, "made.txt"), "utf8"), "from-the-agent\n");
+  const edited = await computer.call({
+    name: "edit",
+    arguments: { path: "seen.txt", old_text: "person's", new_text: "edited" },
+  });
+  assert.equal(edited.failed, undefined, edited.output);
+  assert.equal(readFileSync(join(workspace, "seen.txt"), "utf8"), "the edited file\n");
+  await units.remove({ instance });
+});
+
+test("access goes to the service: a read-only computer can't change or run anything", async (t) => {
+  const { apply, local, asAgent, connected, workspace, units } = await setup(t);
+  const { instance, connections } = await apply(local("read"));
+  await connected(instance);
+  const computer = await asAgent(connections[0]?.connection as string);
+  assert.deepEqual((await computer.list({})).tools.map((one) => one.name).sort(), [
+    "list",
+    "read",
+    "search",
+  ]);
+  assert.equal(readFileSync(join(workspace, "seen.txt"), "utf8"), "the person's file\n");
+  await units.remove({ instance });
+});
+
+test("on a real service, an agent reads a page with its browser", async (t) => {
+  const page = createServer((_, response) => {
+    response.setHeader("content-type", "text/html");
+    response.end("<title>A page</title><p>Words only a browser could fetch.</p>");
+  });
+  page.listen(0, "127.0.0.1");
+  await once(page, "listening");
+  t.after(() => page.close());
+  const { port } = page.address() as AddressInfo;
+  const { apply, local, asAgent, connected, units, running } = await setup(t);
+  const { instance, connections } = await apply(local("none", { browser: true }));
   assert.deepEqual(
     connections.map((one) => one.slot),
     ["browser"],
   );
   await connected(instance);
-  const browser = await asAgentSlot(connections[0]?.connection as string);
-  const { output } = await browser.call({ name: "browser_navigate", arguments: {} });
-  const own = join(dir, "browsers", instance);
-  assert.ok(output.startsWith(realpathSync(own)), output);
-  assert.match(output, /--headless/);
-  assert.ok(output.includes(`--user-data-dir ${join(own, "profile")}`), output);
+  const browser = await asAgent(connections[0]?.connection as string);
+  const opened = await browser.call({
+    name: "browser_navigate",
+    arguments: { url: `http://127.0.0.1:${port}/` },
+  });
+  assert.equal(opened.failed, undefined, opened.output);
+  const seen = await browser.call({ name: "browser_snapshot", arguments: {} });
+  assert.match(`${opened.output}${seen.output}`, /Words only a browser could fetch/);
   await units.remove({ instance });
-  assert.equal(existsSync(own), false);
+  // The service is still there for the next one.
+  assert.equal((await Computer.serviceInfo(running as Service)).isolation, "none");
 });
 
-test("the browser's folder of its own is removed, and the workspace it worked in stays", async (t) => {
-  const { apply, connected, units, dir, workspace, asAgentSlot } = await setup(t);
-  const { instance, connections } = await apply("terminal", { browser: true });
+test("removing kills the computer: a named folder stays, one the service made goes", async (t) => {
+  const { apply, local, connected, workspace, units, running, dir } = await setup(t);
+  const reached = running as Service;
+  const named = await apply(local("terminal"));
+  const made = await apply({ service: "local", access: "files" });
+  await connected(named.instance);
+  const kept = JSON.parse(readFileSync(join(dir, "instances.json"), "utf8"));
+  const idOf = (instance: string) => kept[instance].computer.id as string;
+  const [namedId, madeId] = [idOf(named.instance), idOf(made.instance)];
+  const folder = (await Computer.getInfo(madeId, reached)).workspace as string;
+  assert.ok(statSync(folder).isDirectory());
+
+  await units.remove({ instance: named.instance });
+  await units.remove({ instance: made.instance });
+  for (const id of [namedId, madeId])
+    await assert.rejects(Computer.getInfo(id, reached), /no computer/);
+  assert.equal(readFileSync(join(workspace, "seen.txt"), "utf8"), "the person's file\n");
+  assert.equal(existsSync(folder), false);
+  await assert.rejects(units.status({ instance: named.instance }), refused("unknown"));
+});
+
+test("another address is reached with its token, which stays in the private file", async (t) => {
+  const { apply, units, connected, running, dir, hub, workspace } = await setup(t);
+  const reached = running as Service;
+  const away = { service: "another", address: reached.apiUrl, access: "terminal", path: workspace };
+  const { instance, connections } = await apply(away, { token: reached.apiKey });
   await connected(instance);
-  const browser = await asAgentSlot(connections[1]?.connection as string);
-  // Started in the workspace, so its own file checks are kept to it.
-  assert.ok(
-    (await browser.call({ name: "browser_navigate", arguments: {} })).output.startsWith(workspace),
-  );
+  const status = await units.status({ instance });
+  const file = readFileSync(join(dir, "instances.json"), "utf8");
+  assert.ok(file.includes(reached.apiKey), "kept to reach it again");
+  assert.equal(statSync(dir).mode & 0o777, 0o700);
+  for (const seen of [
+    JSON.stringify(status),
+    JSON.stringify(connections),
+    JSON.stringify(hub.state.audit(0, 100_000)),
+  ])
+    assert.ok(!seen.includes(reached.apiKey));
+  const before = (await Computer.list(reached)).length;
   await units.remove({ instance });
-  assert.equal(existsSync(join(dir, "browsers", instance)), false);
-  assert.ok(existsSync(join(workspace, "seen.txt")));
+  assert.equal((await Computer.list(reached)).length, before - 1);
+
+  // A wrong token makes nothing.
+  const actors = hub.state.actors().length;
+  await assert.rejects(apply(away, { token: "wrong" }));
+  assert.equal(hub.state.actors().length, actors);
+});
+
+test("endpoints are at the address given, whatever the service calls itself", async (t) => {
+  const { apply, connected, dir, running, units, workspace } = await setup(t);
+  const reached = running as Service;
+  const { port } = new URL(reached.apiUrl);
+  const { instance } = await apply(
+    { service: "another", address: `http://localhost:${port}`, access: "read", path: workspace },
+    { token: reached.apiKey },
+  );
+  await connected(instance);
+  const kept = JSON.parse(readFileSync(join(dir, "instances.json"), "utf8"));
+  assert.match(kept[instance].links[0].url, new RegExp(`^http://localhost:${port}/`));
+  await units.remove({ instance });
+});
+
+test("a service that crashed isn't found, and its port gets no token", async (t) => {
+  const { units, root } = await setup(t, { service: false });
+  mkdirSync(join(root, "service"), { recursive: true });
+  writeFileSync(
+    join(root, "service", "server.json"),
+    JSON.stringify({ url: "http://127.0.0.1:9", pid: 999_999, isolation: "none" }),
+  );
+  writeFileSync(join(root, "service", "control-token"), "stale\n");
+  const unit = (await units.units({})).units.find((one) => one.id === "computer");
+  assert.match(form(unit, "service")?.options?.[0]?.description ?? "", /npm install -g/);
+});
+
+test("a computer whose Actors are gone is killed, not forgotten", async (t) => {
+  const { apply, local, connected, dir, running, restart, hub } = await setup(t);
+  const reached = running as Service;
+  const { instance, connections } = await apply(local("read"));
+  await connected(instance);
+  const id = JSON.parse(readFileSync(join(dir, "instances.json"), "utf8"))[instance].computer.id;
+  hub.state.closeActor(PERSON, connections[0]?.connection as string);
+  await restart();
+  await assert.rejects(Computer.getInfo(id, reached), /no computer/);
+});
+
+test("an agent can go even when its service no longer takes the token", async (t) => {
+  const { apply, connected, dir, running, restart, units, workspace } = await setup(t);
+  const reached = running as Service;
+  const { instance } = await apply(
+    { service: "another", address: reached.apiUrl, access: "read", path: workspace },
+    { token: reached.apiKey },
+  );
+  await connected(instance);
+  const file = join(dir, "instances.json");
+  writeFileSync(file, readFileSync(file, "utf8").replaceAll(reached.apiKey, "rotated"));
+  await restart();
+  await units.remove({ instance });
+  await assert.rejects(units.status({ instance }), refused("unknown"));
+});
+
+test("a computer comes back after a restart, and goes even if its service has", async (t) => {
+  const { apply, local, asAgent, connected, restart, units, running, workspace } = await setup(t);
+  const { instance, connections } = await apply(local("terminal"));
+  await connected(instance);
+  await restart();
+  await connected(instance);
+  const computer = await asAgent(connections[0]?.connection as string);
+  await computer.call({ name: "exec_command", arguments: { cmd: "echo back > back.txt" } });
+  assert.equal(readFileSync(join(workspace, "back.txt"), "utf8"), "back\n");
+  await (running as Service).stop();
+  await units.remove({ instance });
+  await assert.rejects(units.status({ instance }), refused("unknown"));
 });
 
 test("the web unit gives its slot and skill, at the service's address", async (t) => {
-  const { units } = await setup(t, standIn, "http://127.0.0.1:9/mcp?tools=web_search_exa");
+  const { units } = await setup(t, {
+    service: false,
+    webUrl: "http://127.0.0.1:9/mcp?tools=web_search_exa",
+  });
   const web = (await units.units({})).units.find((unit) => unit.id === "web");
   assert.deepEqual(web?.gives.slots, [{ name: "web" }]);
   assert.match(web?.form[0]?.options?.[0]?.description ?? "", /sees what it looks for/);
@@ -358,131 +490,4 @@ test("the web unit gives its slot and skill, at the service's address", async (t
   );
   await until(async () => (await units.status({ instance })).state === "down");
   await units.remove({ instance });
-});
-
-test("apply refuses what check refuses, and makes nothing", async (t) => {
-  const { units, hub, values } = await setup(t);
-  const before = hub.state.actors().length;
-  await assert.rejects(
-    units.apply({
-      unit: "computer",
-      values: { ...values("files"), access: "none" },
-      secrets: {},
-      needs: {},
-      agent: "act_agent",
-      name: "Scout's computer",
-    }),
-    refused("invalid"),
-  );
-  assert.equal(hub.state.actors().length, before);
-});
-
-test("a computer comes back after a restart, and remove closes it and leaves the folder", async (t) => {
-  const { apply, connected, restart, units, hub, workspace, dir } = await setup(t);
-  const { instance, connections } = await apply("files");
-  await connected(instance);
-  assert.equal(statSync(join(dir, "instances.json")).mode & 0o777, 0o600);
-
-  await restart();
-  await until(() =>
-    units.status({ instance }).then(
-      () => true,
-      () => false,
-    ),
-  );
-  await connected(instance);
-
-  await units.remove({ instance });
-  assert.equal(hub.state.actor(connections[0]?.connection as string).state, "closed");
-  await assert.rejects(units.status({ instance }), refused("unknown"));
-  await assert.rejects(units.remove({ instance }), refused("unknown"));
-  // The workspace is the person's, whatever else goes.
-  assert.equal(readFileSync(join(workspace, "seen.txt"), "utf8"), "the person's file\n");
-  assert.ok(existsSync(workspace));
-});
-
-test("a server that can't start shows as down with the Actor still there", async (t) => {
-  const { apply, units } = await setup(t, "/nowhere/agentexec.js");
-  const { instance, connections } = await apply("read");
-  await until(async () => (await units.status({ instance })).state === "down");
-  assert.ok(connections[0]?.connection);
-});
-
-test("with the real AgentExec, an agent runs a command and edits a file", {
-  skip: !real,
-}, async (t) => {
-  const { apply, asAgent, connected, workspace } = await setup(t, real);
-  const { instance, connections } = await apply("terminal");
-  await connected(instance);
-  const computer = await asAgent(connections[0]?.connection as string);
-  const ran = await computer.call({ name: "exec_command", arguments: { cmd: "pwd" } });
-  assert.match(ran.output, /^exit_code: 0\n/);
-  assert.ok(ran.output.includes(realpathSync(workspace)));
-  const edited = await computer.call({
-    name: "edit",
-    arguments: { path: "seen.txt", old_text: "the person's", new_text: "an agent's" },
-  });
-  assert.match(edited.output, /\+an agent's file/);
-  assert.equal(readFileSync(join(workspace, "seen.txt"), "utf8"), "an agent's file\n");
-});
-
-test("with the real AgentExec, a read-only computer can't change a file", {
-  skip: !real,
-}, async (t) => {
-  const { apply, asAgent, connected, workspace } = await setup(t, real);
-  const { instance, connections } = await apply("read");
-  await connected(instance);
-  const computer = await asAgent(connections[0]?.connection as string);
-  assert.deepEqual(
-    (await computer.list({})).tools.map((tool) => tool.name),
-    ["read", "list", "search"],
-  );
-  await assert.rejects(
-    computer.call({
-      name: "edit",
-      arguments: { path: "seen.txt", old_text: "the", new_text: "x" },
-    }),
-    refused("unknown"),
-  );
-  assert.equal(readFileSync(join(workspace, "seen.txt"), "utf8"), "the person's file\n");
-  const outside = await computer.call({ name: "read", arguments: { path: "/etc/hosts" } });
-  assert.equal(outside.failed, true);
-  assert.match(outside.output, /outside the workspace/);
-});
-
-test("live: the web unit searches through Exa's own server", { skip: !liveWeb }, async (t) => {
-  const { units, asAgentSlot } = await setup(t);
-  const { instance, connections } = await units.apply({
-    unit: "web",
-    values: { service: "exa" },
-    secrets: {},
-    needs: {},
-    agent: "act_agent",
-    name: "Scout's web",
-  });
-  await until(async () => (await units.status({ instance })).state === "connected");
-  const web = await asAgentSlot(connections[0]?.connection as string);
-  const { output } = await web.call({
-    name: "web_search_exa",
-    arguments: { query: "Node.js release schedule", objective: "the official page", numResults: 1 },
-  });
-  assert.match(output, /^Title: .+\nURL: https?:/m);
-});
-
-test("real: the browser opens a page and reads it", { skip: !realBrowser }, async (t) => {
-  const site = createServer((_, response) => {
-    response.setHeader("content-type", "text/html");
-    response.end("<!doctype html><title>Checkout</title><h1>Checkout</h1><button>Pay now</button>");
-  }).listen(0, "127.0.0.1");
-  await once(site, "listening");
-  t.after(() => site.close());
-  const url = `http://127.0.0.1:${(site.address() as AddressInfo).port}/`;
-  const { apply, asAgentSlot, connected } = await setup(t);
-  const { instance, connections } = await apply("files", { browser: true });
-  await connected(instance);
-  const browser = await asAgentSlot(connections[1]?.connection as string);
-  const opened = await browser.call({ name: "browser_navigate", arguments: { url } });
-  assert.match(opened.output, /- Page Title: Checkout/);
-  const { output } = await browser.call({ name: "browser_snapshot", arguments: {} });
-  assert.match(output, /button "Pay now"/);
 });

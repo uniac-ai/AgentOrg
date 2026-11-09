@@ -1,5 +1,6 @@
 // The computer unit's form and what its answers give. The form is data, read by people and agents
-// alike, so what each answer grants is said in its description.
+// alike, so what each answer grants is said in its description. Which service it runs on is found
+// when the form is read.
 import type { Unit } from "@agentorg/interfaces";
 import type { z } from "zod";
 
@@ -12,24 +13,61 @@ const skill = (name: string) => ({ name, files: [SKILL] });
 export type Access = "read" | "files" | "terminal";
 const WITH_FILES = { slots: [{ name: COMPUTER }], skills: [skill("files"), skill("computer")] };
 
-export const COMPUTER_UNIT: z.input<typeof Unit> = {
+export const LOCAL = "local";
+export const ANOTHER = "another";
+/** What to do when there is no service here: the app never starts or ships one. */
+export const INSTALL_STEPS =
+  "No AgentComputer is running on this machine. Install it with `npm install -g @agentorg/computer`, start it with `agentcomputer serve`, and try again.";
+
+/** How the service on this machine isolates its computers, if one is running. */
+export type Found = { isolation: "none" | "container" } | undefined;
+const localLine = (found: Found) =>
+  !found
+    ? INSTALL_STEPS
+    : found.isolation === "container"
+      ? "On this machine, started by you. Each computer is a container of its own."
+      : "On this machine, started by you. No isolation: it acts as you, and with a terminal it reaches everything you can.";
+
+/** The form as it stands now, with what was found on this machine. */
+export const computerUnit = (found: Found): z.input<typeof Unit> => ({
   id: COMPUTER,
   title: "Computer",
   description: "A place for the agent to work: a folder, how far it can act on it, and a browser.",
   form: [
     {
-      id: "where",
+      id: "service",
       type: "choice",
       value: "string",
-      title: "Where it runs",
+      title: "Service",
+      description: "Where its computer runs, and how that's kept apart from everything else.",
       required: true,
       options: [
+        { value: LOCAL, title: "This machine", description: localLine(found) },
         {
-          value: "local",
-          title: "This computer",
-          description: "It runs on this computer, as you.",
+          value: ANOTHER,
+          title: "Another address",
+          description: "A service elsewhere. What a computer can reach depends on how it isolates.",
         },
       ],
+    },
+    {
+      id: "address",
+      type: "text",
+      value: "string",
+      title: "Address",
+      description: "The service's address, over https unless it's on this machine.",
+      required: true,
+      visible: { field: "service", in: [ANOTHER] },
+    },
+    {
+      id: "token",
+      type: "secret",
+      value: "secret",
+      title: "Token",
+      description:
+        "The service's control token. It's asked each time and never saved in a template.",
+      required: true,
+      visible: { field: "service", in: [ANOTHER] },
     },
     {
       id: "access",
@@ -79,21 +117,21 @@ export const COMPUTER_UNIT: z.input<typeof Unit> = {
       value: "string",
       title: "Working directory",
       description:
-        "The folder it works in. Its file tools stay inside it by a check, not a sandbox. Removing the agent never deletes it.",
-      visible: { field: "where", in: ["local"] },
+        "The folder it works in. Its file tools stay inside it by a check, not a sandbox. Removing the agent leaves it. With none, the service makes one, which goes with the computer.",
+      visible: { field: "service", in: [LOCAL] },
     },
     {
-      id: "containerPath",
+      id: "path",
       type: "text",
       value: "string",
       title: "Working directory",
-      description: "A path inside the container.",
-      visible: { field: "where", in: ["container"] },
+      description: "A path on the service's machine. Removing the agent leaves it.",
+      visible: { field: "service", in: [ANOTHER] },
     },
   ],
   needs: [],
   gives: { slots: [], skills: [], results: [] },
-};
+});
 
 export const WEB_UNIT: z.input<typeof Unit> = {
   id: WEB,

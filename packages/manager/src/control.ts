@@ -19,6 +19,10 @@ const COMPUTER = "computer";
 const FIXED_FOR_AGENTS = new Set(["command", "url", "connection", "skill"]);
 /** The place that is the parent's own computer; every other place is a connection's id. */
 const OWN = "own";
+/** A new computer for the child, on the service its parent's computer runs on. */
+const NEW = "new";
+/** The only service a child's computer can go on: elsewhere needs a token no agent may pass on. */
+const LOCAL_SERVICE = "local";
 const LEVELS = ["none", "read", "files", "terminal"];
 
 /** How many agents one agent may have alive at once, at most and unless the person says. */
@@ -92,7 +96,11 @@ export function agentsUnit(
         value: "strings",
         title: "Places",
         description: "Where its agents can work, when their template has a computer.",
-        options: [{ value: OWN, title: "Its own computer" }, ...places],
+        options: [
+          { value: OWN, title: "Its own computer" },
+          { value: NEW, title: "A new computer on the same service" },
+          ...places,
+        ],
       },
       {
         id: "access",
@@ -148,6 +156,8 @@ export interface Reach {
   browser: boolean;
   connections: { slot: string; connection: string }[];
   skills: string[];
+  /** Which service it is on, when it says. */
+  service?: string;
 }
 const NOWHERE: Reach = { access: "none", browser: false, connections: [], skills: [] };
 
@@ -160,6 +170,7 @@ export function reachOf(record: TheAgent): Reach {
     browser: unit.values.browser === true,
     connections: unit.connections,
     skills: unit.skills,
+    ...(typeof unit.values.service === "string" ? { service: unit.values.service } : {}),
   };
 }
 
@@ -205,6 +216,8 @@ interface Shape {
   }[];
   /** None when the template has no computer, so no place is asked for. */
   places?: string[];
+  /** The template's computer, which is applied only for a new one. */
+  computer?: { offer: Offer; values: Values };
 }
 
 const isAgentsUnit = (self: string, offer: Offer) =>
@@ -224,7 +237,7 @@ function shapeOf(
 ): Shape | undefined {
   const units: Shape["units"] = [];
   const positions = new Map<number, number>();
-  let computer = false;
+  let computer: Shape["computer"];
   const seen = new Map<string, number>();
   for (const [position, unit] of template.units.entries()) {
     const offer = offers.find(
@@ -232,7 +245,7 @@ function shapeOf(
     );
     if (!offer) return undefined;
     if (unit.unit === COMPUTER) {
-      computer = true;
+      computer = { offer, values: unit.values ?? {} };
       continue;
     }
     // No secret passes through an agent, and a template holds none.
@@ -267,8 +280,10 @@ function shapeOf(
     reach.connections.length > 0 &&
     rank(reach.access) <= rank(bound.access) &&
     (!reach.browser || bound.browser);
-  const places = bound.places.filter((place) => place !== OWN || own);
-  return places.length ? { units, places } : undefined;
+  // A new one is made within the bounds, on the service its parent is on.
+  const fresh = reach.service === LOCAL_SERVICE;
+  const places = bound.places.filter((place) => (place !== OWN || own) && (place !== NEW || fresh));
+  return places.length ? { units, places, computer } : undefined;
 }
 
 /** The form an agent fills for one unit: the template's values are the defaults. */
@@ -301,6 +316,51 @@ function formFor(self: string, unit: Shape["units"][number], bound: Bound) {
   return narrowed.map((field) =>
     unit.values[field.id] === undefined ? field : { ...field, default: unit.values[field.id] },
   );
+}
+
+/** The bounds on a new computer: those of the unit, and of its holder's computer as it is now. */
+const withinReach = (bound: Bound, reach: Reach): Bound => ({
+  ...bound,
+  access: LEVELS[Math.min(rank(bound.access), rank(reach.access))] as string,
+  browser: bound.browser && reach.browser,
+});
+
+/** What an agent fills for a new computer: how far it reaches, within the bounds. */
+function newComputerForm(computer: NonNullable<Shape["computer"]>, bound: Bound) {
+  return computer.offer.unit.form.flatMap((field) => {
+    if (field.id === "browser") return bound.browser ? [field] : [];
+    if (field.id !== "access") return [];
+    return [
+      {
+        ...field,
+        options: field.options?.filter((one) => rank(one.value) <= rank(bound.access)),
+      },
+    ];
+  });
+}
+
+/** A new computer's values: the template's, within the bounds, on the parent's service. */
+function newComputer(
+  computer: NonNullable<Shape["computer"]>,
+  given: Values,
+  bound: Bound,
+  service: string,
+) {
+  const problems: TheProblem[] = [];
+  const asked = settle(newComputerForm(computer, bound), given, []).problems;
+  for (const one of asked) if (given[one.field ?? ""] !== undefined) problems.push(one);
+  if (given.browser === true && !bound.browser)
+    problems.push({ field: "browser", message: "This agent may not allow a browser." });
+  const access = LEVELS[
+    given.access === undefined
+      ? Math.min(rank(computer.values.access), rank(bound.access))
+      : rank(given.access)
+  ] as string;
+  const browser =
+    given.browser === undefined
+      ? computer.values.browser === true && bound.browser
+      : given.browser === true;
+  return { problems, values: { ...computer.values, service, access, browser } };
 }
 
 /** A child's agents unit may hold no more than its parent's, and goes one level less deep. */
@@ -472,7 +532,7 @@ export function createControl(parts: ControlParts) {
     return record;
   };
 
-  const createTool = (template: TheTemplate, shape: Shape, bound: Bound): Tool => ({
+  const createTool = (template: TheTemplate, shape: Shape, bound: Bound, reach: Reach): Tool => ({
     name: `create_${template.id}`,
     description:
       `Create an agent from the template "${template.title}". ${template.description}`.slice(
@@ -494,7 +554,17 @@ export function createControl(parts: ControlParts) {
             properties: Object.fromEntries(
               shape.units
                 .filter((unit) => !unit.fixed)
-                .map((unit) => [unit.key, schemaOf(formFor(self, unit, bound))]),
+                .map((unit) => [unit.key, schemaOf(formFor(self, unit, bound))])
+                .concat(
+                  shape.computer && shape.places?.includes(NEW)
+                    ? [
+                        [
+                          COMPUTER,
+                          schemaOf(newComputerForm(shape.computer, withinReach(bound, reach))),
+                        ],
+                      ]
+                    : [],
+                ),
             ),
           },
         },
@@ -512,7 +582,7 @@ export function createControl(parts: ControlParts) {
     const creates = parts.templates().flatMap((template) => {
       if (!bound.templates.includes(template.id)) return [];
       const shape = shapeOf(self, template, offers, bound, reach);
-      return shape ? [createTool(template, shape, bound)] : [];
+      return shape ? [createTool(template, shape, bound, reach)] : [];
     });
     return [...creates, ...FIXED_TOOLS];
   };
@@ -541,18 +611,39 @@ export function createControl(parts: ControlParts) {
         throw new Refused("invalid", `Choose a place: ${shape.places.join(", ")}.`);
       if (args.place && !shape.places?.includes(args.place))
         throw new Refused("invalid", "It can't work there.");
+      const problems: TheProblem[] = [];
       const shared = args.place === OWN ? reach : undefined;
-      const childReach = shared ?? NOWHERE;
+      const fresh =
+        args.place === NEW && shape.computer
+          ? newComputer(
+              shape.computer,
+              (args.units?.[COMPUTER] ?? {}) as Values,
+              withinReach(bound, reach),
+              reach.service as string,
+            )
+          : undefined;
+      if (fresh) problems.push(...fresh.problems);
+      const childReach: Reach =
+        shared ??
+        (fresh
+          ? {
+              access: String(fresh.values.access),
+              browser: fresh.values.browser === true,
+              connections: [],
+              skills: [],
+              service: reach.service as string,
+            }
+          : NOWHERE);
       const shares = shared
         ? shared.connections
-        : args.place
+        : args.place && !fresh
           ? [{ slot: COMPUTER, connection: args.place }]
           : [];
 
       const known = new Set(shape.units.filter((unit) => !unit.fixed).map((unit) => unit.key));
+      if (fresh) known.add(COMPUTER);
       for (const key of Object.keys(args.units ?? {}))
         if (!known.has(key)) throw new Refused("invalid", `This template has no unit ${key}.`);
-      const problems: TheProblem[] = [];
       const units = shape.units.map((unit) => {
         const given = (args.units?.[unit.key] ?? {}) as Values;
         let values: Values = { ...unit.values, ...given };
@@ -591,7 +682,18 @@ export function createControl(parts: ControlParts) {
               creatable: base.creatable,
               ...(base.answers ? { answers: base.answers } : {}),
             },
-            units,
+            units: [
+              ...units,
+              ...(fresh && shape.computer
+                ? [
+                    {
+                      provider: shape.computer.offer.provider,
+                      unit: COMPUTER,
+                      values: fresh.values,
+                    },
+                  ]
+                : []),
+            ],
             template: template.id,
           },
           name: args.name,

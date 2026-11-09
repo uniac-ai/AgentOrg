@@ -1,5 +1,5 @@
 {
-  "name": "@agentorg/computer",
+  "name": "@agentorg/computer-connector",
   "version": "0.0.0",
   "private": true,
   "description": "The computer unit: a terminal and files for an agent, on a machine the person chooses",
@@ -20,10 +20,10 @@
     "test": "node --test \"dist/test/**/*.test.js\""
   },
   "dependencies": {
+    "@agentorg/computer": "0.0.3",
     "@agentorg/interfaces": "0.0.0",
     "@agentorg/mcp": "0.0.0",
     "@agentorg/sdk": "0.0.0",
-    "@playwright/mcp": "0.0.84",
     "zod": "^4.6.7"
   },
   "devDependencies": {

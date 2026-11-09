@@ -111,6 +111,7 @@ const UNITS = [
     title: "Computer",
     description: "A computer to share.",
     form: [
+      { id: "service", type: "text", value: "string", title: "Service" },
       {
         id: "access",
         type: "choice",
@@ -1890,6 +1891,71 @@ test("a computer no longer held can't be shared", async (t) => {
   assert.ok((await s.names(tools)).includes("create_worker"));
   await s.calls.agents.removeUnit({ agent: child, instance: "slot:computer" });
   assert.ok(!(await s.names(tools)).includes("create_worker"), "it has nothing left to share");
+});
+
+test("a new computer is on its parent's service, and within its bounds", async (t) => {
+  const s = await delegating(t);
+  const { agent: parent, tools } = await s.parent(
+    { templates: ["worker"], places: ["new"], access: "files", browser: false },
+    { service: "local", access: "terminal", browser: true },
+  );
+  const schema = (await tools.list({})).tools[0]?.inputSchema as never as {
+    properties: {
+      place: { enum: string[] };
+      units: { properties: { computer: { properties: Record<string, { enum?: string[] }> } } };
+    };
+  };
+  assert.deepEqual(schema.properties.place.enum, ["new"]);
+  const form = schema.properties.units.properties.computer.properties;
+  assert.deepEqual(Object.keys(form), ["access"], "no service, folder or browser to choose");
+  assert.deepEqual(form.access?.enum, ["none", "read", "files"]);
+
+  const child = await s.made(tools, "create_worker", { name: "N", purpose: "P.", place: "new" });
+  const applied = s.given.applied.find((one) => one.agent === child);
+  // The template says terminal, and the bound brings it down.
+  assert.deepEqual(applied?.values, { service: "local", access: "files", browser: false });
+  const own = (await s.calls.agents.get({ agent: parent })).mcp[0]?.connection;
+  assert.notEqual((await s.calls.agents.get({ agent: child })).mcp[0]?.connection, own);
+
+  const beyond = async (computer: object, pattern: RegExp) => {
+    const answer = await tools.call({
+      name: "create_worker",
+      arguments: { name: "X", purpose: "P.", place: "new", units: { computer } },
+    });
+    assert.equal(answer.failed, true);
+    assert.match(answer.output, pattern);
+  };
+  await beyond({ access: "terminal" }, /options/);
+  await beyond({ browser: true }, /browser/);
+  await beyond({ service: "another" }, /no field service/);
+  await beyond({ workspace: "/etc" }, /no field workspace/);
+
+  // Its computer as it is now, not as it was when the unit was filled in.
+  const parentUnits = (await s.calls.agents.get({ agent: parent })).units;
+  const computer = parentUnits.find((one) => one.unit === "computer");
+  await s.calls.agents.removeUnit({ agent: parent, instance: computer?.instance as string });
+  await s.calls.agents.addUnit({
+    agent: parent,
+    unit: s.unit("computer", { service: "local", access: "read" }),
+  } as never);
+  await beyond({ access: "files" }, /options/);
+  const lowered = (await tools.list({})).tools[0]?.inputSchema as never as {
+    properties: {
+      units: { properties: { computer: { properties: Record<string, { enum?: string[] }> } } };
+    };
+  };
+  assert.deepEqual(lowered.properties.units.properties.computer.properties.access?.enum, [
+    "none",
+    "read",
+  ]);
+
+  // Only on a service here: the token for one elsewhere can't pass through an agent.
+  const away = await s.parent(
+    { templates: ["worker"], places: ["new"], access: "files" },
+    { service: "another", access: "terminal" },
+    "Away",
+  );
+  assert.ok(!(await s.names(away.tools)).includes("create_worker"));
 });
 
 test("a parent's agents stay when it goes, as the person's", async (t) => {

@@ -1,11 +1,11 @@
 ---
 name: computer
-description: How your computer works: where your workspace is, what lasts, and how to keep track of longer work. Use at the start of any task that uses files or commands.
+description: How your computer works, where your workspace is, what lasts, and how to keep track of longer work. Use at the start of any task that uses files or commands.
 ---
 
 # Your computer
 
-You have a computer, and a workspace folder on it. `computer__list` with no path shows it. Your workspace is where your work goes.
+You have a computer, and a workspace folder on it. `computer__list` with no path shows it. Your workspace is where your work goes. Your computer may be on another machine than the person's, or in a container of its own.
 
 ## What it can do
 
@@ -13,7 +13,7 @@ The tools you have say what you can do here. You may be able to read files, chan
 
 ## What lasts
 
-Files in your workspace last. They belong to the person, who can see and change them too, so check a file again if it may have changed since you read it. Removing you never deletes them.
+Files in a workspace the person named last. They belong to the person, who can see and change them too, so check a file again if it may have changed since you read it. Removing you never deletes them. A workspace made just for you goes when you do.
 
 ## Be careful
 

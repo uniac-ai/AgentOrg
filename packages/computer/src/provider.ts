@@ -1,31 +1,28 @@
-// The units' provider. A local computer is AgentExec and, when asked for, Playwright MCP, each run
-// as the person through the MCP binding's connection, each an Actor offering its tools. The web
-// unit is one connection to a hosted server. A workspace is the person's folder: nothing here ever
-// deletes it, and only the folder this provider made for a browser goes with its computer.
+// The units' provider, and the connector to AgentComputer. A computer is one the service runs: this
+// asks the service for it through its SDK, then opens an ordinary `url` connection to each endpoint
+// with the computer's token. The web unit is one connection to a hosted server. Nothing here starts
+// a service. The control token and each computer's token stay in this provider's private file.
 import { randomBytes } from "node:crypto";
-import {
-  chmodSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { createRequire } from "node:module";
-import { dirname, isAbsolute, join } from "node:path";
+import { homedir } from "node:os";
+import { isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { Computer, ComputerError } from "@agentorg/computer";
 import { hubActors, type Problem, unitProvider } from "@agentorg/interfaces";
-import { Connection, type Spec, type Timing } from "@agentorg/mcp";
+import { Connection, parseConnection, type Timing } from "@agentorg/mcp";
 import { type Log, Refused } from "@agentorg/sdk";
 import { connect } from "@agentorg/sdk/client";
 import { z } from "zod";
 import {
   type Access,
+  ANOTHER,
   BROWSER_SLOT,
   COMPUTER,
-  COMPUTER_UNIT,
+  computerUnit,
+  type Found,
+  INSTALL_STEPS,
+  LOCAL,
   SKILLS,
   WEB,
   WEB_UNIT,
@@ -35,30 +32,35 @@ const Link = z.object({
   slot: z.string(),
   actor: z.string(),
   credential: z.string(),
-  spec: z.union([
-    z.object({ kind: z.literal("url"), url: z.string() }),
-    z.object({
-      kind: z.literal("command"),
-      command: z.string(),
-      args: z.array(z.string()),
-      cwd: z.string(),
-    }),
-  ]),
-  hide: z.array(z.string()),
+  url: z.string(),
 });
 const Stored = z.object({
   agent: z.string(),
   links: z.array(Link),
-  /** A folder this provider made, which goes when the instance does. */
-  own: z.string().optional(),
+  /** The computer behind them. A service at an address is reached with what is kept here. */
+  computer: z
+    .object({
+      id: z.string(),
+      token: z.string(),
+      service: z.union([
+        z.object({ local: z.literal(true) }),
+        z.object({ apiUrl: z.string(), apiKey: z.string() }),
+      ]),
+    })
+    .optional(),
 });
 type Instance = z.infer<typeof Stored>;
 type Linked = z.infer<typeof Link>;
+type TheProblem = z.input<typeof Problem>;
+interface Reached {
+  apiUrl: string;
+  apiKey: string;
+}
+
 const FILE = "instances.json";
 const SKILLS_DIR = fileURLToPath(new URL("../../skills/", import.meta.url));
 const EXA_URL = "https://mcp.exa.ai/mcp?tools=web_search_exa,web_fetch_exa";
-/** Playwright's own README calls this equivalent to remote code execution. */
-const RUNS_CODE = "browser_run_code_unsafe";
+const SERVICE_ANSWERS_MS = 2000;
 const SAYS: Record<Access, string> = {
   read: "reads files",
   files: "reads and changes files",
@@ -73,10 +75,8 @@ export interface ComputerProviderOptions {
   credential: string;
   /** A private folder of the provider's, which holds each connection's Hub credential. */
   dir: string;
-  /** AgentExec's built file, which this runs with Node. */
-  agentexec: string;
-  /** Playwright MCP's program and which browser it drives; the person's Chrome by default. */
-  playwright?: { cli?: string; args?: string[] };
+  /** Where a service on this machine writes its address and token; the service's own default. */
+  dataFolder?: string;
   /** The hosted server the web unit connects to; Exa's by default. For tests. */
   webUrl?: string;
   log?: Log;
@@ -84,52 +84,64 @@ export interface ComputerProviderOptions {
 }
 
 export interface ComputerProvider {
-  /** Leave the Hub and stop every server. They resume at the next start. */
+  /** Leave the Hub and let every connection go. The computers stay, and resume at the next start. */
   close(): Promise<void>;
 }
 
+const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
 const quiet: Log = { info() {}, warn() {}, error() {} };
-const playwrightCli = () =>
-  join(dirname(createRequire(import.meta.url).resolve("@playwright/mcp/package.json")), "cli.js");
+/** An endpoint at the address the service was reached on, whatever the service calls itself. */
+const at = (apiUrl: string, endpoint: string) => {
+  const url = new URL(endpoint);
+  const { origin } = new URL(apiUrl);
+  return `${origin}${url.pathname}${url.search}`;
+};
+
+/** The same folders the service looks in itself. */
+const defaultDataFolder = () =>
+  process.env.AGENTCOMPUTER_DATA ??
+  (process.env.XDG_DATA_HOME
+    ? join(process.env.XDG_DATA_HOME, "agentcomputer")
+    : join(homedir(), ".local", "share", "agentcomputer"));
 
 /** What is wrong with what was filled in; nothing means it can be applied. */
-function problems(unit: string, values: Record<string, unknown>): z.input<typeof Problem>[] {
-  const found: z.input<typeof Problem>[] = [];
+function problems(
+  unit: string,
+  values: Record<string, unknown>,
+  found: Found,
+  secrets: string[],
+): TheProblem[] {
+  const wrong: TheProblem[] = [];
   if (unit === WEB) {
-    if (values.service !== "exa") found.push({ field: "service", message: "Choose a service." });
-    return found;
+    if (values.service !== "exa") wrong.push({ field: "service", message: "Choose a service." });
+    return wrong;
   }
-  if (values.where !== "local")
-    found.push({ field: "where", message: "Choose where the computer runs." });
+  if (values.service === LOCAL && !found) wrong.push({ field: "service", message: INSTALL_STEPS });
+  else if (values.service === ANOTHER) {
+    const given = secrets.includes("token") ? { token: "given" } : {};
+    const { why } = parseConnection("url", { url: values.address }, given);
+    if (why) wrong.push({ field: "address", message: `That address won't do. ${why}` });
+  } else if (values.service !== LOCAL)
+    wrong.push({ field: "service", message: "Choose a service." });
   if (values.access === "none") {
     if (values.browser !== true)
-      found.push({
+      wrong.push({
         field: "access",
         message: "With no files, no commands and no browser, there's no computer.",
       });
-    return found;
-  }
-  if (!LEVELS.includes(values.access as string))
-    found.push({ field: "access", message: "Choose what it can do." });
-  // Asked for here, not by `required`: a form field is shown by one condition, and this has two.
-  if (values.where === "container") {
-    if (!values.containerPath)
-      found.push({ field: "containerPath", message: "Give the path it works in." });
-    return found;
-  }
+  } else if (!LEVELS.includes(values.access as string))
+    wrong.push({ field: "access", message: "Choose what it can do." });
   const { workspace } = values;
-  if (typeof workspace !== "string" || !isAbsolute(workspace))
-    found.push({ field: "workspace", message: "Give the full path of a folder." });
-  else {
+  if (values.service === LOCAL && workspace !== undefined) {
     let folder = false;
     try {
-      folder = statSync(workspace).isDirectory();
+      folder = isAbsolute(workspace as string) && statSync(workspace as string).isDirectory();
     } catch {
       // Reported as not being a folder.
     }
-    if (!folder) found.push({ field: "workspace", message: `There's no folder at ${workspace}.` });
+    if (!folder) wrong.push({ field: "workspace", message: `There's no folder at ${workspace}.` });
   }
-  return found;
+  return wrong;
 }
 
 /** Run the units' provider as an Actor exporting `unit.provider@1` as `provider`. */
@@ -163,9 +175,51 @@ export async function startComputerProvider(
     renameSync(`${path}.tmp`, path);
   };
 
+  /** A service on this machine, by what it wrote; it needn't be running. */
+  const localService = (): Reached | undefined => {
+    const data = options.dataFolder ?? defaultDataFolder();
+    try {
+      const { url, pid } = JSON.parse(readFileSync(join(data, "server.json"), "utf8")) as {
+        url: string;
+        pid: number;
+      };
+      // A service that crashed leaves this behind: nothing else on its port gets the token.
+      process.kill(pid, 0);
+      return { apiUrl: url, apiKey: readFileSync(join(data, "control-token"), "utf8").trim() };
+    } catch {
+      return undefined;
+    }
+  };
+  /** The service on this machine, if it answers now. */
+  const findLocal = async (): Promise<Found> => {
+    const reached = localService();
+    if (!reached) return undefined;
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      return await Promise.race([
+        Computer.serviceInfo(reached),
+        new Promise<undefined>((resolve) => {
+          timer = setTimeout(resolve, SERVICE_ANSWERS_MS, undefined);
+        }),
+      ]);
+    } catch {
+      return undefined;
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
   const running = new Map<string, Connection[]>();
-  const open = async ({ spec, hide, actor, credential }: Linked) => {
-    const server = new Connection(spec as Spec, {}, log, options.timing, hide);
+  /** Connect a link. A service on this machine may have moved to another port since. */
+  const open = async ({ url, actor, credential }: Linked, computer?: Instance["computer"]) => {
+    const moved = computer && "local" in computer.service ? localService()?.apiUrl : undefined;
+    const token = computer?.token;
+    const server = new Connection(
+      { kind: "url", url: moved ? at(moved, url) : url },
+      token ? { token } : {},
+      log,
+      options.timing,
+    );
     await server.join({ hubUrl, actorId: actor, credential });
     return server;
   };
@@ -178,10 +232,28 @@ export async function startComputerProvider(
     return { found, servers };
   };
 
+  const reachOf = (service: NonNullable<Instance["computer"]>["service"]) =>
+    "local" in service ? localService() : service;
+  /**
+   * The computer goes. Only a service having trouble is worth another try: one that can't be
+   * reached, or no longer takes this token, mustn't keep the agent from going.
+   */
+  const killComputer = async ({ id, service }: NonNullable<Instance["computer"]>) => {
+    const reached = reachOf(service);
+    try {
+      if (!reached) throw new Error("The service isn't there.");
+      await Computer.kill(id, reached);
+    } catch (error) {
+      if (error instanceof ComputerError && error.code >= 500) throw error;
+      if (!(error instanceof ComputerError && error.code === 404))
+        log.error(`A computer may be left on its service: ${messageOf(error)}`);
+    }
+  };
+
   for (const [instance, entry] of Object.entries(stored)) {
     const servers: Connection[] = [];
     try {
-      for (const link of entry.links) servers.push(await open(link));
+      for (const link of entry.links) servers.push(await open(link, entry.computer));
       running.set(instance, servers);
       for (const server of servers) server.run();
     } catch (error) {
@@ -189,67 +261,57 @@ export async function startComputerProvider(
       await Promise.all(servers.map((server) => server.end()));
       // The Hub no longer knows it: its Actors were closed while the provider was away.
       if (error instanceof Refused && error.code === "forbidden") {
+        if (entry.computer) await killComputer(entry.computer).catch(() => {});
         delete stored[instance];
         save();
       }
     }
   }
 
-  /** What a filled-in unit runs: each server with the slot it gives and what a person reads. */
-  const plan = (unit: string, values: Record<string, unknown>, instance: string) => {
-    if (unit === WEB) {
-      const url = options.webUrl ?? EXA_URL;
-      return {
-        servers: [
-          {
-            slot: WEB,
-            spec: { kind: "url" as const, url },
-            hide: [],
-            target: new URL(url).host,
-          },
-        ],
-      };
-    }
+  /** Make the computer, and say what each of its endpoints is. */
+  const makeComputer = async (
+    values: Record<string, unknown>,
+    secrets: Record<string, string>,
+    name: string,
+    agent: string,
+  ) => {
+    const local = values.service === LOCAL;
+    const reached = local
+      ? localService()
+      : { apiUrl: String(values.address).replace(/\/$/, ""), apiKey: secrets.token as string };
+    if (!reached) throw new Refused("invalid", INSTALL_STEPS);
+    const { isolation } = await Computer.serviceInfo(reached);
     const access = values.access as Access | "none";
-    const workspace = values.workspace as string | undefined;
+    const workspace = (local ? values.workspace : values.path) as string | undefined;
+    const computer = await Computer.create({
+      ...reached,
+      access,
+      browser: values.browser === true,
+      name,
+      metadata: { agent },
+      ...(workspace ? { workspace } : {}),
+    });
+    const where = local ? "this machine" : new URL(reached.apiUrl).host;
+    const on = isolation === "container" ? `${where}, in a container` : `${where}, no isolation`;
     const servers = [];
     if (access !== "none")
       servers.push({
         slot: COMPUTER,
-        spec: {
-          kind: "command" as const,
-          command: process.execPath,
-          args: [options.agentexec, "--workspace", workspace as string, "--level", access],
-          cwd: workspace as string,
-        },
-        hide: [],
-        target: `this computer, as you, in ${workspace}: ${SAYS[access]}`,
+        url: at(reached.apiUrl, computer.getMcpUrl("computer")),
+        target: `${on}: ${SAYS[access]}${workspace ? ` in ${workspace}` : ""}`,
       });
-    if (values.browser !== true) return { servers };
-    const own = join(dir, "browsers", instance);
-    mkdirSync(own, { recursive: true, mode: 0o700 });
-    servers.push({
-      slot: BROWSER_SLOT,
-      spec: {
-        kind: "command" as const,
-        command: process.execPath,
-        args: [
-          options.playwright?.cli ?? playwrightCli(),
-          "--headless",
-          ...(options.playwright?.args ?? ["--browser", "chrome"]),
-          "--user-data-dir",
-          join(own, "profile"),
-          "--output-dir",
-          join(own, "output"),
-        ],
-        // Its file tools are kept to the folder it starts in.
-        cwd: workspace ?? own,
-      },
-      // Below a terminal it would be one.
-      hide: access === "terminal" ? [] : [RUNS_CODE],
-      target: "a browser on this computer",
-    });
-    return { servers, own };
+    if (values.browser === true)
+      servers.push({
+        slot: BROWSER_SLOT,
+        url: at(reached.apiUrl, computer.getMcpUrl("browser")),
+        target: `A browser, ${on}`,
+      });
+    const held: NonNullable<Instance["computer"]> = {
+      id: computer.computerID,
+      token: computer.getMcpToken(),
+      service: local ? { local: true } : reached,
+    };
+    return { servers, computer: held };
   };
 
   let closing = false;
@@ -266,35 +328,42 @@ export async function startComputerProvider(
           throw new Refused("unknown", `This provider has no unit ${unit}.`);
       };
       ctx.exports.provider.implement({
-        units: async () => ({ units: [COMPUTER_UNIT, WEB_UNIT] }),
+        units: async () => ({ units: [computerUnit(await findLocal()), WEB_UNIT] }),
         async skill({ unit, name, path: file }) {
           if (!SKILLS[unit]?.includes(name) || file !== "SKILL.md")
             throw new Refused("unknown", `${unit} has no file ${file} of a skill ${name}.`);
           return { text: await readFile(join(SKILLS_DIR, name, file), "utf8") };
         },
-        async check({ unit, values }) {
+        async check({ unit, values, secrets }) {
           known(unit);
-          return { problems: problems(unit, values) };
+          return { problems: problems(unit, values, await findLocal(), secrets) };
         },
-        async apply({ unit, values, name, agent }) {
+        async apply({ unit, values, secrets, name, agent }) {
           known(unit);
-          const wrong = problems(unit, values);
+          const wrong = problems(unit, values, await findLocal(), Object.keys(secrets));
           if (wrong.length > 0)
             throw new Refused("invalid", wrong.map((problem) => problem.message).join(" "));
           const instance = `${unit}_${randomBytes(9).toString("hex")}`;
-          const { servers, own } = plan(unit, values, instance);
-          const entry: Instance = { agent, links: [], ...(own ? { own } : {}) };
+          const web = { url: options.webUrl ?? EXA_URL };
+          const { servers, computer } =
+            unit === WEB
+              ? {
+                  servers: [{ slot: WEB, url: web.url, target: new URL(web.url).host }],
+                  computer: undefined,
+                }
+              : await makeComputer(values, secrets, name, agent);
+          const entry: Instance = { agent, links: [], ...(computer ? { computer } : {}) };
           const made: Connection[] = [];
           const connections: { slot: string; connection: string; target: string }[] = [];
           try {
-            for (const { slot, spec, hide, target } of servers) {
+            for (const { slot, url, target } of servers) {
               // A name of its own for each, as a computer can be two Actors.
               const { actorId, credential } = await ctx.slots.actors.call.create({
                 name: servers.length > 1 ? `${name} (${slot})`.slice(0, 128) : name,
               });
-              const link = { slot, actor: actorId, credential: credential as string, spec, hide };
+              const link = { slot, actor: actorId, credential: credential as string, url };
               entry.links.push(link);
-              made.push(await open(link));
+              made.push(await open(link, computer));
               connections.push({ slot, connection: actorId, target });
             }
             if (closing) throw new Refused("unavailable", "This provider is stopping.");
@@ -308,7 +377,10 @@ export async function startComputerProvider(
             await Promise.all(made.map((server) => server.end()));
             for (const { actor } of entry.links)
               await ctx.slots.actors.call.close({ actorId: actor }).catch(() => {});
-            if (own) rmSync(own, { recursive: true, force: true });
+            if (computer)
+              await killComputer(computer).catch((failed) =>
+                log.warn(`A computer may be left on its service: ${String(failed)}`),
+              );
             throw error;
           }
           return { instance, connections, results: [] };
@@ -333,6 +405,8 @@ export async function startComputerProvider(
         },
         async remove({ instance }) {
           const { found, servers } = held(instance);
+          // First: if the service refuses, the rest is still here to be tried again.
+          if (found.computer) await killComputer(found.computer);
           for (const { actor } of found.links)
             await ctx.slots.actors.call.close({ actorId: actor });
           running.delete(instance);
@@ -342,8 +416,6 @@ export async function startComputerProvider(
           } finally {
             await Promise.all(servers.map((server) => server.end()));
           }
-          // The browser's own profile and downloads. Never a workspace.
-          if (found.own) rmSync(found.own, { recursive: true, force: true });
           return {};
         },
       });
