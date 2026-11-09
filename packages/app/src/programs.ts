@@ -143,7 +143,7 @@ export async function startPrograms(
   const agents =
     chatgpt &&
     (await attempt("the agent provider", async () => {
-      const { actorId, credential } = await identity("agents", "Agents", [
+      const { actorId, credential } = await identity("agents", "AgentOrg", [
         hubBinding("actors"),
         { slot: "model", provider: chatgpt, export: "session" },
       ]);
@@ -160,7 +160,7 @@ export async function startPrograms(
     }));
 
   const mcp = await attempt("the MCP provider", async () => {
-    const { actorId, credential } = await identity("mcp", "MCP", [hubBinding("actors")]);
+    const { actorId, credential } = await identity("mcp", "Local", [hubBinding("actors")]);
     const running = await startMcpProvider({
       hubUrl,
       actorId,
