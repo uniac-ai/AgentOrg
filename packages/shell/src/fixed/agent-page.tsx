@@ -1,6 +1,6 @@
 import { ChevronRightIcon, MoreHorizontalIcon, PlusIcon, XIcon } from "lucide-react";
 import { useState } from "react";
-import { api, go, useLoad } from "../data.ts";
+import { api, go, type Route, useLoad } from "../data.ts";
 import { Button } from "../ui/button.tsx";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible.tsx";
 import {
@@ -15,6 +15,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "../ui/dropdown-menu.tsx";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select.tsx";
@@ -24,17 +25,19 @@ import {
   getAgent,
   lineOf,
   listConnections,
+  listMcpProviders,
+  listSkills,
   type Mcp,
   type McpProvider,
   nowOf,
   REFRESH_MS,
-  type Skill,
+  slotFor,
   useAct,
   useChatRecord,
   useChatSlots,
   useEvery,
 } from "./data.ts";
-import { Nothing, Page, Scroll, Section, StateDot, WhereIcon } from "./parts.tsx";
+import { Jump, Nothing, Page, Scroll, Section, StateDot, WhereIcon } from "./parts.tsx";
 
 /** How many of the latest messages the page shows as its activity. */
 const ACTIVITY = 20;
@@ -46,15 +49,14 @@ export function AgentPage({ agent: id }: { agent: string }) {
   const [changed, setChanged] = useState(0);
   const refresh = () => setChanged((was) => was + 1);
   const detail = useLoad(() => getAgent(id), ["actors", "bindings"], [id, tick, changed]);
-  const skills = useLoad(
-    () => api.call<{ skills: Skill[] }>("skills", "list").then((r) => r.skills),
-    [],
-    [changed],
-  ).value;
+  const skills = useLoad(listSkills, [], [changed]).value;
   const connections = useLoad(listConnections, ["actors", "bindings"], [changed]).value;
-  const providers = useLoad(
+  const providers = useLoad(listMcpProviders, ["actors"]).value;
+  const agentProviders = useLoad(
     () =>
-      api.call<{ providers: McpProvider[] }>("connections", "providers").then((r) => r.providers),
+      api
+        .call<{ providers: { provider: string; name: string }[] }>("agents", "providers")
+        .then((reply) => reply.providers),
     ["actors"],
   ).value;
   const slot = useChatSlots().get(id);
@@ -134,9 +136,15 @@ export function AgentPage({ agent: id }: { agent: string }) {
               action={
                 <AddMenu
                   label="Add an MCP"
-                  empty="No other connections"
                   items={offered.map((c) => ({ id: c.connection, name: c.name }))}
-                  onPick={(connection) => change("expose", { connection })}
+                  onPick={(connection, name) => {
+                    const as = slotFor(
+                      name,
+                      agent.mcp.map((m) => m.slot),
+                    );
+                    change("expose", { connection, ...(as ? { as } : {}) });
+                  }}
+                  more={{ label: "Connect a new MCP…", to: { screen: "mcps", adding: true } }}
                 />
               }
             >
@@ -156,9 +164,9 @@ export function AgentPage({ agent: id }: { agent: string }) {
               action={
                 <AddMenu
                   label="Add a skill"
-                  empty="No other skills"
                   items={spare.map((s) => ({ id: s.name, name: s.name }))}
                   onPick={(skill) => change("expose", { skill })}
+                  more={{ label: "Add a new skill…", to: { screen: "skills", adding: true } }}
                 />
               }
             >
@@ -167,7 +175,11 @@ export function AgentPage({ agent: id }: { agent: string }) {
                   key={skill.name}
                   className="group/skill flex h-11 items-center gap-3 border-t first:border-t-0"
                 >
-                  <span className="shrink-0 font-medium">{skill.name}</span>
+                  <span className="shrink-0 font-medium">
+                    <Jump to={{ screen: "skills", focus: skill.name }}>
+                      <span className="text-[14px] font-medium">{skill.name}</span>
+                    </Jump>
+                  </span>
                   <span className="min-w-0 flex-1 truncate text-[13px] text-muted-foreground phone:hidden">
                     {skill.description}
                   </span>
@@ -189,6 +201,13 @@ export function AgentPage({ agent: id }: { agent: string }) {
           <aside className="flex min-w-0 flex-col gap-7">
             <Section title="Model">
               <ModelPicker slot={running ? slot : undefined} />
+              <p className="mt-1.5 truncate text-[13px] text-muted-foreground">
+                {agent.creatable} from{" "}
+                <Jump to={{ screen: "settings" }}>
+                  {agentProviders?.find((p) => p.provider === agent.provider)?.name ??
+                    agent.provider}
+                </Jump>
+              </p>
             </Section>
             <Section title="Activity">
               <Activity messages={record.messages} />
@@ -236,14 +255,14 @@ export function AgentPage({ agent: id }: { agent: string }) {
 
 function AddMenu({
   label,
-  empty,
   items,
   onPick,
+  more,
 }: {
   label: string;
-  empty: string;
   items: { id: string; name: string }[];
-  onPick(id: string): void;
+  onPick(id: string, name: string): void;
+  more: { label: string; to: Route };
 }) {
   return (
     <DropdownMenu>
@@ -254,11 +273,12 @@ function AddMenu({
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="min-w-56">
         {items.map((item) => (
-          <DropdownMenuItem key={item.id} onSelect={() => onPick(item.id)}>
+          <DropdownMenuItem key={item.id} onSelect={() => onPick(item.id, item.name)}>
             {item.name}
           </DropdownMenuItem>
         ))}
-        {items.length === 0 && <DropdownMenuItem disabled>{empty}</DropdownMenuItem>}
+        {items.length > 0 && <DropdownMenuSeparator />}
+        <DropdownMenuItem onSelect={() => go(more.to)}>{more.label}</DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -291,10 +311,13 @@ function McpRow({
           <span className="truncate font-mono text-xs">{origin?.target}</span>
         </span>
         <span className="min-w-0 truncate text-[13px] text-muted-foreground phone:col-span-2 phone:row-start-3">
-          {origin &&
-            (origin.madeFor
-              ? `Created for this agent${provider ? ` by ${provider}` : ""}`
-              : "Connected by you")}
+          {origin && (
+            <Jump to={{ screen: "mcps", focus: mcp.connection }}>
+              {origin.madeFor
+                ? `Created for this agent${provider ? ` by ${provider}` : ""}`
+                : "Connected by you"}
+            </Jump>
+          )}
         </span>
         <CollapsibleTrigger asChild>
           <Button

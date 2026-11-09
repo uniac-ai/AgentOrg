@@ -34,6 +34,13 @@ export function useEvery(ms: number): number {
 export const listAgents = () =>
   api.call<{ agents: AgentEntry[] }>("agents", "list").then((reply) => reply.agents);
 export const getAgent = (agent: string) => api.call<AgentDetail>("agents", "get", { agent });
+export const listSkills = () =>
+  api.call<{ skills: Skill[] }>("skills", "list").then((reply) => reply.skills);
+export const listMcpProviders = () =>
+  api.call<{ providers: McpProvider[] }>("connections", "providers").then((r) => r.providers);
+/** Every agent with what it's made of: what says which agents use a skill or a connection. */
+export const listDetails = () =>
+  listAgents().then((agents) => Promise.all(agents.map((a) => getAgent(a.agent))));
 export const listConnections = () =>
   api
     .call<{ connections: ConnectionEntry[] }>("connections", "list")
@@ -163,6 +170,21 @@ export function ago(at: string | undefined, now = Date.now()): string {
   if (hours < 24) return `${hours} h`;
   if (hours < 48) return "Yesterday";
   return then.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+/**
+ * The slot a connection is exposed to an agent as, from its name: models read it as the prefix of
+ * its tools. None if the name gives nothing usable, or the agent already has that slot: the Hub
+ * then generates one.
+ */
+export function slotFor(name: string, taken: readonly string[]): string | undefined {
+  const slug = name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^[^a-z]+/, "")
+    .slice(0, 48)
+    .replace(/_+$/, "");
+  return slug && !taken.includes(slug) ? slug : undefined;
 }
 
 /** What a failed call says, for one line in place. */

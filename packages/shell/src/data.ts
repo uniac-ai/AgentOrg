@@ -148,9 +148,17 @@ export type Route =
   | { screen: "home" }
   | { screen: "settings" }
   | { screen: "agent"; agent: string }
-  | { screen: "chat"; agent: string };
+  | { screen: "chat"; agent: string }
+  | { screen: "skills" | "mcps"; focus?: string; adding?: boolean };
 function routeOf(hash: string): Route {
   if (hash === "#/settings") return { screen: "settings" };
+  const managed = /^#\/(skills|mcps)(?:\/(add|s\/([^/]+)))?$/.exec(hash);
+  if (managed)
+    return {
+      screen: managed[1] as "skills" | "mcps",
+      ...(managed[2] === "add" ? { adding: true } : {}),
+      ...(managed[3] ? { focus: decodeURIComponent(managed[3]) } : {}),
+    };
   const chat = /^#\/a\/([^/]+)\/chat$/.exec(hash)?.[1];
   if (chat) return { screen: "chat", agent: decodeURIComponent(chat) };
   const agent = /^#\/a\/(.+)$/.exec(hash)?.[1];
@@ -167,6 +175,11 @@ export function useRoute(): Route {
   return routeOf(hash);
 }
 export function go(route: Route) {
+  if (route.screen === "skills" || route.screen === "mcps") {
+    const rest = route.adding ? "/add" : route.focus ? `/s/${encodeURIComponent(route.focus)}` : "";
+    location.hash = `#/${route.screen}${rest}`;
+    return;
+  }
   location.hash =
     route.screen === "chat"
       ? `#/a/${encodeURIComponent(route.agent)}/chat`

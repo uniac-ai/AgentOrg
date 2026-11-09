@@ -10,6 +10,7 @@ import {
   BreadcrumbPage,
   BreadcrumbSeparator,
 } from "../ui/breadcrumb.tsx";
+import { Button } from "../ui/button.tsx";
 import type { Tone } from "./data.ts";
 
 const WORD: Record<Tone, string> = {
@@ -54,6 +55,35 @@ export function WhereIcon({ kind }: { kind: string }) {
       aria-label={kind === "url" ? "Remote" : "On this computer"}
       className="size-3.5 shrink-0 text-muted-foreground"
     />
+  );
+}
+
+/** Text that goes somewhere: plain until it's pointed at. */
+export function Jump({ to, children }: { to: Route; children: React.ReactNode }) {
+  return (
+    <Button
+      variant="link"
+      className="h-auto min-w-0 justify-start truncate border-0 p-0 text-[13px] font-normal text-inherit"
+      onClick={() => go(to)}
+    >
+      {children}
+    </Button>
+  );
+}
+
+/** The agents using something, each a way to it. */
+export function UsedBy({ agents }: { agents: { agent: string; name: string }[] }) {
+  if (agents.length === 0)
+    return <span className="text-[13px] text-[var(--faint)]">Not used yet</span>;
+  return (
+    <span className="min-w-0 truncate text-[13px] text-muted-foreground">
+      {agents.map((agent, i) => (
+        <Fragment key={agent.agent}>
+          {i > 0 && ", "}
+          <Jump to={{ screen: "agent", agent: agent.agent }}>{agent.name}</Jump>
+        </Fragment>
+      ))}
+    </span>
   );
 }
 

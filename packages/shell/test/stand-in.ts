@@ -335,9 +335,7 @@ export async function standIn(
           agent.skills.push(skills.find((s) => s.name === input.skill) as (typeof skills)[number]);
           return {};
         }
-        const slot = (connections.get(String(input.connection)) as Connection).name
-          .split(" ")[0]
-          ?.toLowerCase() as string;
+        const slot = input.as ? String(input.as) : "generated_tools";
         agent.mcp.push({ slot, connection: String(input.connection) });
         return { slot };
       },
@@ -359,13 +357,74 @@ export async function standIn(
           {
             provider: "local",
             name: "Local",
+            // The two kinds' schemas as the built-in provider describes them.
             kinds: [
-              { kind: "url", title: "A server at a URL", params: {}, secrets: {} },
-              { kind: "command", title: "A command", params: {}, secrets: {} },
+              {
+                kind: "url",
+                title: "A server at an address",
+                params: {
+                  type: "object",
+                  properties: { url: { type: "string", format: "uri" } },
+                  required: ["url"],
+                  additionalProperties: false,
+                },
+                secrets: {
+                  type: "object",
+                  properties: { token: { type: "string" } },
+                  additionalProperties: false,
+                },
+              },
+              {
+                kind: "command",
+                title: "A local server this machine starts",
+                params: {
+                  type: "object",
+                  properties: {
+                    command: { type: "string" },
+                    args: { type: "array", items: { type: "string" } },
+                    cwd: { type: "string" },
+                  },
+                  required: ["command"],
+                  additionalProperties: false,
+                },
+                secrets: {
+                  type: "object",
+                  propertyNames: { type: "string" },
+                  additionalProperties: { type: "string" },
+                },
+              },
             ],
           },
         ],
       }),
+      get: ({ connection }) => {
+        const found = connections.get(String(connection));
+        if (!found) throw new Refusal("unknown", "No such connection.");
+        return {
+          connection: found.connection,
+          name: found.name,
+          origin: found.origin,
+          status: found.status,
+        };
+      },
+      create: (input) => {
+        const connection = `c-new-${connections.size}`;
+        const params = input.params as unknown as Record<string, unknown>;
+        connections.set(connection, {
+          connection,
+          name: String(input.name),
+          origin: {
+            provider: String(input.provider),
+            kind: String(input.kind),
+            target: String(params.url ?? params.command),
+            madeBy: PERSON,
+            at: at(0),
+          },
+          status: { state: "connected", tools: [{ name: "search" }, { name: "fetch" }] },
+        });
+        changed();
+        return { connection };
+      },
       list: () => ({
         connections: [...connections.values()].map(({ connection, name, origin, status }) => ({
           connection,
@@ -375,7 +434,15 @@ export async function standIn(
         })),
       }),
     },
-    skills: { list: () => ({ skills }) },
+    skills: {
+      list: () => ({ skills }),
+      add: ({ path }) => {
+        const name = String(path).split("/").at(-1) as string;
+        const added = { name, description: "Writes a changelog" };
+        skills.push(added);
+        return added;
+      },
+    },
   };
   const INTERFACES: Record<string, Interface> = {
     agents: agentsInterface as unknown as Interface,
@@ -484,7 +551,10 @@ export async function standIn(
         })),
       });
     }
-    if (slot === "login") return { state: "signed_in", account: { email: "sam@example.com" } };
+    if (slot === "login") {
+      if (method === "logout") return { revoked: true };
+      return { state: "signed_in", account: { email: "sam@example.com", plan: "Plus" } };
+    }
     if (slot === "store") return {};
     if (slot === "actors" && method === "list") return { actors: [] };
     if (slot === "grants") return { requests: [] };

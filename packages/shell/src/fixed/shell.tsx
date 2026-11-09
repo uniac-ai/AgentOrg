@@ -1,13 +1,15 @@
 // The fixed frontend: agents, how each is doing, and what each is made of.
-import { BotIcon, MoonIcon, SettingsIcon, SunIcon } from "lucide-react";
+import { BotIcon, MoonIcon, PlugIcon, SettingsIcon, SparklesIcon, SunIcon } from "lucide-react";
 import { useLayoutEffect } from "react";
 import type { LoginStatus } from "../app.tsx";
 import { go, setTheme, useLoad, useRoute, useTheme } from "../data.ts";
-import { Settings } from "../settings.tsx";
 import { AgentPage } from "./agent-page.tsx";
 import { AgentsPage } from "./agents-page.tsx";
 import { ChatPage } from "./chat.tsx";
 import { getAgent, listAgents, nowOf, REFRESH_MS, useEvery } from "./data.ts";
+import { McpsPage } from "./mcps-page.tsx";
+import { SettingsPage } from "./settings-page.tsx";
+import { SkillsPage } from "./skills-page.tsx";
 
 /** The agents with a problem, for the count beside Agents. */
 function useProblems(): number {
@@ -28,19 +30,20 @@ function useProblems(): number {
 }
 
 const NAV = [
-  { screen: "home", label: "Agents", Icon: BotIcon },
-  { screen: "settings", label: "Settings", Icon: SettingsIcon },
+  { screen: "home", label: "Agents", short: "Agents", Icon: BotIcon },
+  { screen: "skills", label: "Skills", short: "Skills", Icon: SparklesIcon },
+  { screen: "mcps", label: "MCP connections", short: "MCPs", Icon: PlugIcon },
+  { screen: "settings", label: "Settings", short: "Settings", Icon: SettingsIcon },
 ] as const;
 
 export function FixedShell({ login }: { login?: LoginStatus }) {
   const route = useRoute();
   const theme = useTheme();
   const problems = useProblems();
-  const here = route.screen === "settings" ? "settings" : "home";
-  // The older Settings page keeps the browser's defaults until it is replaced.
+  const here = route.screen === "agent" || route.screen === "chat" ? "home" : route.screen;
   useLayoutEffect(() => {
-    document.documentElement.dataset.ui = here === "settings" ? "older" : "fixed";
-  }, [here]);
+    document.documentElement.dataset.ui = "fixed";
+  }, []);
   const toggle = (
     <button
       type="button"
@@ -66,13 +69,13 @@ export function FixedShell({ login }: { login?: LoginStatus }) {
         aria-label="Main"
         className="flex w-[196px] shrink-0 flex-col gap-0.5 px-2.5 py-2.5 phone:hidden"
       >
-        {NAV.map(({ screen, label, Icon }) => (
+        {NAV.map(({ screen, label, Icon }, i) => (
           <button
             key={screen}
             type="button"
             aria-current={here === screen ? "page" : undefined}
             onClick={() => go({ screen })}
-            className={`flex h-8 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-[13px] hover:bg-[var(--hover)] ${here === screen ? "bg-[var(--selected)] font-semibold" : "text-muted-foreground"}`}
+            className={`flex h-8 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-[13px] hover:bg-[var(--hover)] ${i === 1 ? "mt-3" : ""} ${here === screen ? "bg-[var(--selected)] font-semibold" : "text-muted-foreground"}`}
           >
             <Icon className="size-4" />
             {label}
@@ -86,15 +89,17 @@ export function FixedShell({ login }: { login?: LoginStatus }) {
           <ChatPage key={route.agent} agent={route.agent} />
         ) : route.screen === "agent" ? (
           <AgentPage key={route.agent} agent={route.agent} />
+        ) : route.screen === "skills" ? (
+          <SkillsPage focus={route.focus} adding={route.adding} />
+        ) : route.screen === "mcps" ? (
+          <McpsPage focus={route.focus} adding={route.adding} />
         ) : route.screen === "settings" ? (
-          <main className="min-h-0 flex-1 overflow-auto">
-            <Settings login={login} />
-          </main>
+          <SettingsPage login={login} toggle={<span className="wide:hidden">{toggle}</span>} />
         ) : (
           <AgentsPage />
         )}
-        <nav aria-label="Main" className="grid shrink-0 grid-cols-3 wide:hidden">
-          {NAV.map(({ screen, label, Icon }) => (
+        <nav aria-label="Main" className="grid shrink-0 grid-cols-4 wide:hidden">
+          {NAV.map(({ screen, short, Icon }) => (
             <button
               key={screen}
               type="button"
@@ -103,10 +108,9 @@ export function FixedShell({ login }: { login?: LoginStatus }) {
               className={`relative flex h-14 flex-col items-center justify-center gap-0.5 text-[11px] ${here === screen ? "font-semibold text-foreground" : "text-muted-foreground"}`}
             >
               <Icon className="size-[18px]" />
-              {label}
+              {short}
             </button>
           ))}
-          <div className="grid place-items-center">{toggle}</div>
         </nav>
       </div>
     </div>
