@@ -16,7 +16,7 @@ const answer = (exit: number | "running", seconds: number, session: string, text
 const page_ = (title: string) =>
   `### Ran Playwright code\n\`\`\`js\nawait page.click();\n\`\`\`\n### Page\n- Page URL: http://localhost:4173/checkout\n- Page Title: ${title}\n### Snapshot\n- [Snapshot](p.yml)`;
 const DIFF =
-  "===================================================================\n--- src/retry.ts\t\n+++ src/retry.ts\t\n@@ -1,2 +1,2 @@\n-  return session.pay(cart);\n+  return newSession().pay(cart);\n }\n";
+  "Index: src/retry.ts\n===================================================================\n--- src/retry.ts\n+++ src/retry.ts\n@@ -1,2 +1,2 @@\n-  return session.pay(cart);\n+  return newSession().pay(cart);\n }\n";
 
 let id = 0;
 const ago = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
@@ -81,8 +81,13 @@ const task = () => [
     "refused",
   ),
   tool("pc__edit", { path: "shop/src/retry.ts", old_text: "y" }, DIFF, 3),
-  tool("pc__exec_command", { cmd: "npm run e2e" }, answer("running", 10, "e2e1", "RUN"), 2),
-  tool("pc__write_stdin", { session_id: "e2e1" }, answer("running", 5, "e2e1", "still going"), 0.5),
+  tool("pc__exec_command", { cmd: "npm run e2e" }, answer("running", 10, "e2e1", "RUN\n"), 2),
+  tool(
+    "pc__write_stdin",
+    { session_id: "e2e1" },
+    answer("running", 5, "e2e1", "still going\n"),
+    0.5,
+  ),
 ];
 
 async function open(
@@ -142,7 +147,7 @@ test(
     );
 
     await chat.getByRole("button", { name: /npm run e2e/ }).click();
-    await chat.getByText("RUN\nstill going", { exact: false }).waitFor();
+    await chat.getByText("still going", { exact: false }).waitFor();
     await chat.getByRole("button", { name: /^Edited retry/ }).click();
     const added = chat.locator(".diff-code-insert");
     assert.match(await added.innerText(), /newSession/);

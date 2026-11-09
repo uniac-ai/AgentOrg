@@ -202,9 +202,10 @@ export function rowsOf(messages: readonly ChatMessage[]): Row[] {
       const lasted = (Date.parse(message.at) - Date.parse(command.at ?? message.at)) / 1000;
       if (answer) command.seconds = (lasted || 0) + answer.seconds;
       command.stopped ||= chars === "\u0003";
-      const typed = chars && chars !== "\u0003" && chars !== "\u0004" ? `\n> ${chars}` : "";
-      command.output =
-        `${command.output}${typed}${answer?.output ? `\n${answer.output}` : ""}`.replace(/^\n/, "");
+      // Each answer is exactly what it wrote since the last: only what was typed needs a line.
+      if (chars && chars !== "\u0003" && chars !== "\u0004")
+        command.output += `${command.output && !command.output.endsWith("\n") ? "\n" : ""}> ${chars}\n`;
+      command.output += answer?.output ?? "";
       command.polled = message.at;
       if (answer?.exit !== undefined) {
         command.exit = answer.exit;

@@ -52,13 +52,14 @@ test("a command reads as itself, under any slot, and how it ended", () => {
 
 test("polls join their command: output, the time since it began, and how it ended", () => {
   const rows = rowsOf([
-    call("c__exec_command", { cmd: "npm test" }, answer("running", 10, "ab", "RUN"), "done", 0),
-    call("c__write_stdin", { session_id: "ab" }, answer("running", 5, "ab", "one"), "done", 30),
-    call("c__write_stdin", { session_id: "ab" }, answer(0, 3, "none", "two"), "done", 60),
+    call("c__exec_command", { cmd: "npm test" }, answer("running", 10, "ab", "RUN\n"), "done", 0),
+    call("c__write_stdin", { session_id: "ab" }, answer("running", 5, "ab", "one\n"), "done", 30),
+    call("c__write_stdin", { session_id: "ab" }, answer("running", 5, "ab", ""), "done", 45),
+    call("c__write_stdin", { session_id: "ab" }, answer(0, 3, "none", "two\n"), "done", 60),
   ]);
   assert.equal(rows.length, 1);
   const [row] = rows as [Extract<Call, { kind: "command" }>];
-  assert.equal(row.output, "RUN\none\ntwo");
+  assert.equal(row.output, "RUN\none\ntwo\n", "as written, with no blank lines between answers");
   assert.equal(row.state, "done");
   assert.equal(row.exit, 0);
   assert.equal(row.seconds, 63);
@@ -66,7 +67,13 @@ test("polls join their command: output, the time since it began, and how it ende
 
 test("an interrupt is a stop, not a failure; input shows; an orphan poll still reads", () => {
   const rows = rowsOf([
-    call("c__exec_command", { cmd: "npm run dev" }, answer("running", 3, "cd", "ready"), "done", 0),
+    call(
+      "c__exec_command",
+      { cmd: "npm run dev" },
+      answer("running", 3, "cd", "ready\n"),
+      "done",
+      0,
+    ),
     call(
       "c__write_stdin",
       { session_id: "cd", chars: "y" },
@@ -84,7 +91,7 @@ test("an interrupt is a stop, not a failure; input shows; an orphan poll still r
   ]);
   const [row] = rows as [Extract<Call, { kind: "command" }>];
   assert.equal(lineOfRow(row), "Stopped npm run dev");
-  assert.equal(row.output, "ready\n> y");
+  assert.equal(row.output, "ready\n> y\n");
   assert.equal(
     lineOfRow(one(call("c__write_stdin", { session_id: "zz" }, answer("running", 5, "zz", "")))),
     "Checked a running command",
@@ -101,7 +108,7 @@ test("reading folds together; an edit counts its diff from AgentExec's patch for
   assert.equal(rows.length, 1);
   assert.equal(lineOfRow(rows[0] as Call), "Read 2 files, listed a folder, searched for pay");
   const diff =
-    "===================================================================\n--- a.ts\t\n+++ a.ts\t\n@@ -1,2 +1,2 @@\n-old\n+new\n same\n";
+    "Index: a.ts\n===================================================================\n--- a.ts\n+++ a.ts\n@@ -1,2 +1,2 @@\n-old\n+new\n same\n";
   const edit = one(call("c__edit", { path: "src/a.ts", old_text: "old", new_text: "new" }, diff));
   assert.deepEqual([edit.kind, lineOfRow(edit)], ["edit", "Edited a.ts"]);
   assert.deepEqual(
@@ -116,16 +123,9 @@ test("reading folds together; an edit counts its diff from AgentExec's patch for
     ),
   );
   assert.equal(lineOfRow(made), "Created n.ts");
-  const refused = one(
-    call(
-      "c__edit",
-      { path: "a.ts" },
-      '{"error":{"code":"x","message":"Nothing matched."}}',
-      "refused",
-    ),
-  );
+  const refused = one(call("c__edit", { path: "a.ts" }, "That text isn't in a.ts.", "refused"));
   assert.equal(lineOfRow(refused), "Couldn't edit a.ts");
-  assert.equal((refused as { output: string }).output, "Nothing matched.");
+  assert.equal((refused as { output: string }).output, "That text isn't in a.ts.");
 });
 
 test("browser steps follow Playwright's real answers", () => {
