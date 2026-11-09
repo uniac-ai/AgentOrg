@@ -9,6 +9,7 @@ import {
   agents as agentsInterface,
   chat as chatInterface,
   connections as connectionsInterface,
+  folders as foldersInterface,
   hubBindings,
   skills as skillsInterface,
 } from "@agentorg/interfaces";
@@ -365,6 +366,14 @@ const TEMPLATES: Template[] = [
     units: [{ provider: "Gone", unit: "mystery" }],
   },
 ];
+
+const FOLDERS: Record<string, string[]> = {
+  "/": ["home"],
+  "/home": ["me"],
+  "/home/me": ["Agents", "Documents"],
+  "/home/me/Agents": ["Foreman"],
+  "/home/me/Agents/Foreman": [],
+};
 
 interface Spec {
   input: z.ZodType;
@@ -745,6 +754,16 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
     if (slot === "login") {
       if (method === "logout") return { revoked: true };
       return { state: "signed_in", account: { email: "sam@example.com", plan: "Plus" } };
+    }
+    if (slot === "folders") {
+      const path = String(input.path ?? "/home/me");
+      const under = FOLDERS[path];
+      if (!under) throw new Refusal("unknown", "There's no such folder.");
+      return foldersInterface.methods.list.output.parse({
+        path,
+        ...(path === "/" ? {} : { parent: path.split("/").slice(0, -1).join("/") || "/" }),
+        folders: under.map((name) => ({ name })),
+      });
     }
     if (slot === "store") {
       if (method === "get")

@@ -253,3 +253,9 @@ export function partsOf(values: Values, form: readonly Field[]): string[] {
     return title ? [title] : [];
   });
 }
+
+/** The answer to `where`, if the unit asks it: what says where a computer is, and what that means. */
+export function whereOf(form: readonly Field[], values: Values) {
+  const field = form.find((f) => f.id === "where");
+  return field?.options?.find((o) => o.value === fieldValue(field, values));
+}

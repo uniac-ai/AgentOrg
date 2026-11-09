@@ -93,7 +93,7 @@ test(
     await choose(page, "Where it runs", /^Its own container/);
     await computer.getByLabel("Image").waitFor();
     await choose(page, "Files and commands", /^None/);
-    assert.equal(await computer.getByLabel("Working directory").count(), 0);
+    assert.equal(await computer.getByLabel("Working directory", { exact: true }).count(), 0);
     assert.equal(await create.isDisabled(), false, "with no access there's no folder to ask for");
     await page.close();
   }),
@@ -110,7 +110,7 @@ test(
     await choose(page, "Where it runs", /^Its own container/);
     await computer.getByLabel("Image").fill("typed/earlier");
     await choose(page, "Where it runs", /^This computer/);
-    await computer.getByLabel("Working directory").fill("/work/foreman");
+    await computer.getByLabel("Working directory", { exact: true }).fill("/work/foreman");
     await choose(page, "Search service", /^Tavily/);
     const key = card(page, "Web").getByLabel("Key");
     assert.equal(await key.getAttribute("type"), "password");
@@ -337,12 +337,15 @@ test(
     await fromTemplate(page, "Assistant");
     await panel(page).getByLabel("Name").fill("Foreman");
     await choose(page, "Where it runs", /^This computer/);
-    await card(page, "Computer").getByLabel("Working directory").fill("/work/foreman");
+    await card(page, "Computer")
+      .getByLabel("Working directory", { exact: true })
+      .fill("/work/foreman");
     await panel(page).getByRole("button", { name: "Create", exact: true }).click();
     await page
       .getByRole("main")
       .getByText("Computer: This computer, Files and terminal, Browser, /work/foreman")
       .waitFor();
+    await page.getByRole("main").getByText("It acts as you on this Mac.").waitFor();
     await page.getByRole("button", { name: "Foreman settings" }).click();
     await page
       .getByRole("region", { name: "MCPs" })
@@ -352,6 +355,54 @@ test(
       .getByRole("region", { name: "Skills" })
       .getByText("Computer", { exact: true })
       .waitFor();
+    await page.close();
+  }),
+);
+
+test(
+  "the directory field walks this machine's folders, and a container's path stays typed",
+  withGateway(async (gateway) => {
+    const page = await open(gateway);
+    await fromTemplate(page, "Assistant");
+    const computer = card(page, "Computer");
+    const browse = computer.getByRole("button", { name: "Browse for Working directory" });
+    await browse.click();
+    const dialog = page.getByRole("dialog", { name: "Working directory" });
+    const folders = dialog.getByRole("list", { name: "Folders" });
+    await folders.getByRole("button", { name: "Documents" }).waitFor();
+    await page.waitForTimeout(250);
+    await dialog.getByText("/home/me", { exact: true }).waitFor();
+    const size = await dialog.boundingBox();
+    await folders.getByRole("button", { name: "Agents" }).click();
+    await folders.getByRole("button", { name: "Foreman" }).click();
+    await dialog.getByText("/home/me/Agents/Foreman", { exact: true }).waitFor();
+    assert.deepEqual(await dialog.boundingBox(), size, "the dialog keeps its box");
+    await dialog.getByRole("button", { name: "Up" }).click();
+    await dialog.getByText("/home/me/Agents", { exact: true }).waitFor();
+    await dialog.getByRole("button", { name: "Choose" }).click();
+    assert.equal(
+      await computer.getByLabel("Working directory", { exact: true }).inputValue(),
+      "/home/me/Agents",
+    );
+
+    await browse.click();
+    await page
+      .getByRole("dialog", { name: "Working directory" })
+      .getByText("/home/me/Agents", { exact: true })
+      .waitFor();
+    await page.keyboard.press("Escape");
+
+    await computer.getByLabel("Working directory", { exact: true }).fill("/not/made/yet");
+    await browse.click();
+    await page
+      .getByRole("dialog", { name: "Working directory" })
+      .getByText("/home/me", { exact: true })
+      .waitFor();
+    await page.keyboard.press("Escape");
+
+    await choose(page, "Where it runs", /^Its own container/);
+    assert.equal(await browse.count(), 0);
+    await computer.getByLabel("Working directory", { exact: true }).fill("/work/typed");
     await page.close();
   }),
 );

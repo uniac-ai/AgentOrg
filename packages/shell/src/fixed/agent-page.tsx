@@ -7,7 +7,7 @@ import { useChats } from "./chats.tsx";
 import { More, Power, Tip } from "./controls.tsx";
 import { ago, useCreatables } from "./data.ts";
 import { Nothing, Scroll, StateDot } from "./parts.tsx";
-import { partsOf } from "./stack.ts";
+import { partsOf, whereOf } from "./stack.ts";
 import { useAgents } from "./watch.tsx";
 
 /** Held for what comes later: the frame is real, and nothing in it is invented. */
@@ -116,8 +116,9 @@ export function AgentPage({ agent: id }: { agent: string }) {
               const parts = partsOf(applied.values, form);
               return (
                 parts.length > 0 && (
-                  <p key={applied.instance} className="min-w-0 truncate">
-                    {applied.title}: {parts.join(", ")}
+                  <p key={applied.instance} className="min-w-0">
+                    {applied.title}: {parts.join(", ")}.{" "}
+                    {whereOf(form, applied.values)?.description}
                   </p>
                 )
               );
