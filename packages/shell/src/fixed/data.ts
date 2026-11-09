@@ -1,0 +1,195 @@
+// What the fixed pages read: management's three slots and each agent's own chat.
+import type { agents, chat, connections, hubBindings, skills } from "@agentorg/interfaces";
+import { NotConnected, Refused } from "@agentorg/sdk";
+import { useEffect, useState } from "react";
+import type { z } from "zod";
+import { api, useConnection, useLoad } from "../data.ts";
+
+type Out<M extends { output: z.ZodType }> = z.output<M["output"]>;
+
+export type AgentEntry = Out<typeof agents.methods.list>["agents"][number];
+export type AgentDetail = Out<typeof agents.methods.get>;
+export type Creatable = Out<typeof agents.methods.creatable>["creatables"][number];
+export type Mcp = AgentDetail["mcp"][number];
+export type ConnectionEntry = Out<typeof connections.methods.list>["connections"][number];
+export type McpProvider = Out<typeof connections.methods.providers>["providers"][number];
+export type Skill = Out<typeof skills.methods.list>["skills"][number];
+export type ChatMessage = z.output<typeof chat.events.message.payload>;
+export type ChatStatus = Out<typeof chat.methods.state>;
+type Binding = Out<typeof hubBindings.methods.list>["bindings"][number];
+
+/** How often what has no event is read again: a server going down, say. */
+export const REFRESH_MS = 5000;
+
+/** A number that goes up every `ms`, for a read or a rendering to follow. */
+export function useEvery(ms: number): number {
+  const [count, setCount] = useState(0);
+  useEffect(() => {
+    const timer = setInterval(() => setCount((was) => was + 1), ms);
+    return () => clearInterval(timer);
+  }, [ms]);
+  return count;
+}
+
+export const listAgents = () =>
+  api.call<{ agents: AgentEntry[] }>("agents", "list").then((reply) => reply.agents);
+export const getAgent = (agent: string) => api.call<AgentDetail>("agents", "get", { agent });
+export const listConnections = () =>
+  api
+    .call<{ connections: ConnectionEntry[] }>("connections", "list")
+    .then((reply) => reply.connections);
+
+/** The slot each agent's chat is exposed to the person as, by agent. */
+export function useChatSlots(): ReadonlyMap<string, string> {
+  return (
+    useLoad(
+      () =>
+        api
+          .call<{ bindings: Binding[] }>("bindings", "list", { actor: "person" })
+          .then(
+            ({ bindings }) =>
+              new Map(
+                bindings
+                  .filter((b) => b.consumer === "person" && b.export === "chat")
+                  .map((b) => [b.provider, b.slot]),
+              ),
+          ),
+      ["bindings", "actors"],
+    ).value ?? new Map()
+  );
+}
+
+/** The latest word on an id replaces the earlier: a tool call running, then ended. */
+function merged(was: ChatMessage[], message: ChatMessage, limit: number): ChatMessage[] {
+  const at = was.findIndex((m) => m.id === message.id);
+  const next = at === -1 ? [...was, message] : was.map((m, i) => (i === at ? message : m));
+  return next.slice(-limit);
+}
+
+/** An agent's status and latest messages, from its chat, kept current while it runs. */
+export function useChatRecord(slot: string | undefined, running: boolean, limit: number) {
+  const connection = useConnection();
+  const [status, setStatus] = useState<ChatStatus>();
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  useEffect(() => {
+    setStatus(undefined);
+    if (!slot || !running || connection !== "open") return;
+    let live = true;
+    const read = () => {
+      Promise.all([
+        api.call<ChatStatus>(slot, "state"),
+        api.call<{ messages: ChatMessage[] }>(slot, "history", { limit }),
+      ]).then(
+        ([now, page]) => {
+          if (!live) return;
+          setStatus(now);
+          setMessages(page.messages);
+        },
+        // Not up yet: read again when its events are made again, or the agent changes.
+        () => {},
+      );
+    };
+    read();
+    const stops = [
+      api.subscribe(slot, "status", (payload) => setStatus(payload as ChatStatus), { again: read }),
+      api.subscribe(
+        slot,
+        "message",
+        (payload) => setMessages((was) => merged(was, payload as ChatMessage, limit)),
+        { again: read },
+      ),
+    ];
+    return () => {
+      live = false;
+      for (const stop of stops) stop();
+    };
+  }, [slot, running, limit, connection]);
+  return { status, messages };
+}
+
+export type Tone = "working" | "idle" | "starting" | "stopped" | "trouble";
+
+export interface Now {
+  tone: Tone;
+  text: string;
+  /** Since when, as the latest entry of the record says. */
+  at?: string;
+}
+
+/** One line for a message of the record. */
+export function lineOf(message: ChatMessage): string {
+  if (message.tool)
+    return `${message.tool.state === "running" ? "Using" : "Used"} ${message.tool.name}`;
+  const first = message.text.trim().split("\n")[0] ?? "";
+  const line = first.replace(/^[#>\s-]+/, "").replace(/[*`]/g, "");
+  return message.role === "user" ? `You: ${line}` : line;
+}
+
+/** What an agent is doing now: what runs it first, then its chat, then its connections. */
+export function nowOf(
+  status: AgentEntry["status"],
+  chatStatus: ChatStatus | undefined,
+  messages: readonly ChatMessage[],
+  mcp: readonly Mcp[] = [],
+): Now {
+  if (status.state === "starting") return { tone: "starting", text: "Starting" };
+  if (status.state === "stopped") return { tone: "stopped", text: "Stopped" };
+  if (status.state === "down") return { tone: "trouble", text: status.detail ?? "Down" };
+  const last = messages.at(-1);
+  const at = last?.at;
+  const when = at ? { at } : {};
+  if (chatStatus?.state === "error")
+    return { tone: "trouble", text: chatStatus.detail?.message ?? "Something went wrong", ...when };
+  if (chatStatus?.state === "thinking") return { tone: "working", text: "Thinking", ...when };
+  if (chatStatus?.state === "tool") {
+    const running = messages.findLast((m) => m.tool?.state === "running");
+    return { tone: "working", text: running ? lineOf(running) : "Using a tool", ...when };
+  }
+  const down = mcp.find((m) => m.status.state === "down");
+  if (down)
+    return { tone: "trouble", text: `${down.slot} is down, so its tools are left out`, ...when };
+  return { tone: "idle", text: last ? lineOf(last) : "Ready", ...when };
+}
+
+/** How long ago, in the fewest characters that still say it. */
+export function ago(at: string | undefined, now = Date.now()): string {
+  if (!at) return "";
+  const then = new Date(at);
+  const minutes = Math.floor((now - then.getTime()) / 60_000);
+  if (Number.isNaN(minutes)) return "";
+  if (minutes < 1) return "Now";
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} h`;
+  if (hours < 48) return "Yesterday";
+  return then.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+/** What a failed call says, for one line in place. */
+export function reasonOf(error: unknown): string {
+  if (error instanceof NotConnected) return "It isn't connected right now. Try again in a moment.";
+  if (error instanceof Refused) return error.message;
+  return "That didn't work. Try again.";
+}
+
+/** A control's call: one at a time, and the reason it failed, if it did. */
+export function useAct() {
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState<string>();
+  const run = (call: () => Promise<unknown>, done?: () => void) => {
+    if (busy) return;
+    setBusy(true);
+    setFailed(undefined);
+    call().then(
+      () => {
+        setBusy(false);
+        done?.();
+      },
+      (error: unknown) => {
+        setBusy(false);
+        setFailed(reasonOf(error));
+      },
+    );
+  };
+  return { busy, failed, run };
+}

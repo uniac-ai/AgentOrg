@@ -8,6 +8,7 @@ import {
   ResizablePanel,
   ResizeHandle,
 } from "@agentorg/kit";
+import { NotConnected, Refused } from "@agentorg/sdk";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { FIRST_RUN } from "./agent-bindings.ts";
 import {
@@ -23,6 +24,8 @@ import {
   useTheme,
 } from "./data.ts";
 import { AgentMenu } from "./delete-agent.tsx";
+import { listAgents } from "./fixed/data.ts";
+import { FixedShell } from "./fixed/shell.tsx";
 import { Home, PlacedView } from "./home.tsx";
 import { NewAgent } from "./new-agent.tsx";
 import { besideAgent, type Placement } from "./rules.ts";
@@ -90,6 +93,12 @@ function SignedIn() {
     () => api.call<LoginStatus>("login", "status"),
     ["login", "bindings", "actors"],
   );
+  // A gateway with no `agents` slot refuses this, and one with no management bound can't answer:
+  // the older pages, until they go.
+  const management = useLoad(listAgents, ["actors", "bindings"]);
+  const older =
+    management.error instanceof NotConnected ||
+    (management.error instanceof Refused && management.error.code === "invalid");
   const connection = useConnection();
   const waited = useWaited(!login.loaded && connection !== "open");
   // Unbound (or unreachable): no ChatGPT screen and no account row.
@@ -117,7 +126,7 @@ function SignedIn() {
       })
       .catch(() => {});
   }, [signedIn]);
-  if (!login.loaded)
+  if (!login.loaded || !management.loaded)
     return waited ? (
       <Card>
         <p className="quiet" role="status">
@@ -130,7 +139,7 @@ function SignedIn() {
     return <FirstRun ready={chatgpt === "ready"} />;
   return (
     <>
-      <Shell login={status} />
+      {older ? <Shell login={status} /> : <FixedShell login={status} />}
       {notice && (
         <div className="banner" role="status">
           You're using your ChatGPT plan{" "}

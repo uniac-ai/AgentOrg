@@ -1,0 +1,532 @@
+// A stand-in for the gateway: it serves the built shell and speaks its `/api`, with management and
+// each agent's chat scripted. Every call and event is checked against the real interfaces, so the
+// pages can't drift from the contracts.
+import { readFileSync } from "node:fs";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
+import { extname } from "node:path";
+import {
+  agents as agentsInterface,
+  chat as chatInterface,
+  connections as connectionsInterface,
+  hubBindings,
+  skills as skillsInterface,
+} from "@agentorg/interfaces";
+import { type WebSocket, WebSocketServer } from "ws";
+import type { z } from "zod";
+
+const DIST = new URL("../dist/", import.meta.url);
+const TYPES: Record<string, string> = {
+  ".html": "text/html",
+  ".js": "text/javascript",
+  ".css": "text/css",
+};
+export const SESSION = "stand-in-session";
+const PERSON = "person";
+
+type Message = z.output<typeof chatInterface.events.message.payload>;
+type Status = z.output<typeof chatInterface.methods.state.output>;
+type Creatable = z.output<typeof agentsInterface.methods.creatable.output>["creatables"][number];
+type AgentStatus = z.output<typeof agentsInterface.methods.list.output>["agents"][number]["status"];
+type Connection = {
+  connection: string;
+  name: string;
+  origin?: z.output<typeof agentsInterface.methods.get.output>["mcp"][number]["origin"];
+  status: z.output<typeof agentsInterface.methods.get.output>["mcp"][number]["status"];
+};
+export interface Agent {
+  agent: string;
+  name: string;
+  status: AgentStatus;
+  provider: string;
+  creatable: string;
+  skills: { name: string; description: string }[];
+  mcp: { slot: string; connection: string }[];
+  chat: { status: Status; messages: Message[]; current?: string };
+}
+
+const at = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
+const text = (id: string, role: "user" | "assistant", body: string, ago: number): Message => ({
+  id,
+  role,
+  text: body,
+  at: at(ago),
+});
+const tool = (id: string, name: string, state: "running" | "done", ago: number): Message => ({
+  id,
+  role: "tool",
+  text: name,
+  at: at(ago),
+  tool: { name, state },
+});
+
+const GITHUB = [{ name: "search_issues" }, { name: "get_issue", description: "Reads one issue" }];
+const ORIGIN = { provider: "local", madeBy: PERSON, at: at(600) };
+
+function seed() {
+  const connections = new Map<string, Connection>(
+    [
+      {
+        connection: "c-github",
+        name: "GitHub acme",
+        origin: { ...ORIGIN, kind: "url", target: "https://api.githubcopilot.com/mcp" },
+        status: { state: "connected" as const, tools: GITHUB },
+      },
+      {
+        connection: "c-linear",
+        name: "Linear",
+        origin: { ...ORIGIN, kind: "url", target: "https://mcp.linear.app/mcp" },
+        status: {
+          state: "down" as const,
+          detail: "The server didn't answer.",
+          tools: [],
+        },
+      },
+      {
+        connection: "c-notes",
+        name: "Notes for Research",
+        origin: {
+          ...ORIGIN,
+          kind: "command",
+          target: "notes-server ~/notes",
+          madeBy: "management",
+          madeFor: "a-research",
+        },
+        status: { state: "connected" as const, tools: [{ name: "read_note" }] },
+      },
+      {
+        connection: "c-postgres",
+        name: "Postgres analytics",
+        origin: { ...ORIGIN, kind: "command", target: "postgres-mcp localhost:5432" },
+        status: { state: "connected" as const, tools: [{ name: "query" }] },
+      },
+    ].map((c) => [c.connection, c]),
+  );
+  const base = { provider: "bundled", creatable: "assistant" };
+  const running: AgentStatus = { state: "running" };
+  const agents = new Map<string, Agent>(
+    (
+      [
+        {
+          ...base,
+          agent: "a-research",
+          name: "Research",
+          status: running,
+          skills: [{ name: "cite-sources", description: "Links every claim to its source" }],
+          mcp: [
+            { slot: "notes", connection: "c-notes" },
+            { slot: "github", connection: "c-github" },
+          ],
+          chat: {
+            status: { state: "tool" },
+            messages: [
+              text("m1", "user", "Why are checkouts failing?", 8),
+              tool("m2", "github__search_issues", "running", 6),
+            ],
+          },
+        },
+        {
+          ...base,
+          agent: "a-reviewer",
+          name: "Reviewer",
+          status: running,
+          skills: [],
+          mcp: [{ slot: "github", connection: "c-github" }],
+          chat: {
+            status: { state: "idle" },
+            messages: [text("m3", "assistant", "**Reviewed** #482 with 3 comments\nMore", 12)],
+          },
+        },
+        {
+          ...base,
+          agent: "a-triage",
+          name: "Triage",
+          status: running,
+          skills: [],
+          mcp: [{ slot: "linear", connection: "c-linear" }],
+          chat: { status: { state: "idle" }, messages: [] },
+        },
+        {
+          ...base,
+          agent: "a-weekly",
+          name: "Weekly report",
+          status: { state: "stopped" },
+          skills: [],
+          mcp: [],
+          chat: { status: { state: "idle" }, messages: [] },
+        },
+        {
+          ...base,
+          agent: "a-broken",
+          name: "Broken",
+          status: { state: "down", detail: "Its program exited." },
+          skills: [],
+          mcp: [],
+          chat: { status: { state: "idle" }, messages: [] },
+        },
+      ] satisfies Agent[]
+    ).map((a) => [a.agent, a]),
+  );
+  return { connections, agents };
+}
+
+const CREATABLES: Creatable[] = [
+  {
+    provider: "bundled",
+    id: "assistant",
+    title: "Assistant",
+    description: "Chats and uses what you connect",
+    instructions: "Help.",
+    asks: [],
+    skills: [],
+    mcp: [],
+  },
+  {
+    provider: "bundled",
+    id: "reviewer",
+    title: "Code reviewer",
+    description: "Reviews pull requests",
+    instructions: "Review.",
+    asks: [
+      { id: "repo", title: "Repository", description: "Owner and name" },
+      { id: "note", title: "Note", optional: true },
+    ],
+    skills: [{ name: "review-a-diff", files: ["SKILL.md"] }],
+    mcp: [
+      { how: "pick", slot: "github", title: "GitHub" },
+      {
+        how: "create",
+        slot: "notes",
+        title: "Notes",
+        kind: "command",
+        params: { command: "notes-server" },
+      },
+    ],
+  },
+];
+
+interface Spec {
+  input: z.ZodType;
+  output: z.ZodType;
+}
+interface Interface {
+  methods: Record<string, Spec>;
+}
+class Refusal extends Error {
+  readonly code: string;
+  constructor(code: string, message: string) {
+    super(message);
+    this.code = code;
+  }
+}
+
+export interface Call {
+  slot: string;
+  method: string;
+  input: Record<string, unknown>;
+}
+
+export async function standIn(
+  options: { older?: boolean; unbound?: boolean; creatables?: Creatable[] } = {},
+) {
+  const { agents, connections } = seed();
+  const skills = [
+    { name: "cite-sources", description: "Links every claim to its source" },
+    { name: "weekly-numbers", description: "Writes the weekly summary" },
+  ];
+  const calls: Call[] = [];
+  const refusals = new Map<string, Refusal>();
+  const subscribers = new Set<{
+    socket: WebSocket;
+    sub: number;
+    slot: string;
+    event: string;
+  }>();
+  const creatables = options.creatables ?? CREATABLES;
+
+  const emit = (slot: string, event: string, payload: unknown) => {
+    for (const s of subscribers)
+      if (s.slot === slot && s.event === event)
+        s.socket.send(JSON.stringify({ sub: s.sub, payload }));
+  };
+  const changed = () => emit("actors", "changed", {});
+  const agentOf = (id: unknown): Agent => {
+    const agent = agents.get(String(id));
+    if (!agent) throw new Refusal("unknown", "No such agent.");
+    return agent;
+  };
+  const entry = ({ agent, name, status, provider, creatable }: Agent) => ({
+    agent,
+    name,
+    status,
+    provider,
+    creatable,
+  });
+  const chatSlot = (agent: string) => `chat_${agent.replaceAll("-", "_")}`;
+
+  type Input = Record<string, never> & Record<string, unknown>;
+  const management: Record<string, Record<string, (input: Input) => unknown>> = {
+    agents: {
+      creatable: () => ({ creatables }),
+      providers: () => ({ providers: [{ provider: "bundled", name: "AgentOrg" }] }),
+      list: () => ({ agents: [...agents.values()].map(entry) }),
+      get: ({ agent: id }) => {
+        const agent = agentOf(id);
+        return {
+          ...entry(agent),
+          instructions: "Help.",
+          skills: agent.skills,
+          mcp: agent.mcp.map(({ slot, connection }) => {
+            const found = connections.get(connection) as Connection;
+            return { slot, connection, origin: found.origin, status: found.status };
+          }),
+        };
+      },
+      create: (input) => {
+        const made = `a-${agents.size + 1}`;
+        const choice = creatables.find((c) => c.id === input.creatable) as Creatable;
+        const picked = (input.connections ?? {}) as Record<string, string>;
+        const mcp = choice.mcp.map((need) => {
+          if (need.how === "pick")
+            return { slot: need.slot, connection: picked[need.slot] as string };
+          const connection = `c-for-${made}`;
+          connections.set(connection, {
+            connection,
+            name: `${need.title} for ${input.name}`,
+            origin: {
+              provider: "local",
+              kind: need.kind,
+              target: "notes-server",
+              madeBy: "management",
+              madeFor: made,
+              at: at(0),
+            },
+            status: { state: "connecting", tools: [] },
+          });
+          return { slot: need.slot, connection };
+        });
+        agents.set(made, {
+          agent: made,
+          name: String(input.name),
+          status: { state: "starting" },
+          provider: String(input.provider),
+          creatable: String(input.creatable),
+          skills: [],
+          mcp,
+          chat: { status: { state: "idle" }, messages: [] },
+        });
+        changed();
+        return { agent: made };
+      },
+      start: ({ agent }) => {
+        agentOf(agent).status = { state: "running" };
+        changed();
+        return {};
+      },
+      stop: ({ agent }) => {
+        agentOf(agent).status = { state: "stopped" };
+        changed();
+        return {};
+      },
+      expose: (input) => {
+        const agent = agentOf(input.agent);
+        if ("skill" in input) {
+          agent.skills.push(skills.find((s) => s.name === input.skill) as (typeof skills)[number]);
+          return {};
+        }
+        const slot = (connections.get(String(input.connection)) as Connection).name
+          .split(" ")[0]
+          ?.toLowerCase() as string;
+        agent.mcp.push({ slot, connection: String(input.connection) });
+        return { slot };
+      },
+      unexpose: (input) => {
+        const agent = agentOf(input.agent);
+        if ("skill" in input) agent.skills = agent.skills.filter((s) => s.name !== input.skill);
+        else agent.mcp = agent.mcp.filter((m) => m.slot !== input.slot);
+        return {};
+      },
+      remove: ({ agent }) => {
+        agents.delete(String(agent));
+        changed();
+        return {};
+      },
+    },
+    connections: {
+      providers: () => ({
+        providers: [
+          {
+            provider: "local",
+            name: "Local",
+            kinds: [
+              { kind: "url", title: "A server at a URL", params: {}, secrets: {} },
+              { kind: "command", title: "A command", params: {}, secrets: {} },
+            ],
+          },
+        ],
+      }),
+      list: () => ({
+        connections: [...connections.values()].map(({ connection, name, origin, status }) => ({
+          connection,
+          name,
+          state: status.state,
+          origin,
+        })),
+      }),
+    },
+    skills: { list: () => ({ skills }) },
+  };
+  const INTERFACES: Record<string, Interface> = {
+    agents: agentsInterface as unknown as Interface,
+    connections: connectionsInterface as unknown as Interface,
+    skills: skillsInterface as unknown as Interface,
+  };
+
+  const chatCall = (agent: Agent, method: string, input: Record<string, unknown>): unknown => {
+    const models = [
+      { id: "fast", name: "Fast" },
+      { id: "deep", name: "Deep" },
+    ];
+    if (method === "state") return agent.chat.status;
+    if (method === "history") return { messages: agent.chat.messages, more: false };
+    if (method === "models")
+      return { models, ...(agent.chat.current ? { current: agent.chat.current } : {}) };
+    if (method === "setModel") {
+      if (input.model) agent.chat.current = String(input.model);
+      else delete agent.chat.current;
+      return {};
+    }
+    throw new Refusal("invalid", `chat has no method ${method} here.`);
+  };
+
+  const person = (slot: string, method: string, input: Record<string, unknown>): unknown => {
+    if (management[slot]) {
+      if (options.older) throw new Refusal("invalid", `The person has no slot ${slot}.`);
+      if (options.unbound) {
+        const error = new Refusal("not_connected", "Nothing is bound.");
+        error.name = "NotConnected";
+        throw error;
+      }
+      const iface = INTERFACES[slot] as Interface;
+      const spec = iface.methods[method] as Spec;
+      const parsed = spec.input.parse(input) as Input;
+      const run = management[slot]?.[method];
+      if (!run) throw new Refusal("invalid", `${slot}.${method} isn't scripted.`);
+      const refused = refusals.get(`${slot}.${method}`);
+      if (refused) {
+        refusals.delete(`${slot}.${method}`);
+        throw refused;
+      }
+      return spec.output.parse(run(parsed));
+    }
+    if (slot.startsWith("chat_")) {
+      const agent = agentOf(slot.slice(5).replaceAll("_", "-"));
+      if (agent.status.state !== "running") {
+        const error = new Refusal("not_connected", "Not running.");
+        error.name = "NotConnected";
+        throw error;
+      }
+      const spec = (chatInterface as unknown as Interface).methods[method] as Spec;
+      return spec.output.parse(
+        chatCall(agent, method, spec.input.parse(input) as Record<string, unknown>),
+      );
+    }
+    if (slot === "bindings") {
+      const output = hubBindings.methods.list.output;
+      return output.parse({
+        bindings: [...agents.values()].map(({ agent }) => ({
+          consumer: PERSON,
+          slot: chatSlot(agent),
+          provider: agent,
+          export: "chat",
+          interface: "chat@1",
+          madeBy: "management",
+          at: at(60),
+          exposed: true,
+        })),
+      });
+    }
+    if (slot === "login") return { state: "signed_in", account: { email: "sam@example.com" } };
+    if (slot === "store") return {};
+    if (slot === "actors" && method === "list") return { actors: [] };
+    if (slot === "grants") return { requests: [] };
+    if (slot === "layout") return { home: [] };
+    throw new Refusal("invalid", `The stand-in has no ${slot}.${method}.`);
+  };
+
+  const server = createServer((request, response) => {
+    const path = new URL(request.url ?? "/", "http://x").pathname;
+    try {
+      const file = path === "/" ? "index.html" : path.slice(1);
+      const body = readFileSync(new URL(file, DIST));
+      response.writeHead(200, { "content-type": TYPES[extname(file)] ?? "text/plain" });
+      response.end(body);
+    } catch {
+      response.writeHead(404).end();
+    }
+  });
+  const sockets = new WebSocketServer({ server, path: "/api" });
+  sockets.on("connection", (socket) => {
+    socket.on("message", (data) => {
+      const message = JSON.parse(String(data));
+      if (message.op === "hello") return socket.send(JSON.stringify({ op: "hello" }));
+      if (message.op === "subscribe") {
+        subscribers.add({ socket, sub: message.sub, slot: message.slot, event: message.event });
+        return;
+      }
+      if (message.op === "unsubscribe") {
+        for (const s of subscribers)
+          if (s.socket === socket && s.sub === message.sub) subscribers.delete(s);
+        return;
+      }
+      if (message.op !== "call") return;
+      const input = (message.input ?? {}) as Record<string, unknown>;
+      calls.push({ slot: message.slot, method: message.method, input });
+      try {
+        const result = person(message.slot, message.method, input);
+        socket.send(JSON.stringify({ id: message.id, result }));
+      } catch (error) {
+        const refusal = error as Refusal;
+        socket.send(
+          JSON.stringify({
+            id: message.id,
+            error: {
+              name: refusal.name,
+              code: refusal.code ?? "failed",
+              message: refusal.message,
+            },
+          }),
+        );
+      }
+    });
+    socket.on("close", () => {
+      for (const s of subscribers) if (s.socket === socket) subscribers.delete(s);
+    });
+  });
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+
+  return {
+    url,
+    agents,
+    connections,
+    calls,
+    /** The next call of `slot.method` is refused. */
+    refuseNext: (name: string, code: string, reason: string) =>
+      refusals.set(name, new Refusal(code, reason)),
+    /** An agent's chat status, as its event says it and `state` will. */
+    setChatStatus(agent: string, status: Status) {
+      agentOf(agent).chat.status = chatInterface.events.status.payload.parse(status);
+      emit(chatSlot(agent), "status", status);
+    },
+    addMessage(agent: string, message: Message) {
+      agentOf(agent).chat.messages.push(chatInterface.events.message.payload.parse(message));
+      emit(chatSlot(agent), "message", message);
+    },
+    changed,
+    close: async () => {
+      for (const socket of sockets.clients) socket.terminate();
+      await new Promise((done) => server.close(done));
+    },
+  };
+}
