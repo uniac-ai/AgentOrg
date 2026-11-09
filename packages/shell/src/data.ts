@@ -1,32 +1,13 @@
-import type {
-  Actor as ActorSchema,
-  BindingRequest as BindingRequestSchema,
-  Binding as BindingSchema,
-  Package as PackageSchema,
-} from "@agentorg/interfaces";
 import { useEffect, useState, useSyncExternalStore } from "react";
-import type { z } from "zod";
 import { Api, type Connection } from "./api.ts";
-
-export type Actor = z.output<typeof ActorSchema>;
-export type Binding = z.output<typeof BindingSchema>;
-export type BindingRequest = z.output<typeof BindingRequestSchema>;
-export type Package = z.output<typeof PackageSchema>;
-export type Manifest = {
-  name: string;
-  modules: Record<string, { placement: string; slots: Record<string, string> }>;
-};
 
 export const api = new Api();
 
 /** What the shell reads, each told to read again by its own events. */
-export type Topic = "actors" | "packages" | "bindings" | "layout" | "grants" | "login";
+export type Topic = "actors" | "bindings" | "login";
 const versions: Record<Topic, number> = {
   actors: 0,
-  packages: 0,
   bindings: 0,
-  layout: 0,
-  grants: 0,
   login: 0,
 };
 const listeners = new Set<() => void>();
@@ -42,29 +23,23 @@ const subscribeVersions = (listener: () => void) => {
 };
 
 /** Audit kinds that change what a topic lists; the Hub has no other event for them. */
-const AUDITED: [RegExp, Topic][] = [
-  [/^package\./, "packages"],
-  [/^(bind|unbind)$/, "bindings"],
-];
+const AUDITED: [RegExp, Topic][] = [[/^(bind|unbind)$/, "bindings"]];
 /**
  * Each topic's events. A subscription the gateway ends is made again (see `Api.subscribe`), and
  * what it says is read again then, since its events meanwhile are lost.
  */
 const on = (slot: string, event: string, topics: Topic[], send = () => bump(...topics)) =>
   api.subscribe(slot, event, send, { again: () => bump(...topics) });
-on("audit", "appended", ["packages", "bindings"], (entry?: unknown) => {
+on("audit", "appended", ["bindings"], (entry?: unknown) => {
   const kind = String((entry as { kind?: unknown } | undefined)?.kind ?? "");
   for (const [pattern, topic] of AUDITED) if (pattern.test(kind)) bump(topic);
 });
 // Made, started, stopped, closed, its process gone, a channel admitted or dropped.
 on("actors", "changed", ["actors"]);
-on("layout", "changed", ["layout"]);
-on("grants", "requested", ["grants"]);
-on("grants", "decided", ["grants", "bindings"]);
 on("login", "changed", ["login"]);
 // A new connection: everything may have changed while it was down.
 api.watch((connection) => {
-  if (connection === "open") bump("actors", "packages", "bindings", "layout", "grants", "login");
+  if (connection === "open") bump("actors", "bindings", "login");
 });
 
 export function useConnection(): Connection {
@@ -129,20 +104,6 @@ export function useAction() {
   return { busy, failed, run };
 }
 
-/** A package's manifest never changes: read once per hash. */
-const manifests = new Map<string, Promise<Manifest>>();
-export function manifestOf(hash: string): Promise<Manifest> {
-  let found = manifests.get(hash);
-  if (!found) {
-    found = api
-      .call<{ manifest: Manifest }>("packages", "get", { hash })
-      .then((reply) => reply.manifest);
-    found.catch(() => manifests.delete(hash));
-    manifests.set(hash, found);
-  }
-  return found;
-}
-
 /** The hash route: home, an agent, or settings. */
 export type Route =
   | { screen: "home" }
@@ -190,27 +151,6 @@ export function go(route: Route) {
           : "#/";
 }
 
-/** The shell's tokens, which every view gets as its theme. */
-const TOKENS = [
-  "font",
-  "canvas",
-  "surface",
-  "raised",
-  "card",
-  "fg",
-  "muted",
-  "faint",
-  "line",
-  "hover",
-  "selected",
-  "accent",
-  "accent-fg",
-  "ok",
-  "warn",
-  "bad",
-  "ring",
-  "radius",
-];
 export type ThemeName = "dark" | "light";
 const THEME = "agentorg.theme";
 const themeListeners = new Set<() => void>();
@@ -235,12 +175,5 @@ export function useTheme(): ThemeName {
       return () => void themeListeners.delete(fn);
     },
     () => (document.documentElement.dataset.theme === "light" ? "light" : "dark"),
-  );
-}
-/** The current theme as CSS variables, for a view's frame. */
-export function themeTokens(): Record<string, string> {
-  const style = getComputedStyle(document.documentElement);
-  return Object.fromEntries(
-    TOKENS.map((name) => [`--${name}`, style.getPropertyValue(`--${name}`).trim()]),
   );
 }

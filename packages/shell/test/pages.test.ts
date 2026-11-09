@@ -301,29 +301,3 @@ test(
       }
   }),
 );
-
-test(
-  "with no `agents` slot the older pages stay",
-  withGateway(
-    async (gateway) => {
-      const page = await open(gateway);
-      await page.locator("nav.sidebar").waitFor();
-      assert.equal(await page.getByRole("button", { name: "Create" }).count(), 0);
-      await page.close();
-    },
-    { older: true },
-  ),
-);
-
-test(
-  "with no management bound the older pages stay",
-  withGateway(
-    async (gateway) => {
-      const page = await open(gateway);
-      await page.locator("nav.sidebar").waitFor();
-      assert.equal(await page.getByRole("button", { name: "Create" }).count(), 0);
-      await page.close();
-    },
-    { unbound: true },
-  ),
-);

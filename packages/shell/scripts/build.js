@@ -19,18 +19,9 @@ await build({
   legalComments: "none",
   logLevel: "warning",
 });
-// A new agent's connections, for Node too: what a test of New agent installs.
-await build({
-  entryPoints: [at("src/agent-bindings.ts")],
-  outfile: at("dist/agent-bindings.js"),
-  format: "esm",
-  platform: "neutral",
-  target: "es2022",
-  logLevel: "warning",
-});
 copyFileSync(at("static/index.html"), at("dist/index.html"));
-// One stylesheet: the older pages' styles, and Tailwind's classes as the components use them. Not
-// minified: that would rewrite the tokens' values, which views read as written.
+// One stylesheet: the tokens, the sign-in page's styles, and Tailwind's classes as the components
+// use them.
 const tailwind = dirname(createRequire(import.meta.url).resolve("@tailwindcss/cli/package.json"));
 execFileSync(
   process.execPath,
