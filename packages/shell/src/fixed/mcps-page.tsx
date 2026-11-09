@@ -11,6 +11,7 @@ import {
   REFRESH_MS,
   useEvery,
 } from "./data.ts";
+import { DeleteButton } from "./delete-dialog.tsx";
 import { Nothing, Page, Scroll, StateDot, UsedBy, WhereIcon } from "./parts.tsx";
 import { rowClass } from "./skills-page.tsx";
 
@@ -41,6 +42,8 @@ export function McpsPage({ focus, adding }: { focus?: string; adding?: boolean }
   const [open, setOpen] = useState(!!adding);
   useEffect(() => setOpen(!!adding), [adding]);
   const rows = list.value ?? [];
+  const using = (connection: string) =>
+    details.filter((a) => a.mcp.some((m) => m.connection === connection));
 
   const originOf = ({ origin }: ConnectionEntry) => {
     if (!origin) return "";
@@ -65,7 +68,7 @@ export function McpsPage({ focus, adding }: { focus?: string; adding?: boolean }
           {rows.map(({ entry, tools }) => (
             <li
               key={entry.connection}
-              className={`${rowClass(focus === entry.connection)} grid-cols-[minmax(0,1.1fr)_minmax(0,1.3fr)_minmax(0,1fr)_72px] phone:grid-cols-[minmax(0,1fr)_auto]`}
+              className={`${rowClass(focus === entry.connection)} grid-cols-[minmax(0,1.1fr)_minmax(0,1.3fr)_minmax(0,1fr)_72px_24px] phone:grid-cols-[minmax(0,1fr)_auto]`}
             >
               <div className="min-w-0">
                 <div className="flex items-center gap-2 font-medium">
@@ -81,11 +84,7 @@ export function McpsPage({ focus, adding }: { focus?: string; adding?: boolean }
                 </span>
               </span>
               <span className="flex min-w-0 phone:col-span-2 phone:row-start-3">
-                <UsedBy
-                  agents={details.filter((a) =>
-                    a.mcp.some((m) => m.connection === entry.connection),
-                  )}
-                />
+                <UsedBy agents={using(entry.connection)} />
               </span>
               <span className="flex justify-end text-xs tabular-nums text-muted-foreground phone:col-start-2 phone:row-start-1">
                 {entry.state === "connecting" ? (
@@ -99,6 +98,16 @@ export function McpsPage({ focus, adding }: { focus?: string; adding?: boolean }
                 ) : (
                   tools !== undefined && `${tools} ${tools === 1 ? "tool" : "tools"}`
                 )}
+              </span>
+              <span className="flex justify-end phone:col-start-2 phone:row-start-3">
+                <DeleteButton
+                  name={entry.name}
+                  agents={using(entry.connection).map((a) => a.name)}
+                  onDelete={() =>
+                    api.call("connections", "remove", { connection: entry.connection })
+                  }
+                  onDeleted={() => setChanged((was) => was + 1)}
+                />
               </span>
             </li>
           ))}

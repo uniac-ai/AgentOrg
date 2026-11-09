@@ -92,7 +92,7 @@ test(
     await dialog.getByLabel("Name").waitFor();
     await page.waitForTimeout(250);
     const size = await dialog.boundingBox();
-    assert.deepEqual(await labels(page), ["Name", "URL", "Token"]);
+    assert.deepEqual(await labels(page), ["Name", "Address", "Token"]);
     const connect = dialog.getByRole("button", { name: "Connect" });
     assert.equal(await connect.isDisabled(), true);
     await dialog.getByRole("combobox", { name: "Kind" }).click();
@@ -103,7 +103,7 @@ test(
     await dialog.getByRole("combobox", { name: "Kind" }).click();
     await page.getByRole("option", { name: /address/ }).click();
     await dialog.getByLabel("Name").fill("Notion");
-    await dialog.getByLabel("URL").fill("https://mcp.notion.com/mcp");
+    await dialog.getByLabel("Address").fill("https://mcp.notion.com/mcp");
     await dialog.getByLabel("Token").fill("secret-value");
     await connect.click();
     await dialog.waitFor({ state: "detached" });
@@ -155,10 +155,10 @@ test(
     const page = await open(gateway, "#/mcps/add");
     const dialog = page.getByRole("dialog");
     await dialog.getByLabel("Name").fill("Bad");
-    await dialog.getByLabel("URL").fill("nope");
+    await dialog.getByLabel("Address").fill("nope");
     await dialog.getByRole("button", { name: "Connect" }).click();
     await dialog.getByRole("alert").getByText("url: its parameters don't fit.").waitFor();
-    assert.equal(await dialog.getByLabel("URL").inputValue(), "nope");
+    assert.equal(await dialog.getByLabel("Address").inputValue(), "nope");
     await page.close();
   }),
 );
@@ -214,6 +214,64 @@ test(
       connection: "c-postgres",
       as: "postgres_analytics",
     });
+    await page.close();
+  }),
+);
+
+test(
+  "a skill is deleted after asking, and the confirm says who loses it",
+  withGateway(async (gateway) => {
+    const page = await open(gateway, "#/skills");
+    await row(page, "cite-sources").getByRole("button", { name: "Research" }).waitFor();
+    const before = await row(page, "cite-sources").boundingBox();
+    await row(page, "cite-sources").hover();
+    assert.deepEqual(await row(page, "cite-sources").boundingBox(), before, "hover moves nothing");
+    await page.getByRole("button", { name: "Delete cite-sources" }).click();
+    const dialog = page.getByRole("dialog", { name: "Delete cite-sources?" });
+    await dialog.getByText("Research loses it. This can't be undone.").waitFor();
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    await dialog.waitFor({ state: "detached" });
+    assert.equal(
+      gateway.calls.some((c) => c.method === "remove"),
+      false,
+    );
+
+    gateway.refuseNext("skills.remove", "failed", "It couldn't be removed.");
+    await row(page, "cite-sources").hover();
+    await page.getByRole("button", { name: "Delete cite-sources" }).click();
+    await dialog.getByRole("button", { name: "Delete" }).click();
+    await dialog.getByRole("alert").getByText("It couldn't be removed.").waitFor();
+    await dialog.getByRole("button", { name: "Delete" }).click();
+    await dialog.waitFor({ state: "detached" });
+    await row(page, "cite-sources").waitFor({ state: "detached" });
+    assert.deepEqual(gateway.calls.findLast((c) => c.method === "remove")?.input, {
+      name: "cite-sources",
+    });
+    assert.deepEqual(gateway.agents.get("a-research")?.skills, []);
+
+    await row(page, "weekly-numbers").hover();
+    await page.getByRole("button", { name: "Delete weekly-numbers" }).click();
+    await page.getByRole("dialog").getByText("Nothing uses it.").waitFor();
+    await page.close();
+  }),
+);
+
+test(
+  "a connection is deleted after asking, naming every agent that loses it",
+  withGateway(async (gateway) => {
+    const page = await open(gateway, "#/mcps");
+    await row(page, "GitHub acme").getByRole("button", { name: "Reviewer" }).waitFor();
+    await row(page, "GitHub acme").hover();
+    await page.getByRole("button", { name: "Delete GitHub acme" }).click();
+    const dialog = page.getByRole("dialog", { name: "Delete GitHub acme?" });
+    await dialog.getByText("Research and Reviewer lose it. This can't be undone.").waitFor();
+    await dialog.getByRole("button", { name: "Delete" }).click();
+    await dialog.waitFor({ state: "detached" });
+    await row(page, "GitHub acme").waitFor({ state: "detached" });
+    assert.deepEqual(gateway.calls.findLast((c) => c.method === "remove")?.input, {
+      connection: "c-github",
+    });
+    assert.deepEqual(gateway.agents.get("a-reviewer")?.mcp, []);
     await page.close();
   }),
 );

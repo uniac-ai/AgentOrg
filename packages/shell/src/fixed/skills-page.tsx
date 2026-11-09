@@ -5,11 +5,12 @@ import { Button } from "../ui/button.tsx";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../ui/dialog.tsx";
 import { Input } from "../ui/input.tsx";
 import { listDetails, listSkills, useAct } from "./data.ts";
+import { DeleteButton } from "./delete-dialog.tsx";
 import { Nothing, Page, Scroll, UsedBy } from "./parts.tsx";
 
 /** A list row, lit when something led here. */
 export const rowClass = (focused: boolean) =>
-  `-mx-2 grid min-h-14 items-center gap-x-4 rounded-xl px-2 py-2 ${focused ? "bg-[var(--selected)]" : ""}`;
+  `group/row -mx-2 grid min-h-14 items-center gap-x-4 rounded-xl px-2 py-2 ${focused ? "bg-[var(--selected)]" : ""}`;
 
 export function SkillsPage({ focus, adding }: { focus?: string; adding?: boolean }) {
   const [changed, setChanged] = useState(0);
@@ -18,6 +19,7 @@ export function SkillsPage({ focus, adding }: { focus?: string; adding?: boolean
   const [open, setOpen] = useState(!!adding);
   useEffect(() => setOpen(!!adding), [adding]);
   const list = skills.value ?? [];
+  const using = (name: string) => details.filter((a) => a.skills.some((s) => s.name === name));
   return (
     <Page
       crumbs={[{ label: "Skills" }]}
@@ -33,7 +35,7 @@ export function SkillsPage({ focus, adding }: { focus?: string; adding?: boolean
           {list.map((skill) => (
             <li
               key={skill.name}
-              className={`${rowClass(focus === skill.name)} grid-cols-[minmax(0,2fr)_minmax(0,1fr)] phone:grid-cols-1`}
+              className={`${rowClass(focus === skill.name)} grid-cols-[minmax(0,2fr)_minmax(0,1fr)_24px] phone:grid-cols-[minmax(0,1fr)_24px]`}
             >
               <div className="min-w-0">
                 <div className="truncate font-medium">{skill.name}</div>
@@ -41,7 +43,17 @@ export function SkillsPage({ focus, adding }: { focus?: string; adding?: boolean
                   {skill.description}
                 </div>
               </div>
-              <UsedBy agents={details.filter((a) => a.skills.some((s) => s.name === skill.name))} />
+              <span className="flex min-w-0 phone:col-start-1 phone:row-start-2">
+                <UsedBy agents={using(skill.name)} />
+              </span>
+              <span className="phone:col-start-2 phone:row-start-1">
+                <DeleteButton
+                  name={skill.name}
+                  agents={using(skill.name).map((a) => a.name)}
+                  onDelete={() => api.call("skills", "remove", { name: skill.name })}
+                  onDeleted={() => setChanged((was) => was + 1)}
+                />
+              </span>
             </li>
           ))}
           {skills.loaded && list.length === 0 && (
