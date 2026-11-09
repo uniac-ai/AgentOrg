@@ -2,7 +2,7 @@
   "name": "assistant",
   "version": "0.0.1",
   "private": true,
-  "description": "An agent that chats, and acts through the connections it's given",
+  "description": "The agent engine, and the bundled provider that runs it",
   "license": "MIT",
   "type": "module",
   "exports": {
@@ -18,32 +18,12 @@
     "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.json",
     "test": "node --test \"dist/test/**/*.test.js\""
   },
-  "agentorg": {
-    "modules": {
-      "logic": "src/logic.ts",
-      "chat": "src/chat.tsx"
-    },
-    "connections": [
-      [
-        "chat.chat",
-        "logic.chat"
-      ]
-    ]
-  },
   "dependencies": {
     "@agentorg/interfaces": "0.0.0",
-    "@agentorg/kit": "0.0.0",
     "@agentorg/sdk": "0.0.0",
-    "react": "^19.3.1",
-    "react-dom": "^19.3.1",
     "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@agentorg/hub": "0.0.0",
-    "@happy-dom/global-registrator": "^21.0.4",
-    "@types/react": "^19.3.0",
-    "@types/react-dom": "^19.3.0",
-    "esbuild": "0.28.2",
-    "happy-dom": "^21.0.4"
+    "@agentorg/hub": "0.0.0"
   }
 }

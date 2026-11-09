@@ -123,7 +123,6 @@ export async function startAgentProvider(options: AgentProviderOptions): Promise
           engine = startEngine(ctx, {
             store: createLocalStore(folderOf(agent)),
             instructions: () => ASSISTANT_INSTRUCTIONS,
-            ownTools: () => [],
           });
         },
       });

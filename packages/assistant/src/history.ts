@@ -147,10 +147,6 @@ export function createHistory(
   };
 
   return {
-    /** Read the store again, as after it was bound to another one. */
-    reset() {
-      loaded = undefined;
-    },
     /**
      * Keep a message, under `id` or its own number, and delete the oldest past the cap. A tool
      * message the store refuses is still kept in memory, since its call has run.

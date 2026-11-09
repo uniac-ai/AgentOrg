@@ -8,7 +8,7 @@ import test from "node:test";
 import { Hub, listen, PERSON } from "@agentorg/hub";
 import { chat, hubActors, hubGrants, kv, llmSession, tools } from "@agentorg/interfaces";
 import { connect } from "@agentorg/sdk/client";
-import logic from "../src/logic.ts";
+import engine from "./engine-actor.ts";
 
 type Item = { type: string; callId?: string; output?: string };
 type Request = { input: Item[]; tools?: { name: string; parameters: unknown }[] };
@@ -95,9 +95,9 @@ async function cast(t: test.TestContext) {
   const agent = await connect({
     hubUrl,
     ...agentId,
-    slots: logic.slots,
-    exports: logic.exports,
-    start: logic.start,
+    slots: engine.slots,
+    exports: engine.exports,
+    start: engine.start,
   });
   clients.push(agent);
   for (const [slot, name] of [
