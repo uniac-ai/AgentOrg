@@ -1,0 +1,31 @@
+{
+  "name": "@agentorg/mcp",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The built-in MCP provider: each connection to an MCP server is an Actor offering tools@1",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    }
+  },
+  "files": [
+    "dist/src"
+  ],
+  "scripts": {
+    "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.json",
+    "test": "node --test \"dist/test/**/*.test.js\""
+  },
+  "dependencies": {
+    "@agentorg/interfaces": "0.0.0",
+    "@agentorg/sdk": "0.0.0",
+    "@modelcontextprotocol/client": "2.4.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@agentorg/hub": "0.0.0",
+    "@modelcontextprotocol/server": "2.4.0"
+  }
+}

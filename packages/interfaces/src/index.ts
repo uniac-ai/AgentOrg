@@ -39,6 +39,7 @@ export { agents, ConnectionOrigin, connections, skills } from "./manager.js";
 export {
   ConnectionKind,
   ConnectionParams,
+  ConnectionSecrets,
   ConnectionState,
   ConnectionStatus,
   ConnectionTarget,
