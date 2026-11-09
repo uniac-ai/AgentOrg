@@ -126,8 +126,8 @@ test("the unit's form says what each answer grants and adds, with nothing presel
     assert.equal(field(id)?.required, true);
   }
   const option = (value: string) => field("access")?.options?.find((one) => one.value === value);
-  assert.match(option("terminal")?.description ?? "", /every file and program you can/);
-  assert.match(option("read")?.description ?? "", /Cannot change them or run anything/);
+  assert.match(option("terminal")?.description ?? "", /reach every file and program you can/);
+  assert.match(option("read")?.description ?? "", /can't change them or run anything/);
   assert.deepEqual(option("none")?.adds, undefined);
   assert.deepEqual(option("read")?.adds?.slots, [{ name: "computer" }]);
   assert.deepEqual(
@@ -138,10 +138,11 @@ test("the unit's form says what each answer grants and adds, with nothing presel
     option("terminal")?.adds?.skills.map((skill) => ("name" in skill ? skill.name : "")),
     ["terminal", "files", "computer"],
   );
-  assert.deepEqual(field("workspace")?.visible, {
-    field: "access",
-    in: ["read", "files", "terminal"],
-  });
+  // Each shown by `where`, so no host needs to know a field by name.
+  assert.equal(field("workspace")?.type, "directory");
+  assert.deepEqual(field("workspace")?.visible, { field: "where", in: ["local"] });
+  assert.equal(field("containerPath")?.type, "text");
+  assert.deepEqual(field("containerPath")?.visible, { field: "where", in: ["container"] });
 });
 
 test("each skill the form names can be read, and an unknown one is refused", async (t) => {

@@ -23,7 +23,11 @@ export const COMPUTER_UNIT: z.input<typeof Unit> = {
       title: "Where it runs",
       required: true,
       options: [
-        { value: "local", title: "This computer", description: "It acts as you on this computer." },
+        {
+          value: "local",
+          title: "This computer",
+          description: "It runs on this computer, as you.",
+        },
       ],
     },
     {
@@ -33,25 +37,25 @@ export const COMPUTER_UNIT: z.input<typeof Unit> = {
       title: "What it can do",
       required: true,
       options: [
-        { value: "none", title: "Nothing", description: "No files and no commands." },
+        { value: "none", title: "Nothing", description: "It has no files and can't run anything." },
         {
           value: "read",
           title: "Read files",
           description:
-            "Reads files in the working directory. Cannot change them or run anything. Kept to that folder by a check, not a sandbox.",
+            "It can read files in its working directory, but can't change them or run anything.",
           adds: WITH_FILES,
         },
         {
           value: "files",
           title: "Read and change files",
           description:
-            "Reads and changes files in the working directory. Cannot run anything. Kept to that folder by a check, not a sandbox.",
+            "It can read and change files in its working directory, but can't run anything.",
           adds: WITH_FILES,
         },
         {
           value: "terminal",
           title: "Files and terminal",
-          description: "Runs any command, so it reaches every file and program you can.",
+          description: "It can run any command, so it can reach every file and program you can.",
           adds: {
             slots: [{ name: SLOT }],
             skills: [skill("terminal"), skill("files"), skill("computer")],
@@ -64,9 +68,19 @@ export const COMPUTER_UNIT: z.input<typeof Unit> = {
       type: "directory",
       value: "string",
       title: "Working directory",
-      description: "The folder it works in. Removing the agent never deletes it.",
+      description:
+        "The folder it works in. Its file tools stay inside it by a check, not a sandbox. Removing the agent never deletes it.",
       required: true,
-      visible: { field: "access", in: ["read", "files", "terminal"] },
+      visible: { field: "where", in: ["local"] },
+    },
+    {
+      id: "containerPath",
+      type: "text",
+      value: "string",
+      title: "Working directory",
+      description: "A path inside the container.",
+      required: true,
+      visible: { field: "where", in: ["container"] },
     },
   ],
   needs: [],
