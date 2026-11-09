@@ -139,7 +139,7 @@ for _ in $(seq 1 120); do
     node -e '
       const { actors } = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
       const up = (name) => actors.some((a) => a.name === name && a.connected);
-      process.exit(["ChatGPT", "Agents", "MCP", "Management"].every(up) ? 0 : 1);
+      process.exit(["ChatGPT", "AgentOrg", "Local", "Management"].every(up) ? 0 : 1);
     ' "$work/actors.json"; then
     ready=1
     break

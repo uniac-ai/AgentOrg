@@ -130,6 +130,13 @@ test("the provider offers its two kinds, each with a JSON Schema of its paramete
     assert.equal(params.type, "object");
     assert.equal(secrets.type, "object");
   }
+  // People read these on the form that connects a server.
+  const titles = (schema: Record<string, unknown>) =>
+    Object.values(schema.properties as Record<string, { title?: string }>).map((p) => p.title);
+  const [url, command] = kinds;
+  assert.deepEqual(titles(url?.params ?? {}), ["Address"]);
+  assert.deepEqual(titles(url?.secrets ?? {}), ["Token"]);
+  assert.deepEqual(titles(command?.params ?? {}), ["Command", "Arguments", "Working folder"]);
   await assert.rejects(mcp.create({ kind: "smoke", params: {}, name: "X" }), refused("invalid"));
   await assert.rejects(mcp.create({ kind: "url", params: {}, name: "X" }), refused("invalid"));
   await assert.rejects(

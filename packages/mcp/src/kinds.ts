@@ -13,14 +13,15 @@ const UrlParams = z.strictObject({
     .refine((url) => {
       const { username, password } = new URL(url);
       return !username && !password;
-    }, "An address can't hold a user or a password: give a token as a secret."),
+    }, "An address can't hold a user or a password: give a token as a secret.")
+    .meta({ title: "Address" }),
 });
 /** The bearer token sent to the server on every request. */
-const UrlSecrets = z.strictObject({ token: SecretValue.optional() });
+const UrlSecrets = z.strictObject({ token: SecretValue.optional().meta({ title: "Token" }) });
 const CommandParams = z.strictObject({
-  command: z.string().min(1).max(4096),
-  args: z.array(z.string().max(4096)).max(256).optional(),
-  cwd: z.string().min(1).max(4096).optional(),
+  command: z.string().min(1).max(4096).meta({ title: "Command" }),
+  args: z.array(z.string().max(4096)).max(256).optional().meta({ title: "Arguments" }),
+  cwd: z.string().min(1).max(4096).optional().meta({ title: "Working folder" }),
 });
 /** Each one is an environment variable of the server, by its name. */
 const CommandSecrets = z.record(EnvName, SecretValue);
