@@ -4,6 +4,7 @@ import { useLayoutEffect } from "react";
 import type { LoginStatus } from "../app.tsx";
 import { go, setTheme, useLoad, useRoute, useTheme } from "../data.ts";
 import { Settings } from "../settings.tsx";
+import { AgentPage } from "./agent-page.tsx";
 import { AgentsPage } from "./agents-page.tsx";
 import { getAgent, listAgents, nowOf, REFRESH_MS, useEvery } from "./data.ts";
 
@@ -80,7 +81,9 @@ export function FixedShell({ login }: { login?: LoginStatus }) {
         <div className="mt-auto">{toggle}</div>
       </nav>
       <div className="flex min-w-0 flex-1 flex-col pr-2 pb-2 phone:p-0">
-        {route.screen === "settings" ? (
+        {route.screen === "agent" ? (
+          <AgentPage key={route.agent} agent={route.agent} />
+        ) : route.screen === "settings" ? (
           <main className="min-h-0 flex-1 overflow-auto">
             <Settings login={login} />
           </main>
