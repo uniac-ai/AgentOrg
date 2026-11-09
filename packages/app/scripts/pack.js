@@ -22,7 +22,18 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 const root = new URL("../../..", import.meta.url).pathname;
-const BUNDLED = ["wire", "sdk", "interfaces", "hub", "shell", "kit"];
+const BUNDLED = [
+  "wire",
+  "sdk",
+  "interfaces",
+  "hub",
+  "shell",
+  "kit",
+  "mcp",
+  "manager",
+  "chatgpt",
+  "assistant",
+];
 const destination = resolve(process.argv[2] ?? ".");
 
 /** The workspace's `npm pack` of `dir`, unpacked into `into`. */
@@ -50,11 +61,10 @@ try {
   for (const file of ["README.md", "LICENSE"]) copyFileSync(join(root, file), join(stage, file));
   const bundled = [];
   for (const name of BUNDLED) {
-    const own = unpack(
-      `packages/${name}`,
-      join(stage, "dist", "node_modules", "@agentorg", name),
-      work,
-    );
+    const dir = `packages/${name}`;
+    // Under its own name, scoped or not: the code finds it by that name.
+    const { name: published } = JSON.parse(readFileSync(join(root, dir, "package.json"), "utf8"));
+    const own = unpack(dir, join(stage, "dist", "node_modules", published), work);
     // Shipped as files, never fetched: not a dependency of the published cli.
     delete cli.dependencies[own.name];
     bundled.push(own.name);

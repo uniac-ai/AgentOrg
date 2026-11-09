@@ -4,10 +4,12 @@ import { createRequire } from "node:module";
 import type { AddressInfo } from "node:net";
 import { dirname, join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { Hub, listen, PERSON, STORAGE } from "@agentorg/hub";
+import { Hub, listen, PERSON } from "@agentorg/hub";
 import {
   accountLogin,
+  agents,
   appRules,
+  connections,
   hubActors,
   hubAudit,
   hubBindings,
@@ -15,8 +17,8 @@ import {
   hubGrants,
   hubPackages,
   installer,
-  kv,
   layout,
+  skills,
 } from "@agentorg/interfaces";
 import { Refused } from "@agentorg/sdk";
 import { connect } from "@agentorg/sdk/client";
@@ -24,7 +26,14 @@ import { WebSocketServer } from "ws";
 import { type PersonSide, serveSocket, type ViewCalls } from "./api.js";
 import { serveFrame } from "./frames.js";
 import { Layout } from "./layout.js";
-import { type FirstRun, type FirstRunOptions, firstRun, oauthRoute } from "./model.js";
+import { oauthRoute } from "./model.js";
+import { Notes } from "./notes.js";
+import {
+  closePackageActors,
+  type Programs,
+  type ProgramsOptions,
+  startPrograms,
+} from "./programs.js";
 import { Rules } from "./rules.js";
 import { SignIn } from "./signin.js";
 import {
@@ -37,8 +46,8 @@ import {
 } from "./transfer.js";
 
 /**
- * The person's slots the gateway declares: every `hub.*` it holds, its own store, and the two the
- * first run binds (either may be unbound): `installer`, and `login`, the model's account sign-in.
+ * The person's slots the gateway declares: every `hub.*` it holds, and what the first run binds
+ * (any may be unbound): `login`, the model's account sign-in, and management's three.
  */
 const SLOTS = {
   packages: hubPackages,
@@ -47,9 +56,11 @@ const SLOTS = {
   grants: hubGrants,
   exports: hubExports,
   audit: hubAudit,
-  store: kv,
   login: accountLogin,
-  /** The installer, bound by the app's first run: plans, installs, exports and imports. */
+  agents,
+  connections,
+  skills,
+  /** The installer: nothing binds it now; what still names it goes with the package system. */
   installer,
 };
 const STATIC = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "static");
@@ -78,10 +89,9 @@ export interface AppOptions {
   /** Where the shell's static files are; `@agentorg/shell`'s build by default. */
   shell?: string;
   /**
-   * The first run, at each start after the person's store is bound: on by default; `false` leaves
-   * the home as it is.
+   * The first run, at each start: on by default; `false` leaves the home as it is.
    */
-  firstRun?: FirstRunOptions | false;
+  firstRun?: Pick<ProgramsOptions, "fetch" | "log"> | false;
 }
 
 export interface App {
@@ -90,8 +100,8 @@ export interface App {
   /** Where external Actors reach the Hub. */
   readonly hubUrl: string;
   readonly hub: Hub;
-  /** This start's first run: what it found or made, once it's done; none when it was off. */
-  readonly firstRun?: Promise<FirstRun | undefined>;
+  /** This start's first run: the programs it started, once it's done; none when it was off. */
+  readonly firstRun?: Promise<Programs | undefined>;
   /** A fresh one-time sign-in address, `<url>/signin#<code>`. */
   signInUrl(): string;
   /** Serve `path` with `route`, for another part of the app. */
@@ -120,7 +130,9 @@ function writePrivate(file: string, text: string) {
 export async function startApp(options: AppOptions): Promise<App> {
   const home = resolve(options.home);
   mkdirSync(home, { recursive: true, mode: 0o700 });
-  const hub = Hub.open(home);
+  if (options.firstRun !== false) closePackageActors(home);
+  // With the first run on, nothing uses the built-in storage, and `storage.db` is never opened.
+  const hub = Hub.open(home, { builtinStorage: options.firstRun === false });
   const listener = await listen(hub, {}).catch((error) => {
     hub.close();
     throw error;
@@ -145,6 +157,8 @@ export async function startApp(options: AppOptions): Promise<App> {
   };
 
   const credential = readFileSync(join(home, "person-credential"), "utf8").trim();
+  /** The app's own notes: the layout, the rules, what the shell remembers. */
+  const notes = new Notes(join(home, "app-notes.json"));
   let logic: Layout | undefined;
   const person = await connect({
     hubUrl: listener.url,
@@ -155,8 +169,8 @@ export async function startApp(options: AppOptions): Promise<App> {
     start(ctx) {
       logic = new Layout({
         store: () => ({
-          get: (key) => ctx.slots.store.call.get({ key }),
-          set: (key, value) => ctx.slots.store.call.set({ key, value: value as never }),
+          get: async (key) => notes.get(key),
+          set: async (key, value) => notes.set(key, value),
         }),
         isView,
         changed: () => emitChanged(),
@@ -180,18 +194,6 @@ export async function startApp(options: AppOptions): Promise<App> {
     throw error;
   });
   const layoutLogic = logic as Layout;
-  // The person's store, where the layout is kept, is the built-in storage's: bound at each start,
-  // explicitly, as the Hub binds nothing by default.
-  if (!hub.state.binding(PERSON, "store"))
-    await person.slots.grants.call
-      .bind({ consumer: PERSON, slot: "store", provider: STORAGE, export: "kv" })
-      .catch((error) => {
-        person.close();
-        void listener.close();
-        hub.close();
-        throw error;
-      });
-
   // However an Actor is closed, here or by an agent, its views leave the layout.
   person.slots.actors.on("changed", ({ actor }) => {
     if (hub.state.actor(actor).state === "closed")
@@ -199,8 +201,11 @@ export async function startApp(options: AppOptions): Promise<App> {
   });
 
   /** The person's side of `/api`: its slots, and `layout`, its own export, served here. */
+  /** A slot exposed to the person at run time: here exactly while it is bound. */
+  const exposedSlot = (slot: string) => person.exposed().find((one) => one.slot === slot);
   const personSide: PersonSide = {
     async call(slot, method, input) {
+      if (slot === "store") return notes.call(method, input);
       if (slot === "rules") {
         // The person's named rules, the gateway's own, checked as a call through the Hub would be.
         const spec = Object.hasOwn(appRules.methods, method)
@@ -237,9 +242,10 @@ export async function startApp(options: AppOptions): Promise<App> {
           throw new Refused("bad_output", `layout.${method}: ${checked.error.message}`);
         return checked.data;
       }
-      if (!Object.hasOwn(SLOTS, slot))
+      const exposed = Object.hasOwn(SLOTS, slot) ? undefined : exposedSlot(slot);
+      if (!exposed && !Object.hasOwn(SLOTS, slot))
         throw new Refused("invalid", `The person has no slot ${slot}.`);
-      const calls = person.slots[slot as keyof typeof SLOTS].call as Record<
+      const calls = (exposed?.call ?? person.slots[slot as keyof typeof SLOTS].call) as Record<
         string,
         ((input: unknown) => Promise<unknown>) | undefined
       >;
@@ -260,9 +266,10 @@ export async function startApp(options: AppOptions): Promise<App> {
         changes.add(tell);
         return () => void changes.delete(tell);
       }
-      if (!Object.hasOwn(SLOTS, slot))
+      const exposed = Object.hasOwn(SLOTS, slot) ? undefined : exposedSlot(slot);
+      if (!exposed && !Object.hasOwn(SLOTS, slot))
         throw new Refused("invalid", `The person has no slot ${slot}.`);
-      const handle = person.slots[slot as keyof typeof SLOTS] as unknown as {
+      const handle = (exposed ?? person.slots[slot as keyof typeof SLOTS]) as unknown as {
         on(event: string, fn: (payload: unknown) => void): () => void;
       };
       try {
@@ -290,9 +297,10 @@ export async function startApp(options: AppOptions): Promise<App> {
   const ran =
     options.firstRun === false
       ? undefined
-      : firstRun(personSide, {
+      : startPrograms(personSide, {
+          home,
+          hubUrl: listener.url,
           log: (message) => process.stderr.write(`${message}\n`),
-          connected: (actorId) => hub.connected(actorId),
           ...options.firstRun,
         }).catch((error: unknown) => {
           process.stderr.write(
@@ -580,7 +588,7 @@ export async function startApp(options: AppOptions): Promise<App> {
   const close = () => {
     closing ??= (async () => {
       // A first run still going finishes first, so it isn't cut off half way.
-      await ran;
+      const programs = await ran;
       rules.close();
       const ours = (file: string, text: string) => {
         if (file === "cli-token") return text.trim() === signIn.cliToken;
@@ -605,6 +613,7 @@ export async function startApp(options: AppOptions): Promise<App> {
       const serverClosed = new Promise<void>((done) => server.close(() => done()));
       server.closeAllConnections();
       await serverClosed;
+      await programs?.close();
       person.close();
       await person.closed;
       await listener.close();

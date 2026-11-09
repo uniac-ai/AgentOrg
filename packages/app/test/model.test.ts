@@ -362,7 +362,7 @@ test("the app runs the first run at start, unless told not to", async (t) => {
     rmSync(home, { recursive: true, force: true });
   });
   const ran = await app.firstRun;
-  assert.ok(ran?.installer && ran.chatgpt);
+  assert.ok(ran?.management && ran.chatgpt);
   const { app: off } = await setup(t);
   assert.equal(off.firstRun, undefined);
 });

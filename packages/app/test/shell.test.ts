@@ -438,12 +438,12 @@ test("settings read the Actors, packages and connections through hub.*", async (
     `${hashes.assistant.slice(0, 11)}…${hashes.assistant.slice(-4)}`,
   );
   await page.getByRole("tab", { name: "Connections" }).click();
-  await page.getByRole("cell", { name: "you.store" }).waitFor();
-  assert.deepEqual(await rows.filter({ hasText: "you.store" }).locator("td").allInnerTexts(), [
-    "you.store",
+  await page.getByRole("cell", { name: "you.actors" }).waitFor();
+  assert.deepEqual(await rows.filter({ hasText: "you.actors" }).locator("td").allInnerTexts(), [
+    "you.actors",
     "→",
-    "storage.kv",
-    "kv@1",
+    "hub.actors",
+    "hub.actors@1",
   ]);
 });
 

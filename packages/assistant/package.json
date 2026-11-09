@@ -11,6 +11,9 @@
       "default": "./dist/src/provider.js"
     }
   },
+  "files": [
+    "dist/src"
+  ],
   "scripts": {
     "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.json",
     "test": "node --test \"dist/test/**/*.test.js\""
