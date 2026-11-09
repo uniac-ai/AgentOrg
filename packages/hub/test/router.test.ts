@@ -1,9 +1,8 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
 import { hubGrants } from "@agentorg/interfaces";
 import {
   type DescribedInterface,
@@ -13,10 +12,8 @@ import {
   hashInterface,
   type InterfaceSchemas,
   method,
-  NotConnected,
   type Refused,
 } from "@agentorg/sdk";
-import { buildPackage } from "@agentorg/sdk/build";
 import {
   type Body,
   encodeFrame,
@@ -24,7 +21,6 @@ import {
   FrameReader,
   type Header,
   input,
-  memoryPair,
   parseBody,
   parseHeader,
   result,
@@ -154,7 +150,7 @@ async function setup(
   options: {
     answerTimeoutMs?: number;
     helloTimeoutMs?: number;
-    checks?: { size?: number; compileBudgetMs?: number };
+    checks?: { size?: number; budgetMs?: number; compileBudgetMs?: number };
   } = {},
 ) {
   const home = join(mkdtempSync(join(tmpdir(), "agentorg-router-")), "home");
@@ -716,70 +712,6 @@ test("a newer channel for an Actor replaces the older one", async (t) => {
   void actor;
 });
 
-test("a pipe the Hub made says hello as its Actor, with no credential and no declares", async (t) => {
-  const { hub, person } = await setup(t);
-  const made = (await person.call("actors", "create", { name: "outside" })) as {
-    result: { actorId: string };
-  };
-  const [ours] = memoryPair();
-  assert.throws(() => hub.accept(ours, { actorId: made.result.actorId }), /package Actor/);
-  assert.throws(() => hub.accept(ours, { actorId: "act_nobody" }), /No Actor/);
-  const board = join(
-    dirname(fileURLToPath(import.meta.url)),
-    "..",
-    "..",
-    "..",
-    "..",
-    "examples",
-    "board",
-  );
-  const out = mkdtempSync(join(tmpdir(), "board-for-router-"));
-  t.after(() => rmSync(out, { recursive: true, force: true }));
-  const built = await buildPackage(board, { out });
-  hub.state.addPackage(PERSON, built.file);
-  const { actorId } = hub.state.createActor(PERSON, { name: "board", package: built.hash });
-  const pipe = () => {
-    const [hubSide, processSide] = memoryPair();
-    return {
-      handle: hub.accept(hubSide, { actorId }),
-      process: new Session(processSide, { client: true }),
-    };
-  };
-  // A pipe's hello must name its own Actor, and may not declare.
-  for (const [hello, code] of [
-    [{ op: "hello", actorId: made.result.actorId }, "forbidden"],
-    [{ op: "hello", actorId, declares: { slots: {} } }, "invalid"],
-  ] as const) {
-    const wrong = pipe();
-    assert.equal((await exchange(wrong.process, hello)).error?.code, code);
-    await wrong.handle.closed;
-  }
-  // A pipe made before its Actor was closed doesn't admit it.
-  const doomed = hub.state.createActor(PERSON, { name: "doomed", package: built.hash }).actorId;
-  const [doomedHub, doomedProcess] = memoryPair();
-  const doomedHandle = hub.accept(doomedHub, { actorId: doomed });
-  hub.state.closeActor(PERSON, doomed);
-  const closed = await exchange(new Session(doomedProcess, { client: true }), {
-    op: "hello",
-    actorId: doomed,
-  });
-  assert.equal(closed.error?.code, "state");
-  await doomedHandle.closed;
-  const { handle, process: process_ } = pipe();
-  assert.equal(hub.connected(actorId), false, "not admitted before its hello");
-  // No credential: the pipe is the proof. The answer is the baseline: its own wiring is bound.
-  const admitted = await exchange(process_, { op: "hello", actorId });
-  assert.deepEqual((admitted.result as { bound: string[] }).bound, ["panel.board"]);
-  assert.ok(hub.connected(actorId));
-  // Its own wiring: the panel's slot reaches the logic's export, and it has no provider channel
-  // other than itself, so a call is forwarded back to it.
-  const call = exchange(process_, { op: "subscribe", slot: "nope", event: "x" });
-  assert.equal((await call).error?.name, "NotConnected");
-  handle.close();
-  await handle.closed;
-  assert.equal(hub.connected(actorId), false);
-});
-
 test("splices end with their binding, and a closed Actor's channel goes", async (t) => {
   const { actor, bind, person, hub } = await setup(t);
   const serve: Serve = async (_, stream, reader) => {
@@ -843,17 +775,25 @@ test("an in-process event goes as JSON: a property left undefined is left out, n
   const heard = person.subscribe("audit", "appended");
   while (!hub.state.audit(0, 1000).entries.some((e) => e.details.op === "subscribe"))
     await later(5);
-  // As a built-in Actor could give it: a detail without a value, then an ordinary one.
-  hub.state.auditHub("probe", { kept: 1, missing: undefined });
-  hub.state.auditHub("probe", { kept: 2 });
-  type Entry = { kind: string; details: Record<string, unknown> };
+  // As the hub could give it: a detail without a value, then an ordinary one.
+  const probe = (slot: string, provider?: string) =>
+    hub.state.auditCall(
+      PERSON,
+      { consumer: PERSON, slot, provider },
+      { op: "call", outcome: "ok" },
+    );
+  probe("first");
+  probe("second", "someone");
+  type Entry = { details: Record<string, unknown> };
   const probes: Entry["details"][] = [];
   while (probes.length < 2) {
     const next = (await heard.next()) as { event?: Entry } | undefined;
     assert.ok(next?.event, `the subscription goes on: ${JSON.stringify(next)}`);
-    if (next.event.kind === "probe") probes.push(next.event.details);
+    if (next.event.details.slot === "first" || next.event.details.slot === "second")
+      probes.push(next.event.details);
   }
-  assert.deepEqual(probes, [{ kept: 1 }, { kept: 2 }]);
+  assert.equal("provider" in (probes[0] as object), false);
+  assert.equal(probes[1]?.provider, "someone");
 });
 
 test("a subscriber that stops reading is cut off, not buffered for", async (t) => {
@@ -914,7 +854,9 @@ test("$id in one Actor's schemas doesn't clash with another's; malformed frames 
 });
 
 test("a reply too large for a frame is refused as too_large, not left hanging", async (t) => {
-  const { person, hub } = await setup(t);
+  // A larger budget than a check needs: under load the check of this large a reply can run out of
+  // the default one, which would be refused as `invalid` before the frame's limit is reached.
+  const { person, hub } = await setup(t, { checks: { budgetMs: 30_000 } });
   for (let i = 0; i < 9000; i++)
     hub.state.createActor(PERSON, { name: `actor-${"n".repeat(100)}-${i}` });
   const listed = await person.call("actors", "list", {});
@@ -1264,7 +1206,6 @@ test("an Actor learns which of its slots are bound: at hello, then by notice on 
     "bindings",
     "exports",
     "grants",
-    "packages",
   ]);
   const settle = async (count: number) => {
     for (let waited = 0; c.client.notices.length < count && waited < 3000; waited += 5)
@@ -1456,270 +1397,6 @@ test("a hello over a WebSocket needs its credential, and a serve names the calle
   assert.deepEqual(seen, [`${c.id}.mine`]);
 });
 
-test("an Actor's logs are read newest last, across the rotated file, and its record counts restarts", async (t) => {
-  const { hub, person, home } = await setup(t);
-  const made = (await person.call("actors", "create", { name: "logged" })) as {
-    result: { actorId: string };
-  };
-  const { actorId } = made.result;
-  const line = (n: number) =>
-    JSON.stringify({ level: "info", message: `line ${n}`, at: new Date(n).toISOString() });
-  mkdirSync(join(home, "logs"), { recursive: true });
-  writeFileSync(join(home, "logs", `${actorId}.log.1`), `${[1, 2, 3].map(line).join("\n")}\n`);
-  // Lines that aren't entries don't count against the limit, and odd fields are dropped.
-  const odd = JSON.stringify({ level: "loud", message: "odd", at: "x", data: [1], extra: 1 });
-  writeFileSync(
-    join(home, "logs", `${actorId}.log`),
-    `${[4, 5].map(line).join("\n")}\n${"not json\n".repeat(10)}${odd}\npartial`,
-  );
-  const logs = (await person.call("actors", "logs", { actorId, limit: 4 })) as {
-    result: { lines: { message: string }[] };
-  };
-  assert.deepEqual(
-    logs.result.lines.map((l) => l.message),
-    ["line 3", "line 4", "line 5", "odd"],
-  );
-  assert.deepEqual(logs.result.lines.at(-1), { level: "info", message: "odd", at: "x" });
-  assert.equal(
-    (await person.call("actors", "logs", { actorId: "act_nobody" })).error?.code,
-    "unknown",
-  );
-  const got = (await person.call("actors", "get", { actorId })) as { result: { restarts: number } };
-  assert.equal(got.result.restarts, 0);
-  void hub;
-});
-
-test("a view module's calls and events run as its Actor, through the package's own wiring", async (t) => {
-  const { hub, person } = await setup(t);
-  const board = join(
-    dirname(fileURLToPath(import.meta.url)),
-    "..",
-    "..",
-    "..",
-    "..",
-    "examples",
-    "board",
-  );
-  const out = mkdtempSync(join(tmpdir(), "board-for-views-"));
-  t.after(() => rmSync(out, { recursive: true, force: true }));
-  const built = await buildPackage(board, { out });
-  hub.state.addPackage(PERSON, built.file);
-  const { actorId } = hub.state.createActor(PERSON, { name: "board", package: built.hash });
-  const got = (await person.call("actors", "get", { actorId })) as { result: { views: string[] } };
-  assert.deepEqual(got.result.views, ["panel"]);
-  const listed = (await person.call("actors", "list", {})) as {
-    result: { actors: { actorId: string; views?: string[] }[] };
-  };
-  assert.deepEqual(listed.result.actors.find((a) => a.actorId === actorId)?.views, ["panel"]);
-  // Not running yet: its views can't call.
-  await assert.rejects(
-    hub.viewCall(actorId, "panel", "board", "list", {}),
-    (e: Refused) => e.code === "state",
-  );
-  hub.state.start(PERSON, actorId);
-
-  // Its process, played by the test: serves logic.board over a pipe.
-  const subscribers: WritableStreamDefaultWriter<Uint8Array>[] = [];
-  const [hubSide, processSide] = memoryPair();
-  hub.accept(hubSide, { actorId });
-  const process_ = new Session(processSide, {
-    client: true,
-    onStream: (stream) => {
-      const reader = new FrameReader(stream.readable);
-      void reader.next().then(async (h) => {
-        const header = parseHeader(h);
-        if (header.op !== "serve") return void stream.writable.close().catch(() => {});
-        const writer = stream.writable.getWriter();
-        if (header.kind === "subscribe") return void subscribers.push(writer);
-        await reader.next();
-        await writer.write(
-          encodeFrame(result({ cards: [{ id: "1", title: `for ${header.caller}`, done: false }] })),
-        );
-        await writer.close();
-      });
-    },
-  });
-  t.after(() => process_.close());
-  await exchange(process_, { op: "hello", actorId });
-
-  assert.deepEqual(await hub.viewCall(actorId, "panel", "board", "list", {}), {
-    cards: [{ id: "1", title: `for ${actorId}`, done: false }],
-  });
-  await assert.rejects(
-    hub.viewCall(actorId, "panel", "board", "add", { title: "" }),
-    (e: Refused) => e.code === "invalid",
-  );
-  await assert.rejects(
-    hub.viewCall(actorId, "logic", "store", "get", { key: "x" }),
-    (e: Refused) => e.code === "forbidden",
-  );
-  await assert.rejects(
-    hub.viewCall(PERSON, "panel", "board", "list", {}),
-    (e: Refused) => e.code === "forbidden",
-  );
-  const audited = hub.state
-    .audit(0, 1000)
-    .entries.filter(
-      (e) => e.kind === "call" && e.actor === actorId && e.details.slot === "panel.board",
-    );
-  assert.deepEqual(
-    audited.map((e) => e.details.outcome),
-    ["refused", "ok", "invalid"],
-  );
-  const refusedViews = hub.state
-    .audit(0, 1000)
-    .entries.filter(
-      (e) => e.kind === "call" && e.actor === actorId && e.details.slot === "logic.store",
-    );
-  assert.equal(refusedViews.length, 1, "a refused non-view module is audited too");
-  assert.throws(
-    () => hub.viewSubscribe(actorId, "panel", "board", "nope", () => {}),
-    (e: Refused) => e.code === "invalid",
-    "refused at the start: thrown",
-  );
-
-  const heard: unknown[] = [];
-  let ended: unknown = "open";
-  const stop = hub.viewSubscribe(
-    actorId,
-    "panel",
-    "board",
-    "changed",
-    (payload) => {
-      heard.push(payload);
-    },
-    (error) => {
-      ended = error;
-    },
-  );
-  for (let waited = 0; !subscribers.length && waited < 3000; waited += 5) await later(5);
-  await subscribers[0]?.write(encodeFrame(eventBody({ id: "2" })));
-  for (let waited = 0; !heard.length && waited < 3000; waited += 5) await later(5);
-  assert.deepEqual(heard, [{ id: "2" }]);
-  // A second subscriber whose onEnd throws doesn't keep the first from hearing the unbind.
-  const stopRude = hub.viewSubscribe(
-    actorId,
-    "panel",
-    "board",
-    "changed",
-    () => {},
-    () => {
-      throw new Error("rude");
-    },
-  );
-  for (let waited = 0; subscribers.length < 2 && waited < 3000; waited += 5) await later(5);
-  // Unbinding its slot ends the subscription with NotConnected.
-  hub.state.unbind(PERSON, actorId, "panel.board");
-  for (let waited = 0; ended === "open" && waited < 3000; waited += 5) await later(5);
-  assert.ok(ended instanceof NotConnected);
-  stop();
-  stop();
-  stopRude();
-});
-
-test("a view module's slot changes reach its listeners: bound now, unbound, and usable again", async (t) => {
-  const { hub, url, person, bind } = await setup(t);
-  const board = join(
-    dirname(fileURLToPath(import.meta.url)),
-    "..",
-    "..",
-    "..",
-    "..",
-    "examples",
-    "board",
-  );
-  const out = mkdtempSync(join(tmpdir(), "board-for-view-slots-"));
-  t.after(() => rmSync(out, { recursive: true, force: true }));
-  const built = await buildPackage(board, { out });
-  hub.state.addPackage(PERSON, built.file);
-  const { actorId } = hub.state.createActor(PERSON, { name: "board", package: built.hash });
-  assert.throws(
-    () => hub.viewSlots(actorId, "logic", () => {}),
-    (e: Refused) => e.code === "forbidden",
-    "a host module isn't a view",
-  );
-  assert.throws(
-    () => hub.viewSlots(PERSON, "panel", () => {}),
-    (e: Refused) => e.code === "forbidden",
-  );
-
-  // One that throws, listening first, doesn't keep the others from hearing.
-  const stopRude = hub.viewSlots(actorId, "panel", () => {
-    throw new Error("rude");
-  });
-  // Not running yet: its package's own wiring is bound, and the listener hears it at once.
-  const heard: [string, boolean][] = [];
-  const stop = hub.viewSlots(actorId, "panel", (slot, bound) => {
-    heard.push([slot, bound]);
-  });
-  assert.deepEqual(heard, [["board", true]]);
-
-  // Its own process connects, the provider of panel.board: usable again.
-  hub.state.start(PERSON, actorId);
-  const processOf = async () => {
-    const [hubSide, processSide] = memoryPair();
-    hub.accept(hubSide, { actorId });
-    const session = new Session(processSide, { client: true, onStream: () => {} });
-    t.after(() => session.close());
-    await exchange(session, { op: "hello", actorId });
-  };
-  await processOf();
-  assert.deepEqual(heard, [
-    ["board", true],
-    ["board", true],
-  ]);
-
-  // Unbound, then bound to another Actor offering the same interface, which connects later.
-  heard.length = 0;
-  hub.state.unbind(PERSON, actorId, "panel.board");
-  assert.deepEqual(heard, [["board", false]]);
-  heard.length = 0;
-  const iface = hub.state.declaration(actorId, "export", "logic.board")?.iface;
-  assert.ok(iface);
-  const made = (await person.call("actors", "create", { name: "other board" })) as {
-    result: { actorId: string; credential: string };
-  };
-  const other = made.result.actorId;
-  const first = await connect(url, { ...made.result, declares: { exports: { board: iface } } });
-  first.close();
-  await first.session.closed;
-  for (let waited = 0; hub.connected(other) && waited < 3000; waited += 5) await later(5);
-  const bound = (await bind(actorId, "panel.board", other, "board")) as { error?: unknown };
-  assert.equal(bound.error, undefined);
-  assert.deepEqual(heard, [["board", true]]);
-  // The provider comes back after the view's listener started: usable again.
-  const again = await connect(url, made.result);
-  t.after(() => again.close());
-  assert.deepEqual(heard, [
-    ["board", true],
-    ["board", true],
-  ]);
-  // The view's own Actor comes back (its views call only while it runs): usable again too, though
-  // another Actor provides the slot.
-  heard.length = 0;
-  await processOf();
-  assert.deepEqual(heard, [["board", true]]);
-  // A listener stopped by another during a change doesn't hear that change.
-  heard.length = 0;
-  let stopLate = () => {};
-  const stopEarly = hub.viewSlots(actorId, "panel", () => stopLate());
-  const late: [string, boolean][] = [];
-  stopLate = hub.viewSlots(actorId, "panel", (slot, bound) => {
-    late.push([slot, bound]);
-  });
-  late.length = 0;
-  hub.state.unbind(PERSON, actorId, "panel.board");
-  assert.deepEqual(late, []);
-  assert.deepEqual(heard, [["board", false]]);
-  stopEarly();
-  await bind(actorId, "panel.board", other, "board");
-  heard.length = 0;
-  stop();
-  stopRude();
-  hub.state.unbind(PERSON, actorId, "panel.board");
-  assert.deepEqual(heard, [], "a stopped listener hears nothing");
-});
-
 test("a provider's own error code reaches the subscriber as an error, whatever it is", async (t) => {
   const { actor, bind } = await setup(t);
   const p = await actor("provider", { exports: { notes } }, async (_, stream) => {
@@ -1775,126 +1452,4 @@ test("compiling never runs an Actor's patternProperties regex against its proper
     { type: "object" },
   );
   await validators.prepare("a", hostile);
-});
-
-test("a view module's log lines go to its Actor's log, bounded, and the file rotates", async (t) => {
-  const { hub, home, person } = await setup(t);
-  const board = join(
-    dirname(fileURLToPath(import.meta.url)),
-    "..",
-    "..",
-    "..",
-    "..",
-    "examples",
-    "board",
-  );
-  const out = mkdtempSync(join(tmpdir(), "board-for-logs-"));
-  t.after(() => rmSync(out, { recursive: true, force: true }));
-  const built = await buildPackage(board, { out });
-  hub.state.addPackage(PERSON, built.file);
-  const { actorId } = hub.state.createActor(PERSON, { name: "board", package: built.hash });
-  const logs = async (limit = 10) =>
-    (
-      (await person.call("actors", "logs", { actorId, limit })) as {
-        result: {
-          lines: {
-            level: string;
-            message: string;
-            data?: Record<string, unknown>;
-            module?: string;
-          }[];
-        };
-      }
-    ).result.lines;
-
-  // Not running is fine: a view may log while its Actor is stopped.
-  hub.viewLog(actorId, "panel", { level: "warn", message: "drawn", data: { cards: 2 } });
-  const [first] = await logs();
-  assert.deepEqual(
-    { ...first, at: undefined },
-    { level: "warn", message: "drawn", data: { cards: 2 }, module: "panel", at: undefined },
-  );
-  assert.equal(statSync(join(home, "logs", `${actorId}.log`)).mode & 0o777, 0o600);
-
-  // Whatever the gateway passes, the Hub bounds it, and nothing it passes makes viewLog throw.
-  let toJSONCalls = 0;
-  const hostile = JSON.parse('{"__proto__": "kept"}') as Record<string, unknown>;
-  Object.assign(hostile, {
-    long: "y".repeat(2000),
-    nested: { deep: true },
-    big: 1n,
-    sneaky: { toJSON: () => (toJSONCalls++ ? "Q".repeat(3 << 20) : undefined) },
-  });
-  Object.defineProperty(hostile, "getter", {
-    enumerable: true,
-    get() {
-      throw new Error("no");
-    },
-  });
-  for (let i = 0; i < 20; i++) hostile[`k${i}`] = i;
-  hub.viewLog(actorId, "panel", {
-    level: "loud",
-    message: Object.create(null) as string,
-    data: hostile,
-  });
-  const [bounded] = await logs(1);
-  assert.equal(bounded?.level, "info");
-  assert.equal(bounded?.message, "[unprintable]");
-  assert.equal(Object.keys(bounded?.data ?? {}).length, 16);
-  assert.deepEqual(
-    { ...bounded?.data, long: String(bounded?.data?.long).length },
-    {
-      ["__proto__"]: "kept",
-      long: 1024,
-      nested: '{"deep":true}',
-      big: "[unreadable]",
-      sneaky: "undefined",
-      getter: "[unreadable]",
-      ...Object.fromEntries(Array.from({ length: 10 }, (_, i) => [`k${i}`, i])),
-    },
-  );
-  assert.equal(toJSONCalls, 1, "a value is turned into JSON once, when it is bounded");
-  hub.viewLog(actorId, "panel", { level: "info", message: "x".repeat(5000) });
-  assert.equal((await logs(1))[0]?.message.length, 4096);
-  const trap = new Proxy(
-    {},
-    {
-      ownKeys() {
-        throw new Error("no keys");
-      },
-    },
-  );
-  hub.viewLog(actorId, "panel", { level: "error", message: "trapped", data: trap });
-  assert.deepEqual(
-    { ...(await logs(1))[0], at: undefined },
-    { level: "error", message: "trapped", module: "panel", at: undefined },
-  );
-
-  // Only a view module of a package Actor logs this way.
-  assert.throws(
-    () => hub.viewLog(actorId, "logic", { level: "info", message: "no" }),
-    (e: Refused) => e.code === "forbidden",
-  );
-  assert.throws(
-    () => hub.viewLog(PERSON, "panel", { level: "info", message: "no" }),
-    (e: Refused) => e.code === "forbidden",
-  );
-
-  // Past 1 MiB the file is rotated once: two files at most, the newest lines still read, and
-  // a second rotation replaces the first.
-  for (let i = 0; i < 600; i++)
-    hub.viewLog(actorId, "panel", { level: "info", message: `line ${i} ${"z".repeat(4000)}` });
-  const file = join(home, "logs", `${actorId}.log`);
-  assert.ok(statSync(file).size <= 1024 * 1024);
-  assert.ok(statSync(`${file}.1`).size <= 1024 * 1024);
-  assert.equal(statSync(join(home, "logs")).mode & 0o777, 0o700);
-  assert.ok(
-    !readFileSync(`${file}.1`, "utf8").includes('"drawn"'),
-    "the first file's lines went with the second rotation",
-  );
-  const newest = await logs(2);
-  assert.deepEqual(
-    newest.map((line) => line.message.split(" ").slice(0, 2).join(" ")),
-    ["line 598", "line 599"],
-  );
 });

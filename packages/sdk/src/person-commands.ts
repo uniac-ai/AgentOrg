@@ -27,11 +27,6 @@ function usage(message: string): never {
 
 /** Each person command: the person's hub slot and method it calls, and its input from the args. */
 const commands: Record<string, { slot: string; method: string; input(args: string[]): unknown }> = {
-  add: {
-    slot: "packages",
-    method: "add",
-    input: ([file]) => (file ? { path: resolve(file) } : usage("add takes a .agentorg file.")),
-  },
   actors: { slot: "actors", method: "list", input: () => ({}) },
   bindings: { slot: "bindings", method: "list", input: () => ({}) },
   exports: { slot: "exports", method: "list", input: () => ({}) },

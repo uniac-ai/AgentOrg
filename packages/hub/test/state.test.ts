@@ -1,14 +1,11 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
-import { hubActors, hubBindings, hubGrants, kv } from "@agentorg/interfaces";
+import { hubActors, hubBindings, hubGrants } from "@agentorg/interfaces";
 import { defineInterface, describeInterface, method, Refused } from "@agentorg/sdk";
-import { buildPackage, writeTar } from "@agentorg/sdk/build";
-import { readTar } from "@agentorg/sdk/manifest";
 import { z } from "zod";
 import { HUB, HubState, PERSON, type RequestRecord, type StateEvents } from "../src/index.ts";
 
@@ -61,14 +58,11 @@ test("first start creates the hub and the person, bound to every hub export, in 
     [
       [HUB, "builtin", "running"],
       [PERSON, "external", "created"],
-      ["storage", "builtin", "running"],
-      ["net", "builtin", "running"],
     ],
   );
   assert.deepEqual(
     state.bindings(PERSON).map((b) => `${b.slot}→${b.provider}.${b.export}`),
     [
-      "packages→hub.packages",
       "actors→hub.actors",
       "bindings→hub.bindings",
       "grants→hub.grants",
@@ -320,69 +314,6 @@ test("exports offered at run time list as dynamic; withdrawing one ends its bind
   assert.throws(() => state.offer(provider, "notes", notes()), refused("conflict"));
 });
 
-test("packages are verified, stored privately, and give their Actor its slots, exports and wiring", async (t) => {
-  const { home, state } = open(t);
-  const board = join(
-    dirname(fileURLToPath(import.meta.url)),
-    "..",
-    "..",
-    "..",
-    "..",
-    "examples",
-    "board",
-  );
-  const out = mkdtempSync(join(tmpdir(), "board-for-hub-"));
-  t.after(() => rmSync(out, { recursive: true, force: true }));
-  const built = await buildPackage(board, { out });
-  const added = state.addPackage(PERSON, built.file);
-  assert.equal(added.hash, built.hash);
-  assert.equal(mode(join(home, "packages", built.hash, "agentorg.json")), 0o600);
-  assert.equal(mode(join(home, "packages", built.hash)), 0o700);
-  assert.deepEqual(
-    state.addPackage(PERSON, built.file).hash,
-    built.hash,
-    "adding again is a no-op",
-  );
-  assert.deepEqual(state.packages(), [{ hash: built.hash, name: "board", version: "0.1.0" }]);
-
-  const store = state.createActor(PERSON, { name: "store" }).actorId;
-  state.declareExternal(store, { slots: {}, exports: { kv: describeInterface(kv) } });
-  const wired = state.createActor(PERSON, {
-    name: "board-with-store",
-    package: built.hash,
-    bindings: [{ slot: "logic.store", provider: store, export: "kv" }],
-  }).actorId;
-  assert.equal(
-    state.binding(wired, "logic.store")?.madeBy,
-    PERSON,
-    "initial bindings on a package",
-  );
-  state.closeActor(PERSON, wired);
-  const { actorId } = state.createActor(PERSON, { name: "board", package: built.hash });
-  assert.equal(state.declaration(actorId, "slot", "logic.store")?.iface.id, "kv@1");
-  assert.equal(state.declaration(actorId, "export", "logic.board")?.iface.id, "board@1");
-  assert.equal(
-    state.binding(actorId, "panel.board")?.export,
-    "logic.board",
-    "the package's own wiring",
-  );
-  assert.throws(() => state.removePackage(PERSON, built.hash), refused("in_use"));
-  state.start(PERSON, actorId);
-  assert.throws(() => state.start(PERSON, actorId), refused("state"));
-  state.stop(PERSON, actorId);
-  state.closeActor(PERSON, actorId);
-  assert.deepEqual(state.bindings(actorId), [], "closing ends its bindings both ways");
-  state.removePackage(PERSON, built.hash);
-
-  const files = readTar(new Uint8Array(readFileSync(built.file)));
-  files.set("dist/logic.js", new TextEncoder().encode("tampered"));
-  const tampered = join(out, `${built.hash}.agentorg`);
-  writeFileSync(tampered, writeTar(files));
-  assert.throws(() => state.addPackage(PERSON, tampered), refused("invalid"));
-  assert.throws(() => state.addPackage(PERSON, join(out, "missing.agentorg")), refused("unknown"));
-  assert.throws(() => state.start(PERSON, PERSON), refused("state"));
-});
-
 test("the audit trail records every change, in order, and pages", (t) => {
   const seen: string[] = [];
   const { state } = open(t, { audited: (entry) => seen.push(entry.kind) });
@@ -422,7 +353,7 @@ test("the audit trail records every change, in order, and pages", (t) => {
 test("each hub export is the authority for its own part only", (t) => {
   const { state } = open(t);
   const { holder, stranger } = cast(state);
-  const slot = (name: "actors" | "packages", iface: Parameters<typeof describeInterface>[0]) => {
+  const slot = (name: "actors", iface: Parameters<typeof describeInterface>[0]) => {
     state.declareExternal(holder, {
       slots: { notes: notes(), [name]: describeInterface(iface) },
       exports: {},
@@ -433,15 +364,9 @@ test("each hub export is the authority for its own part only", (t) => {
   assert.ok(state.holds(holder, "actors"));
   const made = state.createActor(holder, { name: "by-holder" }).actorId;
   state.closeActor(holder, made);
-  assert.throws(() => state.addPackage(holder, "/nowhere.agentorg"), refused("forbidden"));
-  assert.throws(
-    () => state.removePackage(holder, `sha256-${"0".repeat(64)}`),
-    refused("forbidden"),
-  );
   assert.equal(state.isManager(holder), false, "hub.actors@1 doesn't make a manager");
   assert.throws(
-    () =>
-      state.bind(holder, { consumer: stranger, slot: "notes", provider: HUB, export: "packages" }),
+    () => state.bind(holder, { consumer: stranger, slot: "notes", provider: HUB, export: "audit" }),
     refused("forbidden"),
     "it passes on only what it holds",
   );
@@ -563,6 +488,40 @@ test("run-time exports: only they can be withdrawn, and they go when the Actor d
   assert.throws(() => state.offer("act_nobody", "late", notes()), refused("unknown"));
 });
 
+test("an earlier home loses its records of storage, the network and the package store", (t) => {
+  const home = mkdtempSync(join(tmpdir(), "agentorg-older-"));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  HubState.open(home).close();
+  const db = new DatabaseSync(join(home, "hub.db"));
+  const at = new Date().toISOString();
+  const iface = JSON.stringify(notes());
+  for (const id of ["storage", "net"])
+    db.prepare(
+      "INSERT INTO actors (id, name, package, state, created_at) VALUES (?, ?, 'builtin', 'running', ?)",
+    ).run(id, id, at);
+  db.prepare("INSERT INTO declarations VALUES ('storage', 'export', 'kv', ?, 0)").run(iface);
+  db.prepare("INSERT INTO declarations VALUES ('hub', 'export', 'packages', ?, 0)").run(iface);
+  db.prepare("INSERT INTO declarations VALUES ('person', 'slot', 'packages', ?, 0)").run(iface);
+  db.prepare(
+    "INSERT INTO bindings (consumer, slot, provider, export, interface, made_by, at) VALUES ('person', 'packages', 'hub', 'packages', 'hub.packages@1', 'hub', ?)",
+  ).run(at);
+  db.prepare(
+    "INSERT INTO bindings (consumer, slot, provider, export, interface, made_by, at) VALUES ('person', 'old', 'storage', 'kv', 'kv@1', 'person', ?)",
+  ).run(at);
+  db.exec("PRAGMA user_version = 2");
+  db.close();
+  const state = HubState.open(home);
+  t.after(() => state.close());
+  assert.equal(state.actor("storage").state, "closed");
+  assert.equal(state.actor("net").state, "closed");
+  assert.deepEqual(
+    state.bindings(PERSON).filter((b) => b.export === "packages" || b.provider === "storage"),
+    [],
+  );
+  assert.equal(state.declaration("hub", "export", "packages"), undefined);
+  assert.equal(state.declaration("person", "slot", "packages"), undefined);
+});
+
 test("a home from a newer version isn't opened", (t) => {
   const { home, state } = open(t);
   state.close();
@@ -576,7 +535,7 @@ test("the person keeps its hub bindings through redeclaration, and a restart rep
   const { home, state } = open(t);
   state.declareExternal(PERSON, { slots: { notes: notes() }, exports: {} });
   assert.equal(state.isManager(PERSON), true);
-  assert.equal(state.bindings(PERSON).filter((b) => b.provider === HUB).length, 6);
+  assert.equal(state.bindings(PERSON).filter((b) => b.provider === HUB).length, 5);
   state.close();
   // However it came to be, a hub slot wired elsewhere is put back on the hub at the next start.
   const db = new DatabaseSync(join(home, "hub.db"));

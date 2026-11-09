@@ -8,78 +8,28 @@ import { z } from "zod";
 
 const Hash = z.string().regex(/^sha256-[0-9a-f]{64}$/);
 export const Id = z.string().min(1).max(128);
-/** A slot or export: `name` for an external Actor, `module.name` for a package Actor. */
+/** A slot or export: `name`, or `module.name`. */
 export const Name = z
   .string()
   .regex(/^[a-z][A-Za-z0-9_]*(\.[a-z][A-Za-z0-9_]*)?$/)
   .max(129);
 const Empty = z.object({});
 
-export const Package = z.object({ hash: Hash, name: z.string(), version: z.string() });
-
-/** `hub.packages@1`: the content-addressed package store. */
-export const hubPackages = defineInterface({
-  name: "hub.packages",
-  major: 1,
-  kind: "rpc",
-  methods: {
-    /** Add a `.agentorg` archive from a path on the Hub's machine; it is verified first. */
-    add: method({
-      input: z.object({ path: z.string().min(1).max(4096) }),
-      output: z.object({ hash: Hash, manifest: z.record(z.string(), z.json()) }),
-    }),
-    list: method({ input: Empty, output: z.object({ packages: z.array(Package) }) }),
-    get: method({
-      input: z.object({ hash: Hash }),
-      output: z.object({ hash: Hash, manifest: z.record(z.string(), z.json()) }),
-    }),
-    /** Refused while an Actor runs the package. */
-    remove: method({ input: z.object({ hash: Hash }), output: Empty }),
-    /**
-     * Build a package from its source, given as data (`package.json` and files under `src/`, up to
-     * 768 KiB), and add it as `add` does. It's `agentorg build`'s build, reading no tsconfig; its
-     * files import only `@agentorg/sdk`, `@agentorg/interfaces`, `zod`, `react`, `react-dom` and
-     * `@agentorg/kit` by name, and nothing outside the package's folder, never by a pattern. A build that fails is
-     * `Refused("build")` with the build's message, so the source can be fixed and built again.
-     */
-    build: method({
-      input: z.object({ files: z.record(z.string().min(1).max(256), z.string()) }),
-      output: z.object({ hash: Hash, manifest: z.record(z.string(), z.json()) }),
-    }),
-  },
-});
-
 export const ActorState = z.enum(["created", "running", "stopped", "closed"]);
 export const Actor = z.object({
   actorId: Id,
   name: z.string(),
   /**
-   * The package it runs, by hash; `external` for a program that connects itself; `builtin` for
-   * the `hub` Actor, which is the core itself.
+   * `external` for a program that connects itself; `builtin` for the `hub` Actor, which is the
+   * core itself. An Actor an earlier release ran from a package keeps that package's hash.
    */
   package: z.union([Hash, z.literal("external"), z.literal("builtin")]),
   state: ActorState,
   /**
-   * Whether it has a channel to the Hub now: an external Actor while its program is connected (the
-   * person while the app runs: its gateway holds the person's channel), a package Actor while its
-   * process is. The built-in Actors are the Hub itself and have none. `state` is what was asked
-   * for and this is what is: a running package Actor isn't connected while its process starts or
-   * restarts, and a stopping one stays connected until its process has gone.
+   * Whether it has a channel to the Hub now: while its program is connected (the person while the
+   * app runs: its gateway holds the person's channel). The hub is the core itself and has none.
    */
   connected: z.boolean(),
-  /** Times the Hub restarted its process after a crash; 0 for Actors without one. */
-  restarts: z.number().int().min(0),
-  /** How its process last ended on its own, if it has: an exit code or a signal, and when. */
-  lastExit: z
-    .object({ code: z.number().int().nullable(), signal: z.string().nullable(), at: z.string() })
-    .optional(),
-  /**
-   * For a package Actor: whether this machine can run its host process now, and if not, why and
-   * what to do about it.
-   */
-  host: z.object({ available: z.boolean(), reason: z.string().optional() }).optional(),
-  /** For a package Actor: its view modules, which the person's shell can place. */
-  views: z.array(z.string()).optional(),
   /**
    * The Actor it was created for, when a manager created it on another's behalf (the installer
    * names its caller). Provenance only: the Hub grants nothing from it; only a rule the person
@@ -88,69 +38,37 @@ export const Actor = z.object({
   installedFor: Id.optional(),
 });
 
-/** One line of an Actor's log, from its `ctx.log` or its process's own output. */
-export const LogLine = z.object({
-  level: z.enum(["info", "warn", "error"]),
-  message: z.string(),
-  data: z.record(z.string(), z.json()).optional(),
-  module: z.string().optional(),
-  at: z.string(),
-});
-
-/** `hub.actors@1`: Actors and their lifecycle. */
+/** `hub.actors@1`: Actors: who may join the Hub. */
 export const hubActors = defineInterface({
   name: "hub.actors",
   major: 1,
   kind: "rpc",
   methods: {
     /**
-     * With a package, an Actor that runs it; without, an external one, whose credential is returned
-     * once. `bindings` wire the new Actor's slots at once, with the caller's export-side authority
+     * An Actor for a program that connects itself, with a credential returned once. `bindings` wire the new Actor's slots at once, with the caller's export-side authority
      * (the creation is the slot side's yes), for example to its own `hub.grants@1`. `for` names
      * the Actor it is made for, recorded as `installedFor`; only a manager may give it.
      */
     create: method({
       input: z.object({
         name: z.string().min(1).max(128),
-        package: Hash.optional(),
         for: Id.optional(),
         bindings: z
           .array(z.object({ slot: Name, provider: Id, export: Name }))
           .max(64)
           .optional(),
       }),
-      output: z.object({ actorId: Id, credential: z.string().optional() }),
+      output: z.object({ actorId: Id, credential: z.string() }),
     }),
     list: method({ input: Empty, output: z.object({ actors: z.array(Actor) }) }),
     get: method({ input: z.object({ actorId: Id }), output: Actor }),
-    start: method({ input: z.object({ actorId: Id }), output: Empty }),
-    stop: method({ input: z.object({ actorId: Id }), output: Empty }),
     /** Final: its bindings, both ways, are removed. */
     close: method({ input: z.object({ actorId: Id }), output: Empty }),
-    /**
-     * Run another package as the same package Actor: its id, its stores and every binding whose
-     * interfaces still match stay. A binding through a slot or export the new package drops, or
-     * declares as another interface, is dropped and listed in `dropped`; the new package's own
-     * wiring is made where its slot is unbound. A running Actor restarts on the new package.
-     * Only a manager may upgrade: the new package runs as the Actor and keeps what it was granted
-     * (its bindings and its store), which only a manager could grant anyway.
-     */
-    upgrade: method({
-      input: z.object({ actorId: Id, package: Hash }),
-      output: z.object({
-        dropped: z.array(z.object({ consumer: Id, slot: Name, provider: Id, export: Name })),
-      }),
-    }),
-    /** Its newest log lines, oldest first. */
-    logs: method({
-      input: z.object({ actorId: Id, limit: z.number().int().min(1).max(1000).optional() }),
-      output: z.object({ lines: z.array(LogLine) }),
-    }),
   },
   events: {
     /**
-     * An Actor's record may differ: it was made, started, stopped or closed, its process exited,
-     * or it connected or went (`connected`). Read it again with `get` or `list`.
+     * An Actor's record may differ: it was made or closed, or it connected or went (`connected`).
+     * Read it again with `get` or `list`.
      */
     changed: event(z.object({ actor: Id })),
   },

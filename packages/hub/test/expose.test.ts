@@ -211,7 +211,7 @@ test("expose refuses the Hub's own Actors, a missing export, another kind and a 
   const state = open(t);
   const { provider, agent } = cast(state);
   assert.throws(
-    () => state.expose(PERSON, { provider, export: "quests", to: "storage" }),
+    () => state.expose(PERSON, { provider, export: "quests", to: "hub" }),
     refused("forbidden"),
   );
   assert.throws(

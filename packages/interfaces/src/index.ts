@@ -27,9 +27,6 @@ export {
   hubBindings,
   hubExports,
   hubGrants,
-  hubPackages,
-  LogLine,
-  Package,
 } from "./hub.js";
 export { Composition, installer } from "./installer.js";
 export { kv } from "./kv.js";
@@ -47,7 +44,6 @@ export {
   mcpProvider,
 } from "./mcp-provider.js";
 export { appRules, Rule } from "./rules.js";
-export { storageAdmin } from "./storage-admin.js";
 export { ToolEntry, tools } from "./tools.js";
 export { uiShell } from "./ui-shell.js";
 export { uiView } from "./ui-view.js";

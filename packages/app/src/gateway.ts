@@ -14,7 +14,6 @@ import {
   hubBindings,
   hubExports,
   hubGrants,
-  hubPackages,
   skills,
 } from "@agentorg/interfaces";
 import { Refused } from "@agentorg/sdk";
@@ -36,7 +35,6 @@ import { SignIn } from "./signin.js";
  * (any may be unbound): `login`, the model's account sign-in, and management's three.
  */
 const SLOTS = {
-  packages: hubPackages,
   actors: hubActors,
   bindings: hubBindings,
   grants: hubGrants,
@@ -115,8 +113,7 @@ export async function startApp(options: AppOptions): Promise<App> {
   const home = resolve(options.home);
   mkdirSync(home, { recursive: true, mode: 0o700 });
   closePackageActors(home);
-  // Nothing uses the built-in storage, and `storage.db` is never opened.
-  const hub = Hub.open(home, { builtinStorage: false });
+  const hub = Hub.open(home);
   const listener = await listen(hub, {}).catch((error) => {
     hub.close();
     throw error;

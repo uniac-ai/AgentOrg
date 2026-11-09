@@ -4,6 +4,5 @@
     "rootDir": ".",
     "outDir": "dist"
   },
-  "include": ["src", "test"],
-  "exclude": ["test/fixtures/kit-widget"]
+  "include": ["src", "test"]
 }

@@ -29,24 +29,6 @@ cleanup() {
 trap cleanup EXIT
 
 step() { echo "== $*"; }
-# A fixture's source as hub.packages.build takes it: {"files": {path: text}}.
-source_of() {
-  node -e '
-    const fs = require("fs");
-    const [dir, ...paths] = process.argv.slice(1);
-    const files = {};
-    for (const path of paths) files[path] = fs.readFileSync(`${dir}/${path}`, "utf8");
-    console.log(JSON.stringify({ files }));
-  ' "$@"
-}
-# A build's answer: its package's name and hash, or a failure.
-built() {
-  node -e '
-    const { hash, manifest } = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
-    if (!/^sha256-/.test(hash)) process.exit(1);
-    console.log(`${manifest.name} ${hash}`);
-  ' "$1"
-}
 # Start `agentorg` ($1) on a home ($2) in the background as $pid, logging to $3, until it serves.
 start_on() {
   "$1" --no-open --home "$2" >"$3" 2>&1 &
@@ -83,9 +65,6 @@ stop_app() {
   wait "$pid" || true
   pid=""
 }
-fixtures="$root/packages/hub/test/fixtures"
-counter="$(source_of "$fixtures/counter" package.json src/counter.ts src/interface.ts)"
-kit="$(source_of "$fixtures/kit-widget" package.json src/panel.tsx)"
 
 step "pack the cli"
 tarball="$(node "$root/packages/app/scripts/pack.js" "$work/packs")"
@@ -179,20 +158,12 @@ for path in / /app.js /app.css /signin /signin.js; do
   [ "$status" = 200 ] || exit 1
 done
 
-step "the Hub builds an agent's source against the installed SDK, interfaces and zod"
-"$agentorg" call packages build "$counter" --home "$home" >"$work/build.json"
-built "$work/build.json"
-
-step "and a view in JSX against the installed React, react-dom and kit"
-"$agentorg" call packages build "$kit" --home "$home" >"$work/kit.json"
-built "$work/kit.json"
-
 step "stop by pid"
 kill -TERM "$pid"
 wait "$pid" || true
 pid=""
 
-step "the global install's Hub builds the kit widget too"
+step "the global install's Hub starts and answers"
 ghome="$work/ghome"
 "$global/bin/agentorg" hub --home "$ghome" >"$work/hub.log" 2>&1 &
 hubpid=$!
@@ -202,8 +173,7 @@ for _ in $(seq 1 120); do
   sleep 0.5
 done
 [ -s "$ghome/url" ] || { echo "The global Hub wrote no address after 60 s" >&2; exit 1; }
-"$global/bin/agentorg" call packages build "$kit" --home "$ghome" >"$work/gkit.json"
-built "$work/gkit.json"
+"$global/bin/agentorg" call actors list --home "$ghome" >"$work/gactors.json"
 kill -TERM "$hubpid"
 wait "$hubpid" || true
 hubpid=""

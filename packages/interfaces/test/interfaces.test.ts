@@ -18,7 +18,6 @@ import {
   hubBindings,
   hubExports,
   hubGrants,
-  hubPackages,
   kv,
   layout,
   llmSession,
@@ -65,7 +64,7 @@ function compiled(iface: Parameters<typeof describeInterface>[0]) {
 }
 
 test("every interface's schemas compile under the Hub's strict validator", () => {
-  const hub = [hubPackages, hubActors, hubGrants, hubBindings, hubExports, hubAudit];
+  const hub = [hubActors, hubGrants, hubBindings, hubExports, hubAudit];
   for (const iface of [...standard, ...hub, appRules])
     assert.doesNotThrow(() => compiled(iface), describeInterface(iface).id);
 });

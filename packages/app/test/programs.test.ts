@@ -2,15 +2,12 @@
 // reaching management and each agent's chat through `/api`, as `agentorg call` does.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
-import { Hub, listen, PERSON } from "@agentorg/hub";
-import { hubPackages } from "@agentorg/interfaces";
-import { buildPackage } from "@agentorg/sdk/build";
-import { connect } from "@agentorg/sdk/client";
+import { HubState } from "@agentorg/hub";
 import WebSocket from "ws";
 import { type App, startApp } from "../src/index.ts";
 
@@ -63,17 +60,6 @@ function personOf(app: App, home: string) {
   };
 }
 type Person = ReturnType<typeof personOf>;
-
-const counter = join(
-  dirname(fileURLToPath(import.meta.url)),
-  "..",
-  "..",
-  "..",
-  "hub",
-  "test",
-  "fixtures",
-  "counter",
-);
 
 async function until(condition: () => boolean | Promise<boolean>, what: string) {
   for (let i = 0; i < 2000; i++) {
@@ -279,23 +265,16 @@ test("the app's notes are its own file, and the person's store answers from it",
 test("a home an earlier release ran starts as a fresh one: its package Actors closed, its files left", async (t) => {
   const home = mkdtempSync(join(tmpdir(), "agentorg-programs-"));
   t.after(() => rmSync(home, { recursive: true, force: true }));
-  // Made as an earlier release made them: a package Actor, with the built-in storage on.
-  const built = await buildPackage(counter, { out: join(home, "built") });
-  const earlier = Hub.open(home);
-  const server = await listen(earlier);
-  const before = await connect({
-    hubUrl: server.url,
-    actorId: PERSON,
-    credential: readFileSync(join(home, "person-credential"), "utf8").trim(),
-    slots: { packages: hubPackages },
-    declare: false,
-  });
-  const { hash } = await before.slots.packages.call.add({ path: built.file });
-  const agent = earlier.state.createActor(PERSON, { name: "Old agent", package: hash }).actorId;
-  before.close();
-  await before.closed;
-  await server.close();
+  // Made as an earlier release made them: a package Actor recorded in the Hub, and its stores.
+  const earlier = HubState.open(home);
   earlier.close();
+  const db = new DatabaseSync(join(home, "hub.db"));
+  const agent = "act_earlier";
+  db.prepare(
+    "INSERT INTO actors (id, name, package, state, created_at) VALUES (?, 'Old agent', ?, 'running', ?)",
+  ).run(agent, `sha256-${"0".repeat(64)}`, new Date().toISOString());
+  db.close();
+  writeFileSync(join(home, "storage.db"), "what an earlier release stored");
   const sha = () =>
     createHash("sha256")
       .update(readFileSync(join(home, "storage.db")))

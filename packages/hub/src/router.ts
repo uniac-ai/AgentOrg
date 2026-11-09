@@ -6,8 +6,6 @@ import {
   OutcomeUnknown,
   Refused,
 } from "@agentorg/sdk";
-import { errorOf } from "@agentorg/sdk/client";
-import { serveOver } from "@agentorg/sdk/http";
 import {
   type Body,
   type Duplex,
@@ -28,21 +26,8 @@ import {
   YamuxError,
   type YamuxStream,
 } from "@agentorg/wire";
-import { sweepBuilds } from "./build.js";
 import { HubActor } from "./hub-actor.js";
-import { appendLog, boundedEntry } from "./logs.js";
-import { Net, type NetOptions } from "./net.js";
-import { Processes, type ProcessOptions } from "./processes.js";
-import {
-  type BindingRecord,
-  type CallOutcome,
-  HUB,
-  HubState,
-  NET,
-  STORAGE,
-  type Wiring,
-} from "./state.js";
-import { Storage, type StorageLimits } from "./storage.js";
+import { type BindingRecord, type CallOutcome, HUB, HubState, type Wiring } from "./state.js";
 import { type Part, Validators } from "./validate.js";
 
 /** Streams an admitted channel may have open at once. Before admission it may have one: hello. */
@@ -60,8 +45,6 @@ const MAX_OPEN_NOTICES = 64;
  * a provider wait for each delivery, so this bounds the hub Actor's own events.
  */
 const MAX_QUEUED_BYTES = 4 * 1024 * 1024;
-/** Where the Hub's in-process http serving reports a handler's own failure: nowhere. */
-const QUIET = { info() {}, warn() {}, error() {} };
 
 export interface HubOptions {
   /** How long a new channel has to finish hello before it is closed. */
@@ -71,25 +54,12 @@ export interface HubOptions {
    * it the caller gets OutcomeUnknown and the provider's stream is reset.
    */
   answerTimeoutMs?: number;
-  /** What a consumer's stores may hold (defaults in storage.ts). */
-  storage?: StorageLimits;
-  /**
-   * Whether the built-in `storage` runs: on by default. Off, `storage.db` is never opened, so it
-   * stays exactly as it is, and a call to `storage` is refused `unavailable`.
-   */
-  builtinStorage?: boolean;
   /** The schema-check pool: its size and each check's budget (defaults in validate.ts). */
   checks?: { size?: number; budgetMs?: number; compileBudgetMs?: number };
-  /** Package Actors' processes: their sandbox, memory and timings (defaults in processes.ts). */
-  processes?: ProcessOptions;
-  /** The built-in `net` Actor's resolver, extra CA and idle timeout (defaults in net.ts). */
-  net?: NetOptions;
 }
 
 /** A channel the Hub took: `closed` settles when it ends. */
 export interface ChannelHandle {
-  /** Settles when the channel's hello is admitted; never, if it isn't. */
-  admitted: Promise<void>;
   closed: Promise<void>;
   close(): void;
 }
@@ -171,7 +141,7 @@ const pass = (from: ReadableStream<Uint8Array>, to: { writable: WritableStream; 
   });
 
 /**
- * A value as it would cross the wire: what a built-in Actor (the hub, storage) gives in-process is
+ * A value as it would cross the wire: what the hub gives in-process is
  * checked and sent as a channel provider's would be, so a property left undefined is left out,
  * never a value that fails its schema.
  */
@@ -212,9 +182,6 @@ export class Hub {
   readonly state: HubState;
   readonly #actor: HubActor;
   readonly #validators: Validators;
-  readonly #storage: Storage | undefined;
-  readonly #processes: Processes;
-  readonly #net: Net;
   readonly #connections = new Map<string, Connection>();
   /** Open subscriptions and splices by the binding they run through, ended when it goes. */
   readonly #live = new Map<string, Set<(error?: WireError) => void>>();
@@ -222,11 +189,6 @@ export class Hub {
   readonly #answerTimeoutMs: number;
   /** Every channel's session, admitted or still in hello. */
   readonly #sessions = new Set<Session>();
-  /** `viewSlots` listeners by Actor: each hears its view module's slot changes. */
-  readonly #viewListeners = new Map<
-    string,
-    Set<{ module: string; onSlot: (slot: string, bound: boolean) => void }>
-  >();
 
   private constructor(home: string, options: HubOptions) {
     this.#helloTimeoutMs = options.helloTimeoutMs ?? 10_000;
@@ -242,60 +204,19 @@ export class Hub {
           this.#notify(binding.consumer, binding.slot, false);
         }
       },
-      closed: (actorId) => {
-        this.#connections.get(actorId)?.session.close();
-        // Closing is for good: its stores go too. Unbinding keeps them.
-        this.#storage?.deleteConsumer(actorId);
-      },
+      closed: (actorId) => this.#connections.get(actorId)?.session.close(),
       requested: (request, approvers) => actor?.requested(request, approvers),
       decided: (request, status, approvers) => actor?.decided(request, status, approvers),
       exportsChanged: (changed) => actor?.exportsChanged(changed),
       actorChanged: (changed) => actor?.actorChanged(changed),
       audited: (entry) => actor?.audited(entry),
     });
-    this.#net = new Net(this.state, options.net);
-    // Builds a crash interrupted leave their folders; they go now.
-    sweepBuilds(home);
-    this.#processes = new Processes(
-      this.state,
-      (channel, admitted) => this.accept(channel, admitted),
-      options.processes,
-    );
-    actor = this.#actor = new HubActor(this.state, this.#processes, (id) => this.connected(id));
-    try {
-      if (options.builtinStorage !== false) {
-        this.#storage = new Storage(home, options.storage);
-        // Stores of Actors closed while a delete couldn't run (a crash, a lock) go now.
-        this.#storage.keepOnly(
-          new Set(
-            this.state
-              .actors()
-              .filter((a) => a.state !== "closed")
-              .map((a) => a.actorId),
-          ),
-        );
-      }
-    } catch (error) {
-      // Nothing half-open is left: the home's lock and the check workers go with it.
-      this.#validators.close();
-      this.state.close();
-      throw error;
-    }
+    actor = this.#actor = new HubActor(this.state, (id) => this.connected(id));
   }
 
-  /**
-   * Open the Hub in its home. The host sandbox is probed at once; when it is available, package
-   * Actors recorded as `running` get their processes back.
-   */
+  /** Open the Hub in its home. */
   static open(home: string, options: HubOptions = {}): Hub {
-    const hub = new Hub(home, options);
-    hub.#processes.probe().catch(() => {});
-    return hub;
-  }
-
-  #stores(): Storage {
-    if (!this.#storage) throw new Refused("unavailable", "The built-in storage is off.");
-    return this.#storage;
+    return new Hub(home, options);
   }
 
   /** Whether an Actor has a channel now. */
@@ -305,25 +226,11 @@ export class Hub {
 
   /**
    * Take a channel. Its first stream must be `hello`, and nothing else may open before it is
-   * admitted. An external client's hello carries its credential, within the hello deadline. A
-   * channel the Hub made itself, a pipe to a package Actor's process it spawned, is given with
-   * that Actor's id: its hello names that Actor and needs no credential, and its spawner keeps
-   * the deadline. The handle settles when the channel ends, and closes it.
+   * admitted. A hello carries the Actor's credential, within the hello deadline. The handle settles
+   * when the channel ends, and closes it.
    */
-  accept(channel: Duplex, admitted?: { actorId: string }): ChannelHandle {
-    if (admitted) {
-      const actor = this.state.actor(admitted.actorId);
-      if (actor.package === "external" || actor.package === "builtin" || actor.state === "closed")
-        throw new Refused(
-          "state",
-          `${this.state.named(actor.actorId)} isn't a live package Actor.`,
-        );
-    }
+  accept(channel: Duplex): ChannelHandle {
     let conn: Connection | undefined;
-    let admit!: () => void;
-    const admittedNow = new Promise<void>((resolve) => {
-      admit = resolve;
-    });
     let helloSeen = false;
     let ended = false;
     const options: SessionOptions = {
@@ -334,10 +241,9 @@ export class Hub {
         else if (helloSeen) stream.reset();
         else {
           helloSeen = true;
-          void this.#hello(stream, session, admitted, (actorId, replace) => {
+          void this.#hello(stream, session, (actorId, replace) => {
             if (ended) throw new NotConnected("The channel");
-            // Closed while its hello was on the way (a pipe made before a close, or declares
-            // being checked): a closed Actor is never admitted.
+            // Closed while its hello was on the way: a closed Actor is never admitted.
             if (this.state.actor(actorId).state === "closed")
               throw new Refused(
                 "state",
@@ -351,7 +257,6 @@ export class Hub {
                 `${this.state.named(actorId)} already has a channel to this Hub; close that one first.`,
               );
             conn = this.#admit(actorId, session);
-            admit();
             options.maxStreams = MAX_STREAMS;
           });
         }
@@ -359,210 +264,23 @@ export class Hub {
     };
     const session = new Session(channel, options);
     this.#sessions.add(session);
-    // A pipe's hello is waited for by whoever spawned its process, under its own deadline.
-    const timer = admitted
-      ? undefined
-      : setTimeout(() => {
-          if (!conn) session.close(GO_AWAY.protocolError);
-        }, this.#helloTimeoutMs);
+    const timer = setTimeout(() => {
+      if (!conn) session.close(GO_AWAY.protocolError);
+    }, this.#helloTimeoutMs);
     const closed = session.closed.then(() => {
       ended = true;
       clearTimeout(timer);
       this.#sessions.delete(session);
       if (conn) this.#dropped(conn);
     });
-    return { admitted: admittedNow, closed, close: () => session.close() };
+    return { closed, close: () => session.close() };
   }
 
-  /**
-   * A call from one of a package Actor's view modules, run in this process for the gateway that
-   * shows it (step 4): through `<module>.<slot>` of the Actor, as the Actor, checked and audited
-   * like any call. A module that isn't a view of the Actor's package is refused.
-   */
-  async viewCall(
-    actorId: string,
-    module: string,
-    slot: string,
-    method: string,
-    input: unknown,
-  ): Promise<unknown> {
-    const name = this.#viewSlot(actorId, module, slot, { op: "call", method });
-    const { body } = await this.#invoke(actorId, name, method, async () => ({
-      value: input,
-      cancelled: new Promise<void>(() => {}),
-    }));
-    if ("error" in body) throw errorOf(body.error, name);
-    return (body as { result: unknown }).result;
-  }
-
-  /**
-   * Events of a view module's slot, as `viewCall` reaches its methods. `onEvent` may return a
-   * promise: the next event waits for it. Returns how to stop; `onEnd` hears when it ended
-   * otherwise, with the reason if it wasn't a clean end.
-   */
-  viewSubscribe(
-    actorId: string,
-    module: string,
-    slot: string,
-    event: string,
-    onEvent: (payload: unknown) => void | Promise<void>,
-    onEnd?: (error?: Error) => void,
-  ): () => void {
-    const name = this.#viewSlot(actorId, module, slot, { op: "subscribe", method: event });
-    let stopped = false;
-    let starting = true;
-    let refused: WireError | undefined;
-    const stop = this.#subscribeCore(actorId, name, event, {
-      send: async (payload) => {
-        await onEvent(payload);
-      },
-      end: (error) => {
-        if (starting) refused = error;
-        else if (!stopped)
-          try {
-            onEnd?.(error ? errorOf(error.error, name) : undefined);
-          } catch {
-            // The gateway's own trouble; other subscriptions and the unbind go on.
-          }
-      },
-    });
-    starting = false;
-    // Refused at the start: thrown, as a module that isn't a view is.
-    if (!stop) throw errorOf(refused?.error ?? { name: "NotConnected", message: name }, name);
-    return () => {
-      stopped = true;
-      stop();
-    };
-  }
-
-  /**
-   * A view module's slots, for the gateway's frame that shows it: `onSlot` hears each slot (named
-   * within the module, as `viewCall` takes it) that is bound now, at once, then every change:
-   * bound, unbound, and bound again when it is usable again: its provider's channel or the
-   * Actor's own comes back. Refused unless `module` is one of the view modules of the Actor's
-   * package; the Actor needn't be running. Returns how to stop, the only way a listener goes
-   * (closing the Actor unbinds each slot, which it hears, but doesn't stop it).
-   */
-  viewSlots(
-    actorId: string,
-    module: string,
-    onSlot: (slot: string, bound: boolean) => void,
-  ): () => void {
-    this.#viewModule(actorId, module, { running: false });
-    const listener = { module, onSlot };
-    const listeners = this.#viewListeners.get(actorId) ?? new Set();
-    this.#viewListeners.set(actorId, listeners);
-    listeners.add(listener);
-    const prefix = `${module}.`;
-    for (const binding of this.state.bindings(actorId))
-      if (
-        binding.consumer === actorId &&
-        binding.slot.startsWith(prefix) &&
-        listeners.has(listener)
-      )
-        this.#tellView(listener, binding.slot.slice(prefix.length), true);
-    return () => {
-      listeners.delete(listener);
-      if (!listeners.size && this.#viewListeners.get(actorId) === listeners)
-        this.#viewListeners.delete(actorId);
-    };
-  }
-
-  /** A slot change to an Actor's view listeners whose module holds that slot. */
-  #notifyViews(actorId: string, slot: string, bound: boolean) {
-    const listeners = this.#viewListeners.get(actorId);
-    // A copy, so a listener may stop itself or another; one stopped meanwhile hears no more.
-    for (const listener of [...(listeners ?? [])])
-      if (listeners?.has(listener) && slot.startsWith(`${listener.module}.`))
-        this.#tellView(listener, slot.slice(listener.module.length + 1), bound);
-  }
-
-  #tellView(
-    listener: { onSlot: (slot: string, bound: boolean) => void },
-    slot: string,
-    bound: boolean,
-  ) {
-    try {
-      listener.onSlot(slot, bound);
-    } catch {
-      // The gateway's own trouble; other listeners and the change go on.
-    }
-  }
-
-  /**
-   * `<module>.<slot>` of a running package Actor, when `module` is one of its view modules. A
-   * refusal here is audited as the Actor's, as a refusal while resolving a channel's call is.
-   */
-  #viewSlot(
-    actorId: string,
-    module: string,
-    slot: string,
-    call: { op: "call" | "subscribe"; method: string },
-  ): string {
-    const name = `${module}.${slot}`;
-    try {
-      this.#viewModule(actorId, module, { running: true });
-      return name;
-    } catch (error) {
-      if (error instanceof Refused && error.code !== "unknown")
-        this.#audit(actorId, name, undefined, {
-          ...call,
-          outcome: outcomeOf(errorBody(error).error),
-        });
-      throw error;
-    }
-  }
-
-  /** Refused unless `module` is one of the view modules of the Actor's package (and it runs). */
-  #viewModule(actorId: string, module: string, options: { running: boolean }) {
-    const actor = this.state.actor(actorId);
-    if (actor.package === "external" || actor.package === "builtin")
-      throw new Refused("forbidden", `${this.state.named(actorId)} has no package, so no views.`);
-    if (options.running && actor.state !== "running")
-      throw new Refused(
-        "state",
-        `${this.state.named(actorId)} is ${actor.state}${actor.state === "closed" ? "" : "; start it with hub.actors.start"}.`,
-      );
-    const { manifest } = this.state.package(actor.package);
-    if (!Object.hasOwn(manifest.modules, module) || manifest.modules[module]?.placement !== "view")
-      throw new Refused(
-        "forbidden",
-        `${module} isn't a view module of ${this.state.named(actorId)}'s package; hub.actors.get lists its views.`,
-      );
-  }
-
-  /**
-   * A line a view module logged, into its Actor's log, marked with the module. The Hub bounds it
-   * itself: a known level, the text cut to 4 KiB, at most 16 fields of 1 KiB each, and its own time.
-   * Refused `forbidden` for a module that isn't a view, `unknown` for no such Actor (or a closed
-   * one whose package is gone); the Actor may be stopped or closed. Not audited: it isn't a call.
-   * A line the disk won't take is dropped.
-   */
-  viewLog(
-    actorId: string,
-    module: string,
-    line: { level: string; message: string; data?: Record<string, unknown> },
-  ): void {
-    this.#viewModule(actorId, module, { running: false });
-    try {
-      appendLog(
-        this.state.home,
-        actorId,
-        boundedEntry(line.level, line.message, line.data, module),
-      );
-    } catch {
-      // The disk's trouble (full, unwritable) isn't the view's: its line is lost, nothing else.
-    }
-  }
-
-  /** Kill every host process, close every channel, admitted or not, then the state. */
+  /** Close every channel, admitted or not, then the state. */
   close(): void {
-    this.#processes.close();
     for (const session of [...this.#sessions]) session.close();
     this.#connections.clear();
-    this.#viewListeners.clear();
     this.#validators.close();
-    this.#storage?.close();
     this.state.close();
   }
 
@@ -577,12 +295,13 @@ export class Hub {
     this.#connections.set(actorId, conn);
     this.#actor.actorChanged(actorId);
     // Its consumers' subscriptions ended when it went; a notice tells each slot it is usable again.
-    // Exports offered at run time went with the old channel, and their bindings with them. Its own
-    // channel is new and learns its slots from hello; its views, served apart and callable only
-    // while it runs, hear that each of their slots is usable again, whoever provides it.
+    // Exports offered at run time went with the old channel, and their bindings with them. Its
+    // channel is new and learns its slots from hello.
     for (const binding of this.state.bindings(actorId))
-      if (binding.consumer === actorId) this.#notifyViews(actorId, binding.slot, true);
-      else if (this.state.declaration(actorId, "export", binding.export)?.dynamic === false)
+      if (
+        binding.consumer !== actorId &&
+        this.state.declaration(actorId, "export", binding.export)?.dynamic === false
+      )
         this.#notify(binding.consumer, binding.slot, true);
     return conn;
   }
@@ -601,7 +320,6 @@ export class Hub {
   async #hello(
     stream: YamuxStream,
     session: Session,
-    pipe: { actorId: string } | undefined,
     admit: (actorId: string, replace?: false) => void,
   ) {
     const reader = new FrameReader(stream.readable);
@@ -610,13 +328,7 @@ export class Hub {
       const header = parseHeader(await reader.next());
       if (header.op !== "hello")
         throw new Refused("invalid", "A channel's first stream must be hello.");
-      if (pipe) {
-        // The pipe is the proof: it was made for this one Actor's process.
-        if (header.actorId !== pipe.actorId)
-          throw new Refused("forbidden", `This channel is ${this.state.named(pipe.actorId)}'s.`);
-        if (header.declares !== undefined)
-          throw new Refused("invalid", "A package Actor declares through its manifest.");
-      } else if (
+      if (
         header.credential === undefined ||
         !this.state.authenticate(header.actorId, header.credential)
       )
@@ -645,7 +357,7 @@ export class Hub {
     }
   }
 
-  /** Tell an Actor's channel and its views' listeners that one of its slots was bound or unbound. */
+  /** Tell an Actor's channel that one of its slots was bound or unbound. */
   /** A slot made at run time, as its consumer is told of it: the export's interface, and whose it is. */
   #exposure(binding: BindingRecord) {
     return {
@@ -655,7 +367,6 @@ export class Hub {
   }
 
   #notify(actorId: string, slot: string, bound: boolean) {
-    this.#notifyViews(actorId, slot, bound);
     const conn = this.#connections.get(actorId);
     if (!conn) return;
     if (conn.notices >= this.state.slotCount(actorId) + MAX_OPEN_NOTICES)
@@ -796,9 +507,8 @@ export class Hub {
     const { binding, target } = resolved;
     if (target.iface.kind !== kind)
       throw new Refused("invalid", `${slot} is an ${target.iface.kind} slot, not ${kind}.`);
-    // The built-in Actors are served in this process; any other provider needs its channel.
-    const builtin =
-      binding.provider === HUB || binding.provider === STORAGE || binding.provider === NET;
+    // The hub is served in this process; any other provider needs its channel.
+    const builtin = binding.provider === HUB;
     const provider = builtin ? undefined : this.#connections.get(binding.provider);
     if (!builtin && !provider) throw new NotConnected(slot);
     return { binding, iface: target.iface, provider };
@@ -837,7 +547,7 @@ export class Hub {
   }
 
   /**
-   * A call through a caller's slot, without a channel: resolve it, check the input, reach the
+   * A call through a caller's slot: resolve it, check the input, reach the
    * provider, check the output, audit. `input` gives the value (and how the caller cancels) once
    * the slot is known to have the method.
    */
@@ -883,46 +593,7 @@ export class Hub {
     return encoded;
   }
 
-  /**
-   * `storage.admin@1`'s seed, for its caller (the installer): into a live Actor's empty store,
-   * audited with the consumer, the slot and how many entries.
-   */
-  #seed(
-    caller: string,
-    method: string,
-    input: { consumer: string; slot: string; entries: { key: string; value: unknown }[] },
-  ): object {
-    if (method !== "seed")
-      throw new Refused("unimplemented", `storage.admin@1 has no method ${method}.`);
-    if (this.state.actor(input.consumer).state === "closed")
-      throw new Refused("state", `${this.state.named(input.consumer)} is closed for good.`);
-    // Only a store the consumer can reach: its slot, bound to storage's kv.
-    const bound = this.state.binding(input.consumer, input.slot);
-    if (bound?.provider !== STORAGE || bound.export !== "kv")
-      throw new Refused(
-        "invalid",
-        `${this.state.named(input.consumer)}'s ${input.slot} isn't a slot bound to storage.kv; bind it there first.`,
-      );
-    this.#stores().seed(
-      input.consumer,
-      input.slot,
-      input.entries,
-      this.state.named(input.consumer),
-    );
-    // The seed is done; an audit that fails now (the Hub closing) doesn't undo or hide it.
-    try {
-      this.state.auditHub(
-        "storage.seed",
-        { consumer: input.consumer, slot: input.slot, entries: input.entries.length },
-        caller,
-      );
-    } catch {
-      // The state is closed.
-    }
-    return {};
-  }
-
-  /** A call to a built-in Actor: the hub, or storage with the consumer's own store. */
+  /** A call to the hub's own exports. */
   async #builtinCall(
     binding: BindingRecord,
     method: string,
@@ -930,26 +601,7 @@ export class Hub {
     value: unknown,
   ): Promise<Body> {
     try {
-      const out =
-        binding.provider !== STORAGE
-          ? await this.#actor.call(binding.export, method, caller, value)
-          : binding.export === "admin"
-            ? this.#seed(
-                caller,
-                method,
-                value as {
-                  consumer: string;
-                  slot: string;
-                  entries: { key: string; value: unknown }[];
-                },
-              )
-            : this.#stores().call(
-                binding.consumer,
-                binding.slot,
-                method,
-                value as Record<string, unknown>,
-              );
-      return result(asJson(out));
+      return result(asJson(await this.#actor.call(binding.export, method, caller, value)));
     } catch (error) {
       return errorBody(error);
     }
@@ -1068,7 +720,7 @@ export class Hub {
   }
 
   /**
-   * Events of a caller's slot, without a channel: each checked, then handed to `sink` in order, the
+   * Events of a caller's slot: each checked, then handed to `sink` in order, the
    * next waiting for the last to be taken, until the provider ends it, the binding goes, or the
    * returned `stop` runs. A refusal at the start ends the sink at once and returns nothing.
    */
@@ -1198,33 +850,6 @@ export class Hub {
   }
 
   /**
-   * An accepted http stream to `net`: its requests are made from this process, HTTP/1.1 over the
-   * stream's raw bytes, until either side ends it or its binding goes.
-   */
-  async #egress(
-    consumer: string,
-    binding: BindingRecord,
-    stream: YamuxStream,
-    reader: FrameReader,
-    writer: Writer,
-    untrack: () => void,
-  ) {
-    try {
-      await writer.write(encodeFrame(result({})));
-    } catch {
-      untrack();
-      return stream.reset();
-    }
-    writer.releaseLock();
-    await serveOver(
-      { readable: reader.rest(), writable: stream.writable },
-      (request) => this.#net.handle(request, { consumer, slot: binding.slot }),
-      QUIET,
-    );
-    untrack();
-  }
-
-  /**
    * `open` and `http`: validated, then the provider accepts or refuses with one body, which the Hub
    * passes on; after an accept, raw bytes both ways until either side ends them.
    */
@@ -1242,8 +867,6 @@ export class Hub {
     let outcome: CallOutcome = "ok";
     let unbound = false;
     let untrack = () => {};
-    /** `net`'s egress, served here: no provider stream to splice. */
-    let egress = false;
     try {
       const resolved = this.#resolve(
         conn.actorId,
@@ -1265,48 +888,39 @@ export class Hub {
           header.params,
           "invalid",
         );
-      if (!resolved.provider && binding.provider === NET && header.op === "http") {
-        // net's egress is served in this process: accepted here, then the stream is its.
-        egress = true;
-        answered = result({});
-      } else {
-        // The hub's and storage's exports are all rpc, so #resolve refused them already.
-        if (!resolved.provider) throw new NotConnected(header.slot);
-        const opened = this.#openTo(resolved.provider, binding);
-        out = opened;
-        try {
-          const head = opened.writable.getWriter();
-          await head.write(
-            encodeFrame({
-              op: "serve",
-              kind: header.op,
-              export: binding.export,
-              caller: conn.actorId,
-              slot: binding.slot,
-              ...(header.op === "open" ? { params: header.params } : {}),
-            }),
-          );
-          head.releaseLock();
-        } catch {
-          throw new OutcomeUnknown(`${binding.provider} went away before answering.`);
-        }
-        upstream = new FrameReader(opened.readable);
-        const body = await this.#answerFrom(opened, upstream, binding, new Promise(() => {}));
-        if (unbound) throw new NotConnected(header.slot);
-        if ("error" in body) {
-          outcome = "refused";
-          answered = body;
-        } else if ("result" in body) answered = result({});
-        else
-          throw new Refused("bad_output", "A provider answers an open with {result} or {error}.");
+      // The hub's exports are all rpc, so #resolve refused them already.
+      if (!resolved.provider) throw new NotConnected(header.slot);
+      const opened = this.#openTo(resolved.provider, binding);
+      out = opened;
+      try {
+        const head = opened.writable.getWriter();
+        await head.write(
+          encodeFrame({
+            op: "serve",
+            kind: header.op,
+            export: binding.export,
+            caller: conn.actorId,
+            slot: binding.slot,
+            ...(header.op === "open" ? { params: header.params } : {}),
+          }),
+        );
+        head.releaseLock();
+      } catch {
+        throw new OutcomeUnknown(`${binding.provider} went away before answering.`);
       }
+      upstream = new FrameReader(opened.readable);
+      const body = await this.#answerFrom(opened, upstream, binding, new Promise(() => {}));
+      if (unbound) throw new NotConnected(header.slot);
+      if ("error" in body) {
+        outcome = "refused";
+        answered = body;
+      } else if ("result" in body) answered = result({});
+      else throw new Refused("bad_output", "A provider answers an open with {result} or {error}.");
     } catch (error) {
       answered = errorBody(unbound ? new NotConnected(header.slot) : error);
       outcome = outcomeOf(answered.error);
     }
     this.#audit(conn.actorId, header.slot, binding, { op: header.op, outcome });
-    if (egress && binding && "result" in answered)
-      return this.#egress(conn.actorId, binding, stream, reader, writer, untrack);
     if (!("result" in answered) || !out || !upstream) {
       untrack();
       out?.reset();

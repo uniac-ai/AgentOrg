@@ -59,7 +59,7 @@ test("agentorg runs the app; while it runs, the person's commands go through it"
     const listed = JSON.parse(actors.stdout) as { actors: { name: string }[] };
     return listed.actors.map((a) => a.name).sort();
   };
-  const want = ["AgentOrg", "ChatGPT", "Local", "Management", "hub", "net", "person", "storage"];
+  const want = ["AgentOrg", "ChatGPT", "Local", "Management", "hub", "person"];
   let listed = await names();
   for (const end = Date.now() + 30_000; listed.join() !== want.join() && Date.now() < end; )
     listed = await names();
