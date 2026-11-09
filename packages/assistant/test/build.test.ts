@@ -22,6 +22,7 @@ test("the assistant builds to its logic and its chat view, each self-contained",
       entry: "dist/logic.js",
       slots: {
         model: "llm.session@1",
+        settings: "agent.settings@1",
         store: "kv@1",
         layout: "layout@1",
         packages: "hub.packages@1",

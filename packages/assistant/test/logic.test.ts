@@ -1,12 +1,20 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { hubActors, installer, layout } from "@agentorg/interfaces";
-import { defineInterface, describeInterface, method, OutcomeUnknown, Refused } from "@agentorg/sdk";
+import { hubActors, installer, layout, tools } from "@agentorg/interfaces";
+import {
+  defineInterface,
+  describeInterface,
+  method,
+  NotConnected,
+  OutcomeUnknown,
+  Refused,
+} from "@agentorg/sdk";
 import { createTestContext } from "@agentorg/sdk/testing";
 import { z } from "zod";
 import { INPUT_BUDGET } from "../src/history.ts";
 import logic, { BASE_INSTRUCTIONS, INSTRUCTIONS } from "../src/logic.ts";
-import { MAX_OUTPUT } from "../src/tools.ts";
+import { MAX_INSTRUCTIONS } from "../src/settings.ts";
+import { MAX_OUTPUT, MAX_TOOLS, TOOLS_BUDGET } from "../src/tools.ts";
 
 type Item = { type: string; [key: string]: unknown };
 type Request = {
@@ -319,6 +327,207 @@ test("what is exposed to the agent becomes its tools at the next turn, and goes 
   s.actor.unexpose("pocketSideQuests_quests");
   await s.turn("And now?");
   assert.deepEqual(s.requests.at(-1)?.tools, []);
+});
+
+/** A tools@1 entry with an object schema. */
+const entry = (name: string, description?: string) => ({
+  name,
+  ...(description ? { description } : {}),
+  inputSchema: { type: "object" },
+});
+const offeredNames = (request: Request | undefined) => request?.tools?.map((tool) => tool.name);
+const warnings = (s: Awaited<ReturnType<typeof setup>>) =>
+  s.actor.logs.filter((line) => line.level === "warn" && /offered/.test(line.message));
+
+test("a tools@1 slot's tools are offered by name, and what can't be is reported once", async () => {
+  const s = await setup();
+  const long = "t".repeat(70);
+  s.actor.expose("first", tools, {
+    list: () => ({
+      tools: [entry("a.b/c", "d".repeat(2000)), entry("a_b_c"), entry(long)],
+    }),
+    call: () => ({ output: "" }),
+  });
+  await s.turn("hello");
+  const offered = s.requests[0]?.tools as { name: string; description?: string }[];
+  // A character a function name can't have becomes `_`; the name that then clashes is left out.
+  assert.deepEqual(
+    offered.map((tool) => tool.name),
+    ["first__a_b_c"],
+  );
+  assert.equal(offered[0]?.description?.length, 1024);
+  assert.deepEqual(warnings(s)[0]?.fields, {
+    leftOut: [
+      { slot: "first", tool: "a_b_c", reason: "duplicate" },
+      { slot: "first", tool: long, reason: "name" },
+    ],
+  });
+  await s.turn("again");
+  assert.equal(warnings(s).length, 1);
+});
+
+test("a request offers at most what it can carry, the first given first", async () => {
+  const s = await setup();
+  const many = Array.from({ length: MAX_TOOLS + 2 }, (_, i) => entry(`t${i}`));
+  s.actor.expose("big", tools, { list: () => ({ tools: many }), call: () => ({ output: "" }) });
+  s.actor.expose("late", tools, {
+    list: () => ({ tools: [entry("one")] }),
+    call: () => ({ output: "" }),
+  });
+  await s.turn("hello");
+  assert.equal(s.requests[0]?.tools?.length, MAX_TOOLS);
+  assert.equal(offeredNames(s.requests[0])?.at(-1), `big__t${MAX_TOOLS - 1}`);
+  assert.deepEqual(warnings(s)[0]?.fields, {
+    leftOut: [
+      { slot: "big", tool: `t${MAX_TOOLS}`, reason: "limit" },
+      { slot: "big", tool: `t${MAX_TOOLS + 1}`, reason: "limit" },
+      { slot: "late", tool: "one", reason: "limit" },
+    ],
+  });
+});
+
+test("tools past the request's bytes are left out too", async () => {
+  const s = await setup();
+  const wide = (name: string) => ({
+    name,
+    inputSchema: { type: "object", padding: "x".repeat(TOOLS_BUDGET / 2) },
+  });
+  s.actor.expose("wide", tools, {
+    list: () => ({ tools: [wide("a"), wide("b"), wide("c")] }),
+    call: () => ({ output: "" }),
+  });
+  await s.turn("hello");
+  assert.deepEqual(offeredNames(s.requests[0]), ["wide__a"]);
+});
+
+test("a slot that can't list is left out with its code, and its tools return with it", async () => {
+  const s = await setup();
+  let down = true;
+  s.actor.expose("flaky", tools, {
+    list: () => {
+      if (down) throw new NotConnected("flaky");
+      return { tools: [entry("one")] };
+    },
+    call: () => ({ output: "" }),
+  });
+  await s.turn("down");
+  assert.deepEqual(offeredNames(s.requests[0]), []);
+  assert.deepEqual(warnings(s)[0]?.fields, {
+    leftOut: [{ slot: "flaky", reason: "not_connected" }],
+  });
+  down = false;
+  await s.turn("up");
+  assert.deepEqual(offeredNames(s.requests[1]), ["flaky__one"]);
+  assert.ok(s.actor.logs.some((line) => /offered to the model again/.test(line.message)));
+});
+
+test("a call that's refused, or whose connection went, reaches the model as its output", async () => {
+  const s = await setup();
+  s.actor.expose("flaky", tools, {
+    list: () => ({ tools: [entry("one")] }),
+    call: () => {
+      throw new NotConnected("flaky");
+    },
+  });
+  s.script.push(calls(callTool("flaky__one", {}, "c1")), say("It's down."));
+  await s.turn("try");
+  const output = s.requests[1]?.input.find((item) => item.type === "function_call_output");
+  assert.match(String(output?.output), /not_connected/);
+});
+
+/** The settings an agent is given, in memory. */
+function settingsOf(instructions: string, skills: { name: string; description: string }[]) {
+  const files = new Map([
+    ["review", "# Review\nRead the diff first."],
+    ["review/notes.md", "Notes."],
+  ]);
+  return {
+    get: () => ({ instructions, skills }),
+    skill: ({ name, path }: { name: string; path?: string }) => {
+      const text = files.get(path ? `${name}/${path}` : name);
+      if (text === undefined) throw new Refused("unknown", "No such skill or file.");
+      return { text };
+    },
+  };
+}
+const REVIEW = { name: "review", description: "Review a change." };
+
+test("bound to settings, instructions and skills come from it, read at each request", async () => {
+  const s = await setup();
+  let skills = [REVIEW];
+  s.actor.bind("settings", {
+    ...settingsOf("You keep the docs.", []),
+    get: () => ({ instructions: "You keep the docs.", skills }),
+  });
+  await s.turn("hello");
+  const told = String(s.requests[0]?.instructions);
+  assert.ok(told.startsWith("You keep the docs."));
+  assert.ok(told.includes("- review: Review a change."));
+  assert.ok(!told.includes(BASE_INSTRUCTIONS));
+  assert.deepEqual(offeredNames(s.requests[0]), ["settings__skill"]);
+
+  // Removed: gone at the next request, and with no skills there's nothing to read them with.
+  skills = [];
+  await s.turn("again");
+  assert.equal(s.requests[1]?.instructions, "You keep the docs.");
+  assert.deepEqual(offeredNames(s.requests[1]), []);
+});
+
+test("the model reads a skill's text and files through settings", async () => {
+  const s = await setup();
+  s.actor.bind("settings", settingsOf("Do the work.", [REVIEW]));
+  s.script.push(
+    calls(
+      callTool("settings__skill", { name: "review" }, "c1"),
+      callTool("settings__skill", { name: "review", path: "notes.md" }, "c2"),
+      callTool("settings__skill", { name: "review", path: "missing.md" }, "c3"),
+    ),
+    say("Read."),
+  );
+  await s.turn("review this");
+  const outputs = new Map(
+    (s.requests[1]?.input ?? [])
+      .filter((item) => item.type === "function_call_output")
+      .map((item) => [item.callId, String(item.output)]),
+  );
+  assert.equal(outputs.get("c1"), "# Review\nRead the diff first.");
+  assert.equal(outputs.get("c2"), "Notes.");
+  assert.match(outputs.get("c3") ?? "", /unknown/);
+});
+
+test("skills that won't fit the instructions are left out and reported", async () => {
+  const s = await setup();
+  const instructions = "x".repeat(MAX_INSTRUCTIONS - 600);
+  const skills = ["a", "b"].map((name) => ({ name, description: "y".repeat(50) }));
+  skills.push({ name: "c", description: "y".repeat(1000) });
+  s.actor.bind("settings", settingsOf(instructions, skills));
+  await s.turn("hello");
+  const told = String(s.requests[0]?.instructions);
+  assert.ok(told.length <= MAX_INSTRUCTIONS);
+  assert.ok(!told.includes("- c:"));
+  assert.deepEqual(warnings(s)[0]?.fields, {
+    leftOut: [{ slot: "settings", tool: "c", reason: "limit" }],
+  });
+});
+
+test("bound settings that can't answer end the turn rather than run it without its instructions", async () => {
+  const s = await setup();
+  s.actor.bind("settings", {
+    get: () => {
+      throw new NotConnected("settings");
+    },
+  });
+  const end = await s.turn("hello");
+  assert.equal(end.state, "error");
+  assert.equal(end.detail?.code, "not_connected");
+  assert.equal(s.requests.length, 0);
+});
+
+test("with settings unbound, the instructions are today's", async () => {
+  const s = await setup();
+  await s.turn("hello");
+  assert.ok(String(s.requests[0]?.instructions).startsWith(BASE_INSTRUCTIONS));
+  assert.ok(String(s.requests[0]?.instructions).endsWith("Your Actor id is assistant."));
 });
 
 test("the model is chosen per agent, kept with it, and the provider's default until then", async () => {

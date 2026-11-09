@@ -1,5 +1,6 @@
 // The assistant's logic: its chat, its agent loop, and its connections as its tools.
 import {
+  agentSettings,
   chat,
   hubActors,
   hubExports,
@@ -13,9 +14,18 @@ import {
 import { defineActor, describeInterface, Refused } from "@agentorg/sdk";
 import { createAgent } from "./agent.js";
 import { createHistory } from "./history.js";
-import { type ToolSlot, toolsOf } from "./tools.js";
+import { instructionsWith, skillTool } from "./settings.js";
+import {
+  type Candidate,
+  type LeftOut,
+  listedBy,
+  listsTools,
+  methodsOf,
+  offered,
+  type ToolSlot,
+} from "./tools.js";
 
-/** The slots that become tools; `model` and `store` are the assistant's own. */
+/** The slots that become tools; `model`, `store` and `settings` are the assistant's own. */
 const tools = {
   layout,
   packages: hubPackages,
@@ -190,7 +200,7 @@ ${KIT_EXAMPLE}`;
 export const INSTRUCTIONS = `${BASE_INSTRUCTIONS}\n\n${MAKING_INSTRUCTIONS}`;
 
 export default defineActor({
-  slots: { model: llmSession, store: kv, ...tools },
+  slots: { model: llmSession, store: kv, settings: agentSettings, ...tools },
   exports: { chat },
   start(ctx) {
     const history = createHistory(ctx.slots.store.call, ctx.log);
@@ -204,30 +214,53 @@ export default defineActor({
     const described = (Object.keys(tools) as (keyof typeof tools)[]).map(
       (name) => [name, describeInterface(tools[name])] as const,
     );
+    /** What was last reported as left out, so a change is logged once. */
+    let reported = "[]";
+    const report = (leftOut: LeftOut[]) => {
+      const now = JSON.stringify(leftOut);
+      if (now === reported) return;
+      reported = now;
+      if (leftOut.length > 0) ctx.log.warn("Not everything is offered to the model.", { leftOut });
+      else ctx.log.info("Everything is offered to the model again.");
+    };
+    /** What a request says and offers, read afresh: nothing here outlives the request. */
+    const request = async () => {
+      const settings = ctx.slots.settings.bound ? await ctx.slots.settings.call.get({}) : undefined;
+      const told = settings
+        ? instructionsWith(settings.instructions, settings.skills)
+        : {
+            instructions: `${ctx.slots.packages.bound && ctx.slots.installer.bound ? INSTRUCTIONS : BASE_INSTRUCTIONS}\n\nYour Actor id is ${ctx.self.actorId}.`,
+            leftOut: [],
+          };
+      const own: Candidate[] = [
+        ...(settings?.skills.length ? [skillTool(ctx.slots.settings)] : []),
+        ...described.flatMap(([name, schemas]) =>
+          methodsOf(name, schemas, ctx.slots[name] satisfies ToolSlot),
+        ),
+      ];
+      // In the order they came, each asked at once so one slow server delays only itself.
+      const exposed = await Promise.all(
+        ctx.exposed().map(async (slot) =>
+          listsTools(slot.described)
+            ? listedBy(slot.slot, slot)
+            : {
+                candidates: methodsOf(slot.slot, slot.described, { bound: true, call: slot.call }),
+                leftOut: [],
+              },
+        ),
+      );
+      const { tools: offers, leftOut } = offered([
+        ...own,
+        ...exposed.flatMap((one) => one.candidates),
+      ]);
+      report([...told.leftOut, ...exposed.flatMap((one) => one.leftOut), ...leftOut]);
+      return { instructions: told.instructions, tools: offers };
+    };
     const agent = createAgent({
-      instructions: () =>
-        `${ctx.slots.packages.bound && ctx.slots.installer.bound ? INSTRUCTIONS : BASE_INSTRUCTIONS}\n\nYour Actor id is ${ctx.self.actorId}.`,
+      request,
       model: ctx.slots.model,
       chosenModel: chosen,
       history,
-      // Its package's slots, then those exposed to it at run time: every bound slot is tools.
-      tools: () =>
-        toolsOf({
-          ...Object.fromEntries(
-            ctx
-              .exposed()
-              .map((exposed) => [
-                exposed.slot,
-                { described: exposed.described, slot: { bound: true, call: exposed.call } },
-              ]),
-          ),
-          ...Object.fromEntries(
-            described.map(([name, schemas]) => [
-              name,
-              { described: schemas, slot: ctx.slots[name] satisfies ToolSlot },
-            ]),
-          ),
-        }),
       chat: {
         message: (message) => ctx.exports.chat.emit("message", message),
         delta: (id, text) => ctx.exports.chat.emit("delta", { id, text }),

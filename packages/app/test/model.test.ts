@@ -225,10 +225,11 @@ test("New agent from a test: installAgent with what the first run made", async (
     `logic.model ${ran.chatgpt}.model.session`,
     "logic.store storage.kv",
   ]);
-  // Its grants left unbound: the switched-off ones.
+  // Left unbound: the switched-off grants, and settings, which only management binds.
   assert.deepEqual(unbound.filter((slot) => slot.startsWith("logic.")).sort(), [
     "logic.actors",
     "logic.packages",
+    "logic.settings",
   ]);
 });
 
