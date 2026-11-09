@@ -15,7 +15,6 @@ function account() {
         return {};
       },
       delete: async ({ key }) => ({ deleted: values.delete(key) }),
-      list: async () => ({ keys: [], next: null }),
     },
     changed() {},
     now: () => clock,
