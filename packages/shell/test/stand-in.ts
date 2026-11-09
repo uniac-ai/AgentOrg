@@ -229,6 +229,7 @@ export interface Call {
 export async function standIn(
   options: { older?: boolean; unbound?: boolean; creatables?: Creatable[] } = {},
 ) {
+  let sendDelayMs = 0;
   const { agents, connections } = seed();
   const skills = [
     { name: "cite-sources", description: "Links every claim to its source" },
@@ -388,7 +389,44 @@ export async function standIn(
       { id: "deep", name: "Deep" },
     ];
     if (method === "state") return agent.chat.status;
-    if (method === "history") return { messages: agent.chat.messages, more: false };
+    if (method === "history") {
+      const all = agent.chat.messages;
+      const end = input.before ? all.findIndex((m) => m.id === input.before) : all.length;
+      const limit = Number(input.limit ?? 100);
+      return { messages: all.slice(Math.max(0, end - limit), end), more: end > limit };
+    }
+    if (method === "send") {
+      const refused = refusals.get("chat.send");
+      if (refused) {
+        refusals.delete("chat.send");
+        throw refused;
+      }
+      const message = text(`u${agent.chat.messages.length}`, "user", String(input.text), 0);
+      agent.chat.messages.push(message);
+      agent.chat.status = { state: "thinking" };
+      setTimeout(() => {
+        emit(chatSlot(agent.agent), "message", message);
+        emit(chatSlot(agent.agent), "status", agent.chat.status);
+      }, sendDelayMs);
+      return { messageId: message.id };
+    }
+    if (method === "cancel") {
+      agent.chat.status = { state: "idle" };
+      emit(chatSlot(agent.agent), "status", agent.chat.status);
+      return {};
+    }
+    if (method === "retry") {
+      const refused = refusals.get("chat.retry");
+      if (refused) {
+        refusals.delete("chat.retry");
+        throw refused;
+      }
+      const at = agent.chat.messages.findLastIndex((m) => m.role === "user");
+      agent.chat.messages = agent.chat.messages.slice(0, at + 1);
+      agent.chat.status = { state: "thinking" };
+      emit(chatSlot(agent.agent), "status", agent.chat.status);
+      return { messageId: (agent.chat.messages[at] as Message).id };
+    }
     if (method === "models")
       return { models, ...(agent.chat.current ? { current: agent.chat.current } : {}) };
     if (method === "setModel") {
@@ -519,8 +557,18 @@ export async function standIn(
       agentOf(agent).chat.status = chatInterface.events.status.payload.parse(status);
       emit(chatSlot(agent), "status", status);
     },
+    /** How long the record takes to say what was sent. */
+    delaySends: (ms: number) => {
+      sendDelayMs = ms;
+    },
+    delta: (agent: string, id: string, text: string) =>
+      emit(chatSlot(agent), "delta", chatInterface.events.delta.payload.parse({ id, text })),
     addMessage(agent: string, message: Message) {
-      agentOf(agent).chat.messages.push(chatInterface.events.message.payload.parse(message));
+      const { messages } = agentOf(agent).chat;
+      const parsed = chatInterface.events.message.payload.parse(message);
+      const known = messages.findIndex((m) => m.id === parsed.id);
+      if (known === -1) messages.push(parsed);
+      else messages[known] = parsed;
       emit(chatSlot(agent), "message", message);
     },
     changed,

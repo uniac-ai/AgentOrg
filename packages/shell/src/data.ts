@@ -147,9 +147,12 @@ export function manifestOf(hash: string): Promise<Manifest> {
 export type Route =
   | { screen: "home" }
   | { screen: "settings" }
-  | { screen: "agent"; agent: string };
+  | { screen: "agent"; agent: string }
+  | { screen: "chat"; agent: string };
 function routeOf(hash: string): Route {
   if (hash === "#/settings") return { screen: "settings" };
+  const chat = /^#\/a\/([^/]+)\/chat$/.exec(hash)?.[1];
+  if (chat) return { screen: "chat", agent: decodeURIComponent(chat) };
   const agent = /^#\/a\/(.+)$/.exec(hash)?.[1];
   return agent ? { screen: "agent", agent: decodeURIComponent(agent) } : { screen: "home" };
 }
@@ -165,11 +168,13 @@ export function useRoute(): Route {
 }
 export function go(route: Route) {
   location.hash =
-    route.screen === "agent"
-      ? `#/a/${encodeURIComponent(route.agent)}`
-      : route.screen === "settings"
-        ? "#/settings"
-        : "#/";
+    route.screen === "chat"
+      ? `#/a/${encodeURIComponent(route.agent)}/chat`
+      : route.screen === "agent"
+        ? `#/a/${encodeURIComponent(route.agent)}`
+        : route.screen === "settings"
+          ? "#/settings"
+          : "#/";
 }
 
 /** The shell's tokens, which every view gets as its theme. */
