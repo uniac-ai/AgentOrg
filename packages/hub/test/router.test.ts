@@ -505,7 +505,7 @@ test("a reset after one side has finished still reaches the other side", async (
   assert.ok(ended instanceof Error, "the provider's writes end");
 });
 
-test("management goes only through the hub's exports, and requests reach their approvers live", async (t) => {
+test("management goes only through the hub's exports, and the live audit feed carries it", async (t) => {
   const { actor, bind, person, hub } = await setup(t);
   const p = await actor("provider", { exports: { notes } }, notesProvider().serve);
   const grants = describeInterface(hubGrants);
@@ -517,62 +517,17 @@ test("management goes only through the hub's exports, and requests reach their a
     "NotConnected",
     "no hub slot, no management",
   );
-
-  const requested = person.subscribe("grants", "requested");
-  const decided = person.subscribe("grants", "decided");
-  // The consumer holds hub.grants too, but its own request isn't its to decide.
-  const own = c.client.subscribe("grants", "requested");
   const audited = person.subscribe("audit", "appended");
-  const subscribed = () =>
-    hub.state
-      .audit(0, 1000)
-      .entries.filter((e) => e.actor === PERSON && e.details.op === "subscribe");
-  while (subscribed().length < 3) await later(5);
-  while (
-    !hub.state.audit(0, 1000).entries.some((e) => e.actor === c.id && e.details.op === "subscribe")
-  )
+  while (!hub.state.audit(0, 1000).entries.some((e) => e.details.op === "subscribe"))
     await later(5);
+  // The consumer holds hub.grants, but only its own slot's side of this binding.
   const wiring = { consumer: c.id, slot: "notes", provider: p.id, export: "notes" };
-  const asked = (await c.client.call("grants", "request", { ...wiring, reason: "please" })) as {
-    result: { requestId: string };
-  };
-  const seen = (await requested.next()) as { event: { reason: string; needs: string } };
-  assert.deepEqual([seen.event.reason, seen.event.needs], ["please", "export"]);
-  // The live audit feed carries the request (after whatever was audited before it: calls, the
-  // host's status from the Hub's opening probe).
+  assert.equal((await c.client.call("grants", "bind", wiring)).error?.code, "forbidden");
+  assert.deepEqual(await bind(c.id, "notes", p.id, "notes"), { result: { bound: true } });
   let entry: { event: { kind: string } } | undefined;
   do entry = (await audited.next()) as { event: { kind: string } } | undefined;
-  while (entry && entry.event.kind !== "request");
-  assert.equal(entry?.event.kind, "request");
-  assert.deepEqual(await bind(c.id, "notes", p.id, "notes"), { result: { bound: true } });
-  assert.deepEqual(await decided.next(), {
-    event: {
-      request: { ...(seen.event as object), requestId: asked.result.requestId },
-      status: "approved",
-    },
-  });
-  // The provider offering itself is a request to the consumer, which hears of it.
-  const p2 = await actor("offerer", { slots: { grants }, exports: { notes } }, undefined, [
-    { slot: "grants", provider: HUB, export: "grants" },
-  ]);
-  await person.call("grants", "unbind", { consumer: c.id, slot: "notes" });
-  const offered = await p2.client.call("grants", "bind", {
-    consumer: c.id,
-    slot: "notes",
-    provider: p2.id,
-    export: "notes",
-  });
-  assert.equal((offered.result as { bound: boolean }).bound, false);
-  const heard = (await own.next()) as { event: { requestedBy: string; needs: string } };
-  assert.deepEqual([heard.event.requestedBy, heard.event.needs], [p2.id, "slot"], "only the offer");
-  const listed = (await person.call("grants", "requests", {})) as {
-    result: { requests: unknown[] };
-  };
-  assert.deepEqual(
-    listed.result.requests.map((r) => (r as { needs: string }).needs),
-    ["slot"],
-    "the first was approved by binding; the offer waits for the consumer",
-  );
+  while (entry && entry.event.kind !== "bind");
+  assert.equal(entry?.event.kind, "bind");
   const created = await person.call("actors", "create", { name: "" });
   assert.equal(created.error?.code, "invalid", "the hub's inputs are validated like any other");
   const refused = await person.call("actors", "close", { actorId: PERSON });
@@ -666,37 +621,6 @@ test("an Actor's record says whether it has a channel now", async (t) => {
   assert.equal(await listed(actorId), false);
   await person.call("actors", "close", { actorId });
   assert.equal(await changed(), actorId, "closed");
-});
-
-test("an Actor offers and withdraws exports on its own channel", async (t) => {
-  const { actor, bind, person } = await setup(t);
-  const provider = notesProvider();
-  const p = await actor("provider", {}, provider.serve);
-  const c = await actor("consumer", { slots: { notes } });
-  const changed = person.subscribe("exports", "changed");
-  assert.deepEqual(
-    await exchange(p.client.session, { op: "offer", name: "extra", interface: notes }),
-    {
-      result: {},
-    },
-  );
-  assert.deepEqual(await changed.next(), { event: { actor: p.id } });
-  const listed = (await person.call("exports", "list", { actor: p.id })) as {
-    result: { exports: { export: string; dynamic: boolean }[] };
-  };
-  assert.deepEqual(
-    listed.result.exports.map((e) => [e.export, e.dynamic]),
-    [["extra", true]],
-  );
-  await bind(c.id, "notes", p.id, "extra");
-  assert.deepEqual(await c.client.call("notes", "write", { text: "hi" }), { result: { n: 1 } });
-  const forged = { ...notes, hash: echo.hash };
-  const refused = await exchange(p.client.session, { op: "offer", name: "bad", interface: forged });
-  assert.equal(refused.error?.code, "invalid");
-  assert.deepEqual(await exchange(p.client.session, { op: "withdraw", name: "extra" }), {
-    result: {},
-  });
-  assert.equal((await c.client.call("notes", "write", { text: "hi" })).error?.name, "NotConnected");
 });
 
 test("a newer channel for an Actor replaces the older one", async (t) => {
@@ -1360,22 +1284,6 @@ test("when a provider comes back, its consumers hear their slot is usable again"
     "an Actor's own wiring isn't re-noticed",
   );
   assert.deepEqual(await c.client.call("notes", "write", { text: "again" }), { result: { n: 1 } });
-
-  // A run-time export went with the old channel, its bindings too: no notice when the Actor returns.
-  await exchange(back.session, { op: "offer", name: "extra", interface: notes });
-  const d = await actor("other-consumer", { slots: { notes } });
-  await bind(d.id, "notes", made.result.actorId, "extra");
-  for (let waited = 0; d.client.notices.length < 1 && waited < 3000; waited += 5) await later(5);
-  back.close();
-  for (let waited = 0; d.client.notices.length < 2 && waited < 3000; waited += 5) await later(5);
-  assert.deepEqual(d.client.notices, [
-    ["notes", true],
-    ["notes", false],
-  ]);
-  const third = await connect(url, { ...made.result }, provider.serve);
-  t.after(() => third.close());
-  await later(100);
-  assert.deepEqual(d.client.notices.length, 2);
 });
 
 test("a hello over a WebSocket needs its credential, and a serve names the caller's slot", async (t) => {

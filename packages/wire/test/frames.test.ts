@@ -197,15 +197,6 @@ test("headers and bodies are checked for their shape", () => {
     false,
     "only false changes anything",
   );
-  assert.deepEqual(parseHeader({ op: "offer", name: "extra", interface: { id: "x@1" } }), {
-    op: "offer",
-    name: "extra",
-    interface: { id: "x@1" },
-  });
-  assert.deepEqual(parseHeader({ op: "withdraw", name: "extra" }), {
-    op: "withdraw",
-    name: "extra",
-  });
   assert.deepEqual(parseHeader({ op: "slot", name: "notes", bound: false }), {
     op: "slot",
     name: "notes",
@@ -223,8 +214,6 @@ test("headers and bodies are checked for their shape", () => {
     null,
     [],
     { op: "fly" },
-    { op: "offer", name: "x" },
-    { op: "withdraw" },
     { op: "slot", name: "notes" },
     { op: "slot", name: "notes", bound: "yes" },
     // Only a bound slot carries its exposure, and all of it.

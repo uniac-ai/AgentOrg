@@ -19,7 +19,7 @@ const instanceOf = (
     ? isBranded(value, name)
     : Function.prototype[Symbol.hasInstance].call(asked, value);
 
-/** A call on a slot that no export is bound to, or on an export that was withdrawn. */
+/** A call on a slot that no export is bound to. */
 export class NotConnected extends Error {
   static override [Symbol.hasInstance](value: unknown): boolean {
     // biome-ignore lint/complexity/noThisInStatic: `this` is the class instanceof was asked about, a subclass included.

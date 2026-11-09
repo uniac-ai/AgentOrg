@@ -39,8 +39,8 @@ export interface LogLine {
 /**
  * A module run without a Hub, for tests: bind fakes to its slots, drive its exports, and read what
  * it emitted and logged. It runs on the same runtime as a real module, so every call is validated
- * as the Hub validates it: bad input is `Refused` with code `invalid`, and an unbound slot or a
- * withdrawn export throws `NotConnected`.
+ * as the Hub validates it: bad input is `Refused` with code `invalid`, and an unbound slot throws
+ * `NotConnected`.
  */
 export interface TestContext<S extends InterfaceMap, X extends InterfaceMap>
   extends Omit<ModuleRuntime<S, X>, "bind" | "call" | "expose"> {

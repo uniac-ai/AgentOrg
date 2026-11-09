@@ -76,11 +76,7 @@ export type Handlers<M extends Methods> = {
 export interface EmitOptions {
   readonly to?: string;
 }
-interface Withdrawable {
-  /** Stop offering this export; bindings to it end. */
-  withdraw(): void;
-}
-export interface RpcExport<M extends Methods, E extends Events> extends Withdrawable {
+export interface RpcExport<M extends Methods, E extends Events> {
   implement(handlers: Handlers<M>): void;
   emit<K extends keyof E & string>(
     event: K,
@@ -88,10 +84,10 @@ export interface RpcExport<M extends Methods, E extends Events> extends Withdraw
     options?: EmitOptions,
   ): void;
 }
-export interface StreamExport<O extends z.ZodType> extends Withdrawable {
+export interface StreamExport<O extends z.ZodType> {
   accept(handler: (params: z.output<O>, stream: Duplex) => void | Promise<void>): void;
 }
-export interface HttpExport extends Withdrawable {
+export interface HttpExport {
   serve(handler: (request: Request) => Response | Promise<Response>): void;
 }
 
@@ -108,7 +104,7 @@ export type FrameRoot = typeof globalThis extends { Element: { prototype: infer 
  * and the frame runtime maps the wire methods `mount`, `resize` and `unmount` onto it. No other
  * interface should take this shape; anything else crosses the wire as schemas.
  */
-export interface ViewExport<MountOptions, Size> extends Withdrawable {
+export interface ViewExport<MountOptions, Size> {
   implement(view: {
     /** Render into `el`; the function returned, if any, runs at unmount. */
     // biome-ignore lint/suspicious/noConfusingVoidType: a mount that cleans up nothing returns nothing.
@@ -141,8 +137,7 @@ export interface Log {
 
 /** Slots or exports: names to interfaces. */
 export type InterfaceMap = Record<string, Interface>;
-/** Exports may not be named `add`, which is `exports.add`. */
-export type ExportMap = InterfaceMap & { add?: never };
+export type ExportMap = InterfaceMap;
 
 /** Whether an interface is `ui.view@1`, the one in-frame interface, with its own export handle. */
 export function isFrameInterface(iface: Interface): boolean {
@@ -172,10 +167,7 @@ export interface ExposedSlot {
 /** Everything a module gets. There are no files, network, environment or Hub access besides. */
 export interface Context<S extends InterfaceMap, X extends InterfaceMap> {
   readonly slots: { readonly [K in keyof S]: Slot<S[K]> };
-  readonly exports: { readonly [K in keyof X]: Export<X[K]> } & {
-    /** Offer another export at run time; consumers still bind it explicitly. */
-    add<I extends Interface>(name: string, iface: I): Export<I>;
-  };
+  readonly exports: { readonly [K in keyof X]: Export<X[K]> };
   readonly self: { readonly actorId: string; readonly module: string };
   readonly log: Log;
   /**
@@ -225,8 +217,6 @@ function define<S extends InterfaceMap, X extends InterfaceMap>(
     for (const name of names)
       if (!NAME.test(name))
         throw new TypeError(`${JSON.stringify(name)} isn't a valid ${what} name.`);
-  if ("add" in exports)
-    throw new TypeError(`"add" is reserved for exports.add; name the export differently.`);
   return { agentorg: MODULE, placement, slots, exports, start: spec.start };
 }
 
