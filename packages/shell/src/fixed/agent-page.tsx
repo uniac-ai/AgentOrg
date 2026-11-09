@@ -6,21 +6,10 @@ import { useBuilding } from "./building.tsx";
 import { useChats } from "./chats.tsx";
 import { More, Power, Tip } from "./controls.tsx";
 import { ago, useCreatables } from "./data.ts";
+import { Frames } from "./frames.tsx";
 import { Nothing, Scroll, StateDot } from "./parts.tsx";
 import { chosenNotes, partsOf } from "./stack.ts";
 import { useAgents } from "./watch.tsx";
-
-/** Held for what comes later: the frame is real, and nothing in it is invented. */
-function Held({ title, className }: { title: string; className?: string }) {
-  return (
-    <section
-      aria-label={title}
-      className={`min-h-40 rounded-xl border border-dashed p-3 ${className ?? ""}`}
-    >
-      <h2 className="text-xs font-normal text-[var(--faint)]">{title}</h2>
-    </section>
-  );
-}
 
 function Fact({ label, value, onClick }: { label: string; value: string; onClick(): void }) {
   return (
@@ -130,8 +119,12 @@ export function AgentPage({ agent: id }: { agent: string }) {
 
         <div className="-mx-2 grid grid-cols-4 gap-1 tight:grid-cols-2">
           <Fact
-            label="Made from"
-            value={creatable?.title ?? entry.creatable}
+            label="Built from"
+            value={
+              detail?.units.length
+                ? [...new Set(detail.units.map((u) => u.title))].join(", ")
+                : (creatable?.title ?? entry.creatable)
+            }
             onClick={toSettings}
           />
           <Fact label="Model" value={model} onClick={toSettings} />
@@ -139,11 +132,7 @@ export function AgentPage({ agent: id }: { agent: string }) {
           <Fact label="Skills" value={String(detail?.skills.length ?? "")} onClick={toSettings} />
         </div>
 
-        <div className="grid grid-cols-[minmax(0,2fr)_minmax(0,1fr)] gap-3 tight:grid-cols-1">
-          <Held title="Computer" className="row-span-2 min-h-96 tight:row-span-1 tight:min-h-48" />
-          <Held title="Browser" />
-          <Held title="Updates" />
-        </div>
+        <Frames agent={id} {...(slot ? { slot } : {})} running={running} />
       </div>
     </Scroll>
   );

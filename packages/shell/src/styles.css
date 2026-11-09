@@ -8,6 +8,7 @@
 @import "tailwindcss/utilities" layer(utilities);
 @import "tw-animate-css";
 @import "streamdown/styles.css";
+@import "react-diff-view/style/index.css" layer(components);
 @import "../static/app.css" layer(legacy);
 
 @source "./**/*.tsx";
@@ -264,5 +265,52 @@
       color: var(--muted);
       background: none;
     }
+  }
+}
+
+/* An edit's diff: react-diff-view's table, on our tokens. */
+@layer components {
+  .diff-view .diff {
+    font:
+      12px / 1.5 ui-monospace,
+      SFMono-Regular,
+      Menlo,
+      monospace;
+    color: var(--fg);
+    table-layout: auto;
+    width: 100%;
+  }
+  .diff-view .diff-line {
+    --diff-background-color: transparent;
+  }
+  .diff-view .diff-code {
+    padding: 0 10px;
+    white-space: pre;
+    word-break: normal;
+  }
+  .diff-view .diff-code-insert {
+    background: color-mix(in srgb, var(--ok) 20%, transparent);
+  }
+  .diff-view .diff-code-delete {
+    background: color-mix(in srgb, var(--bad) 20%, transparent);
+  }
+  .diff-view .diff-code-insert::before {
+    content: "+";
+    opacity: 0.6;
+    margin-right: 6px;
+  }
+  .diff-view .diff-code-delete::before {
+    content: "−";
+    opacity: 0.6;
+    margin-right: 6px;
+  }
+  .diff-view .diff-code-normal::before {
+    content: " ";
+    margin-right: 6px;
+    white-space: pre;
+  }
+  .diff-view .diff-hunk-header,
+  .diff-view .diff-decoration {
+    display: none;
   }
 }

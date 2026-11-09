@@ -44,6 +44,8 @@ import {
   MessageScrollerProvider,
   MessageScrollerViewport,
 } from "../ui/message-scroller.tsx";
+import { CallRow } from "./call-row.tsx";
+import { type Row, rowsOf } from "./calls.ts";
 import { DOCKED, useChats } from "./chats.tsx";
 import { ago, type ChatMessage, type ChatStatus, useAct } from "./data.ts";
 import { Nothing, SidePanel, StateDot } from "./parts.tsx";
@@ -425,6 +427,7 @@ function Chat({
   const unrecorded = sending.filter((m) => !m.messageId || !recorded.has(m.messageId));
   // Until the record has what was sent: "Thinking" never drops out between the two.
   const running = busy || unrecorded.length > 0;
+  const rows = useMemo(() => new Map(rowsOf(messages).map((row) => [row.id, row])), [messages]);
   const turns = useMemo(
     () => turnsOf(messages, unrecorded, streaming, keys.current),
     [messages, unrecorded, streaming],
@@ -522,6 +525,7 @@ function Chat({
                   ) : (
                     <Reply
                       parts={turn.parts}
+                      rows={rows}
                       reduced={reduced}
                       isLast={turn === lastTurn}
                       running={running}
@@ -601,14 +605,28 @@ function Chat({
   );
 }
 
+/** A call's row; a poll has none of its own, it's part of the command's. */
+function Tool({ message, row }: { message: ChatMessage; row?: Row | undefined }) {
+  if (!message.tool)
+    return (
+      <p className="flex h-8 items-center gap-2 px-1 text-[13px] text-muted-foreground">
+        <WrenchIcon className="size-3.5" />
+        {message.text}
+      </p>
+    );
+  return row && row.kind !== "say" ? <CallRow row={row} /> : null;
+}
+
 function Reply({
   parts,
+  rows,
   reduced,
   isLast,
   running,
   onRetry,
 }: {
   parts: Part[];
+  rows: ReadonlyMap<string, Row>;
   reduced: boolean;
   isLast: boolean;
   running: boolean;
@@ -622,7 +640,7 @@ function Reply({
       <MessageContent className="gap-3">
         {parts.map((part) =>
           part.kind === "tool" ? (
-            <ToolCall key={part.message.id} message={part.message} />
+            <Tool key={part.message.id} message={part.message} row={rows.get(part.message.id)} />
           ) : (
             <Bubble key={part.id} variant="ghost" className="w-full">
               <BubbleContent className="prose-chat w-full">
@@ -669,44 +687,5 @@ function Reply({
         </MessageFooter>
       </MessageContent>
     </Message>
-  );
-}
-
-/** A tool call as one quiet row, opened for what went in and came back. */
-function ToolCall({ message }: { message: ChatMessage }) {
-  const tool = message.tool;
-  if (!tool)
-    return (
-      <p className="flex h-8 items-center gap-2 px-1 text-[13px] text-muted-foreground">
-        <WrenchIcon className="size-3.5" />
-        {message.text}
-      </p>
-    );
-  const body = [tool.input, tool.output && `→ ${tool.output}`].filter(Boolean).join("\n");
-  return (
-    <Collapsible className="group/tool rounded-lg text-[13px]">
-      <CollapsibleTrigger className="flex h-8 w-full items-center gap-2 rounded-lg px-1 text-left text-muted-foreground hover:bg-[var(--hover)] hover:text-foreground">
-        {tool.state === "running" ? (
-          <LoaderCircleIcon className="size-3.5 animate-spin motion-reduce:animate-none" />
-        ) : (
-          <WrenchIcon className="size-3.5" />
-        )}
-        <span className="min-w-0 flex-1 truncate font-mono text-xs">{tool.name}</span>
-        {tool.state === "done" && (
-          <CheckIcon className="size-3.5 text-[var(--ok)]" aria-label="done" />
-        )}
-        {tool.state === "refused" && (
-          <XIcon className="size-3.5 text-[var(--bad)]" aria-label="refused" />
-        )}
-        <ChevronRightIcon className="size-3.5 transition-transform group-data-[state=open]/tool:rotate-90 motion-reduce:transition-none" />
-      </CollapsibleTrigger>
-      {body && (
-        <CollapsibleContent>
-          <pre className="mt-1 mb-1 ml-6 rounded-lg bg-[var(--raised)] px-3 py-2 font-mono text-xs whitespace-pre-wrap text-muted-foreground">
-            {body}
-          </pre>
-        </CollapsibleContent>
-      )}
-    </Collapsible>
   );
 }
