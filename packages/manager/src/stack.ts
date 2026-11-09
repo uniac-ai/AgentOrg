@@ -19,6 +19,15 @@ import {
 } from "@agentorg/interfaces";
 import { type Log, Refused, type Slot } from "@agentorg/sdk";
 import { z } from "zod";
+import {
+  AGENTS_SLOT,
+  AGENTS_UNIT,
+  agentsUnit,
+  type Reach,
+  reachOf,
+  reachProblems,
+  skillFile,
+} from "./control.js";
 import { formProblems, settle, type Worked, workedOut } from "./form.js";
 import type { SkillFiles, Skills } from "./skills.js";
 
@@ -47,6 +56,17 @@ export const AgentRecord = z.object({
   purpose: z.string().optional(),
   template: z.string().optional(),
   units: z.array(UnitRecord).default([]),
+  /** The agent that made it, which may be gone by now. */
+  parent: z.object({ agent: z.string(), name: z.string() }).optional(),
+  /** The parent's computer, when it shares one: its own reach, for agents it makes. */
+  computer: z
+    .object({
+      access: z.string(),
+      browser: z.boolean(),
+      connections: z.array(z.object({ slot: z.string(), connection: z.string() })),
+      skills: z.array(z.string()),
+    })
+    .optional(),
 });
 export const Records = z.object({
   agents: z.record(z.string(), AgentRecord),
@@ -70,7 +90,7 @@ type AgentCalls = Slot<typeof agents>["call"];
 type CreateInput = Parameters<AgentCalls["create"]>[0];
 type CheckInput = Parameters<AgentCalls["check"]>[0];
 type AddInput = Parameters<AgentCalls["addUnit"]>[0];
-type StackInput = Extract<CreateInput, { stack: unknown }>["stack"];
+export type StackInput = Extract<CreateInput, { stack: unknown }>["stack"];
 type FilledUnit = StackInput["units"][number];
 type StackBase = StackInput["base"];
 type Provided<T> = { actor: string; call: T };
@@ -87,12 +107,20 @@ const MAX_PROBLEMS = 256;
 const MAX_NAME = 128;
 const TOOLS = "tools@1";
 
-interface Offer {
+export interface Offer {
   unit: TheUnit;
   provider: string;
   providerName: string;
   /** None for management's own. */
   call?: Units;
+}
+/** What makes an agent an agent's: who made it, and what of its parent's it shares. */
+interface Child {
+  parent: { agent: string; name: string };
+  reach: Reach;
+  shares: { slot: string; connection: string }[];
+  skills: string[];
+  computer?: Reach;
 }
 /** A unit that passed its check, ready to apply. `needs` refers to earlier units by `Giver.ref`. */
 interface Placed {
@@ -154,7 +182,7 @@ export interface StackParts {
   agentProviders(): Provided<Agents>[];
   unitProviders(): Provided<Units>[];
   recordOf(agent: string): TheAgent;
-  openActors(): Promise<Map<string, unknown>>;
+  openActors(): Promise<Map<string, { name: string }>>;
   nameOf(actor: string): Promise<string>;
   changed(agent: string): void;
   fromEach<T, R>(list: T[], read: (one: T) => Promise<R>): Promise<R[]>;
@@ -189,7 +217,22 @@ export function createStacks(parts: StackParts) {
     return running;
   };
 
-  const ownUnits = (): TheUnit[] => [
+  const isAgentsUnit = (offer: Offer) => offer.provider === self && offer.unit.id === AGENTS_UNIT;
+  /** The connections the person made, which an agents unit can list as places. */
+  const places = async () => {
+    const actors = await parts.openActors();
+    return Object.entries(records.connections).flatMap(([connection, origin]) => {
+      const actor = actors.get(connection);
+      return actor && !origin.madeFor ? [{ value: connection, title: actor.name }] : [];
+    });
+  };
+  const ownUnits = async (): Promise<TheUnit[]> => [
+    agentsUnit(
+      templates()
+        .slice(0, MAX_OPTIONS)
+        .map(({ id, title, description }) => ({ value: id, title, description })),
+      (await places()).slice(0, MAX_OPTIONS - 1),
+    ),
     {
       id: SKILL_UNIT,
       title: "Skill",
@@ -231,8 +274,9 @@ export function createStacks(parts: StackParts) {
 
   /** Every unit on offer now; a provider that doesn't answer offers none. */
   const catalog = async (): Promise<Offer[]> => {
-    const [providerName, others] = await Promise.all([
+    const [providerName, mine, others] = await Promise.all([
       parts.nameOf(self),
+      ownUnits(),
       parts.fromEach(parts.unitProviders(), async ({ actor, call }) => {
         const name = await parts.nameOf(actor);
         return (await call.units({})).units.map(
@@ -240,10 +284,7 @@ export function createStacks(parts: StackParts) {
         );
       }),
     ]);
-    return [
-      ...ownUnits().map((unit) => ({ unit, provider: self, providerName })),
-      ...others.flat(),
-    ];
+    return [...mine.map((unit) => ({ unit, provider: self, providerName })), ...others.flat()];
   };
 
   const baseOf = async (base: StackBase) => {
@@ -355,7 +396,7 @@ export function createStacks(parts: StackParts) {
     };
   };
 
-  const plan = async (units: FilledUnit[]) => {
+  const plan = async (units: FilledUnit[], reach?: Reach) => {
     const offers = await catalog();
     const taken: Taken = { slots: new Set(), skills: new Set(), givers: [] };
     const placed: Placed[] = [];
@@ -365,6 +406,14 @@ export function createStacks(parts: StackParts) {
       problems.push(...one.problems.map((problem) => ({ ...problem, unit: position })));
       if (one.placed) placed.push(one.placed);
     }
+    const computer = placed.find((one) => one.offer.unit.id === "computer");
+    const own = reach ?? {
+      access: String(computer?.values.access ?? "none"),
+      browser: computer?.values.browser === true,
+    };
+    for (const [position, one] of placed.entries())
+      if (isAgentsUnit(one.offer))
+        problems.push(...reachProblems(one.values, own).map((p) => ({ ...p, unit: position })));
     return { placed, problems };
   };
 
@@ -389,7 +438,10 @@ export function createStacks(parts: StackParts) {
         results: unit.results.map((result) => result.kind),
       })),
     };
-    return place(input.unit, input.needs ?? {}, taken, await catalog(), undefined);
+    const placing = await place(input.unit, input.needs ?? {}, taken, await catalog(), undefined);
+    if (placing.placed && isAgentsUnit(placing.placed.offer))
+      placing.problems.push(...reachProblems(placing.placed.values, reachOf(record)));
+    return placing;
   };
 
   const unwind = async (undo: (() => unknown)[]) => {
@@ -479,14 +531,32 @@ export function createStacks(parts: StackParts) {
       const slot = values.slot as string;
       await parts.exposeConnection(agent, values.connection as string, slot);
       undo.push(() => hub.grants.unexpose({ to: agent, slot }));
+    } else if (isAgentsUnit(offer)) {
+      await parts.exposeConnection(agent, self, AGENTS_SLOT);
+      undo.push(() => hub.grants.unexpose({ to: agent, slot: AGENTS_SLOT }));
+      const instance = `uni_${crypto.randomUUID().replaceAll("-", "")}`;
+      made = {
+        instance,
+        provider: self,
+        providerInstance: instance,
+        unit: offer.unit.id,
+        title: offer.unit.title,
+        values,
+        needs: {},
+        results: [],
+        connections: [{ slot: AGENTS_SLOT, connection: self }],
+        skills: worked.skills.map((skill) => skill.name),
+      };
     }
 
     for (const { name, files } of worked.skills) {
       if (!library.has(name)) {
-        if (!files || !offer.call) throw new Refused("unknown", `There is no skill ${name}.`);
+        if (!files) throw new Refused("unknown", `There is no skill ${name}.`);
         const copied: SkillFiles = {};
         for (const path of files)
-          copied[path] = (await offer.call.skill({ unit: offer.unit.id, name, path })).text;
+          copied[path] = offer.call
+            ? (await offer.call.skill({ unit: offer.unit.id, name, path })).text
+            : (skillFile(path) as string);
         library.add(copied, name);
         // Another agent may have been given it meanwhile, and then it stays.
         undo.push(() => {
@@ -569,7 +639,16 @@ export function createStacks(parts: StackParts) {
     });
 
   /** Remove a unit and what it made; a provider that has lost it leaves only the connections. */
-  const dropUnit = async (record: TheAgent, unit: TheUnitRecord) => {
+  const dropUnit = async (agent: string, record: TheAgent, unit: TheUnitRecord) => {
+    if (unit.provider === self) {
+      await hub.grants.unexpose({ to: agent, slot: AGENTS_SLOT }).catch((error) => {
+        if (!alreadyGone(error)) throw error;
+      });
+      record.skills = record.skills.filter((skill) => !unit.skills.includes(skill));
+      record.units = record.units.filter((one) => one.instance !== unit.instance);
+      save();
+      return;
+    }
     const provider = parts.unitProviders().find((one) => one.actor === unit.provider);
     let removed = false;
     try {
@@ -595,10 +674,12 @@ export function createStacks(parts: StackParts) {
     return undefined;
   };
   const statusOf = async (unit: Pick<TheUnitRecord, "provider" | "providerInstance">) =>
-    parts
-      .unitProviders()
-      .find((one) => one.actor === unit.provider)
-      ?.call.status({ instance: unit.providerInstance });
+    unit.provider === self
+      ? { state: "connected" as const, detail: undefined, connections: [] }
+      : parts
+          .unitProviders()
+          .find((one) => one.actor === unit.provider)
+          ?.call.status({ instance: unit.providerInstance });
   const DOWN = { state: "down" as const, detail: "Its provider can't be reached." };
 
   const fromUnit = (record: TheAgent, given: { slot: string } | { skill: string }) =>
@@ -612,11 +693,15 @@ export function createStacks(parts: StackParts) {
     serial,
     fromUnit,
     unitMaking,
+    catalog,
+    allTemplates: templates,
+    baseProviderNamed,
     /** How one connection a unit made stands, as its unit says. */
     async connectionStatus(
       unit: Pick<TheUnitRecord, "provider" | "providerInstance">,
       connection: string,
     ): Promise<z.infer<typeof ConnectionStatus>> {
+      if (unit.provider === self) return { state: "connected", tools: [] };
       try {
         const found = (await statusOf(unit))?.connections.find(
           (one) => one.connection === connection,
@@ -750,10 +835,10 @@ export function createStacks(parts: StackParts) {
     },
 
     /** All or none: what this made is undone, last first, if a step fails. */
-    async create(input: CreateInput, caller: string) {
+    async create(input: CreateInput, caller: string, child?: Child) {
       const stack = await stackOf(input);
       const { provider, creatable } = await baseOf(stack.base);
-      const { placed, problems } = await plan(stack.units);
+      const { placed, problems } = await plan(stack.units, child?.reach);
       if (problems.length) throw refusal(problems);
 
       const undo: Work["undo"] = [];
@@ -773,6 +858,8 @@ export function createStacks(parts: StackParts) {
           units: [],
           ...(input.purpose ? { purpose: input.purpose } : {}),
           ...(stack.template ? { template: stack.template } : {}),
+          ...(child ? { parent: child.parent } : {}),
+          ...(child?.computer ? { computer: child.computer } : {}),
         };
         creating.set(agent, record);
         undo.push(() => creating.delete(agent));
@@ -790,6 +877,14 @@ export function createStacks(parts: StackParts) {
           if (unit) applied.set(position, unit);
         }
 
+        if (child) {
+          for (const { slot, connection } of child.shares)
+            await parts.exposeConnection(agent, connection, slot);
+          for (const name of child.skills)
+            if (library.has(name) && !record.skills.includes(name)) record.skills.push(name);
+          // Its parent reaches its chat through management, which needs it for that.
+          await hub.grants.expose({ provider: agent, export: made.chat, to: self });
+        }
         await hub.grants.expose({ provider: agent, export: made.chat, to: "person" });
         records.agents[agent] = record;
         undo.push(() => delete records.agents[agent]);
@@ -843,7 +938,7 @@ export function createStacks(parts: StackParts) {
       if (unit) {
         const needing = record.units.find((one) => Object.values(one.needs).includes(instance));
         if (needing) throw new Refused("state", `${needing.title} needs this unit.`);
-        await dropUnit(record, unit);
+        await dropUnit(agent, record, unit);
         changed(agent);
         return {};
       }
@@ -866,8 +961,8 @@ export function createStacks(parts: StackParts) {
     },
 
     /** Every unit, last first: if one can't go, what is left can be tried again. */
-    async removeAll(record: TheAgent) {
-      for (const unit of [...record.units].reverse()) await dropUnit(record, unit);
+    async removeAll(agent: string, record: TheAgent) {
+      for (const unit of [...record.units].reverse()) await dropUnit(agent, record, unit);
     },
   };
 }

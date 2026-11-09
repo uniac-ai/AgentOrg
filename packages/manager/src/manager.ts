@@ -6,6 +6,7 @@ import {
   agents,
   type ConnectionOrigin,
   type ConnectionStatus,
+  chat,
   connections,
   type FieldValues,
   hubActors,
@@ -13,12 +14,14 @@ import {
   hubGrants,
   skills,
   type Template,
+  tools,
   type Unit,
   unitProvider,
 } from "@agentorg/interfaces";
 import { describeInterface, type Interface, type Log, Refused, type Slot } from "@agentorg/sdk";
 import { connect } from "@agentorg/sdk/client";
 import type { z } from "zod";
+import { createControl } from "./control.js";
 import { schemaOf, secretsSchemaOf, settle } from "./form.js";
 import { createSkills, readSkillFolder } from "./skills.js";
 import { type AgentRecord, createStacks, Records } from "./stack.js";
@@ -26,9 +29,11 @@ import { type AgentRecord, createStacks, Records } from "./stack.js";
 type Origin = z.infer<typeof ConnectionOrigin>;
 type Agents = Slot<typeof agentProvider>["call"];
 type Units = Slot<typeof unitProvider>["call"];
+type Chats = Slot<typeof chat>["call"];
 type Status = z.infer<typeof ConnectionStatus>;
 
 const FILE = "manager.json";
+const CHAT_WAIT_MS = 2000;
 const TOOLS_EXPORT = "tools";
 
 export interface ManagerOptions {
@@ -110,7 +115,7 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
     actorId: options.actorId,
     credential: options.credential,
     slots: { actors: hubActors, grants: hubGrants, bindings: hubBindings },
-    exports: { agents, connections, skills, settings: agentSettings },
+    exports: { agents, connections, skills, settings: agentSettings, tools },
     log,
     start(ctx) {
       const hub = {
@@ -154,6 +159,15 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
         if (!record) throw new Refused("unknown", `Management has no agent ${agent}.`);
         return record;
       };
+      const parentOf = ({ parent }: z.infer<typeof AgentRecord>) =>
+        parent
+          ? {
+              parent: {
+                ...parent,
+                ...(records.agents[parent.agent] ? {} : { gone: true as const }),
+              },
+            }
+          : {};
       const settingsOf = (agent: string) => creating.get(agent) ?? recordOf(agent);
       const originOf = (connection: string) => {
         const origin = records.connections[connection];
@@ -253,6 +267,91 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
         removeAgent,
       });
 
+      const startAgent = async (agent: string) => {
+        const { provider } = recordOf(agent);
+        return named(agentProviders(), provider, "agent provider").call.start({ agent });
+      };
+      const stopAgent = async (agent: string) => {
+        const { provider } = recordOf(agent);
+        return named(agentProviders(), provider, "agent provider").call.stop({ agent });
+      };
+      /** Its units and connections go first: if one can't, the agent is here to be tried again. */
+      const removeWhole = (agent: string) =>
+        stacks.serial(agent, async () => {
+          const record = recordOf(agent);
+          await stacks.removeAll(agent, record);
+          for (const [connection, origin] of Object.entries(records.connections)) {
+            if (origin.madeFor !== agent) continue;
+            await removeConnection(connection, origin.provider);
+            forget(connection);
+            save();
+          }
+          await removeAgent(agent, record.provider);
+          delete records.agents[agent];
+          save();
+          return {};
+        });
+      /** A child's chat: exposed to management when it is made, which takes a moment to arrive. */
+      const chatOf = async (agent: string) => {
+        for (let waited = 0; waited < CHAT_WAIT_MS; waited += 20) {
+          const found = exposed<Chats>(chat).find((one) => one.actor === agent);
+          if (found) return found.call;
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        throw new Refused("not_connected", "That agent's chat can't be reached now.");
+      };
+      const control = createControl({
+        self: options.actorId,
+        records,
+        creatingCount: () => creating.size,
+        catalog: stacks.catalog,
+        boundTo: async (agent) =>
+          new Set(
+            (await hub.bindings.list({ actor: agent })).bindings
+              .filter((binding) => binding.consumer === agent)
+              .map((binding) => `${binding.slot} ${binding.provider}`),
+          ),
+        templates: stacks.allTemplates,
+        baseProviderNamed: stacks.baseProviderNamed,
+        serial: stacks.serial,
+        create: (input, caller, child) => stacks.create(input, caller, child),
+        nameOf,
+        chatOf,
+        statusOf: agentStatus,
+        start: startAgent,
+        stop: stopAgent,
+        remove: removeWhole,
+      });
+      /** Those who call management: the person. An agent comes through its agents unit instead. */
+      const personOnly = <E extends { implement(handlers: never): void }>(exported: E) => ({
+        implement(handlers: Parameters<E["implement"]>[0]) {
+          const held = handlers as Record<
+            string,
+            (input: unknown, context: { caller: string }) => unknown
+          >;
+          exported.implement(
+            Object.fromEntries(
+              Object.entries(held).map(([method, handler]) => [
+                method,
+                (input: unknown, context: { caller: string }) => {
+                  if (records.agents[context.caller] || creating.has(context.caller))
+                    throw new Refused(
+                      "forbidden",
+                      "An agent reaches this through its agents unit.",
+                    );
+                  return handler(input, context);
+                },
+              ]),
+            ) as never,
+          );
+        },
+      });
+
+      ctx.exports.tools.implement({
+        list: async (_, { caller }) => ({ tools: await control.list(caller) }),
+        call: ({ name, arguments: input }, { caller }) => control.call(caller, name, input),
+      });
+
       ctx.exports.settings.implement({
         get: (_, { caller }) => {
           const { instructions, purpose, skills: names } = settingsOf(caller);
@@ -273,7 +372,7 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
         },
       });
 
-      ctx.exports.agents.implement({
+      personOnly(ctx.exports.agents).implement({
         creatable: async () => ({
           creatables: (
             await fromEach(agentProviders(), async ({ actor, call }) =>
@@ -316,6 +415,7 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
                         creatable: record.creatable,
                         ...(record.purpose ? { purpose: record.purpose } : {}),
                         ...(record.template ? { template: record.template } : {}),
+                        ...parentOf(record),
                       })),
                     ]
                   : [];
@@ -353,6 +453,7 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
             creatable: record.creatable,
             ...(record.purpose ? { purpose: record.purpose } : {}),
             ...(record.template ? { template: record.template } : {}),
+            ...parentOf(record),
             instructions: record.instructions,
             skills: record.skills.flatMap((skill) => {
               const entry = library.entry(skill);
@@ -362,14 +463,8 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
             units,
           };
         },
-        async start({ agent }) {
-          const { provider } = recordOf(agent);
-          return named(agentProviders(), provider, "agent provider").call.start({ agent });
-        },
-        async stop({ agent }) {
-          const { provider } = recordOf(agent);
-          return named(agentProviders(), provider, "agent provider").call.stop({ agent });
-        },
+        start: ({ agent }) => startAgent(agent),
+        stop: ({ agent }) => stopAgent(agent),
         expose: (input) =>
           stacks.serial(input.agent, async () => {
             const record = recordOf(input.agent);
@@ -401,24 +496,10 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
             return {};
           }),
         /** Units and connections go first: if one can't, the agent is still here to be tried again. */
-        remove: ({ agent }) =>
-          stacks.serial(agent, async () => {
-            const record = recordOf(agent);
-            await stacks.removeAll(record);
-            for (const [connection, origin] of Object.entries(records.connections)) {
-              if (origin.madeFor !== agent) continue;
-              await removeConnection(connection, origin.provider);
-              forget(connection);
-              save();
-            }
-            await removeAgent(agent, record.provider);
-            delete records.agents[agent];
-            save();
-            return {};
-          }),
+        remove: ({ agent }) => removeWhole(agent),
       });
 
-      ctx.exports.connections.implement({
+      personOnly(ctx.exports.connections).implement({
         providers: async () => ({
           providers: (
             await fromEach(unitProviders(), async ({ actor, call }) => ({
@@ -532,7 +613,7 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
         },
       });
 
-      ctx.exports.skills.implement({
+      personOnly(ctx.exports.skills).implement({
         add: (input) => {
           const added = library.add("path" in input ? readSkillFolder(input.path) : input.files);
           for (const [agent, record] of Object.entries(records.agents))
