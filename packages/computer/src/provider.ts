@@ -61,6 +61,13 @@ function problems(values: Record<string, unknown>): z.input<typeof Problem>[] {
     });
   else if (values.access !== "read" && values.access !== "files" && values.access !== "terminal")
     found.push({ field: "access", message: "Choose what it can do." });
+  // Asked for here, not by `required`: a form field is shown by one condition, and this has two.
+  if (values.access === "none") return found;
+  if (values.where === "container") {
+    if (!values.containerPath)
+      found.push({ field: "containerPath", message: "Give the path it works in." });
+    return found;
+  }
   const { workspace } = values;
   if (typeof workspace !== "string" || !isAbsolute(workspace))
     found.push({ field: "workspace", message: "Give the full path of a folder." });

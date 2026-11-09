@@ -140,6 +140,9 @@ test("the unit's form says what each answer grants and adds, with nothing presel
   );
   // Each shown by `where`, so no host needs to know a field by name.
   assert.equal(field("workspace")?.type, "directory");
+  // `check` asks for each, since being needed depends on two answers and `visible` takes one.
+  assert.equal(field("workspace")?.required, undefined);
+  assert.equal(field("containerPath")?.required, undefined);
   assert.deepEqual(field("workspace")?.visible, { field: "where", in: ["local"] });
   assert.equal(field("containerPath")?.type, "text");
   assert.deepEqual(field("containerPath")?.visible, { field: "where", in: ["container"] });
@@ -169,7 +172,17 @@ test("check says what's wrong by field, and changes nothing", async (t) => {
   const fields = async (filled: Record<string, string>) =>
     (await check(filled)).problems.map((problem) => problem.field);
   assert.deepEqual(await fields({ ...values("read"), where: "elsewhere" }), ["where"]);
-  assert.deepEqual(await fields({ where: "local", access: "none" }), ["access", "workspace"]);
+  // The folder is asked for only when there is something to do in it.
+  assert.deepEqual(await fields({ where: "local", access: "none" }), ["access"]);
+  assert.deepEqual(await fields({ where: "local", access: "read" }), ["workspace"]);
+  assert.deepEqual(await fields({ where: "local", access: "read", workspace: "" }), ["workspace"]);
+  assert.deepEqual(await fields({ where: "container", access: "read" }), [
+    "where",
+    "containerPath",
+  ]);
+  assert.deepEqual(await fields({ where: "container", access: "read", containerPath: "/work" }), [
+    "where",
+  ]);
   assert.deepEqual(await fields({ ...values("read"), workspace: "relative/path" }), ["workspace"]);
   assert.deepEqual(await fields({ ...values("read"), workspace: `${workspace}/nope` }), [
     "workspace",

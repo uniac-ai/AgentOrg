@@ -70,7 +70,6 @@ export const COMPUTER_UNIT: z.input<typeof Unit> = {
       title: "Working directory",
       description:
         "The folder it works in. Its file tools stay inside it by a check, not a sandbox. Removing the agent never deletes it.",
-      required: true,
       visible: { field: "where", in: ["local"] },
     },
     {
@@ -79,7 +78,6 @@ export const COMPUTER_UNIT: z.input<typeof Unit> = {
       value: "string",
       title: "Working directory",
       description: "A path inside the container.",
-      required: true,
       visible: { field: "where", in: ["container"] },
     },
   ],
