@@ -23,7 +23,8 @@ async function open(
   await page.goto(`${gateway.url}/${hash}`);
   return page;
 }
-const row = (page: Page, name: string) => page.getByRole("listitem").filter({ hasText: name });
+const row = (page: Page, name: string) =>
+  page.getByRole("list", { name: "Your agents" }).getByRole("listitem").filter({ hasText: name });
 const box = (locator: Locator) => locator.boundingBox();
 
 const withGateway =
@@ -50,7 +51,6 @@ test(
     await row(page, "Triage").getByText("linear is down, so its tools are left out").waitFor();
     await row(page, "Weekly report").getByRole("img", { name: "Stopped" }).waitFor();
     await row(page, "Broken").getByText("Its program exited.").waitFor();
-    await page.getByRole("img", { name: "2 with a problem" }).first().waitFor();
     await page.close();
   }),
 );
@@ -143,7 +143,7 @@ test(
 test(
   "the agent page shows each MCP's place and origin, its skills, and its activity",
   withGateway(async (gateway) => {
-    const page = await open(gateway, "#/a/a-research");
+    const page = await open(gateway, "#/a/a-research/settings");
     const mcps = page.getByRole("region", { name: "MCPs" });
     await mcps.getByText("Created for this agent by Local").waitFor();
     await mcps.getByText("Connected by you").waitFor();
@@ -168,7 +168,7 @@ test(
 test(
   "skills and connections are exposed and removed from the agent page",
   withGateway(async (gateway) => {
-    const page = await open(gateway, "#/a/a-reviewer");
+    const page = await open(gateway, "#/a/a-reviewer/settings");
     const mcps = page.getByRole("region", { name: "MCPs" });
     await mcps.getByText("github", { exact: true }).waitFor();
     await page.getByRole("button", { name: "Add an MCP" }).click();
@@ -199,7 +199,7 @@ test(
 test(
   "the model is read and chosen through the agent's chat",
   withGateway(async (gateway) => {
-    const page = await open(gateway, "#/a/a-reviewer");
+    const page = await open(gateway, "#/a/a-reviewer/settings");
     const model = page.getByRole("combobox", { name: "Model" });
     await page.waitForFunction(
       () => !document.querySelector('button[aria-label="Model"]')?.hasAttribute("disabled"),
@@ -225,13 +225,11 @@ test(
   "an agent is stopped, started and deleted from its page, after asking",
   withGateway(async (gateway) => {
     const page = await open(gateway, "#/a/a-reviewer");
-    const menu = page.getByRole("button", { name: "Reviewer options" });
-    await menu.click();
-    await page.getByRole("menuitem", { name: "Stop" }).click();
+    await page.getByRole("button", { name: "Stop Reviewer" }).click();
     await page.getByRole("main").getByText("Stopped", { exact: true }).waitFor();
-    await menu.click();
-    await page.getByRole("menuitem", { name: "Start" }).click();
+    await page.getByRole("button", { name: "Start Reviewer" }).click();
     await page.getByRole("main").getByText("Reviewed #482 with 3 comments").first().waitFor();
+    const menu = page.getByRole("button", { name: "Reviewer options" });
     await menu.click();
     await page.getByRole("menuitem", { name: /Delete/ }).click();
     const dialog = page.getByRole("dialog", { name: "Delete Reviewer?" });
@@ -244,6 +242,60 @@ test(
     await page.waitForURL(/#\/$/);
     await row(page, "Research").waitFor();
     assert.equal(gateway.agents.has("a-reviewer"), false);
+    await page.close();
+  }),
+);
+
+test(
+  "the left bar holds the agents, the plus and Settings; the main page controls each agent",
+  withGateway(async (gateway) => {
+    const page = await open(gateway);
+    const nav = page.getByRole("navigation", { name: "Main" });
+    await nav.getByRole("button", { name: "Research" }).waitFor();
+    assert.deepEqual(
+      (await nav.getByRole("button").allInnerTexts()).map((t) => t.trim()),
+      ["Agents", "", "Research", "Reviewer", "Triage", "Weekly report", "Broken", "Settings"],
+    );
+    const settings = await nav.getByRole("button", { name: "Settings" }).boundingBox();
+    assert.ok(settings && settings.y + settings.height > 860, "at the bottom");
+    await nav.getByRole("button", { name: "Create" }).click();
+    await page.getByRole("dialog", { name: "Create" }).waitFor();
+    await page.keyboard.press("Escape");
+
+    const weekly = row(page, "Weekly report");
+    await weekly.getByRole("button", { name: "Start Weekly report" }).click();
+    await weekly.getByRole("button", { name: "Stop Weekly report" }).waitFor();
+    assert.equal(gateway.agents.get("a-weekly")?.status.state, "running");
+    gateway.refuseNext("agents.stop", "failed", "It wouldn't stop.");
+    await weekly.getByRole("button", { name: "Stop Weekly report" }).click();
+    await weekly.getByText("It wouldn't stop.").waitFor();
+    assert.equal(await page.getByRole("main").getByText("github", { exact: true }).count(), 0);
+    await page.close();
+  }),
+);
+
+test(
+  "an agent's page says what it's for, holds room, and leads to what it's made of",
+  withGateway(async (gateway) => {
+    const page = await open(gateway, "#/a/a-research");
+    const main = page.getByRole("main");
+    await main.getByRole("heading", { name: "Research" }).waitFor();
+    await main.getByText("Chats and uses what you connect").waitFor();
+    await main
+      .getByRole("button", { name: /^Made from/ })
+      .getByText("Assistant")
+      .waitFor();
+    await main.getByRole("button", { name: /^MCPs/ }).getByText("2").waitFor();
+    for (const held of ["Computer", "Browser", "Updates"])
+      assert.equal((await main.getByRole("region", { name: held }).innerText()).trim(), held);
+    await main.getByRole("button", { name: "Research settings" }).click();
+    await page.waitForURL(/\/a\/a-research\/settings$/);
+    await main.getByRole("region", { name: "MCPs" }).getByText("github", { exact: true }).waitFor();
+    await page
+      .getByRole("navigation", { name: "breadcrumb" })
+      .getByRole("button", { name: "Research" })
+      .click();
+    await page.waitForURL(/\/a\/a-research$/);
     await page.close();
   }),
 );
@@ -262,9 +314,12 @@ test(
         return 0.2126 * (r as number) + 0.7152 * (g as number) + 0.0722 * (b as number);
       });
     for (const theme of ["dark", "light"]) {
-      const page = await open(gateway, "#/a/a-reviewer");
-      if (theme === "light")
-        await page.getByRole("button", { name: "Color: dark" }).first().click();
+      const page = await open(gateway, theme === "light" ? "#/?light" : "#/a/a-reviewer");
+      if (theme === "light") {
+        await page.evaluate(() => localStorage.setItem("agentorg.theme", "light"));
+        await page.goto(`${gateway.url}/#/a/a-reviewer`);
+        await page.reload();
+      }
       await page.getByRole("button", { name: "Reviewer options" }).click();
       const menu = page.locator('[data-slot="dropdown-menu-content"]');
       await menu.waitFor();
@@ -282,7 +337,7 @@ test(
       { width: 1440, height: 900 },
       { width: 390, height: 844 },
     ])
-      for (const hash of ["#/", "#/a/a-research", "#/a/a-triage"]) {
+      for (const hash of ["#/", "#/a/a-research", "#/a/a-research/settings", "#/a/a-triage"]) {
         const page = await open(gateway, hash, viewport);
         await page.getByRole("main").getByText(/./).first().waitFor();
         const bad = await page.evaluate(() => {

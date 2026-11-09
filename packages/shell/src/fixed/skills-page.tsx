@@ -6,11 +6,8 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { Input } from "../ui/input.tsx";
 import { listDetails, listSkills, useAct } from "./data.ts";
 import { DeleteButton } from "./delete-dialog.tsx";
-import { Nothing, Page, Scroll, UsedBy } from "./parts.tsx";
-
-/** A list row, lit when something led here. */
-export const rowClass = (focused: boolean) =>
-  `group/row -mx-2 grid min-h-14 items-center gap-x-4 rounded-xl px-2 py-2 ${focused ? "bg-[var(--selected)]" : ""}`;
+import { Nothing, rowClass, Scroll, UsedBy } from "./parts.tsx";
+import { SettingsFrame } from "./settings-page.tsx";
 
 export function SkillsPage({ focus, adding }: { focus?: string; adding?: boolean }) {
   const [changed, setChanged] = useState(0);
@@ -21,8 +18,8 @@ export function SkillsPage({ focus, adding }: { focus?: string; adding?: boolean
   const list = skills.value ?? [];
   const using = (name: string) => details.filter((a) => a.skills.some((s) => s.name === name));
   return (
-    <Page
-      crumbs={[{ label: "Skills" }]}
+    <SettingsFrame
+      tab="skills"
       action={
         <Button size="sm" onClick={() => setOpen(true)}>
           <PlusIcon />
@@ -35,7 +32,7 @@ export function SkillsPage({ focus, adding }: { focus?: string; adding?: boolean
           {list.map((skill) => (
             <li
               key={skill.name}
-              className={`${rowClass(focus === skill.name)} grid-cols-[minmax(0,2fr)_minmax(0,1fr)_24px] phone:grid-cols-[minmax(0,1fr)_24px]`}
+              className={`${rowClass(focus === skill.name)} grid-cols-[minmax(0,2fr)_minmax(0,1fr)_24px] tight:grid-cols-[minmax(0,1fr)_24px]`}
             >
               <div className="min-w-0">
                 <div className="truncate font-medium">{skill.name}</div>
@@ -43,10 +40,10 @@ export function SkillsPage({ focus, adding }: { focus?: string; adding?: boolean
                   {skill.description}
                 </div>
               </div>
-              <span className="flex min-w-0 phone:col-start-1 phone:row-start-2">
+              <span className="flex min-w-0 tight:col-start-1 tight:row-start-2">
                 <UsedBy agents={using(skill.name)} />
               </span>
-              <span className="phone:col-start-2 phone:row-start-1">
+              <span className="tight:col-start-2 tight:row-start-1">
                 <DeleteButton
                   name={skill.name}
                   agents={using(skill.name).map((a) => a.name)}
@@ -70,7 +67,7 @@ export function SkillsPage({ focus, adding }: { focus?: string; adding?: boolean
         onClose={() => setOpen(false)}
         onAdded={() => setChanged((was) => was + 1)}
       />
-    </Page>
+    </SettingsFrame>
   );
 }
 

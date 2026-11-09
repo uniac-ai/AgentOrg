@@ -1,15 +1,73 @@
 import { type LoginStatus, USAGE } from "../app.tsx";
-import { api, useLoad } from "../data.ts";
+import { api, go, type Route, setTheme, type ThemeName, useLoad, useTheme } from "../data.ts";
 import { signIn, useSigningIn } from "../sign-in.ts";
 import { Button } from "../ui/button.tsx";
-import { type Creatable, listAgents, listConnections, listMcpProviders, useAct } from "./data.ts";
-import { Jump, Page, Scroll, Section, UsedBy } from "./parts.tsx";
-import { rowClass } from "./skills-page.tsx";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select.tsx";
+import { Tabs, TabsList, TabsTrigger } from "../ui/tabs.tsx";
+import { listAgents, listConnections, listMcpProviders, useAct, useCreatables } from "./data.ts";
+import { Jump, rowClass, Scroll, Section, UsedBy } from "./parts.tsx";
 
 const countOf = (n: number) => `${n} ${n === 1 ? "connection" : "connections"}`;
-const THREE = "grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)_minmax(0,1fr)] phone:grid-cols-1";
+const THREE = "grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)_minmax(0,1fr)] tight:grid-cols-1";
 
-export function SettingsPage({ login, toggle }: { login?: LoginStatus; toggle: React.ReactNode }) {
+type Tab = "skills" | "mcps" | "providers" | "account";
+const ROUTES: Record<Tab, Route> = {
+  skills: { screen: "skills" },
+  mcps: { screen: "mcps" },
+  providers: { screen: "settings", tab: "providers" },
+  account: { screen: "settings", tab: "account" },
+};
+
+/** Settings' tabs, and what the tab offers beside them. */
+export function SettingsFrame({
+  tab,
+  action,
+  children,
+}: {
+  tab: Tab;
+  action?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="flex h-full flex-col">
+      <div className="no-bar flex shrink-0 items-center justify-between gap-2 overflow-x-auto px-5 pt-4 tight:px-3.5">
+        <Tabs value={tab} onValueChange={(next) => go(ROUTES[next as Tab])}>
+          <TabsList>
+            <TabsTrigger value="skills">Skills</TabsTrigger>
+            <TabsTrigger value="mcps">
+              <span className="tight:hidden">MCP connections</span>
+              <span className="hidden tight:inline">MCPs</span>
+            </TabsTrigger>
+            <TabsTrigger value="providers">Providers</TabsTrigger>
+            <TabsTrigger value="account">Account</TabsTrigger>
+          </TabsList>
+        </Tabs>
+        {action}
+      </div>
+      <div className="min-h-0 flex-1">{children}</div>
+    </div>
+  );
+}
+
+export function SettingsPage({
+  tab,
+  login,
+}: {
+  tab: "providers" | "account";
+  login?: LoginStatus;
+}) {
+  return (
+    <SettingsFrame tab={tab}>
+      <Scroll>
+        <div className="mx-auto flex max-w-5xl flex-col gap-7">
+          {tab === "providers" ? <Providers /> : <AccountTab login={login} />}
+        </div>
+      </Scroll>
+    </SettingsFrame>
+  );
+}
+
+function Providers() {
   const agents = useLoad(listAgents, ["actors"]).value ?? [];
   const connections = useLoad(listConnections, ["actors"]).value ?? [];
   const mcpProviders = useLoad(listMcpProviders, ["actors"]).value ?? [];
@@ -21,54 +79,65 @@ export function SettingsPage({ login, toggle }: { login?: LoginStatus; toggle: R
           .then((reply) => reply.providers),
       ["actors"],
     ).value ?? [];
-  const creatables =
-    useLoad(
-      () => api.call<{ creatables: Creatable[] }>("agents", "creatable").then((r) => r.creatables),
-      ["actors"],
-    ).value ?? [];
+  const creatables = useCreatables() ?? [];
   return (
-    <Page crumbs={[{ label: "Settings" }]} action={toggle}>
-      <Scroll>
-        <div className="mx-auto flex max-w-5xl flex-col gap-7">
-          {login && (
-            <Section title="ChatGPT">
-              <Account login={login} />
-            </Section>
-          )}
-          <Section title="Agent providers">
-            {agentProviders.map((provider) => (
-              <div key={provider.provider} className={`${rowClass(false)} ${THREE}`}>
-                <div className="truncate font-medium">{provider.name}</div>
-                <span className="truncate text-[13px] text-muted-foreground">
-                  {creatables
-                    .filter((c) => c.provider === provider.provider)
-                    .map((c) => c.title)
-                    .join(", ")}
-                </span>
-                <UsedBy agents={agents.filter((a) => a.provider === provider.provider)} />
-              </div>
-            ))}
-          </Section>
-          <Section title="MCP providers">
-            {mcpProviders.map((provider) => (
-              <div key={provider.provider} className={`${rowClass(false)} ${THREE}`}>
-                <div className="truncate font-medium">{provider.name}</div>
-                <span className="truncate text-[13px] text-muted-foreground">
-                  {provider.kinds.map((k) => k.title).join(", ")}
-                </span>
-                <span className="text-[13px] text-muted-foreground">
-                  <Jump to={{ screen: "mcps" }}>
-                    {countOf(
-                      connections.filter((c) => c.origin?.provider === provider.provider).length,
-                    )}
-                  </Jump>
-                </span>
-              </div>
-            ))}
-          </Section>
-        </div>
-      </Scroll>
-    </Page>
+    <>
+      <Section title="Agent providers">
+        {agentProviders.map((provider) => (
+          <div key={provider.provider} className={`${rowClass(false)} ${THREE}`}>
+            <div className="truncate font-medium">{provider.name}</div>
+            <span className="truncate text-[13px] text-muted-foreground">
+              {creatables
+                .filter((c) => c.provider === provider.provider)
+                .map((c) => c.title)
+                .join(", ")}
+            </span>
+            <UsedBy agents={agents.filter((a) => a.provider === provider.provider)} />
+          </div>
+        ))}
+      </Section>
+      <Section title="MCP providers">
+        {mcpProviders.map((provider) => (
+          <div key={provider.provider} className={`${rowClass(false)} ${THREE}`}>
+            <div className="truncate font-medium">{provider.name}</div>
+            <span className="truncate text-[13px] text-muted-foreground">
+              {provider.kinds.map((k) => k.title).join(", ")}
+            </span>
+            <span className="text-[13px] text-muted-foreground">
+              <Jump to={{ screen: "mcps" }}>
+                {countOf(
+                  connections.filter((c) => c.origin?.provider === provider.provider).length,
+                )}
+              </Jump>
+            </span>
+          </div>
+        ))}
+      </Section>
+    </>
+  );
+}
+
+function AccountTab({ login }: { login?: LoginStatus }) {
+  const theme = useTheme();
+  return (
+    <>
+      {login && (
+        <Section title="ChatGPT">
+          <Account login={login} />
+        </Section>
+      )}
+      <Section title="Color">
+        <Select value={theme} onValueChange={(next) => setTheme(next as ThemeName)}>
+          <SelectTrigger aria-label="Color" className="w-40">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="dark">Dark</SelectItem>
+            <SelectItem value="light">Light</SelectItem>
+          </SelectContent>
+        </Select>
+      </Section>
+    </>
   );
 }
 

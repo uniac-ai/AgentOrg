@@ -37,7 +37,6 @@ import {
   MessageScrollerViewport,
 } from "../ui/message-scroller.tsx";
 import { type ChatMessage, type ChatStatus, getAgent, useAct, useChatSlots } from "./data.ts";
-import { Page } from "./parts.tsx";
 
 const PAGE = 100;
 const busyOf = (state: string) => state === "thinking" || state === "tool";
@@ -142,14 +141,9 @@ export function ChatPage({ agent: id }: { agent: string }) {
   const detail = useLoad(() => getAgent(id), ["actors"], [id]);
   const slot = useChatSlots().get(id);
   const agent = detail.value;
-  const crumbs = [
-    { label: "Agents", to: { screen: "home" as const } },
-    { label: agent?.name ?? "Agent", to: { screen: "agent" as const, agent: id } },
-    { label: "Chat" },
-  ];
   const act = useAct();
   return (
-    <Page crumbs={crumbs}>
+    <>
       {agent && agent.status.state !== "running" ? (
         <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
           <p className="text-[15px]">
@@ -177,7 +171,7 @@ export function ChatPage({ agent: id }: { agent: string }) {
       ) : (
         agent && slot && <Chat slot={slot} name={agent.name} />
       )}
-    </Page>
+    </>
   );
 }
 

@@ -2,14 +2,6 @@
 import { GlobeIcon, LaptopIcon, LoaderCircleIcon } from "lucide-react";
 import { Fragment } from "react";
 import { go, type Route } from "../data.ts";
-import {
-  Breadcrumb,
-  BreadcrumbItem,
-  BreadcrumbLink,
-  BreadcrumbList,
-  BreadcrumbPage,
-  BreadcrumbSeparator,
-} from "../ui/breadcrumb.tsx";
 import { Button } from "../ui/button.tsx";
 import type { Tone } from "./data.ts";
 
@@ -111,55 +103,10 @@ export const Nothing = ({ children }: { children: React.ReactNode }) => (
   <p className="py-2 text-[13px] text-[var(--faint)]">{children}</p>
 );
 
-export interface Crumb {
-  label: string;
-  to?: Route;
-}
-
-/** A page: its path and its actions on the canvas, its content on one surface. */
-export function Page({
-  crumbs,
-  action,
-  children,
-}: {
-  crumbs: Crumb[];
-  action?: React.ReactNode;
-  children: React.ReactNode;
-}) {
-  return (
-    <>
-      <header className="flex h-12 shrink-0 items-center justify-between gap-2 px-3">
-        <Breadcrumb>
-          <BreadcrumbList className="flex-nowrap text-[13px]">
-            {crumbs.map((crumb, i) => (
-              <Fragment key={crumb.label}>
-                {i > 0 && <BreadcrumbSeparator />}
-                <BreadcrumbItem className="min-w-0">
-                  {crumb.to ? (
-                    <BreadcrumbLink asChild>
-                      <button type="button" onClick={() => go(crumb.to as Route)}>
-                        {crumb.label}
-                      </button>
-                    </BreadcrumbLink>
-                  ) : (
-                    <BreadcrumbPage className="truncate font-semibold">
-                      {crumb.label}
-                    </BreadcrumbPage>
-                  )}
-                </BreadcrumbItem>
-              </Fragment>
-            ))}
-          </BreadcrumbList>
-        </Breadcrumb>
-        <div className="flex shrink-0 items-center gap-1">{action}</div>
-      </header>
-      <main className="window relative min-h-0 flex-1 overflow-hidden rounded-2xl bg-background phone:rounded-none phone:after:hidden">
-        {children}
-      </main>
-    </>
-  );
-}
+/** A list row, lit when something led here. */
+export const rowClass = (focused: boolean) =>
+  `group/row -mx-2 grid min-h-14 items-center gap-x-4 rounded-xl px-2 py-2 ${focused ? "bg-[var(--selected)]" : ""}`;
 
 export const Scroll = ({ children }: { children: React.ReactNode }) => (
-  <div className="no-bar h-full overflow-y-auto p-5 phone:p-3.5">{children}</div>
+  <div className="no-bar h-full overflow-y-auto p-5 tight:p-3.5">{children}</div>
 );

@@ -156,9 +156,9 @@ test(
 
     await page.getByRole("button", { name: "Retry" }).click();
     await page.getByText("The old answer.").waitFor({ state: "detached" });
-    await page.getByRole("button", { name: "Stop" }).waitFor();
-    await page.getByRole("button", { name: "Stop" }).click();
-    await page.getByRole("button", { name: "Send" }).waitFor();
+    await page.getByRole("button", { name: "Stop", exact: true }).waitFor();
+    await page.getByRole("button", { name: "Stop", exact: true }).click();
+    await page.getByRole("button", { name: "Send", exact: true }).waitFor();
     assert.ok(gateway.calls.some((c) => c.method === "cancel"));
     await page.close();
   }),

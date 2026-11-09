@@ -194,14 +194,23 @@ export function reasonOf(error: unknown): string {
   return "That didn't work. Try again.";
 }
 
+/** What can be created: it says what each agent is for. */
+export function useCreatables(): Creatable[] | undefined {
+  return useLoad(
+    () => api.call<{ creatables: Creatable[] }>("agents", "creatable").then((r) => r.creatables),
+    ["actors"],
+  ).value;
+}
+
 /** A control's call: one at a time, and the reason it failed, if it did. */
-export function useAct() {
+export function useAct(onFailed?: (why?: string) => void) {
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState<string>();
   const run = (call: () => Promise<unknown>, done?: () => void) => {
     if (busy) return;
     setBusy(true);
     setFailed(undefined);
+    onFailed?.(undefined);
     call().then(
       () => {
         setBusy(false);
@@ -210,6 +219,7 @@ export function useAct() {
       (error: unknown) => {
         setBusy(false);
         setFailed(reasonOf(error));
+        onFailed?.(reasonOf(error));
       },
     );
   };

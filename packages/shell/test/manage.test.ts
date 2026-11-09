@@ -27,7 +27,8 @@ const withGateway = (run: (gateway: Gateway) => Promise<void>) => async () => {
     await gateway.close();
   }
 };
-const row = (page: Page, name: string) => page.getByRole("listitem").filter({ hasText: name });
+const row = (page: Page, name: string) =>
+  page.getByRole("main").getByRole("listitem").filter({ hasText: name });
 const labels = (page: Page) =>
   page.getByRole("dialog").locator('[data-slot="field-label"]').allInnerTexts();
 
@@ -166,15 +167,16 @@ test(
 test(
   "the agent page leads to a connection and a skill, and to adding new ones",
   withGateway(async (gateway) => {
-    const page = await open(gateway, "#/a/a-reviewer");
+    const page = await open(gateway, "#/a/a-reviewer/settings");
     await page.getByRole("button", { name: "Connected by you" }).click();
     await page.waitForURL(/#\/mcps\/s\/c-github$/);
     await row(page, "GitHub acme").getByRole("button", { name: "Reviewer" }).click();
     await page.waitForURL(/#\/a\/a-reviewer$/);
+    await page.goto(`${gateway.url}/#/a/a-reviewer/settings`);
     await page.getByRole("button", { name: "Add an MCP" }).click();
     await page.getByRole("menuitem", { name: "Connect a new MCP…" }).click();
     await page.getByRole("dialog", { name: "Connect an MCP" }).waitFor();
-    await page.goto(`${gateway.url}/#/a/a-reviewer`);
+    await page.goto(`${gateway.url}/#/a/a-reviewer/settings`);
     await page.getByRole("button", { name: "Add a skill" }).click();
     await page.getByRole("menuitem", { name: "Add a new skill…" }).click();
     await page.getByRole("dialog", { name: "Add skill" }).waitFor();
@@ -197,7 +199,7 @@ test(
       },
       status: { state: "connected", tools: [] },
     });
-    const page = await open(gateway, "#/a/a-reviewer");
+    const page = await open(gateway, "#/a/a-reviewer/settings");
     await page.getByRole("region", { name: "MCPs" }).getByText("github", { exact: true }).waitFor();
     await page.getByRole("button", { name: "Add an MCP" }).click();
     await page.getByRole("menuitem", { name: "GitHub", exact: true }).click();
@@ -277,18 +279,35 @@ test(
 );
 
 test(
-  "Settings shows the account and the providers, and signs out",
+  "Settings holds skills, MCP connections, providers and the account",
   withGateway(async (gateway) => {
-    const page = await open(gateway, "#/settings");
-    const chatgpt = page.getByRole("region", { name: "ChatGPT" });
-    await chatgpt.getByText("sam@example.com").waitFor();
-    await chatgpt.getByText("Plus").waitFor();
+    const page = await open(gateway, "#/");
+    await page
+      .getByRole("navigation", { name: "Main" })
+      .getByRole("button", { name: "Settings" })
+      .click();
+    await page.getByRole("tab", { name: "Skills" }).waitFor();
+    assert.deepEqual(await page.getByRole("tab").allInnerTexts(), [
+      "Skills",
+      "MCP connections",
+      "Providers",
+      "Account",
+    ]);
+    await row(page, "cite-sources").waitFor();
+    await page.getByRole("tab", { name: "Providers" }).click();
     const agents = page.getByRole("region", { name: "Agent providers" });
     await agents.getByText("AgentOrg").waitFor();
     await agents.getByText("Assistant, Code reviewer").waitFor();
     const mcp = page.getByRole("region", { name: "MCP providers" });
     await mcp.getByText("Local", { exact: true }).waitFor();
     await mcp.getByRole("button", { name: "4 connections" }).waitFor();
+    await page.getByRole("tab", { name: "Account" }).click();
+    const chatgpt = page.getByRole("region", { name: "ChatGPT" });
+    await chatgpt.getByText("sam@example.com").waitFor();
+    await chatgpt.getByText("Plus").waitFor();
+    await page.getByRole("combobox", { name: "Color" }).click();
+    await page.getByRole("option", { name: "Light" }).click();
+    assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), "light");
     await chatgpt.getByRole("button", { name: "Sign out" }).click();
     await page.waitForTimeout(100);
     assert.ok(gateway.calls.some((c) => c.slot === "login" && c.method === "logout"));
@@ -297,10 +316,10 @@ test(
 );
 
 test(
-  "the nav doesn't move between pages, and no page overflows or shows a scrollbar",
+  "the left bar doesn't move between pages, and no page overflows or shows a scrollbar",
   withGateway(async (gateway) => {
     for (const width of [1440, 390])
-      for (const hash of ["#/skills", "#/mcps", "#/settings"]) {
+      for (const hash of ["#/skills", "#/mcps", "#/settings/providers", "#/settings/account"]) {
         const page = await open(gateway, hash, width);
         await page.getByRole("main").getByText(/./).first().waitFor();
         await page.waitForTimeout(150);
@@ -319,11 +338,11 @@ test(
         await page.close();
       }
     const page = await open(gateway, "#/");
-    const nav = page.getByRole("navigation", { name: "Main" }).filter({ visible: true });
+    const nav = page.getByRole("navigation", { name: "Main" });
     const first = nav.getByRole("button").nth(0);
     await first.waitFor();
     const before = await first.boundingBox();
-    for (const name of ["Skills", "MCP connections", "Settings"]) {
+    for (const name of [/^Settings$/, /Research$/, /^Agents$/]) {
       await nav.getByRole("button", { name }).click();
       assert.deepEqual(await first.boundingBox(), before);
     }
