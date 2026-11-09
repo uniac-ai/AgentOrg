@@ -288,11 +288,13 @@ test(
       .click();
     await page.getByRole("tab", { name: "Skills" }).waitFor();
     assert.deepEqual(await page.getByRole("tab").allInnerTexts(), [
+      "Templates",
       "Skills",
       "MCP connections",
       "Providers",
       "Account",
     ]);
+    await page.getByRole("tab", { name: "Skills" }).click();
     await row(page, "cite-sources").waitFor();
     await page.getByRole("tab", { name: "Providers" }).click();
     const agents = page.getByRole("region", { name: "Agent providers" });

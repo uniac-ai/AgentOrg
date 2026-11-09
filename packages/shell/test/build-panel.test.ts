@@ -262,3 +262,96 @@ test(
     await page.close();
   }),
 );
+
+test(
+  "Settings lists the templates: use one, copy one, delete one",
+  withGateway(async (gateway) => {
+    const page = await open(gateway);
+    await page
+      .getByRole("navigation", { name: "Main" })
+      .getByRole("button", { name: "Settings" })
+      .click();
+    const list = page.getByRole("list", { name: "Templates" });
+    const assistant = list.getByRole("listitem").filter({ hasText: "Assistant" });
+    await assistant.getByText("Computer, Web").waitFor();
+    await assistant.getByRole("button", { name: "Use" }).click();
+    await panel(page).getByText("New agent").waitFor();
+    await panel(page).getByRole("button", { name: "Build options" }).click();
+    await page.getByRole("menuitem", { name: "Discard" }).click();
+
+    await assistant.getByRole("button", { name: "New template from Assistant" }).click();
+    assert.equal(await panel(page).getByLabel("Name").inputValue(), "Assistant copy");
+    await panel(page).getByRole("button", { name: "Save template" }).click();
+    await list.getByRole("listitem").filter({ hasText: "Assistant copy" }).waitFor();
+    assert.equal(await panel(page).count(), 0);
+    assert.deepEqual(gateway.calls.find((c) => c.method === "saveTemplate")?.input, {
+      id: "assistant-copy",
+      title: "Assistant copy",
+      description: "Does what you ask on a computer",
+      from: "assistant",
+      base: { provider: "AgentOrg", creatable: "assistant" },
+      units: [
+        { provider: "AgentOrg", unit: "computer", values: { access: "terminal", browser: true } },
+        { provider: "AgentOrg", unit: "web" },
+      ],
+    });
+
+    const copy = list.getByRole("listitem").filter({ hasText: "Assistant copy" });
+    await copy.hover();
+    await copy.getByRole("button", { name: "Delete Assistant copy" }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Delete" }).click();
+    await copy.waitFor({ state: "detached" });
+    await page.close();
+  }),
+);
+
+test(
+  "a saved template keeps no secret and nothing that isn't shown, and the stack stays open",
+  withGateway(async (gateway) => {
+    const page = await open(gateway);
+    await fromTemplate(page, "Assistant");
+    await choose(page, "Search service", /^Tavily/);
+    await card(page, "Web").getByLabel("Key").fill("the-key");
+    await choose(page, "Files and commands", /^None/);
+    await panel(page).getByRole("button", { name: "Build options" }).click();
+    await page.getByRole("menuitem", { name: /^Save as template/ }).click();
+    const dialog = page.getByRole("dialog");
+    await dialog.getByLabel("Template name").fill("Browse only");
+    await dialog.getByRole("button", { name: "Save" }).click();
+    await dialog.waitFor({ state: "detached" });
+    const saved = gateway.calls.find((c) => c.method === "saveTemplate")?.input;
+    assert.equal(JSON.stringify(saved).includes("the-key"), false);
+    assert.deepEqual((saved as { units: unknown[] }).units, [
+      { provider: "AgentOrg", unit: "computer", values: { access: "none", browser: true } },
+      { provider: "AgentOrg", unit: "web", values: { service: "tavily" } },
+    ]);
+    assert.equal(await card(page, "Web").getByLabel("Key").inputValue(), "the-key");
+    await page.close();
+  }),
+);
+
+test(
+  "an agent's page names what its units are, and its settings say which unit gave what",
+  withGateway(async (gateway) => {
+    const page = await open(gateway);
+    await fromTemplate(page, "Assistant");
+    await panel(page).getByLabel("Name").fill("Foreman");
+    await choose(page, "Where it runs", /^This computer/);
+    await card(page, "Computer").getByLabel("Working directory").fill("/work/foreman");
+    await panel(page).getByRole("button", { name: "Create", exact: true }).click();
+    await page
+      .getByRole("main")
+      .getByText("Computer: This computer, Files and terminal, Browser, /work/foreman")
+      .waitFor();
+    await page.getByRole("button", { name: "Foreman settings" }).click();
+    await page
+      .getByRole("region", { name: "MCPs" })
+      .getByRole("button", { name: "Computer", exact: true })
+      .waitFor();
+    await page
+      .getByRole("region", { name: "Skills" })
+      .getByText("Computer", { exact: true })
+      .waitFor();
+    await page.close();
+  }),
+);

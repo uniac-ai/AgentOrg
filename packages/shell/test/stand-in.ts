@@ -43,9 +43,10 @@ export interface Agent {
   status: AgentStatus;
   provider: string;
   creatable: string;
-  skills: { name: string; description: string }[];
-  mcp: { slot: string; connection: string }[];
+  skills: { name: string; description: string; instance?: string }[];
+  mcp: { slot: string; connection: string; instance?: string }[];
   purpose?: string;
+  units?: z.output<typeof agentsInterface.methods.get.output>["units"];
   chat: { status: Status; messages: Message[]; current?: string };
 }
 
@@ -404,6 +405,7 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
   }>();
   const creatables = options.creatables ?? CREATABLES;
   let problems: StackProblem[] = [];
+  let templates = [...TEMPLATES];
 
   const emit = (slot: string, event: string, payload: unknown) => {
     for (const s of subscribers)
@@ -438,23 +440,38 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
           ...entry(agent),
           instructions: "Help.",
           skills: agent.skills,
-          mcp: agent.mcp.map(({ slot, connection }) => {
+          mcp: agent.mcp.map(({ slot, connection, instance }) => {
             const found = connections.get(connection) as Connection;
-            return { slot, connection, origin: found.origin, status: found.status };
+            return {
+              slot,
+              connection,
+              origin: found.origin,
+              status: found.status,
+              ...(instance ? { instance } : {}),
+            };
           }),
-          units: [],
+          units: agent.units ?? [],
         };
       },
       units: () => ({
         bases: creatables.map((c) => ({ ...c, providerName: "AgentOrg" })),
         units: UNITS,
       }),
-      templates: () => ({ templates: TEMPLATES }),
+      templates: () => ({ templates }),
+      saveTemplate: (input) => {
+        templates.push(input as unknown as Template);
+        return {};
+      },
+      removeTemplate: ({ id }) => {
+        templates = templates.filter((t) => t.id !== id);
+        return {};
+      },
       check: () => ({ problems }),
       create: (input) => {
         const made = `a-${agents.size + 1}`;
-        const { base } = input.stack as unknown as {
+        const { base, units } = input.stack as unknown as {
           base: { provider: string; creatable: string };
+          units: { provider: string; unit: string; values: Record<string, string | boolean> }[];
         };
         agents.set(made, {
           agent: made,
@@ -462,9 +479,22 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
           status: { state: "starting" },
           provider: base.provider,
           creatable: base.creatable,
-          skills: [],
-          mcp: [],
+          skills:
+            units.length > 0
+              ? [{ name: "files", description: "Works with files", instance: "i-0" }]
+              : [],
+          mcp:
+            units.length > 0 ? [{ slot: "computer", connection: "c-notes", instance: "i-0" }] : [],
           ...(input.purpose ? { purpose: String(input.purpose) } : {}),
+          units: units.map((u, i) => ({
+            instance: `i-${i}`,
+            provider: u.provider,
+            unit: u.unit,
+            title: UNITS.find((c) => c.id === u.unit)?.title ?? u.unit,
+            values: u.values,
+            needs: {},
+            status: { state: "connected" as const },
+          })),
           chat: { status: { state: "idle" }, messages: [] },
         });
         changed();

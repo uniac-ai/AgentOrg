@@ -13,6 +13,7 @@ import {
 import { useState } from "react";
 import { api, go } from "../data.ts";
 import { Button } from "../ui/button.tsx";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../ui/dialog.tsx";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -88,14 +89,24 @@ export function CreateMenu() {
 
 export function BuildPanel() {
   const building = useBuilding();
-  const { catalog, draft, open, hide, discard, setText, setProblems } = building;
+  const { catalog, draft, open, hide, discard, saveTemplate, setText, setProblems } = building;
   const act = useAct();
+  const [saving, setSaving] = useState(false);
   if (!open || !draft) return null;
   const ready = isReady(draft);
+  const isTemplate = draft.mode === "template";
   const finish = () => {
     if (!ready) return;
-    const stack = toStack(draft);
     const purpose = draft.purpose.trim();
+    if (isTemplate) {
+      act.run(async () => {
+        await saveTemplate(draft.name.trim(), purpose);
+        discard();
+        go({ screen: "settings", tab: "templates" });
+      });
+      return;
+    }
+    const stack = toStack(draft);
     act.run(async () => {
       const { problems } = await api.call<{ problems: StackProblem[] }>("agents", "check", {
         stack,
@@ -125,7 +136,7 @@ export function BuildPanel() {
       >
         <header className="flex h-11 shrink-0 items-center gap-1 pr-2 pl-4">
           <h2 className="min-w-0 flex-1 truncate text-[13px] font-semibold">
-            New agent
+            {isTemplate ? "New template" : "New agent"}
             {draft.from && (
               <span className="font-normal text-muted-foreground"> from {draft.from.title}</span>
             )}
@@ -137,6 +148,11 @@ export function BuildPanel() {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
+              {!isTemplate && (
+                <DropdownMenuItem onSelect={() => setSaving(true)}>
+                  Save as template…
+                </DropdownMenuItem>
+              )}
               <DropdownMenuItem variant="destructive" onSelect={discard}>
                 Discard
               </DropdownMenuItem>
@@ -210,11 +226,60 @@ export function BuildPanel() {
             </p>
           )}
           <Button type="submit" disabled={!ready || act.busy}>
-            Create
+            {isTemplate ? "Save template" : "Create"}
           </Button>
         </footer>
       </form>
+      <SaveTemplate open={saving} onClose={() => setSaving(false)} />
     </SidePanel>
+  );
+}
+
+/** Keeps the stack as it stands, without its secrets; the stack stays open. */
+function SaveTemplate({ open, onClose }: { open: boolean; onClose(): void }) {
+  const { draft, saveTemplate } = useBuilding();
+  const [typed, setTyped] = useState<string>();
+  const act = useAct();
+  const title = typed ?? (draft?.from ? `${draft.from.title} copy` : "");
+  return (
+    <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
+      <DialogContent className="window ring-0 sm:max-w-sm">
+        <form
+          className="flex flex-col gap-4"
+          onSubmit={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            if (!title.trim()) return;
+            act.run(
+              () => saveTemplate(title.trim(), draft?.purpose.trim() ?? ""),
+              () => {
+                setTyped(undefined);
+                onClose();
+              },
+            );
+          }}
+        >
+          <DialogHeader>
+            <DialogTitle>Save as template</DialogTitle>
+          </DialogHeader>
+          <Input
+            aria-label="Template name"
+            value={title}
+            onChange={(e) => setTyped(e.target.value)}
+          />
+          {act.failed && (
+            <p role="alert" className="text-[13px] text-[var(--bad)]">
+              {act.failed}
+            </p>
+          )}
+          <DialogFooter>
+            <Button type="submit" disabled={!title.trim() || act.busy}>
+              Save
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }
 

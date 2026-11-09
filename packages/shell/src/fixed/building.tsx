@@ -12,6 +12,7 @@ import {
   draftFrom,
   type StackProblem,
   type Template,
+  toTemplate,
 } from "./stack.ts";
 
 const EMPTY: Catalog = { bases: [], units: [], templates: [] };
@@ -25,7 +26,10 @@ function readCatalog(): Promise<Catalog> {
 
 function useBuildingState() {
   const chats = useChats();
-  const catalog = useLoad(readCatalog, ["actors"]).value ?? EMPTY;
+  // Saving a template raises no event: `version` reads them again.
+  const [version, setVersion] = useState(0);
+  const catalog = useLoad(readCatalog, ["actors"], [version]).value ?? EMPTY;
+  const reread = () => setVersion((was) => was + 1);
   const [draft, setDraft] = useState<Draft>();
   const [open, setOpen] = useState(false);
   const keys = useRef(0);
@@ -80,6 +84,20 @@ function useBuildingState() {
       changeUnit(key, (u) => ({ values: { ...u.values, [id]: value } })),
     setSecret: (key: number, id: string, value: string) =>
       changeUnit(key, (u) => ({ secrets: { ...u.secrets, [id]: value } })),
+    saveTemplate: (title: string, description: string) =>
+      api
+        .call(
+          "agents",
+          "saveTemplate",
+          toTemplate(
+            draft as Draft,
+            title,
+            description,
+            catalog.templates.map((t) => t.id),
+          ),
+        )
+        .then(reread),
+    removeTemplate: (id: string) => api.call("agents", "removeTemplate", { id }).then(reread),
     setProblems: (problems: StackProblem[]) =>
       setDraft((was) => (was ? { ...was, problems } : was)),
   };

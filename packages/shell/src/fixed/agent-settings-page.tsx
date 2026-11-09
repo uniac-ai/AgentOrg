@@ -102,6 +102,7 @@ export function AgentSettingsPage({ agent: id }: { agent: string }) {
                 key={mcp.slot}
                 mcp={mcp}
                 agentName={agent.name}
+                unit={agent.units.find((u) => u.instance === mcp.instance)?.title}
                 providers={providers ?? []}
                 onRemove={() => change("unexpose", { slot: mcp.slot })}
               />
@@ -132,6 +133,11 @@ export function AgentSettingsPage({ agent: id }: { agent: string }) {
                 <span className="min-w-0 flex-1 truncate text-[13px] text-muted-foreground tight:hidden">
                   {skill.description}
                 </span>
+                {skill.instance && (
+                  <span className="shrink-0 text-[13px] text-muted-foreground">
+                    {agent.units.find((u) => u.instance === skill.instance)?.title}
+                  </span>
+                )}
                 <Button
                   variant="ghost"
                   size="icon-xs"
@@ -201,11 +207,13 @@ function AddMenu({
 function McpRow({
   mcp,
   agentName,
+  unit,
   providers,
   onRemove,
 }: {
   mcp: Mcp;
   agentName: string;
+  unit?: string;
   providers: McpProvider[];
   onRemove(): void;
 }) {
@@ -226,9 +234,10 @@ function McpRow({
         <span className="min-w-0 truncate text-[13px] text-muted-foreground tight:col-span-2 tight:row-start-3">
           {origin && (
             <Jump to={{ screen: "mcps", focus: mcp.connection }}>
-              {origin.madeFor
-                ? `Created for this agent${provider ? ` by ${provider}` : ""}`
-                : "Connected by you"}
+              {unit ??
+                (origin.madeFor
+                  ? `Created for this agent${provider ? ` by ${provider}` : ""}`
+                  : "Connected by you")}
             </Jump>
           )}
         </span>
