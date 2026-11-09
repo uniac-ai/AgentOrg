@@ -2,6 +2,7 @@ import { MessageCircleIcon, Settings2Icon } from "lucide-react";
 import { useState } from "react";
 import { api, go, useLoad } from "../data.ts";
 import { Button } from "../ui/button.tsx";
+import { useChats } from "./chats.tsx";
 import { More, Power, Tip } from "./controls.tsx";
 import { ago, useCreatables } from "./data.ts";
 import { Nothing, Scroll, StateDot } from "./parts.tsx";
@@ -35,6 +36,7 @@ function Fact({ label, value, onClick }: { label: string; value: string; onClick
 /** One agent: what it's for and how it stands, then room for what it will show. */
 export function AgentPage({ agent: id }: { agent: string }) {
   const { byId, loaded, list } = useAgents();
+  const { chatWith } = useChats();
   const watched = byId.get(id);
   const creatables = useCreatables();
   const [failed, setFailed] = useState<string>();
@@ -71,7 +73,7 @@ export function AgentPage({ agent: id }: { agent: string }) {
             <p className="mt-1 text-[15px] text-muted-foreground">{creatable?.description}</p>
           </div>
           <div className="flex shrink-0 items-center gap-1">
-            <Button size="sm" onClick={() => go({ screen: "chat", agent: id })}>
+            <Button size="sm" onClick={() => chatWith(id)}>
               <MessageCircleIcon />
               Chat
             </Button>

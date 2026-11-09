@@ -1,5 +1,5 @@
 // The fixed frontend: agents on the left and in the middle, Settings at the bottom.
-import { PlusIcon, SettingsIcon } from "lucide-react";
+import { MessageCircleIcon, PlusIcon, SettingsIcon } from "lucide-react";
 import { Fragment, useLayoutEffect, useState } from "react";
 import type { LoginStatus } from "../app.tsx";
 import { go, type Route, useRoute } from "../data.ts";
@@ -16,7 +16,8 @@ import { TooltipProvider } from "../ui/tooltip.tsx";
 import { AgentPage } from "./agent-page.tsx";
 import { AgentSettingsPage } from "./agent-settings-page.tsx";
 import { AgentsPage } from "./agents-page.tsx";
-import { ChatPage } from "./chat.tsx";
+import { ChatPanel } from "./chat.tsx";
+import { ChatsProvider, useChats } from "./chats.tsx";
 import { CreateDialog } from "./create.tsx";
 import { McpsPage } from "./mcps-page.tsx";
 import { StateDot } from "./parts.tsx";
@@ -31,7 +32,9 @@ export function FixedShell({ login }: { login?: LoginStatus }) {
   return (
     <AgentsProvider>
       <TooltipProvider>
-        <Frame login={login} />
+        <ChatsProvider>
+          <Frame login={login} />
+        </ChatsProvider>
       </TooltipProvider>
     </AgentsProvider>
   );
@@ -47,16 +50,13 @@ function crumbsOf(route: Route, name: string): { label: string; to?: Route }[] {
   if (inSettings(route)) return [{ label: "Settings" }];
   if (route.screen === "agent") return [home, { label: name }];
   const agent = (route as { agent: string }).agent;
-  return [
-    home,
-    { label: name, to: { screen: "agent", agent } },
-    { label: route.screen === "chat" ? "Chat" : "Settings" },
-  ];
+  return [home, { label: name, to: { screen: "agent", agent } }, { label: "Settings" }];
 }
 
 function Frame({ login }: { login?: LoginStatus }) {
   const route = useRoute();
   const { list, byId } = useAgents();
+  const chats = useChats();
   const [creating, setCreating] = useState(false);
   const current = "agent" in route ? route.agent : undefined;
   const name = list.find((a) => a.agent === current)?.name ?? "";
@@ -69,7 +69,10 @@ function Frame({ login }: { login?: LoginStatus }) {
   );
   const crumbs = crumbsOf(route, name);
   return (
-    <div className="@container/app relative flex h-full w-full bg-[var(--canvas)] text-foreground">
+    <div
+      data-shell
+      className="@container/app relative flex h-full w-full bg-[var(--canvas)] text-foreground"
+    >
       <nav
         aria-label="Main"
         className="flex w-[212px] shrink-0 flex-col gap-0.5 px-2.5 py-2.5 phone:hidden"
@@ -146,6 +149,24 @@ function Frame({ login }: { login?: LoginStatus }) {
             >
               <SettingsIcon />
             </Button>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label={chats.fresh > 0 ? `Chats, ${chats.fresh} new` : "Chats"}
+              aria-pressed={chats.open}
+              className={`relative ${chats.open ? "bg-[var(--selected)]" : ""}`}
+              onClick={chats.toggle}
+            >
+              <MessageCircleIcon />
+              {chats.fresh > 0 && (
+                <span
+                  aria-hidden
+                  className="absolute -top-0.5 -right-0.5 grid size-4 place-items-center rounded-full bg-[var(--unread)] text-[10px] font-semibold text-white"
+                >
+                  {chats.fresh}
+                </span>
+              )}
+            </Button>
           </div>
         </header>
         <div className="relative flex min-h-0 flex-1 gap-2">
@@ -155,11 +176,11 @@ function Frame({ login }: { login?: LoginStatus }) {
             {route.screen === "agent-settings" && (
               <AgentSettingsPage key={route.agent} agent={route.agent} />
             )}
-            {route.screen === "chat" && <ChatPage key={route.agent} agent={route.agent} />}
             {route.screen === "skills" && <SkillsPage focus={route.focus} adding={route.adding} />}
             {route.screen === "mcps" && <McpsPage focus={route.focus} adding={route.adding} />}
             {route.screen === "settings" && <SettingsPage tab={route.tab} login={login} />}
           </main>
+          <ChatPanel />
         </div>
       </div>
       <CreateDialog open={creating} onClose={() => setCreating(false)} />

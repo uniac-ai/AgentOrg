@@ -4,9 +4,11 @@ import { NotConnected, Refused } from "@agentorg/sdk";
 import {
   ArrowUpIcon,
   CheckIcon,
+  ChevronLeftIcon,
   ChevronRightIcon,
   CopyIcon,
   LoaderCircleIcon,
+  MoreHorizontalIcon,
   RefreshCwIcon,
   SquareIcon,
   WrenchIcon,
@@ -15,11 +17,17 @@ import {
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Streamdown } from "streamdown";
 import { USAGE } from "../app.tsx";
-import { api, useConnection, useLoad } from "../data.ts";
+import { api, go, useConnection } from "../data.ts";
 import { signIn } from "../sign-in.ts";
 import { Bubble, BubbleContent } from "../ui/bubble.tsx";
 import { Button } from "../ui/button.tsx";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible.tsx";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "../ui/dropdown-menu.tsx";
 import {
   InputGroup,
   InputGroupAddon,
@@ -36,7 +44,10 @@ import {
   MessageScrollerProvider,
   MessageScrollerViewport,
 } from "../ui/message-scroller.tsx";
-import { type ChatMessage, type ChatStatus, getAgent, useAct, useChatSlots } from "./data.ts";
+import { DOCKED, useChats } from "./chats.tsx";
+import { ago, type ChatMessage, type ChatStatus, useAct } from "./data.ts";
+import { Nothing, SidePanel, StateDot } from "./parts.tsx";
+import { useAgents } from "./watch.tsx";
 
 const PAGE = 100;
 const busyOf = (state: string) => state === "thinking" || state === "tool";
@@ -137,23 +148,127 @@ function useReducedMotion(): boolean {
   );
 }
 
-export function ChatPage({ agent: id }: { agent: string }) {
-  const detail = useLoad(() => getAgent(id), ["actors"], [id]);
-  const slot = useChatSlots().get(id);
-  const agent = detail.value;
-  const act = useAct();
+/** The chats, one session per agent, in the panel the top bar opens. */
+export function ChatPanel() {
+  const { open, thread } = useChats();
+  if (!open) return null;
+  return (
+    <SidePanel label="Chats">
+      {thread ? <Thread key={thread} agent={thread} /> : <List />}
+    </SidePanel>
+  );
+}
+
+function List() {
+  const { sessions, show } = useChats();
   return (
     <>
-      {agent && agent.status.state !== "running" ? (
-        <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
-          <p className="text-[15px]">
-            {agent.status.state === "starting"
+      <h2 className="flex h-11 shrink-0 items-center px-4 text-[13px] font-semibold">Chats</h2>
+      <ul className="no-bar min-h-0 flex-1 overflow-y-auto px-2 pb-2">
+        {sessions.map((session) => (
+          <li key={session.agent}>
+            <button
+              type="button"
+              onClick={() => show(session.agent)}
+              className="flex h-16 w-full items-center gap-2 rounded-xl px-2 text-left hover:bg-[var(--hover)]"
+            >
+              {session.fresh ? (
+                <span
+                  role="img"
+                  aria-label="New"
+                  className="size-2 shrink-0 rounded-full bg-[var(--unread)]"
+                />
+              ) : (
+                <span className="size-2 shrink-0" />
+              )}
+              <span className="min-w-0 flex-1">
+                <span
+                  className={`block truncate text-sm ${session.fresh ? "font-semibold" : "font-medium"}`}
+                >
+                  {session.name}
+                </span>
+                {session.working ? (
+                  <span className="thinking block w-fit text-[13px]">Working</span>
+                ) : (
+                  <span className="block truncate text-[13px] text-muted-foreground">
+                    {session.preview}
+                  </span>
+                )}
+              </span>
+              <span className="shrink-0 self-start pt-3 text-xs tabular-nums text-muted-foreground">
+                {ago(session.at)}
+              </span>
+            </button>
+          </li>
+        ))}
+        {sessions.length === 0 && (
+          <li className="px-2">
+            <Nothing>Start one with Chat on an agent.</Nothing>
+          </li>
+        )}
+      </ul>
+    </>
+  );
+}
+
+function Thread({ agent: id }: { agent: string }) {
+  const { show, close, drop, drafts } = useChats();
+  const { byId } = useAgents();
+  const shell = useRef<HTMLDivElement>(null);
+  const act = useAct();
+  const watched = byId.get(id);
+  if (!watched) return null;
+  const { entry, slot, now } = watched;
+  return (
+    <div ref={shell} className="flex min-h-0 flex-1 flex-col">
+      <header className="flex h-11 shrink-0 items-center gap-1.5 px-2">
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label="All chats"
+          onClick={() => show(undefined)}
+        >
+          <ChevronLeftIcon />
+        </Button>
+        <StateDot tone={now.tone} />
+        <Button
+          variant="link"
+          className="h-auto min-w-0 truncate border-0 p-0 text-[13px] font-semibold text-foreground"
+          onClick={() => {
+            go({ screen: "agent", agent: id });
+            // Over the page, the panel gets out of its way; docked, it stays beside it.
+            const width = shell.current?.closest("[data-shell]")?.clientWidth ?? 0;
+            if (width < DOCKED) close();
+          }}
+        >
+          {entry.name}
+        </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className="ml-auto"
+              aria-label={`${entry.name} chat options`}
+            >
+              <MoreHorizontalIcon />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem onSelect={() => drop(id)}>Remove from Chats</DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </header>
+      {entry.status.state !== "running" ? (
+        <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
+          <p className="text-sm">
+            {entry.status.state === "starting"
               ? "Starting…"
-              : agent.status.state === "stopped"
-                ? `${agent.name} is stopped.`
-                : (agent.status.detail ?? `${agent.name} is down.`)}
+              : entry.status.state === "stopped"
+                ? `${entry.name} is stopped.`
+                : (entry.status.detail ?? `${entry.name} is down.`)}
           </p>
-          {agent.status.state === "stopped" && (
+          {entry.status.state === "stopped" && (
             <Button
               size="sm"
               disabled={act.busy}
@@ -169,13 +284,23 @@ export function ChatPage({ agent: id }: { agent: string }) {
           )}
         </div>
       ) : (
-        agent && slot && <Chat slot={slot} name={agent.name} />
+        slot && <Chat slot={slot} name={entry.name} drafts={drafts} agent={id} />
       )}
-    </>
+    </div>
   );
 }
 
-function Chat({ slot, name }: { slot: string; name: string }) {
+function Chat({
+  slot,
+  name,
+  agent,
+  drafts,
+}: {
+  slot: string;
+  name: string;
+  agent: string;
+  drafts: Map<string, string>;
+}) {
   const connection = useConnection();
   const reduced = useReducedMotion();
   /** The record, in order, and the text still streaming by id. */
@@ -186,7 +311,12 @@ function Chat({ slot, name }: { slot: string; name: string }) {
   /** What the person sent, shown at once, until the record has it. */
   const [sending, setSending] = useState<readonly Sending[]>([]);
   const [hasEarlier, setHasEarlier] = useState(false);
-  const [text, setText] = useState("");
+  // What's half typed waits for the person, in this session.
+  const [text, setTextState] = useState(drafts.get(agent) ?? "");
+  const setText = (value: string) => {
+    drafts.set(agent, value);
+    setTextState(value);
+  };
   // What the async reads below merge into: always the latest.
   const shown = useRef(messages);
   shown.current = messages;
@@ -357,11 +487,11 @@ function Chat({ slot, name }: { slot: string; name: string }) {
   const offered = action && (action.run !== "retry" || messages.some((m) => m.role === "user"));
 
   return (
-    <div className="@container flex h-full flex-col">
+    <div className="flex min-h-0 flex-1 flex-col">
       <MessageScrollerProvider defaultScrollPosition="end">
         <MessageScroller className="min-h-0 flex-1">
           <MessageScrollerViewport className="no-bar">
-            <MessageScrollerContent className="mx-auto w-full max-w-[44rem] gap-8 px-5 pt-8 pb-6 @max-[460px]:px-3.5 @max-[460px]:pt-5">
+            <MessageScrollerContent className="w-full gap-6 px-4 pt-3 pb-4">
               {hasEarlier && (
                 <MessageScrollerItem>
                   <Marker variant="separator" className="justify-center text-xs">
@@ -383,7 +513,7 @@ function Chat({ slot, name }: { slot: string; name: string }) {
                     <Message align="end">
                       <MessageContent>
                         <Bubble variant="secondary" align="end">
-                          <BubbleContent className="rounded-2xl px-3.5 py-2 text-[15px] whitespace-pre-wrap">
+                          <BubbleContent className="rounded-2xl px-3 py-1.5 text-sm whitespace-pre-wrap">
                             {turn.text}
                           </BubbleContent>
                         </Bubble>
@@ -402,7 +532,7 @@ function Chat({ slot, name }: { slot: string; name: string }) {
               ))}
               {thinking && (
                 <MessageScrollerItem>
-                  <div role="status" className="thinking w-fit text-[15px] font-medium">
+                  <div role="status" className="thinking w-fit text-sm font-medium">
                     Thinking
                   </div>
                 </MessageScrollerItem>
@@ -413,7 +543,7 @@ function Chat({ slot, name }: { slot: string; name: string }) {
         </MessageScroller>
       </MessageScrollerProvider>
 
-      <div className="mx-auto w-full max-w-[44rem] shrink-0 px-5 pb-4 @max-[460px]:px-2.5 @max-[460px]:pb-2.5">
+      <div className="shrink-0 px-2.5 pb-2.5">
         {notice && (
           <div
             role="alert"
@@ -434,7 +564,7 @@ function Chat({ slot, name }: { slot: string; name: string }) {
           <InputGroupTextarea
             aria-label="Message"
             placeholder={`Message ${name}`}
-            className="min-h-11 text-[15px]"
+            className="min-h-11 text-sm"
             value={text}
             onChange={(event) => setText(event.target.value)}
             onKeyDown={(event) => {
