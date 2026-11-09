@@ -6,6 +6,7 @@ import { Id, SlotName } from "./hub.js";
 import {
   ConnectionKind,
   ConnectionParams,
+  ConnectionSecrets,
   ConnectionState,
   ConnectionStatus,
   ConnectionTarget,
@@ -139,17 +140,20 @@ export const connections = defineInterface({
                 kind: ConnectionKind,
                 title: z.string().min(1).max(128),
                 params: z.record(z.string(), z.json()),
+                secrets: z.record(z.string(), z.json()),
               }),
             ),
           }),
         ),
       }),
     }),
+    /** `secrets` go to the provider and nowhere else: they are never read back. */
     create: method({
       input: z.object({
         provider: Id,
         kind: ConnectionKind,
         params: ConnectionParams,
+        secrets: ConnectionSecrets.optional(),
         name: ActorName,
       }),
       output: OnConnection,

@@ -130,6 +130,9 @@ test("a connection's status can't carry extra fields, and a creatable's needs sa
   const provider = compiled(mcpProvider);
   assert.equal(provider["status.output"]?.({ state: "connected", tools: [], token: "x" }), false);
   assert.equal(provider["status.output"]?.({ state: "up", tools: [] }), false);
+  const made = { kind: "url", params: { url: "https://x/" }, name: "X" };
+  assert.ok(provider["create.input"]?.({ ...made, secrets: { token: "t" } }));
+  assert.equal(provider["create.input"]?.({ ...made, secrets: { token: "" } }), false);
   assert.equal(
     provider["create.output"]?.({ connection: "act_1", target: "https://x", token: "y" }),
     false,

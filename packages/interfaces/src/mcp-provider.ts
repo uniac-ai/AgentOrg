@@ -22,6 +22,17 @@ export const ConnectionStatus = z.object({
 });
 /** The parameters of a connection, fitting its kind's `params` schema. */
 export const ConnectionParams = z.record(z.string(), z.json());
+/**
+ * What a server needs and shouldn't be seen, by name, such as a bearer token. Write-only: the values
+ * cross once, in `create`, and go only to the provider's own private file.
+ */
+export const ConnectionSecrets = z.record(
+  z
+    .string()
+    .regex(/^[A-Za-z_][A-Za-z0-9_]*$/)
+    .max(256),
+  z.string().min(1).max(16_384),
+);
 /** What a connection attaches to or runs, for people to read: never a secret. */
 export const ConnectionTarget = z.string().min(1).max(4096);
 
@@ -30,9 +41,8 @@ export const ConnectionTarget = z.string().min(1).max(4096);
  * Hub as its own Actor, whose id is `connection`, exporting `tools@1` as `tools`. MCP itself stays
  * behind this interface.
  *
- * A secret a server needs stays with the provider: a kind's parameters say where the provider
- * finds it, such as one of its own environment variables, and its value never crosses this
- * interface, in `params`, `target` or `detail`. `status` and `remove` are refused `unknown` for a connection the
+ * A secret a server needs is given once, in `create`'s `secrets`, and stays with the provider: its
+ * value is never in `params`, `target`, `detail`, or anything else read back. `status` and `remove` are refused `unknown` for a connection the
  * provider doesn't hold.
  */
 export const mcpProvider = defineInterface({
@@ -40,7 +50,7 @@ export const mcpProvider = defineInterface({
   major: 1,
   kind: "rpc",
   methods: {
-    /** The kinds it offers; `params` is the JSON Schema of each kind's parameters. */
+    /** The kinds it offers; `params` and `secrets` are the JSON Schemas of what each one takes. */
     kinds: method({
       input: z.object({}),
       output: z.object({
@@ -49,6 +59,7 @@ export const mcpProvider = defineInterface({
             kind: ConnectionKind,
             title: z.string().min(1).max(128),
             params: z.record(z.string(), z.json()),
+            secrets: z.record(z.string(), z.json()),
           }),
         ),
       }),
@@ -56,12 +67,13 @@ export const mcpProvider = defineInterface({
     /**
      * Make a connection and its Actor, named `name`. It returns once the Actor has joined the Hub,
      * whether or not the server has answered yet; `status` says how it stands. Refused `invalid`
-     * when `kind` isn't offered or `params` don't fit it.
+     * when `kind` isn't offered or `params` or `secrets` don't fit it.
      */
     create: method({
       input: z.object({
         kind: ConnectionKind,
         params: ConnectionParams,
+        secrets: ConnectionSecrets.optional(),
         name: z.string().min(1).max(128),
       }),
       output: z.object({ connection: Id, target: ConnectionTarget }),

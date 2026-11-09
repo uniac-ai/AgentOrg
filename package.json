@@ -11,6 +11,7 @@
     "packages/sdk",
     "packages/interfaces",
     "packages/hub",
+    "packages/mcp",
     "packages/installer",
     "packages/chatgpt",
     "packages/kit",
