@@ -16,7 +16,7 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { Hub, listen, PERSON } from "@agentorg/hub";
-import { hubActors, hubExports, hubGrants, mcpProvider, tools } from "@agentorg/interfaces";
+import { hubActors, hubExports, hubGrants, tools, unitProvider } from "@agentorg/interfaces";
 import { Refused } from "@agentorg/sdk";
 import { connect } from "@agentorg/sdk/client";
 import { McpServer, WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/server";
@@ -84,11 +84,37 @@ async function setup(t: test.TestContext, timing?: Timing) {
     hubUrl: server.url,
     actorId: asked.actorId,
     credential: asked.credential as string,
-    slots: { mcp: mcpProvider },
+    slots: { mcp: unitProvider },
   });
   leaving.push(() => caller.close());
   await until(() => caller.slots.mcp.bound);
-  const mcp = caller.slots.mcp.call;
+  const units = caller.slots.mcp.call;
+  /** A connection as one is made and read: the unit's instance is its connection. */
+  const mcp = {
+    async create(input: {
+      kind: string;
+      params: Record<string, unknown>;
+      secrets?: Record<string, string>;
+      name: string;
+    }) {
+      const { connections } = await units.apply({
+        unit: input.kind,
+        values: { ...input.params, slot: "tools" } as never,
+        secrets: input.secrets ?? {},
+        needs: {},
+        agent: "person",
+        name: input.name,
+      });
+      const made = connections[0] as (typeof connections)[number];
+      return { connection: made.connection, target: made.target };
+    },
+    async status({ connection }: { connection: string }) {
+      const { connections } = await units.status({ instance: connection });
+      const { connection: _, ...status } = connections[0] as (typeof connections)[number];
+      return status;
+    },
+    remove: ({ connection }: { connection: string }) => units.remove({ instance: connection }),
+  };
 
   /** An Actor bound to a connection's `tools`, counting what it hears. */
   const consumerOf = async (connection: string) => {
@@ -116,27 +142,34 @@ async function setup(t: test.TestContext, timing?: Timing) {
   };
   const connected = (connection: string) =>
     until(async () => (await mcp.status({ connection })).state === "connected");
-  return { hub, person, mcp, dir, logged, provider, start, consumerOf, connected };
+  return { hub, person, mcp, units, dir, logged, provider, start, consumerOf, connected };
 }
 
-test("the provider offers its two kinds, each with a JSON Schema of its parameters", async (t) => {
-  const { mcp } = await setup(t);
-  const { kinds } = await mcp.kinds({});
+test("the provider offers its two kinds as units, each making one connection", async (t) => {
+  const { units } = await setup(t);
+  const offered = (await units.units({})).units;
   assert.deepEqual(
-    kinds.map((k) => k.kind),
-    ["url", "command"],
+    offered.map((unit) => [unit.id, unit.gives.slots, unit.needs]),
+    [
+      ["url", [{ field: "slot" }], []],
+      ["command", [{ field: "slot" }], []],
+    ],
   );
-  for (const { params, secrets } of kinds) {
-    assert.equal(params.type, "object");
-    assert.equal(secrets.type, "object");
-  }
-  // People read these on the form that connects a server.
-  const titles = (schema: Record<string, unknown>) =>
-    Object.values(schema.properties as Record<string, { title?: string }>).map((p) => p.title);
-  const [url, command] = kinds;
-  assert.deepEqual(titles(url?.params ?? {}), ["Address"]);
-  assert.deepEqual(titles(url?.secrets ?? {}), ["Token"]);
-  assert.deepEqual(titles(command?.params ?? {}), ["Command", "Arguments", "Working folder"]);
+  assert.deepEqual(
+    offered.map((unit) => unit.form.map((field) => field.title)),
+    [
+      ["Address", "Token", "Name"],
+      ["Command", "Arguments", "Working folder", "Secrets", "Name"],
+    ],
+  );
+  await assert.rejects(
+    units.skill({ unit: "url", name: "x", path: "SKILL.md" }),
+    refused("unknown"),
+  );
+});
+
+test("what doesn't fit its kind is refused", async (t) => {
+  const { mcp } = await setup(t);
   await assert.rejects(mcp.create({ kind: "smoke", params: {}, name: "X" }), refused("invalid"));
   await assert.rejects(mcp.create({ kind: "url", params: {}, name: "X" }), refused("invalid"));
   await assert.rejects(
@@ -170,6 +203,62 @@ test("the provider offers its two kinds, each with a JSON Schema of its paramete
     }),
     refused("invalid"),
   );
+});
+
+test("its own check says what can't connect, without being given a secret", async (t) => {
+  const { units } = await setup(t);
+  const check = (unit: string, values: object, secrets: string[] = []) =>
+    units.check({ unit, values: { ...values, slot: "a" } as never, secrets });
+  assert.deepEqual((await check("url", { url: "https://x.example/" }, ["token"])).problems, []);
+  assert.equal((await check("url", { url: "ftp://x.example/" })).problems.length, 1);
+  assert.match(
+    (await check("url", { url: "http://x.example/" }, ["token"])).problems[0]?.message as string,
+    /only over https/,
+  );
+  assert.deepEqual(
+    (await check("command", { command: "x" }, ["agentorgEnvironmentLines"])).problems,
+    [],
+  );
+});
+
+test("a command's secrets come as lines or by name, and are its environment", async (t) => {
+  const { mcp, units, connected, dir } = await setup(t);
+  const secret = `value=${randomUUID()}`;
+  const made = await units.apply({
+    unit: "command",
+    values: { ...command, slot: "tools" },
+    secrets: { agentorgEnvironmentLines: `FIRST=${secret}\r\n\nSECOND=2\n` },
+    needs: {},
+    agent: "person",
+    name: "Lines",
+  });
+  await connected(made.instance);
+  const kept = JSON.parse(readFileSync(join(dir, "connections.json"), "utf8"));
+  assert.deepEqual(kept[made.instance].secrets, { FIRST: secret, SECOND: "2" });
+  assert.deepEqual(kept[made.instance].params, command, "its name isn't a parameter");
+  await assert.rejects(
+    units.apply({
+      unit: "command",
+      values: { ...command, slot: "tools" },
+      secrets: { agentorgEnvironmentLines: "no equals sign" },
+      needs: {},
+      agent: "person",
+      name: "Bad",
+    }),
+    (error: unknown) =>
+      refused("invalid")(error) && !(error as Error).message.includes("no equals"),
+  );
+  await mcp.remove({ connection: made.instance });
+  // A variable called `env` is one like any other.
+  const plain = await mcp.create({
+    kind: "command",
+    params: command,
+    secrets: { env: "plainvalue" },
+    name: "Named env",
+  });
+  const after = JSON.parse(readFileSync(join(dir, "connections.json"), "utf8"));
+  assert.deepEqual(after[plain.connection].secrets, { env: "plainvalue" });
+  await mcp.remove(plain);
 });
 
 test("a server connected by hand shows in hub.exports as tools@1, and its tools run", async (t) => {

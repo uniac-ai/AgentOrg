@@ -14,6 +14,15 @@ export {
   SkillPath,
 } from "./agent-settings.js";
 export { ChatMessage, ChatState, ChatStatus, ChatTool, chat } from "./chat.js";
+export {
+  ConnectionKind,
+  ConnectionParams,
+  ConnectionSecrets,
+  ConnectionState,
+  ConnectionStatus,
+  ConnectionTarget,
+  ConnectionTool,
+} from "./connection.js";
 export { FOLDERS_MAX, folders } from "./folders.js";
 export {
   Actor,
@@ -41,16 +50,6 @@ export {
   Template,
   TemplateId,
 } from "./manager.js";
-export {
-  ConnectionKind,
-  ConnectionParams,
-  ConnectionSecrets,
-  ConnectionState,
-  ConnectionStatus,
-  ConnectionTarget,
-  ConnectionTool,
-  mcpProvider,
-} from "./mcp-provider.js";
 export { ToolEntry, tools } from "./tools.js";
 export {
   Field,

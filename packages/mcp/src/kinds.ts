@@ -1,3 +1,4 @@
+import type { Unit } from "@agentorg/interfaces";
 import { z } from "zod";
 
 const SecretValue = z.string().min(1).max(16_384);
@@ -40,6 +41,77 @@ export const KINDS = [
     secrets: CommandSecrets,
   },
 ] as const;
+
+/** The secret holding a command's environment as lines; named so that no variable is called it. */
+const LINES = "agentorgEnvironmentLines";
+const NAME = {
+  id: "slot",
+  type: "text",
+  value: "string",
+  title: "Name",
+  description: "What the agent knows this connection as.",
+  required: true,
+} as const;
+const GIVES = { slots: [{ field: "slot" }], skills: [], results: [] };
+
+/** Each kind as a unit: it gives one connection, under the name it is filled in with. */
+export const UNITS = [
+  {
+    id: "url",
+    title: "A server at an address",
+    description: "Connects to an MCP server over HTTP.",
+    form: [
+      {
+        id: "url",
+        type: "text",
+        value: "string",
+        title: "Address",
+        description: "It is shown and kept as written: a token goes in Token.",
+        required: true,
+      },
+      { id: "token", type: "secret", value: "secret", title: "Token" },
+      NAME,
+    ],
+    needs: [],
+    gives: GIVES,
+  },
+  {
+    id: "command",
+    title: "A local server this machine starts",
+    description: "Starts an MCP server with this app's rights.",
+    form: [
+      { id: "command", type: "text", value: "string", title: "Command", required: true },
+      { id: "args", type: "text", value: "strings", title: "Arguments" },
+      { id: "cwd", type: "directory", value: "string", title: "Working folder" },
+      {
+        id: LINES,
+        type: "environment",
+        value: "secret",
+        title: "Secrets",
+        description: "One NAME=value per line: each is an environment variable of the server.",
+      },
+      NAME,
+    ],
+    needs: [],
+    gives: GIVES,
+  },
+] satisfies z.input<typeof Unit>[];
+
+/**
+ * What a unit's secrets mean to a connection: the lines are environment variables by name.
+ * Secrets that come by name already are as they are. A line is named by position, never by content.
+ */
+export function namedSecrets(secrets: Secrets): { secrets?: Secrets; why?: string } {
+  const { [LINES]: lines, ...named } = secrets;
+  if (lines === undefined) return { secrets: named };
+  for (const [index, line] of lines.split(/\r?\n/).entries()) {
+    if (line.trim() === "") continue;
+    const split = line.indexOf("=");
+    if (split < 1) return { why: `Line ${index + 1} of the secrets isn't NAME=value.` };
+    named[line.slice(0, split).trim()] = line.slice(split + 1);
+  }
+  return { secrets: named };
+}
 
 const LOOPBACK = new Set(["127.0.0.1", "localhost", "[::1]"]);
 

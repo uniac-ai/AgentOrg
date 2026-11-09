@@ -7,23 +7,24 @@ import {
   type ConnectionOrigin,
   type ConnectionStatus,
   connections,
+  type FieldValues,
   hubActors,
   hubBindings,
   hubGrants,
-  mcpProvider,
   skills,
   type Template,
+  type Unit,
   unitProvider,
 } from "@agentorg/interfaces";
 import { describeInterface, type Interface, type Log, Refused, type Slot } from "@agentorg/sdk";
 import { connect } from "@agentorg/sdk/client";
 import type { z } from "zod";
+import { schemaOf, secretsSchemaOf, settle } from "./form.js";
 import { createSkills, readSkillFolder } from "./skills.js";
 import { type AgentRecord, createStacks, Records } from "./stack.js";
 
 type Origin = z.infer<typeof ConnectionOrigin>;
 type Agents = Slot<typeof agentProvider>["call"];
-type Mcp = Slot<typeof mcpProvider>["call"];
 type Units = Slot<typeof unitProvider>["call"];
 type Status = z.infer<typeof ConnectionStatus>;
 
@@ -49,6 +50,21 @@ export interface Manager {
 
 const quiet: Log = { info() {}, warn() {}, error() {} };
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
+/** The slot a connection is made for by the person: no agent has it yet, so it names nothing. */
+const PERSON_SLOT = "tools";
+/** A unit that makes one connection and nothing else, by the field that names it, is a kind. */
+const slotFieldOf = ({ needs, gives, form }: z.infer<typeof Unit>) => {
+  const [slot] = gives.slots;
+  return slot &&
+    "field" in slot &&
+    gives.slots.length === 1 &&
+    !needs.length &&
+    !gives.skills.length &&
+    !gives.results.length &&
+    !form.some((field) => field.adds || field.options?.some((option) => option.adds))
+    ? slot.field
+    : undefined;
+};
 const alreadyGone = (error: unknown) => error instanceof Refused && error.code === "unknown";
 
 /**
@@ -64,7 +80,7 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
   chmodSync(dir, 0o700);
   const path = join(dir, FILE);
   const read = (): z.infer<typeof Records> => {
-    const empty = { agents: {}, connections: {}, templates: {} };
+    const empty = { agents: {}, connections: {}, templates: {}, instances: {} };
     let raw: string;
     try {
       raw = readFileSync(path, "utf8");
@@ -111,7 +127,6 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
           .map(({ provider, call }) => ({ actor: provider.actor, call: call as unknown as T }));
       };
       const agentProviders = () => exposed<Agents>(agentProvider);
-      const mcpProviders = () => exposed<Mcp>(mcpProvider);
       const unitProviders = () => exposed<Units>(unitProvider);
       const named = <T extends { actor: string }>(list: T[], actor: string, what: string) => {
         const found = list.find((one) => one.actor === actor);
@@ -152,6 +167,11 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
           return { state: "down" as const, detail: "Its provider can't be reached." };
         }
       };
+      const instanceOf = (connection: string) => records.instances[connection] ?? connection;
+      const forget = (connection: string) => {
+        delete records.connections[connection];
+        delete records.instances[connection];
+      };
       const connectionStatus = async (connection: string): Promise<Status> => {
         const unit = stacks.unitMaking(connection);
         if (unit) return stacks.connectionStatus(unit, connection);
@@ -161,12 +181,10 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
           const { connected } = await hub.actors.get({ actorId: connection });
           return { state: connected ? "connected" : "down", tools: [] };
         }
-        try {
-          const mcp = named(mcpProviders(), origin.provider, "MCP provider");
-          return await mcp.call.status({ connection });
-        } catch {
-          return { state: "down", detail: "Its provider can't be reached.", tools: [] };
-        }
+        return stacks.connectionStatus(
+          { provider: origin.provider, providerInstance: instanceOf(connection) },
+          connection,
+        );
       };
       const exposeConnection = async (agent: string, connection: string, as?: string) => {
         const { slot } = await hub.grants.expose({
@@ -179,9 +197,9 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
       };
       /** Remove a connection through its provider; one that has lost it leaves only the Actor. */
       const removeConnection = async (connection: string, provider: string) => {
-        const mcp = mcpProviders().find((one) => one.actor === provider);
+        const maker = unitProviders().find((one) => one.actor === provider);
         try {
-          if (mcp) return void (await mcp.call.remove({ connection }));
+          if (maker) return void (await maker.call.remove({ instance: instanceOf(connection) }));
         } catch (error) {
           if (!alreadyGone(error)) throw error;
         }
@@ -390,7 +408,7 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
             for (const [connection, origin] of Object.entries(records.connections)) {
               if (origin.madeFor !== agent) continue;
               await removeConnection(connection, origin.provider);
-              delete records.connections[connection];
+              forget(connection);
               save();
             }
             await removeAgent(agent, record.provider);
@@ -402,21 +420,61 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
 
       ctx.exports.connections.implement({
         providers: async () => ({
-          providers: await fromEach(mcpProviders(), async ({ actor, call }) => ({
-            provider: actor,
-            name: await nameOf(actor),
-            kinds: (await call.kinds({})).kinds,
-          })),
+          providers: (
+            await fromEach(unitProviders(), async ({ actor, call }) => ({
+              provider: actor,
+              name: await nameOf(actor),
+              kinds: (
+                await call.units({})
+              ).units.flatMap((unit) => {
+                const slot = slotFieldOf(unit);
+                if (!slot) return [];
+                const fields = unit.form.filter((field) => field.id !== slot);
+                return [
+                  {
+                    kind: unit.id,
+                    title: unit.title,
+                    params: JSON.parse(JSON.stringify(schemaOf(fields))),
+                    secrets: JSON.parse(JSON.stringify(secretsSchemaOf(fields))),
+                  },
+                ];
+              }),
+            }))
+          ).filter(({ kinds }) => kinds.length > 0),
         }),
         // `secrets` go straight to the provider: nothing here keeps or logs them.
-        async create({ provider, kind, params, secrets, name }, { caller }) {
-          const mcp = named(mcpProviders(), provider, "MCP provider");
-          const { connection, target } = await mcp.call.create({
-            kind,
-            params,
+        async create({ provider, kind, params, secrets = {}, name }, { caller }) {
+          const { call } = named(unitProviders(), provider, "connection provider");
+          const unit = (await call.units({})).units.find((one) => one.id === kind);
+          const slot = unit && slotFieldOf(unit);
+          if (!unit || !slot) throw new Refused("invalid", `${provider} offers no ${kind}.`);
+          const declared = Object.keys(secrets).filter((id) =>
+            unit.form.some((field) => field.id === id && field.value === "secret"),
+          );
+          const settled = settle(
+            unit.form,
+            { ...params, [slot]: PERSON_SLOT } as z.infer<typeof FieldValues>,
+            declared,
+          );
+          if (settled.problems.length)
+            throw new Refused("invalid", settled.problems.map((one) => one.message).join(" "));
+          const applied = await call.apply({
+            unit: kind,
+            values: settled.values,
+            secrets,
+            needs: {},
+            agent: "person",
             name,
-            ...(secrets ? { secrets } : {}),
           });
+          const [made] = applied.connections;
+          if (!made || applied.connections.length !== 1) {
+            await call.remove({ instance: applied.instance }).catch(async () => {
+              for (const one of applied.connections)
+                await hub.actors.close({ actorId: one.connection });
+            });
+            throw new Refused("failed", `${kind} didn't make one connection.`);
+          }
+          const { connection, target } = made;
           try {
             records.connections[connection] = {
               provider,
@@ -425,10 +483,11 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
               madeBy: caller,
               at: new Date().toISOString(),
             };
+            records.instances[connection] = applied.instance;
             save();
           } catch (error) {
-            delete records.connections[connection];
             await closing(connection, () => removeConnection(connection, provider));
+            forget(connection);
             throw error;
           }
           return { connection };
@@ -467,7 +526,7 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
           if (stacks.unitMaking(connection))
             throw new Refused("state", "This connection came with a unit: remove the unit.");
           await removeConnection(connection, origin.provider);
-          delete records.connections[connection];
+          forget(connection);
           save();
           return {};
         },

@@ -23,7 +23,6 @@ import {
   hubActors,
   hubBindings,
   hubGrants,
-  mcpProvider,
   skills,
   tools,
   unitProvider,
@@ -78,6 +77,18 @@ const UNITS = [
       skills: [{ name: "notes", files: ["SKILL.md", "more/guide.md"] }],
       results: [],
     },
+  },
+  {
+    id: "stand-in",
+    title: "Stand-in",
+    description: "Makes one connection, and is a kind of connection for that.",
+    form: [
+      { id: "url", type: "text", value: "string", title: "Address" },
+      { id: "token", type: "secret", value: "secret", title: "Token" },
+      { id: "slot", type: "text", value: "string", title: "Name", required: true },
+    ],
+    needs: [],
+    gives: { slots: [{ field: "slot" }], skills: [], results: [] },
   },
   {
     id: "computer",
@@ -157,13 +168,11 @@ async function setup(t: test.TestContext) {
   } = {};
   const given: {
     secrets: unknown[];
-    params: unknown[];
     removed: string[];
     applied: { unit: string; values: object; secrets: object; needs: object; agent: string }[];
     checked: { unit: string; values: object; secrets: string[] }[];
   } = {
     secrets: [],
-    params: [],
     removed: [],
     applied: [],
     checked: [],
@@ -238,54 +247,6 @@ async function setup(t: test.TestContext) {
   });
   leaving.push(() => agentsProvider.close());
 
-  // A stand-in MCP provider: each connection is an Actor offering tools.
-  const mcpActor = hub.state.createActor(PERSON, {
-    name: "MCP",
-    bindings: [{ slot: "actors", provider: "hub", export: "actors" }],
-  });
-  const mcpClient = await connect({
-    hubUrl: server.url,
-    actorId: mcpActor.actorId,
-    credential: mcpActor.credential as string,
-    slots: { actors: hubActors },
-    exports: { provider: mcpProvider },
-    start(ctx) {
-      const held = new Map<string, { close(): void }>();
-      ctx.exports.provider.implement({
-        kinds: () => ({
-          kinds: [{ kind: "stand-in", title: "Stand-in", params: {}, secrets: {} }],
-        }),
-        async create({ params, secrets, name }) {
-          given.params.push(params);
-          given.secrets.push(secrets);
-          const { actorId, credential } = await ctx.slots.actors.call.create({ name });
-          const client = await connect({
-            hubUrl: server.url,
-            actorId,
-            credential: credential as string,
-            exports: script.noTools ? {} : { tools },
-          });
-          held.set(actorId, client);
-          leaving.push(() => client.close());
-          return { connection: actorId, target: "a stand-in server" };
-        },
-        status: ({ connection }) => {
-          if (!held.has(connection)) throw new Refused("unknown", "Not held.");
-          return { state: "connected" as const, tools: [{ name: "read" }] };
-        },
-        async remove({ connection }) {
-          if (!held.has(connection)) throw new Refused("unknown", "Not held.");
-          given.removed.push(connection);
-          held.get(connection)?.close();
-          held.delete(connection);
-          await ctx.slots.actors.call.close({ actorId: connection });
-          return {};
-        },
-      });
-    },
-  });
-  leaving.push(() => mcpClient.close());
-
   // A stand-in unit provider: an instance holds the connections it made, each an Actor.
   const unitsActor = hub.state.createActor(PERSON, {
     name: "Units",
@@ -313,12 +274,15 @@ async function setup(t: test.TestContext) {
           await script.during?.();
           failing("apply");
           given.applied.push({ unit, values, secrets, needs, agent });
+          given.secrets.push(secrets);
           const slots =
             unit === "files"
               ? ["files", ...(values.extra ? ["extra"] : [])]
               : unit === "terminal"
                 ? ["terminal"]
-                : [];
+                : unit === "stand-in"
+                  ? [values.slot as string]
+                  : [];
           const made = [];
           for (const slot of slots) {
             const { actorId, credential } = await ctx.slots.actors.call.create({ name });
@@ -333,6 +297,8 @@ async function setup(t: test.TestContext) {
           }
           const instance = `inst-${crypto.randomUUID()}`;
           held.set(instance, made);
+          // One made before units is known by its connection.
+          for (const { connection } of made) held.set(connection, made);
           return {
             instance,
             connections: made.map(({ slot, connection }) => ({
@@ -368,6 +334,7 @@ async function setup(t: test.TestContext) {
             await ctx.slots.actors.call.close({ actorId: connection });
           }
           held.delete(instance);
+          for (const { connection } of made) held.delete(connection);
           return {};
         },
       });
@@ -376,7 +343,7 @@ async function setup(t: test.TestContext) {
   leaving.push(() => unitsClient.close());
 
   // A provider is connected by exposing its export to management; nothing else says so.
-  for (const actor of [agentActor.actorId, mcpActor.actorId, unitsActor.actorId])
+  for (const actor of [agentActor.actorId, unitsActor.actorId])
     await person.slots.grants.call.expose({
       provider: actor,
       export: "provider",
@@ -422,7 +389,7 @@ async function setup(t: test.TestContext) {
   const picked = async () =>
     (
       await caller.slots.connections.call.create({
-        provider: mcpActor.actorId,
+        provider: unitsActor.actorId,
         kind: "stand-in",
         params: {},
         name: "Search",
@@ -471,7 +438,11 @@ async function setup(t: test.TestContext) {
     writeFileSync(path, JSON.stringify(kept));
     manager = await startManagement();
     await until(() => caller.slots.agents.bound);
-    for (let i = 0; (await caller.slots.agents.call.units({})).units.length < 5; i++) {
+    for (
+      let i = 0;
+      (await caller.slots.agents.call.units({})).units.length < 2 + UNITS.length;
+      i++
+    ) {
       assert.ok(i < 300, "the units never came back");
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
@@ -485,7 +456,6 @@ async function setup(t: test.TestContext) {
     given,
     heard,
     agentActor,
-    mcpActor,
     unitsActor,
     management,
     base,
@@ -521,7 +491,7 @@ test("a provider counts once it has exposed its export to management", async (t)
   const mcp = await s.calls.connections.providers({});
   assert.deepEqual(
     mcp.providers.map((p) => [p.provider, p.name, p.kinds.map((k) => k.kind)]),
-    [[s.mcpActor.actorId, "MCP", ["stand-in"]]],
+    [[s.unitsActor.actorId, "Units", ["stand-in"]]],
   );
   // Un-exposed, it is gone: the Hub's binding was the only record.
   const { bindings } = await s.person.slots.bindings.call.list({ actor: s.management.actorId });
@@ -639,10 +609,8 @@ test("mid-creation the agent can't be seen or saved, and its settings are alread
   const s = await setup(t);
   await s.calls.skills.add({ files: { "SKILL.md": SKILL("other") } });
   const { agent: bystander } = await s.calls.agents.create({
-    provider: s.agentActor.actorId,
-    creatable: "plain",
+    stack: { base: s.base, units: [] },
     name: "Bystander",
-    answers: {},
   });
   const search = await s.picked();
   let listed: string[] | undefined;
@@ -687,10 +655,8 @@ test("a skill that calls itself something else is refused before the one of that
 test("a skill an undone creation added stays if another agent was given it meanwhile", async (t) => {
   const s = await setup(t);
   const { agent: other } = await s.calls.agents.create({
-    provider: s.agentActor.actorId,
-    creatable: "plain",
+    stack: { base: s.base, units: [] },
     name: "Other",
-    answers: {},
   });
   // The skill arrives with the first unit; the second is where it fails.
   s.script.during = async () => {
@@ -708,7 +674,7 @@ test("a connection or agent whose provider has gone can still be removed", async
   const s = await setup(t);
   const connection = await s.picked();
   const agent = await s.makeFull(connection);
-  for (const provider of [s.mcpActor.actorId, s.unitsActor.actorId, s.agentActor.actorId]) {
+  for (const provider of [s.unitsActor.actorId, s.agentActor.actorId]) {
     const { bindings } = await s.person.slots.bindings.call.list({ actor: s.management.actorId });
     const slot = bindings.find((b) => b.provider === provider)?.slot as string;
     await s.person.slots.grants.call.unexpose({ to: s.management.actorId, slot });
@@ -733,15 +699,16 @@ test("what can't be made refuses before anything is made", async (t) => {
   assert.deepEqual(await s.openActors(), actors);
   await assert.rejects(
     s.calls.agents.create({
-      provider: s.agentActor.actorId,
-      creatable: "nothing",
+      stack: { base: { ...s.base, creatable: "nothing" }, units: [] },
       name: "X",
-      answers: {},
     }),
     refused("unknown"),
   );
   await assert.rejects(
-    s.calls.agents.create({ provider: "act_x", creatable: "plain", name: "X", answers: {} }),
+    s.calls.agents.create({
+      stack: { base: { ...s.base, provider: "act_x" }, units: [] },
+      name: "X",
+    }),
     refused("unknown"),
   );
 });
@@ -762,14 +729,7 @@ test("a unit's skill whose name is here keeps the one here, and survives a failu
 test("an agent sees only its own settings, and only it hears that they changed", async (t) => {
   const s = await setup(t);
   const make = async (name: string) =>
-    (
-      await s.calls.agents.create({
-        provider: s.agentActor.actorId,
-        creatable: "plain",
-        name,
-        answers: {},
-      })
-    ).agent;
+    (await s.calls.agents.create({ stack: { base: s.base, units: [] }, name })).agent;
   const [a, b] = [await make("A"), await make("B")];
   const [one, other] = [s.agentChannel(a), s.agentChannel(b)];
   await until(() => one.slots.settings.bound && other.slots.settings.bound);
@@ -856,10 +816,8 @@ test("a unit that can't go leaves the agent to be tried again", async (t) => {
 test("an agent is told what it's for", async (t) => {
   const s = await setup(t);
   const { agent } = await s.calls.agents.create({
-    provider: s.agentActor.actorId,
-    creatable: "plain",
+    stack: { base: s.base, units: [] },
     name: "Pat",
-    answers: {},
     purpose: "Keeps the docs tidy.",
   });
   assert.equal((await s.calls.agents.get({ agent })).purpose, "Keeps the docs tidy.");
@@ -889,6 +847,7 @@ test("every unit on offer is listed, management's own among them", async (t) => 
       ["skill", "Management"],
       ["connection", "Management"],
       ["files", "Units"],
+      ["stand-in", "Units"],
       ["computer", "Units"],
       ["terminal", "Units"],
     ],
@@ -1260,7 +1219,7 @@ test("a Connection unit stands as its connection does", async (t) => {
   const agent = await s.makeStack([s.own("connection", { connection, slot: "search" })]);
   assert.equal((await s.calls.agents.get({ agent })).units[0]?.status.state, "connected");
   const { bindings } = await s.person.slots.bindings.call.list({ actor: s.management.actorId });
-  const slot = bindings.find((b) => b.provider === s.mcpActor.actorId)?.slot as string;
+  const slot = bindings.find((b) => b.provider === s.unitsActor.actorId)?.slot as string;
   await s.person.slots.grants.call.unexpose({ to: s.management.actorId, slot });
   for (let i = 0; (await s.calls.agents.get({ agent })).units[0]?.status.state !== "down"; i++) {
     assert.ok(i < 300, "it never read as down");
@@ -1271,15 +1230,14 @@ test("a Connection unit stands as its connection does", async (t) => {
 test("an agent from before units reads and goes as it did", async (t) => {
   const s = await setup(t);
   const { agent } = await s.calls.agents.create({
-    provider: s.agentActor.actorId,
-    creatable: "plain",
+    stack: { base: s.base, units: [] },
     name: "Old",
-    answers: {},
   });
   const connection = await s.picked();
   await s.calls.agents.expose({ agent, connection, as: "search" });
   await s.restart((kept) => {
     delete kept.templates;
+    delete kept.instances;
     delete (kept.agents as unknown as Record<string, { units?: unknown }>)[agent]?.units;
   });
   const read = await s.calls.agents.get({ agent });
@@ -1287,18 +1245,73 @@ test("an agent from before units reads and goes as it did", async (t) => {
     read.units.map((one) => one.instance),
     ["slot:search"],
   );
+  assert.deepEqual(read.units[0]?.status, { state: "connected" });
   assert.deepEqual((await s.calls.agents.templates({})).templates, []);
   await s.calls.agents.remove({ agent });
   assert.deepEqual((await s.calls.agents.list({})).agents, []);
+  // A connection the person made before units goes through the provider, by its own id.
+  await s.calls.connections.remove({ connection });
+  assert.ok(s.given.removed.includes(connection));
+  assert.ok(!(await s.openActors()).includes(connection));
+});
+
+test("a connection the person makes is a unit that makes one, with no agent yet", async (t) => {
+  const s = await setup(t);
+  const [provider] = (await s.calls.connections.providers({})).providers;
+  assert.deepEqual(provider?.kinds, [
+    {
+      kind: "stand-in",
+      title: "Stand-in",
+      params: {
+        type: "object",
+        properties: { url: { type: "string", title: "Address" } },
+        required: [],
+      },
+      secrets: { type: "object", properties: { token: { type: "string", title: "Token" } } },
+    },
+  ]);
+  const { connection } = await s.calls.connections.create({
+    provider: s.unitsActor.actorId,
+    kind: "stand-in",
+    params: { url: "x" },
+    name: "Made",
+  });
+  assert.deepEqual(s.given.applied.at(-1), {
+    unit: "stand-in",
+    values: { url: "x", slot: "tools" },
+    secrets: {},
+    needs: {},
+    agent: "person",
+  });
+  assert.equal((await s.calls.connections.get({ connection })).status.state, "connected");
+  await assert.rejects(
+    s.calls.connections.create({
+      provider: s.unitsActor.actorId,
+      kind: "files",
+      params: { folder: "/a" },
+      name: "Not a kind",
+    }),
+    refused("invalid"),
+  );
+  await assert.rejects(
+    s.calls.connections.create({
+      provider: s.unitsActor.actorId,
+      kind: "stand-in",
+      params: { unknown: "x" },
+      name: "Unknown",
+    }),
+    refused("invalid"),
+  );
+  await s.calls.connections.remove({ connection });
+  assert.equal(s.given.removed.length, 1);
+  await assert.rejects(s.calls.connections.get({ connection }), refused("unknown"));
 });
 
 test("exposing a connection is a Hub binding and nothing else; removing one takes its exposures", async (t) => {
   const s = await setup(t);
   const { agent } = await s.calls.agents.create({
-    provider: s.agentActor.actorId,
-    creatable: "plain",
+    stack: { base: s.base, units: [] },
     name: "Pat",
-    answers: {},
   });
   const connection = await s.picked();
   const before = readFileSync(join(s.dir, "manager.json"), "utf8");
@@ -1321,7 +1334,7 @@ test("secrets pass through to the provider, and management keeps none", async (t
   const s = await setup(t);
   const secret = `secret-${crypto.randomUUID()}`;
   const { connection } = await s.calls.connections.create({
-    provider: s.mcpActor.actorId,
+    provider: s.unitsActor.actorId,
     kind: "stand-in",
     params: { url: "x" },
     secrets: { token: secret },

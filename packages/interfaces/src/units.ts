@@ -1,8 +1,8 @@
 import { defineInterface, method } from "@agentorg/sdk";
 import { z } from "zod";
 import { SKILL_FILE_MAX, SkillName, SkillPath } from "./agent-settings.js";
+import { ConnectionSecrets, ConnectionStatus, ConnectionTarget } from "./connection.js";
 import { Id, SlotName } from "./hub.js";
-import { ConnectionSecrets, ConnectionStatus, ConnectionTarget } from "./mcp-provider.js";
 
 const Slug = z
   .string()
@@ -142,7 +142,8 @@ export const unitProvider = defineInterface({
      * Run a unit for an agent. `needs` holds the handle of each result it needs, by kind. `name` is
      * for what it makes to show: an Actor's name. Each connection is an Actor exporting `tools@1`
      * as `tools`, for management to expose under `slot`. The slots must be those the description
-     * and the values work out to, or management undoes the creation.
+     * and the values work out to, or management undoes the creation. `agent` is `person` for a
+     * connection the person makes for no agent yet.
      */
     apply: method({
       input: z.object({

@@ -222,10 +222,17 @@ test("a socket's subscriptions end when asked, and it holds 256 at most", async 
     [257],
   );
   for (let sub = 1; sub <= 256; sub++) cli.send({ sub, op: "unsubscribe" });
-  await new Promise((resolve) => setTimeout(resolve, 100));
-  await cli.call("actors", "create", { name: "Heard by nobody" });
-  await new Promise((resolve) => setTimeout(resolve, 100));
-  assert.equal(cli.events.filter((e) => e.payload).length, 0);
+  // A call is answered after all that was sent before it, so they have all ended by now. What the
+  // first run did before this was heard, as it should be, so only what comes after counts.
+  await cli.call("actors", "list");
+  const from = cli.events.length;
+  cli.subscribe(258, "actors", "changed");
+  await cli.call("actors", "create", { name: "Heard by one" });
+  await until(() => cli.events.slice(from).some((e) => e.sub === 258));
+  assert.deepEqual(
+    cli.events.slice(from).filter((e) => e.sub !== 258),
+    [],
+  );
 });
 
 test("an upgrade that resets before it's refused doesn't stop the app", async (t) => {
