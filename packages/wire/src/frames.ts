@@ -1,6 +1,6 @@
 import { ByteQueue } from "./bytes.js";
 
-/** The largest JSON frame: 1 MiB. `stream` and `http` bodies are raw bytes, not frames. */
+/** The largest JSON frame: 1 MiB. */
 export const MAX_FRAME = 1024 * 1024;
 
 export class FrameError extends Error {
@@ -21,8 +21,7 @@ export function encodeFrame(value: unknown): Uint8Array {
 }
 
 /**
- * Reads frames from a byte stream, then hands over what follows them untouched: a stream starts
- * with a header frame, and for `open` and `http` the rest is raw bytes.
+ * Reads frames from a byte stream, and can hand over what follows them untouched.
  */
 export class FrameReader {
   readonly #reader: ReadableStreamDefaultReader<Uint8Array>;

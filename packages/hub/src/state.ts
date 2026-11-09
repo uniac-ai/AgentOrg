@@ -377,7 +377,7 @@ export class HubState {
     caller: string,
     /** The binding the call went through; an unbound slot has only its consumer and slot. */
     binding: Pick<Wiring, "consumer" | "slot"> & Partial<Wiring>,
-    call: { op: "call" | "subscribe" | "open" | "http"; method?: string; outcome: CallOutcome },
+    call: { op: "call" | "subscribe"; method?: string; outcome: CallOutcome },
   ): void {
     this.#transaction(() => this.#audit(caller, "call", { ...binding, ...call }));
   }
@@ -869,11 +869,6 @@ export class HubState {
     const offered = this.declaration(provider.actorId, "export", input.export);
     if (!offered)
       throw new Refused("unknown", `${this.named(provider.actorId)} offers no ${input.export}.`);
-    if (offered.iface.kind !== "rpc")
-      throw new Refused(
-        "unsupported",
-        `Only an rpc export can be exposed; ${input.export} is ${offered.iface.kind}.`,
-      );
     const already = this.bindings(to.actorId).find(
       (b) =>
         b.consumer === to.actorId &&

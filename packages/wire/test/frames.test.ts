@@ -223,7 +223,6 @@ test("headers and bodies are checked for their shape", () => {
     { op: "slot", name: "q", bound: true, exposed: { ...exposure, provider: { actor: "a" } } },
     { op: "call", slot: "s" },
     { op: "call", slot: "", method: "m" },
-    { op: "open", slot: "tty" },
     { op: "serve", kind: "x", export: "e", caller: "c" },
     { op: "hello", actorId: "a".repeat(300), credential: "c" },
   ])

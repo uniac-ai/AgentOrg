@@ -69,38 +69,6 @@ test("an rpc interface describes each method and event as JSON Schema", () => {
   assert.match(described.hash, /^sha256-[0-9a-f]{64}$/);
 });
 
-test("stream and http interfaces name their protocol instead of method schemas", () => {
-  const shell = defineInterface({
-    name: "computer.shell",
-    major: 1,
-    kind: "stream",
-    protocol: "pty",
-    open: z.object({ cols: z.number(), rows: z.number() }),
-  });
-  const site = defineInterface({ name: "site", major: 1, kind: "http" });
-  const described = describeInterface(shell);
-  assert.ok(described.kind === "stream");
-  assert.equal(described.protocol, "pty");
-  assert.deepEqual(Object.keys((described.open as { properties: object }).properties), [
-    "cols",
-    "rows",
-  ]);
-  assert.deepEqual(Object.keys(describeInterface(site)), ["id", "kind", "hash"]);
-  assert.notEqual(described.hash, describeInterface({ ...shell, protocol: "raw" }).hash);
-  assert.throws(
-    () =>
-      defineInterface({
-        name: "shell",
-        major: 1,
-        kind: "stream",
-        protocol: "",
-        open: z.object({}),
-      }),
-    /names its protocol/,
-  );
-  assert.notEqual(describeInterface(site).hash, describeInterface({ ...site, major: 2 }).hash);
-});
-
 test("an interface's hash is stable across rebuilds and changes with any schema", () => {
   const first = describeInterface(board()).hash;
   assert.equal(describeInterface(board()).hash, first);

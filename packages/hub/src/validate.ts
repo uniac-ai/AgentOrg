@@ -4,36 +4,23 @@ import type { DescribedInterface, JsonSchema } from "@agentorg/sdk";
 import { Refused } from "@agentorg/sdk";
 import type { Compiled, Job, Reply, SchemaPart } from "./validate-worker.js";
 
-/** A part of an interface with its own schema: a method's input or output, an event, or `open`. */
-export type Part =
-  | { method: string; side: "input" | "output" }
-  | { event: string }
-  | { open: true };
+/** A part of an interface with its own schema: a method's input or output, or an event. */
+export type Part = { method: string; side: "input" | "output" } | { event: string };
 
 const describe = (part: Part) =>
-  "method" in part
-    ? `${part.method} ${part.side}`
-    : "event" in part
-      ? `${part.event} event`
-      : "open";
+  "method" in part ? `${part.method} ${part.side}` : `${part.event} event`;
 
 function schemaOf(iface: DescribedInterface, part: Part): JsonSchema | undefined {
   if ("method" in part)
-    return iface.kind === "rpc" && Object.hasOwn(iface.methods, part.method)
+    return Object.hasOwn(iface.methods, part.method)
       ? iface.methods[part.method]?.[part.side]
       : undefined;
-  if ("event" in part)
-    return iface.kind === "rpc" && Object.hasOwn(iface.events, part.event)
-      ? iface.events[part.event]
-      : undefined;
-  return iface.kind === "stream" ? iface.open : undefined;
+  return Object.hasOwn(iface.events, part.event) ? iface.events[part.event] : undefined;
 }
 
 const keyOf = (iface: DescribedInterface, part: Part) => `${iface.hash} ${describe(part)}`;
 
 function partsOf(iface: DescribedInterface): Part[] {
-  if (iface.kind === "stream") return [{ open: true }];
-  if (iface.kind !== "rpc") return [];
   return [
     ...Object.keys(iface.methods).flatMap((method) => [
       { method, side: "input" as const },

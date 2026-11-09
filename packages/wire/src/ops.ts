@@ -19,10 +19,6 @@
  *   or `{error}` body, then the stream closes.
  * - `subscribe`: `{event}` bodies flow until the subscriber resets the stream, or the provider
  *   side closes it (with an `{error}` body first when it was refused).
- * - `open` and `http`: the answering side sends exactly one body first, `{result: {}}` to accept
- *   or `{error}` to refuse; after an accept, raw bytes flow both ways, each side closing its own
- *   direction, and a reset ends both. The provider answers the Hub, and the Hub forwards that
- *   answer. The opener may send bytes before the answer; they wait.
  * Cancelling a reader of a yamux stream resets it.
  */
 export type Header =
@@ -33,10 +29,6 @@ export type Header =
   | { op: "hello"; actorId: string; credential?: string; declares?: unknown; replace?: false }
   | { op: "call"; slot: string; method: string }
   | { op: "subscribe"; slot: string; event: string }
-  /** Raw bytes in the interface's protocol, after the Hub validates `params`. */
-  | { op: "open"; slot: string; params: unknown }
-  /** HTTP/1.1 bytes. */
-  | { op: "http"; slot: string }
   /**
    * From the Hub to an Actor: one of its slots was bound or unbound. A slot made at run time (an
    * export exposed to this Actor) carries `exposed` while bound: the export's described interface
@@ -44,18 +36,17 @@ export type Header =
    */
   | { op: "slot"; name: string; bound: boolean; exposed?: Exposure }
   /**
-   * From the Hub to a provider: the same four, naming its export, who is calling, and through which
+   * From the Hub to a provider: the same two, naming its export, who is calling, and through which
    * of the caller's slots (a provider keeping state per consumer keys it by both).
    */
   | {
       op: "serve";
-      kind: "call" | "subscribe" | "open" | "http";
+      kind: "call" | "subscribe";
       export: string;
       caller: string;
       slot: string;
       method?: string;
       event?: string;
-      params?: unknown;
     };
 
 /** A slot made at run time, as the Hub describes it: the export's interface, and whose it is. */
@@ -101,11 +92,6 @@ export function parseHeader(value: unknown): Header {
       return { op: "call", slot: text(value, "slot"), method: text(value, "method") };
     case "subscribe":
       return { op: "subscribe", slot: text(value, "slot"), event: text(value, "event") };
-    case "open":
-      if (!("params" in value)) throw new HeaderError("An open header needs params.");
-      return { op: "open", slot: text(value, "slot"), params: value.params };
-    case "http":
-      return { op: "http", slot: text(value, "slot") };
     case "slot": {
       if (typeof value.bound !== "boolean") throw new HeaderError("A slot header needs bound.");
       if (!("exposed" in value))
@@ -133,10 +119,8 @@ export function parseHeader(value: unknown): Header {
     }
     case "serve": {
       const kind = value.kind;
-      if (kind !== "call" && kind !== "subscribe" && kind !== "open" && kind !== "http")
-        throw new HeaderError("A serve header's kind must be call, subscribe, open or http.");
-      if (kind === "open" && !("params" in value))
-        throw new HeaderError("An open serve header needs params.");
+      if (kind !== "call" && kind !== "subscribe")
+        throw new HeaderError("A serve header's kind must be call or subscribe.");
       return {
         op: "serve",
         kind,
@@ -145,7 +129,6 @@ export function parseHeader(value: unknown): Header {
         slot: text(value, "slot"),
         ...(kind === "call" ? { method: text(value, "method") } : {}),
         ...(kind === "subscribe" ? { event: text(value, "event") } : {}),
-        ...(kind === "open" ? { params: value.params } : {}),
       };
     }
     default:

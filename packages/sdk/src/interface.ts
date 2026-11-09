@@ -39,18 +39,7 @@ export interface RpcInterface<
   readonly methods: M;
   readonly events: E;
 }
-/** Raw bytes in a named protocol, the L4 shape; opening a stream takes parameters. */
-export interface StreamInterface<N extends string = string, O extends z.ZodType = z.ZodType>
-  extends Named<N> {
-  readonly kind: "stream";
-  readonly protocol: string;
-  readonly open: O;
-}
-/** HTTP/1.1 requests and responses on streams, the L7 shape. */
-export interface HttpInterface<N extends string = string> extends Named<N> {
-  readonly kind: "http";
-}
-export type Interface = RpcInterface | StreamInterface | HttpInterface;
+export type Interface = RpcInterface;
 
 const NAME = /^[a-z][a-z0-9-]*(\.[a-z][a-z0-9-]*)*$/;
 const MEMBER = /^[a-z][A-Za-z0-9_]*$/;
@@ -65,26 +54,12 @@ export function defineInterface<
   E extends Events = NoEvents,
   const V extends number = number,
 >(spec: { name: N; major: V; kind: "rpc"; methods: M; events?: E }): RpcInterface<N, M, E, V>;
-export function defineInterface<const N extends string, O extends z.ZodType>(spec: {
-  name: N;
-  major: number;
-  kind: "stream";
-  protocol: string;
-  open: O;
-}): StreamInterface<N, O>;
-export function defineInterface<const N extends string>(spec: {
-  name: N;
-  major: number;
-  kind: "http";
-}): HttpInterface<N>;
 export function defineInterface(spec: {
   name: string;
   major: number;
   kind: Interface["kind"];
   methods?: Methods;
   events?: Events;
-  protocol?: string;
-  open?: z.ZodType;
 }): Interface {
   if (!NAME.test(spec.name))
     throw new TypeError(
@@ -106,34 +81,18 @@ export function defineInterface(spec: {
         if (name in methods) throw new TypeError(`${id}: ${name} is both a method and an event.`);
       return { name: spec.name, major: spec.major, kind: "rpc", methods, events };
     }
-    case "stream":
-      if (!spec.protocol || !spec.open)
-        throw new TypeError(`${id}: a stream interface names its protocol and its open schema.`);
-      return {
-        name: spec.name,
-        major: spec.major,
-        kind: "stream",
-        protocol: spec.protocol,
-        open: spec.open,
-      };
-    case "http":
-      return { name: spec.name, major: spec.major, kind: "http" };
     default:
-      throw new TypeError(`${id}: kind must be rpc, stream or http.`);
+      throw new TypeError(`${id}: kind must be rpc.`);
   }
 }
 
 export type JsonSchema = Record<string, unknown>;
 /** An interface's identity and JSON Schemas. */
-export type InterfaceSchemas = { id: string } & (
-  | {
-      kind: "rpc";
-      methods: Record<string, { input: JsonSchema; output: JsonSchema }>;
-      events: Record<string, JsonSchema>;
-    }
-  | { kind: "stream"; protocol: string; open: JsonSchema }
-  | { kind: "http" }
-);
+export type InterfaceSchemas = { id: string } & {
+  kind: "rpc";
+  methods: Record<string, { input: JsonSchema; output: JsonSchema }>;
+  events: Record<string, JsonSchema>;
+};
 /** An interface's identity, JSON Schemas and hash. */
 export type DescribedInterface = InterfaceSchemas & { hash: string };
 
@@ -234,15 +193,6 @@ function interfaceSchemas(iface: Interface): InterfaceSchemas {
           ]),
         ),
       };
-    case "stream":
-      return {
-        id,
-        kind: "stream",
-        protocol: iface.protocol,
-        open: jsonSchema(id, "open", iface.open, "input"),
-      };
-    case "http":
-      return { id, kind: "http" };
   }
 }
 
