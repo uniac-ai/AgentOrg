@@ -4,6 +4,7 @@ import { NotConnected, Refused } from "@agentorg/sdk";
 import { useEffect, useState } from "react";
 import type { z } from "zod";
 import { api, useConnection, useLoad } from "../data.ts";
+import { lineOfRow, rowsOf } from "./calls.ts";
 
 type Out<M extends { output: z.ZodType }> = z.output<M["output"]>;
 
@@ -125,8 +126,11 @@ export interface Now {
 
 /** One line for a message of the record. */
 export function lineOf(message: ChatMessage): string {
-  if (message.tool)
+  if (message.tool) {
+    const [row] = rowsOf([message]);
+    if (row && row.kind !== "other") return lineOfRow(row);
     return `${message.tool.state === "running" ? "Using" : "Used"} ${message.tool.name}`;
+  }
   const first = message.text.trim().split("\n")[0] ?? "";
   const line = first.replace(/^[#>\s-]+/, "").replace(/[*`]/g, "");
   return message.role === "user" ? `You: ${line}` : line;

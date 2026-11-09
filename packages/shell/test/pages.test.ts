@@ -222,18 +222,18 @@ test(
 );
 
 test(
-  "an agent's page says what it's for, holds room, and leads to what it's made of",
+  "an agent's page says what it's for, holds room for what it does, and leads to what it's made of",
   withGateway(async (gateway) => {
     const page = await open(gateway, "#/a/a-research");
     const main = page.getByRole("main");
     await main.getByRole("heading", { name: "Research" }).waitFor();
     await main.getByText("Chats and uses what you connect").waitFor();
     await main
-      .getByRole("button", { name: /^Made from/ })
+      .getByRole("button", { name: /^Built from/ })
       .getByText("Assistant")
       .waitFor();
     await main.getByRole("button", { name: /^MCPs/ }).getByText("2").waitFor();
-    for (const held of ["Computer", "Browser", "Updates"])
+    for (const held of ["Computer", "Browser"])
       assert.equal((await main.getByRole("region", { name: held }).innerText()).trim(), held);
     await main.getByRole("button", { name: "Research settings" }).click();
     await page.waitForURL(/\/a\/a-research\/settings$/);
