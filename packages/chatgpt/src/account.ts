@@ -1,6 +1,6 @@
 /**
  * The ChatGPT sign-in this Actor owns: its registration, its tokens and their refresh. The tokens
- * stay inside, apart from its own store: nothing here returns, emits or logs one.
+ * stay inside, apart from where they are kept: nothing here returns, emits or logs one.
  */
 import type { kv, LoginState } from "@agentorg/interfaces";
 import { Refused, type Slot } from "@agentorg/sdk";
@@ -26,7 +26,8 @@ import {
 } from "./oauth.js";
 
 type State = z.output<typeof LoginState>;
-type Store = Slot<typeof kv>["call"];
+/** Where the sign-in is kept: the Actor's `kv@1` slot, or the program's own file. */
+export type Store = Pick<Slot<typeof kv>["call"], "get" | "set" | "delete">;
 /** This host's registration: its own opaque id, and the client id OpenAI issued it. */
 interface Registration {
   hostId: string;

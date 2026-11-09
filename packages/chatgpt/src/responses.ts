@@ -305,6 +305,10 @@ export function createSession(options: {
   }
 
   return {
+    /** Stop every response still running. */
+    stop() {
+      for (const controller of running.values()) controller.abort();
+    },
     /** Forget the model list, so it is read again for the next account. */
     reset() {
       listed = undefined;
