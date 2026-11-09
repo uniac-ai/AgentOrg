@@ -120,13 +120,22 @@ export class Connection {
   #lose: (() => void) | undefined;
   #running: Promise<void> | undefined;
   readonly #spec: Spec;
+  readonly #hide: ReadonlySet<string>;
   readonly #secrets: Secrets;
   readonly #log: Log;
   readonly #scrub: (text: string) => string;
   readonly #pingEveryMs: number;
   readonly #firstDelayMs: number;
 
-  constructor(spec: Spec, secrets: Secrets, log: Log, timing: Timing = {}) {
+  /** `hide` names tools of the server that are never offered or run through this connection. */
+  constructor(
+    spec: Spec,
+    secrets: Secrets,
+    log: Log,
+    timing: Timing = {},
+    hide: readonly string[] = [],
+  ) {
+    this.#hide = new Set(hide);
     this.#spec = spec;
     this.#secrets = secrets;
     this.#pingEveryMs = timing.pingEveryMs ?? PING_EVERY_MS;
@@ -324,6 +333,9 @@ export class Connection {
 
   async #refresh(mcp: Client) {
     const { tools: listed } = await mcp.listTools();
-    this.#tools = fit(listed, this.#log);
+    this.#tools = fit(
+      listed.filter((tool) => !this.#hide.has(tool.name)),
+      this.#log,
+    );
   }
 }
