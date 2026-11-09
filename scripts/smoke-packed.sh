@@ -5,7 +5,8 @@
 # first run must make ChatGPT, both providers and management, all connected; an agent must be made
 # with `agentorg call agents create`; the gateway must serve the shell, the sign-in page and the
 # frame runtime; and the Hub must build an agent's source, which resolves the SDK, the interfaces
-# and zod from the installed package. Run after `npm run build`.
+# and zod from the installed package. Last, this build must start on a home the published 0.0.5
+# made: its old Actors closed, and `agents create` working. Run after `npm run build`.
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -59,6 +60,24 @@ start_on() {
   echo "No address after 60 s" >&2
   cat "$3" >&2
   exit 1
+}
+# The Installer's and ChatGPT's ids on a home ($2), once both run and are connected, by `agentorg`
+# ($1); a failure after 60 s.
+both_ready() {
+  for _ in $(seq 1 120); do
+    if "$1" actors --home "$2" >"$work/ready.json" 2>/dev/null &&
+      node -e '
+        const { actors } = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+        const up = (name) => actors.find((a) => a.name === name && a.state === "running" && a.connected);
+        const [i, c] = [up("Installer"), up("ChatGPT")];
+        if (!i || !c) process.exit(1);
+        console.log(`Installer=${i.actorId} ChatGPT=${c.actorId}`);
+      ' "$work/ready.json"; then
+      return 0
+    fi
+    sleep 0.5
+  done
+  return 1
 }
 stop_app() {
   kill -TERM "$pid"
@@ -138,7 +157,7 @@ step "agentorg call agents create makes an Assistant, running"
 # Management hears of its providers as first run exposes them: asked until it offers Assistant.
 for _ in $(seq 1 60); do
   "$agentorg" call agents creatable --home "$home" >"$work/creatable.json" 2>/dev/null &&
-    grep -q '"id":"assistant"' "$work/creatable.json" && break
+    grep -Eq '"id": ?"assistant"' "$work/creatable.json" && break
   sleep 0.5
 done
 create="$(node -e '
@@ -190,4 +209,50 @@ kill -TERM "$hubpid"
 wait "$hubpid" || true
 hubpid=""
 
+step "a home the published 0.0.5 made: this build starts on it as on a fresh one"
+old="$work/old"
+mkdir "$old"
+(cd "$old" && echo '{"private":true}' >package.json &&
+  npm install --silent --no-audit --no-fund --cache "$work/cache" @agentorg/cli@0.0.5)
+was="$old/node_modules/.bin/agentorg"
+uphome="$work/uphome"
+start_on "$was" "$uphome" "$work/old.log"
+made="$(both_ready "$was" "$uphome")" ||
+  { echo "0.0.5's first run didn't finish" >&2; cat "$work/old.log" >&2; exit 1; }
+echo "0.0.5: $made"
+"$was" actors --home "$uphome" >"$work/old-actors.json"
+stop_app
+start_on "$agentorg" "$uphome" "$work/up.log"
+for _ in $(seq 1 120); do
+  "$agentorg" call agents creatable --home "$uphome" >"$work/up-creatable.json" 2>/dev/null &&
+    grep -Eq '"id": ?"assistant"' "$work/up-creatable.json" && break
+  kill -0 "$pid" 2>/dev/null || { cat "$work/up.log" >&2; exit 1; }
+  sleep 0.5
+done
+grep -Eq '"id": ?"assistant"' "$work/up-creatable.json" ||
+  { echo "This build didn't start on the 0.0.5 home" >&2; cat "$work/up.log" >&2; exit 1; }
+if grep -E "didn't work|Error" "$work/up.log"; then
+  echo "This build reported a problem on the 0.0.5 home" >&2
+  exit 1
+fi
+"$agentorg" actors --home "$uphome" >"$work/up-actors.json"
+node -e '
+  const fs = require("fs");
+  const read = (f) => JSON.parse(fs.readFileSync(f, "utf8")).actors;
+  const [before, after] = process.argv.slice(1).map(read);
+  const old = before.filter((a) => a.name === "Installer" || a.name === "ChatGPT");
+  if (old.length !== 2) { console.error("expected the old Actors"); process.exit(1); }
+  for (const a of old) {
+    const now = after.find((b) => b.actorId === a.actorId);
+    if (now?.state !== "closed") { console.error(`${a.name} is ${now?.state ?? "removed"}`); process.exit(1); }
+  }
+  console.log(`${old.length} old Actors closed`);
+' "$work/old-actors.json" "$work/up-actors.json"
+create="$(node -e '
+  const { creatables: [one] } = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+  console.log(JSON.stringify({ provider: one.provider, creatable: one.id, name: "Newcomer", answers: {} }));
+' "$work/up-creatable.json")"
+"$agentorg" call agents create "$create" --home "$uphome" >/dev/null
+echo "agents create works on the 0.0.5 home"
+stop_app
 echo "smoke passed"

@@ -1,10 +1,13 @@
 // First run on a fresh home: the programs made once and started in this process, and the person
 // reaching management and each agent's chat through `/api`, as `agentorg call` does.
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
+import { PERSON } from "@agentorg/hub";
 import WebSocket from "ws";
 import { type App, startApp } from "../src/index.ts";
 
@@ -257,4 +260,44 @@ test("the app's notes are its own file, and the person's store answers from it",
   assert.equal(statSync(join(s.home, "app-notes.json")).mode & 0o777, 0o600);
   assert.ok(existsSync(join(s.home, "programs", "agents")));
   await assert.rejects(person.call("store", "nothing"), refused("invalid"));
+});
+
+test("a home an earlier release ran starts as a fresh one: its package Actors closed, its files left", async (t) => {
+  const home = mkdtempSync(join(tmpdir(), "agentorg-programs-"));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const bundled = join(dirname(fileURLToPath(import.meta.url)), "..", "bundled");
+  const index = JSON.parse(readFileSync(join(bundled, "index.json"), "utf8")) as Record<
+    string,
+    string
+  >;
+  // Made as an earlier release made them: package Actors, with the built-in storage on.
+  const earlier = await startApp({ home, firstRun: false });
+  const before = personOf(earlier, home);
+  const { hash } = await before.call<{ hash: string }>("packages", "add", {
+    path: join(bundled, index.assistant as string),
+  });
+  const agent = earlier.hub.state.createActor(PERSON, { name: "Old agent", package: hash }).actorId;
+  await before.close();
+  await earlier.close();
+  const sha = () =>
+    createHash("sha256")
+      .update(readFileSync(join(home, "storage.db")))
+      .digest("hex");
+  const stored = sha();
+
+  const problems: string[] = [];
+  const app = await startApp({ home, firstRun: { log: (line) => problems.push(line) } });
+  const person = personOf(app, home);
+  t.after(async () => {
+    await person.close();
+    await app.close();
+  });
+  const ran = await app.firstRun;
+  assert.deepEqual(problems, []);
+  assert.ok(ran?.management && app.hub.connected(ran.management));
+  assert.equal(app.hub.state.actor(agent).state, "closed");
+  // Nothing is made again: the person creates agents anew.
+  assert.deepEqual((await person.call<{ agents: unknown[] }>("agents", "list")).agents, []);
+  assert.ok(await createAssistant(person, "New agent"));
+  assert.equal(sha(), stored);
 });

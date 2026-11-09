@@ -73,6 +73,11 @@ export interface HubOptions {
   answerTimeoutMs?: number;
   /** What a consumer's stores may hold (defaults in storage.ts). */
   storage?: StorageLimits;
+  /**
+   * Whether the built-in `storage` runs: on by default. Off, `storage.db` is never opened, so it
+   * stays exactly as it is, and a call to `storage` is refused `unavailable`.
+   */
+  builtinStorage?: boolean;
   /** The schema-check pool: its size and each check's budget (defaults in validate.ts). */
   checks?: { size?: number; budgetMs?: number; compileBudgetMs?: number };
   /** Package Actors' processes: their sandbox, memory and timings (defaults in processes.ts). */
@@ -207,7 +212,7 @@ export class Hub {
   readonly state: HubState;
   readonly #actor: HubActor;
   readonly #validators: Validators;
-  readonly #storage: Storage;
+  readonly #storage: Storage | undefined;
   readonly #processes: Processes;
   readonly #net: Net;
   readonly #connections = new Map<string, Connection>();
@@ -240,7 +245,7 @@ export class Hub {
       closed: (actorId) => {
         this.#connections.get(actorId)?.session.close();
         // Closing is for good: its stores go too. Unbinding keeps them.
-        this.#storage.deleteConsumer(actorId);
+        this.#storage?.deleteConsumer(actorId);
       },
       requested: (request, approvers) => actor?.requested(request, approvers),
       decided: (request, status, approvers) => actor?.decided(request, status, approvers),
@@ -258,16 +263,18 @@ export class Hub {
     );
     actor = this.#actor = new HubActor(this.state, this.#processes, (id) => this.connected(id));
     try {
-      this.#storage = new Storage(home, options.storage);
-      // Stores of Actors closed while a delete couldn't run (a crash, a lock) go now.
-      this.#storage.keepOnly(
-        new Set(
-          this.state
-            .actors()
-            .filter((a) => a.state !== "closed")
-            .map((a) => a.actorId),
-        ),
-      );
+      if (options.builtinStorage !== false) {
+        this.#storage = new Storage(home, options.storage);
+        // Stores of Actors closed while a delete couldn't run (a crash, a lock) go now.
+        this.#storage.keepOnly(
+          new Set(
+            this.state
+              .actors()
+              .filter((a) => a.state !== "closed")
+              .map((a) => a.actorId),
+          ),
+        );
+      }
     } catch (error) {
       // Nothing half-open is left: the home's lock and the check workers go with it.
       this.#validators.close();
@@ -284,6 +291,11 @@ export class Hub {
     const hub = new Hub(home, options);
     hub.#processes.probe().catch(() => {});
     return hub;
+  }
+
+  #stores(): Storage {
+    if (!this.#storage) throw new Refused("unavailable", "The built-in storage is off.");
+    return this.#storage;
   }
 
   /** Whether an Actor has a channel now. */
@@ -550,7 +562,7 @@ export class Hub {
     this.#connections.clear();
     this.#viewListeners.clear();
     this.#validators.close();
-    this.#storage.close();
+    this.#storage?.close();
     this.state.close();
   }
 
@@ -891,7 +903,12 @@ export class Hub {
         "invalid",
         `${this.state.named(input.consumer)}'s ${input.slot} isn't a slot bound to storage.kv; bind it there first.`,
       );
-    this.#storage.seed(input.consumer, input.slot, input.entries, this.state.named(input.consumer));
+    this.#stores().seed(
+      input.consumer,
+      input.slot,
+      input.entries,
+      this.state.named(input.consumer),
+    );
     // The seed is done; an audit that fails now (the Hub closing) doesn't undo or hide it.
     try {
       this.state.auditHub(
@@ -926,7 +943,7 @@ export class Hub {
                   entries: { key: string; value: unknown }[];
                 },
               )
-            : this.#storage.call(
+            : this.#stores().call(
                 binding.consumer,
                 binding.slot,
                 method,

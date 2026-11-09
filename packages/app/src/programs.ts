@@ -1,8 +1,9 @@
 // The app's programs: ChatGPT, the agent provider, the MCP provider and management, each an Actor
 // of its own that this process runs on its own channel, with its own private folder under the home.
 // Every step reads what is there before it acts, so each start converges on the same system.
-import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { HubState, PERSON } from "@agentorg/hub";
 import { startManager } from "@agentorg/manager";
 import { startMcpProvider } from "@agentorg/mcp";
 import type { Log } from "@agentorg/sdk";
@@ -27,6 +28,23 @@ export interface Programs {
   management?: string;
   /** Leave the Hub, in the order that lets each finish. What each keeps stays. */
   close(): Promise<void>;
+}
+
+/**
+ * Close every Actor that runs a package, as an earlier release's do: the programs replace them.
+ * Before the Hub opens, which would otherwise start the ones recorded as running. Each stays
+ * listed as closed; the files it left in the home stay too, unread.
+ */
+export function closePackageActors(home: string) {
+  if (!existsSync(join(home, "hub.db"))) return;
+  const state = HubState.open(home);
+  try {
+    for (const { actorId, package: from, state: now } of state.actors())
+      if (now !== "closed" && from !== "external" && from !== "builtin")
+        state.closeActor(PERSON, actorId);
+  } finally {
+    state.close();
+  }
 }
 
 /** The Hub's exports each program holds. */

@@ -28,7 +28,12 @@ import { serveFrame } from "./frames.js";
 import { Layout } from "./layout.js";
 import { oauthRoute } from "./model.js";
 import { Notes } from "./notes.js";
-import { type Programs, type ProgramsOptions, startPrograms } from "./programs.js";
+import {
+  closePackageActors,
+  type Programs,
+  type ProgramsOptions,
+  startPrograms,
+} from "./programs.js";
 import { Rules } from "./rules.js";
 import { SignIn } from "./signin.js";
 import {
@@ -125,7 +130,9 @@ function writePrivate(file: string, text: string) {
 export async function startApp(options: AppOptions): Promise<App> {
   const home = resolve(options.home);
   mkdirSync(home, { recursive: true, mode: 0o700 });
-  const hub = Hub.open(home);
+  if (options.firstRun !== false) closePackageActors(home);
+  // With the first run on, nothing uses the built-in storage, and `storage.db` is never opened.
+  const hub = Hub.open(home, { builtinStorage: options.firstRun === false });
   const listener = await listen(hub, {}).catch((error) => {
     hub.close();
     throw error;
