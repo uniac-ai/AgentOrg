@@ -11,19 +11,9 @@ import {
   layout,
   llmSession,
 } from "@agentorg/interfaces";
-import { defineActor, describeInterface, Refused } from "@agentorg/sdk";
-import { createAgent } from "./agent.js";
-import { createHistory } from "./history.js";
-import { instructionsWith, skillTool } from "./settings.js";
-import {
-  type Candidate,
-  type LeftOut,
-  listedBy,
-  listsTools,
-  methodsOf,
-  offered,
-  type ToolSlot,
-} from "./tools.js";
+import { defineActor, describeInterface } from "@agentorg/sdk";
+import { startEngine } from "./engine.js";
+import { methodsOf, type ToolSlot } from "./tools.js";
 
 /** The slots that become tools; `model`, `store` and `settings` are the assistant's own. */
 const tools = {
@@ -34,9 +24,6 @@ const tools = {
   exports: hubExports,
   installer,
 };
-
-/** Where the agent keeps the model chosen for it, beside its record in the store. */
-const MODEL_KEY = "settings/model";
 
 /** A whole package, as `packages__build` takes it: the instructions' example, built by a test. */
 export const EXAMPLE: Record<string, string> = {
@@ -203,99 +190,19 @@ export default defineActor({
   slots: { model: llmSession, store: kv, settings: agentSettings, ...tools },
   exports: { chat },
   start(ctx) {
-    const history = createHistory(ctx.slots.store.call, ctx.log);
-    ctx.slots.store.onBind(() => history.reset());
-    ctx.slots.store.onUnbind(() => history.reset());
-    /** The model chosen for this agent, if any; read for each request. */
-    const chosen = async () => {
-      const { value } = await ctx.slots.store.call.get({ key: MODEL_KEY });
-      return typeof value === "string" ? value : undefined;
-    };
     const described = (Object.keys(tools) as (keyof typeof tools)[]).map(
       (name) => [name, describeInterface(tools[name])] as const,
     );
-    /** What was last reported as left out, so a change is logged once. */
-    let reported = "[]";
-    const report = (leftOut: LeftOut[]) => {
-      const now = JSON.stringify(leftOut);
-      if (now === reported) return;
-      reported = now;
-      if (leftOut.length > 0) ctx.log.warn("Not everything is offered to the model.", { leftOut });
-      else ctx.log.info("Everything is offered to the model again.");
-    };
-    /** What a request says and offers, read afresh: nothing here outlives the request. */
-    const request = async () => {
-      const settings = ctx.slots.settings.bound ? await ctx.slots.settings.call.get({}) : undefined;
-      const told = settings
-        ? instructionsWith(settings.instructions, settings.skills)
-        : {
-            instructions: `${ctx.slots.packages.bound && ctx.slots.installer.bound ? INSTRUCTIONS : BASE_INSTRUCTIONS}\n\nYour Actor id is ${ctx.self.actorId}.`,
-            leftOut: [],
-          };
-      const own: Candidate[] = [
-        ...(settings?.skills.length ? [skillTool(ctx.slots.settings)] : []),
-        ...described.flatMap(([name, schemas]) =>
+    const engine = startEngine(ctx, {
+      store: ctx.slots.store.call,
+      instructions: () =>
+        `${ctx.slots.packages.bound && ctx.slots.installer.bound ? INSTRUCTIONS : BASE_INSTRUCTIONS}\n\nYour Actor id is ${ctx.self.actorId}.`,
+      ownTools: () =>
+        described.flatMap(([name, schemas]) =>
           methodsOf(name, schemas, ctx.slots[name] satisfies ToolSlot),
         ),
-      ];
-      // In the order they came, each asked at once so one slow server delays only itself.
-      const exposed = await Promise.all(
-        ctx.exposed().map(async (slot) =>
-          listsTools(slot.described)
-            ? listedBy(slot.slot, slot)
-            : {
-                candidates: methodsOf(slot.slot, slot.described, { bound: true, call: slot.call }),
-                leftOut: [],
-              },
-        ),
-      );
-      const { tools: offers, leftOut } = offered([
-        ...own,
-        ...exposed.flatMap((one) => one.candidates),
-      ]);
-      report([...told.leftOut, ...exposed.flatMap((one) => one.leftOut), ...leftOut]);
-      return { instructions: told.instructions, tools: offers };
-    };
-    const agent = createAgent({
-      request,
-      model: ctx.slots.model,
-      chosenModel: chosen,
-      history,
-      chat: {
-        message: (message) => ctx.exports.chat.emit("message", message),
-        delta: (id, text) => ctx.exports.chat.emit("delta", { id, text }),
-        status: (status) => ctx.exports.chat.emit("status", status),
-      },
-      log: ctx.log,
     });
-    ctx.slots.model.on("delta", ({ requestId, text }) => agent.delta(requestId, text));
-    ctx.exports.chat.implement({
-      send: ({ text }) => agent.send(text),
-      history: ({ before, limit }) => history.page(before, limit ?? 50),
-      cancel: async () => {
-        await agent.cancel();
-        return {};
-      },
-      state: () => agent.state(),
-      retry: () => agent.retry(),
-      models: async () => {
-        const [{ models }, current] = await Promise.all([
-          ctx.slots.model.call.models({}),
-          chosen(),
-        ]);
-        return { models, ...(current ? { current } : {}) };
-      },
-      setModel: async ({ model }) => {
-        if (!model) {
-          await ctx.slots.store.call.delete({ key: MODEL_KEY });
-          return {};
-        }
-        const { models } = await ctx.slots.model.call.models({});
-        if (!models.some((offered) => offered.id === model))
-          throw new Refused("unknown", `${model} isn't one of the models offered.`);
-        await ctx.slots.store.call.set({ key: MODEL_KEY, value: model });
-        return {};
-      },
-    });
+    ctx.slots.store.onBind(() => engine.reset());
+    ctx.slots.store.onUnbind(() => engine.reset());
   },
 });

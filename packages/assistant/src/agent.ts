@@ -44,6 +44,8 @@ export function createAgent(options: {
   let turn: Turn | undefined;
   /** A cancelled turn whose running call hasn't settled: the next turn waits for its records. */
   let draining: Promise<void> | undefined;
+  /** Settles when the latest turn's loop has ended. */
+  let ending: Promise<void> | undefined;
   /** The latest status, for a view that asks. */
   let latest: Status = { state: "idle" };
   const say = (next: Status) => {
@@ -70,6 +72,7 @@ export function createAgent(options: {
         if (turn === current) turn = undefined;
       })
       .catch((error: unknown) => log.error("A turn's status failed.", { error: String(error) }));
+    ending = current.ended;
   };
   const show = (entry: Awaited<ReturnType<History["append"]>>) => chat.message(messageOf(entry));
   /** A call starting: shown as running, under the id its record will have when it ends. */
@@ -246,6 +249,10 @@ export function createAgent(options: {
       say({ state: "idle" });
       if (current.requestId && model.bound)
         await model.call.cancel({ requestId: current.requestId }).catch(() => {});
+    },
+    /** Settles when the latest turn has written all it will. */
+    settled: async () => {
+      await ending;
     },
     /** Streamed text of the model request running now, for the reply it becomes. */
     delta(requestId: string, text: string) {
