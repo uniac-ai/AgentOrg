@@ -12,16 +12,20 @@ test.after(() => browser.close());
 
 type Gateway = Awaited<ReturnType<typeof standIn>>;
 
+const panel = (page: Page) => page.getByRole("complementary", { name: "Chats" });
+
+/** A signed-in page with this agent's session open in the panel. */
 async function open(gateway: Gateway, agent = "a-reviewer", width = 1440): Promise<Page> {
   const page = await browser.newPage({ viewport: { width, height: 900 } });
   page.setDefaultTimeout(8000);
   await page.addInitScript((session) => localStorage.setItem("agentorg.session", session), SESSION);
-  await page.goto(`${gateway.url}/#/a/${agent}/chat`);
-  await page.getByRole("textbox", { name: "Message" }).waitFor();
-  await page.getByText("Reviewed #482").first().waitFor();
+  await page.goto(`${gateway.url}/#/a/${agent}`);
+  await page.getByRole("main").getByRole("button", { name: "Chat", exact: true }).click();
+  await panel(page).getByRole("textbox", { name: "Message" }).waitFor();
+  await panel(page).getByText("Reviewed #482").first().waitFor();
   return page;
 }
-const input = (page: Page) => page.getByRole("textbox", { name: "Message" });
+const input = (page: Page) => panel(page).getByRole("textbox", { name: "Message" });
 
 const withGateway = (run: (gateway: Gateway) => Promise<void>) => async () => {
   const gateway = await standIn();
@@ -49,7 +53,9 @@ test(
     assert.equal(gateway.calls.filter((c) => c.method === "send").length, 0, "not sent yet");
     await input(page).press("Enter");
     assert.equal(await input(page).inputValue(), "");
-    await page.getByText(/first line/).waitFor();
+    await panel(page)
+      .getByText(/first line/)
+      .waitFor();
     await page.close();
   }),
 );
@@ -61,7 +67,7 @@ test(
     const page = await open(gateway);
     await input(page).fill("slow to record");
     await input(page).press("Enter");
-    const sent = page.getByText("slow to record");
+    const sent = panel(page).getByText("slow to record");
     await sent.waitFor();
     await page.waitForTimeout(400);
     const before = await sent.boundingBox();
@@ -79,7 +85,7 @@ test(
     const page = await open(gateway);
     await input(page).fill("refuse this");
     await input(page).press("Enter");
-    await page.getByRole("alert").getByText("A turn is running.").waitFor();
+    await panel(page).getByRole("alert").getByText("A turn is running.").waitFor();
     assert.equal(await input(page).inputValue(), "refuse this");
     await page.close();
   }),
@@ -90,18 +96,18 @@ test(
   withGateway(async (gateway) => {
     const page = await open(gateway);
     gateway.setChatStatus("a-reviewer", { state: "thinking" });
-    await page.getByRole("status").getByText("Thinking").waitFor();
+    await panel(page).getByRole("status").getByText("Thinking").waitFor();
     gateway.delta("a-reviewer", "r1", "Three causes ");
-    await page.locator("[data-sd-animate]").first().waitFor();
-    const thinking = page.getByRole("status").filter({ hasText: "Thinking" });
+    await panel(page).locator("[data-sd-animate]").first().waitFor();
+    const thinking = panel(page).getByRole("status").filter({ hasText: "Thinking" });
     assert.equal(await thinking.count(), 0, "the first words take its place");
     gateway.delta("a-reviewer", "r1", "explain it.");
-    await page.getByText("explain it.").waitFor();
+    await panel(page).getByText("explain it.").waitFor();
     gateway.addMessage("a-reviewer", reply("r1", "Three causes explain it."));
     gateway.setChatStatus("a-reviewer", { state: "idle" });
-    await page.getByText("Three causes explain it.").waitFor();
-    assert.equal(await page.getByText("Three causes explain it.").count(), 1);
-    assert.equal(await page.locator("[data-sd-animate]").count(), 0);
+    await panel(page).getByText("Three causes explain it.").waitFor();
+    assert.equal(await panel(page).getByText("Three causes explain it.").count(), 1);
+    assert.equal(await panel(page).locator("[data-sd-animate]").count(), 0);
     await page.close();
   }),
 );
@@ -120,7 +126,7 @@ test(
     };
     gateway.setChatStatus("a-reviewer", { state: "tool" });
     gateway.addMessage("a-reviewer", running);
-    const row = page.getByRole("button", { name: /github__get_issue/ });
+    const row = panel(page).getByRole("button", { name: /github__get_issue/ });
     await row.waitFor();
     const before = await row.boundingBox();
     gateway.addMessage("a-reviewer", {
@@ -131,7 +137,7 @@ test(
     assert.equal(await row.count(), 1);
     assert.deepEqual(await row.boundingBox(), before);
     await row.click();
-    await page.getByText("→ the issue").waitFor();
+    await panel(page).getByText("→ the issue").waitFor();
     await page.close();
   }),
 );
@@ -147,18 +153,18 @@ test(
     });
     gateway.addMessage("a-reviewer", reply("r2", "The old answer."));
     const page = await open(gateway);
-    await page.getByText("The old answer.").waitFor();
+    await panel(page).getByText("The old answer.").waitFor();
 
     gateway.refuseNext("chat.retry", "busy", "A turn is running.");
-    await page.getByRole("button", { name: "Retry" }).click();
-    await page.getByRole("alert").getByText("A turn is running.").waitFor();
-    await page.getByText("The old answer.").waitFor();
+    await panel(page).getByRole("button", { name: "Retry" }).click();
+    await panel(page).getByRole("alert").getByText("A turn is running.").waitFor();
+    await panel(page).getByText("The old answer.").waitFor();
 
-    await page.getByRole("button", { name: "Retry" }).click();
-    await page.getByText("The old answer.").waitFor({ state: "detached" });
-    await page.getByRole("button", { name: "Stop", exact: true }).waitFor();
-    await page.getByRole("button", { name: "Stop", exact: true }).click();
-    await page.getByRole("button", { name: "Send", exact: true }).waitFor();
+    await panel(page).getByRole("button", { name: "Retry" }).click();
+    await panel(page).getByText("The old answer.").waitFor({ state: "detached" });
+    await panel(page).getByRole("button", { name: "Stop", exact: true }).waitFor();
+    await panel(page).getByRole("button", { name: "Stop", exact: true }).click();
+    await panel(page).getByRole("button", { name: "Send", exact: true }).waitFor();
     assert.ok(gateway.calls.some((c) => c.method === "cancel"));
     await page.close();
   }),
@@ -172,7 +178,7 @@ test(
       state: "error",
       detail: { code: "usage_limit", message: "Limit." },
     });
-    const notice = page.getByRole("alert");
+    const notice = panel(page).getByRole("alert");
     await notice.getByText("Usage limit reached").waitFor();
     await notice.getByRole("button", { name: "Manage usage" }).waitFor();
     await page.close();
@@ -194,25 +200,24 @@ test(
       })),
     );
     const page = await open(gateway);
-    assert.equal(await page.getByText("Old note 3", { exact: true }).count(), 0);
-    await page.getByRole("button", { name: "Earlier messages" }).click();
-    await page.getByText("Old note 3", { exact: true }).waitFor({ state: "attached" });
-    assert.equal(await page.getByRole("combobox", { name: "Model" }).count(), 0);
+    assert.equal(await panel(page).getByText("Old note 3", { exact: true }).count(), 0);
+    await panel(page).getByRole("button", { name: "Earlier messages" }).click();
+    await panel(page).getByText("Old note 3", { exact: true }).waitFor({ state: "attached" });
+    assert.equal(await panel(page).getByRole("combobox", { name: "Model" }).count(), 0);
     await page.close();
   }),
 );
 
 test(
-  "a stopped agent's chat offers Start, and is reached from the agent's page",
+  "a stopped agent's session offers Start",
   withGateway(async (gateway) => {
     const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
     page.setDefaultTimeout(8000);
     await page.addInitScript((s) => localStorage.setItem("agentorg.session", s), SESSION);
     await page.goto(`${gateway.url}/#/a/a-weekly`);
-    await page.getByRole("button", { name: "Chat", exact: true }).click();
-    await page.waitForURL(/#\/a\/a-weekly\/chat$/);
-    await page.getByText("Weekly report is stopped.").waitFor();
-    await page.getByRole("button", { name: "Start" }).click();
+    await page.getByRole("main").getByRole("button", { name: "Chat", exact: true }).click();
+    await panel(page).getByText("Weekly report is stopped.").waitFor();
+    await panel(page).getByRole("button", { name: "Start" }).click();
     await input(page).waitFor();
     await page.close();
   }),
@@ -226,7 +231,7 @@ test(
       const bad = await page.evaluate(() => {
         const out: string[] = [];
         if (document.documentElement.scrollWidth > innerWidth) out.push("page overflows");
-        for (const el of document.querySelectorAll<HTMLElement>("main, main *"))
+        for (const el of document.querySelectorAll<HTMLElement>("main, main *, aside, aside *"))
           if (
             /auto|scroll/.test(getComputedStyle(el).overflowY) &&
             el.offsetWidth - el.clientWidth > 0

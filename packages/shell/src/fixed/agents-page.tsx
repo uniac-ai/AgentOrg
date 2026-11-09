@@ -3,6 +3,7 @@ import { useState } from "react";
 import { go } from "../data.ts";
 import { Button } from "../ui/button.tsx";
 import { Item } from "../ui/item.tsx";
+import { useChats } from "./chats.tsx";
 import { More, Power, Tip } from "./controls.tsx";
 import { type AgentEntry, ago, useCreatables } from "./data.ts";
 import { Nothing, Scroll, StateDot } from "./parts.tsx";
@@ -32,6 +33,7 @@ export function AgentsPage() {
 
 function AgentRow({ agent }: { agent: AgentEntry }) {
   const watched = useAgents().byId.get(agent.agent);
+  const { chatWith } = useChats();
   const creatables = useCreatables();
   const [failed, setFailed] = useState<string>();
   const now = watched?.now;
@@ -65,7 +67,7 @@ function AgentRow({ agent }: { agent: AgentEntry }) {
             variant="ghost"
             size="icon-sm"
             aria-label={`Chat with ${agent.name}`}
-            onClick={() => go({ screen: "chat", agent: agent.agent })}
+            onClick={() => chatWith(agent.agent)}
           >
             <MessageCircleIcon />
           </Button>

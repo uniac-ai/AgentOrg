@@ -110,7 +110,6 @@ export type Route =
   | { screen: "settings"; tab: "providers" | "account" }
   | { screen: "agent"; agent: string }
   | { screen: "agent-settings"; agent: string }
-  | { screen: "chat"; agent: string }
   | { screen: "skills" | "mcps"; focus?: string; adding?: boolean };
 function routeOf(hash: string): Route {
   // Settings opens on its first tab.
@@ -126,9 +125,7 @@ function routeOf(hash: string): Route {
     };
   const settings = /^#\/a\/([^/]+)\/settings$/.exec(hash)?.[1];
   if (settings) return { screen: "agent-settings", agent: decodeURIComponent(settings) };
-  const chat = /^#\/a\/([^/]+)\/chat$/.exec(hash)?.[1];
-  if (chat) return { screen: "chat", agent: decodeURIComponent(chat) };
-  const agent = /^#\/a\/(.+)$/.exec(hash)?.[1];
+  const agent = /^#\/a\/([^/]+)$/.exec(hash)?.[1];
   return agent ? { screen: "agent", agent: decodeURIComponent(agent) } : { screen: "home" };
 }
 export function useRoute(): Route {
@@ -152,13 +149,11 @@ export function go(route: Route) {
     return;
   }
   location.hash =
-    route.screen === "chat"
-      ? `#/a/${encodeURIComponent(route.agent)}/chat`
-      : route.screen === "agent-settings"
-        ? `#/a/${encodeURIComponent(route.agent)}/settings`
-        : route.screen === "agent"
-          ? `#/a/${encodeURIComponent(route.agent)}`
-          : "#/";
+    route.screen === "agent-settings"
+      ? `#/a/${encodeURIComponent(route.agent)}/settings`
+      : route.screen === "agent"
+        ? `#/a/${encodeURIComponent(route.agent)}`
+        : "#/";
 }
 
 export type ThemeName = "dark" | "light";

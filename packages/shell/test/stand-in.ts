@@ -234,6 +234,7 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
     { name: "weekly-numbers", description: "Writes the weekly summary" },
   ];
   const calls: Call[] = [];
+  const notes = new Map<string, unknown>();
   const refusals = new Map<string, Refusal>();
   const subscribers = new Set<{
     socket: WebSocket;
@@ -564,7 +565,12 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
       if (method === "logout") return { revoked: true };
       return { state: "signed_in", account: { email: "sam@example.com", plan: "Plus" } };
     }
-    if (slot === "store") return {};
+    if (slot === "store") {
+      if (method === "get")
+        return notes.has(String(input.key)) ? { value: notes.get(String(input.key)) } : {};
+      notes.set(String(input.key), input.value);
+      return {};
+    }
     throw new Refusal("invalid", `The stand-in has no ${slot}.${method}.`);
   };
 
@@ -648,6 +654,7 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
       emit(chatSlot(agent), "message", message);
     },
     changed,
+    notes,
     close: async () => {
       for (const socket of sockets.clients) socket.terminate();
       await new Promise((done) => server.close(done));
