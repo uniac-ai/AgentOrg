@@ -198,12 +198,15 @@ test(
     await nav.getByRole("button", { name: "Research" }).waitFor();
     assert.deepEqual(
       (await nav.getByRole("button").allInnerTexts()).map((t) => t.trim()),
-      ["Agents", "", "Research", "Reviewer", "Triage", "Weekly report", "Broken", "Settings"],
+      ["", "Agents", "Research", "Reviewer", "Triage", "Weekly report", "Broken", "Settings"],
     );
     const settings = await nav.getByRole("button", { name: "Settings" }).boundingBox();
     assert.ok(settings && settings.y + settings.height > 860, "at the bottom");
     await nav.getByRole("button", { name: "Create" }).click();
-    await page.getByRole("menuitem", { name: "Empty" }).waitFor();
+    await page
+      .getByRole("dialog", { name: "Create" })
+      .getByRole("button", { name: "Empty" })
+      .waitFor();
     await page.keyboard.press("Escape");
 
     const weekly = row(page, "Weekly report");

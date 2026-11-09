@@ -1,8 +1,6 @@
-// The stack being built, kept here so that leaving the panel loses nothing. The right side holds
-// one panel at a time: the chats, or this.
-import { createContext, useContext, useEffect, useRef, useState } from "react";
+// The stack being built, kept here so that putting the popup away loses nothing.
+import { createContext, useContext, useRef, useState } from "react";
 import { api, useLoad } from "../data.ts";
-import { useChats } from "./chats.tsx";
 import {
   type Catalog,
   type CatalogBase,
@@ -25,7 +23,6 @@ function readCatalog(): Promise<Catalog> {
 }
 
 function useBuildingState() {
-  const chats = useChats();
   // Saving a template raises no event: `version` reads them again.
   const [version, setVersion] = useState(0);
   const catalog = useLoad(readCatalog, ["actors"], [version]).value ?? EMPTY;
@@ -35,15 +32,6 @@ function useBuildingState() {
   const keys = useRef(0);
   const nextKey = () => ++keys.current;
 
-  // The chats opening puts this away; the stack stays.
-  useEffect(() => {
-    if (chats.open) setOpen(false);
-  }, [chats.open]);
-
-  const show = () => {
-    chats.close();
-    setOpen(true);
-  };
   /** Any change makes what was found wrong with the stack out of date. */
   const change = (next: (was: Draft) => Partial<Draft>) =>
     setDraft((was) => (was ? { ...was, ...next(was), problems: [] } : was));
@@ -53,15 +41,18 @@ function useBuildingState() {
   return {
     catalog,
     draft,
-    open: open && !chats.open,
-    show,
+    open,
+    show: () => setOpen(true),
     hide: () => setOpen(false),
-    /** A template, or nothing, opens the stack in the chats' place. */
+    /** A template, or nothing, starts a stack in the popup. */
     start(template?: Template, mode: Draft["mode"] = "agent") {
       setDraft(draftFrom(template, catalog, mode, nextKey));
-      show();
+      setOpen(true);
     },
-    discard() {
+    /** Back to choosing what to start from. */
+    discard: () => setDraft(undefined),
+    /** It's made: nothing is left to keep. */
+    done() {
       setDraft(undefined);
       setOpen(false);
     },

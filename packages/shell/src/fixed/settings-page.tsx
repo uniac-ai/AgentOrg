@@ -10,6 +10,9 @@ import { Jump, rowClass, Scroll, Section, UsedBy } from "./parts.tsx";
 const countOf = (n: number) => `${n} ${n === 1 ? "connection" : "connections"}`;
 const THREE = "grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)_minmax(0,1fr)] tight:grid-cols-1";
 
+const SECTION =
+  "h-8 flex-none justify-start rounded-lg px-2.5 text-[13px] font-normal hover:bg-[var(--hover)] data-active:bg-[var(--selected)] dark:data-active:border-transparent dark:data-active:bg-[var(--selected)]";
+
 type Tab = "templates" | "skills" | "mcps" | "providers" | "account";
 const ROUTES: Record<Tab, Route> = {
   templates: { screen: "settings", tab: "templates" },
@@ -19,7 +22,7 @@ const ROUTES: Record<Tab, Route> = {
   account: { screen: "settings", tab: "account" },
 };
 
-/** Settings' tabs, and what the tab offers beside them. */
+/** Settings' sections down the left, with what the section offers beneath them. */
 export function SettingsFrame({
   tab,
   action,
@@ -30,23 +33,36 @@ export function SettingsFrame({
   children: React.ReactNode;
 }) {
   return (
-    <div className="flex h-full flex-col">
-      <div className="no-bar flex shrink-0 items-center justify-between gap-2 overflow-x-auto px-5 pt-4 tight:px-3.5">
-        <Tabs value={tab} onValueChange={(next) => go(ROUTES[next as Tab])}>
-          <TabsList>
-            <TabsTrigger value="templates">Templates</TabsTrigger>
-            <TabsTrigger value="skills">Skills</TabsTrigger>
-            <TabsTrigger value="mcps">
+    <div className="flex h-full tight:flex-col">
+      <div className="flex w-48 shrink-0 flex-col gap-3 p-3 tight:w-auto tight:flex-row tight:items-center tight:gap-2 tight:pb-0">
+        <Tabs
+          className="no-bar min-w-0 tight:flex-1 tight:overflow-x-auto"
+          orientation="vertical"
+          value={tab}
+          onValueChange={(next) => go(ROUTES[next as Tab])}
+        >
+          <TabsList className="w-full items-stretch gap-0.5 bg-transparent p-0 tight:w-fit tight:flex-row! tight:justify-start">
+            <TabsTrigger className={SECTION} value="templates">
+              Templates
+            </TabsTrigger>
+            <TabsTrigger className={SECTION} value="skills">
+              Skills
+            </TabsTrigger>
+            <TabsTrigger className={SECTION} value="mcps">
               <span className="tight:hidden">MCP connections</span>
               <span className="hidden tight:inline">MCPs</span>
             </TabsTrigger>
-            <TabsTrigger value="providers">Providers</TabsTrigger>
-            <TabsTrigger value="account">Account</TabsTrigger>
+            <TabsTrigger className={SECTION} value="providers">
+              Providers
+            </TabsTrigger>
+            <TabsTrigger className={SECTION} value="account">
+              Account
+            </TabsTrigger>
           </TabsList>
         </Tabs>
-        {action}
+        {action && <div className="shrink-0">{action}</div>}
       </div>
-      <div className="min-h-0 flex-1">{children}</div>
+      <div className="min-h-0 min-w-0 flex-1">{children}</div>
     </div>
   );
 }

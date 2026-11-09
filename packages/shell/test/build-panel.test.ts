@@ -29,13 +29,16 @@ const withGateway = (run: (gateway: Gateway) => Promise<void>) => async () => {
   }
 };
 const plus = (page: Page) => page.getByRole("button", { name: /^Create/ }).first();
-const panel = (page: Page) => page.getByRole("complementary", { name: "Build" });
+const panel = (page: Page) => page.getByRole("dialog", { name: /^New (agent|template)/ });
+const chooser = (page: Page) => page.getByRole("dialog", { name: "Create" });
 const card = (page: Page, name: string) =>
   panel(page).getByRole("list", { name: "Units" }).getByRole("listitem", { name });
 async function fromTemplate(page: Page, name: string) {
   await page.getByRole("list", { name: "Your agents" }).waitFor();
   await plus(page).click();
-  await page.getByRole("menuitem", { name: new RegExp(`^${name}`) }).click();
+  await chooser(page)
+    .getByRole("button", { name: new RegExp(`^${name}`) })
+    .click();
   await panel(page).waitFor();
 }
 async function choose(page: Page, field: string, option: RegExp) {
@@ -161,7 +164,7 @@ test(
     const page = await open(gateway);
     await page.getByRole("list", { name: "Your agents" }).waitFor();
     await plus(page).click();
-    await page.getByRole("menuitem", { name: "Empty" }).click();
+    await chooser(page).getByRole("button", { name: "Empty" }).click();
     await panel(page).getByLabel("Name").fill("Solo");
     const create = panel(page).getByRole("button", { name: "Create", exact: true });
     await panel(page).getByRole("button", { name: "Add a unit" }).click();
@@ -198,7 +201,7 @@ test(
     const page = await open(gateway);
     await page.getByRole("list", { name: "Your agents" }).waitFor();
     await plus(page).click();
-    await page.getByRole("menuitem", { name: "Empty" }).click();
+    await chooser(page).getByRole("button", { name: "Empty" }).click();
     await panel(page).getByRole("button", { name: "Add a unit" }).click();
     await page.getByRole("menuitem", { name: /^Agent control/ }).click();
     const control = card(page, "Agent control");
@@ -231,24 +234,37 @@ test(
 );
 
 test(
-  "the right side holds one panel at a time, in one place, and leaving loses nothing",
+  "Create is one popup that keeps its box, and only Discard loses a stack",
   withGateway(async (gateway) => {
     const page = await open(gateway);
-    await fromTemplate(page, "Assistant");
+    await page.getByRole("list", { name: "Your agents" }).waitFor();
+    await plus(page).click();
+    await chooser(page).getByRole("button", { name: "Empty" }).waitFor();
+    await page.waitForTimeout(250);
+    const chosen = await chooser(page).boundingBox();
+    await chooser(page)
+      .getByRole("button", { name: /^Assistant/ })
+      .click();
     await panel(page).getByLabel("Name").fill("Foreman");
-    const built = await panel(page).boundingBox();
-    await page.getByRole("button", { name: /^Chats/ }).click();
-    const chats = page.getByRole("complementary", { name: "Chats" });
-    await chats.waitFor();
-    assert.equal(await panel(page).count(), 0);
-    assert.deepEqual(await chats.boundingBox(), built, "the same place and size");
+    assert.deepEqual(await panel(page).boundingBox(), chosen, "the same box");
+
+    await page.mouse.click(8, 8);
+    await page.waitForTimeout(200);
+    assert.equal(await panel(page).getByLabel("Name").inputValue(), "Foreman", "a stray click");
+
+    await page.keyboard.press("Escape");
+    await panel(page).waitFor({ state: "detached" });
     await page.getByRole("button", { name: "Create, one in progress" }).first().click();
-    await page.getByRole("menuitem", { name: "Continue Foreman" }).click();
-    assert.equal(await chats.count(), 0);
     assert.equal(await panel(page).getByLabel("Name").inputValue(), "Foreman");
+
+    await panel(page).getByRole("button", { name: "Close" }).click();
+    await panel(page).waitFor({ state: "detached" });
+    await page.getByRole("button", { name: "Create, one in progress" }).first().click();
     await panel(page).getByRole("button", { name: "Build options" }).click();
     await page.getByRole("menuitem", { name: "Discard" }).click();
-    assert.equal(await panel(page).count(), 0);
+    await chooser(page).getByRole("button", { name: "Empty" }).waitFor();
+    await page.keyboard.press("Escape");
+    await chooser(page).waitFor({ state: "detached" });
     await page.getByRole("button", { name: "Create", exact: true }).first().waitFor();
     await page.close();
   }),
@@ -284,6 +300,8 @@ test(
     await panel(page).getByText("New agent").waitFor();
     await panel(page).getByRole("button", { name: "Build options" }).click();
     await page.getByRole("menuitem", { name: "Discard" }).click();
+    await page.keyboard.press("Escape");
+    await chooser(page).waitFor({ state: "detached" });
 
     await assistant.getByRole("button", { name: "New template from Assistant" }).click();
     assert.equal(await panel(page).getByLabel("Name").inputValue(), "Assistant copy");
@@ -321,7 +339,7 @@ test(
     await choose(page, "Files and commands", /^None/);
     await panel(page).getByRole("button", { name: "Build options" }).click();
     await page.getByRole("menuitem", { name: /^Save as template/ }).click();
-    const dialog = page.getByRole("dialog");
+    const dialog = page.getByRole("dialog", { name: "Save as template" });
     await dialog.getByLabel("Template name").fill("Browse only");
     await dialog.getByRole("button", { name: "Save" }).click();
     await dialog.waitFor({ state: "detached" });
