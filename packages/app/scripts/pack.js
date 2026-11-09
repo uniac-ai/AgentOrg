@@ -4,8 +4,8 @@
 // everything in a bundling package's own node_modules as bundled, and a global install nests the
 // cli's dependencies there, so it never extracted esbuild and its install script failed. The code
 // finds them as it finds them in the workspace, by name from its own location (dist/src walks up
-// to dist/node_modules), and so do the paths read at run time: the shell's files, the frame
-// runtime, the host runner, the ajv worker and what a Hub build imports. Their third-party
+// to dist/node_modules), and so do the paths read at run time: the shell's files, the host
+// runner, the ajv worker and what a Hub build imports. Their third-party
 // dependencies are the cli's own, found further up. Run after `npm run build`:
 // `node packages/app/scripts/pack.js <destination>`, which prints the tarball's path.
 import { execFileSync } from "node:child_process";
