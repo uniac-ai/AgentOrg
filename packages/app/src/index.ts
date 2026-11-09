@@ -10,6 +10,8 @@ export {
   type PersonCalls,
   type Target,
 } from "./model.js";
+export { Notes } from "./notes.js";
+export { type Programs, type ProgramsOptions, startPrograms } from "./programs.js";
 export { SignIn } from "./signin.js";
 export {
   MAX_TRANSFER,

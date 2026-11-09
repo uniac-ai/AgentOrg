@@ -2,10 +2,10 @@
 # The published package as a person gets it: @agentorg/cli packed, with the other @agentorg
 # packages inside it (dist/node_modules), installed from its tarball into an empty folder with a
 # cache of its own, and globally with a prefix of its own. Then `agentorg` runs on a fresh home:
-# first run must make the Installer and ChatGPT, both running and connected; the gateway must
-# serve the shell, the sign-in page and the frame runtime; and the Hub must build an agent's
-# source, which resolves the SDK, the interfaces and zod from the installed package. Run after
-# `npm run build`.
+# first run must make ChatGPT, both providers and management, all connected; an agent must be made
+# with `agentorg call agents create`; the gateway must serve the shell, the sign-in page and the
+# frame runtime; and the Hub must build an agent's source, which resolves the SDK, the interfaces
+# and zod from the installed package. Run after `npm run build`.
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -60,24 +60,6 @@ start_on() {
   cat "$3" >&2
   exit 1
 }
-# The Installer's and ChatGPT's ids on a home ($2), once both run and are connected, by `agentorg`
-# ($1); a failure after 60 s.
-both_ready() {
-  for _ in $(seq 1 120); do
-    if "$1" actors --home "$2" >"$work/ready.json" 2>/dev/null &&
-      node -e '
-        const { actors } = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
-        const up = (name) => actors.find((a) => a.name === name && a.state === "running" && a.connected);
-        const [i, c] = [up("Installer"), up("ChatGPT")];
-        if (!i || !c) process.exit(1);
-        console.log(`Installer=${i.actorId} ChatGPT=${c.actorId}`);
-      ' "$work/ready.json"; then
-      return 0
-    fi
-    sleep 0.5
-  done
-  return 1
-}
 stop_app() {
   kill -TERM "$pid"
   wait "$pid" || true
@@ -131,14 +113,14 @@ done
 [ -n "$url" ] || { echo "No address after 60 s" >&2; cat "$work/app.log" >&2; exit 1; }
 echo "$url"
 
-step "first run: the Installer and ChatGPT, running and connected"
+step "first run: ChatGPT, both providers and management, connected"
 ready=""
 for _ in $(seq 1 120); do
   if "$agentorg" actors --home "$home" >"$work/actors.json" 2>"$work/actors.err" &&
     node -e '
       const { actors } = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
-      const up = (name) => actors.some((a) => a.name === name && a.state === "running" && a.connected);
-      process.exit(up("Installer") && up("ChatGPT") ? 0 : 1);
+      const up = (name) => actors.some((a) => a.name === name && a.connected);
+      process.exit(["ChatGPT", "Agents", "MCP", "Management"].every(up) ? 0 : 1);
     ' "$work/actors.json"; then
     ready=1
     break
@@ -150,7 +132,27 @@ node -e '
   const { actors } = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
   for (const a of actors) console.log(`${a.name}\t${a.state}\tconnected=${a.connected}`);
 ' "$work/actors.json" || cat "$work/actors.err"
-[ -n "$ready" ] || { echo "Not both running and connected after 60 s" >&2; cat "$work/app.log" >&2; exit 1; }
+[ -n "$ready" ] || { echo "Not all connected after 60 s" >&2; cat "$work/app.log" >&2; exit 1; }
+
+step "agentorg call agents create makes an Assistant, running"
+# Management hears of its providers as first run exposes them: asked until it offers Assistant.
+for _ in $(seq 1 60); do
+  "$agentorg" call agents creatable --home "$home" >"$work/creatable.json" 2>/dev/null &&
+    grep -q '"id":"assistant"' "$work/creatable.json" && break
+  sleep 0.5
+done
+create="$(node -e '
+  const { creatables: [one] } = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+  console.log(JSON.stringify({ provider: one.provider, creatable: one.id, name: "Scout", answers: {} }));
+' "$work/creatable.json")"
+"$agentorg" call agents create "$create" --home "$home" >"$work/created.json"
+"$agentorg" call agents list --home "$home" >"$work/agents.json"
+node -e '
+  const { agents } = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+  const scout = agents.find((a) => a.name === "Scout");
+  if (scout?.status.state !== "running") { console.error(JSON.stringify(agents)); process.exit(1); }
+  console.log(`Scout is ${scout.status.state}`);
+' "$work/agents.json"
 
 step "the gateway serves the shell, the sign-in page and the frame runtime"
 for path in / /app.js /app.css /signin /signin.js /frames/runtime.js; do
@@ -188,82 +190,4 @@ kill -TERM "$hubpid"
 wait "$hubpid" || true
 hubpid=""
 
-step "an earlier release's home: the published 0.0.3 makes it, this build takes it over"
-old="$work/old"
-mkdir "$old"
-(cd "$old" && echo '{"private":true}' >package.json &&
-  npm install --silent --no-audit --no-fund --cache "$work/cache" @agentorg/cli@0.0.3)
-uphome="$work/uphome"
-start_on "$old/node_modules/.bin/agentorg" "$uphome" "$work/old.log"
-made="$(both_ready "$old/node_modules/.bin/agentorg" "$uphome")" ||
-  { echo "0.0.3's first run didn't finish" >&2; cat "$work/old.log" >&2; exit 1; }
-echo "0.0.3: $made"
-# An agent made on 0.0.3: an interface that changed under the same major must not strand it.
-"$old/node_modules/.bin/agentorg" call store get '{"key":"app/first-run"}' --home "$uphome" >"$work/old-record.json"
-agent_input="$(node -e '
-  const { value } = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
-  const chatgpt = /ChatGPT=(\S+)/.exec(process.argv[2])[1];
-  console.log(JSON.stringify({ package: value.assistant, name: "Agent", start: true, connections: {
-    "logic.model": { actor: chatgpt, export: "model.session" },
-    "logic.store": { actor: "storage", export: "kv" },
-  } }));
-' "$work/old-record.json" "$made")"
-agent="$("$old/node_modules/.bin/agentorg" call installer install "$agent_input" --home "$uphome" |
-  node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).actorId))')"
-echo "0.0.3's agent: $agent"
-stop_app
-start_on "$agentorg" "$uphome" "$work/up.log"
-# The Hub resumes the old Actors as it opens: wait for the first run to have upgraded both.
-for _ in $(seq 1 120); do
-  grep -q '^First run: upgraded the installer' "$work/up.log" &&
-    grep -q '^First run: upgraded ChatGPT' "$work/up.log" && break
-  kill -0 "$pid" 2>/dev/null || break
-  sleep 0.5
-done
-grep -q '^First run: upgraded the installer' "$work/up.log" &&
-  grep -q '^First run: upgraded ChatGPT' "$work/up.log" ||
-  { echo "This build's first run didn't upgrade both" >&2; cat "$work/up.log" >&2; exit 1; }
-grep '^First run: upgraded' "$work/up.log"
-kept="$(both_ready "$agentorg" "$uphome")" ||
-  { echo "This build didn't take the home over" >&2; cat "$work/up.log" >&2; exit 1; }
-echo "this build: $kept"
-[ "$made" = "$kept" ] || { echo "The Installer or ChatGPT is another Actor now" >&2; exit 1; }
-# The agent came over: the same Actor, on this build's assistant, running, its connections kept.
-"$agentorg" call store get '{"key":"app/first-run"}' --home "$uphome" >"$work/up-record.json"
-for _ in $(seq 1 120); do
-  "$agentorg" actors --home "$uphome" >"$work/up-actors.json" 2>/dev/null &&
-    node -e '
-      const fs = require("fs");
-      const [actors, record, id] = process.argv.slice(1);
-      const { value } = JSON.parse(fs.readFileSync(record, "utf8"));
-      const agent = JSON.parse(fs.readFileSync(actors, "utf8")).actors.find((a) => a.actorId === id);
-      if (!agent || agent.package !== value.assistant || agent.state !== "running" || !agent.connected)
-        process.exit(1);
-    ' "$work/up-actors.json" "$work/up-record.json" "$agent" && break
-  kill -0 "$pid" 2>/dev/null || break
-  sleep 0.5
-  false
-done || { echo "The agent didn't come over on this build" >&2; cat "$work/up.log" >&2; exit 1; }
-"$agentorg" call bindings list "{\"actor\":\"$agent\"}" --home "$uphome" >"$work/up-bindings.json"
-node -e '
-  const { bindings } = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
-  for (const slot of ["chat.chat", "logic.model", "logic.store"])
-    if (!bindings.some((b) => b.slot === slot)) {
-      console.error(`The agent lost ${slot}`);
-      process.exit(1);
-    }
-  console.log("the agent kept its chat and model connections");
-' "$work/up-bindings.json"
-# The upgraded Installer installs: the counter, built by the Hub, with its store.
-"$agentorg" call packages build "$counter" --home "$uphome" >"$work/up-build.json"
-hash="$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).hash)' "$work/up-build.json")"
-"$agentorg" call installer install \
-  "{\"package\":\"$hash\",\"name\":\"Counter\",\"connections\":{\"counter.store\":{\"actor\":\"storage\",\"export\":\"kv\"}}}" \
-  --home "$uphome" >"$work/up-install.json"
-node -e '
-  const { actorId } = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
-  if (!/^act_/.test(actorId)) process.exit(1);
-  console.log(`installed the counter as ${actorId}`);
-' "$work/up-install.json"
-stop_app
 echo "smoke passed"

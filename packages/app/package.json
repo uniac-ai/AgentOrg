@@ -34,10 +34,15 @@
     "@agentorg/hub": "0.0.0",
     "@agentorg/interfaces": "0.0.0",
     "@agentorg/kit": "0.0.0",
+    "@agentorg/manager": "0.0.0",
+    "@agentorg/mcp": "0.0.0",
     "@agentorg/sdk": "0.0.0",
     "@agentorg/shell": "0.0.0",
     "@assistant-ui/react": "^0.15.32",
+    "@modelcontextprotocol/client": "2.4.0",
     "ajv": "^8.20.0",
+    "assistant": "0.0.1",
+    "chatgpt": "0.0.1",
     "esbuild": "0.28.2",
     "radix-ui": "^1.8.1",
     "react": "^19.3.1",
@@ -47,10 +52,10 @@
     "remark-gfm": "^4.0.1",
     "remend": "^1.4.0",
     "ws": "^8.22.1",
+    "yaml": "2.9.1",
     "zod": "^4.6.7"
   },
   "devDependencies": {
-    "chatgpt": "0.0.1",
     "@playwright/test": "1.64.1",
     "@types/ws": "^8.18.2"
   },
