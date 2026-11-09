@@ -6,6 +6,7 @@ import { go, setTheme, useLoad, useRoute, useTheme } from "../data.ts";
 import { Settings } from "../settings.tsx";
 import { AgentPage } from "./agent-page.tsx";
 import { AgentsPage } from "./agents-page.tsx";
+import { ChatPage } from "./chat.tsx";
 import { getAgent, listAgents, nowOf, REFRESH_MS, useEvery } from "./data.ts";
 
 /** The agents with a problem, for the count beside Agents. */
@@ -81,7 +82,9 @@ export function FixedShell({ login }: { login?: LoginStatus }) {
         <div className="mt-auto">{toggle}</div>
       </nav>
       <div className="flex min-w-0 flex-1 flex-col pr-2 pb-2 phone:p-0">
-        {route.screen === "agent" ? (
+        {route.screen === "chat" ? (
+          <ChatPage key={route.agent} agent={route.agent} />
+        ) : route.screen === "agent" ? (
           <AgentPage key={route.agent} agent={route.agent} />
         ) : route.screen === "settings" ? (
           <main className="min-h-0 flex-1 overflow-auto">

@@ -86,21 +86,26 @@ export function AgentPage({ agent: id }: { agent: string }) {
     <Page
       crumbs={[{ label: "Agents", to: { screen: "home" } }, { label: agent.name }]}
       action={
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon-sm" aria-label={`${agent.name} options`}>
-              <MoreHorizontalIcon />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            <DropdownMenuItem onSelect={() => change(stopped ? "start" : "stop", {})}>
-              {stopped ? "Start" : "Stop"}
-            </DropdownMenuItem>
-            <DropdownMenuItem variant="destructive" onSelect={() => setDeleting(true)}>
-              Delete…
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        <>
+          <Button size="sm" onClick={() => go({ screen: "chat", agent: id })}>
+            Chat
+          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon-sm" aria-label={`${agent.name} options`}>
+                <MoreHorizontalIcon />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onSelect={() => change(stopped ? "start" : "stop", {})}>
+                {stopped ? "Start" : "Stop"}
+              </DropdownMenuItem>
+              <DropdownMenuItem variant="destructive" onSelect={() => setDeleting(true)}>
+                Delete…
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </>
       }
     >
       <Scroll>

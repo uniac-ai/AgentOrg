@@ -7,10 +7,12 @@
 @import "tailwindcss/theme" layer(theme);
 @import "tailwindcss/utilities" layer(utilities);
 @import "tw-animate-css";
+@import "streamdown/styles.css";
 @import "../static/app.css" layer(legacy);
 @import "../static/kit-overrides.css";
 
 @source "./**/*.tsx";
+@source "../../../node_modules/streamdown/dist/*.js";
 
 @custom-variant dark (&:is([data-theme="dark"], [data-theme="dark"] *));
 @custom-variant phone {
@@ -79,6 +81,48 @@
 @custom-variant data-vertical {
   &:where([data-orientation="vertical"]) {
     @slot;
+  }
+}
+
+/* The bottom fade of a scrolling thread, also from `shadcn/tailwind.css`. */
+@utility scroll-fade-b {
+  --_scroll-fade-size-b: var(
+    --scroll-fade-b-size,
+    var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10)))
+  );
+  --scroll-fade-mask: linear-gradient(
+    to bottom,
+    #000 0,
+    #000 calc(100% - var(--scroll-fade-b, 0px)),
+    transparent 100%
+  );
+  -webkit-mask-image: var(--scroll-fade-mask);
+  mask-image: var(--scroll-fade-mask);
+  -webkit-mask-composite: source-in;
+  mask-composite: intersect;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+
+  @supports (animation-timeline: scroll()) {
+    animation: scroll-fade-reveal-b 1ms ease-in-out;
+    animation-timeline: scroll(self y);
+    animation-range: calc(100% - var(--scroll-fade-reveal, calc(var(--spacing) * 24))) 100%;
+    animation-fill-mode: both;
+  }
+
+  @supports not (animation-timeline: scroll()) {
+    --scroll-fade-b: var(--_scroll-fade-size-b);
+  }
+}
+@keyframes scroll-fade-reveal-b {
+  from {
+    --scroll-fade-b: var(
+      --_scroll-fade-size-b,
+      var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10)))
+    );
+  }
+  to {
+    --scroll-fade-b: 0px;
   }
 }
 
@@ -162,5 +206,57 @@
   }
   .no-bar::-webkit-scrollbar {
     display: none;
+  }
+}
+
+/* The reveal: Streamdown's per-word spans, with a quick fading blur. */
+@keyframes sd-reveal {
+  from {
+    opacity: 0;
+    filter: blur(6px);
+  }
+  to {
+    opacity: 1;
+    filter: blur(0);
+  }
+}
+@keyframes thinking {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+@layer components {
+  /* Agent text: the width and rhythm of a page, not a bubble. */
+  .prose-chat {
+    font-size: 15px;
+    line-height: 1.65;
+  }
+  .prose-chat :where(p, ul, ol) {
+    margin: 0 0 0.75em;
+  }
+  .prose-chat :where(:last-child) {
+    margin-bottom: 0;
+  }
+  .thinking {
+    background: linear-gradient(90deg, var(--faint) 0%, var(--fg) 50%, var(--faint) 100%);
+    background-size: 200% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    animation: thinking 1.6s linear infinite;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    [data-sd-animate] {
+      /* biome-ignore lint/complexity/noImportantStyles: Streamdown sets it inline. */
+      animation: none !important;
+    }
+    .thinking {
+      animation: none;
+      color: var(--muted);
+      background: none;
+    }
   }
 }
