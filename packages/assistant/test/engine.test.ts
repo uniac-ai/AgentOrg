@@ -4,9 +4,10 @@ import { tools } from "@agentorg/interfaces";
 import { defineInterface, method, NotConnected, OutcomeUnknown, Refused } from "@agentorg/sdk";
 import { createTestContext } from "@agentorg/sdk/testing";
 import { z } from "zod";
+import { MAX_CALLS } from "../src/agent.ts";
 import { INPUT_BUDGET } from "../src/history.ts";
 import { MAX_INSTRUCTIONS } from "../src/settings.ts";
-import { MAX_OUTPUT, MAX_TOOLS, TOOLS_BUDGET } from "../src/tools.ts";
+import { capped, MAX_OUTPUT, MAX_TOOLS, TOOLS_BUDGET } from "../src/tools.ts";
 import engine, { INSTRUCTIONS } from "./engine-actor.ts";
 
 /** An interface that isn't `tools@1`. */
@@ -178,7 +179,7 @@ test("a tool message says its call running, then how it ended, under one id; the
       callTool("layout__place", { actor: "board", module: "panel" }, "c1"),
       callTool("layout__remove", { id: "p9" }, "c2"),
     ),
-    calls(...Array.from({ length: 21 }, (_, i) => callTool("layout__get", {}, `g${i}`))),
+    calls(...Array.from({ length: MAX_CALLS + 1 }, (_, i) => callTool("layout__get", {}, `g${i}`))),
   );
   await s.turn("Place it, then remove p9.");
   type Shown = { id: string; role: string; text: string; tool?: Record<string, unknown> };
@@ -208,7 +209,15 @@ test("a tool message says its call running, then how it ended, under one id; the
   assert.equal(note?.text, "3 calls: limit");
   assert.equal(note?.tool, undefined);
   // The record shows the same as the events' last word on each.
-  const { messages } = (await s.actor.call("chat", "history", {})) as { messages: Shown[] };
+  type Page = { messages: Shown[]; more: boolean };
+  const page = (before?: string) =>
+    s.actor.call("chat", "history", { limit: 200, ...(before ? { before } : {}) }) as Promise<Page>;
+  let { messages, more } = await page();
+  while (more) {
+    const older = await page(messages[0]?.id);
+    messages = [...older.messages, ...messages];
+    more = older.more;
+  }
   const recorded = messages.filter((m) => m.role === "tool");
   assert.deepEqual(recorded[0], placed);
   assert.deepEqual(recorded[1], removed);
@@ -579,7 +588,7 @@ test("a function call runs through its slot, and its result or refusal goes back
     if (item.type === "function_call") assert.equal(last[i + 1]?.callId, item.callId);
 });
 
-test("a turn makes at most 20 tool calls, and says so as its error", async () => {
+test("a turn makes at most MAX_CALLS tool calls, and says so as its error", async () => {
   const s = await setup();
   let runs = 0;
   s.actor.expose(
@@ -592,21 +601,21 @@ test("a turn makes at most 20 tool calls, and says so as its error", async () =>
       },
     }),
   );
-  for (let i = 0; i < 30; i++) s.script.push(calls(callTool("layout__get", {})));
+  for (let i = 0; i < MAX_CALLS + 10; i++) s.script.push(calls(callTool("layout__get", {})));
   const from = s.actor.emitted.length;
   assert.equal((await s.turn("Loop.")).detail?.code, "limit");
-  assert.equal(runs, 20);
-  assert.equal(s.requests.length, 20);
+  assert.equal(runs, MAX_CALLS);
+  assert.equal(s.requests.length, MAX_CALLS);
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(s.statuses(from).at(-1)?.state, "error", "no idle after the limit");
   // Many calls in one reply: those past the limit are answered "limit", so every call is paired.
   s.script.length = 0;
   s.script.push(
-    calls(...Array.from({ length: 25 }, (_, i) => callTool("layout__get", {}, `m${i}`))),
+    calls(...Array.from({ length: MAX_CALLS + 5 }, (_, i) => callTool("layout__get", {}, `m${i}`))),
   );
   runs = 0;
   assert.equal((await s.turn("Many.")).detail?.code, "limit");
-  assert.equal(runs, 20);
+  assert.equal(runs, MAX_CALLS);
   assert.equal(s.messages().filter((m) => m === "tool: 5 calls: limit").length, 1);
 });
 
@@ -756,7 +765,19 @@ test("a refusal from the model ends the turn with its code, and no idle after", 
   assert.ok(s.actor.logs.some((line) => line.message === "A turn failed."));
 });
 
-test("outputs are capped in bytes, refusals too, and a long reply is shown in part", async () => {
+test("a long output keeps its head and its tail, and says how much was cut", () => {
+  const short = "x".repeat(MAX_OUTPUT);
+  assert.equal(capped(short), short);
+  const cut = capped(`start${"x".repeat(100_000)}the error`);
+  assert.ok(cut.startsWith("start") && cut.endsWith("the error"));
+  assert.match(cut, /\n… \[70014 characters cut\] …\n/);
+  // A surrogate pair across either cut is dropped whole, so the text stays well formed.
+  // The offsets put a pair across both cuts.
+  const emoji = capped(`a${"😀".repeat(40_000)}b`);
+  assert.equal(Buffer.from(emoji).toString(), emoji);
+});
+
+test("outputs are capped, refusals too, and a long reply is shown in part", async () => {
   const s = await setup();
   s.actor.expose(
     "layout",
@@ -788,8 +809,8 @@ test("outputs are capped in bytes, refusals too, and a long reply is shown in pa
   const outputs = sent.filter((i) => i.type === "function_call_output");
   assert.equal(outputs.length, 2);
   for (const item of outputs) {
-    assert.ok(bytes(item.output as string) <= MAX_OUTPUT);
-    assert.match(item.output as string, /… \(cut\)$/);
+    assert.ok((item.output as string).length <= MAX_OUTPUT + 64);
+    assert.match(item.output as string, /characters cut/);
   }
   const shown = s.actor.emitted
     .filter((e) => e.event === "message")
@@ -865,6 +886,24 @@ test("the model gets the newest whole exchanges that fit, and a call keeps its o
   assert.ok(bytes(JSON.stringify(sent)) <= INPUT_BUDGET);
 });
 
+test("the next message still has a long turn, with its oldest outputs left out", async () => {
+  const s = await setup();
+  s.actor.expose("big", tools, listing({ read: () => "x".repeat(10_000) }));
+  for (let i = 0; i < 60; i++) s.script.push(calls(callTool("big__read", {}, `c${i}`)));
+  s.script.push(say("Done with the long part."));
+  await s.turn("Do the long part.");
+  s.script.push(say("Going on."));
+  await s.turn("Go on.");
+  const sent = s.requests.at(-1)?.input ?? [];
+  assert.ok(bytes(JSON.stringify(sent)) <= INPUT_BUDGET + 20_000);
+  const said = sent.filter((item) => item.type === "message").map((item) => item.content);
+  assert.deepEqual(said, ["Do the long part.", "Done with the long part.", "Go on."]);
+  const outputs = sent.filter((item) => item.type === "function_call_output");
+  assert.equal(outputs.length, 60, "every call keeps an output");
+  assert.match(outputs[0]?.output as string, /Left out/);
+  assert.doesNotMatch(outputs.at(-1)?.output as string, /Left out/);
+});
+
 test("a latest exchange over the budget leaves out its oldest outputs, never a call", async () => {
   const s = await setup();
   s.actor.expose(
@@ -936,10 +975,10 @@ test("thousands of calls in one reply cost a handful of writes", async () => {
   );
   const before = s.store.writes.count;
   assert.equal((await s.turn("Flood.")).detail?.code, "limit");
-  // The message, 20 calls, and one entry answering the other 1,980.
-  assert.equal(s.store.writes.count - before, 22);
+  // The message, `MAX_CALLS` calls, and one entry answering the other 1,980.
+  assert.equal(s.store.writes.count - before, MAX_CALLS + 2);
   const input = (await s.actor.call("chat", "history", { limit: 200 })) as { messages: unknown[] };
-  assert.equal(input.messages.length, 22);
+  assert.equal(input.messages.length, 200, "a full page of what was recorded");
 });
 
 test("a long message is stored once, under storage's value limit, and a big call is still kept", async () => {

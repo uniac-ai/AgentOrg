@@ -138,6 +138,7 @@ async function setup(
   t: test.TestContext,
   options: {
     answerTimeoutMs?: number;
+    answerTimeoutsMs?: Record<string, number>;
     helloTimeoutMs?: number;
     checks?: { size?: number; budgetMs?: number; compileBudgetMs?: number };
   } = {},
@@ -302,6 +303,32 @@ test("a provider that goes mid-subscription ends it with NotConnected", async (t
   await provider.waitSubscribed();
   p.client.socket.close();
   assert.equal((await sub.next())?.error?.name, "NotConnected");
+});
+
+test("one interface's calls can have a longer limit, and only its", async (t) => {
+  const { actor, bind } = await setup(t, {
+    answerTimeoutMs: 200,
+    answerTimeoutsMs: { [notes.id]: 30_000 },
+  });
+  const other = describeInterface(
+    defineInterface({
+      name: "other",
+      major: 1,
+      kind: "rpc",
+      methods: { write: method({ input: z.object({ text: z.string() }), output: z.object({}) }) },
+    }),
+  );
+  const provider = notesProvider();
+  const p = await actor("provider", { exports: { notes, other } }, async (...args) => {
+    await later(600);
+    return provider.serve(...args);
+  });
+  const c = await actor("consumer", { slots: { notes, other } });
+  await bind(c.id, "notes", p.id, "notes");
+  await bind(c.id, "other", p.id, "other");
+  assert.ok("result" in (await c.client.call("notes", "write", { text: "slow" })));
+  const late = await c.client.call("other", "write", { text: "slow" });
+  assert.equal(late.error?.name, "OutcomeUnknown");
 });
 
 test("a provider's answer is bounded by the deadline, and a caller that resets cancels it", async (t) => {

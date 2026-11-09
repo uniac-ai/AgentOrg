@@ -229,9 +229,10 @@ export function createHistory(
       return { messages, more: start > 0 };
     },
     /**
-     * The conversation to send: the newest whole exchanges (each from a user message on) that fit
-     * the budget, and always the latest one. A latest one that alone is over the budget has its
-     * oldest function arguments and outputs left out, each call still paired with an output.
+     * The conversation to send: the newest exchanges (each from a user message on) that fit the
+     * budget, and always the latest two, so "go on" after a long turn still has that turn. When
+     * those two are over the budget, their oldest function arguments and outputs are left out,
+     * each call still paired with an output.
      */
     async input(): Promise<ResponseItem[]> {
       const { records } = await load();
@@ -241,7 +242,7 @@ export function createHistory(
         exchanges.at(-1)?.push(...entry.items);
       }
       let total = exchanges.reduce((sum, items) => sum + size(items), 0);
-      while (exchanges.length > 1 && total > INPUT_BUDGET) total -= size(exchanges.shift());
+      while (exchanges.length > 2 && total > INPUT_BUDGET) total -= size(exchanges.shift());
       const items = exchanges.flat();
       for (let i = 0; i < items.length && total > INPUT_BUDGET; i++) {
         const item = items[i] as ResponseItem;
