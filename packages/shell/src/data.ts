@@ -107,12 +107,16 @@ export function useAction() {
 /** The hash route: home, an agent, or settings. */
 export type Route =
   | { screen: "home" }
-  | { screen: "settings" }
+  | { screen: "settings"; tab: "providers" | "account" }
   | { screen: "agent"; agent: string }
+  | { screen: "agent-settings"; agent: string }
   | { screen: "chat"; agent: string }
   | { screen: "skills" | "mcps"; focus?: string; adding?: boolean };
 function routeOf(hash: string): Route {
-  if (hash === "#/settings") return { screen: "settings" };
+  // Settings opens on its first tab.
+  if (hash === "#/settings") return { screen: "skills" };
+  const tab = /^#\/settings\/(providers|account)$/.exec(hash)?.[1];
+  if (tab) return { screen: "settings", tab: tab as "providers" | "account" };
   const managed = /^#\/(skills|mcps)(?:\/(add|s\/([^/]+)))?$/.exec(hash);
   if (managed)
     return {
@@ -120,6 +124,8 @@ function routeOf(hash: string): Route {
       ...(managed[2] === "add" ? { adding: true } : {}),
       ...(managed[3] ? { focus: decodeURIComponent(managed[3]) } : {}),
     };
+  const settings = /^#\/a\/([^/]+)\/settings$/.exec(hash)?.[1];
+  if (settings) return { screen: "agent-settings", agent: decodeURIComponent(settings) };
   const chat = /^#\/a\/([^/]+)\/chat$/.exec(hash)?.[1];
   if (chat) return { screen: "chat", agent: decodeURIComponent(chat) };
   const agent = /^#\/a\/(.+)$/.exec(hash)?.[1];
@@ -141,13 +147,17 @@ export function go(route: Route) {
     location.hash = `#/${route.screen}${rest}`;
     return;
   }
+  if (route.screen === "settings") {
+    location.hash = `#/settings/${route.tab}`;
+    return;
+  }
   location.hash =
     route.screen === "chat"
       ? `#/a/${encodeURIComponent(route.agent)}/chat`
-      : route.screen === "agent"
-        ? `#/a/${encodeURIComponent(route.agent)}`
-        : route.screen === "settings"
-          ? "#/settings"
+      : route.screen === "agent-settings"
+        ? `#/a/${encodeURIComponent(route.agent)}/settings`
+        : route.screen === "agent"
+          ? `#/a/${encodeURIComponent(route.agent)}`
           : "#/";
 }
 

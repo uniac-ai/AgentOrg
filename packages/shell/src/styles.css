@@ -24,8 +24,13 @@
     @slot;
   }
 }
-@custom-variant narrow {
-  @container app (width < 56rem) {
+@custom-variant dock {
+  @container app (width >= 68.75rem) {
+    @slot;
+  }
+}
+@custom-variant tight {
+  @container main (width < 44rem) {
     @slot;
   }
 }

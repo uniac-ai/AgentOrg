@@ -12,8 +12,8 @@ import {
   useEvery,
 } from "./data.ts";
 import { DeleteButton } from "./delete-dialog.tsx";
-import { Nothing, Page, Scroll, StateDot, UsedBy, WhereIcon } from "./parts.tsx";
-import { rowClass } from "./skills-page.tsx";
+import { Nothing, rowClass, Scroll, StateDot, UsedBy, WhereIcon } from "./parts.tsx";
+import { SettingsFrame } from "./settings-page.tsx";
 
 /** Each connection with how many tools it offers; a server's state has no event, so it's reread. */
 const readConnections = async () => {
@@ -54,8 +54,8 @@ export function McpsPage({ focus, adding }: { focus?: string; adding?: boolean }
   };
 
   return (
-    <Page
-      crumbs={[{ label: "MCP connections" }]}
+    <SettingsFrame
+      tab="mcps"
       action={
         <Button size="sm" onClick={() => setOpen(true)}>
           <PlusIcon />
@@ -68,7 +68,7 @@ export function McpsPage({ focus, adding }: { focus?: string; adding?: boolean }
           {rows.map(({ entry, tools }) => (
             <li
               key={entry.connection}
-              className={`${rowClass(focus === entry.connection)} grid-cols-[minmax(0,1.1fr)_minmax(0,1.3fr)_minmax(0,1fr)_72px_24px] phone:grid-cols-[minmax(0,1fr)_auto]`}
+              className={`${rowClass(focus === entry.connection)} grid-cols-[minmax(0,1.1fr)_minmax(0,1.3fr)_minmax(0,1fr)_72px_24px] tight:grid-cols-[minmax(0,1fr)_auto]`}
             >
               <div className="min-w-0">
                 <div className="flex items-center gap-2 font-medium">
@@ -77,16 +77,16 @@ export function McpsPage({ focus, adding }: { focus?: string; adding?: boolean }
                 </div>
                 <div className="truncate text-[13px] text-muted-foreground">{originOf(entry)}</div>
               </div>
-              <span className="flex min-w-0 items-center gap-2 phone:col-span-2 phone:row-start-2">
+              <span className="flex min-w-0 items-center gap-2 tight:col-span-2 tight:row-start-2">
                 {entry.origin && <WhereIcon kind={entry.origin.kind} />}
                 <span className="truncate font-mono text-xs text-muted-foreground">
                   {entry.origin?.target}
                 </span>
               </span>
-              <span className="flex min-w-0 phone:col-span-2 phone:row-start-3">
+              <span className="flex min-w-0 tight:col-span-2 tight:row-start-3">
                 <UsedBy agents={using(entry.connection)} />
               </span>
-              <span className="flex justify-end text-xs tabular-nums text-muted-foreground phone:col-start-2 phone:row-start-1">
+              <span className="flex justify-end text-xs tabular-nums text-muted-foreground tight:col-start-2 tight:row-start-1">
                 {entry.state === "connecting" ? (
                   <LoaderCircleIcon
                     role="img"
@@ -99,7 +99,7 @@ export function McpsPage({ focus, adding }: { focus?: string; adding?: boolean }
                   tools !== undefined && `${tools} ${tools === 1 ? "tool" : "tools"}`
                 )}
               </span>
-              <span className="flex justify-end phone:col-start-2 phone:row-start-3">
+              <span className="flex justify-end tight:col-start-2 tight:row-start-3">
                 <DeleteButton
                   name={entry.name}
                   agents={using(entry.connection).map((a) => a.name)}
@@ -128,6 +128,6 @@ export function McpsPage({ focus, adding }: { focus?: string; adding?: boolean }
           setChanged((was) => was + 1);
         }}
       />
-    </Page>
+    </SettingsFrame>
   );
 }

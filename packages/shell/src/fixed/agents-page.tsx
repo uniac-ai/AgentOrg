@@ -1,86 +1,78 @@
-import { PlusIcon } from "lucide-react";
+import { MessageCircleIcon } from "lucide-react";
 import { useState } from "react";
-import { go, useLoad } from "../data.ts";
+import { go } from "../data.ts";
 import { Button } from "../ui/button.tsx";
 import { Item } from "../ui/item.tsx";
-import { CreateDialog } from "./create.tsx";
-import {
-  type AgentEntry,
-  ago,
-  getAgent,
-  listAgents,
-  nowOf,
-  REFRESH_MS,
-  type Tone,
-  useChatRecord,
-  useChatSlots,
-  useEvery,
-} from "./data.ts";
-import { Nothing, Page, Scroll, StateDot } from "./parts.tsx";
+import { More, Power, Tip } from "./controls.tsx";
+import { type AgentEntry, ago, useCreatables } from "./data.ts";
+import { Nothing, Scroll, StateDot } from "./parts.tsx";
+import { useAgents } from "./watch.tsx";
 
+/** The main page: the agents, and the controls for each. */
 export function AgentsPage() {
-  const tick = useEvery(REFRESH_MS);
-  const [creating, setCreating] = useState(false);
-  const list = useLoad(listAgents, ["actors"], [tick]);
-  const slots = useChatSlots();
-  const agents = list.value ?? [];
+  const { list, loaded, failed } = useAgents();
   // The order is the order made; a row never jumps while it's being read.
   return (
-    <Page
-      crumbs={[{ label: "Agents" }]}
-      action={
-        <Button size="sm" onClick={() => setCreating(true)}>
-          <PlusIcon />
-          Create
-        </Button>
-      }
-    >
-      <Scroll>
-        <ul className="mx-auto flex max-w-5xl flex-col">
-          {agents.map((agent) => (
-            <li key={agent.agent}>
-              <AgentRow agent={agent} slot={slots.get(agent.agent)} tick={tick} />
-            </li>
-          ))}
-          {list.loaded && agents.length === 0 && (
-            <li>
-              <Nothing>{list.error ? "Agents can't be read right now." : "No agents yet."}</Nothing>
-            </li>
-          )}
-        </ul>
-      </Scroll>
-      <CreateDialog open={creating} onClose={() => setCreating(false)} />
-    </Page>
+    <Scroll>
+      <ul aria-label="Your agents" className="mx-auto flex max-w-5xl flex-col">
+        {list.map((agent) => (
+          <li key={agent.agent}>
+            <AgentRow agent={agent} />
+          </li>
+        ))}
+        {loaded && list.length === 0 && (
+          <li>
+            <Nothing>{failed ? "Agents can't be read right now." : "No agents yet."}</Nothing>
+          </li>
+        )}
+      </ul>
+    </Scroll>
   );
 }
 
-const TEXT: Partial<Record<Tone, string>> = { trouble: "text-[var(--bad)]" };
-
-function AgentRow({ agent, slot, tick }: { agent: AgentEntry; slot?: string; tick: number }) {
-  const running = agent.status.state === "running";
-  const { status, messages } = useChatRecord(slot, running, 5);
-  // Whether a connection of its is down: nothing tells, so it's read with the list.
-  const detail = useLoad(() => getAgent(agent.agent), ["actors", "bindings"], [agent.agent, tick]);
-  const now = nowOf(agent.status, status, messages, detail.value?.mcp);
+function AgentRow({ agent }: { agent: AgentEntry }) {
+  const watched = useAgents().byId.get(agent.agent);
+  const creatables = useCreatables();
+  const [failed, setFailed] = useState<string>();
+  const now = watched?.now;
+  const purpose = creatables?.find(
+    (c) => c.provider === agent.provider && c.id === agent.creatable,
+  )?.description;
+  const text = failed ?? now?.text ?? "";
+  const open = () => go({ screen: "agent", agent: agent.agent });
   return (
-    <Item
-      asChild
-      className="h-14 flex-nowrap gap-3 rounded-xl hover:bg-[var(--hover)] phone:h-16 phone:flex-wrap phone:content-center phone:gap-y-0.5"
-    >
-      <button type="button" onClick={() => go({ screen: "agent", agent: agent.agent })}>
-        <StateDot tone={now.tone} />
-        <span className="w-44 shrink-0 truncate text-left font-medium phone:w-auto phone:min-w-0 phone:flex-1">
-          {agent.name}
-        </span>
-        <span
-          className={`min-w-0 flex-1 truncate text-left text-[13px] phone:order-last phone:basis-full phone:pl-6 ${TEXT[now.tone] ?? "text-muted-foreground"}`}
-        >
-          {now.text}
-        </span>
-        <span className="w-16 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
-          {ago(now.at)}
-        </span>
+    <Item className="min-h-16 flex-nowrap gap-3 rounded-xl py-2 hover:bg-[var(--hover)] tight:flex-wrap tight:gap-y-1">
+      <StateDot tone={now?.tone ?? "idle"} />
+      <button
+        type="button"
+        onClick={open}
+        className="w-56 shrink-0 text-left tight:w-auto tight:min-w-0 tight:flex-1"
+      >
+        <span className="block truncate font-medium">{agent.name}</span>
+        <span className="block truncate text-[13px] text-muted-foreground">{purpose}</span>
       </button>
+      <span
+        className={`min-w-0 flex-1 truncate text-[13px] tight:order-last tight:basis-full tight:pl-6 ${failed || now?.tone === "trouble" ? "text-[var(--bad)]" : "text-muted-foreground"}`}
+      >
+        {text}
+      </span>
+      <span className="w-12 shrink-0 text-right text-xs tabular-nums text-muted-foreground tight:hidden">
+        {ago(now?.at)}
+      </span>
+      <span className="flex shrink-0 items-center">
+        <Tip label="Chat">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label={`Chat with ${agent.name}`}
+            onClick={() => go({ screen: "chat", agent: agent.agent })}
+          >
+            <MessageCircleIcon />
+          </Button>
+        </Tip>
+        <Power agent={agent} onFailed={setFailed} />
+        <More agent={agent} />
+      </span>
     </Item>
   );
 }
