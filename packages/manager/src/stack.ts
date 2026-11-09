@@ -52,6 +52,8 @@ export const Records = z.object({
   agents: z.record(z.string(), AgentRecord),
   connections: z.record(z.string(), ConnectionOrigin),
   templates: z.record(z.string(), Template).default({}),
+  /** A connection the person made, to its provider's id for it; none means they are the same. */
+  instances: z.record(z.string(), z.string()).default({}),
 });
 
 type TheAgent = z.infer<typeof AgentRecord>;
@@ -522,11 +524,6 @@ export function createStacks(parts: StackParts) {
   /** What a stack is, whichever way the caller said it. */
   const stackOf = async (input: CreateInput): Promise<StackInput> => {
     if ("stack" in input) return input.stack;
-    if ("creatable" in input)
-      return {
-        base: { provider: input.provider, creatable: input.creatable, answers: input.answers },
-        units: [],
-      };
     const template = templates().find((one) => one.id === input.template);
     if (!template) throw new Refused("unknown", `There is no template ${input.template}.`);
     const fill = input.fill ?? [];
@@ -597,7 +594,7 @@ export function createStacks(parts: StackParts) {
         if (unit.connections.some((one) => one.connection === connection)) return unit;
     return undefined;
   };
-  const statusOf = async (unit: TheUnitRecord) =>
+  const statusOf = async (unit: Pick<TheUnitRecord, "provider" | "providerInstance">) =>
     parts
       .unitProviders()
       .find((one) => one.actor === unit.provider)
@@ -617,7 +614,7 @@ export function createStacks(parts: StackParts) {
     unitMaking,
     /** How one connection a unit made stands, as its unit says. */
     async connectionStatus(
-      unit: TheUnitRecord,
+      unit: Pick<TheUnitRecord, "provider" | "providerInstance">,
       connection: string,
     ): Promise<z.infer<typeof ConnectionStatus>> {
       try {

@@ -2,7 +2,6 @@ import { defineInterface, method } from "@agentorg/sdk";
 import { z } from "zod";
 import { AgentStatus, Answers, Creatable, CreatableId } from "./agent-provider.js";
 import { SKILL_FILE_MAX, SkillEntry, SkillName, SkillPath } from "./agent-settings.js";
-import { Id, SlotName } from "./hub.js";
 import {
   ConnectionKind,
   ConnectionParams,
@@ -10,7 +9,8 @@ import {
   ConnectionState,
   ConnectionStatus,
   ConnectionTarget,
-} from "./mcp-provider.js";
+} from "./connection.js";
+import { Id, SlotName } from "./hub.js";
 import { FieldValues, Problem, ResultKind, Unit, UnitId } from "./units.js";
 
 const Time = z.string().max(64);
@@ -161,8 +161,6 @@ export const agents = defineInterface({
      * Make an agent, from a stack, or from a template with what is filled in for each of its units
      * by position; nothing in a template is locked, so a caller changing more sends the stack. All
      * or none: if any step fails, what this creation made is removed, last first.
-     *
-     * The third form is the older one, from a creatable alone: it goes once the pages use stacks.
      */
     create: method({
       input: z.union([
@@ -172,13 +170,6 @@ export const agents = defineInterface({
           fill: z.array(Fill).max(64).optional(),
           answers: Answers.optional(),
           name: ActorName,
-          purpose: Purpose.optional(),
-        }),
-        z.strictObject({
-          provider: Id,
-          creatable: CreatableId,
-          name: ActorName,
-          answers: Answers,
           purpose: Purpose.optional(),
         }),
       ]),

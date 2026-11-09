@@ -18,7 +18,6 @@ import {
   hubGrants,
   kv,
   llmSession,
-  mcpProvider,
   skills,
   tools,
   unitProvider,
@@ -56,16 +55,7 @@ test("every interface's schemas compile under the Hub's strict validator", () =>
     assert.doesNotThrow(() => compiled(iface), describeInterface(iface).id);
 });
 
-const management = [
-  tools,
-  agentSettings,
-  mcpProvider,
-  agentProvider,
-  agents,
-  connections,
-  skills,
-  unitProvider,
-];
+const management = [tools, agentSettings, agentProvider, agents, connections, skills, unitProvider];
 
 test("the agent management interfaces are named, versioned and compile strictly", () => {
   assert.deepEqual(
@@ -73,7 +63,6 @@ test("the agent management interfaces are named, versioned and compile strictly"
     [
       "tools@1",
       "agent.settings@1",
-      "mcp.provider@1",
       "agent.provider@1",
       "agents@1",
       "connections@1",
@@ -123,14 +112,14 @@ test("a skill's name and paths stay inside its folder", () => {
 });
 
 test("a connection's status can't carry extra fields, and a base holds only what it asks", () => {
-  const provider = compiled(mcpProvider);
-  assert.equal(provider["status.output"]?.({ state: "connected", tools: [], token: "x" }), false);
-  assert.equal(provider["status.output"]?.({ state: "up", tools: [] }), false);
-  const made = { kind: "url", params: { url: "https://x/" }, name: "X" };
-  assert.ok(provider["create.input"]?.({ ...made, secrets: { token: "t" } }));
-  assert.equal(provider["create.input"]?.({ ...made, secrets: { token: "" } }), false);
+  const provider = compiled(unitProvider);
+  const status = { state: "connected", connections: [{ connection: "a", state: "up", tools: [] }] };
+  assert.equal(provider["status.output"]?.(status), false);
   assert.equal(
-    provider["create.output"]?.({ connection: "act_1", target: "https://x", token: "y" }),
+    provider["status.output"]?.({
+      state: "connected",
+      connections: [{ connection: "a", state: "connected", tools: [], token: "x" }],
+    }),
     false,
   );
   const creatables = compiled(agentProvider)["creatable.output"];
@@ -279,7 +268,10 @@ test("a stack carries secrets at creation, and a template can never hold one", (
   const stack = { base, units: [{ ...unit, secrets: { key: "k" }, needs: { computer: 0 } }] };
   assert.ok(create({ stack, name: "Fay", purpose: "Keeps the docs tidy." }));
   assert.ok(create({ template: "assistant", fill: [{ values: { where: "local" } }], name: "Fay" }));
-  assert.ok(create({ provider: "act_b", creatable: "assistant", name: "Fay", answers: {} }));
+  assert.equal(
+    create({ provider: "act_b", creatable: "assistant", name: "Fay", answers: {} }),
+    false,
+  );
   assert.equal(create({ name: "Fay" }), false);
   assert.equal(create({ stack, template: "assistant", name: "Fay" }), false);
   const named = { ...base, provider: "Local" };

@@ -4,7 +4,8 @@
 # cache of its own, and globally with a prefix of its own. Then `agentorg` runs on a fresh home:
 # first run must make ChatGPT, both providers and management, all connected; an agent must be made
 # with `agentorg call agents create`; and the gateway must serve the shell and the sign-in page. Last, this build must start on a home the published 0.0.5
-# made: its old Actors closed, and `agents create` working. Run after `npm run build`.
+# made: its old Actors closed, and `agents create` working; and on a home the published 0.0.6 made,
+# with a connection that must still answer. Run after `npm run build`.
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -133,7 +134,7 @@ for _ in $(seq 1 60); do
 done
 create="$(node -e '
   const { creatables: [one] } = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
-  console.log(JSON.stringify({ provider: one.provider, creatable: one.id, name: "Scout", answers: {} }));
+  console.log(JSON.stringify({ stack: { base: { provider: one.provider, creatable: one.id }, units: [] }, name: "Scout" }));
 ' "$work/creatable.json")"
 "$agentorg" call agents create "$create" --home "$home" >"$work/created.json"
 "$agentorg" call agents list --home "$home" >"$work/agents.json"
@@ -212,9 +213,61 @@ node -e '
 ' "$work/old-actors.json" "$work/up-actors.json"
 create="$(node -e '
   const { creatables: [one] } = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
-  console.log(JSON.stringify({ provider: one.provider, creatable: one.id, name: "Newcomer", answers: {} }));
+  console.log(JSON.stringify({ stack: { base: { provider: one.provider, creatable: one.id }, units: [] }, name: "Newcomer" }));
 ' "$work/up-creatable.json")"
 "$agentorg" call agents create "$create" --home "$uphome" >/dev/null
 echo "agents create works on the 0.0.5 home"
+stop_app
+
+step "a home the published 0.0.6 made: its connection works on this build, and can be removed"
+old6="$work/old6"
+mkdir "$old6"
+(cd "$old6" && echo '{"private":true}' >package.json &&
+  npm install --silent --no-audit --no-fund --cache "$work/cache" @agentorg/cli@0.0.6)
+was="$old6/node_modules/.bin/agentorg"
+home6="$work/home6"
+start_on "$was" "$home6" "$work/old6.log"
+for _ in $(seq 1 120); do
+  "$was" call connections providers --home "$home6" >"$work/mcp.json" 2>/dev/null &&
+    grep -Eq '"kind": ?"command"' "$work/mcp.json" && break
+  kill -0 "$pid" 2>/dev/null || { cat "$work/old6.log" >&2; exit 1; }
+  sleep 0.5
+done
+grep -Eq '"kind": ?"command"' "$work/mcp.json" ||
+  { echo "0.0.6 offered no way to connect" >&2; cat "$work/old6.log" >&2; exit 1; }
+create="$(node -e '
+  const { providers: [one] } = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+  console.log(JSON.stringify({
+    provider: one.provider, kind: "command", name: "Fixture",
+    params: { command: process.execPath, args: [process.argv[2]] },
+  }));
+' "$work/mcp.json" "$root/packages/mcp/dist/test/fixtures/server.js")"
+connection="$("$was" call connections create "$create" --home "$home6" |
+  node -e 'console.log(JSON.parse(require("fs").readFileSync(0, "utf8")).connection)')"
+# Whether the connection answers with its tools, asked of `agentorg` ($1) on the 0.0.6 home.
+answers() {
+  "$1" call connections get "{\"connection\":\"$connection\"}" --home "$home6" 2>/dev/null |
+    node -e '
+      const { status } = JSON.parse(require("fs").readFileSync(0, "utf8"));
+      process.exit(status.state === "connected" && status.tools.length > 0 ? 0 : 1);
+    '
+}
+wait_answers() {
+  for _ in $(seq 1 120); do
+    answers "$1" && return 0
+    kill -0 "$pid" 2>/dev/null || return 1
+    sleep 0.5
+  done
+  return 1
+}
+wait_answers "$was" || { echo "0.0.6's connection never answered" >&2; cat "$work/old6.log" >&2; exit 1; }
+stop_app
+start_on "$agentorg" "$home6" "$work/up6.log"
+wait_answers "$agentorg" ||
+  { echo "0.0.6's connection doesn't work on this build" >&2; cat "$work/up6.log" >&2; exit 1; }
+"$agentorg" call connections remove "{\"connection\":\"$connection\"}" --home "$home6" >/dev/null
+"$agentorg" call connections list --home "$home6" | grep -q "$connection" &&
+  { echo "The connection is still there" >&2; exit 1; }
+echo "0.0.6's connection works here and is removed"
 stop_app
 echo "smoke passed"

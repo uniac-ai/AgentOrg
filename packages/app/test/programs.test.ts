@@ -113,10 +113,8 @@ const createAssistant = async (person: Person, name: string) => {
   assert.equal(assistant?.id, "assistant");
   return (
     await person.call<{ agent: string }>("agents", "create", {
-      provider: assistant.provider,
-      creatable: assistant.id,
+      stack: { base: { provider: assistant.provider, creatable: assistant.id }, units: [] },
       name,
-      answers: {},
     })
   ).agent;
 };

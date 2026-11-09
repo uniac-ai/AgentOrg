@@ -1,11 +1,18 @@
 import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { hubActors, mcpProvider } from "@agentorg/interfaces";
+import { hubActors, unitProvider } from "@agentorg/interfaces";
 import { type Log, Refused } from "@agentorg/sdk";
 import { connect } from "@agentorg/sdk/client";
 import { z } from "zod";
 import { Connection, type Timing } from "./connection.js";
-import { KINDS, parseConnection, type Secrets, type Spec, targetOf } from "./kinds.js";
+import {
+  namedSecrets,
+  parseConnection,
+  type Secrets,
+  type Spec,
+  targetOf,
+  UNITS,
+} from "./kinds.js";
 
 /** What is kept of a connection between runs, in the provider's private file. */
 const Stored = z.object({
@@ -15,6 +22,8 @@ const Stored = z.object({
   secrets: z.record(z.string(), z.string()),
 });
 const FILE = "connections.json";
+/** What a unit's values come to as a connection's parameters: its name isn't one. */
+const paramsOf = ({ slot: _, ...params }: Record<string, unknown>) => params;
 
 export interface McpProviderOptions {
   hubUrl: string;
@@ -36,8 +45,8 @@ export interface McpProvider {
 const quiet: Log = { info() {}, warn() {}, error() {} };
 
 /**
- * Run the built-in MCP provider as an Actor exporting `mcp.provider@1` as `provider`. It offers two
- * kinds, `url` and `command`; a server it starts runs with this process's rights. Connections made earlier are joined again at the start.
+ * Run the built-in MCP provider as an Actor exporting `unit.provider@1` as `provider`. It offers two
+ * units, `url` and `command`; a server it starts runs with this process's rights. Connections made earlier are joined again at the start.
  */
 export async function startMcpProvider(options: McpProviderOptions): Promise<McpProvider> {
   const log = options.log ?? quiet;
@@ -120,20 +129,25 @@ export async function startMcpProvider(options: McpProviderOptions): Promise<Mcp
     actorId: options.actorId,
     credential: options.credential,
     slots: { actors: hubActors },
-    exports: { provider: mcpProvider },
+    exports: { provider: unitProvider },
     log,
     start(ctx) {
       ctx.exports.provider.implement({
-        kinds: () => ({
-          kinds: KINDS.map(({ kind, title, params, secrets }) => ({
-            kind,
-            title,
-            params: JSON.parse(JSON.stringify(z.toJSONSchema(params))),
-            secrets: JSON.parse(JSON.stringify(z.toJSONSchema(secrets))),
-          })),
-        }),
-        async create({ kind, params, secrets, name }) {
-          const { spec, secrets: hidden, why } = parseConnection(kind, params, secrets);
+        units: () => ({ units: UNITS }),
+        skill: () => {
+          throw new Refused("unknown", "These units come with no skill.");
+        },
+        check({ unit, values, secrets }) {
+          // Only whether a token is there matters, and a check never holds its value.
+          const given = secrets.includes("token") ? { token: "given" } : {};
+          const { why } = parseConnection(unit, paramsOf(values), given);
+          return { problems: why ? [{ message: why }] : [] };
+        },
+        async apply({ unit: kind, values, secrets, name }) {
+          const params = paramsOf(values);
+          const named = namedSecrets(secrets);
+          if (!named.secrets) throw new Refused("invalid", named.why ?? "Its secrets don't fit.");
+          const { spec, secrets: hidden, why } = parseConnection(kind, params, named.secrets);
           if (!spec) throw new Refused("invalid", why);
           const { actorId, credential } = await ctx.slots.actors.call.create({ name });
           let connection: Connection | undefined;
@@ -150,10 +164,24 @@ export async function startMcpProvider(options: McpProviderOptions): Promise<Mcp
             await ctx.slots.actors.call.close({ actorId }).catch(() => {});
             throw error;
           }
-          return { connection: actorId, target: targetOf(spec) };
+          // The instance is the connection: one made before units had no other id.
+          return {
+            instance: actorId,
+            connections: [
+              { slot: String(values.slot), connection: actorId, target: targetOf(spec) },
+            ],
+            results: [],
+          };
         },
-        status: ({ connection }) => held(connection).status(),
-        async remove({ connection }) {
+        async status({ instance }) {
+          const status = await held(instance).status();
+          return {
+            state: status.state,
+            ...(status.detail ? { detail: status.detail } : {}),
+            connections: [{ ...status, connection: instance }],
+          };
+        },
+        async remove({ instance: connection }) {
           const found = held(connection);
           await ctx.slots.actors.call.close({ actorId: connection });
           connections.delete(connection);

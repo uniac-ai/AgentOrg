@@ -177,7 +177,6 @@ export function schemaOf(form: TheForm): Record<string, unknown> {
       field.value
     ];
     const notes = [
-      field.title,
       field.description,
       ...(field.options ?? []).map((option) =>
         option.description ? `${option.value}: ${option.description}` : undefined,
@@ -189,7 +188,8 @@ export function schemaOf(form: TheForm): Record<string, unknown> {
     const allowed = field.options?.map((option) => option.value);
     properties[field.id] = {
       type,
-      description: notes.join(" "),
+      title: field.title,
+      ...(notes.length ? { description: notes.join(" ") } : {}),
       ...(field.value === "strings"
         ? { items: { type: "string", ...(allowed ? { enum: allowed } : {}) } }
         : allowed
@@ -202,4 +202,17 @@ export function schemaOf(form: TheForm): Record<string, unknown> {
     if (field.required && !field.visible && field.default === undefined) required.push(field.id);
   }
   return { type: "object", properties, required };
+}
+
+/** The JSON Schema of a form's secrets. A field of type `environment` takes secrets by any name. */
+export function secretsSchemaOf(form: TheForm): Record<string, unknown> {
+  const secrets = form.filter((field) => field.value === "secret");
+  if (secrets.some((field) => field.type === "environment"))
+    return { type: "object", additionalProperties: { type: "string" } };
+  return {
+    type: "object",
+    properties: Object.fromEntries(
+      secrets.map((field) => [field.id, { type: "string", title: field.title }]),
+    ),
+  };
 }
