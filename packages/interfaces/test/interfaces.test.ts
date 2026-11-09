@@ -122,7 +122,7 @@ test("a skill's name and paths stay inside its folder", () => {
     assert.equal(skill({ name }), false, JSON.stringify(name));
 });
 
-test("a connection's status can't carry extra fields, and a creatable's needs say how they're met", () => {
+test("a connection's status can't carry extra fields, and a base holds only what it asks", () => {
   const provider = compiled(mcpProvider);
   assert.equal(provider["status.output"]?.({ state: "connected", tools: [], token: "x" }), false);
   assert.equal(provider["status.output"]?.({ state: "up", tools: [] }), false);
@@ -141,26 +141,9 @@ test("a connection's status can't carry extra fields, and a creatable's needs sa
     description: "",
     instructions: "",
     asks: [{ id: "folder", title: "Folder" }],
-    skills: [{ name: "notes", files: ["SKILL.md"] }],
-    mcp: [
-      { how: "pick", slot: "search", title: "Search" },
-      {
-        how: "create",
-        slot: "files",
-        title: "Files",
-        kind: "command",
-        params: { command: "server" },
-        fromAnswers: { cwd: "folder" },
-      },
-    ],
   };
   assert.ok(creatables({ creatables: [creatable] }));
-  assert.equal(
-    creatables({
-      creatables: [{ ...creatable, mcp: [{ how: "create", slot: "files", title: "Files" }] }],
-    }),
-    false,
-  );
+  assert.equal(creatables({ creatables: [{ ...creatable, mcp: [] }] }), false);
 });
 
 test("an agent's status tells stopped by the person from down", () => {

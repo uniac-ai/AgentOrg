@@ -103,15 +103,10 @@ test(
       "Name",
       "Repository",
       "Note",
-      "GitHub",
     ]);
     const create = dialog.getByRole("button", { name: "Create" });
     assert.equal(await create.isDisabled(), true, "an ask with no answer holds it back");
     await dialog.getByLabel("Repository").fill("acme/storefront");
-    // Only what the person made can be picked: nothing created for another agent.
-    await dialog.getByRole("combobox", { name: "GitHub" }).click();
-    assert.equal(await page.getByRole("option", { name: "Notes for Research" }).count(), 0);
-    await page.getByRole("option", { name: "Postgres analytics" }).click();
     await create.click();
     await page.waitForURL(/#\/a\/a-6$/);
     assert.deepEqual(gateway.calls.find((c) => c.method === "create")?.input, {
@@ -119,7 +114,6 @@ test(
       creatable: "reviewer",
       name: "Code reviewer",
       answers: { repo: "acme/storefront" },
-      connections: { github: "c-postgres" },
     });
     await page.close();
   }),

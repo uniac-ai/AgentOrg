@@ -1,5 +1,6 @@
 export { canonicalJson, hashOf, sha256 } from "./canonical.js";
 export { NotConnected, OutcomeUnknown, Refused, type RefusedCode } from "./errors.js";
+export { filled } from "./filled.js";
 export {
   compareInterfaces,
   type DescribedInterface,

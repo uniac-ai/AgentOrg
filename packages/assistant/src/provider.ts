@@ -24,8 +24,6 @@ const ASSISTANT = {
   description: "An agent that chats, and acts through the connections you give it.",
   instructions: ASSISTANT_INSTRUCTIONS,
   asks: [],
-  skills: [],
-  mcp: [],
 };
 
 /** What is kept of an agent between runs, in the provider's private file. */
@@ -183,9 +181,6 @@ export async function startAgentProvider(options: AgentProviderOptions): Promise
     start(ctx) {
       ctx.exports.provider.implement({
         creatable: async () => ({ creatables: [ASSISTANT] }),
-        skill: async ({ creatable, name, path: file }) => {
-          throw new Refused("unknown", `${creatable} has no file ${file} of a skill ${name}.`);
-        },
         async create({ creatable, name }) {
           if (creatable !== ASSISTANT.id)
             throw new Refused("unknown", `This provider offers no ${creatable}.`);
