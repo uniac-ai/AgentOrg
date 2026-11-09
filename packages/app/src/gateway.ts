@@ -14,9 +14,10 @@ import {
   hubBindings,
   hubExports,
   hubGrants,
+  llmSession,
   skills,
 } from "@agentorg/interfaces";
-import { Refused } from "@agentorg/sdk";
+import { describeInterface, Refused } from "@agentorg/sdk";
 import { connect } from "@agentorg/sdk/client";
 import { WebSocketServer } from "ws";
 import { type PersonSide, serveSocket } from "./api.js";
@@ -59,6 +60,11 @@ const MAX_MESSAGE = 1024 * 1024;
 const HELLO_TIMEOUT_MS = 10_000;
 /** The close code for a socket with no live session: the tab signs in again. */
 const SIGN_IN_AGAIN = 4401;
+
+/** A model's reply can take minutes; every other interface keeps the Hub's own limit. */
+export const HUB_OPTIONS = {
+  answerTimeoutsMs: { [describeInterface(llmSession).id]: 10 * 60_000 },
+};
 
 /** A route another part of the app adds, such as the model Actor's sign-in callback (step 5). */
 export type Route = (request: IncomingMessage, response: ServerResponse, url: URL) => void;
@@ -113,7 +119,7 @@ export async function startApp(options: AppOptions): Promise<App> {
   const home = resolve(options.home);
   mkdirSync(home, { recursive: true, mode: 0o700 });
   closePackageActors(home);
-  const hub = Hub.open(home);
+  const hub = Hub.open(home, HUB_OPTIONS);
   const listener = await listen(hub, {}).catch((error) => {
     hub.close();
     throw error;

@@ -45,8 +45,8 @@ export interface LeftOut {
   reason: string;
 }
 
-/** A function's output is cut to this many bytes of UTF-8, so one result can't fill a request. */
-export const MAX_OUTPUT = 16 * 1024;
+/** A function's output keeps this many characters, so one result can't fill a request. */
+export const MAX_OUTPUT = 30_000;
 /** What a request can carry: its tools count, and, with the record and instructions, one frame. */
 export const MAX_TOOLS = 128;
 export const TOOLS_BUDGET = 256 * 1024;
@@ -64,12 +64,16 @@ export function codeOf(error: unknown): { code: string; message: string } {
   return { code: "failed", message: "The call failed." };
 }
 
-/** At most `MAX_OUTPUT` bytes of `text`, cut at a character, saying so when it is cut. */
+/**
+ * `text`, or its first and last `MAX_OUTPUT / 2` characters with what was cut between them: a
+ * failing command's error is at the end, and what it was doing at the start.
+ */
 export function capped(text: string): string {
-  const bytes = encoder.encode(text);
-  if (bytes.byteLength <= MAX_OUTPUT) return text;
-  const head = new TextDecoder().decode(bytes.subarray(0, MAX_OUTPUT - 16)).replace(/�$/, "");
-  return `${head}… (cut)`;
+  if (text.length <= MAX_OUTPUT) return text;
+  // Between characters: never half of a surrogate pair at either cut.
+  const head = text.slice(0, MAX_OUTPUT / 2).replace(/[\uD800-\uDBFF]$/, "");
+  const tail = text.slice(-MAX_OUTPUT / 2).replace(/^[\uDC00-\uDFFF]/, "");
+  return `${head}\n… [${text.length - head.length - tail.length} characters cut] …\n${tail}`;
 }
 
 /** Whether a slot is a `tools@1`, whose tools are whatever it lists. */

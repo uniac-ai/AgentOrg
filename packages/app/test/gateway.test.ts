@@ -5,8 +5,10 @@ import { connect as connectTcp } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { Hub } from "@agentorg/hub";
 import { connect } from "@agentorg/sdk/client";
 import WebSocket from "ws";
+import { HUB_OPTIONS } from "../src/gateway.ts";
 import { type App, SignIn, startApp } from "../src/index.ts";
 
 async function setup(t: test.TestContext) {
@@ -250,4 +252,11 @@ test("the app stops itself when the person's channel is taken, and takes its fil
   assert.deepEqual(await app.closed, { lost: true });
   for (const file of ["app.json", "cli-token", "url"])
     assert.equal(existsSync(join(home, file)), false, file);
+});
+
+test("the app gives a model's reply ten minutes; other interfaces keep the Hub's own limit", async (t) => {
+  assert.deepEqual(HUB_OPTIONS, { answerTimeoutsMs: { "llm.session@1": 600_000 } });
+  const open = t.mock.method(Hub, "open");
+  await setup(t);
+  assert.equal(open.mock.calls[0]?.arguments[1], HUB_OPTIONS);
 });

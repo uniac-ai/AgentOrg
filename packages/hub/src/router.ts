@@ -49,10 +49,12 @@ export interface HubOptions {
   /** How long a new channel has to finish hello before it is closed. */
   helloTimeoutMs?: number;
   /**
-   * How long a provider has to answer a call; past
-   * it the caller gets OutcomeUnknown and the provider's stream is reset.
+   * How long a provider has to answer a call; past it the caller gets OutcomeUnknown and the
+   * provider's stream is reset.
    */
   answerTimeoutMs?: number;
+  /** A different limit for the calls of some interfaces, by id (`name@major`). */
+  answerTimeoutsMs?: Record<string, number>;
   /** The schema-check pool: its size and each check's budget (defaults in validate.ts). */
   checks?: { size?: number; budgetMs?: number; compileBudgetMs?: number };
 }
@@ -171,12 +173,14 @@ export class Hub {
   readonly #live = new Map<string, Set<(error?: WireError) => void>>();
   readonly #helloTimeoutMs: number;
   readonly #answerTimeoutMs: number;
+  readonly #answerTimeoutsMs: Record<string, number>;
   /** Every channel's session, admitted or still in hello. */
   readonly #sessions = new Set<Session>();
 
   private constructor(home: string, options: HubOptions) {
     this.#helloTimeoutMs = options.helloTimeoutMs ?? 10_000;
     this.#answerTimeoutMs = options.answerTimeoutMs ?? 60_000;
+    this.#answerTimeoutsMs = options.answerTimeoutsMs ?? {};
     this.#validators = new Validators(options.checks);
     let actor: HubActor | undefined;
     this.state = HubState.open(home, {
@@ -617,7 +621,10 @@ export class Hub {
   ): Promise<Body> {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const late = new Promise<"late">((resolve) => {
-      timer = setTimeout(() => resolve("late"), this.#answerTimeoutMs);
+      timer = setTimeout(
+        () => resolve("late"),
+        this.#answerTimeoutsMs[binding.interface] ?? this.#answerTimeoutMs,
+      );
     });
     let first: unknown;
     try {

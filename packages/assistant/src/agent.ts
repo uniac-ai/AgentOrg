@@ -1,7 +1,7 @@
 /**
  * The agent loop: a turn sends the conversation and the tools to the model, runs each function the
  * model calls through its slot, and sends the results back, until the model answers without
- * calling anything, or the turn has made its 20 calls.
+ * calling anything, or the turn has made its `MAX_CALLS` calls.
  */
 import type { ChatMessage, llmSession } from "@agentorg/interfaces";
 import { type Log, Refused, type Slot } from "@agentorg/sdk";
@@ -9,7 +9,8 @@ import type { z } from "zod";
 import { argumentsOf, type History, head, messageOf, type ResponseItem } from "./history.js";
 import { capped, codeOf, runTool, type Tools } from "./tools.js";
 
-export const MAX_CALLS = 20;
+/** A brake on a turn, not a budget: nothing approves a call, and the person can stop it. */
+export const MAX_CALLS = 200;
 
 type Status =
   | { state: "idle" | "thinking" | "tool" }
