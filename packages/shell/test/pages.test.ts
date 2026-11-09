@@ -85,13 +85,203 @@ test(
 );
 
 test(
+  "Create offers what `agents.creatable` returns and asks only what the choice needs",
+  withGateway(async (gateway) => {
+    const page = await open(gateway);
+    await page.getByRole("button", { name: "Create" }).click();
+    const dialog = page.getByRole("dialog");
+    await dialog.getByRole("button", { name: /^Assistant/ }).waitFor();
+    await page.waitForTimeout(250);
+    const size = await box(dialog);
+    await dialog.getByRole("button", { name: /^Assistant/ }).click();
+    assert.deepEqual(await dialog.locator('[data-slot="field-label"]').allInnerTexts(), ["Name"]);
+    assert.deepEqual(await box(dialog), size, "the dialog keeps its box");
+    await dialog.getByRole("button", { name: "Back" }).click();
+
+    await dialog.getByRole("button", { name: /^Code reviewer/ }).click();
+    assert.deepEqual(await dialog.locator('[data-slot="field-label"]').allInnerTexts(), [
+      "Name",
+      "Repository",
+      "Note",
+      "GitHub",
+    ]);
+    const create = dialog.getByRole("button", { name: "Create" });
+    assert.equal(await create.isDisabled(), true, "an ask with no answer holds it back");
+    await dialog.getByLabel("Repository").fill("acme/storefront");
+    // Only what the person made can be picked: nothing created for another agent.
+    await dialog.getByRole("combobox", { name: "GitHub" }).click();
+    assert.equal(await page.getByRole("option", { name: "Notes for Research" }).count(), 0);
+    await page.getByRole("option", { name: "Postgres analytics" }).click();
+    await create.click();
+    await page.waitForURL(/#\/a\/a-6$/);
+    assert.deepEqual(gateway.calls.find((c) => c.method === "create")?.input, {
+      provider: "bundled",
+      creatable: "reviewer",
+      name: "Code reviewer",
+      answers: { repo: "acme/storefront" },
+      connections: { github: "c-postgres" },
+    });
+    await page.close();
+  }),
+);
+
+test(
+  "a refused Create stays open and says why",
+  withGateway(async (gateway) => {
+    gateway.refuseNext("agents.create", "failed", "The provider isn't connected.");
+    const page = await open(gateway);
+    await page.getByRole("button", { name: "Create" }).click();
+    const dialog = page.getByRole("dialog");
+    await dialog.getByRole("button", { name: /^Assistant/ }).click();
+    await dialog.getByRole("button", { name: "Create" }).click();
+    await dialog.getByRole("alert").getByText("The provider isn't connected.").waitFor();
+    assert.equal(await dialog.getByLabel("Name").inputValue(), "Assistant");
+    await page.close();
+  }),
+);
+
+test(
+  "the agent page shows each MCP's place and origin, its skills, and its activity",
+  withGateway(async (gateway) => {
+    const page = await open(gateway, "#/a/a-research");
+    const mcps = page.getByRole("region", { name: "MCPs" });
+    await mcps.getByText("Created for this agent by Local").waitFor();
+    await mcps.getByText("Connected by you").waitFor();
+    await mcps.getByText("notes-server ~/notes").waitFor();
+    await mcps.getByRole("img", { name: "Remote" }).waitFor();
+    await mcps.getByRole("img", { name: "On this computer" }).waitFor();
+
+    const name = mcps.getByText("github", { exact: true });
+    const before = await box(name);
+    await mcps.getByRole("button", { name: "github tools" }).click();
+    await mcps.getByText("search_issues").waitFor();
+    assert.deepEqual(await box(name), before, "opening its tools doesn't move the row");
+
+    await page.getByRole("region", { name: "Skills" }).getByText("cite-sources").waitFor();
+    const activity = page.getByRole("region", { name: "Activity" });
+    await activity.getByText("Using github__search_issues").waitFor();
+    await activity.getByText("6 min · github").waitFor();
+    await page.close();
+  }),
+);
+
+test(
+  "skills and connections are exposed and removed from the agent page",
+  withGateway(async (gateway) => {
+    const page = await open(gateway, "#/a/a-reviewer");
+    const mcps = page.getByRole("region", { name: "MCPs" });
+    await mcps.getByText("github", { exact: true }).waitFor();
+    await page.getByRole("button", { name: "Add an MCP" }).click();
+    // Neither what it has nor what was created for another agent.
+    assert.deepEqual(await page.getByRole("menuitem").allInnerTexts(), [
+      "Linear",
+      "Postgres analytics",
+    ]);
+    await page.getByRole("menuitem", { name: "Postgres analytics" }).click();
+    await mcps.getByText("postgres", { exact: true }).waitFor();
+
+    await page.getByRole("button", { name: "Add a skill" }).click();
+    await page.getByRole("menuitem", { name: "weekly-numbers" }).click();
+    const skills = page.getByRole("region", { name: "Skills" });
+    await skills.getByText("weekly-numbers").waitFor();
+    await skills.getByText("weekly-numbers").hover();
+    await page.getByRole("button", { name: "Remove weekly-numbers" }).click();
+    await skills.getByText("weekly-numbers").waitFor({ state: "detached" });
+
+    await mcps.getByRole("button", { name: "postgres tools" }).click();
+    await mcps.getByRole("button", { name: "Remove from Reviewer" }).last().click();
+    await mcps.getByText("postgres", { exact: true }).waitFor({ state: "detached" });
+    await page.close();
+  }),
+);
+
+test(
+  "the model is read and chosen through the agent's chat",
+  withGateway(async (gateway) => {
+    const page = await open(gateway, "#/a/a-reviewer");
+    const model = page.getByRole("combobox", { name: "Model" });
+    await page.waitForFunction(
+      () => !document.querySelector('button[aria-label="Model"]')?.hasAttribute("disabled"),
+    );
+    assert.equal(await model.innerText(), "Default");
+    await model.click();
+    await page.getByRole("option", { name: "Deep" }).click();
+    await page.waitForFunction(
+      () => document.querySelector('button[aria-label="Model"]')?.textContent === "Deep",
+    );
+    assert.equal(gateway.agents.get("a-reviewer")?.chat.current, "deep");
+    await model.click();
+    await page.getByRole("option", { name: "Default" }).click();
+    await page.waitForFunction(
+      () => document.querySelector('button[aria-label="Model"]')?.textContent === "Default",
+    );
+    assert.equal(gateway.agents.get("a-reviewer")?.chat.current, undefined);
+    await page.close();
+  }),
+);
+
+test(
+  "an agent is stopped, started and deleted from its page, after asking",
+  withGateway(async (gateway) => {
+    const page = await open(gateway, "#/a/a-reviewer");
+    const menu = page.getByRole("button", { name: "Reviewer options" });
+    await menu.click();
+    await page.getByRole("menuitem", { name: "Stop" }).click();
+    await page.getByRole("main").getByText("Stopped", { exact: true }).waitFor();
+    await menu.click();
+    await page.getByRole("menuitem", { name: "Start" }).click();
+    await page.getByRole("main").getByText("Reviewed #482 with 3 comments").first().waitFor();
+    await menu.click();
+    await page.getByRole("menuitem", { name: /Delete/ }).click();
+    const dialog = page.getByRole("dialog", { name: "Delete Reviewer?" });
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    await dialog.waitFor({ state: "detached" });
+    assert.ok(gateway.agents.has("a-reviewer"));
+    await menu.click();
+    await page.getByRole("menuitem", { name: /Delete/ }).click();
+    await dialog.getByRole("button", { name: "Delete" }).click();
+    await page.waitForURL(/#\/$/);
+    await row(page, "Research").waitFor();
+    assert.equal(gateway.agents.has("a-reviewer"), false);
+    await page.close();
+  }),
+);
+
+test(
+  "every portaled surface takes the theme",
+  withGateway(async (gateway) => {
+    const luma = (locator: Locator) =>
+      locator.evaluate((node) => {
+        const canvas = document
+          .createElement("canvas")
+          .getContext("2d") as CanvasRenderingContext2D;
+        canvas.fillStyle = getComputedStyle(node).backgroundColor;
+        canvas.fillRect(0, 0, 1, 1);
+        const [r, g, b] = canvas.getImageData(0, 0, 1, 1).data as unknown as number[];
+        return 0.2126 * (r as number) + 0.7152 * (g as number) + 0.0722 * (b as number);
+      });
+    for (const theme of ["dark", "light"]) {
+      const page = await open(gateway, "#/a/a-reviewer");
+      if (theme === "light")
+        await page.getByRole("button", { name: "Color: dark" }).first().click();
+      await page.getByRole("button", { name: "Reviewer options" }).click();
+      const menu = page.locator('[data-slot="dropdown-menu-content"]');
+      await menu.waitFor();
+      const value = await luma(menu);
+      assert.ok(theme === "light" ? value > 180 : value < 110, `${theme}: ${value}`);
+      await page.close();
+    }
+  }),
+);
+
+test(
   "no page shows a scrollbar or overflows sideways, wide or phone",
   withGateway(async (gateway) => {
     for (const viewport of [
       { width: 1440, height: 900 },
       { width: 390, height: 844 },
     ])
-      for (const hash of ["#/"]) {
+      for (const hash of ["#/", "#/a/a-research", "#/a/a-triage"]) {
         const page = await open(gateway, hash, viewport);
         await page.getByRole("main").getByText(/./).first().waitFor();
         const bad = await page.evaluate(() => {

@@ -1,5 +1,9 @@
+import { PlusIcon } from "lucide-react";
+import { useState } from "react";
 import { go, useLoad } from "../data.ts";
+import { Button } from "../ui/button.tsx";
 import { Item } from "../ui/item.tsx";
+import { CreateDialog } from "./create.tsx";
 import {
   type AgentEntry,
   ago,
@@ -16,12 +20,21 @@ import { Nothing, Page, Scroll, StateDot } from "./parts.tsx";
 
 export function AgentsPage() {
   const tick = useEvery(REFRESH_MS);
+  const [creating, setCreating] = useState(false);
   const list = useLoad(listAgents, ["actors"], [tick]);
   const slots = useChatSlots();
   const agents = list.value ?? [];
   // The order is the order made; a row never jumps while it's being read.
   return (
-    <Page crumbs={[{ label: "Agents" }]}>
+    <Page
+      crumbs={[{ label: "Agents" }]}
+      action={
+        <Button size="sm" onClick={() => setCreating(true)}>
+          <PlusIcon />
+          Create
+        </Button>
+      }
+    >
       <Scroll>
         <ul className="mx-auto flex max-w-5xl flex-col">
           {agents.map((agent) => (
@@ -36,6 +49,7 @@ export function AgentsPage() {
           )}
         </ul>
       </Scroll>
+      <CreateDialog open={creating} onClose={() => setCreating(false)} />
     </Page>
   );
 }
