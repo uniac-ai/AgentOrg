@@ -316,11 +316,14 @@ test("a url connection sends its token, and is seen to go when its server dies",
     name: "Wrong",
   });
   await until(async () => (await mcp.status({ connection: wrong })).state === "down");
+  const refusedBy = await mcp.status({ connection: wrong });
+  assert.doesNotMatch(refusedBy.detail ?? "", /ended/, "it says why, not just that it ended");
+  assert.equal(heard.changed, 1, "a connection that never came up changes nothing");
 });
 
 test("a secret reaches its server and the provider's file, and nothing that is read back", async (t) => {
   const { hub, person, mcp, dir, logged, connected } = await setup(t, { firstDelayMs: 100 });
-  const secret = `secret-${randomUUID()}`;
+  const secret = `secret-${randomUUID()}\nsecond-line-${randomUUID()}`;
   // Connected through a server that gets it as a variable, and one that prints it and dies.
   const { connection, target } = await mcp.create({
     kind: "command",
@@ -352,10 +355,14 @@ test("a secret reaches its server and the provider's file, and nothing that is r
     audit: hub.state.audit(0, 100_000),
     logged,
   });
-  assert.ok(!seen.includes(secret), "the secret was read back");
+  for (const part of [secret, ...secret.split("\n")])
+    assert.ok(!seen.includes(JSON.stringify(part).slice(1, -1)), "the secret was read back");
   assert.ok(logged.some((line) => line.includes("[hidden]")));
   const file = join(dir, "connections.json");
-  assert.ok(readFileSync(file, "utf8").includes(secret), "it is kept for the next start");
+  assert.ok(
+    readFileSync(file, "utf8").includes(JSON.stringify(secret)),
+    "it is kept for the next start",
+  );
   assert.equal(statSync(file).mode & 0o777, 0o600);
 });
 

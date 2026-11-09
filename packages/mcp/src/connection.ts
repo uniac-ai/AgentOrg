@@ -32,8 +32,7 @@ const LIST_ROOM = 900 * 1024;
 
 const cut = (text: string, max: number) =>
   text.length <= max ? text : `${text.slice(0, max - 40)}… [cut: ${text.length} characters]`;
-const messageOf = (error: unknown) =>
-  cut(error instanceof Error ? error.message : String(error), 2000);
+const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 /** The tools a server lists, fitted to what `tools@1` can carry; what can't be is logged. */
 function fit(listed: Awaited<ReturnType<Client["listTools"]>>["tools"], log: Log): Tool[] {
@@ -134,7 +133,14 @@ export class Connection {
     this.#firstDelayMs = timing.firstDelayMs ?? FIRST_DELAY_MS;
     // What is secret never leaves in a log, a detail or an error: its values, and an address's query.
     const query = spec.kind === "url" ? new URL(spec.url).search : "";
-    const hidden = [...Object.values(secrets), ...(query.length > 1 ? [query] : [])];
+    // A value that spans lines is also hidden line by line, as a server prints it; longest first.
+    const hidden = [
+      ...Object.values(secrets).flatMap((value) => [
+        value,
+        ...value.split(/\r?\n/).filter((line) => line.length > 0),
+      ]),
+      ...(query.length > 1 ? [query] : []),
+    ].sort((a, b) => b.length - a.length);
     this.#scrub = (text) => hidden.reduce((out, value) => out.replaceAll(value, "[hidden]"), text);
     const clean = (message: string) => cut(this.#scrub(message), 4000);
     this.#log = {
@@ -209,20 +215,23 @@ export class Connection {
         this.#lose?.();
         throw new Refused("not_connected", `The server went away during ${name}.`);
       }
-      return { output: this.#scrub(messageOf(error)), failed: true as const };
+      return { output: cut(this.#scrub(messageOf(error)), 2000), failed: true as const };
     }
   }
 
-  /** Whether an error says the server can't be reached, rather than that it answered no. */
+  /** Whether an error says the server can't be reached, rather than that one request failed. */
   #gone(error: unknown) {
-    if (error instanceof ProtocolError) return false;
-    return !(error instanceof SdkError && error.code === SdkErrorCode.RequestTimeout);
+    if (error instanceof TypeError) return true;
+    return (
+      error instanceof SdkError &&
+      (error.code === SdkErrorCode.ConnectionClosed || error.code === SdkErrorCode.NotConnected)
+    );
   }
 
   #set(state: State, detail?: string) {
     const changed = state !== this.#state && (state === "connected" || this.#state === "connected");
     this.#state = state;
-    this.#detail = detail === undefined ? undefined : this.#scrub(detail);
+    this.#detail = detail === undefined ? undefined : cut(this.#scrub(detail), 2000);
     if (state !== "connected") this.#tools = [];
     if (changed) this.#changed();
   }
@@ -270,16 +279,30 @@ export class Connection {
       },
     );
     this.#mcp = mcp;
+    let over = false;
     const closed = new Promise<void>((resolve) => {
-      mcp.onclose = resolve;
-      this.#lose = resolve;
+      const done = () => {
+        over = true;
+        resolve();
+      };
+      mcp.onclose = done;
+      this.#lose = done;
     });
     let pinging: NodeJS.Timeout | undefined;
     try {
-      await Promise.race([mcp.connect(transportOf(this.#spec, this.#secrets, log)), closed]);
-      if (this.#ended) return "";
-      await Promise.race([this.#refresh(mcp), closed]);
-      if (this.#ended) return "";
+      // A failed start closes before it rejects: what it rejects with is the reason to give.
+      for (const step of [
+        () => mcp.connect(transportOf(this.#spec, this.#secrets, log)),
+        () => this.#refresh(mcp),
+      ]) {
+        const going = step();
+        await Promise.race([going, closed]);
+        if (this.#ended) return "";
+        if (over) {
+          await going;
+          return "The connection to the server ended.";
+        }
+      }
       this.#set("connected");
       // An address's transport says nothing when its server dies: asking is how that's noticed.
       pinging = setInterval(() => {
