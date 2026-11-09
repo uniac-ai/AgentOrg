@@ -1,14 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { hubActors, tools } from "@agentorg/interfaces";
-import {
-  defineInterface,
-  describeInterface,
-  method,
-  NotConnected,
-  OutcomeUnknown,
-  Refused,
-} from "@agentorg/sdk";
+import { tools } from "@agentorg/interfaces";
+import { defineInterface, method, NotConnected, OutcomeUnknown, Refused } from "@agentorg/sdk";
 import { createTestContext } from "@agentorg/sdk/testing";
 import { z } from "zod";
 import { INPUT_BUDGET } from "../src/history.ts";
@@ -16,19 +9,23 @@ import { MAX_INSTRUCTIONS } from "../src/settings.ts";
 import { MAX_OUTPUT, MAX_TOOLS, TOOLS_BUDGET } from "../src/tools.ts";
 import engine, { INSTRUCTIONS } from "./engine-actor.ts";
 
-/** A typed interface for an exposed slot, whose methods become tools. */
-const layout = defineInterface({
-  name: "layout",
+/** An interface that isn't `tools@1`. */
+const other = defineInterface({
+  name: "other",
   major: 1,
   kind: "rpc",
-  methods: {
-    get: method({ input: z.object({}), output: z.object({ home: z.array(z.json()) }) }),
-    place: method({
-      input: z.object({ actor: z.string(), module: z.string() }),
-      output: z.object({ id: z.string() }),
-    }),
-    remove: method({ input: z.object({ id: z.string() }), output: z.object({}) }),
-  },
+  methods: { read: method({ input: z.object({}), output: z.object({}) }) },
+});
+
+/** Tools for an exposed `tools@1` slot, each a handler by name. */
+type Handlers = Record<string, (input: Record<string, unknown>) => unknown>;
+const listing = (handlers: Handlers) => ({
+  list: () => ({
+    tools: Object.keys(handlers).map((name) => ({ name, inputSchema: { type: "object" } })),
+  }),
+  call: async ({ name, arguments: input }: { name: string; arguments: unknown }) => ({
+    output: JSON.stringify((await handlers[name]?.(input as Record<string, unknown>)) ?? {}),
+  }),
 });
 
 type Item = { type: string; [key: string]: unknown };
@@ -166,12 +163,16 @@ async function setup(values = new Map<string, unknown>()) {
 
 test("a tool message says its call running, then how it ended, under one id; the record keeps it", async () => {
   const s = await setup();
-  s.actor.expose("layout", layout, {
-    place: () => ({ id: "p1" }),
-    remove: () => {
-      throw new Refused("unknown", "No such placement.");
-    },
-  });
+  s.actor.expose(
+    "layout",
+    tools,
+    listing({
+      place: () => ({ id: "p1" }),
+      remove: () => {
+        throw new Refused("unknown", "No such placement.");
+      },
+    }),
+  );
   s.script.push(
     calls(
       callTool("layout__place", { actor: "board", module: "panel" }, "c1"),
@@ -181,11 +182,11 @@ test("a tool message says its call running, then how it ended, under one id; the
   );
   await s.turn("Place it, then remove p9.");
   type Shown = { id: string; role: string; text: string; tool?: Record<string, unknown> };
-  const tools = s.actor.emitted
+  const shown = s.actor.emitted
     .filter((e) => e.event === "message")
     .map((e) => e.payload as Shown)
     .filter((m) => m.role === "tool");
-  const [placing, placed, removing, removed] = tools;
+  const [placing, placed, removing, removed] = shown;
   assert.deepEqual(placing?.tool, {
     name: "layout__place",
     state: "running",
@@ -203,7 +204,7 @@ test("a tool message says its call running, then how it ended, under one id; the
   assert.equal(removed?.tool?.state, "refused");
   assert.match(String(removed?.tool?.output), /No such placement/);
   // Calls that never ran (past the turn's limit) are one note, with no tool.
-  const note = tools.at(-1);
+  const note = shown.at(-1);
   assert.equal(note?.text, "3 calls: limit");
   assert.equal(note?.tool, undefined);
   // The record shows the same as the events' last word on each.
@@ -217,14 +218,18 @@ test("a tool message says its call running, then how it ended, under one id; the
 test("how each call ended outlives a restart, and a call ends shown even if its record fails", async () => {
   const values = new Map<string, unknown>();
   const s = await setup(values);
-  s.actor.expose("layout", layout, {
-    place: () => ({ id: "p1" }),
-    // The store goes while this call runs: its record can't be written.
-    remove: () => {
-      s.actor.unbind("store");
-      return {};
-    },
-  });
+  s.actor.expose(
+    "layout",
+    tools,
+    listing({
+      place: () => ({ id: "p1" }),
+      // The store goes while this call runs: its record can't be written.
+      remove: () => {
+        s.actor.unbind("store");
+        return {};
+      },
+    }),
+  );
   s.script.push(calls(callTool("layout__place", { actor: "board", module: "panel" }, "c1")));
   await s.turn("Place it.");
   type Shown = { id: string; role: string; tool?: { state: string } };
@@ -244,31 +249,25 @@ test("how each call ended outlives a restart, and a call ends shown even if its 
 });
 
 test("what is exposed to the agent becomes its tools at the next turn, and goes when removed", async () => {
-  const quests = defineInterface({
-    name: "pocket.quests",
-    major: 1,
-    kind: "rpc",
-    methods: {
-      list: method({ input: z.object({}), output: z.object({ quests: z.array(z.string()) }) }),
-      complete: method({ input: z.object({ quest: z.string() }), output: z.object({}) }),
-    },
-  });
   const s = await setup();
-  const done: string[] = [];
+  const done: unknown[] = [];
+  const parameters = { type: "object", properties: { quest: { type: "string" } } };
   s.actor.expose(
     "pocketSideQuests_quests",
-    quests,
+    tools,
     {
-      list: () => ({ quests: ["Water the plants"] }),
-      complete: ({ quest }) => {
-        done.push(quest);
-        return {};
+      list: () => ({ tools: [{ name: "complete", inputSchema: parameters }] }),
+      call: ({ arguments: args }) => {
+        done.push(args.quest);
+        return { output: "{}" };
       },
     },
-    { actor: "act_quests", export: "logic.quests" },
+    { actor: "act_quests", export: "tools" },
   );
   // A name a function tool can't have is left out, not sent.
-  s.actor.expose("x".repeat(60), quests, { list: () => ({ quests: [] }) });
+  s.actor.expose("x".repeat(60), tools, listing({ list: () => ({}) }));
+  // Only tools@1 slots are tools: another interface exposed to it offers none.
+  s.actor.expose("other", other, { read: () => ({}) });
   s.script.push(
     calls(callTool("pocketSideQuests_quests__complete", { quest: "Water the plants" }, "c1")),
     say("Done."),
@@ -276,14 +275,9 @@ test("what is exposed to the agent becomes its tools at the next turn, and goes 
   await s.turn("Mark the plants done.");
   assert.deepEqual(
     (s.requests[0]?.tools ?? []).map((tool) => tool.name),
-    ["pocketSideQuests_quests__list", "pocketSideQuests_quests__complete"],
+    ["pocketSideQuests_quests__complete"],
   );
-  assert.deepEqual(
-    s.requests[0]?.tools?.find((tool) => tool.name === "pocketSideQuests_quests__complete")
-      ?.parameters,
-    (describeInterface(quests) as { methods: Record<string, { input: unknown }> }).methods.complete
-      ?.input,
-  );
+  assert.deepEqual(s.requests[0]?.tools?.[0]?.parameters, parameters);
   assert.deepEqual(done, ["Water the plants"]);
   s.actor.unexpose("pocketSideQuests_quests");
   await s.turn("And now?");
@@ -518,16 +512,21 @@ test("the model is chosen per agent, kept with it, and the provider's default un
 test("a function call runs through its slot, and its result or refusal goes back", async () => {
   const s = await setup();
   const placed: unknown[] = [];
-  s.actor.expose("layout", layout, {
-    place: (input) => {
-      placed.push(input);
-      if (input.module === "logic") throw new Refused("invalid", "logic isn't a view module.");
-      return { id: "p1" };
-    },
-    get: () => {
-      throw new OutcomeUnknown();
-    },
-  });
+  s.actor.expose(
+    "layout",
+    tools,
+    listing({
+      remove: () => ({}),
+      place: (input) => {
+        placed.push(input);
+        if (input.module === "logic") throw new Refused("invalid", "logic isn't a view module.");
+        return { id: "p1" };
+      },
+      get: () => {
+        throw new OutcomeUnknown();
+      },
+    }),
+  );
   s.script.push(
     {
       output: [
@@ -583,12 +582,16 @@ test("a function call runs through its slot, and its result or refusal goes back
 test("a turn makes at most 20 tool calls, and says so as its error", async () => {
   const s = await setup();
   let runs = 0;
-  s.actor.expose("layout", layout, {
-    get: () => {
-      runs++;
-      return { home: [] };
-    },
-  });
+  s.actor.expose(
+    "layout",
+    tools,
+    listing({
+      get: () => {
+        runs++;
+        return { home: [] };
+      },
+    }),
+  );
   for (let i = 0; i < 30; i++) s.script.push(calls(callTool("layout__get", {})));
   const from = s.actor.emitted.length;
   assert.equal((await s.turn("Loop.")).detail?.code, "limit");
@@ -657,14 +660,18 @@ test("cancel during a tool call keeps its real result and skips the calls after 
   const running = gate();
   const release = gate();
   let entered = 0;
-  s.actor.expose("layout", layout, {
-    place: async () => {
-      entered++;
-      running.open();
-      await release.shut;
-      return { id: "p1" };
-    },
-  });
+  s.actor.expose(
+    "layout",
+    tools,
+    listing({
+      place: async () => {
+        entered++;
+        running.open();
+        await release.shut;
+        return { id: "p1" };
+      },
+    }),
+  );
   s.script.push(
     calls(
       callTool("layout__place", { actor: "b", module: "panel" }, "g1"),
@@ -751,11 +758,15 @@ test("a refusal from the model ends the turn with its code, and no idle after", 
 
 test("outputs are capped in bytes, refusals too, and a long reply is shown in part", async () => {
   const s = await setup();
-  s.actor.expose("layout", layout, {
-    remove: () => {
-      throw new Refused("invalid", "x".repeat(250_000));
-    },
-  });
+  s.actor.expose(
+    "layout",
+    tools,
+    listing({
+      remove: () => {
+        throw new Refused("invalid", "x".repeat(250_000));
+      },
+    }),
+  );
   const named = (name: string) => [
     {
       actorId: "a",
@@ -766,7 +777,7 @@ test("outputs are capped in bytes, refusals too, and a long reply is shown in pa
       restarts: 0,
     },
   ];
-  s.actor.expose("actors", hubActors, { list: () => ({ actors: named("é".repeat(60_000)) }) });
+  s.actor.expose("actors", tools, listing({ list: () => ({ actors: named("é".repeat(60_000)) }) }));
   const long = "y".repeat(150_000);
   s.script.push(
     calls(callTool("actors__list", {}, "a"), callTool("layout__remove", { id: "x" }, "b")),
@@ -834,7 +845,7 @@ test("history pages back, survives a restart, and skips what doesn't read back",
 
 test("the model gets the newest whole exchanges that fit, and a call keeps its output", async () => {
   const s = await setup();
-  s.actor.expose("layout", layout, { get: () => ({ home: [] }) });
+  s.actor.expose("layout", tools, listing({ get: () => ({ home: [] }) }));
   s.script.push(calls(callTool("layout__get", {}, "first")));
   await s.turn("Message 1.");
   const bigs = Array.from({ length: 5 }, (_, i) => `${i}${"x".repeat(95_000)}`);
@@ -856,20 +867,24 @@ test("the model gets the newest whole exchanges that fit, and a call keeps its o
 
 test("a latest exchange over the budget leaves out its oldest outputs, never a call", async () => {
   const s = await setup();
-  s.actor.expose("actors", hubActors, {
-    list: () => ({
-      actors: [
-        {
-          actorId: "a",
-          name: "z".repeat(15_000),
-          package: "external" as const,
-          state: "running" as const,
-          connected: true,
-          restarts: 0,
-        },
-      ],
+  s.actor.expose(
+    "actors",
+    tools,
+    listing({
+      list: () => ({
+        actors: [
+          {
+            actorId: "a",
+            name: "z".repeat(15_000),
+            package: "external" as const,
+            state: "running" as const,
+            connected: true,
+            restarts: 0,
+          },
+        ],
+      }),
     }),
-  });
+  );
   for (let i = 0; i < 20; i++) s.script.push(calls(callTool("actors__list", {}, `k${i}`)));
   s.script.push(say("done"));
   await s.turn("é".repeat(99_000));
@@ -884,13 +899,17 @@ test("a cancelled turn's running call is recorded before the next message", asyn
   const s = await setup();
   const release = gate();
   let entered = false;
-  s.actor.expose("layout", layout, {
-    get: async () => {
-      entered = true;
-      await release.shut;
-      return { home: [] };
-    },
-  });
+  s.actor.expose(
+    "layout",
+    tools,
+    listing({
+      get: async () => {
+        entered = true;
+        await release.shut;
+        return { home: [] };
+      },
+    }),
+  );
   s.script.push(calls(callTool("layout__get", {}, "c1"), callTool("layout__get", {}, "c2")));
   await s.actor.call("chat", "send", { text: "One." });
   await until(() => entered, "the call to start");
@@ -911,7 +930,7 @@ test("a cancelled turn's running call is recorded before the next message", asyn
 
 test("thousands of calls in one reply cost a handful of writes", async () => {
   const s = await setup();
-  s.actor.expose("layout", layout, { get: () => ({ home: [] }) });
+  s.actor.expose("layout", tools, listing({ get: () => ({ home: [] }) }));
   s.script.push(
     calls(...Array.from({ length: 2000 }, (_, i) => callTool("layout__get", {}, `x${i}`))),
   );
@@ -925,7 +944,7 @@ test("thousands of calls in one reply cost a handful of writes", async () => {
 
 test("a long message is stored once, under storage's value limit, and a big call is still kept", async () => {
   const s = await setup();
-  s.actor.expose("layout", layout, { get: () => ({ home: [] }) });
+  s.actor.expose("layout", tools, listing({ get: () => ({ home: [] }) }));
   // 45,000 CJK characters are 135 KB of UTF-8: stored twice, they would pass 256 KiB.
   assert.deepEqual(await s.turn("漢".repeat(45_000)), { state: "idle" });
   const big = { pad: "x".repeat(190_000) };
@@ -946,7 +965,7 @@ test("a long message is stored once, under storage's value limit, and a big call
 
 test("calls with large arguments never take a request past its budget", async () => {
   const s = await setup();
-  s.actor.expose("layout", layout, { get: () => ({ home: [] }) });
+  s.actor.expose("layout", tools, listing({ get: () => ({ home: [] }) }));
   // Arguments, not outputs, fill this exchange: only leaving out old arguments keeps it in budget.
   for (let i = 0; i < 20; i++)
     s.script.push(calls(callTool("layout__get", { pad: "y".repeat(15_000) }, `a${i}`)));

@@ -23,7 +23,6 @@ import {
   type SessionOptions,
   type WireError,
   wireError,
-  YamuxError,
   type YamuxStream,
 } from "@agentorg/wire";
 import { HubActor } from "./hub-actor.js";
@@ -50,7 +49,7 @@ export interface HubOptions {
   /** How long a new channel has to finish hello before it is closed. */
   helloTimeoutMs?: number;
   /**
-   * How long a provider has to answer a call, or to accept or refuse an open or http stream; past
+   * How long a provider has to answer a call; past
    * it the caller gets OutcomeUnknown and the provider's stream is reset.
    */
   answerTimeoutMs?: number;
@@ -126,21 +125,6 @@ const whenReset = (reader: FrameReader) =>
   );
 
 /**
- * One direction of a splice. A source that fails resets the destination, and a destination its
- * side reset resets the source. A destination that can't take more because its channel went ends
- * this direction only: cancelling the source would reset its whole stream, and with it the other
- * direction, which may still carry an answer. What the source still sends is read and dropped
- * until it ends.
- */
-const pass = (from: ReadableStream<Uint8Array>, to: { writable: WritableStream; reset(): void }) =>
-  from.pipeTo(to.writable, { preventCancel: true }).catch((error: unknown) => {
-    to.reset();
-    if (error instanceof YamuxError && error.code === "reset")
-      return from.cancel(error).catch(() => {});
-    return from.pipeTo(new WritableStream()).catch(() => {});
-  });
-
-/**
  * A value as it would cross the wire: what the hub gives in-process is
  * checked and sent as a channel provider's would be, so a property left undefined is left out,
  * never a value that fails its schema.
@@ -183,7 +167,7 @@ export class Hub {
   readonly #actor: HubActor;
   readonly #validators: Validators;
   readonly #connections = new Map<string, Connection>();
-  /** Open subscriptions and splices by the binding they run through, ended when it goes. */
+  /** Open subscriptions by the binding they run through, ended when it goes. */
   readonly #live = new Map<string, Set<(error?: WireError) => void>>();
   readonly #helloTimeoutMs: number;
   readonly #answerTimeoutMs: number;
@@ -429,6 +413,9 @@ export class Hub {
     } catch {
       recomputed = undefined;
     }
+    // Any other kind could only come from a program built against an older SDK.
+    if ((iface as { kind?: unknown }).kind !== "rpc")
+      throw new Refused("invalid", `${iface.id} isn't an rpc interface.`);
     // The hash keys the compiled schemas, so it is checked before anything is compiled.
     if (recomputed !== hash)
       throw new Refused("invalid", `${iface.id}'s hash doesn't match its schemas.`);
@@ -448,9 +435,6 @@ export class Hub {
           return await this.#call(conn, header, reader, writer);
         case "subscribe":
           return await this.#subscribe(conn, header, stream, reader, writer);
-        case "open":
-        case "http":
-          return await this.#splice(conn, header, stream, reader, writer);
         default:
           throw new Refused("invalid", `A ${header.op} stream can't be opened here.`);
       }
@@ -460,7 +444,7 @@ export class Hub {
     }
   }
 
-  /** Keep an open subscription or splice under its binding, so the binding's end ends it. */
+  /** Keep an open subscription under its binding, so the binding's end ends it. */
   #track(binding: BindingRecord, end: (error?: WireError) => void): () => void {
     const key = bindingKey(binding);
     const ends = this.#live.get(key) ?? new Set();
@@ -476,13 +460,11 @@ export class Hub {
   // the caller's, a subscription's events in the subscriber's, a hello's or offer's compile in the
   // declaring Actor's. A slow provider so delays only the callers using it, each in its own turn.
 
-  /** A consumer's slot, resolved through its binding to a live provider of the right kind. */
-  #resolve(caller: string, slot: string, kind: DescribedInterface["kind"]): Resolved {
+  /** A consumer's slot, resolved through its binding to a live provider. */
+  #resolve(caller: string, slot: string): Resolved {
     const resolved = this.state.resolveCall(caller, slot);
     if (!resolved) throw new NotConnected(slot);
     const { binding, target } = resolved;
-    if (target.iface.kind !== kind)
-      throw new Refused("invalid", `${slot} is an ${target.iface.kind} slot, not ${kind}.`);
     // The hub is served in this process; any other provider needs its channel.
     const builtin = binding.provider === HUB;
     const provider = builtin ? undefined : this.#connections.get(binding.provider);
@@ -494,7 +476,7 @@ export class Hub {
     caller: string,
     slot: string,
     binding: BindingRecord | undefined,
-    call: { op: "call" | "subscribe" | "open" | "http"; method?: string; outcome: CallOutcome },
+    call: { op: "call" | "subscribe"; method?: string; outcome: CallOutcome },
   ) {
     const { consumer, provider, export: exported } = binding ?? { consumer: caller };
     try {
@@ -537,7 +519,7 @@ export class Hub {
     let reply: Body;
     let outcome: CallOutcome = "ok";
     try {
-      const resolved = this.#resolve(caller, slot, "rpc");
+      const resolved = this.#resolve(caller, slot);
       binding = resolved.binding;
       const { iface, provider } = resolved;
       const part: Part = { method, side: "input" };
@@ -704,7 +686,7 @@ export class Hub {
     let resolved: Resolved | undefined;
     const part: Part = { event };
     try {
-      resolved = this.#resolve(caller, slot, "rpc");
+      resolved = this.#resolve(caller, slot);
       if (!this.#validators.has(resolved.iface, part))
         throw new Refused("invalid", `${resolved.iface.id} has no event ${event}.`);
     } catch (error) {
@@ -823,95 +805,5 @@ export class Hub {
       }
     })();
     return end;
-  }
-
-  /**
-   * `open` and `http`: validated, then the provider accepts or refuses with one body, which the Hub
-   * passes on; after an accept, raw bytes both ways until either side ends them.
-   */
-  async #splice(
-    conn: Connection,
-    header: { op: "open" | "http"; slot: string; params?: unknown },
-    stream: YamuxStream,
-    reader: FrameReader,
-    writer: Writer,
-  ) {
-    let binding: BindingRecord | undefined;
-    let out: YamuxStream | undefined;
-    let upstream: FrameReader | undefined;
-    let answered: Body;
-    let outcome: CallOutcome = "ok";
-    let unbound = false;
-    let untrack = () => {};
-    try {
-      const resolved = this.#resolve(
-        conn.actorId,
-        header.slot,
-        header.op === "open" ? "stream" : "http",
-      );
-      binding = resolved.binding;
-      // Tracked from here, so a binding that goes while the provider decides ends it too.
-      untrack = this.#track(binding, () => {
-        unbound = true;
-        out?.reset();
-        stream.reset();
-      });
-      if (header.op === "open")
-        await this.#validators.check(
-          conn.actorId,
-          resolved.iface,
-          { open: true },
-          header.params,
-          "invalid",
-        );
-      // The hub's exports are all rpc, so #resolve refused them already.
-      if (!resolved.provider) throw new NotConnected(header.slot);
-      const opened = this.#openTo(resolved.provider, binding);
-      out = opened;
-      try {
-        const head = opened.writable.getWriter();
-        await head.write(
-          encodeFrame({
-            op: "serve",
-            kind: header.op,
-            export: binding.export,
-            caller: conn.actorId,
-            slot: binding.slot,
-            ...(header.op === "open" ? { params: header.params } : {}),
-          }),
-        );
-        head.releaseLock();
-      } catch {
-        throw new OutcomeUnknown(`${binding.provider} went away before answering.`);
-      }
-      upstream = new FrameReader(opened.readable);
-      const body = await this.#answerFrom(opened, upstream, binding, new Promise(() => {}));
-      if (unbound) throw new NotConnected(header.slot);
-      if ("error" in body) {
-        outcome = "refused";
-        answered = body;
-      } else if ("result" in body) answered = result({});
-      else throw new Refused("bad_output", "A provider answers an open with {result} or {error}.");
-    } catch (error) {
-      answered = errorBody(unbound ? new NotConnected(header.slot) : error);
-      outcome = outcomeOf(answered.error);
-    }
-    this.#audit(conn.actorId, header.slot, binding, { op: header.op, outcome });
-    if (!("result" in answered) || !out || !upstream) {
-      untrack();
-      out?.reset();
-      await answer(writer, answered);
-      return drain(reader);
-    }
-    const provider = out;
-    try {
-      await writer.write(encodeFrame(answered));
-    } catch {
-      untrack();
-      return provider.reset();
-    }
-    writer.releaseLock();
-    await Promise.all([pass(reader.rest(), provider), pass(upstream.rest(), stream)]);
-    untrack();
   }
 }

@@ -1,18 +1,5 @@
 import type { z } from "zod";
-import type {
-  DescribedInterface,
-  Events,
-  Interface,
-  Methods,
-  RpcInterface,
-  StreamInterface,
-} from "./interface.js";
-
-/** A byte stream both ways. */
-export interface Duplex {
-  readonly readable: ReadableStream<Uint8Array>;
-  readonly writable: WritableStream<Uint8Array>;
-}
+import type { DescribedInterface, Events, Interface, Methods, RpcInterface } from "./interface.js";
 
 interface SlotState {
   /** Whether an export is bound to this slot now; a slot may be unbound at any time. */
@@ -37,20 +24,8 @@ export interface RpcSlot<M extends Methods, E extends Events> extends SlotState 
     fn: (payload: z.output<E[K]["payload"]>) => void,
   ): () => void;
 }
-/** A slot of a `stream` interface: opening it gives a byte stream in the interface's protocol. */
-export interface StreamSlot<O extends z.ZodType> extends SlotState {
-  open(params: z.input<O>): Promise<Duplex>;
-}
-/** A slot of an `http` interface. */
-export interface HttpSlot extends SlotState {
-  fetch(request: Request): Promise<Response>;
-}
 export type Slot<I extends Interface> =
-  I extends RpcInterface<string, infer M, infer E>
-    ? RpcSlot<M, E>
-    : I extends StreamInterface<string, infer O>
-      ? StreamSlot<O>
-      : HttpSlot;
+  I extends RpcInterface<string, infer M, infer E> ? RpcSlot<M, E> : never;
 
 /** Who made a call: the calling Actor, as the Hub names it. */
 export interface CallInfo {
@@ -81,19 +56,8 @@ export interface RpcExport<M extends Methods, E extends Events> {
     options?: EmitOptions,
   ): void;
 }
-export interface StreamExport<O extends z.ZodType> {
-  accept(handler: (params: z.output<O>, stream: Duplex) => void | Promise<void>): void;
-}
-export interface HttpExport {
-  serve(handler: (request: Request) => Response | Promise<Response>): void;
-}
-
 export type Export<I extends Interface> =
-  I extends RpcInterface<string, infer M, infer E>
-    ? RpcExport<M, E>
-    : I extends StreamInterface<string, infer O>
-      ? StreamExport<O>
-      : HttpExport;
+  I extends RpcInterface<string, infer M, infer E> ? RpcExport<M, E> : never;
 
 /** Structured log lines. */
 export interface Log {

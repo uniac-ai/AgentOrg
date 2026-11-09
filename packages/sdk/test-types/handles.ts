@@ -16,16 +16,8 @@ const board = defineInterface({
   },
   events: { changed: event(z.object({ id: z.string() })) },
 });
-const shell = defineInterface({
-  name: "computer.shell",
-  major: 1,
-  kind: "stream",
-  protocol: "pty",
-  open: z.object({ cols: z.number(), rows: z.number() }),
-});
-const site = defineInterface({ name: "site", major: 1, kind: "http" });
 export const actor = defineActor({
-  slots: { board, shell, site },
+  slots: { board },
   exports: { board },
   async start(ctx) {
     const { cards } = await ctx.slots.board.call.list({});
@@ -34,8 +26,6 @@ export const actor = defineActor({
     const done: boolean = added.done;
     const off: () => void = ctx.slots.board.on("changed", (payload) => payload.id.toUpperCase());
     const bound: boolean = ctx.slots.board.bound;
-    await ctx.slots.shell.open({ cols: 80, rows: 24 });
-    await ctx.slots.site.fetch(new Request("http://site/"));
     ctx.exports.board.implement({
       list: async () => ({ cards: [] }),
       add: ({ title }, { caller }) => {
@@ -61,12 +51,6 @@ export const actor = defineActor({
     ctx.exports.board.emit("changed", {});
     // @ts-expect-error: an event goes `to` an Actor's id, a string.
     ctx.exports.board.emit("changed", { id: "1" }, { to: 1 });
-    // @ts-expect-error: a stream slot has no `call`.
-    ctx.slots.shell.call;
-    // @ts-expect-error: opening a pty needs `cols` and `rows`.
-    await ctx.slots.shell.open({ cols: 80 });
-    // @ts-expect-error: an http slot is fetched, not opened.
-    await ctx.slots.site.open({});
     // @ts-expect-error: no slot named `store`.
     ctx.slots.store;
     // @ts-expect-error: a handler must return the method's output.
@@ -82,26 +66,8 @@ defineActor({
   },
 });
 
-export const servers = defineActor({
-  exports: { tty: shell, web: site },
-  start(ctx) {
-    ctx.exports.tty.accept(({ cols }, stream) => void [cols.toFixed(), stream.readable]);
-    ctx.exports.web.serve(async (request) => new Response(request.url));
-    // @ts-expect-error: a stream export is accepted, not implemented.
-    ctx.exports.tty.implement({});
-    // @ts-expect-error: `accept` gets the open parameters, which have no `name`.
-    ctx.exports.tty.accept(({ name }) => void name);
-    // @ts-expect-error: an http handler returns a Response.
-    ctx.exports.web.serve(() => "text");
-  },
-});
-
 const harness = createTestContext(actor);
 harness.bind("board", { list: async () => ({ cards: [] }) });
-harness.bind("shell", () => {
-  const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
-  return { readable, writable };
-});
 // @ts-expect-error: a fake board handler must return the method's output.
 harness.bind("board", { list: async () => ({ items: [] }) });
 // @ts-expect-error: no slot named `store` to bind.

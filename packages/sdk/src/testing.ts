@@ -1,12 +1,6 @@
-import type { z } from "zod";
 import { Refused } from "./errors.js";
-import {
-  describeInterface,
-  type Interface,
-  type RpcInterface,
-  type StreamInterface,
-} from "./interface.js";
-import type { CallInfo, Duplex, Handlers, InterfaceMap, Log, ModuleDefinition } from "./module.js";
+import { describeInterface, type Interface, type RpcInterface } from "./interface.js";
+import type { CallInfo, Handlers, InterfaceMap, Log, ModuleDefinition } from "./module.js";
 import {
   type Binding,
   check,
@@ -15,13 +9,9 @@ import {
   type SlotProvider,
 } from "./runtime.js";
 
-/** A fake bound to a slot in a test: handlers for `rpc`, a function for `stream` and `http`. */
+/** A fake bound to a slot in a test: its handlers. */
 export type Provider<I extends Interface> =
-  I extends RpcInterface<string, infer M>
-    ? Partial<Handlers<M>>
-    : I extends StreamInterface<string, infer O>
-      ? (params: z.output<O>) => Duplex | Promise<Duplex>
-      : (request: Request) => Response | Promise<Response>;
+  I extends RpcInterface<string, infer M> ? Partial<Handlers<M>> : never;
 
 export interface Emitted {
   export: string;
@@ -91,29 +81,19 @@ export function createTestContext<S extends InterfaceMap, X extends InterfaceMap
     call: (exportName, method, input, caller = self) =>
       runtime.call(exportName, method, input, caller),
     bind(slot, fake) {
-      const iface = definition.slots[slot] as Interface;
-      let provider: SlotProvider;
-      if (iface.kind === "rpc") {
-        const handlers = fake as Record<
-          string,
-          ((input: unknown, call: CallInfo) => unknown) | undefined
-        >;
-        // The module itself is the caller of its own slot.
-        const call = { caller: self };
-        provider = {
-          async call(method, input) {
-            const handler = Object.hasOwn(handlers, method) ? handlers[method] : undefined;
-            if (!handler) throw new Refused("unimplemented", `${slot}.${method} isn't faked.`);
-            return handler(input, call);
-          },
-        };
-      } else if (iface.kind === "stream") {
-        const open = fake as (params: unknown) => Duplex | Promise<Duplex>;
-        provider = { open: async (params) => open(params) };
-      } else {
-        const fetch = fake as (request: Request) => Response | Promise<Response>;
-        provider = { fetch: async (request) => fetch(request) };
-      }
+      const handlers = fake as Record<
+        string,
+        ((input: unknown, call: CallInfo) => unknown) | undefined
+      >;
+      // The module itself is the caller of its own slot.
+      const call = { caller: self };
+      const provider: SlotProvider = {
+        async call(method, input) {
+          const handler = Object.hasOwn(handlers, method) ? handlers[method] : undefined;
+          if (!handler) throw new Refused("unimplemented", `${slot}.${method} isn't faked.`);
+          return handler(input, call);
+        },
+      };
       return runtime.bind(slot, provider);
     },
     expose(slot, iface, fake, provider = { actor: "test-provider", export: "export" }) {

@@ -7,7 +7,7 @@ import { type Context, Refused, type Slot } from "@agentorg/sdk";
 import { createAgent } from "./agent.js";
 import { createHistory } from "./history.js";
 import { instructionsWith, skillTool } from "./settings.js";
-import { type Candidate, type LeftOut, listedBy, listsTools, methodsOf, offered } from "./tools.js";
+import { type Candidate, type LeftOut, listedBy, listsTools, offered } from "./tools.js";
 
 /** Where the agent keeps the model chosen for it, beside its record in the store. */
 const MODEL_KEY = "settings/model";
@@ -50,14 +50,10 @@ export function startEngine(
     const own: Candidate[] = settings?.skills.length ? [skillTool(ctx.slots.settings)] : [];
     // In the order they came, each asked at once so one slow server delays only itself.
     const exposed = await Promise.all(
-      ctx.exposed().map(async (slot) =>
-        listsTools(slot.described)
-          ? listedBy(slot.slot, slot)
-          : {
-              candidates: methodsOf(slot.slot, slot.described, { bound: true, call: slot.call }),
-              leftOut: [],
-            },
-      ),
+      ctx
+        .exposed()
+        .filter((slot) => listsTools(slot.described))
+        .map((slot) => listedBy(slot.slot, slot)),
     );
     const { tools, leftOut } = offered([...own, ...exposed.flatMap((one) => one.candidates)]);
     report([...told.leftOut, ...exposed.flatMap((one) => one.leftOut), ...leftOut]);

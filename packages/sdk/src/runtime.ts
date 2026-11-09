@@ -1,9 +1,8 @@
 import { NotConnected, Refused } from "./errors.js";
-import type { DescribedInterface, Interface, RpcInterface, StreamInterface } from "./interface.js";
+import type { DescribedInterface, Interface, RpcInterface } from "./interface.js";
 import type {
   CallInfo,
   Context,
-  Duplex,
   EmitOptions,
   ExposedSlot,
   InterfaceMap,
@@ -12,13 +11,11 @@ import type {
 } from "./module.js";
 
 /**
- * What serves a bound slot, as the host side sees it: one function per kind. The runtime validates
+ * What serves a bound slot, as the host side sees it. The runtime validates
  * what goes in and comes out against the interface's schemas, as the Hub does.
  */
 export interface SlotProvider {
   call?(method: string, input: unknown): Promise<unknown>;
-  open?(params: unknown): Promise<Duplex>;
-  fetch?(request: Request): Promise<Response>;
 }
 /** A bound slot, seen from the host side: it delivers the provider's events to the module. */
 export interface Binding {
@@ -58,15 +55,6 @@ export interface ModuleRuntime<S extends InterfaceMap, X extends InterfaceMap> {
   unexpose(slot: string): void;
   /** Call an export's method for `caller`, the calling Actor as the Hub names it. */
   call(exportName: string, method: string, input: unknown, caller: string): Promise<unknown>;
-  open(exportName: string, params: unknown, stream: Duplex): Promise<void>;
-  /**
-   * The two halves of `open`: checks that the export takes the stream (throwing a refusal at
-   * once), then returns what runs it. A remote host answers accept or refuse in between.
-   */
-  accepting(exportName: string, params: unknown): (stream: Duplex) => Promise<void>;
-  fetch(exportName: string, request: Request): Promise<Response>;
-  /** The checking half of `fetch`: refuses at once, or returns what serves each request. */
-  serving(exportName: string): (request: Request) => Promise<Response>;
 }
 
 export interface RuntimeOptions {
@@ -185,25 +173,6 @@ export function createRuntime<S extends InterfaceMap, X extends InterfaceMap>(
             return () => void set.delete(fn);
           },
         });
-      case "stream":
-        return Object.assign(base, {
-          async open(params: unknown) {
-            const target = provider();
-            const parsed = check(iface.open, params, `${name} open`);
-            if (!target.open)
-              throw new Refused("unimplemented", `${name} isn't served by a stream provider.`);
-            return target.open(parsed);
-          },
-        });
-      case "http":
-        return Object.assign(base, {
-          async fetch(request: Request) {
-            const target = provider();
-            if (!target.fetch)
-              throw new Refused("unimplemented", `${name} isn't served by an http provider.`);
-            return target.fetch(request);
-          },
-        });
     }
   };
 
@@ -228,15 +197,11 @@ export function createRuntime<S extends InterfaceMap, X extends InterfaceMap>(
             );
           },
         };
-      case "stream":
-        return { accept: store };
-      case "http":
-        return { serve: store };
     }
   };
 
   /** A connected export of the expected kind; implemented or not is checked after its input. */
-  const target = (name: string, kind: "rpc" | "stream" | "http") => {
+  const target = (name: string, kind: "rpc") => {
     const state = exported.get(name);
     if (!state) throw new NotConnected(name);
     if (state.iface.kind !== kind) throw new TypeError(`${name} isn't an ${kind} export.`);
@@ -377,27 +342,6 @@ export function createRuntime<S extends InterfaceMap, X extends InterfaceMap>(
     },
   } as unknown as Context<S, X>;
 
-  const serving = (exportName: string) => {
-    const state = target(exportName, "http");
-    const handler = implemented<(request: Request) => Response | Promise<Response>>(
-      state,
-      exportName,
-    );
-    return async (request: Request) => handler(request);
-  };
-
-  const accepting = (exportName: string, params: unknown) => {
-    const state = target(exportName, "stream");
-    const parsed = check((state.iface as StreamInterface).open, params, `${exportName} open`);
-    const handler = implemented<(params: unknown, stream: Duplex) => void | Promise<void>>(
-      state,
-      exportName,
-    );
-    return async (stream: Duplex) => {
-      await handler(parsed, stream);
-    };
-  };
-
   /** Run a slot's bind or unbind handlers; one that throws is logged and the rest still run. */
   const notify = (slot: string, handlers: Set<() => void>) => {
     const failed = (error: unknown) =>
@@ -468,14 +412,6 @@ export function createRuntime<S extends InterfaceMap, X extends InterfaceMap>(
         `${exportName}.${method} output`,
         "bad_output",
       );
-    },
-    accepting,
-    async open(exportName, params, stream) {
-      await accepting(exportName, params)(stream);
-    },
-    serving,
-    async fetch(exportName, request) {
-      return serving(exportName)(request);
     },
   };
 }

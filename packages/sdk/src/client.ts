@@ -21,7 +21,6 @@ import { errorBodyOf, errorFromBody, NotConnected, OutcomeUnknown, Refused } fro
 import { type DescribedInterface, describeInterface, type Interface } from "./interface.js";
 import {
   type Context,
-  type Duplex,
   defineActor,
   type ExportMap,
   type InterfaceMap,
@@ -42,10 +41,6 @@ export interface ServeHandlers {
     send: (payload: unknown) => void,
     end: (error?: unknown) => void,
   ): () => void;
-  /** Check that the export takes the stream (throwing a refusal if not), then return what runs it. */
-  accept(serve: Serve): (stream: Duplex) => Promise<void>;
-  /** The same for an `http` export: the stream carries HTTP/1.1 once accepted. */
-  serveHttp(serve: Serve): (stream: Duplex) => Promise<void>;
 }
 
 export interface ChannelOptions {
@@ -103,9 +98,6 @@ export interface Channel {
     onEvent: (payload: unknown) => void,
     onEnd?: (error?: Error) => void,
   ): () => void;
-  open(slot: string, params: unknown): Promise<Duplex>;
-  /** A stream to an `http` slot's provider, carrying HTTP/1.1 once it accepts. */
-  http(slot: string): Promise<Duplex>;
   close(): void;
   /** Settles when the channel ends. */
   readonly closed: Promise<void>;
@@ -221,16 +213,6 @@ export async function openChannel(options: ChannelOptions): Promise<Channel> {
         return await answer(stream, result(await handlers.call(header, body.input)));
       }
       if (header.kind === "subscribe") return subscribeStream(handlers, header, stream);
-      if (header.kind === "open" || header.kind === "http") {
-        const run = header.kind === "open" ? handlers.accept(header) : handlers.serveHttp(header);
-        const writer = stream.writable.getWriter();
-        await writer.write(encodeFrame(result({})));
-        writer.releaseLock();
-        // Accepted: from here the stream is raw bytes, so a failing handler can only reset it.
-        return await run({ readable: reader.rest(), writable: stream.writable }).catch(() =>
-          stream.reset(),
-        );
-      }
       return stream.reset();
     } catch (error) {
       await answer(stream, bodyOf(error));
@@ -369,36 +351,9 @@ export async function openChannel(options: ChannelOptions): Promise<Channel> {
         stream.reset();
       };
     },
-    open: (slot, params) => splice({ op: "open", slot, params }, slot),
-    http: (slot) => splice({ op: "http", slot }, slot),
     close: () => session.close(),
     closed,
   };
-
-  /** Open a raw stream: send its header, read the one body that answers, then hand over the bytes. */
-  async function splice(header: unknown, slot: string): Promise<Duplex> {
-    let stream: YamuxStream | undefined;
-    try {
-      stream = session.open();
-      const writer = stream.writable.getWriter();
-      await writer.write(encodeFrame(header));
-      writer.releaseLock();
-      const reader = new FrameReader(stream.readable);
-      const first = await reader.next();
-      if (first === undefined) throw new NotConnected(slot);
-      answered(parseBody(first), slot);
-      return { readable: reader.rest(), writable: stream.writable };
-    } catch (error) {
-      stream?.reset();
-      if (
-        error instanceof Refused ||
-        error instanceof NotConnected ||
-        error instanceof OutcomeUnknown
-      )
-        throw error;
-      throw new NotConnected(slot);
-    }
-  }
 }
 
 export interface ConnectOptions<S extends InterfaceMap, X extends ExportMap> {
@@ -439,8 +394,7 @@ type None = Record<never, Interface>;
  * `start`, and use slots from `onBind`. `start` runs before the channel opens, so the Hub never
  * reaches an export before it is implemented. A slot is bound when the Hub says so; `onBind` runs
  * when it becomes usable (bound, or its provider back), and `on` handlers subscribe while it is
- * usable. `http` slots and
- * exports speak HTTP/1.1 over the Hub's stream, one request per stream, with `node:http`.
+ * usable.
  */
 export async function connect<
   const S extends InterfaceMap = None,

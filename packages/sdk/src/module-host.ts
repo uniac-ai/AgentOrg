@@ -1,5 +1,5 @@
-import type { Channel, ChannelExposure, Serve, ServeHandlers } from "./client.js";
-import { NotConnected, OutcomeUnknown, Refused } from "./errors.js";
+import type { Channel, ChannelExposure, ServeHandlers } from "./client.js";
+import { NotConnected } from "./errors.js";
 import type { InterfaceMap, Log } from "./module.js";
 import type { Binding, ModuleRuntime, RuntimeOptions } from "./runtime.js";
 
@@ -124,28 +124,6 @@ export class ModuleHost {
       slot,
       runtime.bind(slot, {
         call: (method, value) => open.call(name, method, value),
-        open: (params) => open.open(name, params),
-        fetch: async (request) => {
-          // HTTP/1.1 is spoken with node:http, loaded when an http slot is first used.
-          const { fetchOver } = await import("./client-http.js");
-          const stream = await open.http(name);
-          try {
-            return await fetchOver(stream, request, name);
-          } catch (error) {
-            // An abort keeps its own reason, and the provider's own SDK error is that error; a
-            // stream lost mid-request may have reached the provider.
-            if (
-              request.signal.aborted ||
-              error instanceof Refused ||
-              error instanceof NotConnected ||
-              error instanceof OutcomeUnknown
-            )
-              throw error;
-            throw new OutcomeUnknown(
-              `The http request on ${name} ended before its response: ${String(error)}`,
-            );
-          }
-        },
       }),
     );
     this.#resubscribe(slot);
@@ -191,14 +169,6 @@ export class ModuleHost {
       };
       ends.add(ended);
       return stop;
-    },
-    accept: (serve) => this.runtime.accepting(serve.export, serve.params),
-    serveHttp: (serve) => {
-      const handle = this.runtime.serving(serve.export);
-      return async (stream) => {
-        const { serveOver } = await import("./client-http.js");
-        await serveOver(stream, handle, this.#log);
-      };
     },
   };
 

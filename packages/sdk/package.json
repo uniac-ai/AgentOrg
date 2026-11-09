@@ -25,10 +25,6 @@
     "./person-commands": {
       "types": "./dist/src/person-commands.d.ts",
       "default": "./dist/src/person-commands.js"
-    },
-    "./http": {
-      "types": "./dist/src/client-http.d.ts",
-      "default": "./dist/src/client-http.js"
     }
   },
   "files": [

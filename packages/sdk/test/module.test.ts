@@ -24,22 +24,9 @@ const notes = defineInterface({
   },
   events: { written: event(z.object({ key: z.string() })) },
 });
-const pipe = defineInterface({
-  name: "pipe",
-  major: 1,
-  kind: "stream",
-  protocol: "raw",
-  open: z.object({ name: z.string() }),
-});
-const site = defineInterface({ name: "site", major: 1, kind: "http" });
-const pair = () => {
-  const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
-  return { readable, writable };
-};
-
 test("defineActor keeps its slots and exports", () => {
   const start = () => {};
-  const actor = defineActor({ slots: { notes }, exports: { site }, start });
+  const actor = defineActor({ slots: { notes }, exports: { notes }, start });
   assert.deepEqual(Object.keys(actor.slots), ["notes"]);
   assert.deepEqual(defineActor({ start }).slots, {});
 });
@@ -181,31 +168,6 @@ test("an rpc export is called through its handlers and emits validated events", 
     (e: Refused) => e.code === "invalid",
   );
   assert.deepEqual(t.logs, [{ level: "info", message: "ready", fields: { exports: 1 } }]);
-});
-
-test("stream and http slots and exports carry bytes and requests", async () => {
-  const opened: unknown[] = [];
-  const t = createTestContext(
-    defineActor({
-      slots: { pipe, site },
-      exports: { tunnel: pipe, web: site },
-      start(ctx) {
-        ctx.exports.tunnel.accept((params) => void opened.push(params));
-        ctx.exports.web.serve((request) => new Response(new URL(request.url).pathname));
-      },
-    }),
-  );
-  await t.start();
-  await assert.rejects(t.ctx.slots.pipe.open({ name: "a" }), NotConnected);
-  t.bind("pipe", () => pair());
-  assert.ok((await t.ctx.slots.pipe.open({ name: "a" })).readable instanceof ReadableStream);
-  await assert.rejects(t.ctx.slots.pipe.open({ name: 1 } as never), Refused);
-  t.bind("site", (request) => new Response(`got ${request.method}`));
-  assert.equal(await (await t.ctx.slots.site.fetch(new Request("http://x/"))).text(), "got GET");
-  await t.open("tunnel", { name: "b" }, pair());
-  assert.deepEqual(opened, [{ name: "b" }]);
-  assert.equal(await (await t.fetch("web", new Request("http://x/hello"))).text(), "/hello");
-  await assert.rejects(t.call("web", "read", {}), /isn't an rpc export/);
 });
 
 test("a handler learns who called, and an event can go to one subscriber", async () => {

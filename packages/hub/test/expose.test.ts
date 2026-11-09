@@ -30,9 +30,8 @@ const pipe = describeInterface(
   defineInterface({
     name: "pipe",
     major: 1,
-    kind: "stream",
-    protocol: "bytes",
-    open: z.object({}),
+    kind: "rpc",
+    methods: { read: method({ input: z.object({}), output: z.object({}) }) },
   }),
 );
 const refused = (code: string, text?: RegExp) => (error: unknown) =>
@@ -150,7 +149,7 @@ test("without both ends, expose is refused, naming the Actors and who could", (t
     );
 });
 
-test("expose refuses the Hub's own Actors, a missing export, another kind and a bad name", (t) => {
+test("expose refuses the Hub's own Actors, a missing export and a bad name", (t) => {
   const state = open(t);
   const { provider, agent } = cast(state);
   assert.throws(
@@ -160,10 +159,6 @@ test("expose refuses the Hub's own Actors, a missing export, another kind and a 
   assert.throws(
     () => state.expose(PERSON, { provider, export: "nope", to: agent }),
     refused("unknown"),
-  );
-  assert.throws(
-    () => state.expose(PERSON, { provider, export: "pipe", to: agent }),
-    refused("unsupported"),
   );
   for (const as of ["Board", "a.b", "x".repeat(49)])
     assert.throws(

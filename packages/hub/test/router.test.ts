@@ -47,18 +47,7 @@ const notes = describeInterface(
     events: { written: event(z.object({ text: z.string() })) },
   }),
 );
-const echo = describeInterface(
-  defineInterface({
-    name: "echo",
-    major: 1,
-    kind: "stream",
-    protocol: "bytes",
-    open: z.object({ prefix: z.string() }),
-  }),
-);
-const web = describeInterface(defineInterface({ name: "web", major: 1, kind: "http" }));
-const text = new TextEncoder();
-async function answerWith(writer: WritableStreamDefaultWriter<Uint8Array>, body: Body) {
+async function _answerWith(writer: WritableStreamDefaultWriter<Uint8Array>, body: Body) {
   await writer.write(encodeFrame(body));
   await writer.close();
 }
@@ -350,161 +339,6 @@ test("a reply that is neither a result nor an error is bad_output", async (t) =>
   assert.equal((await c.client.call("notes", "write", { text: "x" })).error?.code, "bad_output");
 });
 
-test("open and http streams are validated, then spliced", async (t) => {
-  const { actor, bind } = await setup(t);
-  const serve: Serve = async (header, stream, reader) => {
-    if (header.kind === "open") {
-      const { prefix } = header.params as { prefix: string };
-      const writer = stream.writable.getWriter();
-      if (prefix === "no") return answerWith(writer, wireError("Refused", "not today", "busy"));
-      await writer.write(encodeFrame(result({})));
-      await writer.write(text.encode(prefix));
-      writer.releaseLock();
-      await reader.rest().pipeTo(stream.writable);
-    } else if (header.kind === "http") {
-      const writer = stream.writable.getWriter();
-      await writer.write(encodeFrame(result({})));
-      await writer.write(text.encode("HTTP/1.1 200 OK\r\ncontent-length: 5\r\n\r\nhello"));
-      await writer.close();
-    }
-  };
-  const p = await actor("provider", { exports: { echo, web } }, serve);
-  const c = await actor("consumer", { slots: { echo, web } });
-  await bind(c.id, "echo", p.id, "echo");
-  await bind(c.id, "web", p.id, "web");
-
-  /** Open a stream, send bytes, and read the answer and then all the bytes that come back. */
-  const splice = async (header: unknown, bytes = "") => {
-    const stream = c.client.session.open();
-    const writer = stream.writable.getWriter();
-    await writer.write(encodeFrame(header));
-    if (bytes) await writer.write(text.encode(bytes));
-    await writer.close();
-    const reader = new FrameReader(stream.readable);
-    const first = reply(await reader.next());
-    if (!("result" in first)) return { first, rest: "" };
-    let rest = "";
-    for await (const chunk of reader.rest()) rest += new TextDecoder().decode(chunk);
-    return { first, rest };
-  };
-  assert.deepEqual(await splice({ op: "open", slot: "echo", params: { prefix: ">" } }, "ping"), {
-    first: { result: {} },
-    rest: ">ping",
-  });
-  const http = await splice({ op: "http", slot: "web" }, "GET / HTTP/1.1\r\nhost: x\r\n\r\n");
-  assert.match(http.rest, /200 OK[\s\S]*hello$/);
-  const refusals = [
-    [{ op: "open", slot: "echo", params: { prefix: 1 } }, "invalid"],
-    [{ op: "open", slot: "echo", params: { prefix: "no" } }, "busy"],
-    [{ op: "http", slot: "echo" }, "invalid"],
-  ] as const;
-  for (const [header, code] of refusals)
-    assert.equal((await splice(header)).first.error?.code, code, JSON.stringify(header));
-  assert.equal(
-    (await splice({ op: "open", slot: "none", params: {} })).first.error?.name,
-    "NotConnected",
-  );
-});
-
-test("a splice delivers a provider's whole answer though its channel goes while the consumer still sends", async (t) => {
-  const { actor, bind, hub } = await setup(t);
-  const size = 384 * 1024; // more than the consumer's window, so some is still in the Hub
-  let answered: () => void = () => {};
-  const done = new Promise<void>((resolve) => {
-    answered = resolve;
-  });
-  const serve: Serve = async (_, stream) => {
-    const writer = stream.writable.getWriter();
-    await writer.write(encodeFrame(result({})));
-    await writer.write(new Uint8Array(size).fill(1));
-    await writer.close();
-    answered();
-  };
-  const p = await actor("provider", { exports: { echo } }, serve);
-  const c = await actor("consumer", { slots: { echo } });
-  await bind(c.id, "echo", p.id, "echo");
-
-  const stream = c.client.session.open();
-  const writer = stream.writable.getWriter();
-  await writer.write(encodeFrame({ op: "open", slot: "echo", params: { prefix: "" } }));
-  const reader = new FrameReader(stream.readable);
-  assert.deepEqual(reply(await reader.next()), { result: {} });
-  // The consumer reads no more for now: the answer waits in its window and in the Hub. The
-  // provider has said all of it, then its channel goes.
-  await done;
-  p.client.close();
-  for (let waited = 0; hub.connected(p.id) && waited < 3000; waited += 5) await later(5);
-  assert.equal(hub.connected(p.id), false);
-  // The consumer still sends, more than a window, so this write ends only if the Hub takes it:
-  // it can't pass it on, which mustn't cost the consumer the answer.
-  await writer.write(new Uint8Array(512 * 1024));
-  let got = 0;
-  for await (const chunk of reader.rest()) got += chunk.length;
-  assert.equal(got, size);
-});
-
-test("a splice delivers a consumer's whole upload though its channel goes while the provider still sends", async (t) => {
-  const { actor, bind, hub } = await setup(t);
-  const size = 384 * 1024; // more than the provider's window, so some is still in the Hub
-  let provider: { stream: YamuxStream; reader: FrameReader } | undefined;
-  const serve: Serve = async (_, stream, reader) => {
-    const writer = stream.writable.getWriter();
-    await writer.write(encodeFrame(result({})));
-    writer.releaseLock();
-    provider = { stream, reader };
-  };
-  const p = await actor("provider", { exports: { echo } }, serve);
-  const c = await actor("consumer", { slots: { echo } });
-  await bind(c.id, "echo", p.id, "echo");
-
-  const stream = c.client.session.open();
-  const writer = stream.writable.getWriter();
-  await writer.write(encodeFrame({ op: "open", slot: "echo", params: { prefix: "" } }));
-  assert.deepEqual(reply(await new FrameReader(stream.readable).next()), { result: {} });
-  // The consumer says all of it while the provider reads nothing yet, then its channel goes.
-  await writer.write(new Uint8Array(size).fill(1));
-  await writer.close();
-  c.client.close();
-  for (let waited = 0; hub.connected(c.id) && waited < 3000; waited += 5) await later(5);
-  assert.equal(hub.connected(c.id), false);
-  assert.ok(provider);
-  // The provider still sends, more than a window, so this write ends only if the Hub takes it:
-  // it can't pass it on, which mustn't cost the provider the upload.
-  const out = provider.stream.writable.getWriter();
-  await out.write(new Uint8Array(512 * 1024));
-  out.releaseLock();
-  let got = 0;
-  for await (const chunk of provider.reader.rest()) got += chunk.length;
-  assert.equal(got, size);
-});
-
-test("a reset after one side has finished still reaches the other side", async (t) => {
-  const { actor, bind } = await setup(t);
-  let ended: unknown;
-  const serve: Serve = async (_, stream) => {
-    const writer = stream.writable.getWriter();
-    await writer.write(encodeFrame(result({})));
-    // Streams until the other end goes.
-    try {
-      for (;;) await writer.write(new Uint8Array(64 * 1024));
-    } catch (error) {
-      ended = error;
-    }
-  };
-  const p = await actor("provider", { exports: { echo } }, serve);
-  const c = await actor("consumer", { slots: { echo } });
-  await bind(c.id, "echo", p.id, "echo");
-  const stream = c.client.session.open();
-  const writer = stream.writable.getWriter();
-  await writer.write(encodeFrame({ op: "open", slot: "echo", params: { prefix: "" } }));
-  // The consumer has said all it will, then goes: the provider's stream is reset, not drained.
-  await writer.close();
-  assert.deepEqual(reply(await new FrameReader(stream.readable).next()), { result: {} });
-  stream.reset();
-  for (let waited = 0; ended === undefined && waited < 3000; waited += 5) await later(5);
-  assert.ok(ended instanceof Error, "the provider's writes end");
-});
-
 test("management goes only through the hub's exports, and the live audit feed carries it", async (t) => {
   const { actor, bind, person, hub } = await setup(t);
   const p = await actor("provider", { exports: { notes } }, notesProvider().serve);
@@ -564,9 +398,17 @@ test("admission: a credential, hello first, nothing else before it, and a deadli
   socket.close();
 });
 
+test("an interface of another kind, from an older program, is refused at hello", async (t) => {
+  const { actor } = await setup(t);
+  const schemas = { id: "web@1", kind: "http" };
+  const old = { ...schemas, hash: hashInterface(schemas as never) };
+  const older = await actor("older", { exports: { web: old as never } });
+  assert.equal(older.client.admitted.error?.code, "invalid");
+});
+
 test("a declared interface whose hash doesn't match its schemas is refused at hello", async (t) => {
   const { actor } = await setup(t);
-  const forged = { ...notes, hash: echo.hash };
+  const forged = { ...notes, hash: `sha256-${"0".repeat(64)}` };
   const forger = await actor("forger", { exports: { notes: forged } });
   assert.equal(forger.client.admitted.error?.code, "invalid");
   const noMethods = await actor("odd", {
@@ -634,37 +476,6 @@ test("a newer channel for an Actor replaces the older one", async (t) => {
   await first.session.closed;
   assert.ok(hub.connected(made.result.actorId));
   void actor;
-});
-
-test("splices end with their binding, and a closed Actor's channel goes", async (t) => {
-  const { actor, bind, person, hub } = await setup(t);
-  const serve: Serve = async (_, stream, reader) => {
-    const writer = stream.writable.getWriter();
-    await writer.write(encodeFrame(result({})));
-    writer.releaseLock();
-    await reader
-      .rest()
-      .pipeTo(stream.writable)
-      .catch(() => {});
-  };
-  const p = await actor("provider", { exports: { echo } }, serve);
-  const c = await actor("consumer", { slots: { echo } });
-  await bind(c.id, "echo", p.id, "echo");
-  const stream = c.client.session.open();
-  const writer = stream.writable.getWriter();
-  await writer.write(encodeFrame({ op: "open", slot: "echo", params: { prefix: "" } }));
-  const reader = new FrameReader(stream.readable);
-  assert.deepEqual(reply(await reader.next()), { result: {} });
-  await person.call("grants", "unbind", { consumer: c.id, slot: "echo" });
-  await assert.rejects(
-    (async () => {
-      for await (const _ of reader.rest());
-    })(),
-    /reset/,
-  );
-  await person.call("actors", "close", { actorId: c.id });
-  await c.client.session.closed;
-  assert.equal(hub.connected(c.id), false);
 });
 
 test("a call on an unbound slot is audited without a provider, and audit subscribers hear on", async (t) => {
@@ -785,75 +596,6 @@ test("a reply too large for a frame is refused as too_large, not left hanging", 
     hub.state.createActor(PERSON, { name: `actor-${"n".repeat(100)}-${i}` });
   const listed = await person.call("actors", "list", {});
   assert.equal(listed.error?.code, "too_large");
-});
-
-test("an open the provider refuses, or whose binding goes while it decides, leaves nothing open", async (t) => {
-  const { actor, bind, person } = await setup(t);
-  let decide = () => {};
-  const served: FrameReader[] = [];
-  const p = await actor("provider", { exports: { echo } }, async (header, stream, reader) => {
-    served.push(reader);
-    const writer = stream.writable.getWriter();
-    if ((header.params as { prefix: string }).prefix === "wait")
-      await new Promise<void>((resolve) => {
-        decide = resolve;
-      });
-    await writer.write(encodeFrame(wireError("Refused", "no", "busy")));
-    await writer.close().catch(() => {});
-  });
-  const c = await actor("consumer", { slots: { echo } });
-  await bind(c.id, "echo", p.id, "echo");
-  const open = async (prefix: string) => {
-    const stream = c.client.session.open();
-    const writer = stream.writable.getWriter();
-    await writer.write(encodeFrame({ op: "open", slot: "echo", params: { prefix } }));
-    await writer.write(text.encode("early bytes"));
-    await writer.close();
-    const frame = await new FrameReader(stream.readable).next().catch(() => undefined);
-    // A reset reads as no answer at all.
-    return frame === undefined
-      ? ({ error: { name: "reset", message: "" } } as Reply)
-      : reply(frame);
-  };
-  assert.equal((await open("x")).error?.code, "busy");
-  await assert.rejects(
-    served[0]?.next() as Promise<unknown>,
-    "the Hub ends its stream to the provider",
-  );
-  // Refused opens with bytes the Hub never reads don't use up the channel's streams.
-  for (let i = 0; i < 300; i++) assert.equal((await open("x")).error?.code, "busy");
-
-  const pending = open("wait");
-  while (served.length < 302) await later(5);
-  await person.call("grants", "unbind", { consumer: c.id, slot: "echo" });
-  decide();
-  assert.match(String((await pending).error?.name), /NotConnected|reset/);
-});
-
-test("a splice delivers everything when the provider's channel ends after it finishes", async (t) => {
-  const { actor, bind } = await setup(t);
-  const payload = "z".repeat(400 * 1024);
-  let provider: Client | undefined;
-  const p = await actor("provider", { exports: { echo } }, async (_, stream) => {
-    const writer = stream.writable.getWriter();
-    await writer.write(encodeFrame(result({})));
-    await writer.write(text.encode(payload));
-    await writer.close();
-    provider?.close();
-  });
-  provider = p.client;
-  const c = await actor("consumer", { slots: { echo } });
-  await bind(c.id, "echo", p.id, "echo");
-  const stream = c.client.session.open();
-  await stream.writable
-    .getWriter()
-    .write(encodeFrame({ op: "open", slot: "echo", params: { prefix: "" } }));
-  await later(100); // the provider is done and gone before the opener reads anything
-  const reader = new FrameReader(stream.readable);
-  assert.deepEqual(reply(await reader.next()), { result: {} });
-  let got = 0;
-  for await (const chunk of reader.rest()) got += chunk.length;
-  assert.equal(got, payload.length);
 });
 
 test("the compiled cache forgets the oldest interfaces, boolean schemas included", async (t) => {
@@ -1122,7 +864,7 @@ test("a slow caller of a shared provider doesn't hold up its other callers", asy
 test("an Actor learns which of its slots are bound: at hello, then by notice on each change", async (t) => {
   const { actor, bind, person } = await setup(t);
   const p = await actor("provider", { exports: { notes } }, notesProvider().serve);
-  const c = await actor("consumer", { slots: { notes, echo } });
+  const c = await actor("consumer", { slots: { notes, other: notes } });
   assert.deepEqual((c.client.admitted.result as { bound: string[] }).bound, []);
   assert.deepEqual([...(person.admitted.result as { bound: string[] }).bound].sort(), [
     "actors",

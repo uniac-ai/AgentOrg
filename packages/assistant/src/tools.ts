@@ -1,7 +1,6 @@
 /**
- * The assistant's tools, gathered afresh for each model request. A typed slot gives one function
- * per method, whose parameters are the JSON Schema the Hub checks the call against. A `tools@1`
- * slot gives whatever it lists now, with its server's own input schemas. Each is offered as
+ * The assistant's tools, gathered afresh for each model request. A `tools@1` slot gives whatever
+ * it lists now, with its server's own input schemas. Each is offered as
  * `<slot>__<name>`, and a call runs through the slot, so the Hub checks and audits it like any
  * other.
  */
@@ -16,10 +15,6 @@ import {
 import type { z } from "zod";
 import { head } from "./history.js";
 
-export interface ToolSlot {
-  readonly bound: boolean;
-  readonly call: Readonly<Record<string, (input: never) => Promise<unknown>>>;
-}
 /** How a function call ended, as the model and the record see it. */
 export interface Outcome {
   output: string;
@@ -75,24 +70,6 @@ export function capped(text: string): string {
   if (bytes.byteLength <= MAX_OUTPUT) return text;
   const head = new TextDecoder().decode(bytes.subarray(0, MAX_OUTPUT - 16)).replace(/�$/, "");
   return `${head}… (cut)`;
-}
-
-/** The methods of a typed slot, as tools. An unbound slot, or another kind, gives none. */
-export function methodsOf(name: string, described: DescribedInterface, slot: ToolSlot) {
-  if (!slot.bound || described.kind !== "rpc") return [];
-  return Object.entries(described.methods).map(
-    ([method, { input }]): Candidate => ({
-      slot: name,
-      name: method,
-      description: `${method} on ${name} (${described.id})`,
-      // A described schema is JSON by construction.
-      parameters: input as Candidate["parameters"],
-      run: async (args) => {
-        const call = slot.call[method] as (input: unknown) => Promise<unknown>;
-        return { output: JSON.stringify((await call(args)) ?? {}), ok: true };
-      },
-    }),
-  );
 }
 
 /** Whether a slot is a `tools@1`, whose tools are whatever it lists. */
