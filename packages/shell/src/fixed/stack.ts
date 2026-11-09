@@ -109,8 +109,8 @@ export const missingNeeds = (unit: DraftUnit, above: readonly DraftUnit[]) =>
 /** A template or an agent can be finished: a name always, and for an agent everything required. */
 export function isReady(draft: Draft): boolean {
   if (!draft.name.trim()) return false;
-  if (draft.mode === "template") return !!draft.base;
   if (!draft.base || draft.units.some((u) => !u.unit)) return false;
+  if (draft.mode === "template") return true;
   const answered = draft.base.asks.every((a) => a.optional || draft.answers[a.id]?.trim());
   return (
     answered &&
@@ -181,7 +181,7 @@ export function draftFrom(
   return {
     mode,
     ...(template ? { from: { id: template.id, title: template.title } } : {}),
-    name: "",
+    name: mode === "template" && template ? `${template.title} copy` : "",
     purpose: mode === "template" ? (template?.description ?? "") : "",
     ...(base ? { base } : {}),
     answers: { ...template?.base.answers },
@@ -197,4 +197,71 @@ export function draftFrom(
     }),
     problems: [],
   };
+}
+
+const slugOf = (title: string, taken: readonly string[]) => {
+  const slug =
+    title
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^[^a-z]+/, "")
+      .slice(0, 56)
+      .replace(/-+$/, "") || "template";
+  let id = slug;
+  for (let n = 2; taken.includes(id); n++) id = `${slug}-${n}`;
+  return id;
+};
+
+/** A template as management keeps it: providers by name, and no secret. */
+export function toTemplate(
+  draft: Draft,
+  title: string,
+  description: string,
+  taken: readonly string[],
+): Template {
+  const base = draft.base as CatalogBase;
+  const answers = given(draft.answers);
+  return {
+    id: slugOf(title, taken),
+    title,
+    description,
+    ...(draft.from ? { from: draft.from.id } : {}),
+    base: {
+      provider: base.providerName,
+      creatable: base.id,
+      ...(Object.keys(answers).length > 0 ? { answers } : {}),
+    },
+    units: draft.units.map((u) => {
+      const { values } = filled(u);
+      return {
+        provider: (u.unit as CatalogUnit).providerName,
+        unit: u.id,
+        ...(Object.keys(values).length > 0 ? { values } : {}),
+      };
+    }),
+  };
+}
+
+/** A unit's answers in words: each choice's title, each toggle that's on, and any folder. */
+export function partsOf(values: Values, form: readonly Field[]): string[] {
+  return form.flatMap((field) => {
+    if (!isShown(field, form, values)) return [];
+    const value = fieldValue(field, values);
+    if (field.value === "boolean") return value === true ? [field.title] : [];
+    if (field.type === "directory" && typeof value === "string" && value) return [value];
+    const title = field.options?.find((o) => o.value === value)?.title;
+    return title ? [title] : [];
+  });
+}
+
+/** What each chosen option means, in the unit's own words, in the form's order. */
+export function chosenNotes(values: Values, form: readonly Field[]): string[] {
+  return form.flatMap((field) => {
+    if (!isShown(field, form, values)) return [];
+    const value = fieldValue(field, values);
+    const chosen = Array.isArray(value) ? value : [value];
+    return (field.options ?? []).flatMap((o) =>
+      chosen.includes(o.value) && o.description ? [o.description] : [],
+    );
+  });
 }

@@ -1,6 +1,9 @@
 // One field of a unit's form, drawn from its description. A type this host doesn't know gets the
 // plain control for the kind of value it holds.
-import { api, useLoad } from "../data.ts";
+import { FolderOpenIcon } from "lucide-react";
+import { useState } from "react";
+import { useLoad } from "../data.ts";
+import { Button } from "../ui/button.tsx";
 import { Checkbox } from "../ui/checkbox.tsx";
 import { Field as FieldBox, FieldDescription, FieldError, FieldLabel } from "../ui/field.tsx";
 import { Input } from "../ui/input.tsx";
@@ -8,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { Switch } from "../ui/switch.tsx";
 import { Textarea } from "../ui/textarea.tsx";
 import { type ConnectionEntry, listConnections } from "./data.ts";
+import { FolderPicker } from "./folder-picker.tsx";
 import { Jump } from "./parts.tsx";
 import type { Field, Values } from "./stack.ts";
 import { fieldValue } from "./stack.ts";
@@ -165,6 +169,7 @@ export function FormField({
   onSecret(value: string): void;
 }) {
   const control = controlOf(field);
+  const [browsing, setBrowsing] = useState(false);
   const value = fieldValue(field, values);
   const text = typeof value === "string" || typeof value === "number" ? String(value) : "";
   const list = Array.isArray(value) ? value : [];
@@ -245,12 +250,36 @@ export function FormField({
         />
       )}
       {(control === "text" || control === "directory") && (
-        <Input
-          id={id}
-          spellCheck={false}
-          className={control === "directory" ? "font-mono text-xs" : ""}
-          value={text}
-          onChange={(e) => onChange(e.target.value)}
+        <div className="flex items-center gap-1">
+          <Input
+            id={id}
+            spellCheck={false}
+            className={control === "directory" ? "font-mono text-xs" : ""}
+            value={text}
+            onChange={(e) => onChange(e.target.value)}
+          />
+          {control === "directory" && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              aria-label={`Browse for ${field.title}`}
+              onClick={() => setBrowsing(true)}
+            >
+              <FolderOpenIcon />
+            </Button>
+          )}
+        </div>
+      )}
+      {browsing && (
+        <FolderPicker
+          title={field.title}
+          {...(text.startsWith("/") ? { start: text } : {})}
+          onClose={() => setBrowsing(false)}
+          onPick={(path) => {
+            onChange(path);
+            setBrowsing(false);
+          }}
         />
       )}
       {notes}

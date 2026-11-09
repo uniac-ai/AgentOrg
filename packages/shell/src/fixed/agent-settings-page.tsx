@@ -12,6 +12,7 @@ import {
 } from "../ui/dropdown-menu.tsx";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select.tsx";
 import {
+  type AgentDetail,
   ago,
   type ChatMessage,
   getAgent,
@@ -102,6 +103,11 @@ export function AgentSettingsPage({ agent: id }: { agent: string }) {
                 key={mcp.slot}
                 mcp={mcp}
                 agentName={agent.name}
+                unit={
+                  mcp.origin?.madeFor
+                    ? agent.units.find((u) => u.instance === mcp.instance)?.title
+                    : undefined
+                }
                 providers={providers ?? []}
                 onRemove={() => change("unexpose", { slot: mcp.slot })}
               />
@@ -131,6 +137,9 @@ export function AgentSettingsPage({ agent: id }: { agent: string }) {
                 </span>
                 <span className="min-w-0 flex-1 truncate text-[13px] text-muted-foreground tight:hidden">
                   {skill.description}
+                </span>
+                <span className="shrink-0 text-[13px] text-muted-foreground">
+                  {givenBy(agent.units, skill)}
                 </span>
                 <Button
                   variant="ghost"
@@ -197,15 +206,23 @@ function AddMenu({
   );
 }
 
+/** The unit that came with a skill; none for a unit that only exposes the skill it was told to. */
+function givenBy(units: AgentDetail["units"], skill: AgentDetail["skills"][number]) {
+  const unit = units.find((u) => u.instance === skill.instance);
+  return unit && !Object.values(unit.values).includes(skill.name) ? unit.title : undefined;
+}
+
 /** Where a connection is, how it got there, and what it offers. */
 function McpRow({
   mcp,
   agentName,
+  unit,
   providers,
   onRemove,
 }: {
   mcp: Mcp;
   agentName: string;
+  unit?: string;
   providers: McpProvider[];
   onRemove(): void;
 }) {
@@ -226,9 +243,10 @@ function McpRow({
         <span className="min-w-0 truncate text-[13px] text-muted-foreground tight:col-span-2 tight:row-start-3">
           {origin && (
             <Jump to={{ screen: "mcps", focus: mcp.connection }}>
-              {origin.madeFor
-                ? `Created for this agent${provider ? ` by ${provider}` : ""}`
-                : "Connected by you"}
+              {unit ??
+                (origin.madeFor
+                  ? `Created for this agent${provider ? ` by ${provider}` : ""}`
+                  : "Connected by you")}
             </Jump>
           )}
         </span>

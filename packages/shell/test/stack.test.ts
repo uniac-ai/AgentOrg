@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   type CatalogUnit,
+  chosenNotes,
   type Draft,
   type Field,
   givesOf,
@@ -116,4 +117,39 @@ test("the stack holds only what's shown and filled in, with secrets apart", () =
   assert.deepEqual(stack.units, [
     { provider: "p", unit: "computer", values: { access: "none" }, secrets: { key: "k" } },
   ]);
+});
+
+test("what's chosen says what it means, for any unit, in the form's order", () => {
+  const described: Field[] = [
+    {
+      id: "one",
+      type: "choice",
+      value: "string",
+      title: "One",
+      options: [
+        { value: "a", title: "A", description: "First." },
+        { value: "b", title: "B" },
+      ],
+    },
+    {
+      id: "many",
+      type: "choices",
+      value: "strings",
+      title: "Many",
+      options: [
+        { value: "x", title: "X", description: "Second." },
+        { value: "y", title: "Y", description: "Not this." },
+      ],
+    },
+    {
+      id: "gone",
+      type: "choice",
+      value: "string",
+      title: "Gone",
+      default: "z",
+      visible: { field: "one", in: ["b"] },
+      options: [{ value: "z", title: "Z", description: "Hidden." }],
+    },
+  ];
+  assert.deepEqual(chosenNotes({ one: "a", many: ["x"] }, described), ["First.", "Second."]);
 });

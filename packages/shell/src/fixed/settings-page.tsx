@@ -10,8 +10,9 @@ import { Jump, rowClass, Scroll, Section, UsedBy } from "./parts.tsx";
 const countOf = (n: number) => `${n} ${n === 1 ? "connection" : "connections"}`;
 const THREE = "grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)_minmax(0,1fr)] tight:grid-cols-1";
 
-type Tab = "skills" | "mcps" | "providers" | "account";
+type Tab = "templates" | "skills" | "mcps" | "providers" | "account";
 const ROUTES: Record<Tab, Route> = {
+  templates: { screen: "settings", tab: "templates" },
   skills: { screen: "skills" },
   mcps: { screen: "mcps" },
   providers: { screen: "settings", tab: "providers" },
@@ -33,6 +34,7 @@ export function SettingsFrame({
       <div className="no-bar flex shrink-0 items-center justify-between gap-2 overflow-x-auto px-5 pt-4 tight:px-3.5">
         <Tabs value={tab} onValueChange={(next) => go(ROUTES[next as Tab])}>
           <TabsList>
+            <TabsTrigger value="templates">Templates</TabsTrigger>
             <TabsTrigger value="skills">Skills</TabsTrigger>
             <TabsTrigger value="mcps">
               <span className="tight:hidden">MCP connections</span>

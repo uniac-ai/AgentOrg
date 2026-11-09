@@ -107,15 +107,15 @@ export function useAction() {
 /** The hash route: home, an agent, or settings. */
 export type Route =
   | { screen: "home" }
-  | { screen: "settings"; tab: "providers" | "account" }
+  | { screen: "settings"; tab: "templates" | "providers" | "account" }
   | { screen: "agent"; agent: string }
   | { screen: "agent-settings"; agent: string }
   | { screen: "skills" | "mcps"; focus?: string; adding?: boolean };
 function routeOf(hash: string): Route {
   // Settings opens on its first tab.
-  if (hash === "#/settings") return { screen: "skills" };
-  const tab = /^#\/settings\/(providers|account)$/.exec(hash)?.[1];
-  if (tab) return { screen: "settings", tab: tab as "providers" | "account" };
+  if (hash === "#/settings") return { screen: "settings", tab: "templates" };
+  const tab = /^#\/settings\/(templates|providers|account)$/.exec(hash)?.[1];
+  if (tab) return { screen: "settings", tab: tab as "templates" | "providers" | "account" };
   const managed = /^#\/(skills|mcps)(?:\/(add|s\/([^/]+)))?$/.exec(hash);
   if (managed)
     return {

@@ -2,10 +2,12 @@ import { MessageCircleIcon, Settings2Icon } from "lucide-react";
 import { useState } from "react";
 import { api, go, useLoad } from "../data.ts";
 import { Button } from "../ui/button.tsx";
+import { useBuilding } from "./building.tsx";
 import { useChats } from "./chats.tsx";
 import { More, Power, Tip } from "./controls.tsx";
 import { ago, useCreatables } from "./data.ts";
 import { Nothing, Scroll, StateDot } from "./parts.tsx";
+import { chosenNotes, partsOf } from "./stack.ts";
 import { useAgents } from "./watch.tsx";
 
 /** Held for what comes later: the frame is real, and nothing in it is invented. */
@@ -39,6 +41,7 @@ export function AgentPage({ agent: id }: { agent: string }) {
   const { chatWith } = useChats();
   const watched = byId.get(id);
   const creatables = useCreatables();
+  const { catalog } = useBuilding();
   const [failed, setFailed] = useState<string>();
   const slot = watched?.slot;
   const running = watched?.entry.status.state === "running";
@@ -103,6 +106,27 @@ export function AgentPage({ agent: id }: { agent: string }) {
           </span>
           <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{ago(now.at)}</span>
         </div>
+
+        {detail?.units.some((u) => u.values) && (
+          <div className="-mt-3 flex flex-col text-[13px] text-muted-foreground">
+            {detail.units.map((applied) => {
+              const form =
+                catalog.units.find((u) => u.provider === applied.provider && u.id === applied.unit)
+                  ?.form ?? [];
+              const parts = partsOf(applied.values, form);
+              return (
+                parts.length > 0 && (
+                  <p key={applied.instance} className="min-w-0">
+                    {[
+                      `${applied.title}: ${parts.join(", ")}.`,
+                      ...chosenNotes(applied.values, form),
+                    ].join(" ")}
+                  </p>
+                )
+              );
+            })}
+          </div>
+        )}
 
         <div className="-mx-2 grid grid-cols-4 gap-1 tight:grid-cols-2">
           <Fact

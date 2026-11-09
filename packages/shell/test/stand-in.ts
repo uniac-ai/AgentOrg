@@ -9,6 +9,7 @@ import {
   agents as agentsInterface,
   chat as chatInterface,
   connections as connectionsInterface,
+  folders as foldersInterface,
   hubBindings,
   skills as skillsInterface,
 } from "@agentorg/interfaces";
@@ -43,9 +44,10 @@ export interface Agent {
   status: AgentStatus;
   provider: string;
   creatable: string;
-  skills: { name: string; description: string }[];
-  mcp: { slot: string; connection: string }[];
+  skills: { name: string; description: string; instance?: string }[];
+  mcp: { slot: string; connection: string; instance?: string }[];
   purpose?: string;
+  units?: z.output<typeof agentsInterface.methods.get.output>["units"];
   chat: { status: Status; messages: Message[]; current?: string };
 }
 
@@ -264,7 +266,14 @@ const UNITS: Units["units"] = [
         title: "Working directory",
         required: true,
         description: "The folder it works in. It is never deleted.",
-        visible: { field: "access", in: ["read", "terminal"] },
+        visible: { field: "where", in: ["local"] },
+      },
+      {
+        id: "inside",
+        type: "text",
+        value: "string",
+        title: "Path in the container",
+        visible: { field: "where", in: ["container"] },
       },
       {
         id: "image",
@@ -365,6 +374,14 @@ const TEMPLATES: Template[] = [
   },
 ];
 
+const FOLDERS: Record<string, string[]> = {
+  "/": ["home"],
+  "/home": ["me"],
+  "/home/me": ["Agents", "Documents"],
+  "/home/me/Agents": ["Foreman"],
+  "/home/me/Agents/Foreman": [],
+};
+
 interface Spec {
   input: z.ZodType;
   output: z.ZodType;
@@ -404,6 +421,7 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
   }>();
   const creatables = options.creatables ?? CREATABLES;
   let problems: StackProblem[] = [];
+  let templates = [...TEMPLATES];
 
   const emit = (slot: string, event: string, payload: unknown) => {
     for (const s of subscribers)
@@ -438,23 +456,38 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
           ...entry(agent),
           instructions: "Help.",
           skills: agent.skills,
-          mcp: agent.mcp.map(({ slot, connection }) => {
+          mcp: agent.mcp.map(({ slot, connection, instance }) => {
             const found = connections.get(connection) as Connection;
-            return { slot, connection, origin: found.origin, status: found.status };
+            return {
+              slot,
+              connection,
+              origin: found.origin,
+              status: found.status,
+              ...(instance ? { instance } : {}),
+            };
           }),
-          units: [],
+          units: agent.units ?? [],
         };
       },
       units: () => ({
         bases: creatables.map((c) => ({ ...c, providerName: "AgentOrg" })),
         units: UNITS,
       }),
-      templates: () => ({ templates: TEMPLATES }),
+      templates: () => ({ templates }),
+      saveTemplate: (input) => {
+        templates.push(input as unknown as Template);
+        return {};
+      },
+      removeTemplate: ({ id }) => {
+        templates = templates.filter((t) => t.id !== id);
+        return {};
+      },
       check: () => ({ problems }),
       create: (input) => {
         const made = `a-${agents.size + 1}`;
-        const { base } = input.stack as unknown as {
+        const { base, units } = input.stack as unknown as {
           base: { provider: string; creatable: string };
+          units: { provider: string; unit: string; values: Record<string, string | boolean> }[];
         };
         agents.set(made, {
           agent: made,
@@ -462,9 +495,22 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
           status: { state: "starting" },
           provider: base.provider,
           creatable: base.creatable,
-          skills: [],
-          mcp: [],
+          skills:
+            units.length > 0
+              ? [{ name: "files", description: "Works with files", instance: "i-0" }]
+              : [],
+          mcp:
+            units.length > 0 ? [{ slot: "computer", connection: "c-notes", instance: "i-0" }] : [],
           ...(input.purpose ? { purpose: String(input.purpose) } : {}),
+          units: units.map((u, i) => ({
+            instance: `i-${i}`,
+            provider: u.provider,
+            unit: u.unit,
+            title: UNITS.find((c) => c.id === u.unit)?.title ?? u.unit,
+            values: u.values,
+            needs: {},
+            status: { state: "connected" as const },
+          })),
           chat: { status: { state: "idle" }, messages: [] },
         });
         changed();
@@ -715,6 +761,16 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
     if (slot === "login") {
       if (method === "logout") return { revoked: true };
       return { state: "signed_in", account: { email: "sam@example.com", plan: "Plus" } };
+    }
+    if (slot === "folders") {
+      const path = String(input.path ?? "/home/me");
+      const under = FOLDERS[path];
+      if (!under) throw new Refusal("unknown", "There's no such folder.");
+      return foldersInterface.methods.list.output.parse({
+        path,
+        ...(path === "/" ? {} : { parent: path.split("/").slice(0, -1).join("/") || "/" }),
+        folders: under.map((name) => ({ name })),
+      });
     }
     if (slot === "store") {
       if (method === "get")

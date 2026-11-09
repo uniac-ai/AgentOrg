@@ -24,6 +24,7 @@ import { McpsPage } from "./mcps-page.tsx";
 import { StateDot } from "./parts.tsx";
 import { SettingsPage } from "./settings-page.tsx";
 import { SkillsPage } from "./skills-page.tsx";
+import { TemplatesPage } from "./templates-page.tsx";
 import { AgentsProvider, useAgents } from "./watch.tsx";
 
 export function FixedShell({ login }: { login?: LoginStatus }) {
@@ -43,7 +44,7 @@ export function FixedShell({ login }: { login?: LoginStatus }) {
   );
 }
 
-const SETTINGS: Route = { screen: "skills" };
+const SETTINGS: Route = { screen: "settings", tab: "templates" };
 const inSettings = (route: Route) =>
   route.screen === "skills" || route.screen === "mcps" || route.screen === "settings";
 
@@ -177,7 +178,12 @@ function Frame({ login }: { login?: LoginStatus }) {
             )}
             {route.screen === "skills" && <SkillsPage focus={route.focus} adding={route.adding} />}
             {route.screen === "mcps" && <McpsPage focus={route.focus} adding={route.adding} />}
-            {route.screen === "settings" && <SettingsPage tab={route.tab} login={login} />}
+            {route.screen === "settings" &&
+              (route.tab === "templates" ? (
+                <TemplatesPage />
+              ) : (
+                <SettingsPage tab={route.tab} login={login} />
+              ))}
           </main>
           <ChatPanel />
           <BuildPanel />

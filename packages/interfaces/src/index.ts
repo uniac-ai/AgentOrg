@@ -14,6 +14,7 @@ export {
   SkillPath,
 } from "./agent-settings.js";
 export { ChatMessage, ChatState, ChatStatus, ChatTool, chat } from "./chat.js";
+export { FOLDERS_MAX, folders } from "./folders.js";
 export {
   Actor,
   ActorState,
