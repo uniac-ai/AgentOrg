@@ -40,7 +40,8 @@ export const computerUnit = (found: Found): z.input<typeof Unit> => ({
       value: "string",
       title: "Service",
       description: "Where its computer runs, and how that's kept apart from everything else.",
-      required: true,
+      // Not required: with none found, `check` says what to do, which is more than "fill this in".
+      ...(found ? { default: LOCAL } : {}),
       options: [
         { value: LOCAL, title: "This machine", description: localLine(found) },
         {
