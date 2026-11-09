@@ -35,11 +35,49 @@ export interface Draft {
   mode: "agent" | "template";
   from?: Pick<Template, "id" | "title">;
   name: string;
+  /** The name used if none is typed; none for a template, which has to be named. */
+  suggested: string;
   purpose: string;
   base?: CatalogBase;
   answers: Record<string, string>;
   units: DraftUnit[];
   problems: StackProblem[];
+}
+
+const NAMES = [
+  "Birch",
+  "Cedar",
+  "Dash",
+  "Ember",
+  "Fern",
+  "Grove",
+  "Hazel",
+  "Indigo",
+  "Juniper",
+  "Kestrel",
+  "Linden",
+  "Maple",
+  "Nova",
+  "Onyx",
+  "Pine",
+  "Quill",
+  "Robin",
+  "Sage",
+  "Tansy",
+  "Umber",
+  "Vale",
+  "Wren",
+  "Yarrow",
+  "Zephyr",
+];
+
+/** A name to offer, not one an agent already has. */
+export function pickName(taken: readonly string[], random = Math.random): string {
+  const free = NAMES.filter((name) => !taken.includes(name));
+  if (free.length > 0) return free[Math.floor(random() * free.length)] as string;
+  let n = 2;
+  while (taken.includes(`${NAMES[0]} ${n}`)) n++;
+  return `${NAMES[0]} ${n}`;
 }
 
 const blank = (value: Value | undefined) =>
@@ -106,9 +144,13 @@ export const missingNeeds = (unit: DraftUnit, above: readonly DraftUnit[]) =>
     (kind) => !above.some((u) => u.unit?.gives.results.includes(kind)),
   );
 
+/** What it will be called: what was typed, or else what was offered. */
+export const nameOf = (draft: Pick<Draft, "name" | "suggested">) =>
+  draft.name.trim() || draft.suggested;
+
 /** A template or an agent can be finished: a name always, and for an agent everything required. */
 export function isReady(draft: Draft): boolean {
-  if (!draft.name.trim()) return false;
+  if (!nameOf(draft)) return false;
   if (!draft.base || draft.units.some((u) => !u.unit)) return false;
   if (draft.mode === "template") return true;
   const answered = draft.base.asks.every((a) => a.optional || draft.answers[a.id]?.trim());
@@ -182,6 +224,7 @@ export function draftFrom(
     mode,
     ...(template ? { from: { id: template.id, title: template.title } } : {}),
     name: mode === "template" && template ? `${template.title} copy` : "",
+    suggested: "",
     purpose: mode === "template" ? (template?.description ?? "") : "",
     ...(base ? { base } : {}),
     answers: { ...template?.base.answers },

@@ -1,4 +1,4 @@
-// The stack being built, kept here so that putting the popup away loses nothing.
+// The stack being built in the Create window. It lasts as long as the window is open.
 import { createContext, useContext, useRef, useState } from "react";
 import { api, useLoad } from "../data.ts";
 import {
@@ -8,10 +8,12 @@ import {
   type Draft,
   type DraftUnit,
   draftFrom,
+  pickName,
   type StackProblem,
   type Template,
   toTemplate,
 } from "./stack.ts";
+import { useAgents } from "./watch.tsx";
 
 const EMPTY: Catalog = { bases: [], units: [], templates: [] };
 
@@ -27,6 +29,7 @@ function useBuildingState() {
   const [version, setVersion] = useState(0);
   const catalog = useLoad(readCatalog, ["actors"], [version]).value ?? EMPTY;
   const reread = () => setVersion((was) => was + 1);
+  const { list } = useAgents();
   const [draft, setDraft] = useState<Draft>();
   const [open, setOpen] = useState(false);
   const keys = useRef(0);
@@ -42,19 +45,23 @@ function useBuildingState() {
     catalog,
     draft,
     open,
-    show: () => setOpen(true),
-    hide: () => setOpen(false),
-    /** A template, or nothing, starts a stack in the popup. */
-    start(template?: Template, mode: Draft["mode"] = "agent") {
-      setDraft(draftFrom(template, catalog, mode, nextKey));
+    show() {
+      setDraft(undefined);
       setOpen(true);
     },
-    /** Back to choosing what to start from. */
-    discard: () => setDraft(undefined),
-    /** It's made: nothing is left to keep. */
-    done() {
-      setDraft(undefined);
-      setOpen(false);
+    hide: () => setOpen(false),
+    /** Once the window has gone: whatever was in it goes too. */
+    clear: () => setDraft(undefined),
+    /** A template, or nothing, fills the panel. Choosing again keeps what was typed for an agent. */
+    start(template?: Template, mode: Draft["mode"] = "agent") {
+      const next = draftFrom(template, catalog, mode, nextKey);
+      const offered = pickName(list.map((agent) => agent.name));
+      setDraft((was) => ({
+        ...next,
+        ...(mode === "agent" ? { suggested: was?.suggested || offered } : {}),
+        ...(mode === "agent" && was ? { name: was.name, purpose: was.purpose } : {}),
+      }));
+      setOpen(true);
     },
     setText: (text: Partial<Pick<Draft, "name" | "purpose">>) => change(() => text),
     setBase: (base: CatalogBase) => change(() => ({ base, answers: {} })),

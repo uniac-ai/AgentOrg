@@ -1,6 +1,6 @@
 // One field of a unit's form, drawn from its description. A type this host doesn't know gets the
 // plain control for the kind of value it holds.
-import { FolderOpenIcon } from "lucide-react";
+import { FolderOpenIcon, InfoIcon } from "lucide-react";
 import { useState } from "react";
 import { useLoad } from "../data.ts";
 import { Button } from "../ui/button.tsx";
@@ -10,6 +10,7 @@ import { Input } from "../ui/input.tsx";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select.tsx";
 import { Switch } from "../ui/switch.tsx";
 import { Textarea } from "../ui/textarea.tsx";
+import { Tip } from "./controls.tsx";
 import { type ConnectionEntry, listConnections } from "./data.ts";
 import { FolderPicker } from "./folder-picker.tsx";
 import { Jump } from "./parts.tsx";
@@ -173,8 +174,19 @@ export function FormField({
   const value = fieldValue(field, values);
   const text = typeof value === "string" || typeof value === "number" ? String(value) : "";
   const list = Array.isArray(value) ? value : [];
-  // A choice says what the chosen answer means; anything else says what it is.
-  const says = field.options?.find((o) => o.value === value)?.description ?? field.description;
+  // What the chosen answer means is always there; what the field is, on asking.
+  const says = field.options?.find((o) => o.value === value)?.description;
+  const about = field.description && (
+    <Tip label={field.description}>
+      <button
+        type="button"
+        aria-label={`About ${field.title}`}
+        className="text-muted-foreground hover:text-foreground"
+      >
+        <InfoIcon className="size-3" />
+      </button>
+    </Tip>
+  );
   const notes = (
     <>
       {says && <FieldDescription className="text-xs">{says}</FieldDescription>}
@@ -184,10 +196,12 @@ export function FormField({
   if (control === "toggle")
     return (
       <FieldBox className="gap-1.5">
-        <div className="flex items-center justify-between gap-3">
-          <FieldLabel htmlFor={id} className="text-xs">
+        <div className="flex items-center gap-1.5">
+          <FieldLabel htmlFor={id} className="w-fit text-xs">
             {field.title}
           </FieldLabel>
+          {about}
+          <span className="flex-1" />
           <Switch id={id} checked={value === true} onCheckedChange={onChange} />
         </div>
         {notes}
@@ -195,9 +209,12 @@ export function FormField({
     );
   return (
     <FieldBox className="gap-1.5">
-      <FieldLabel htmlFor={id} className="text-xs">
-        {field.title}
-      </FieldLabel>
+      <div className="flex items-center gap-1.5">
+        <FieldLabel htmlFor={id} className="w-fit text-xs">
+          {field.title}
+        </FieldLabel>
+        {about}
+      </div>
       {control === "choice" && (
         <OneOf
           id={id}
