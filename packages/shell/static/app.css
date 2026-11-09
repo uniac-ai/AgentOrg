@@ -346,9 +346,6 @@ a {
   min-height: 0;
 }
 /* In the gap between the chat and the widgets: it takes no room, and only its line shows. */
-.stage > .kit-resize-handle {
-  margin: 0 -8px;
-}
 .container {
   background: var(--surface);
   border-radius: var(--radius);
@@ -387,11 +384,6 @@ a {
   color: var(--muted);
   font-weight: 400;
 }
-.view-head .kit-icon-button {
-  margin-left: auto;
-  width: 26px;
-  height: 26px;
-}
 /* The frame fills what its placement leaves under the header. */
 .view-body {
   padding: 4px 14px 14px;
@@ -424,11 +416,6 @@ a {
 .ghost:disabled {
   opacity: 0.6;
   cursor: default;
-}
-.kit-menu .menu-note {
-  text-align: left;
-  padding: 4px 10px 6px;
-  max-width: 200px;
 }
 
 /* ---------- Home: the placed views ---------- */
@@ -743,11 +730,6 @@ tr:hover td {
   justify-content: center;
   color: var(--muted);
   font-size: 13px;
-}
-.kit-dialog .steps {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
 }
 .granted {
   display: inline-flex;

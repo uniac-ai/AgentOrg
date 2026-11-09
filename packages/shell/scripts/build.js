@@ -1,5 +1,8 @@
 // The shell as static files for the gateway to serve: one bundled script, its page and its styles.
+import { execFileSync } from "node:child_process";
 import { copyFileSync, mkdirSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
 import { build } from "esbuild";
 
 const at = (path) => new URL(`../${path}`, import.meta.url).pathname;
@@ -25,5 +28,12 @@ await build({
   target: "es2022",
   logLevel: "warning",
 });
-for (const file of ["index.html", "app.css"])
-  copyFileSync(at(`static/${file}`), at(`dist/${file}`));
+copyFileSync(at("static/index.html"), at("dist/index.html"));
+// One stylesheet: the older pages' styles, and Tailwind's classes as the components use them. Not
+// minified: that would rewrite the tokens' values, which views read as written.
+const tailwind = dirname(createRequire(import.meta.url).resolve("@tailwindcss/cli/package.json"));
+execFileSync(
+  process.execPath,
+  [join(tailwind, "dist", "index.mjs"), "-i", at("src/styles.css"), "-o", at("dist/app.css")],
+  { cwd: at("."), stdio: ["ignore", "ignore", "inherit"] },
+);
