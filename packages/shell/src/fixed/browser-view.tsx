@@ -146,7 +146,7 @@ export function ScreencastView({ target }: ViewerProps) {
   return (
     <section
       aria-label="Browser"
-      className="flex h-[440px] min-w-0 flex-col overflow-hidden rounded-xl border bg-background text-[15px] leading-[1.5] has-[canvas:focus]:border-[var(--unread)] has-[canvas:focus]:ring-1 has-[canvas:focus]:ring-[var(--unread)]"
+      className="flex h-[440px] min-w-0 flex-col overflow-hidden rounded-xl border bg-background text-[15px] leading-[1.5]"
     >
       {/* The first row: its tabs, with the plus beside them. */}
       <div className="flex h-11 shrink-0 items-center gap-1 pr-1.5 pl-2">
