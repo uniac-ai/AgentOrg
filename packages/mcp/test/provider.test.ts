@@ -162,6 +162,14 @@ test("the provider offers its two kinds as units, each making one connection", a
       ["Command", "Arguments", "Working folder", "Secrets", "Name"],
     ],
   );
+  // What each field says, for agents: an address reached, a program run.
+  assert.deepEqual(
+    offered.map((unit) => unit.form.map((field) => field.authority ?? null)),
+    [
+      ["contacts", null, null],
+      ["runs", "runs", "runs", null, null],
+    ],
+  );
   await assert.rejects(
     units.skill({ unit: "url", name: "x", path: "SKILL.md" }),
     refused("unknown"),

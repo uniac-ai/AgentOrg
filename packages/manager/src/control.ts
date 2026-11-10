@@ -3,7 +3,7 @@
  * allowed. The agent holds no authority of the Hub's. It calls management's tools, and management,
  * which holds that authority, works out who is calling and what that caller's unit allows.
  */
-import type { FieldValues, Problem, Template, ToolEntry, Unit } from "@agentorg/interfaces";
+import type { Field, FieldValues, Problem, Template, ToolEntry, Unit } from "@agentorg/interfaces";
 import { Refused } from "@agentorg/sdk";
 import { z } from "zod";
 import { schemaOf, settle } from "./form.js";
@@ -12,11 +12,6 @@ import type { AgentRecord, Offer, StackInput } from "./stack.js";
 export const AGENTS_UNIT = "agents";
 export const AGENTS_SLOT = "agents";
 const COMPUTER = "computer";
-/**
- * Units whose values say what is run or reached: an agent can't change them, or a template it may
- * use would be any server or anyone's connection. A template offers one only with it filled in.
- */
-const FIXED_FOR_AGENTS = new Set(["command", "url", "connection", "mcp", "skill"]);
 /** The place that is the parent's own computer; every other place is a connection's id. */
 const OWN = "own";
 /** A new computer for the child, on the service its parent's computer runs on. */
@@ -66,10 +61,12 @@ There is one create tool per template you may use. Read its description and fiel
 export const skillFile = (path: string) => (path === SKILL_FILE ? SKILL_TEXT : undefined);
 
 type Values = z.infer<typeof FieldValues>;
+type Value = Values[string];
 type TheUnit = z.infer<typeof Unit>;
 type TheAgent = z.infer<typeof AgentRecord>;
 type TheTemplate = z.infer<typeof Template>;
 type TheProblem = z.infer<typeof Problem>;
+type TheField = z.infer<typeof Field>;
 
 /** The agents unit's form, with what can be chosen today. */
 export function agentsUnit(
@@ -83,6 +80,7 @@ export function agentsUnit(
     form: [
       {
         id: "templates",
+        authority: "setting",
         type: "choices",
         value: "strings",
         title: "Templates",
@@ -92,6 +90,7 @@ export function agentsUnit(
       },
       {
         id: "places",
+        authority: "setting",
         type: "choices",
         value: "strings",
         title: "Places",
@@ -104,6 +103,7 @@ export function agentsUnit(
       },
       {
         id: "access",
+        authority: "setting",
         type: "choice",
         value: "string",
         title: "Most a computer can do",
@@ -113,6 +113,7 @@ export function agentsUnit(
       },
       {
         id: "browser",
+        authority: "setting",
         type: "toggle",
         value: "boolean",
         title: "A computer can have a browser",
@@ -121,6 +122,7 @@ export function agentsUnit(
       },
       {
         id: "limit",
+        authority: "setting",
         type: "number",
         value: "number",
         title: "How many at once",
@@ -212,7 +214,6 @@ interface Shape {
     offer: Offer;
     values: Values;
     needs?: object;
-    fixed: boolean;
   }[];
   /** None when the template has no computer, so no place is asked for. */
   places?: string[];
@@ -248,12 +249,12 @@ function shapeOf(
       computer = { offer, values: unit.values ?? {} };
       continue;
     }
-    // No secret passes through an agent, and a template holds none.
-    if (offer.unit.form.some((field) => field.value === "secret" && field.required))
-      return undefined;
     if (isAgentsUnit(self, offer) && bound.depth <= 1) return undefined;
-    const fixed = FIXED_FOR_AGENTS.has(unit.unit);
-    if (fixed && settle(offer.unit.form, unit.values ?? {}, []).problems.length) return undefined;
+    // What an agent can't set must already be there. That includes any secret it would need.
+    const { form } = offer.unit;
+    const settled = settle(form, unit.values ?? {}, []);
+    if (settled.problems.some((one) => !form.find((f) => f.id === one.field && settable(f))))
+      return undefined;
     for (const needed of Object.values(unit.needs ?? {}))
       if (!positions.has(needed)) return undefined;
     positions.set(position, units.length);
@@ -264,7 +265,6 @@ function shapeOf(
       position,
       offer,
       values: unit.values ?? {},
-      fixed,
       ...(unit.needs
         ? {
             needs: Object.fromEntries(
@@ -286,37 +286,93 @@ function shapeOf(
   return places.length ? { units, places, computer } : undefined;
 }
 
-/** The form an agent fills for one unit: the template's values are the defaults. */
+const settable = (field: TheField) => field.authority === "setting";
+
+/** A field with what may be chosen cut to a limit, by its type; gone if nothing is left. */
+function cutToLimit(field: TheField, limit: unknown): TheField[] {
+  if (limit === undefined) return [field];
+  const within = (option: { value: string }) => {
+    if (field.type === "choice") return indexIn(field, option.value) <= indexIn(field, limit);
+    return (limit as string[]).includes(option.value);
+  };
+  switch (field.type) {
+    case "toggle":
+      return limit === true ? [field] : [];
+    case "number":
+      return [{ ...field, max: Math.min(field.max ?? Number(limit), Number(limit)) }];
+    case "choice":
+    case "choices":
+    case "connection":
+      return [{ ...field, ...(field.options ? { options: field.options.filter(within) } : {}) }];
+    default:
+      return [field];
+  }
+}
+const indexIn = (field: TheField, value: unknown) =>
+  Math.max(field.options?.findIndex((option) => option.value === value) ?? 0, 0);
+
+/** Why a value given for a field is more than a limit allows, if it is. */
+function overLimit(field: TheField, given: unknown, limit: unknown) {
+  if (given === undefined || limit === undefined) return undefined;
+  switch (field.type) {
+    case "toggle":
+      return given === true && limit !== true ? `This agent may not allow ${field.id}.` : undefined;
+    case "number":
+      return Number(given) > Number(limit) ? `This agent may allow at most ${limit}.` : undefined;
+    case "choice":
+      return indexIn(field, given) > indexIn(field, limit)
+        ? "That reaches further than this agent may allow."
+        : undefined;
+    case "choices":
+    case "connection":
+      return [given].flat().some((one) => !(limit as string[]).includes(String(one)))
+        ? `That is more ${field.id} than this agent has.`
+        : undefined;
+    default:
+      return undefined;
+  }
+}
+
+/** A value brought within a limit, by the field's type. */
+function withinLimit(field: TheField, value: Value | undefined, limit: unknown): Value {
+  if (limit === undefined) return value as Value;
+  switch (field.type) {
+    case "toggle":
+      return value === true && limit === true;
+    case "number":
+      return Math.min(Number(value ?? limit), Number(limit));
+    case "choice":
+      return field.options?.[Math.min(indexIn(field, value), indexIn(field, limit))]
+        ?.value as string;
+    case "choices":
+    case "connection":
+      return [value ?? []]
+        .flat()
+        .map(String)
+        .filter((one) => (limit as string[]).includes(one));
+    default:
+      return value as Value;
+  }
+}
+
+/** The form an agent fills for one unit: what it may set, with the template's values as defaults. */
 function formFor(self: string, unit: Shape["units"][number], bound: Bound) {
-  const narrowed = unit.offer.unit.form.flatMap((field) => {
-    if (!isAgentsUnit(self, unit.offer)) return [field];
-    switch (field.id) {
-      case "depth":
-        return [];
-      case "browser":
-        return bound.browser ? [field] : [];
-      case "limit":
-        return [{ ...field, max: bound.limit }];
-      case "templates":
-      case "places": {
-        const allowed = bound[field.id];
-        return [{ ...field, options: field.options?.filter((one) => allowed.includes(one.value)) }];
-      }
-      case "access":
-        return [
-          {
-            ...field,
-            options: field.options?.filter((one) => rank(one.value) <= rank(bound.access)),
-          },
-        ];
-      default:
-        return [field];
-    }
-  });
+  const fields = unit.offer.unit.form.filter(settable);
+  const narrowed = isAgentsUnit(self, unit.offer)
+    ? fields.flatMap((field) => cutToLimit(field, limitOf(bound, field)))
+    : fields;
   return narrowed.map((field) =>
     unit.values[field.id] === undefined ? field : { ...field, default: unit.values[field.id] },
   );
 }
+const limitOf = (bound: Limits, field: TheField) =>
+  Object.hasOwn(bound, field.id)
+    ? (bound as unknown as Record<string, unknown>)[field.id]
+    : undefined;
+/** What bounds a field, by its id: an agents unit's own, or a new computer's reach. */
+type Limits = Bound | { access: string; browser: boolean };
+/** A new computer is held by how far it reaches, and by nothing else of the unit's bounds. */
+const reachLimits = ({ access, browser }: Bound) => ({ access, browser });
 
 /** The bounds on a new computer: those of the unit, and of its holder's computer as it is now. */
 const withinReach = (bound: Bound, reach: Reach): Bound => ({
@@ -325,18 +381,11 @@ const withinReach = (bound: Bound, reach: Reach): Bound => ({
   browser: bound.browser && reach.browser,
 });
 
-/** What an agent fills for a new computer: how far it reaches, within the bounds. */
+/** What an agent fills for a new computer: what it may set, within the bounds. */
 function newComputerForm(computer: NonNullable<Shape["computer"]>, bound: Bound) {
-  return computer.offer.unit.form.flatMap((field) => {
-    if (field.id === "browser") return bound.browser ? [field] : [];
-    if (field.id !== "access") return [];
-    return [
-      {
-        ...field,
-        options: field.options?.filter((one) => rank(one.value) <= rank(bound.access)),
-      },
-    ];
-  });
+  return computer.offer.unit.form
+    .filter(settable)
+    .flatMap((field) => cutToLimit(field, limitOf(reachLimits(bound), field)));
 }
 
 /** A new computer's values: the template's, within the bounds, on the parent's service. */
@@ -346,56 +395,34 @@ function newComputer(
   bound: Bound,
   service: string,
 ) {
-  const problems: TheProblem[] = [];
   const asked = settle(newComputerForm(computer, bound), given, []).problems;
-  for (const one of asked) if (given[one.field ?? ""] !== undefined) problems.push(one);
-  if (given.browser === true && !bound.browser)
-    problems.push({ field: "browser", message: "This agent may not allow a browser." });
-  const access = LEVELS[
-    given.access === undefined
-      ? Math.min(rank(computer.values.access), rank(bound.access))
-      : rank(given.access)
-  ] as string;
-  const browser =
-    given.browser === undefined
-      ? computer.values.browser === true && bound.browser
-      : given.browser === true;
-  return { problems, values: { ...computer.values, service, access, browser } };
+  const values: Values = { ...computer.values, service };
+  for (const field of computer.offer.unit.form.filter(settable))
+    values[field.id] =
+      given[field.id] ??
+      withinLimit(field, computer.values[field.id], limitOf(reachLimits(bound), field));
+  return { problems: asked.filter((one) => given[one.field ?? ""] !== undefined), values };
 }
 
-/** A child's agents unit may hold no more than its parent's, and goes one level less deep. */
-function narrowedForChild(given: Values, merged: Values, bound: Bound, reach: Reach) {
+/**
+ * A child's agents unit holds no more than its parent's, by each field's type. What was given
+ * beyond `bound` is a problem; a template's value is brought within `caps`.
+ */
+function narrowedForChild(
+  form: TheField[],
+  given: Values,
+  merged: Values,
+  bound: Bound,
+  caps: Bound,
+) {
   const problems: TheProblem[] = [];
-  const within = (field: "templates" | "places") => {
-    const asked = given[field] as string[] | undefined;
-    if (asked?.some((one) => !bound[field].includes(one)))
-      problems.push({ field, message: `That is more ${field} than this agent has.` });
-  };
-  within("templates");
-  within("places");
-  if (given.access !== undefined && rank(given.access) > rank(bound.access))
-    problems.push({ field: "access", message: "That reaches further than this agent may allow." });
-  if (given.browser === true && !bound.browser)
-    problems.push({ field: "browser", message: "This agent may not allow a browser." });
-  if (given.limit !== undefined && Number(given.limit) > bound.limit)
-    problems.push({ field: "limit", message: `This agent may allow at most ${bound.limit}.` });
-  if (given.depth !== undefined)
-    problems.push({ field: "depth", message: "How deep it can go is set by this agent's own." });
-  const within2 = (list: unknown, allowed: string[]) =>
-    ((list ?? []) as string[]).filter((one) => allowed.includes(one));
-  const access = Math.min(rank(merged.access), rank(bound.access), rank(reach.access));
-  return {
-    problems,
-    values: {
-      ...merged,
-      templates: within2(merged.templates, bound.templates),
-      places: within2(merged.places, bound.places),
-      access: LEVELS[access] as string,
-      browser: merged.browser === true && bound.browser && reach.browser,
-      limit: Math.min(Number(merged.limit ?? LIMIT_DEFAULT), bound.limit),
-      depth: bound.depth - 1,
-    },
-  };
+  const values: Values = { ...merged };
+  for (const field of form.filter(settable)) {
+    const message = overLimit(field, given[field.id], limitOf(bound, field));
+    if (message) problems.push({ field: field.id, message });
+    values[field.id] = withinLimit(field, merged[field.id], limitOf(caps, field));
+  }
+  return { problems, values };
 }
 
 const Target = z.object({ agent: z.string().min(1).max(128) });
@@ -553,7 +580,7 @@ export function createControl(parts: ControlParts) {
             description: "Only what should differ from the template.",
             properties: Object.fromEntries(
               shape.units
-                .filter((unit) => !unit.fixed)
+                .filter((unit) => unit.offer.unit.form.some(settable))
                 .map((unit) => [unit.key, schemaOf(formFor(self, unit, bound))])
                 .concat(
                   shape.computer && shape.places?.includes(NEW)
@@ -640,21 +667,31 @@ export function createControl(parts: ControlParts) {
           ? [{ slot: COMPUTER, connection: args.place }]
           : [];
 
-      const known = new Set(shape.units.filter((unit) => !unit.fixed).map((unit) => unit.key));
+      const known = new Set(
+        shape.units.filter((unit) => unit.offer.unit.form.some(settable)).map((unit) => unit.key),
+      );
       if (fresh) known.add(COMPUTER);
       for (const key of Object.keys(args.units ?? {}))
         if (!known.has(key)) throw new Refused("invalid", `This template has no unit ${key}.`);
       const units = shape.units.map((unit) => {
         const given = (args.units?.[unit.key] ?? {}) as Values;
+        const { form } = unit.offer.unit;
+        // A secret is refused for what it is when the stack is checked.
+        for (const id of Object.keys(given)) {
+          const field = form.find((one) => one.id === id);
+          if (field && !settable(field) && field.value !== "secret")
+            problems.push({ field: id, message: `An agent can't set ${field.title}.` });
+        }
         let values: Values = { ...unit.values, ...given };
         if (isAgentsUnit(self, unit.offer)) {
           // Held to the form first: what follows compares numbers and lists.
-          const typed = settle(unit.offer.unit.form, values, []);
+          const typed = settle(form, values, []);
           problems.push(...typed.problems);
           if (typed.problems.length === 0) {
-            const narrowed = narrowedForChild(given, typed.values, bound, childReach);
+            const caps = withinReach(bound, childReach);
+            const narrowed = narrowedForChild(form, given, typed.values, bound, caps);
             problems.push(...narrowed.problems);
-            values = narrowed.values;
+            values = { ...narrowed.values, depth: bound.depth - 1 };
           }
         }
         return {

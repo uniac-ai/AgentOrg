@@ -61,10 +61,18 @@ const UNITS = [
     title: "Files",
     description: "A folder.",
     form: [
-      { id: "folder", type: "directory", value: "string", title: "Folder", required: true },
+      {
+        id: "folder",
+        authority: "setting",
+        type: "directory",
+        value: "string",
+        title: "Folder",
+        required: true,
+      },
       { id: "token", type: "secret", value: "secret", title: "Token" },
       {
         id: "extra",
+        authority: "setting",
         type: "toggle",
         value: "boolean",
         title: "Extra",
@@ -114,6 +122,7 @@ const UNITS = [
       { id: "service", type: "text", value: "string", title: "Service" },
       {
         id: "access",
+        authority: "setting",
         type: "choice",
         value: "string",
         title: "Access",
@@ -122,6 +131,7 @@ const UNITS = [
       },
       {
         id: "browser",
+        authority: "setting",
         type: "toggle",
         value: "boolean",
         title: "Browser",
@@ -134,6 +144,14 @@ const UNITS = [
       skills: [{ name: "using-it", files: ["SKILL.md"] }],
       results: [],
     },
+  },
+  {
+    id: "closed",
+    title: "Closed",
+    description: "Declares nothing, so an agent may set nothing of it.",
+    form: [{ id: "mode", type: "text", value: "string", title: "Mode" }],
+    needs: [],
+    gives: { slots: [], skills: [], results: [] },
   },
   {
     id: "vault",
@@ -1007,6 +1025,7 @@ test("every unit on offer is listed, management's own among them", async (t) => 
       ["machine", "Units"],
       ["terminal", "Units"],
       ["computer", "Units"],
+      ["closed", "Units"],
       ["vault", "Units"],
     ],
   );
@@ -1798,7 +1817,7 @@ test("a child's agents unit holds no more than its parent's, one level less deep
   await beyond({ limit: 3 }, /at most 2/);
   await beyond({ access: "terminal" }, /further/);
   await beyond({ browser: true }, /browser/);
-  await beyond({ depth: 2 }, /deep/);
+  await beyond({ depth: 2 }, /can't set/);
   // At depth 1, it has no agents unit to pass on.
   const childTools = await s.exposedTo<ToolCalls>(deputy, "agents");
   assert.deepEqual((await s.names(childTools)).slice(0, 2), ["create_helper", "list"]);
@@ -1869,6 +1888,41 @@ test("a child shares its parent's computer only within the bounds, or goes to a 
   assert.ok(!(await s.names(lower.tools)).includes("create_worker"));
   const none = await s.parent({ templates: ["worker"], places: ["own"] }, undefined, "None");
   assert.ok(!(await s.names(none.tools)).includes("create_worker"), "it has no computer");
+});
+
+test("a field no one declared is closed to an agent, and its template's value stands", async (t) => {
+  const s = await delegating(t);
+  await s.calls.agents.saveTemplate({
+    id: "sealed",
+    title: "Sealed",
+    description: "",
+    base: { provider: "Agents", creatable: "plain" },
+    units: [{ provider: "Units", unit: "closed", values: { mode: "fixed" } }],
+  });
+  await s.calls.agents.saveTemplate({
+    id: "unsealed",
+    title: "Unsealed",
+    description: "",
+    base: { provider: "Agents", creatable: "plain" },
+    units: [{ provider: "Units", unit: "closed" }],
+  });
+  const { tools } = await s.parent({ templates: ["sealed", "unsealed"] });
+  const offered = (await tools.list({})).tools;
+  const schema = offered.find((one) => one.name === "create_sealed")?.inputSchema as never as {
+    properties: { units: { properties: object } };
+  };
+  assert.deepEqual(schema.properties.units.properties, {}, "nothing in it to set");
+  assert.ok(
+    offered.some((one) => one.name === "create_unsealed"),
+    "nothing it must set",
+  );
+  const tried = await tools.call({
+    name: "create_sealed",
+    arguments: { name: "X", purpose: "P.", units: { closed: { mode: "mine" } } },
+  });
+  assert.equal(tried.failed, true);
+  const child = await s.made(tools, "create_sealed", { name: "Y", purpose: "P." });
+  assert.deepEqual(s.given.applied.find((one) => one.agent === child)?.values, { mode: "fixed" });
 });
 
 test("a place means nothing on a template with no computer", async (t) => {
