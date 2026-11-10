@@ -453,6 +453,14 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
           stacks.serial(input.agent, () => stacks.addUnit(input, caller)),
         removeUnit: (input) => stacks.serial(input.agent, () => stacks.removeUnit(input)),
         activity: (input) => activity.read(input),
+        async live({ agent, instance, surface, mode }) {
+          const unit = recordOf(agent).units.find((one) => one.instance === instance);
+          if (!unit || unit.provider === options.actorId)
+            throw new Refused("unknown", `${agent} has nothing like that to open live.`);
+          const provider = unitProviders().find((one) => one.actor === unit.provider);
+          if (!provider) throw new Refused("not_connected", "Its provider can't be reached now.");
+          return provider.call.live({ instance: unit.providerInstance, surface, mode });
+        },
 
         async list() {
           const actors = await open();

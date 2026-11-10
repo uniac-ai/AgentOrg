@@ -418,11 +418,21 @@ async function setup(t: test.TestContext) {
           if (!made) throw new Refused("unknown", "Not held.");
           return {
             state: "connected" as const,
+            surfaces: [{ surface: "screen", protocol: "stand-in@1", operate: true }],
             connections: made.map(({ connection }) => ({
               connection,
               state: "connected" as const,
               tools: [{ name: "read" }],
             })),
+          };
+        },
+        live: ({ instance, surface, mode }) => {
+          if (!held.has(instance) || surface !== "screen")
+            throw new Refused("unknown", "Nothing like that here.");
+          return {
+            url: `ws://127.0.0.1:9/live/${instance}/${mode}`,
+            protocol: "stand-in@1",
+            expiresAt: new Date(Date.now() + 60_000).toISOString(),
           };
         },
         async remove({ instance }) {
@@ -644,7 +654,7 @@ test("a stack is made, bound, exposed and recorded, with its chat to the person"
     { name: "notes", description: "The notes skill.", instance: files?.instance },
   ]);
   assert.deepEqual(files?.values, { folder: "/work" });
-  assert.deepEqual(files?.status, { state: "connected" });
+  assert.equal(files?.status.state, "connected");
   const bySlot = Object.fromEntries(read.mcp.map((m) => [m.slot, m]));
   assert.equal(bySlot.search?.connection, search);
   assert.equal(bySlot.search?.origin?.madeFor, undefined, "picked, so it isn't the agent's");
@@ -2519,6 +2529,49 @@ test("an agent's template is its own, runs nothing, and stays within its bounds"
   // Without the scope, there's no such tool.
   const plain = await s.parent({ templates: ["helper"] }, undefined, "Plain");
   assert.ok(!(await s.names(plain.tools)).includes("template_save"));
+});
+
+test("a unit's surfaces show on its agent, and only the person gets a ticket to one", async (t) => {
+  const s = await delegating(t);
+  const agent = await s.makeStack([s.unit("machine")]);
+  const [unit] = (await s.calls.agents.get({ agent })).units;
+  assert.deepEqual(unit?.status.surfaces, [
+    { surface: "screen", protocol: "stand-in@1", operate: true },
+  ]);
+  const ticket = await s.calls.agents.live({
+    agent,
+    instance: unit?.instance as string,
+    surface: "screen",
+    mode: "operate",
+  });
+  assert.equal(ticket.protocol, "stand-in@1");
+  assert.match(ticket.url, /\/operate$/);
+  await assert.rejects(
+    s.calls.agents.live({ agent, instance: "uni_none", surface: "screen", mode: "watch" }),
+    refused("unknown"),
+  );
+  await assert.rejects(
+    s.calls.agents.live({
+      agent,
+      instance: unit?.instance as string,
+      surface: "nothing",
+      mode: "watch",
+    }),
+    refused("unknown"),
+  );
+  // No control scope gives an agent one.
+  const { tools } = await s.parent(
+    {
+      templates: ["helper"],
+      agents: "all",
+      connections: "add",
+      skills: "add",
+      saveTemplates: true,
+    },
+    undefined,
+    "Everything",
+  );
+  assert.ok(!(await s.names(tools)).some((name) => name.includes("live")));
 });
 
 test("a parent's agents stay when it goes, as the person's", async (t) => {

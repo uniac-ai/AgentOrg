@@ -235,6 +235,43 @@ test("a socket's subscriptions end when asked, and it holds 256 at most", async 
   );
 });
 
+test("a live socket is the tab's own: same origin, then its session, before anything opens", async (t) => {
+  const { app, token } = await setup(t);
+  const { session } = await signIn(app);
+  const at = `${app.url.replace("http", "ws")}/live?agent=act_none&instance=uni_none&surface=terminal`;
+  const opened = (headers: Record<string, string>) =>
+    new Promise<{ status?: number; closed?: number; reason?: string }>((done) => {
+      const socket = new WebSocket(at, { headers });
+      socket.once("unexpected-response", (_request, response) =>
+        done({ status: response.statusCode }),
+      );
+      socket.once("open", () => {
+        if (session && headers.Origin === app.url)
+          socket.send(JSON.stringify({ op: "hello", session: headers.session ?? session }));
+      });
+      socket.once("close", (code, reason) => done({ closed: code, reason: String(reason) }));
+    });
+  assert.equal((await opened({ Origin: "https://elsewhere.example" })).status, 401);
+  assert.deepEqual(
+    (await opened({ Origin: app.url, session: "not-a-session" })).closed,
+    4401,
+    "a session it doesn't have",
+  );
+  const refused = await opened({ Origin: app.url });
+  assert.equal(refused.closed, 4404);
+  assert.ok(refused.reason, "it says why");
+  // Nor does /api hand a page a ticket, under any slot.
+  const cli = api(app, { Authorization: `Bearer ${token}` });
+  t.after(cli.close);
+  await cli.opened;
+  for (const slot of ["agents", "elsewhere"])
+    assert.equal(
+      (await cli.call(slot, "live", { agent: "a", instance: "i", surface: "s", mode: "watch" }))
+        .error?.code,
+      "forbidden",
+    );
+});
+
 test("an upgrade that resets before it's refused doesn't stop the app", async (t) => {
   const { app } = await setup(t);
   const { port } = new URL(app.url);

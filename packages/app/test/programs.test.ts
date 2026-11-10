@@ -432,3 +432,117 @@ test("the bundled Assistant is a computer and the web, and its computer goes wit
   assert.equal((await Computer.list(reached)).length, 0);
   assert.ok(existsSync(folder), "it's a folder someone can see, so it stays");
 });
+
+test("a socket from the person reaches a computer's surfaces live, with no token in it", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "agentorg-live-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const data = join(root, "service");
+  const workspace = join(root, "workspace");
+  mkdirSync(workspace);
+  const s = await open(t, {
+    dataFolder: data,
+    webUrl: "http://127.0.0.1:9/mcp",
+    agentsFolder: join(root, "Agents"),
+  });
+  const service = spawn(
+    process.execPath,
+    [
+      join(
+        dirname(createRequire(import.meta.url).resolve("@agentorg/computer")),
+        "agentcomputer.js",
+      ),
+      "serve",
+      "--listen",
+      "127.0.0.1:0",
+      "--data",
+      data,
+    ],
+    { stdio: "ignore" },
+  );
+  t.after(async () => {
+    if (service.exitCode === null) {
+      service.kill("SIGTERM");
+      await once(service, "exit");
+    }
+  });
+  await until(() => existsSync(join(data, "server.json")), "the service to start");
+  const reached = {
+    apiUrl: JSON.parse(readFileSync(join(data, "server.json"), "utf8")).url as string,
+    apiKey: readFileSync(join(data, "control-token"), "utf8").trim(),
+  };
+  const { app, person } = await s.start();
+  const { agent } = await person.call<{ agent: string }>("agents", "create", {
+    template: "assistant",
+    fill: [{ values: { service: "local", workspace } }],
+    name: "Watched",
+  });
+  type Surfaces = { surface: string; protocol: string; unavailable?: string }[];
+  const units = (
+    await person.call<{
+      units: { instance: string; unit: string; status: { surfaces?: Surfaces } }[];
+    }>("agents", "get", { agent })
+  ).units;
+  const computer = units.find((one) => one.unit === "computer");
+  const surfaces = computer?.status.surfaces ?? [];
+  assert.deepEqual(
+    surfaces.map((one) => [one.surface, one.protocol]),
+    [
+      ["commands", "commands@1"],
+      ["terminal", "pty@1"],
+    ],
+  );
+  // A page never holds a ticket: `/api` won't give one.
+  await assert.rejects(
+    person.call("agents", "live", {
+      agent,
+      instance: computer?.instance,
+      surface: "commands",
+      mode: "watch",
+    }),
+    refused("forbidden"),
+  );
+
+  const kept = Object.values(
+    JSON.parse(readFileSync(join(s.home, "programs", "computer", "instances.json"), "utf8")),
+  ) as { computer?: { id: string; token: string } }[];
+  const held = kept.find((one) => one.computer)?.computer as { id: string; token: string };
+  const cli = readFileSync(join(s.home, "cli-token"), "utf8").trim();
+  const heard: string[] = [];
+  const live = async (surface: string, mode: string) => {
+    const socket = new WebSocket(
+      `${app.url.replace("http", "ws")}/live?agent=${agent}&instance=${computer?.instance}&surface=${surface}&mode=${mode}`,
+      { headers: { Authorization: `Bearer ${cli}` } },
+    );
+    const frames: string[] = [];
+    socket.on("message", (data) => {
+      frames.push(String(data));
+      heard.push(String(data));
+    });
+    t.after(() => socket.close());
+    await until(() => frames.length > 0, "the surface to open");
+    return { socket, frames };
+  };
+
+  const watch = await live("commands", "watch");
+  assert.deepEqual(JSON.parse(watch.frames[0] as string), { op: "live", protocol: "commands@1" });
+  const run = await Computer.connect(held.id, { ...reached, accessToken: held.token });
+  await run.commands.run("echo live-proof");
+  await run.close();
+  await until(
+    () => watch.frames.some((one) => one.includes("live-proof")),
+    "the command to be seen",
+  );
+
+  const terminal = surfaces.find((one) => one.surface === "terminal");
+  if (!terminal?.unavailable) {
+    const shell = await live("terminal", "operate");
+    shell.socket.send(Buffer.concat([Buffer.from([0x30]), Buffer.from("echo pty-proof\n")]));
+    await until(
+      () => shell.frames.some((one) => one.includes("pty-proof") && !one.includes("echo pty")),
+      "the shell to answer",
+    );
+  }
+  for (const secret of [reached.apiKey, held.token])
+    assert.ok(!heard.some((one) => one.includes(secret)), "no token reaches the page");
+  await person.call("agents", "remove", { agent });
+});

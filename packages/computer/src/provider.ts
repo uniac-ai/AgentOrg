@@ -99,6 +99,17 @@ const at = (apiUrl: string, endpoint: string) => {
   return `${origin}${url.pathname}${url.search}`;
 };
 
+/** A live session's socket, at the address the service was reached on. */
+const socketAt = (apiUrl: string, socket: string) => {
+  const { pathname, search } = new URL(socket);
+  const reached = new URL(apiUrl);
+  return `${reached.protocol === "https:" ? "wss:" : "ws:"}//${reached.host}${pathname}${search}`;
+};
+/** How long a computer's own surfaces may take to say what they are, in a status. */
+const SURFACES_MS = 2000;
+/** How long what they said is used again: a status is asked for often. */
+const SURFACES_FRESH_MS = 10_000;
+
 /** The same folders the service looks in itself. */
 const defaultDataFolder = () =>
   process.env.AGENTCOMPUTER_DATA ??
@@ -294,6 +305,40 @@ export async function startComputerProvider(
     return folder;
   };
 
+  /** What of a computer can be opened live, as its service says; none if it can't say now. */
+  const asked = new Map<string, { at: number; answer: ReturnType<typeof askSurfaces> }>();
+  /** One question at a time per computer, and its answer kept a little while. */
+  const surfacesOf = (computer: NonNullable<Instance["computer"]>) => {
+    const kept = asked.get(computer.id);
+    if (kept && Date.now() - kept.at < SURFACES_FRESH_MS) return kept.answer;
+    const answer = askSurfaces(computer);
+    asked.set(computer.id, { at: Date.now(), answer });
+    return answer;
+  };
+  const askSurfaces = async (computer: NonNullable<Instance["computer"]>) => {
+    const reached = reachOf(computer.service);
+    if (!reached) return undefined;
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      const info = await Promise.race([
+        Computer.getInfo(computer.id, reached),
+        new Promise<undefined>((resolve) => {
+          timer = setTimeout(resolve, SURFACES_MS, undefined);
+        }),
+      ]);
+      return info?.surfaces.map(({ surface, protocol, operate, unavailable }) => ({
+        surface,
+        protocol,
+        operate,
+        ...(unavailable ? { unavailable } : {}),
+      }));
+    } catch {
+      return undefined;
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
   /** Make the computer, and say what each of its endpoints is. */
   const makeComputer = async (
     values: Record<string, unknown>,
@@ -431,6 +476,7 @@ export async function startComputerProvider(
           }));
           const down = each.find((one) => one.state === "down");
           const waiting = each.some((one) => one.state === "connecting");
+          const surfaces = found.computer ? await surfacesOf(found.computer) : undefined;
           return {
             state: down
               ? ("down" as const)
@@ -439,7 +485,36 @@ export async function startComputerProvider(
                 : ("connected" as const),
             ...(down?.detail ? { detail: down.detail } : {}),
             connections: each,
+            ...(surfaces ? { surfaces } : {}),
           };
+        },
+        async live({ instance, surface, mode }) {
+          const { found } = held(instance);
+          const reached = found.computer && reachOf(found.computer.service);
+          if (!found.computer || !reached)
+            throw new Refused("unknown", "Nothing of this can be opened live.");
+          try {
+            const session = await Computer.createLiveSession(
+              found.computer.id,
+              { surface: surface as "commands" | "terminal", mode },
+              reached,
+            );
+            return {
+              url: socketAt(reached.apiUrl, session.url),
+              protocol: session.protocol,
+              expiresAt: session.expiresAt,
+            };
+          } catch (error) {
+            if (!(error instanceof ComputerError)) throw error;
+            throw new Refused(
+              error.code === 404 || error.code === 400
+                ? "unknown"
+                : error.code === 409
+                  ? "state"
+                  : "failed",
+              error.message,
+            );
+          }
         },
         async remove({ instance }) {
           const { found, servers } = held(instance);

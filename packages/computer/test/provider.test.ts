@@ -414,12 +414,27 @@ test("endpoints are at the address given, whatever the service calls itself", as
   const reached = running as Service;
   const { port } = new URL(reached.apiUrl);
   const { instance } = await apply(
-    { service: "another", address: `http://localhost:${port}`, access: "read", path: workspace },
+    {
+      service: "another",
+      address: `http://localhost:${port}`,
+      access: "terminal",
+      path: workspace,
+    },
     { token: reached.apiKey },
   );
   await connected(instance);
   const kept = JSON.parse(readFileSync(join(dir, "instances.json"), "utf8"));
   assert.match(kept[instance].links[0].url, new RegExp(`^http://localhost:${port}/`));
+  // So is a live session's socket.
+  const status = await units.status({ instance });
+  assert.ok(status.surfaces?.some((one) => one.surface === "commands"));
+  const ticket = await units.live({ instance, surface: "commands", mode: "watch" });
+  assert.match(ticket.url, new RegExp(`^ws://localhost:${port}/`));
+  assert.equal(ticket.protocol, "commands@1");
+  await assert.rejects(
+    units.live({ instance, surface: "nothing", mode: "watch" }),
+    refused("unknown"),
+  );
   await units.remove({ instance });
 });
 

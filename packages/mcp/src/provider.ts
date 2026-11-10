@@ -185,6 +185,9 @@ export async function startMcpProvider(options: McpProviderOptions): Promise<Mcp
             connections: [{ ...status, connection: instance }],
           };
         },
+        live: () => {
+          throw new Refused("unknown", "A connection has nothing to open live.");
+        },
         async remove({ instance: connection }) {
           const found = held(connection);
           await ctx.slots.actors.call.close({ actorId: connection });

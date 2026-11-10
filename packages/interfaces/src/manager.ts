@@ -11,7 +11,16 @@ import {
   ConnectionTarget,
 } from "./connection.js";
 import { Id, SlotName } from "./hub.js";
-import { FieldValues, Problem, ResultKind, Unit, UnitId } from "./units.js";
+import {
+  FieldValues,
+  LiveMode,
+  LiveSurface,
+  LiveTicket,
+  Problem,
+  ResultKind,
+  Unit,
+  UnitId,
+} from "./units.js";
 
 const Time = z.string().max(64);
 const ActorName = z.string().min(1).max(128);
@@ -89,7 +98,12 @@ const AppliedUnit = z.object({
   title: z.string().min(1).max(128),
   values: FieldValues,
   needs: z.record(ResultKind, Id),
-  status: z.object({ state: ConnectionState, detail: z.string().max(2000).optional() }),
+  status: z.object({
+    state: ConnectionState,
+    detail: z.string().max(2000).optional(),
+    /** What of it can be opened live, through `agents.live`. */
+    surfaces: z.array(LiveSurface).max(16).optional(),
+  }),
 });
 
 /** Where a connection came from, written once when it was made. */
@@ -246,6 +260,14 @@ export const agents = defineInterface({
         limit: z.number().int().min(1).max(200).optional(),
       }),
       output: z.object({ entries: z.array(ActivityEntry), more: z.boolean() }),
+    }),
+    /**
+     * A one-time ticket to open one of a unit's surfaces live. For the person's gateway, which dials
+     * it and pipes the bytes to a page; it never reaches a page itself. No agent can ask for one.
+     */
+    live: method({
+      input: z.object({ agent: Id, instance: Id, surface: UnitId, mode: LiveMode }),
+      output: LiveTicket,
     }),
     /** Final: removes the units, last first, then the agent, and the connections made for it. */
     remove: method({ input: OnAgent, output: z.object({}) }),
