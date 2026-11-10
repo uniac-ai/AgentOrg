@@ -10,6 +10,7 @@ import {
   isReady,
   isShown,
   nameOf,
+  needsAttention,
   pickName,
   toStack,
 } from "../src/fixed/stack.ts";
@@ -169,4 +170,13 @@ test("the name offered is one no agent has, and it's what an untouched field mea
   );
   assert.equal(isReady({ ...draftOf({ access: "none" }), name: "", suggested: "Wren" }), true);
   assert.equal(isReady({ ...draftOf({ access: "none" }), name: "", suggested: "" }), false);
+});
+
+test("a card asks for attention only when there's something on it to do", () => {
+  const entry = (values: Draft["units"][number]["values"]) =>
+    draftOf(values).units[0] as Draft["units"][number];
+  assert.equal(needsAttention(entry({ access: "none" }), []), false);
+  assert.equal(needsAttention(entry({ access: "read" }), []), true, "a required field is empty");
+  assert.equal(needsAttention(entry({ access: "read", dir: "/x" }), []), false);
+  assert.equal(needsAttention({ key: 1, id: "gone", values: {}, secrets: {} }, []), true);
 });

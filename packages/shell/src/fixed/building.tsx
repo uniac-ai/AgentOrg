@@ -102,7 +102,14 @@ function useBuildingState() {
       change((was) => ({ answers: { ...was.answers, [id]: value } })),
     /** On the end of the stack, or just above the unit that needs it. */
     addUnit(unit: CatalogUnit, before?: number) {
-      const entry = { key: nextKey(), unit, id: unit.id, values: {}, secrets: {} };
+      const entry = {
+        key: nextKey(),
+        unit,
+        id: unit.id,
+        values: {},
+        secrets: {},
+        added: true as const,
+      };
       change((was) => {
         const at = before === undefined ? -1 : was.units.findIndex((u) => u.key === before);
         if (at === -1) return { units: [...was.units, entry] };

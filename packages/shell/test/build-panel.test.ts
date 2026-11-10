@@ -45,6 +45,11 @@ async function choose(page: Page, field: string, option: RegExp) {
   await panel(page).getByRole("combobox", { name: field }).click();
   await page.getByRole("option", { name: option }).click();
 }
+/** Opens a card that started as one row. */
+const unfold = (page: Page, name: string) =>
+  card(page, name)
+    .getByRole("button", { name: `Open ${name}` })
+    .click();
 const gives = (page: Page, name: string) => card(page, name).locator("[data-gives]").innerText();
 
 test(
@@ -120,6 +125,7 @@ test(
     await computer.getByLabel("Image").fill("typed/earlier");
     await choose(page, "Where it runs", /^This computer/);
     await computer.getByLabel("Working directory", { exact: true }).fill("/work/foreman");
+    await unfold(page, "Web");
     await choose(page, "Search service", /^Tavily/);
     const key = card(page, "Web").getByLabel("Key");
     assert.equal(await key.getAttribute("type"), "password");
@@ -324,7 +330,7 @@ test(
     const create = panel(page).getByRole("button", { name: "Create", exact: true });
     assert.equal(await create.isDisabled(), false, "nothing required is empty");
 
-    for (let i = 0; i < 6; i++) {
+    for (let i = 0; i < 10; i++) {
       await panel(page).getByRole("button", { name: "Add a unit" }).click();
       await page.getByRole("menuitem", { name: /^Web/ }).click();
       await page.getByRole("menu").waitFor({ state: "detached" });
@@ -340,7 +346,7 @@ test(
       "they scroll",
     );
     assert.deepEqual(await name.boundingBox(), before, "the name stays");
-    for (let i = 0; i < 6; i++)
+    for (let i = 0; i < 10; i++)
       await panel(page).getByRole("button", { name: "Remove Web" }).first().click();
 
     await create.click();
@@ -437,6 +443,7 @@ test(
   withGateway(async (gateway) => {
     const page = await open(gateway);
     await fromTemplate(page, "Assistant");
+    await unfold(page, "Web");
     await choose(page, "Search service", /^Tavily/);
     await card(page, "Web").getByLabel("Key").fill("the-key");
     await choose(page, "Files and commands", /^None/);
@@ -668,6 +675,73 @@ test(
     await page.waitForTimeout(500);
     assert.equal(await name.count(), 1, "choosing while it closes keeps it open");
     assert.equal(await assistant.getAttribute("aria-pressed"), "true");
+    await page.close();
+  }),
+);
+
+test(
+  "a unit with nothing to fill starts as one row of its choices, and opens on asking",
+  withGateway(async (gateway) => {
+    const page = await open(gateway);
+    await fromTemplate(page, "Assistant");
+    assert.equal(await card(page, "Web").getByRole("combobox").count(), 0, "folded");
+    assert.equal(await card(page, "Web").locator("[data-summary]").innerText(), "Exa");
+    assert.equal(await card(page, "Web").locator("[data-grants]").innerText(), "No key needed.");
+    assert.equal(
+      await card(page, "Computer").getByRole("combobox", { name: "Where it runs" }).count(),
+      1,
+      "something to fill",
+    );
+    await card(page, "Web").getByText("Web", { exact: true }).click();
+    await card(page, "Web").getByRole("combobox", { name: "Search service" }).waitFor();
+    assert.equal(await card(page, "Web").locator("[data-grants]").count(), 0);
+    await page.close();
+  }),
+);
+
+test(
+  "a folded unit's line of what it grants stays, and a problem on it opens it",
+  withGateway(async (gateway) => {
+    gateway.changeForm("computer", (field) => {
+      if (field.id === "where") field.default = "local";
+      if (field.id === "workspace") delete field.required;
+    });
+    const page = await open(gateway);
+    await fromTemplate(page, "Assistant");
+    const computer = card(page, "Computer");
+    assert.equal(await computer.getByRole("combobox").count(), 0, "preselected, so folded");
+    assert.equal(
+      await computer.locator("[data-summary]").innerText(),
+      "This computer, Files and terminal, Browser",
+    );
+    assert.match(
+      await computer.locator("[data-grants]").innerText(),
+      /It acts as you on this Mac\./,
+    );
+    assert.equal(
+      await panel(page).getByRole("button", { name: "Create", exact: true }).isDisabled(),
+      false,
+    );
+
+    gateway.findProblems([{ unit: 0, field: "where", message: "No service is running here." }]);
+    await panel(page).getByRole("button", { name: "Create", exact: true }).click();
+    await computer.getByText("No service is running here.").waitFor();
+    await computer.getByRole("combobox", { name: "Where it runs" }).waitFor();
+    await page.close();
+  }),
+);
+
+test(
+  "a unit added by hand starts open, even with nothing to fill",
+  withGateway(async (gateway) => {
+    const page = await open(gateway);
+    await page.getByRole("list", { name: "Your agents" }).waitFor();
+    await plus(page).click();
+    await panel(page).getByRole("button", { name: "Empty" }).click();
+    await panel(page).getByRole("button", { name: "Add a unit" }).click();
+    await page.getByRole("menuitem", { name: /^Web/ }).click();
+    await card(page, "Web").getByRole("combobox", { name: "Search service" }).waitFor();
+    assert.equal(await card(page, "Web").locator("[data-summary]").count(), 0);
     await page.close();
   }),
 );
