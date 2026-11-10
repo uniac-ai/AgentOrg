@@ -1,4 +1,4 @@
-// What the terminal viewers share: one xterm, and what a closed surface says.
+// One xterm for the terminal viewer, and what a closed surface says in any viewer.
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import { useEffect, useRef } from "react";
@@ -18,11 +18,8 @@ export function Xterm({
   onResize,
 }: {
   label: string;
-  /**
-   * A line feed alone starts a new line, as what isn't on a terminal device writes them. Left out,
-   * it is so unless the xterm takes typing.
-   */
-  convertEol?: boolean;
+  /** A line feed alone starts a new line, as what isn't on a terminal device writes them. */
+  convertEol: boolean;
   onReady(term: Terminal): void;
   onInput?: (data: string) => void;
   onResize?: (size: { columns: number; rows: number }) => void;
@@ -44,7 +41,7 @@ export function Xterm({
       fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
       fontSize: 12.5,
       lineHeight: 1.3,
-      convertEol: convertEol ?? !typing,
+      convertEol,
       theme: {
         background: color("--surface"),
         foreground: color("--fg"),
