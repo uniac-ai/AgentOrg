@@ -8,13 +8,14 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
 import { createRequire } from "node:module";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
@@ -81,6 +82,57 @@ async function until(condition: () => boolean | Promise<boolean>, what: string) 
   assert.fail(`timed out waiting for ${what}`);
 }
 const refused = (code: string) => (error: unknown) => (error as { code?: string }).code === code;
+/** The browser Playwright installed for the tests. */
+function headlessShell(): string {
+  const root =
+    process.env.PLAYWRIGHT_BROWSERS_PATH ??
+    (process.platform === "darwin"
+      ? join(homedir(), "Library", "Caches", "ms-playwright")
+      : join(homedir(), ".cache", "ms-playwright"));
+  for (const entry of readdirSync(root).filter((one) => one.startsWith("chromium_headless_shell")))
+    for (const inner of readdirSync(join(root, entry), { withFileTypes: true }))
+      if (inner.isDirectory())
+        for (const file of ["chrome-headless-shell", "headless_shell"])
+          if (existsSync(join(root, entry, inner.name, file)))
+            return join(root, entry, inner.name, file);
+  throw new Error(
+    `No headless shell under ${root}: run npx playwright install --only-shell chromium`,
+  );
+}
+/**
+ * A real service on `data`, as the person would start it, stopped when the test ends. It drives the
+ * headless shell: left to itself, the service starts the Chrome installed on the machine.
+ */
+async function startService(t: test.TestContext, data: string) {
+  const service = spawn(
+    process.execPath,
+    [
+      join(
+        dirname(createRequire(import.meta.url).resolve("@agentorg/computer")),
+        "agentcomputer.js",
+      ),
+      "serve",
+      "--listen",
+      "127.0.0.1:0",
+      "--data",
+      data,
+      "--browser-path",
+      headlessShell(),
+    ],
+    { stdio: "ignore" },
+  );
+  t.after(async () => {
+    if (service.exitCode === null) {
+      service.kill("SIGTERM");
+      await once(service, "exit");
+    }
+  });
+  await until(() => existsSync(join(data, "server.json")), "the service to start");
+  return {
+    apiUrl: JSON.parse(readFileSync(join(data, "server.json"), "utf8")).url as string,
+    apiKey: readFileSync(join(data, "control-token"), "utf8").trim(),
+  };
+}
 type Binding = { consumer: string; slot: string; provider: string; export: string };
 const wiring = async (person: Person, actor: string) =>
   (await person.call<{ bindings: Binding[] }>("bindings", "list", { actor })).bindings
@@ -358,32 +410,7 @@ test("the bundled Assistant is a computer and the web, and its computer goes wit
   assert.deepEqual((await person.call<{ agents: unknown[] }>("agents", "list")).agents, []);
   assert.equal(existsSync(join(data, "server.json")), false);
 
-  const service = spawn(
-    process.execPath,
-    [
-      join(
-        dirname(createRequire(import.meta.url).resolve("@agentorg/computer")),
-        "agentcomputer.js",
-      ),
-      "serve",
-      "--listen",
-      "127.0.0.1:0",
-      "--data",
-      data,
-    ],
-    { stdio: "ignore" },
-  );
-  t.after(async () => {
-    if (service.exitCode === null) {
-      service.kill("SIGTERM");
-      await once(service, "exit");
-    }
-  });
-  await until(() => existsSync(join(data, "server.json")), "the service to start");
-  const reached = {
-    apiUrl: JSON.parse(readFileSync(join(data, "server.json"), "utf8")).url as string,
-    apiKey: readFileSync(join(data, "control-token"), "utf8").trim(),
-  };
+  const reached = await startService(t, data);
 
   const { agent } = await person.call<{ agent: string }>("agents", "create", {
     template: "assistant",
@@ -444,32 +471,7 @@ test("a socket from the person reaches a computer's surfaces live, with no token
     webUrl: "http://127.0.0.1:9/mcp",
     agentsFolder: join(root, "Agents"),
   });
-  const service = spawn(
-    process.execPath,
-    [
-      join(
-        dirname(createRequire(import.meta.url).resolve("@agentorg/computer")),
-        "agentcomputer.js",
-      ),
-      "serve",
-      "--listen",
-      "127.0.0.1:0",
-      "--data",
-      data,
-    ],
-    { stdio: "ignore" },
-  );
-  t.after(async () => {
-    if (service.exitCode === null) {
-      service.kill("SIGTERM");
-      await once(service, "exit");
-    }
-  });
-  await until(() => existsSync(join(data, "server.json")), "the service to start");
-  const reached = {
-    apiUrl: JSON.parse(readFileSync(join(data, "server.json"), "utf8")).url as string,
-    apiKey: readFileSync(join(data, "control-token"), "utf8").trim(),
-  };
+  const reached = await startService(t, data);
   const { app, person } = await s.start();
   const { agent } = await person.call<{ agent: string }>("agents", "create", {
     template: "assistant",
