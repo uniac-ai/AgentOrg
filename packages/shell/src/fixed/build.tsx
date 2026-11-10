@@ -27,12 +27,15 @@ import { useAct } from "./data.ts";
 import { FormField } from "./form.tsx";
 import {
   type CatalogUnit,
+  chosenNotes,
   type DraftUnit,
   givesOf,
   isReady,
   isShown,
   missingNeeds,
   nameOf,
+  needsAttention,
+  partsOf,
   type StackProblem,
   toStack,
 } from "./stack.ts";
@@ -380,7 +383,12 @@ function UnitCard({
   problems: StackProblem[];
 }) {
   const { catalog, addUnit, removeUnit, setSecret, setValue } = useBuilding();
-  const [unfolded, setUnfolded] = useState(true);
+  // What needs nothing from the person starts as one row, and can always be opened.
+  const [unfolded, setUnfolded] = useState(() => needsAttention(entry, above));
+  const found = problems.length > 0;
+  useEffect(() => {
+    if (found) setUnfolded(true);
+  }, [found]);
   const { unit, key, values, secrets } = entry;
   const title = unit?.title ?? entry.id;
   const gives = unit ? givesOf(unit, values) : { slots: [], skills: [] };
@@ -392,8 +400,24 @@ function UnitCard({
   return (
     <li aria-label={title} className="rounded-xl bg-card">
       <div className="flex h-10 items-center gap-1.5 pr-1.5 pl-3">
-        <CpuIcon className="size-3.5 shrink-0 text-muted-foreground" />
-        <span className="min-w-0 flex-1 truncate text-[13px] font-semibold">{title}</span>
+        <button
+          type="button"
+          tabIndex={-1}
+          aria-hidden
+          className="flex h-full min-w-0 flex-1 items-center gap-1.5 text-left"
+          onClick={() => setUnfolded(!unfolded)}
+        >
+          <CpuIcon className="size-3.5 shrink-0 text-muted-foreground" />
+          <span className="shrink-0 text-[13px] font-semibold">{title}</span>
+          {!unfolded && (
+            <span
+              data-summary
+              className="min-w-0 flex-1 truncate pl-1 text-xs text-muted-foreground"
+            >
+              {unit && partsOf(values, unit.form).join(", ")}
+            </span>
+          )}
+        </button>
         <Button
           type="button"
           variant="ghost"
@@ -416,6 +440,11 @@ function UnitCard({
           <XIcon />
         </Button>
       </div>
+      {!unfolded && unit && chosenNotes(values, unit.form).length > 0 && (
+        <p data-grants className="px-3 pb-2.5 text-xs text-muted-foreground">
+          {chosenNotes(values, unit.form).join(" ")}
+        </p>
+      )}
       {unfolded && (
         <div className="flex flex-col gap-3 px-3 pb-3 empty:hidden">
           {!unit && <p className="text-xs text-[var(--bad)]">Not available here.</p>}

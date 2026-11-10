@@ -148,6 +148,12 @@ export const missingNeeds = (unit: DraftUnit, above: readonly DraftUnit[]) =>
 export const nameOf = (draft: Pick<Draft, "name" | "suggested">) =>
   draft.name.trim() || draft.suggested;
 
+/** A card opens by itself only when there's something on it to do. */
+export const needsAttention = (unit: DraftUnit, above: readonly DraftUnit[]) =>
+  !unit.unit ||
+  unit.unit.form.some((field) => isUnfilled(field, unit)) ||
+  missingNeeds(unit, above).length > 0;
+
 /** A template or an agent can be finished: a name always, and for an agent everything required. */
 export function isReady(draft: Draft): boolean {
   if (!nameOf(draft)) return false;
