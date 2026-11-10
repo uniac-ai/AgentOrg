@@ -46,7 +46,9 @@ function headlessShell(): string {
     (process.platform === "darwin"
       ? join(homedir(), "Library", "Caches", "ms-playwright")
       : join(homedir(), ".cache", "ms-playwright"));
-  for (const entry of readdirSync(root).filter((one) => one.startsWith("chromium_headless_shell")))
+  // With no browsers installed at all, there is no such folder to read.
+  const installed = existsSync(root) ? readdirSync(root) : [];
+  for (const entry of installed.filter((one) => one.startsWith("chromium_headless_shell")))
     for (const inner of readdirSync(join(root, entry), { withFileTypes: true }))
       if (inner.isDirectory())
         for (const file of ["chrome-headless-shell", "headless_shell"])
