@@ -104,6 +104,21 @@ export const ConnectionOrigin = z.object({
   at: Time,
 });
 
+/** One call an agent made through its control unit that changed something, or was refused. */
+const ActivityEntry = z.object({
+  /** Its place in the log, newest highest. */
+  seq: z.number().int().min(0),
+  at: Time,
+  /** The agent that called. */
+  caller: Id,
+  tool: z.string().min(1).max(128),
+  /** What it was about: an agent, a connection, a skill or a unit's instance. */
+  target: z.string().max(256).optional(),
+  outcome: z.enum(["done", "refused"]),
+  /** Why it was refused. Never a message an agent sent, or a secret. */
+  reason: z.string().max(2000).optional(),
+});
+
 /** An agent as the list shows it: its status is its provider's. */
 const AgentEntry = z.object({
   agent: Id,
@@ -220,6 +235,18 @@ export const agents = defineInterface({
     addUnit: method({ input: z.strictObject(AddUnit), output: z.object({ instance: Id }) }),
     /** Remove a unit from a living agent: what it made goes. Refused `state` while another needs it. */
     removeUnit: method({ input: z.object({ agent: Id, instance: Id }), output: z.object({}) }),
+    /**
+     * What agents did through their control units, newest first: each call that changed something,
+     * and each refusal. With `agent`, those it made or that were about it.
+     */
+    activity: method({
+      input: z.object({
+        agent: Id.optional(),
+        before: z.number().int().min(0).optional(),
+        limit: z.number().int().min(1).max(200).optional(),
+      }),
+      output: z.object({ entries: z.array(ActivityEntry), more: z.boolean() }),
+    }),
     /** Final: removes the units, last first, then the agent, and the connections made for it. */
     remove: method({ input: OnAgent, output: z.object({}) }),
   },

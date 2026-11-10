@@ -1019,7 +1019,7 @@ test("every unit on offer is listed, management's own among them", async (t) => 
     units.map((one) => [one.id, one.providerName]),
     [
       ["mcp", "Management"],
-      ["agents", "Management"],
+      ["control", "Management"],
       ["skill", "Management"],
       ["files", "Units"],
       ["machine", "Units"],
@@ -1585,7 +1585,7 @@ async function delegating(t: test.TestContext) {
     deputy: [
       {
         provider: "Management",
-        unit: "agents",
+        unit: "control",
         values: { templates: ["helper", "worker"], limit: 8, depth: 3, access: "files" },
       },
     ],
@@ -1597,13 +1597,13 @@ async function delegating(t: test.TestContext) {
       base: on,
       units,
     });
-  const agentsUnit = (values: object) => s.own("agents", values);
+  const agentsUnit = (values: object) => s.own("control", values);
   const parent = async (values: object, computer?: object, name = "Parent") => {
     const agent = await s.makeStack(
       [...(computer ? [s.unit("computer", computer as never)] : []), agentsUnit(values)],
       name,
     );
-    return { agent, tools: await s.exposedTo<ToolCalls>(agent, "agents") };
+    return { agent, tools: await s.exposedTo<ToolCalls>(agent, "control") };
   };
   const made = async (tools: ToolCalls, name: string, args: object) => {
     const answer = await tools.call({ name, arguments: args });
@@ -1620,13 +1620,17 @@ test("an agent creates, messages, reads, stops and removes an agent of its own",
   assert.deepEqual(await s.names(tools), [
     "create_helper",
     "create_prefilled",
-    "list",
-    "status",
-    "send",
-    "read",
-    "stop",
-    "start",
-    "remove",
+    "agent_list",
+    "agent_get",
+    "agent_send",
+    "agent_read",
+    "agent_stop",
+    "agent_start",
+    "agent_remove",
+    "agent_add_unit",
+    "agent_remove_unit",
+    "template_list",
+    "unit_list",
   ]);
   const held = await s.calls.agents.get({ agent: parent });
   assert.deepEqual(
@@ -1651,16 +1655,19 @@ test("an agent creates, messages, reads, stops and removes an agent of its own",
     return JSON.parse(answer.output);
   };
   assert.deepEqual(
-    (await call("list", {})).agents.map((one: { agent: string }) => one.agent),
+    (await call("agent_list", {})).agents.map((one: { agent: string }) => one.agent),
     [child],
   );
-  await call("send", { agent: child, text: "Please start." });
-  assert.equal(s.chats.get(child)?.[0]?.text, "Please start.");
-  assert.equal((await call("read", { agent: child })).messages[0].text, "Please start.");
-  assert.deepEqual((await call("status", { agent: child })).chat, { state: "idle" });
-  await call("stop", { agent: child });
+  await call("agent_send", { agent: child, text: "Please start." });
+  // It says who sent it, so it doesn't read as the person's.
+  assert.equal(s.chats.get(child)?.[0]?.text, 'An agent, "Parent", says:\n\nPlease start.');
+  assert.match((await call("agent_read", { agent: child })).messages[0].text, /Please start/);
+  const got = await call("agent_get", { agent: child });
+  assert.deepEqual(got.chat, { state: "idle" });
+  assert.equal(got.purpose, "Do the small part.");
+  await call("agent_stop", { agent: child });
   assert.equal((await s.calls.agents.get({ agent: child })).status.state, "stopped");
-  await call("start", { agent: child });
+  await call("agent_start", { agent: child });
   assert.equal((await s.calls.agents.get({ agent: child })).status.state, "running");
 
   // No agent holds any part of the Hub.
@@ -1669,9 +1676,9 @@ test("an agent creates, messages, reads, stops and removes an agent of its own",
       !(await s.bindingsOf(agent)).some((b) => b.provider === "hub" && b.consumer === agent),
     );
 
-  await call("remove", { agent: child });
+  await call("agent_remove", { agent: child });
   assert.ok(!(await s.openActors()).includes(child));
-  assert.deepEqual((await call("list", {})).agents, []);
+  assert.deepEqual((await call("agent_list", {})).agents, []);
 });
 
 test("a template's values are the defaults of what an agent fills in", async (t) => {
@@ -1715,15 +1722,24 @@ test("an agent reaches only what it made, and only through its unit", async (t) 
   const one = await s.parent({ templates: ["helper"] }, undefined, "One");
   const two = await s.parent({ templates: ["helper"] }, undefined, "Two");
   const child = await s.made(one.tools, "create_helper", { name: "Kid", purpose: "P." });
-  for (const name of ["status", "send", "read", "stop", "start", "remove"]) {
+  for (const name of [
+    "agent_get",
+    "agent_send",
+    "agent_read",
+    "agent_stop",
+    "agent_start",
+    "agent_remove",
+    "agent_add_unit",
+    "agent_remove_unit",
+  ]) {
     const answer = await two.tools.call({
       name,
-      arguments: { agent: child, text: "Hello" },
+      arguments: { agent: child, text: "Hello", provider: "x", unit: "y", instance: "i" },
     });
     assert.equal(answer.failed, true, name);
     assert.match(answer.output, /no agent/);
   }
-  const output = (await two.tools.call({ name: "list", arguments: {} })).output;
+  const output = (await two.tools.call({ name: "agent_list", arguments: {} })).output;
   assert.deepEqual(JSON.parse(output).agents, []);
   assert.equal((await one.tools.call({ name: "create_nothing", arguments: {} })).failed, true);
 
@@ -1738,10 +1754,10 @@ test("an agent reaches only what it made, and only through its unit", async (t) 
 
   // Nor does holding its tools without the unit.
   const bare = await s.makeStack([], "Bare");
-  await s.calls.agents.expose({ agent: bare, connection: s.management.actorId, as: "agents" });
-  const tools = await s.exposedTo<ToolCalls>(bare, "agents");
+  await s.calls.agents.expose({ agent: bare, connection: s.management.actorId, as: "control" });
+  const tools = await s.exposedTo<ToolCalls>(bare, "control");
   assert.deepEqual((await tools.list({})).tools, []);
-  await assert.rejects(tools.call({ name: "list", arguments: {} }), refused("unknown"));
+  await assert.rejects(tools.call({ name: "agent_list", arguments: {} }), refused("unknown"));
 });
 
 test("an agent can't have more agents than its limit, or the home more than its cap", async (t) => {
@@ -1754,7 +1770,7 @@ test("an agent can't have more agents than its limit, or the home more than its 
   });
   assert.equal(twice.failed, true);
   assert.match(twice.output, /already have/);
-  await tools.call({ name: "remove", arguments: { agent: first } });
+  await tools.call({ name: "agent_remove", arguments: { agent: first } });
   await s.made(tools, "create_helper", { name: "C", purpose: "P." });
 
   // Two at once can't both take the last place.
@@ -1795,9 +1811,15 @@ test("a child's agents unit holds no more than its parent's, one level less deep
     { access: "read" },
   );
   const deputy = await s.made(tools, "create_deputy", { name: "Deputy", purpose: "P." });
-  const unit = (await s.calls.agents.get({ agent: deputy })).units.find((u) => u.unit === "agents");
+  const unit = (await s.calls.agents.get({ agent: deputy })).units.find(
+    (u) => u.unit === "control",
+  );
   // The template's values are brought within the parent's, whatever the template says.
   assert.deepEqual(unit?.values, {
+    agents: "own",
+    saveTemplates: false,
+    connections: "none",
+    skills: "none",
     templates: ["helper"],
     places: [],
     access: "none",
@@ -1808,7 +1830,7 @@ test("a child's agents unit holds no more than its parent's, one level less deep
   const beyond = async (values: object, pattern: RegExp) => {
     const answer = await tools.call({
       name: "create_deputy",
-      arguments: { name: "More", purpose: "P.", units: { agents: values } },
+      arguments: { name: "More", purpose: "P.", units: { control: values } },
     });
     assert.equal(answer.failed, true);
     assert.match(answer.output, pattern);
@@ -1819,8 +1841,8 @@ test("a child's agents unit holds no more than its parent's, one level less deep
   await beyond({ browser: true }, /browser/);
   await beyond({ depth: 2 }, /can't set/);
   // At depth 1, it has no agents unit to pass on.
-  const childTools = await s.exposedTo<ToolCalls>(deputy, "agents");
-  assert.deepEqual((await s.names(childTools)).slice(0, 2), ["create_helper", "list"]);
+  const childTools = await s.exposedTo<ToolCalls>(deputy, "control");
+  assert.deepEqual((await s.names(childTools)).slice(0, 2), ["create_helper", "agent_list"]);
 });
 
 test("a child shares its parent's computer only within the bounds, or goes to a listed place", async (t) => {
@@ -1945,7 +1967,7 @@ test("a value of the wrong kind can't get past a bound", async (t) => {
   for (const units of [{ limit: "abc" }, { templates: "helper" }, { depth: "1" }]) {
     const answer = await tools.call({
       name: "create_deputy",
-      arguments: { name: "X", purpose: "P.", units: { agents: units } },
+      arguments: { name: "X", purpose: "P.", units: { control: units } },
     });
     assert.equal(answer.failed, true, JSON.stringify(units));
   }
@@ -2006,7 +2028,7 @@ test("a computer no longer held can't be shared", async (t) => {
       { provider: "Units", unit: "computer", values: { access: "read" } },
       {
         provider: "Management",
-        unit: "agents",
+        unit: "control",
         values: { templates: ["worker"], places: ["own"], access: "read" },
       },
     ],
@@ -2016,7 +2038,7 @@ test("a computer no longer held can't be shared", async (t) => {
     purpose: "P.",
     place: "own",
   });
-  const tools = await s.exposedTo<ToolCalls>(child, "agents");
+  const tools = await s.exposedTo<ToolCalls>(child, "control");
   assert.ok((await s.names(tools)).includes("create_worker"));
   await s.calls.agents.removeUnit({ agent: child, instance: "slot:computer" });
   assert.ok(!(await s.names(tools)).includes("create_worker"), "it has nothing left to share");
@@ -2085,6 +2107,222 @@ test("a new computer is on its parent's service, and within its bounds", async (
     "Away",
   );
   assert.ok(!(await s.names(away.tools)).includes("create_worker"));
+});
+
+test("what an agent can see of connections is what its scope says", async (t) => {
+  const s = await delegating(t);
+  const connection = await s.picked();
+  const { tools } = await s.parent({ templates: ["helper"], agents: "all" }, undefined, "Nosy");
+  const other = await s.makeStack([s.own("connection", { connection, slot: "search" })], "Other");
+  const got = JSON.parse(
+    (await tools.call({ name: "agent_get", arguments: { agent: other } })).output,
+  );
+  assert.deepEqual(Object.keys(got.mcp[0]).sort(), ["instance", "slot", "status"]);
+  const units = JSON.parse((await tools.call({ name: "unit_list", arguments: {} })).output).units;
+  const places = units
+    .find((one: { id: string }) => one.id === "control")
+    .form.find((field: { id: string }) => field.id === "places");
+  assert.deepEqual(
+    places.options.map((one: { value: string }) => one.value),
+    ["own", "new"],
+  );
+});
+
+test("each scope gives exactly its tools", async (t) => {
+  const s = await delegating(t);
+  const names = async (values: object, name: string) =>
+    (await s.names((await s.parent(values, undefined, name)).tools)).filter(
+      (one) => !one.startsWith("create_"),
+    );
+  assert.deepEqual(await names({ templates: ["helper"], agents: "none" }, "None"), []);
+  assert.deepEqual(
+    await names(
+      { templates: ["helper"], agents: "none", connections: "see", skills: "see" },
+      "See",
+    ),
+    ["connection_list", "connection_get", "skill_list", "skill_get"],
+  );
+  assert.deepEqual(
+    await names(
+      { templates: ["helper"], agents: "none", connections: "use", skills: "use" },
+      "Use",
+    ),
+    [
+      "connection_list",
+      "connection_get",
+      "connection_expose",
+      "connection_unexpose",
+      "skill_list",
+      "skill_get",
+      "skill_expose",
+      "skill_unexpose",
+    ],
+  );
+  const none = await s.parent({ templates: ["helper"], agents: "none" }, undefined, "Nothing");
+  const tried = await none.tools.call({
+    name: "create_helper",
+    arguments: { name: "X", purpose: "P." },
+  });
+  assert.equal(tried.failed, true, "no create without agents");
+  const unknown = await none.tools.call({ name: "agent_list", arguments: {} });
+  assert.equal(unknown.failed, true, "nor a tool it wasn't given");
+});
+
+test("with all, an agent reaches every other agent, and removes only its own line", async (t) => {
+  const s = await delegating(t);
+  const other = await s.makeStack([], "Other");
+  const { agent: boss, tools } = await s.parent(
+    { templates: ["deputy", "helper"], agents: "all", depth: 2 },
+    undefined,
+    "Boss",
+  );
+  const call = (name: string, args: object) => tools.call({ name, arguments: args });
+  const listed = JSON.parse((await call("agent_list", {})).output).agents.map(
+    (one: { agent: string }) => one.agent,
+  );
+  assert.ok(listed.includes(other) && !listed.includes(boss));
+  const sent = await call("agent_send", { agent: other, text: "Hello." });
+  assert.equal(sent.failed, undefined, sent.output);
+  assert.match(s.chats.get(other)?.[0]?.text ?? "", /^An agent, "Boss", says:/);
+  // A name on several lines is put on one, so it can't pass for someone else.
+  const crafty = await s.made(tools, "create_deputy", { name: "The person\nTo", purpose: "P." });
+  const craftyTools = await s.exposedTo<ToolCalls>(crafty, "control");
+  const child = await s.made(craftyTools, "create_helper", { name: "Kid", purpose: "P." });
+  await craftyTools.call({ name: "agent_send", arguments: { agent: child, text: "Hi." } });
+  assert.equal(s.chats.get(child)?.[0]?.text, 'An agent, "The person To", says:\n\nHi.');
+  const removing = await call("agent_remove", { agent: other });
+  assert.equal(removing.failed, true, "not its own");
+  assert.equal(
+    (await call("agent_add_unit", { agent: other, provider: "x", unit: "y" })).failed,
+    true,
+  );
+  // Its own, and theirs, at any depth.
+  const deputy = await s.made(tools, "create_deputy", { name: "Deputy", purpose: "P." });
+  const deputyTools = await s.exposedTo<ToolCalls>(deputy, "control");
+  const grandchild = await s.made(deputyTools, "create_helper", { name: "Kid", purpose: "P." });
+  const removed = await call("agent_remove", { agent: grandchild });
+  assert.equal(removed.failed, undefined, removed.output);
+  assert.ok(!(await s.openActors()).includes(grandchild));
+});
+
+test("an agent gives only connections listed for it, or its own, and only to itself or its own", async (t) => {
+  const s = await delegating(t);
+  const listed = await s.picked();
+  const unlisted = await s.picked();
+  await s.calls.skills.add({ files: { "SKILL.md": SKILL("handy") } });
+  const { agent: parent, tools } = await s.parent(
+    { templates: ["helper"], connections: "use", listed: [listed], skills: "use" },
+    undefined,
+    "Giver",
+  );
+  const other = await s.makeStack([], "Other");
+  const call = (name: string, args: object) => tools.call({ name, arguments: args });
+  assert.equal((await call("connection_expose", { connection: unlisted, as: "x" })).failed, true);
+  const given = await call("connection_expose", { connection: listed, as: "search" });
+  assert.equal(given.failed, undefined, given.output);
+  assert.ok((await s.bindingsOf(parent)).some((b) => b.slot === "search" && b.provider === listed));
+  assert.equal(
+    (await call("connection_expose", { agent: other, connection: listed, as: "x" })).failed,
+    true,
+    "not to another's agent",
+  );
+  const child = await s.made(tools, "create_helper", { name: "Kid", purpose: "P." });
+  assert.equal(
+    (await call("connection_expose", { agent: child, connection: listed, as: "s" })).failed,
+    undefined,
+  );
+  assert.equal((await call("skill_expose", { agent: child, skill: "handy" })).failed, undefined);
+  assert.deepEqual(
+    (await s.calls.agents.get({ agent: child })).skills.map((one) => one.name),
+    ["handy"],
+  );
+  // A skill's name is held to the interface's own, so it can't reach outside the library.
+  for (const skill of ["../../../elsewhere", "..", "handy/../x"]) {
+    assert.equal((await call("skill_expose", { skill })).failed, true, skill);
+    assert.equal((await call("skill_get", { name: skill })).failed, true, skill);
+  }
+  // Its own control slot can't be taken away by it.
+  assert.equal((await call("connection_unexpose", { slot: "control" })).failed, true);
+  assert.equal((await call("connection_unexpose", { slot: "search" })).failed, undefined);
+});
+
+test("a unit an agent adds is held to what it may set", async (t) => {
+  const s = await delegating(t);
+  const { tools } = await s.parent({ templates: ["helper"] });
+  const child = await s.made(tools, "create_helper", { name: "Kid", purpose: "P." });
+  const add = (values: object, unit = "files") =>
+    tools.call({
+      name: "agent_add_unit",
+      arguments: { agent: child, provider: s.unitsActor.actorId, unit, values },
+    });
+  assert.equal((await add({ folder: "/a" })).failed, undefined);
+  assert.equal((await s.calls.agents.get({ agent: child })).units.length, 1);
+  assert.match((await add({ mode: "x" }, "closed")).output, /can't set/);
+  assert.match(
+    (await add({ access: "terminal" }, "computer")).output,
+    /only when an agent is made/,
+  );
+});
+
+test("the control log keeps each change and each refusal, never what was said", async (t) => {
+  const s = await delegating(t);
+  const { agent: parent, tools } = await s.parent({ templates: ["helper"] });
+  const child = await s.made(tools, "create_helper", { name: "Kid", purpose: "P." });
+  const words = `words-${crypto.randomUUID()}`;
+  await tools.call({ name: "agent_send", arguments: { agent: child, text: words } });
+  await tools.call({ name: "agent_list", arguments: {} });
+  await tools.call({ name: "agent_remove", arguments: { agent: "act_nobody" } });
+  const { entries } = await s.calls.agents.activity({});
+  assert.deepEqual(
+    entries.map((one) => [one.caller, one.tool, one.target, one.outcome]),
+    [
+      [parent, "agent_remove", "act_nobody", "refused"],
+      [parent, "agent_send", child, "done"],
+      [parent, "create_helper", child, "done"],
+    ],
+  );
+  assert.match(entries[0]?.reason ?? "", /no agent/);
+  assert.ok(!JSON.stringify(entries).includes(words));
+  assert.ok(!readFileSync(join(s.dir, "activity.jsonl"), "utf8").includes(words));
+  assert.deepEqual(
+    (await s.calls.agents.activity({ agent: child })).entries.map((one) => one.tool),
+    ["agent_send", "create_helper"],
+  );
+  const page = await s.calls.agents.activity({ limit: 1 });
+  assert.equal(page.more, true);
+  assert.equal(
+    (await s.calls.agents.activity({ before: page.entries[0]?.seq })).entries[0]?.tool,
+    "agent_send",
+  );
+});
+
+test("a child's control unit holds no more than its parent's, scope by scope", async (t) => {
+  const s = await delegating(t);
+  const { tools } = await s.parent(
+    { templates: ["deputy", "helper"], depth: 2, connections: "see", skills: "use" },
+    undefined,
+    "Scoped",
+  );
+  const beyond = async (values: object) =>
+    (
+      await tools.call({
+        name: "create_deputy",
+        arguments: { name: "More", purpose: "P.", units: { control: values } },
+      })
+    ).failed;
+  assert.equal(await beyond({ agents: "all" }), true);
+  assert.equal(await beyond({ connections: "use" }), true);
+  assert.equal(await beyond({ skills: "add" }), true);
+  assert.equal(await beyond({ saveTemplates: true }), true);
+  const deputy = await s.made(tools, "create_deputy", {
+    name: "Deputy",
+    purpose: "P.",
+    units: { control: { skills: "see" } },
+  });
+  const values = (await s.calls.agents.get({ agent: deputy })).units.find(
+    (one) => one.unit === "control",
+  )?.values;
+  assert.deepEqual([values?.connections, values?.skills], ["none", "see"]);
 });
 
 test("a parent's agents stay when it goes, as the person's", async (t) => {

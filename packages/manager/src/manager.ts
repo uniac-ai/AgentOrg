@@ -21,6 +21,7 @@ import {
 import { describeInterface, type Interface, type Log, Refused, type Slot } from "@agentorg/sdk";
 import { connect } from "@agentorg/sdk/client";
 import type { z } from "zod";
+import { createActivity } from "./activity.js";
 import { createControl } from "./control.js";
 import { schemaOf, secretsSchemaOf, settle } from "./form.js";
 import { createSkills, readSkillFolder } from "./skills.js";
@@ -33,7 +34,12 @@ type Chats = Slot<typeof chat>["call"];
 type Status = z.infer<typeof ConnectionStatus>;
 
 const FILE = "manager.json";
+const ACTIVITY = "activity.jsonl";
+/** Who a control call is made as, when it isn't on an agent's own behalf. */
+const PERSON_CALLER = "person";
+type Handler = (input: unknown, context: { caller: string }) => unknown;
 const CHAT_WAIT_MS = 2000;
+const CHAT = "chat@1";
 const TOOLS_EXPORT = "tools";
 
 export interface ManagerOptions {
@@ -94,6 +100,7 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
     renameSync(`${path}.tmp`, path);
   };
   const library = createSkills(join(dir, "skills"));
+  const activity = createActivity(join(dir, ACTIVITY));
   /** Agents being made: they can read their settings, and nothing else can see them yet. */
   const creating = new Map<string, z.infer<typeof AgentRecord>>();
 
@@ -280,6 +287,19 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
         });
       /** A child's chat: exposed to management when it is made, which takes a moment to arrive. */
       const chatOf = async (agent: string) => {
+        const exposedChat = () => exposed<Chats>(chat).find((one) => one.actor === agent);
+        if (!exposedChat()) {
+          // One the person made: its chat is reached as the person reaches it.
+          const { bindings } = await hub.bindings.list({ actor: PERSON_CALLER });
+          const theirs = bindings.find(
+            (one) =>
+              one.provider === agent && one.interface === CHAT && one.consumer === PERSON_CALLER,
+          );
+          if (theirs)
+            await hub.grants
+              .expose({ provider: agent, export: theirs.export, to: options.actorId })
+              .catch((error) => log.warn(`Reaching a chat: ${messageOf(error)}`));
+        }
         for (let waited = 0; waited < CHAT_WAIT_MS; waited += 20) {
           const found = exposed<Chats>(chat).find((one) => one.actor === agent);
           if (found) return found.call;
@@ -287,6 +307,10 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
         }
         throw new Refused("not_connected", "That agent's chat can't be reached now.");
       };
+      /** The person's own handlers, which an agent's control tools call after their checks. */
+      const personHandlers: Partial<
+        Record<"agents" | "connections" | "skills", Record<string, Handler>>
+      > = {};
       const control = createControl({
         self: options.actorId,
         records,
@@ -308,14 +332,27 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
         start: startAgent,
         stop: stopAgent,
         remove: removeWhole,
+        // Held to the interface's own input, as the person's calls are by the Hub.
+        person: async (iface, method, input, caller = PERSON_CALLER) => {
+          const handler = personHandlers[iface]?.[method];
+          const spec = (
+            { agents, connections, skills }[iface].methods as Record<string, { input: z.ZodType }>
+          )[method];
+          if (!handler || !spec) throw new Refused("unimplemented", `${iface} has no ${method}.`);
+          return handler(spec.input.parse(input), { caller });
+        },
+        hasSkill: (name) => library.has(name),
+        madeBy: (connection) => records.connections[connection]?.madeBy,
+        log: (entry) => activity.add(entry),
       });
-      /** Those who call management: the person. An agent comes through its agents unit instead. */
-      const personOnly = <E extends { implement(handlers: never): void }>(exported: E) => ({
+      /** Those who call management: the person. An agent comes through its control unit instead. */
+      const personOnly = <E extends { implement(handlers: never): void }>(
+        exported: E,
+        name: keyof typeof personHandlers,
+      ) => ({
         implement(handlers: Parameters<E["implement"]>[0]) {
-          const held = handlers as Record<
-            string,
-            (input: unknown, context: { caller: string }) => unknown
-          >;
+          const held = handlers as Record<string, Handler>;
+          personHandlers[name] = held;
           exported.implement(
             Object.fromEntries(
               Object.entries(held).map(([method, handler]) => [
@@ -324,7 +361,7 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
                   if (records.agents[context.caller] || creating.has(context.caller))
                     throw new Refused(
                       "forbidden",
-                      "An agent reaches this through its agents unit.",
+                      "An agent reaches this through its control unit.",
                     );
                   return handler(input, context);
                 },
@@ -359,7 +396,7 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
         },
       });
 
-      personOnly(ctx.exports.agents).implement({
+      personOnly(ctx.exports.agents, "agents").implement({
         creatable: async () => ({
           creatables: (
             await fromEach(agentProviders(), async ({ actor, call }) =>
@@ -385,6 +422,7 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
         addUnit: (input, { caller }) =>
           stacks.serial(input.agent, () => stacks.addUnit(input, caller)),
         removeUnit: (input) => stacks.serial(input.agent, () => stacks.removeUnit(input)),
+        activity: (input) => activity.read(input),
 
         async list() {
           const actors = await open();
@@ -486,7 +524,7 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
         remove: ({ agent }) => removeWhole(agent),
       });
 
-      personOnly(ctx.exports.connections).implement({
+      personOnly(ctx.exports.connections, "connections").implement({
         providers: async () => ({
           providers: (
             await fromEach(unitProviders(), async ({ actor, call }) => ({
@@ -600,7 +638,7 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
         },
       });
 
-      personOnly(ctx.exports.skills).implement({
+      personOnly(ctx.exports.skills, "skills").implement({
         add: (input) => {
           const added = library.add("path" in input ? readSkillFolder(input.path) : input.files);
           for (const [agent, record] of Object.entries(records.agents))
