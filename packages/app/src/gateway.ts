@@ -74,7 +74,7 @@ export type Route = (request: IncomingMessage, response: ServerResponse, url: UR
 export interface AppOptions {
   /** The Hub home. */
   home: string;
-  /** The gateway's port on 127.0.0.1; any free one by default. */
+  /** The gateway's port on 127.0.0.1; by default the kept sessions' if it can, else any free one. */
   port?: number;
   /** Where the shell's static files are; `@agentorg/shell`'s build by default. */
   shell?: string;
@@ -102,6 +102,17 @@ export interface App {
    * program took it, or the Hub went), so it stopped itself.
    */
   readonly closed: Promise<{ lost: boolean }>;
+}
+
+/** The port the kept sessions were given at, if any are kept. */
+function keptPort(sessions: string): number | undefined {
+  try {
+    const { at } = JSON.parse(readFileSync(sessions, "utf8")) as { at?: unknown };
+    const port = /^http:\/\/127\.0\.0\.1:(\d+)$/.exec(String(at))?.[1];
+    return port === undefined ? undefined : Number(port);
+  } catch {
+    return undefined;
+  }
 }
 
 /** Write a file only its owner reads, all at once. */
@@ -137,16 +148,11 @@ export async function startApp(options: AppOptions): Promise<App> {
     kept: {
       read() {
         try {
-          const kept = JSON.parse(readFileSync(sessions, "utf8")) as {
-            at?: unknown;
-            hashes?: unknown;
-          };
-          if (kept.at === origin) return kept.hashes;
-          rmSync(sessions);
+          return (JSON.parse(readFileSync(sessions, "utf8")) as { hashes?: unknown }).hashes;
         } catch {
           // None kept, or none that reads back.
+          return undefined;
         }
-        return undefined;
       },
       write(hashes) {
         try {
@@ -357,16 +363,26 @@ export async function startApp(options: AppOptions): Promise<App> {
     });
   });
 
-  await new Promise<void>((done, failed) => {
-    server.once("error", failed);
-    server.listen(options.port ?? 0, "127.0.0.1", () => done());
-  }).catch(async (error) => {
+  const listenOn = (port: number) =>
+    new Promise<void>((done, failed) => {
+      server.once("error", failed);
+      server.listen(port, "127.0.0.1", () => done());
+    });
+  // With no port asked for, the one the kept sessions were given at, so a tab left open is still
+  // signed in. If that one can't be had, any free one, as on a first start.
+  await (options.port === undefined
+    ? listenOn(keptPort(sessions) ?? 0).catch(() => listenOn(0))
+    : listenOn(options.port)
+  ).catch(async (error) => {
     person.close();
     await listener.close();
     hub.close();
     throw error;
   });
-  origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const { port } = server.address() as AddressInfo;
+  // At another address the kept sessions are dropped, before anything is answered.
+  if (keptPort(sessions) !== port) rmSync(sessions, { force: true });
+  origin = `http://127.0.0.1:${port}`;
   writePrivate(join(home, "cli-token"), `${signIn.cliToken}\n`);
   writePrivate(join(home, "app.json"), `${JSON.stringify({ url: origin, pid: process.pid })}\n`);
 

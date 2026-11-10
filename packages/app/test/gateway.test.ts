@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
-import { connect as connectTcp } from "node:net";
+import { connect as connectTcp, createServer as createTcpServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -128,13 +128,22 @@ function restarting(t: test.TestContext) {
   });
   return {
     home,
-    /** Start on the home, at `port` or any free one. */
+    /** Start on the home, at `port`, or where the app itself chooses. */
     async start(port?: number) {
       const app = await startApp({ home, firstRun: { log: () => {} }, ...(port ? { port } : {}) });
       apps.push(app);
       return app;
     },
   };
+}
+/** Something else listening on `port`, until the test ends. */
+async function taking(t: test.TestContext, port: number) {
+  const other = createTcpServer();
+  t.after(() => other.close());
+  await new Promise<void>((done, failed) =>
+    other.once("error", failed).listen(port, "127.0.0.1", done),
+  );
+  return other;
 }
 /** What a tab saying `session` first gets: its call answered, or the code its socket closes with. */
 async function tabWith(app: App, session: string) {
@@ -177,16 +186,38 @@ test("a tab stays signed in when the app starts again at its address, and no oth
   });
   assert.equal(late.status, 403);
   assert.notEqual(readFileSync(join(home, "cli-token"), "utf8").trim(), token);
+});
 
-  // At another address the kept sessions are dropped, there and for good: a tab couldn't say
-  // one there, and what a tab left on the old address goes on saying is worth nothing.
+test("with no port asked for, the app takes the address its kept sessions are for; when it can't, they are dropped for good", async (t) => {
+  const { start } = restarting(t);
+  const first = await start();
+  const session = (await signIn(first)).session as string;
+  await first.close();
+  const second = await start();
+  assert.equal(second.url, first.url);
+  assert.equal(await tabWith(second, session), "answered");
   await second.close();
-  const elsewhere = await start();
-  assert.notEqual(elsewhere.url, first.url);
-  assert.equal(await tabWith(elsewhere, session), 4401);
-  await elsewhere.close();
+
+  // Something else has the port: the app starts elsewhere, as on a first start. What a tab left
+  // on the old address goes on saying there is worth nothing, even once the app is back on it.
+  const port = Number(new URL(first.url).port);
+  const other = await taking(t, port);
+  const third = await start();
+  assert.notEqual(third.url, first.url);
+  await third.close();
+  await new Promise((done) => other.close(done));
   const back = await start(port);
+  assert.equal(back.url, first.url);
   assert.equal(await tabWith(back, session), 4401);
+});
+
+test("a port that was asked for and is taken is an error, not another port", async (t) => {
+  const { start } = restarting(t);
+  const first = await start();
+  const port = Number(new URL(first.url).port);
+  await first.close();
+  await taking(t, port);
+  await assert.rejects(start(port), { code: "EADDRINUSE" });
 });
 
 test("sessions that don't read back are no reason not to start: everyone signs in again", async (t) => {
