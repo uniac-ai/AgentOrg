@@ -1,7 +1,7 @@
 /**
- * An agent's chats: each one's entry in the store, the looper's thread it is, and the one turn this
- * engine has them share. A chat is made by the message that starts it and is never deleted. The
- * entries are read when a chat is first asked for, all of them, and then stay in memory.
+ * An agent's chats: each one's entry in the store, and the looper's thread it is. A chat is made by
+ * the message that starts it and is never deleted. The entries are read when a chat is first asked
+ * for, all of them, and then stay in memory.
  */
 import {
   CHAT_TITLE_MAX,
@@ -151,19 +151,6 @@ export function createChats(options: {
   log: Log;
 }) {
   const { store, emit, log } = options;
-  /** The chat that has the turn: this engine runs one at a time, whichever chat it is in. */
-  let working: { held: Held } | undefined;
-  /** The chat that last had it: a turn stopped there may have a call still running. */
-  let last: Held | undefined;
-  /** Set while the agent is stopped: no turn starts until it is started. */
-  let stopped = options.stopped;
-  /** Set when the engine closes: no turn starts after. */
-  let closed = false;
-  /** Refuse a turn that can't start now, whatever chat it is for. */
-  const mayStart = () => {
-    if (closed) throw new Refused("unavailable", "This agent is closing.");
-    if (stopped) throw new Refused("busy", "It is stopped. Start it to go on.");
-  };
   /** The highest place in the list given so far. */
   let top = 0;
   /** Entries being written, one after another, so the latest written is the latest said. */
@@ -184,13 +171,9 @@ export function createChats(options: {
           emit.message({ ...message, chat: thread });
         },
         delta: (thread, id, text) => emit.delta({ chat: thread, id, text }),
-        status(thread, status) {
-          // The turn is given back before anyone hears it is over: the next may start at once.
-          if (working?.held.id === thread && (status.state === "idle" || status.state === "error"))
-            working = undefined;
-          emit.status({ ...status, chat: thread });
-        },
+        status: (thread, status) => emit.status({ ...status, chat: thread }),
       },
+      stopped: options.stopped,
       log,
     }),
   );
@@ -307,40 +290,12 @@ export function createChats(options: {
     if (!held) throw new Refused("unknown", "This agent has no such chat.");
     return held;
   };
-  /**
-   * Start a turn in a chat, or refuse while any chat has the turn. The turn is given back if it
-   * doesn't start; once it has, its status gives it back.
-   */
-  const turn = async <T>(held: Held, start: () => Promise<T>) => {
-    mayStart();
-    if (working)
-      throw new Refused(
-        "busy",
-        working.held === held
-          ? "A turn is running. Wait for it, or cancel it."
-          : "It is working in another chat. Wait for it, or stop it there.",
-      );
-    const mine = { held };
-    working = mine;
-    try {
-      // A turn stopped in another chat may have a call still running: it ends before this starts.
-      if (last && last !== held) await looper.drained(last.id);
-      // The agent may have been stopped meanwhile.
-      mayStart();
-      last = held;
-      return await start();
-    } catch (error) {
-      if (working === mine) working = undefined;
-      throw error;
-    }
-  };
-
   return {
     /** Start a turn in a chat, or in a new chat this message starts. */
     async send({ chat, text }: Input<"send">) {
       if (chat !== undefined) {
-        const held = await heldOf(chat);
-        const { messageId } = await turn(held, () => looper.send(chat, text));
+        await heldOf(chat);
+        const { messageId } = await looper.send(chat, text);
         return { chat, messageId };
       }
       const found = await load();
@@ -353,20 +308,17 @@ export function createChats(options: {
           archived: false,
         },
       };
-      return turn(held, async () => {
-        try {
-          // Its entry first: a record with no entry would be a chat nobody can find.
-          await store.set({ key: ENTRIES + held.id, value: held.stored });
-          found.set(held.id, held);
-          mayStart();
-          const { messageId } = await looper.send(held.id, text);
-          return { chat: held.id, messageId };
-        } catch (error) {
-          found.delete(held.id);
-          await store.delete({ key: ENTRIES + held.id }).catch(() => {});
-          throw error;
-        }
-      });
+      try {
+        // Its entry first: a record with no entry would be a chat nobody can find.
+        await store.set({ key: ENTRIES + held.id, value: held.stored });
+        found.set(held.id, held);
+        const { messageId } = await looper.send(held.id, text);
+        return { chat: held.id, messageId };
+      } catch (error) {
+        found.delete(held.id);
+        await store.delete({ key: ENTRIES + held.id }).catch(() => {});
+        throw error;
+      }
     },
     history: async ({ chat, before, limit }: Input<"history">) =>
       looper.page((await heldOf(chat)).id, before, limit ?? PAGE),
@@ -376,7 +328,8 @@ export function createChats(options: {
     },
     state: async ({ chat }: Input<"state">) => looper.state((await heldOf(chat)).id),
     async retry({ chat }: Input<"retry">) {
-      return turn(await heldOf(chat), () => looper.retry(chat));
+      await heldOf(chat);
+      return looper.retry(chat);
     },
     /**
      * The chats after `before` in the list, the one a message was last sent in first. `before`
@@ -404,25 +357,14 @@ export function createChats(options: {
       return {};
     },
     /**
-     * Stop the agent: the turn in progress is cut, and none starts until it is started. A call
-     * already running finishes first, so this answers when nothing more will be written. Its chats
-     * stay as they are, to be read.
+     * Stop the agent: its turns are cut, and none starts until it is started. A call already
+     * running finishes first, so this answers when nothing more will be written. Its chats stay as
+     * they are, to be read.
      */
-    async stop() {
-      stopped = true;
-      const held = working?.held;
-      if (held) await looper.cancel(held.id);
-      // A call still running, in this turn or one stopped before it, is recorded first.
-      await Promise.all([held, last].map((one) => one && looper.drained(one.id)));
-    },
-    start() {
-      stopped = false;
-    },
-    /** Close for good: the turn in progress is cut, and none starts after. */
-    async close() {
-      closed = true;
-      if (working) await looper.cancel(working.held.id);
-    },
+    stop: () => looper.stop(),
+    start: () => looper.start(),
+    /** Close for good: its turns are cut, and none starts after. */
+    close: () => looper.close(),
     /** Settles when every chat's latest turn has written all it will. */
     async settled() {
       await loaded?.catch(() => undefined);

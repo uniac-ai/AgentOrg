@@ -1,0 +1,308 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import {
+  createLooper,
+  type Json,
+  type OutputItem,
+  PLACES,
+  Refusal,
+  type Tool,
+  WAITING,
+} from "../src/index.ts";
+
+/**
+ * A looper whose model answers a request only when the test says so, naming the request by the
+ * last thing said to it. `asked` is what the model has been asked, in order.
+ */
+function looperWith(
+  options: {
+    tools?: Tool[];
+    stopped?: boolean;
+    /** A model that never hears a cancel: its answer stays out. */
+    deaf?: boolean;
+    /** Awaited before each write to the store. */
+    writing?: (key: string) => Promise<void> | undefined;
+  } = {},
+) {
+  const values = new Map<string, Json>();
+  const said: string[] = [];
+  const asked: string[] = [];
+  const open = new Map<string, { id: string; answer(output: OutputItem[]): void; fail(): void }>();
+  const looper = createLooper({
+    store: {
+      get: async ({ key }) => (values.has(key) ? { value: values.get(key) as Json } : {}),
+      async set({ key, value }) {
+        await options.writing?.(key);
+        values.set(key, value);
+      },
+      delete: async ({ key }) => void values.delete(key),
+      list: async ({ prefix = "", after }) => ({
+        keys: [...values.keys()]
+          .filter((key) => key.startsWith(prefix) && (after === undefined || key > after))
+          .sort(),
+        next: null,
+      }),
+    },
+    model: {
+      respond: ({ requestId, input }) =>
+        new Promise((answer, fail) => {
+          const last = input.findLast((item) => item.type === "message" && item.role === "user");
+          const text = last?.type === "message" ? last.content : "";
+          asked.push(text);
+          open.set(text, {
+            id: requestId,
+            answer: (output) => answer({ output }),
+            fail: () => fail(new Refusal("cancelled", "The request was cancelled.")),
+          });
+        }),
+      async cancel({ requestId }) {
+        if (options.deaf) return;
+        for (const request of open.values()) if (request.id === requestId) request.fail();
+      },
+    },
+    request: async () => ({ instructions: "", tools: options.tools ?? [] }),
+    out: {
+      message: (thread, { role, text }) => said.push(`${thread}: ${role}: ${text}`),
+      delta() {},
+      status() {},
+    },
+    ...(options.stopped === undefined ? {} : { stopped: options.stopped }),
+    log: { info() {}, warn() {}, error() {} },
+  });
+  /** Answer the request that ends with `text`, or fail it. */
+  const answer = (text: string, output: OutputItem[] = says("Done.")) =>
+    open.get(text)?.answer(output);
+  const fail = (text: string) => open.get(text)?.fail();
+  /** Threads no message was sent in before, each sent one and left in its turn. */
+  const fill = async (names: string[]) => {
+    const before = asked.length;
+    for (const name of names) await looper.send(name, `Work ${name}.`);
+    while (asked.length < before + names.length) await idle();
+  };
+  return { looper, said, asked, answer, fail, fill };
+}
+const says = (content: string): OutputItem[] => [{ type: "message", role: "assistant", content }];
+/** Let everything that can happen now happen. */
+async function idle() {
+  for (let i = 0; i < 50; i++) await new Promise((soon) => setImmediate(soon));
+}
+
+test("turns run side by side up to the places; the next waits its turn, its message already said", async () => {
+  const { looper, said, asked, answer, fill } = looperWith();
+  await fill(["a", "b", "c", "d"]);
+  assert.equal(asked.length, PLACES);
+
+  await looper.send("e", "Work e.");
+  await looper.send("f", "Work f.");
+  await idle();
+  assert.equal(asked.length, PLACES, "nothing more is asked of the model");
+  assert.ok(said.includes("e: user: Work e."));
+  assert.deepEqual(looper.state("e"), { state: "thinking" });
+  // A thread that waits is in its turn: it takes no second message, and no retry.
+  await assert.rejects(looper.send("e", "And this."), { name: "Refusal", code: "busy" });
+  await assert.rejects(looper.retry("e"), { code: "busy" });
+
+  // A place freed goes to whoever has waited longest.
+  answer("Work b.");
+  await idle();
+  assert.deepEqual(asked.slice(PLACES), ["Work e."]);
+  answer("Work a.");
+  await idle();
+  assert.deepEqual(asked.slice(PLACES), ["Work e.", "Work f."]);
+  for (const name of ["c", "d", "e", "f"]) answer(`Work ${name}.`);
+  await looper.settled();
+  assert.deepEqual(looper.state("f"), { state: "idle" });
+  assert.ok(said.includes("f: assistant: Done."));
+});
+
+test("a thread already begun takes one more place, so new threads never keep a message from it", async () => {
+  const { looper, asked, answer, fill } = looperWith();
+  for (const begun of ["x", "y"]) {
+    await looper.send(begun, `Start ${begun}.`);
+    await idle();
+    answer(`Start ${begun}.`);
+    await looper.settled();
+  }
+  await fill(["a", "b", "c", "d"]);
+  await looper.send("e", "Work e.");
+  await looper.send("x", "More x.");
+  await looper.send("y", "More y.");
+  await idle();
+  // The one more place is one: the second begun thread waits like any other.
+  assert.deepEqual(asked.slice(-2), ["Work d.", "More x."]);
+
+  // With five running, one ending frees no place for a new thread, only for the begun one.
+  answer("Work a.");
+  await idle();
+  assert.equal(asked.at(-1), "More y.");
+  answer("Work b.");
+  await idle();
+  assert.equal(asked.at(-1), "More y.");
+  answer("Work c.");
+  await idle();
+  assert.equal(asked.at(-1), "Work e.");
+  for (const text of ["Work d.", "More x.", "More y.", "Work e."]) answer(text);
+  await looper.settled();
+});
+
+test("the line for a place holds so many turns; past that a message is refused, and nothing of it is kept", async () => {
+  const { looper, said, asked, answer, fill } = looperWith();
+  await fill(["old"]);
+  answer("Work old.");
+  await looper.settled();
+  await fill(["a", "b", "c", "d"]);
+  for (let i = 0; i < WAITING; i++) await looper.send(`waits ${i}`, "Work.");
+  const full = {
+    name: "Refusal",
+    code: "busy",
+    message: "Too many turns are waiting. Wait for one to start, or cancel one.",
+  };
+  await assert.rejects(looper.send("one more", "Hello."), full);
+  assert.ok(!said.includes("one more: user: Hello."));
+  assert.deepEqual((await looper.page("one more", undefined, 10)).messages, []);
+  assert.deepEqual(looper.state("one more"), { state: "idle" });
+  // The one more place is still there for a thread already begun.
+  await looper.send("old", "More old.");
+  await idle();
+  assert.equal(asked.at(-1), "More old.");
+  // A turn that leaves the line makes room in it.
+  await looper.cancel("waits 0");
+  await looper.send("one more", "Hello again.");
+  assert.ok(said.includes("one more: user: Hello again."));
+  await looper.stop();
+});
+
+/** A tool that runs until the test lets it end. */
+function held() {
+  let finish: () => void = () => {};
+  const until = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  const tool: Tool = {
+    name: "hold",
+    parameters: {},
+    run: async () => {
+      await until;
+      return { output: "held", ok: true };
+    },
+  };
+  const called: OutputItem[] = [
+    { type: "function_call", callId: "c1", name: "hold", arguments: "{}" },
+  ];
+  return { tool, called, finish };
+}
+
+test("a turn cancelled while it waits never starts, and one cancelled in a call keeps its place until the call ends", async () => {
+  const { tool, called, finish } = held();
+  const { looper, said, asked, answer, fill } = looperWith({ tools: [tool] });
+  await fill(["a", "b", "c", "d"]);
+  answer("Work a.", called);
+  await looper.send("e", "Work e.");
+  await looper.send("f", "Work f.");
+  await idle();
+
+  await looper.cancel("e");
+  assert.deepEqual(looper.state("e"), { state: "idle" });
+  // Its call is still running: the turn is over for its thread, and its place is not yet free.
+  await looper.cancel("a");
+  await idle();
+  assert.equal(asked.length, PLACES);
+  finish();
+  await idle();
+  assert.deepEqual(asked.slice(PLACES), ["Work f."]);
+  assert.ok(said.includes("a: tool: hold: done"));
+  for (const name of ["b", "c", "d", "f"]) answer(`Work ${name}.`);
+  await looper.settled();
+  assert.ok(!asked.includes("Work e."));
+});
+
+test("a turn that will write nothing more gives its place back: one that failed, and one cancelled while the model answers", async () => {
+  const { looper, asked, answer, fail, fill } = looperWith({ deaf: true });
+  await fill(["a", "b", "c", "d"]);
+  await looper.send("e", "Work e.");
+  await looper.send("f", "Work f.");
+  await idle();
+  fail("Work a.");
+  await idle();
+  assert.deepEqual(looper.state("a").state, "error");
+  assert.deepEqual(asked.slice(PLACES), ["Work e."]);
+  // The model never hears this cancel, and its answer stays out: the place is free all the same.
+  await looper.cancel("b");
+  await idle();
+  assert.deepEqual(asked.slice(PLACES), ["Work e.", "Work f."]);
+  for (const name of ["b", "c", "d", "e", "f"]) answer(`Work ${name}.`);
+  await looper.settled();
+  assert.deepEqual(looper.state("b"), { state: "idle" });
+});
+
+test("stopped, every turn is cut, running or waiting, and no message is taken until it is started", async () => {
+  const { looper, said, asked, answer, fill } = looperWith();
+  await fill(["a", "b", "c", "d"]);
+  await looper.send("e", "Work e.");
+  await looper.stop();
+  await idle();
+  assert.equal(asked.length, PLACES, "the one that waited never started");
+  for (const name of ["a", "e"]) assert.deepEqual(looper.state(name), { state: "idle" });
+  const stopped = { name: "Refusal", code: "busy", message: "It is stopped. Start it to go on." };
+  await assert.rejects(looper.send("a", "More."), stopped);
+  await assert.rejects(looper.send("new", "Hello."), stopped);
+  await assert.rejects(looper.retry("a"), stopped);
+  assert.ok(!said.includes("a: user: More."));
+  // One made stopped starts stopped.
+  await assert.rejects(looperWith({ stopped: true }).looper.send("a", "Hello."), stopped);
+
+  // Started, it takes messages again; what was cut stays cut.
+  looper.start();
+  await looper.send("a", "More.");
+  await idle();
+  assert.deepEqual(asked.slice(PLACES), ["More."]);
+  answer("More.");
+  await looper.settled();
+  assert.ok(said.includes("a: assistant: Done."));
+});
+
+test("stopping answers when nothing more will be written: after a call still running, and a message being recorded", async () => {
+  const { tool, called, finish } = held();
+  let recorded: () => void = () => {};
+  const late = new Promise<void>((resolve) => {
+    recorded = resolve;
+  });
+  const { looper, said, asked, answer, fill } = looperWith({
+    tools: [tool],
+    writing: (key) => (key.startsWith("thread/late/") ? late : undefined),
+  });
+  await fill(["a"]);
+  answer("Work a.", called);
+  await idle();
+  const sending = looper.send("late", "Just before.");
+  await idle();
+  let stopped = false;
+  const stopping = looper.stop().then(() => {
+    stopped = true;
+  });
+  await idle();
+  assert.equal(stopped, false);
+  recorded();
+  await sending;
+  await idle();
+  assert.equal(stopped, false, "the call is still running");
+  finish();
+  await stopping;
+  assert.ok(said.includes("late: user: Just before."));
+  assert.ok(said.includes("a: tool: hold: done"));
+  await idle();
+  assert.deepEqual(asked, ["Work a."]);
+});
+
+test("closed, every turn is cut and no message is taken again", async () => {
+  const { looper, asked, fill } = looperWith();
+  await fill(["a"]);
+  await looper.close();
+  assert.deepEqual(looper.state("a"), { state: "idle" });
+  const closed = { name: "Refusal", code: "unavailable" };
+  await assert.rejects(looper.send("a", "Still there?"), closed);
+  await assert.rejects(looper.send("new", "Hello."), closed);
+  looper.start();
+  await assert.rejects(looper.send("a", "Now?"), closed);
+  assert.deepEqual(asked, ["Work a."]);
+});

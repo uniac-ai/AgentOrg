@@ -142,7 +142,7 @@ export async function startAgentProvider(options: AgentProviderOptions): Promise
       throw error;
     }
   };
-  /** Cut its turn, close its channel, and wait until its engine has written all it will. */
+  /** Cut its turns, close its channel, and wait until its engine has written all it will. */
   const halt = async (one: Held) => {
     const { channel, engine } = one;
     delete one.channel;
