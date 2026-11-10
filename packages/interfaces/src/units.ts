@@ -119,6 +119,24 @@ export const Problem = z.object({ field: FieldId.optional(), message: z.string()
 
 const OnInstance = z.object({ instance: Id });
 
+/** Something of an instance that can be watched or operated live, in a protocol the page knows. */
+export const LiveSurface = z.object({
+  surface: Slug,
+  /** The frames it speaks, such as `pty@1`, `commands@1` or `screencast@1`. */
+  protocol: z.string().min(1).max(64),
+  /** Whether it can be operated, not only watched. */
+  operate: z.boolean(),
+  /** Why it can't be opened here, if it can't. */
+  unavailable: z.string().max(2000).optional(),
+});
+export const LiveMode = z.enum(["watch", "operate"]);
+/** A one-time ticket to open a surface: a socket address that is its own authority, briefly. */
+export const LiveTicket = z.object({
+  url: z.string().min(1).max(4096),
+  protocol: z.string().min(1).max(64),
+  expiresAt: z.string().max(64),
+});
+
 /**
  * `unit.provider@1`: a program that offers units. Running one yields connections and the skills
  * it declared; management exposes them and records the instance, and removes instances last first.
@@ -180,7 +198,18 @@ export const unitProvider = defineInterface({
         state: ConnectionStatus.shape.state,
         detail: z.string().max(2000).optional(),
         connections: z.array(ConnectionStatus.extend({ connection: Id })).max(32),
+        /** What of it can be opened live now. */
+        surfaces: z.array(LiveSurface).max(16).optional(),
       }),
+    }),
+    /**
+     * A one-time ticket to open one of its surfaces live. Only the person's gateway asks for one,
+     * and it dials the url itself: no ticket reaches a page. Refused `unknown` for a surface the
+     * instance doesn't have.
+     */
+    live: method({
+      input: OnInstance.extend({ surface: Slug, mode: LiveMode }),
+      output: LiveTicket,
     }),
     /** Final: it undoes what this instance made, and nothing the person pointed it at. */
     remove: method({ input: OnInstance, output: z.object({}) }),

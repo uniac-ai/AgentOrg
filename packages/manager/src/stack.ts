@@ -8,6 +8,7 @@ import {
   ConnectionOrigin,
   type ConnectionStatus,
   FieldValues,
+  type LiveSurface,
   type Problem,
   ResultKind,
   SkillName,
@@ -892,13 +893,18 @@ export function createStacks(parts: StackParts) {
         )),
         ...(await Promise.all(
           record.units.map(async (unit) => {
-            let status: { state: "connecting" | "connected" | "down"; detail?: string } = DOWN;
+            let status: {
+              state: "connecting" | "connected" | "down";
+              detail?: string;
+              surfaces?: z.infer<typeof LiveSurface>[];
+            } = DOWN;
             try {
               const answer = await statusOf(unit);
               if (answer)
                 status = {
                   state: answer.state,
                   ...(answer.detail ? { detail: answer.detail } : {}),
+                  ...("surfaces" in answer && answer.surfaces ? { surfaces: answer.surfaces } : {}),
                 };
             } catch (error) {
               log.warn(`A unit's status: ${messageOf(error)}`);

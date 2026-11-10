@@ -81,6 +81,9 @@ export function serveSocket(
         void (async () => {
           if (!isName(slot) || !isName(method))
             throw new Refused("invalid", "A call names its slot and method.");
+          // A live ticket is for the gateway's own pipe at `/live`, never for a page to hold, under
+          // whatever slot a page might expose it at.
+          if (method === "live") throw new Refused("forbidden", "Open a live surface at /live.");
           return deps.person.call(slot, method, input);
         })()
           .then(

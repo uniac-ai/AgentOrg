@@ -22,6 +22,7 @@ import { connect } from "@agentorg/sdk/client";
 import { WebSocketServer } from "ws";
 import { type PersonSide, serveSocket } from "./api.js";
 import { callFolders } from "./folders.js";
+import { LIVE_MAX, pipeLive, type Ticket } from "./live.js";
 import { Notes } from "./notes.js";
 import { oauthRoute } from "./oauth.js";
 import {
@@ -263,6 +264,7 @@ export async function startApp(options: AppOptions): Promise<App> {
     response.end(request.method === "HEAD" ? undefined : body);
   };
   const sockets = new WebSocketServer({ noServer: true, maxPayload: MAX_MESSAGE });
+  const lives = new WebSocketServer({ noServer: true, maxPayload: LIVE_MAX });
   server.on("upgrade", (request, socket, head) => {
     // An upgraded socket has no error handler of its own: a client that resets would crash the app.
     socket.on("error", () => socket.destroy());
@@ -270,11 +272,27 @@ export async function startApp(options: AppOptions): Promise<App> {
     const cli = signIn.isCli(request.headers.authorization);
     const allowed =
       request.headers.host === host() &&
-      url.pathname === "/api" &&
+      (url.pathname === "/api" || url.pathname === "/live") &&
       (cli || request.headers.origin === origin);
     if (!allowed) {
       socket.end("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
       return;
+    }
+    if (url.pathname === "/live") {
+      const query = url.searchParams;
+      return lives.handleUpgrade(request, socket, head, (ws) =>
+        pipeLive(ws, {
+          cli,
+          isSession: (session) => signIn.isSession(session),
+          ticket: async () =>
+            (await personSide.call("agents", "live", {
+              agent: query.get("agent"),
+              instance: query.get("instance"),
+              surface: query.get("surface"),
+              mode: query.get("mode") ?? "watch",
+            })) as Ticket,
+        }),
+      );
     }
     sockets.handleUpgrade(request, socket, head, (ws) => {
       let served: ReturnType<typeof serveSocket> | undefined;
@@ -357,8 +375,10 @@ export async function startApp(options: AppOptions): Promise<App> {
         } catch {
           // Already gone.
         }
-      for (const client of sockets.clients) client.terminate();
-      sockets.close();
+      for (const server of [sockets, lives]) {
+        for (const client of server.clients) client.terminate();
+        server.close();
+      }
       // server.close waits for every open connection; a tab still connected (a keep-alive request,
       // a socket reconnecting) would hold the app open, so they are all closed now.
       const serverClosed = new Promise<void>((done) => server.close(() => done()));
