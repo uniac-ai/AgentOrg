@@ -16,12 +16,21 @@ export const Entry = z.object({
   items: z.array(Item),
   /** For a tool message whose call ran: how it ended. */
   state: z.enum(["done", "refused"]).optional(),
+  /** For a user message said while a turn was running: it is part of that turn. */
+  joined: z.literal(true).optional(),
+  /**
+   * For what came of a model request that had read the record up to the message of this number,
+   * when a user message was said after that: the model reads it ahead of that message, which it
+   * doesn't answer.
+   */
+  ahead: z.number().optional(),
 });
 export type Entry = z.output<typeof Entry>;
 
 /** Where a record's messages are kept in its store. */
 export const MESSAGES = "msg/";
 const keyOf = (seq: number) => `${MESSAGES}${String(seq).padStart(12, "0")}`;
+const seqOf = (key: string) => Number(key.slice(MESSAGES.length)) || 0;
 // The record's limits are fixed here for now, sized for a host that carries a model request, or a
 // page of messages, in one piece of about a megabyte.
 /** What the model is sent of the past: the newest exchanges up to this many bytes of JSON. */
@@ -102,7 +111,16 @@ interface Kept {
   key: string;
   entry: Entry;
   bytes: number;
+  /** Set while a user message is being written: the model is sent it only once it is stored. */
+  writing?: boolean;
 }
+
+/** Whether a user message follows the one numbered `read`: one `stored` already, when asked so. */
+const saidAfter = (records: Kept[], read: number, stored = false) =>
+  records.some(
+    (record) =>
+      record.entry.role === "user" && seqOf(record.key) > read && !(stored && record.writing),
+  );
 
 export function createRecord(
   store: Store,
@@ -130,7 +148,7 @@ export function createRecord(
           const keys = page.keys.slice(at, at + READS);
           const values = await Promise.all(keys.map((key) => store.get({ key })));
           keys.forEach((key, i) => {
-            last = Math.max(last, Number(key.slice(MESSAGES.length)) || 0);
+            last = Math.max(last, seqOf(key));
             const parsed = Entry.safeParse(values[i]?.value);
             if (!parsed.success) {
               log.warn("A stored message didn't read back; it is left out.", { key });
@@ -155,25 +173,30 @@ export function createRecord(
   return {
     /**
      * Keep a message, under `id` or its own number, and delete the oldest past the cap. A tool
-     * message the store refuses is still kept in memory, since its call has run.
+     * message the store refuses is still kept in memory, since its call has run. `read` is given
+     * for what came of a model request that had read the record up to that number: when a user
+     * message was said since, it is kept as `ahead` of it.
      */
-    async append(entry: Omit<Entry, "id" | "at">, id?: string): Promise<Entry> {
+    async append(entry: Omit<Entry, "id" | "at">, id?: string, read?: number): Promise<Entry> {
       const state = await load();
       const key = keyOf(++state.last);
-      const record = {
+      const record: Kept = {
         key,
         entry: kept({
           id: id ?? key.slice(MESSAGES.length),
           at: new Date().toISOString(),
           ...entry,
+          ...(read !== undefined && saidAfter(state.records, read) ? { ahead: read } : {}),
         }),
         bytes: 0,
+        writing: entry.role === "user",
       };
       record.bytes = size(record.entry);
       state.records.push(record);
       state.bytes += record.bytes;
       try {
         await store.set({ key, value: record.entry as Json });
+        record.writing = false;
       } catch (error) {
         if (entry.role !== "tool") {
           state.records.splice(state.records.indexOf(record), 1);
@@ -199,12 +222,17 @@ export function createRecord(
       }
       return record.entry;
     },
-    /** Forget everything after the message `id`: a retry takes the place of what followed it. */
+    /**
+     * Forget what followed the message `id`, up to the next user message: a retry takes the place
+     * of what came of its message, and keeps what was said since.
+     */
     async dropAfter(id: string) {
       const state = await load();
       const at = state.records.findLastIndex((record) => record.entry.id === id);
       if (at === -1) return;
-      for (const gone of state.records.splice(at + 1)) {
+      const next = state.records.findIndex((record, i) => i > at && record.entry.role === "user");
+      const count = (next === -1 ? state.records.length : next) - at - 1;
+      for (const gone of state.records.splice(at + 1, count)) {
         state.bytes -= gone.bytes;
         await store.delete({ key: gone.key }).catch((error: unknown) =>
           log.warn("A replaced message couldn't be deleted.", {
@@ -243,18 +271,40 @@ export function createRecord(
       return { messages, more: start > 0 };
     },
     /**
-     * The conversation to send: the newest exchanges (each from a user message on) that fit the
-     * budget, and always the latest two, so "go on" after a long turn still has that turn. When
-     * those two are over the budget, their oldest function arguments and outputs are left out,
-     * each call still paired with an output.
+     * The conversation to send: the newest exchanges (each from the user message that starts a turn
+     * on) that fit the budget, and always the latest two, so "go on" after a long turn still has
+     * that turn. When those two are over the budget, their oldest function arguments and outputs
+     * are left out, each call still paired with an output. A message said during a turn comes after
+     * whatever is `ahead` of it, so the model reads it as not yet answered. `read` is the number
+     * up to which every user message was read, for `append` and `saidAfter`: one still being
+     * written is not read yet.
      */
-    async input(): Promise<Item[]> {
-      const { records } = await load();
+    async input(): Promise<{ items: Item[]; read: number }> {
+      const { records, last } = await load();
+      const unwritten = records.find((record) => record.writing);
+      const read = unwritten ? seqOf(unwritten.key) - 1 : last;
       const exchanges: Item[][] = [];
-      for (const { entry } of records) {
-        if (entry.role === "user" || exchanges.length === 0) exchanges.push([]);
+      /** Said during a turn, and not yet put: what is ahead of them goes first. */
+      const late: Kept[] = [];
+      const put = (entry: Entry) => {
+        if ((entry.role === "user" && !entry.joined) || exchanges.length === 0) exchanges.push([]);
         exchanges.at(-1)?.push(...entry.items);
+      };
+      /** Put the late messages numbered up to `read`. */
+      const putLate = (read: number) => {
+        while (late[0] && seqOf(late[0].key) <= read) put((late.shift() as Kept).entry);
+      };
+      for (const record of records) {
+        // Nothing to send: a user message still being written, or a line with no items.
+        if (record.writing || record.entry.items.length === 0) continue;
+        if (record.entry.joined) {
+          late.push(record);
+          continue;
+        }
+        putLate(record.entry.ahead ?? last);
+        put(record.entry);
       }
+      putLate(last);
       let total = exchanges.reduce((sum, items) => sum + size(items), 0);
       while (exchanges.length > 2 && total > INPUT_BUDGET) total -= size(exchanges.shift());
       const items = exchanges.flat();
@@ -268,7 +318,11 @@ export function createRecord(
           items[i] = { ...item, arguments: ARGUMENTS_LEFT_OUT };
         }
       }
-      return items;
+      return { items, read };
+    },
+    /** Whether a user message has been stored after the one numbered `read`, which `input` gave. */
+    async saidAfter(read: number): Promise<boolean> {
+      return saidAfter((await load()).records, read, true);
     },
   };
 }

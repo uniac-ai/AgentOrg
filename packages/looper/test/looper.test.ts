@@ -185,7 +185,7 @@ test("a refusal is shown with its code, and anything else thrown as `failed`", a
   });
 });
 
-test("a thread in a turn refuses another, and a model's streamed text goes to the reply it becomes", async () => {
+test("a thread in a turn refuses a retry, and a model's streamed text goes to the reply it becomes", async () => {
   let answer: (output: OutputItem[]) => void = () => {};
   const reply = new Promise<OutputItem[]>((resolve) => {
     answer = resolve;
@@ -193,7 +193,7 @@ test("a thread in a turn refuses another, and a model's streamed text goes to th
   const { looper, said, deltas, requests } = looperWith([reply]);
   await looper.send("one", "First.");
   while (requests.length === 0) await new Promise((soon) => setImmediate(soon));
-  await assert.rejects(looper.send("one", "Second."), { name: "Refusal", code: "busy" });
+  await assert.rejects(looper.retry("one"), { name: "Refusal", code: "busy" });
   assert.deepEqual(looper.state("one"), { state: "thinking" });
 
   looper.delta(requests[0]?.requestId as string, "Do");
