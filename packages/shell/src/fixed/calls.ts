@@ -315,45 +315,6 @@ export function lineOfRow(row: Row): string {
   }
 }
 
-export interface Update {
-  id: string;
-  text: string;
-  said: boolean;
-  running: boolean;
-  at?: string;
-}
-
-/** Updates read coarser than the chat: a run of browser steps is one line. */
-export function updatesOf(rows: readonly Row[]): Update[] {
-  const out: (Update & { steps?: number; url?: string })[] = [];
-  for (const row of rows) {
-    const last = out.at(-1);
-    if (row.kind === "page" && last?.steps) {
-      last.steps++;
-      last.running = row.state === "running";
-      last.url ??= row.url;
-      if (row.at) last.at = row.at;
-      last.text = last.url
-        ? `Tried ${shortUrl(last.url)}, ${last.steps} steps`
-        : `Used the browser, ${last.steps} steps`;
-      continue;
-    }
-    const text =
-      row.kind === "say"
-        ? (row.text.trim().split("\n")[0] ?? "").replace(/^[#>\s-]+/, "").replace(/[*`]/g, "")
-        : lineOfRow(row);
-    out.push({
-      id: row.id,
-      text,
-      said: row.kind === "say",
-      running: row.state === "running",
-      ...(row.at ? { at: row.at } : {}),
-      ...(row.kind === "page" ? { steps: 1, ...(row.url ? { url: row.url } : {}) } : {}),
-    });
-  }
-  return out;
-}
-
 export const lastLines = (text: string, n: number) =>
   text
     .split("\n")

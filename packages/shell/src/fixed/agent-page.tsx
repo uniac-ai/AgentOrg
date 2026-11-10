@@ -1,12 +1,15 @@
 import { MessageCircleIcon, Settings2Icon } from "lucide-react";
 import { useState } from "react";
+import { USAGE } from "../app.tsx";
 import { api, go, useLoad } from "../data.ts";
+import { signIn } from "../sign-in.ts";
 import { Button } from "../ui/button.tsx";
 import { useBuilding } from "./building.tsx";
 import { useChats } from "./chats.tsx";
 import { More, Power, Tip } from "./controls.tsx";
-import { ago, useCreatables } from "./data.ts";
+import { ago, useAct, useCreatables } from "./data.ts";
 import { Frames } from "./frames.tsx";
+import { noticeOf } from "./notice.ts";
 import { Nothing, Scroll, StateDot } from "./parts.tsx";
 import { chosenNotes, partsOf } from "./stack.ts";
 import { useAgents } from "./watch.tsx";
@@ -32,6 +35,7 @@ export function AgentPage({ agent: id }: { agent: string }) {
   const creatables = useCreatables();
   const { catalog } = useBuilding();
   const [failed, setFailed] = useState<string>();
+  const act = useAct(setFailed);
   const slot = watched?.slot;
   const running = watched?.entry.status.state === "running";
   const models = useLoad(
@@ -55,6 +59,21 @@ export function AgentPage({ agent: id }: { agent: string }) {
     (c) => c.provider === entry.provider && c.id === entry.creatable,
   );
   const toSettings = () => go({ screen: "agent-settings", agent: id });
+  // What stopped it, if it's something to act on: what the chat offers, or starting it again.
+  const remedy: { label: string; run(): unknown } | undefined = (() => {
+    if (entry.status.state === "down")
+      return { label: "Start", run: () => api.call("agents", "start", { agent: id }) };
+    const detail = watched.status?.state === "error" ? watched.status.detail : undefined;
+    const action = detail && noticeOf(detail).action;
+    if (!action) return undefined;
+    if (action.run === "manage")
+      return {
+        label: action.label,
+        run: () => window.open(USAGE, "_blank", "noopener,noreferrer"),
+      };
+    if (action.run === "signIn") return { label: action.label, run: () => signIn() };
+    return slot ? { label: action.label, run: () => api.call(slot, "retry") } : undefined;
+  })();
   const model = models?.models.find((m) => m.id === models.current)?.name ?? "Default";
   return (
     <Scroll>
@@ -86,14 +105,24 @@ export function AgentPage({ agent: id }: { agent: string }) {
           </div>
         </div>
 
-        <div className="flex h-6 items-center gap-2.5 text-[14px]">
+        <div role="status" aria-label="Now" className="flex h-8 items-center gap-2.5 text-[14px]">
           <StateDot tone={failed ? "trouble" : now.tone} />
           <span
-            className={`min-w-0 flex-1 truncate ${failed || now.tone === "trouble" ? "text-[var(--bad)]" : ""}`}
+            className={`min-w-0 truncate ${failed || now.tone === "trouble" ? "text-[var(--bad)]" : ""}`}
           >
             {failed ?? now.text}
           </span>
           <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{ago(now.at)}</span>
+          {remedy && (
+            <Button
+              size="xs"
+              variant="secondary"
+              disabled={act.busy}
+              onClick={() => act.run(async () => remedy.run())}
+            >
+              {remedy.label}
+            </Button>
+          )}
         </div>
 
         {detail?.units.some((u) => u.values) && (

@@ -1,7 +1,7 @@
 // What a person reads, worked out from tool messages in the shapes the bundled tools really answer.
 import assert from "node:assert/strict";
 import test from "node:test";
-import { type Call, lineOfRow, rowsOf, updatesOf } from "../src/fixed/calls.ts";
+import { type Call, lineOfRow, rowsOf } from "../src/fixed/calls.ts";
 import type { ChatMessage } from "../src/fixed/data.ts";
 
 const start = Date.parse("2026-11-09T10:00:00Z");
@@ -187,24 +187,4 @@ test("a tool we don't know, or one that only shares a name, stays as it came", (
     tool: { name: "x__y", state: "done" as const, input: "not json" },
   };
   assert.equal(one(bad).kind, "other");
-});
-
-test("Updates reads coarser: a run of browser steps is one line, and what's said is its first", () => {
-  const lines = updatesOf(
-    rowsOf([
-      {
-        id: "s",
-        role: "assistant",
-        text: "**Found it.**\nMore.",
-        at: new Date(start).toISOString(),
-      },
-      call("b__browser_navigate", { url: "http://x/a" }, PAGE),
-      call("b__browser_click", { target: "e1" }, PAGE),
-      call("b__browser_type", { target: "e2" }, "### Ran Playwright code"),
-    ]),
-  );
-  assert.deepEqual(
-    lines.map((l) => l.text),
-    ["Found it.", "Tried localhost:4173/checkout, 3 steps"],
-  );
 });
