@@ -18,6 +18,8 @@ const REACH = ["none", "see", "use", "add"];
 const atLeast = (answers: string[], value: string, least: string) =>
   answers.indexOf(value) >= answers.indexOf(least);
 const COMPUTER = "computer";
+/** The kind of connection an agent may add: one at an address. */
+const URL_KIND = "url";
 /** The place that is the parent's own computer; every other place is a connection's id. */
 const OWN = "own";
 /** A new computer for the child, on the service its parent's computer runs on. */
@@ -584,8 +586,10 @@ export interface ControlParts {
   person: Person;
   /** Where each connection came from, to know which an agent made. */
   madeBy(connection: string): string | undefined;
-  /** Whether the library has a skill of this name. */
-  hasSkill(name: string): boolean;
+  /** Whether the library has a skill of this name that this agent may see. */
+  hasSkill(name: string, caller: string): boolean;
+  /** The agent that saved a template, if one did. */
+  templateAuthor(id: string): string | undefined;
   /** Keep a line of the control log. */
   log(entry: Activity): void;
 }
@@ -609,6 +613,29 @@ export function createControl(parts: ControlParts) {
       ? reach
       : NOWHERE;
   };
+  /**
+   * Why a template an agent saved has a value it may not set itself, if one does: the agent's own
+   * template is held to what it could have given, at saving and again at creating.
+   */
+  const notItsOwn = (caller: string, bound: Bound, template: TheTemplate, offers: Offer[]) => {
+    if (Object.keys(template.base.answers ?? {}).length)
+      return "An agent's template answers nothing of its base.";
+    for (const unit of template.units) {
+      const offer = offers.find(
+        (one) => one.providerName === unit.provider && one.unit.id === unit.unit,
+      );
+      if (!offer) return `${unit.provider} offers no unit ${unit.unit}.`;
+      for (const [id, value] of Object.entries(unit.values ?? {})) {
+        const field = offer.unit.form.find((one) => one.id === id);
+        if (field && !mayFill(caller, bound, field, value))
+          return `An agent can't set ${field.title}.`;
+      }
+    }
+    return undefined;
+  };
+  /** A template it may create from: one listed for it, or one it saved. */
+  const allowed = (caller: string, bound: Bound, id: string) =>
+    bound.templates.includes(id) || parts.templateAuthor(id) === caller;
   const holdingOf = (caller: string) => {
     const record = records.agents[caller];
     const unit = record?.units.find((one) => one.provider === self && one.unit === AGENTS_UNIT);
@@ -648,7 +675,7 @@ export function createControl(parts: ControlParts) {
     if (field.type !== "connection")
       return (
         atLeast(REACH, bound.skills, "use") &&
-        [value ?? []].flat().every((one) => parts.hasSkill(String(one)))
+        [value ?? []].flat().every((one) => parts.hasSkill(String(one), caller))
       );
     return (
       atLeast(REACH, bound.connections, "use") &&
@@ -711,7 +738,7 @@ export function createControl(parts: ControlParts) {
     const reach = await reachNow(caller, record);
     const opens = (field: TheField) => mayFill(caller, bound, field, undefined);
     return parts.templates().flatMap((template) => {
-      if (!bound.templates.includes(template.id)) return [];
+      if (!allowed(caller, bound, template.id)) return [];
       const shape = shapeOf(self, template, offers, bound, reach);
       return shape ? [createTool(template, shape, bound, reach, opens)] : [];
     });
@@ -723,7 +750,7 @@ export function createControl(parts: ControlParts) {
       const args = CreateArgs.parse(input);
       const holding = holdingOf(caller);
       const template = parts.templates().find((one) => one.id === id);
-      if (!holding || !template || !holding.bound.templates.includes(id))
+      if (!holding || !template || !allowed(caller, holding.bound, id))
         throw new Refused("unknown", `You can't create from ${id}.`);
       const { record, bound } = holding;
       if (!atLeast(AGENTS, bound.agents, "own"))
@@ -737,6 +764,11 @@ export function createControl(parts: ControlParts) {
       const offers = await parts.catalog();
       const shape = shapeOf(self, template, offers, bound, reach);
       if (!shape) throw new Refused("unknown", `You can't create from ${id}.`);
+      const theirs =
+        parts.templateAuthor(id) === caller
+          ? notItsOwn(caller, bound, template, offers)
+          : undefined;
+      if (theirs) throw new Refused("invalid", theirs);
 
       // Where it works: its computer is shared, or is a connection the person listed.
       if (shape.places && !args.place)
@@ -1090,11 +1122,12 @@ export function createControl(parts: ControlParts) {
       async run(caller, bound, { agent, connection, as }) {
         if (!bound.listed.includes(connection) && parts.madeBy(connection) !== caller)
           throw new Refused("unknown", `You may not use ${connection}.`);
-        return parts.person("agents", "expose", {
-          agent: selfOrOwn(caller, agent),
-          connection,
-          ...(as ? { as } : {}),
-        });
+        return parts.person(
+          "agents",
+          "expose",
+          { agent: selfOrOwn(caller, agent), connection, ...(as ? { as } : {}) },
+          caller,
+        );
       },
     }),
     verb({
@@ -1112,7 +1145,7 @@ export function createControl(parts: ControlParts) {
       input: z.object({}),
       needs: sees("skills", "see"),
       changes: false,
-      run: async () => parts.person("skills", "list", {}),
+      run: async (caller) => parts.person("skills", "list", {}, caller),
     }),
     verb({
       name: "skill_get",
@@ -1120,7 +1153,7 @@ export function createControl(parts: ControlParts) {
       input: z.object({ name: z.string().min(1).max(64) }),
       needs: sees("skills", "see"),
       changes: false,
-      run: async (_, __, { name }) => parts.person("skills", "get", { name }),
+      run: async (caller, _, { name }) => parts.person("skills", "get", { name }, caller),
     }),
     verb({
       name: "skill_expose",
@@ -1129,7 +1162,7 @@ export function createControl(parts: ControlParts) {
       needs: sees("skills", "use"),
       changes: true,
       run: async (caller, _, { agent, skill }) =>
-        parts.person("agents", "expose", { agent: selfOrOwn(caller, agent), skill }),
+        parts.person("agents", "expose", { agent: selfOrOwn(caller, agent), skill }, caller),
     }),
     verb({
       name: "skill_unexpose",
@@ -1138,7 +1171,106 @@ export function createControl(parts: ControlParts) {
       needs: sees("skills", "use"),
       changes: true,
       run: async (caller, _, { agent, skill }) =>
-        parts.person("agents", "unexpose", { agent: selfOrOwn(caller, agent), skill }),
+        parts.person("agents", "unexpose", { agent: selfOrOwn(caller, agent), skill }, caller),
+    }),
+    verb({
+      name: "connection_add",
+      description:
+        "Add a connection to an MCP server at a public https address. It takes no token, reaches nothing on this machine or its network, and goes when you do. Give it to yourself or your agents with connection_expose.",
+      input: z.object({
+        name: z.string().min(1).max(128),
+        url: z.string().min(1).max(4096).describe("An https address on the public internet."),
+      }),
+      needs: sees("connections", "add"),
+      changes: true,
+      async run(caller, _, { name, url }) {
+        const { providers } = await parts.person("connections", "providers", {});
+        const at = (providers as { provider: string; kinds: { kind: string }[] }[]).find((one) =>
+          one.kinds.some((kind) => kind.kind === URL_KIND),
+        );
+        if (!at) throw new Refused("unavailable", "Nothing here connects to an address now.");
+        return parts.person(
+          "connections",
+          "create",
+          { provider: at.provider, kind: URL_KIND, params: { url, public: true }, name },
+          caller,
+        );
+      },
+    }),
+    verb({
+      name: "connection_remove",
+      description: "Remove a connection you added, for good.",
+      input: z.object({ connection: Id }),
+      needs: sees("connections", "add"),
+      changes: true,
+      run: async (caller, _, { connection }) =>
+        parts.person("connections", "remove", { connection }, caller),
+    }),
+    verb({
+      name: "skill_add",
+      description:
+        "Write a new skill: its SKILL.md, with front matter naming it, and any other files. Its name mustn't be one there is. You and your agents see it.",
+      input: z.object({
+        files: z
+          .record(z.string(), z.string())
+          .describe("By path inside the skill, such as SKILL.md."),
+      }),
+      needs: sees("skills", "add"),
+      changes: true,
+      run: async (caller, _, { files }) => parts.person("skills", "add", { files }, caller),
+    }),
+    verb({
+      name: "skill_remove",
+      description: "Remove a skill you wrote.",
+      input: z.object({ name: z.string().min(1).max(64) }),
+      needs: sees("skills", "add"),
+      changes: true,
+      run: async (caller, _, { name }) => parts.person("skills", "remove", { name }, caller),
+    }),
+    verb({
+      name: "template_save",
+      description:
+        "Save a template of your own, from units on unit_list, providers named as there. Its id mustn't be one there is, it can't say what program to run, and a control unit in it stays within yours. You can create from it.",
+      input: z.object({ template: z.record(z.string(), z.unknown()) }),
+      needs: (bound) => own(bound) && bound.saveTemplates,
+      changes: true,
+      async run(caller, bound, { template }) {
+        const wrong = notItsOwn(
+          caller,
+          bound,
+          template as unknown as TheTemplate,
+          await parts.catalog(),
+        );
+        if (wrong) throw new Refused("invalid", wrong);
+        const units = (template.units ?? []) as {
+          provider?: string;
+          unit?: string;
+          values?: Values;
+        }[];
+        const offers = await parts.catalog();
+        for (const unit of units) {
+          const offer = offers.find(
+            (one) => one.providerName === unit.provider && one.unit.id === unit.unit,
+          );
+          if (!offer || !isAgentsUnit(self, offer)) continue;
+          // What it would let an agent do stays within what this one may.
+          for (const field of offer.unit.form.filter(settable)) {
+            const message = overLimit(field, unit.values?.[field.id], limitOf(bound, field));
+            if (message) throw new Refused("invalid", message);
+          }
+          if (Number(unit.values?.depth ?? 1) >= bound.depth)
+            throw new Refused("invalid", "A control unit in it goes less deep than yours.");
+        }
+        return parts.person("agents", "saveTemplate", template, caller);
+      },
+    }),
+    verb({
+      name: "template_remove",
+      description: "Remove a template you saved.",
+      input: z.object({ id: z.string().min(1).max(64) }),
+      needs: (bound) => own(bound) && bound.saveTemplates,
+      changes: true,
+      run: async (caller, _, { id }) => parts.person("agents", "removeTemplate", { id }, caller),
     }),
   ];
   const toolOf = (one: Verb<z.ZodType>): Tool => ({

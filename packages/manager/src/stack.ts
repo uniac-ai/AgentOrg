@@ -77,6 +77,13 @@ export const Records = z.object({
   templates: z.record(z.string(), Template).default({}),
   /** A connection the person made, to its provider's id for it; none means they are the same. */
   instances: z.record(z.string(), z.string()).default({}),
+  /** The agent that added a skill or saved a template, which only it may replace or remove. */
+  authors: z
+    .object({
+      skills: z.record(z.string(), z.string()).default({}),
+      templates: z.record(z.string(), z.string()).default({}),
+    })
+    .default({ skills: {}, templates: {} }),
 });
 
 type TheAgent = z.infer<typeof AgentRecord>;
@@ -109,6 +116,8 @@ const skillInstance = (name: string) => `skill:${name}`;
 const slotInstance = (slot: string) => `slot:${slot}`;
 
 const MAX_MESSAGE = 2000;
+/** How many templates one agent may save. */
+const AGENT_TEMPLATES = 32;
 const MAX_OPTIONS = 256;
 const MAX_PROBLEMS = 256;
 const MAX_NAME = 128;
@@ -942,7 +951,16 @@ export function createStacks(parts: StackParts) {
       };
     },
     templates: () => ({ templates: templates() }),
-    async saveTemplate(template: TheTemplate) {
+    /** With `agent`, it's that agent's own: it replaces nothing, and starts no program. */
+    async saveTemplate(template: TheTemplate, agent?: string) {
+      if (agent && templates().some((one) => one.id === template.id))
+        throw new Refused("state", `There is a template ${template.id} already.`);
+      if (
+        agent &&
+        Object.values(records.authors.templates).filter((one) => one === agent).length >=
+          AGENT_TEMPLATES
+      )
+        throw new Refused("limit", `An agent can save at most ${AGENT_TEMPLATES} templates.`);
       await baseProviderNamed(template.base.provider);
       const offers = await catalog();
       for (const unit of template.units) {
@@ -951,17 +969,25 @@ export function createStacks(parts: StackParts) {
         const how = form.find((field) => field.id === MCP_HOW);
         if (unit.unit === MCP_UNIT && !how?.options?.some((one) => one.value === unit.values?.how))
           throw new Refused("unknown", `${String(unit.values?.how)} isn't on offer now.`);
-        for (const field of form)
+        for (const field of form) {
           if (field.value === "secret" && unit.values?.[field.id] !== undefined)
             throw new Refused("invalid", `${field.title} is a secret: a template holds none.`);
+          if (agent && field.authority === "runs" && unit.values?.[field.id] !== undefined)
+            throw new Refused("invalid", `An agent's template can't say what ${field.title} runs.`);
+        }
       }
       records.templates[template.id] = template;
+      // Saved by the person, it's the person's, whoever saved it first.
+      if (agent) records.authors.templates[template.id] = agent;
+      else delete records.authors.templates[template.id];
       save();
       return {};
     },
-    removeTemplate({ id }: { id: string }) {
-      if (!records.templates[id]) throw new Refused("unknown", `No saved template ${id}.`);
+    removeTemplate({ id }: { id: string }, agent?: string) {
+      if (!records.templates[id] || (agent && records.authors.templates[id] !== agent))
+        throw new Refused("unknown", `No saved template ${id}.`);
       delete records.templates[id];
+      delete records.authors.templates[id];
       save();
       return {};
     },

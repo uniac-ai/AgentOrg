@@ -40,6 +40,10 @@ const PERSON_CALLER = "person";
 type Handler = (input: unknown, context: { caller: string }) => unknown;
 const CHAT_WAIT_MS = 2000;
 const CHAT = "chat@1";
+/** What one agent may add of its own, at most. */
+const AGENT_CONNECTIONS = 16;
+const AGENT_SKILLS = 32;
+const AGENT_SKILL_BYTES = 1024 * 1024;
 const TOOLS_EXPORT = "tools";
 
 export interface ManagerOptions {
@@ -78,7 +82,13 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
   chmodSync(dir, 0o700);
   const path = join(dir, FILE);
   const read = (): z.infer<typeof Records> => {
-    const empty = { agents: {}, connections: {}, templates: {}, instances: {} };
+    const empty = {
+      agents: {},
+      connections: {},
+      templates: {},
+      instances: {},
+      authors: { skills: {}, templates: {} },
+    };
     let raw: string;
     try {
       raw = readFileSync(path, "utf8");
@@ -152,6 +162,21 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
         const record = records.agents[agent];
         if (!record) throw new Refused("unknown", `Management has no agent ${agent}.`);
         return record;
+      };
+      /** The caller when it's an agent, which reaches these only through its control unit. */
+      const agentOf = (caller: string) =>
+        records.agents[caller] || creating.has(caller) ? caller : undefined;
+      /** A skill an agent added is seen by it and the agents below it, until the person shares it. */
+      const seesSkill = (caller: string, name: string) => {
+        const author = records.authors.skills[name];
+        if (!author || !agentOf(caller)) return true;
+        const seen = new Set<string>();
+        for (let at: string | undefined = caller; at && !seen.has(at); ) {
+          if (at === author) return true;
+          seen.add(at);
+          at = records.agents[at]?.parent?.agent;
+        }
+        return false;
       };
       const parentOf = ({ parent }: z.infer<typeof AgentRecord>) =>
         parent
@@ -282,6 +307,10 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
           }
           await removeAgent(agent, record.provider);
           delete records.agents[agent];
+          // What it wrote or saved is the person's now.
+          for (const kept of [records.authors.skills, records.authors.templates])
+            for (const [name, author] of Object.entries(kept))
+              if (author === agent) delete kept[name];
           save();
           return {};
         });
@@ -341,7 +370,8 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
           if (!handler || !spec) throw new Refused("unimplemented", `${iface} has no ${method}.`);
           return handler(spec.input.parse(input), { caller });
         },
-        hasSkill: (name) => library.has(name),
+        hasSkill: (name, caller) => library.has(name) && seesSkill(caller, name),
+        templateAuthor: (id) => records.authors.templates[id],
         madeBy: (connection) => records.connections[connection]?.madeBy,
         log: (entry) => activity.add(entry),
       });
@@ -415,8 +445,8 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
 
         units: () => stacks.units(),
         templates: () => stacks.templates(),
-        saveTemplate: (template) => stacks.saveTemplate(template),
-        removeTemplate: (input) => stacks.removeTemplate(input),
+        saveTemplate: (template, { caller }) => stacks.saveTemplate(template, agentOf(caller)),
+        removeTemplate: (input, { caller }) => stacks.removeTemplate(input, agentOf(caller)),
         check: (input) => stacks.check(input),
         create: (input, { caller }) => stacks.create(input, caller),
         addUnit: (input, { caller }) =>
@@ -490,13 +520,15 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
         },
         start: ({ agent }) => startAgent(agent),
         stop: ({ agent }) => stopAgent(agent),
-        expose: (input) =>
+        expose: (input, { caller }) =>
           stacks.serial(input.agent, async () => {
             const record = recordOf(input.agent);
             if ("connection" in input)
               return { slot: await exposeConnection(input.agent, input.connection, input.as) };
-            if (!library.has(input.skill))
+            if (!library.has(input.skill) || !seesSkill(caller, input.skill))
               throw new Refused("unknown", `Management has no skill ${input.skill}.`);
+            // The person giving an agent's skill to anyone shares it: it's the person's now.
+            if (!agentOf(caller)) delete records.authors.skills[input.skill];
             if (!record.skills.includes(input.skill)) {
               record.skills.push(input.skill);
               save();
@@ -550,6 +582,16 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
         }),
         // `secrets` go straight to the provider: nothing here keeps or logs them.
         async create({ provider, kind, params, secrets = {}, name }, { caller }) {
+          const agent = agentOf(caller);
+          if (
+            agent &&
+            Object.values(records.connections).filter((one) => one.madeBy === agent).length >=
+              AGENT_CONNECTIONS
+          )
+            throw new Refused(
+              "limit",
+              `An agent can add at most ${AGENT_CONNECTIONS} connections.`,
+            );
           const { call } = named(unitProviders(), provider, "connection provider");
           const unit = (await call.units({})).units.find((one) => one.id === kind);
           const slot = unit && slotFieldOf(unit);
@@ -587,6 +629,8 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
               kind,
               target,
               madeBy: caller,
+              // One an agent made goes with it.
+              ...(agent ? { madeFor: agent } : {}),
               at: new Date().toISOString(),
             };
             records.instances[connection] = applied.instance;
@@ -627,8 +671,10 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
             status: await connectionStatus(connection),
           };
         },
-        async remove({ connection }) {
+        async remove({ connection }, { caller }) {
           const origin = originOf(connection);
+          if (agentOf(caller) && origin.madeBy !== caller)
+            throw new Refused("unknown", `You have no connection ${connection}.`);
           if (stacks.unitMaking(connection))
             throw new Refused("state", "This connection came with a unit: remove the unit.");
           await removeConnection(connection, origin.provider);
@@ -639,15 +685,42 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
       });
 
       personOnly(ctx.exports.skills, "skills").implement({
-        add: (input) => {
+        add: (input, { caller }) => {
+          const agent = agentOf(caller);
+          if (agent) {
+            // An agent writes a skill of its own: it can't read a folder, or replace one there is.
+            if ("path" in input) throw new Refused("forbidden", "An agent gives a skill as files.");
+            const named = library.nameOf(input.files);
+            if (library.has(named))
+              throw new Refused("state", `There is a skill ${named} already.`);
+            if (
+              Object.values(records.authors.skills).filter((one) => one === agent).length >=
+              AGENT_SKILLS
+            )
+              throw new Refused("limit", `An agent can write at most ${AGENT_SKILLS} skills.`);
+            const bytes = Object.values(input.files).reduce(
+              (sum, text) => sum + Buffer.byteLength(text),
+              0,
+            );
+            if (bytes > AGENT_SKILL_BYTES)
+              throw new Refused("limit", "An agent's skill can be at most 1 MB.");
+            const added = library.add(input.files, named);
+            records.authors.skills[added.name] = agent;
+            save();
+            return added;
+          }
           const added = library.add("path" in input ? readSkillFolder(input.path) : input.files);
+          // Replaced by the person, it's the person's.
+          delete records.authors.skills[added.name];
           for (const [agent, record] of Object.entries(records.agents))
             if (record.skills.includes(added.name)) changed(agent);
           return added;
         },
-        list: () => ({ skills: library.list() }),
-        get: ({ name }) => {
-          const entry = library.entry(name);
+        list: (_, { caller }) => ({
+          skills: library.list().filter((one) => seesSkill(caller, one.name)),
+        }),
+        get: ({ name }, { caller }) => {
+          const entry = seesSkill(caller, name) ? library.entry(name) : undefined;
           if (!entry) throw new Refused("unknown", `Management has no skill ${name}.`);
           return {
             ...entry,
@@ -658,9 +731,12 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
               .map(([agent]) => agent),
           };
         },
-        remove: ({ name }) => {
-          if (!library.has(name)) throw new Refused("unknown", `Management has no skill ${name}.`);
+        remove: ({ name }, { caller }) => {
+          const agent = agentOf(caller);
+          if (!library.has(name) || (agent && records.authors.skills[name] !== agent))
+            throw new Refused("unknown", `Management has no skill ${name}.`);
           dropSkill(name);
+          delete records.authors.skills[name];
           save();
           return {};
         },

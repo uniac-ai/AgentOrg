@@ -11,6 +11,7 @@ import {
 import { getDefaultEnvironment, StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import type { z } from "zod";
 import type { Secrets, Spec } from "./kinds.js";
+import { publicFetch } from "./public.js";
 
 type Tool = z.infer<typeof ToolEntry>;
 type State = z.infer<typeof ConnectionState>;
@@ -79,6 +80,8 @@ function transportOf(spec: Spec, secrets: Secrets, log: Log) {
     const { token } = secrets;
     return new StreamableHTTPClientTransport(new URL(spec.url), {
       ...(token ? { requestInit: { headers: { Authorization: `Bearer ${token}` } } } : {}),
+      // Checked at each request, so a name that later points home is refused then.
+      ...(spec.public ? { fetch: publicFetch } : {}),
     });
   }
   const transport = new StdioClientTransport({
