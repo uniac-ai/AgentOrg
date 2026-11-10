@@ -161,7 +161,17 @@ export function AgentPage({ agent: id }: { agent: string }) {
           <Fact label="Skills" value={String(detail?.skills.length ?? "")} onClick={toSettings} />
         </div>
 
-        <Frames agent={id} {...(slot ? { slot } : {})} running={running} />
+        <Frames
+          agent={id}
+          {...(slot ? { slot } : {})}
+          running={running}
+          surfaces={(detail?.units ?? []).flatMap((unit) =>
+            (unit.status.surfaces ?? []).map((surface) => ({
+              ...surface,
+              instance: unit.instance,
+            })),
+          )}
+        />
       </div>
     </Scroll>
   );

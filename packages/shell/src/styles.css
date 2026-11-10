@@ -9,6 +9,7 @@
 @import "tw-animate-css";
 @import "streamdown/styles.css";
 @import "react-diff-view/style/index.css" layer(components);
+@import "@xterm/xterm/css/xterm.css" layer(components);
 @import "../static/app.css" layer(legacy);
 
 @source "./**/*.tsx";
@@ -265,6 +266,16 @@
       color: var(--muted);
       background: none;
     }
+  }
+}
+
+/* xterm scrolls its own viewport: like every other list here, without a bar. */
+@layer components {
+  .xterm-host .xterm-viewport {
+    scrollbar-width: none;
+  }
+  .xterm-host .xterm-viewport::-webkit-scrollbar {
+    display: none;
   }
 }
 

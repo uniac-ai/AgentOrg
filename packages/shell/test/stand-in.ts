@@ -423,6 +423,15 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
   const creatables = options.creatables ?? CREATABLES;
   let problems: StackProblem[] = [];
   let templates = [...TEMPLATES];
+  /** What the live surfaces have heard and said. */
+  const live = {
+    opened: [] as { agent: string; instance: string; surface: string; mode: string }[],
+    commands: [] as Record<string, unknown>[],
+    watchers: new Set<WebSocket>(),
+    shells: new Set<WebSocket>(),
+    typed: [] as string[],
+    resized: [] as { columns: number; rows: number }[],
+  };
   let units = UNITS;
 
   const emit = (slot: string, event: string, payload: unknown) => {
@@ -794,7 +803,53 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
       response.writeHead(404).end();
     }
   });
-  const sockets = new WebSocketServer({ server, path: "/api" });
+  const sockets = new WebSocketServer({ noServer: true });
+  const lives = new WebSocketServer({ noServer: true });
+  server.on("upgrade", (request, socket, head) => {
+    const { pathname } = new URL(request.url ?? "/", "http://stand-in");
+    const to = pathname === "/api" ? sockets : pathname === "/live" ? lives : undefined;
+    if (!to) return socket.destroy();
+    to.handleUpgrade(request, socket, head, (ws) => to.emit("connection", ws, request));
+  });
+  lives.on("connection", (socket: WebSocket, request: { url?: string }) => {
+    const query = new URL(request.url ?? "/", "http://stand-in").searchParams;
+    const target = {
+      agent: query.get("agent") ?? "",
+      instance: query.get("instance") ?? "",
+      surface: query.get("surface") ?? "",
+      mode: query.get("mode") ?? "",
+    };
+    socket.once("message", (data) => {
+      const hello = JSON.parse(String(data)) as { op?: string; session?: string };
+      if (hello.op !== "hello" || hello.session !== SESSION)
+        return socket.close(4401, "Sign in again");
+      const unit = agents.get(target.agent)?.units?.find((u) => u.instance === target.instance);
+      const surface = unit?.status.surfaces?.find((one) => one.surface === target.surface);
+      if (!surface) return socket.close(4404, "No such surface.");
+      live.opened.push(target);
+      socket.send(JSON.stringify({ op: "live", protocol: surface.protocol }));
+      if (surface.protocol === "commands@1") {
+        for (const event of live.commands) socket.send(JSON.stringify(event));
+        live.watchers.add(socket);
+        socket.on("close", () => live.watchers.delete(socket));
+      }
+      if (surface.protocol === "pty@1") {
+        live.shells.add(socket);
+        socket.on("close", () => live.shells.delete(socket));
+        socket.send(Buffer.from("0$ "));
+        socket.on("message", (frame: Buffer) => {
+          const body = frame.subarray(1).toString();
+          if (frame[0] === 0x30) {
+            live.typed.push(body);
+            // A shell echoes what's typed.
+            socket.send(
+              Buffer.concat([Buffer.from("0"), Buffer.from(body.replaceAll("\r", "\r\n$ "))]),
+            );
+          } else if (frame[0] === 0x31) live.resized.push(JSON.parse(body));
+        });
+      }
+    });
+  });
   sockets.on("connection", (socket) => {
     socket.on("message", (data) => {
       const message = JSON.parse(String(data));
@@ -845,6 +900,16 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
       units = structuredClone(units);
       for (const field of units.find((u) => u.id === id)?.form ?? []) change(field);
     },
+    live,
+    /** A `commands@1` event, to every watcher and to those who come later. */
+    command(event: Record<string, unknown>) {
+      live.commands.push(event);
+      for (const ws of live.watchers) ws.send(JSON.stringify(event));
+    },
+    /** The service ends every shell, as when it exits. */
+    endShells: (code: number, reason: string) => {
+      for (const ws of live.shells) ws.close(code, reason);
+    },
     /** What `agents.check` finds wrong from now on. */
     findProblems: (found: StackProblem[]) => {
       problems = found;
@@ -874,6 +939,7 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
     changed,
     notes,
     close: async () => {
+      for (const ws of lives.clients) ws.terminate();
       for (const socket of sockets.clients) socket.terminate();
       await new Promise((done) => server.close(done));
     },
