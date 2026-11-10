@@ -100,7 +100,15 @@ test(
   "a reply reveals word by word, then settles as one message with no spans",
   withGateway(async (gateway) => {
     const page = await open(gateway);
-    gateway.setChatStatus("a-reviewer", { state: "thinking" });
+    // The agent works, and the newest thing said here is the person's: the chat awaits a reply.
+    gateway.setChatStatus("a-reviewer", { state: "working" });
+    gateway.addMessage("a-reviewer", {
+      id: "u-ask",
+      role: "user",
+      text: "Why did it fail?",
+      at: new Date().toISOString(),
+    });
+    await panel(page).getByText("Why did it fail?").waitFor();
     await panel(page).getByRole("status").getByText("Thinking").waitFor();
     gateway.delta("a-reviewer", "r1", "Three causes ");
     await panel(page).locator("[data-sd-animate]").first().waitFor();
@@ -129,7 +137,7 @@ test(
       at,
       tool: { name: "github__get_issue", state: "running" as const, input: '{"n":1}' },
     };
-    gateway.setChatStatus("a-reviewer", { state: "tool" });
+    gateway.setChatStatus("a-reviewer", { state: "working" });
     gateway.addMessage("a-reviewer", running);
     const row = panel(page).getByRole("button", { name: /github__get_issue/ });
     await row.waitFor();
@@ -148,7 +156,7 @@ test(
 );
 
 test(
-  "Stop cancels, and Retry replaces the reply, or restores it when refused",
+  "a chat is messages only: its button is always Send, with no Stop and no Retry, and a message goes while the agent works",
   withGateway(async (gateway) => {
     gateway.addMessage("a-reviewer", {
       id: "u1",
@@ -159,34 +167,57 @@ test(
     gateway.addMessage("a-reviewer", reply("r2", "The old answer."));
     const page = await open(gateway);
     await panel(page).getByText("The old answer.").waitFor();
-
-    gateway.refuseNext("chat.retry", "busy", "A turn is running.");
-    await panel(page).getByRole("button", { name: "Retry" }).click();
-    await panel(page).getByRole("alert").getByText("A turn is running.").waitFor();
-    await panel(page).getByText("The old answer.").waitFor();
-
-    await panel(page).getByRole("button", { name: "Retry" }).click();
-    await panel(page).getByText("The old answer.").waitFor({ state: "detached" });
-    await panel(page).getByRole("button", { name: "Stop", exact: true }).waitFor();
-    await panel(page).getByRole("button", { name: "Stop", exact: true }).click();
+    // The agent works, but the newest thing said here is its reply: nothing here awaits one, even
+    // once a tool's call of its shows.
+    gateway.setChatStatus("a-reviewer", { state: "working" });
+    gateway.addMessage("a-reviewer", {
+      id: "t-elsewhere",
+      role: "tool",
+      text: "github__get_issue",
+      at: new Date().toISOString(),
+      tool: { name: "github__get_issue", state: "done", input: '{"n":1}', output: "the issue" },
+    });
+    await panel(page)
+      .getByRole("button", { name: /github__get_issue/ })
+      .waitFor();
+    assert.equal(await panel(page).getByRole("status").filter({ hasText: "Thinking" }).count(), 0);
+    await input(page).fill("One more thing");
+    await panel(page).getByRole("button", { name: "Send", exact: true }).click();
+    await panel(page).getByText("One more thing").waitFor();
+    await panel(page).getByRole("status").getByText("Thinking").waitFor();
+    assert.ok(gateway.calls.some((c) => c.method === "send" && c.input.text === "One more thing"));
+    // Still Send while it awaits the reply, and nothing stops or retries.
     await panel(page).getByRole("button", { name: "Send", exact: true }).waitFor();
-    assert.ok(gateway.calls.some((c) => c.method === "cancel"));
+    for (const name of ["Stop", "Retry"])
+      assert.equal(await panel(page).getByRole("button", { name, exact: true }).count(), 0, name);
     await page.close();
   }),
 );
 
 test(
-  "a turn ending in a usage limit offers the plan's page",
+  "a message that got no answer says why and offers what helps, until the chat's next reply",
   withGateway(async (gateway) => {
     const page = await open(gateway);
-    gateway.setChatStatus("a-reviewer", {
-      state: "error",
-      detail: { code: "usage_limit", message: "Limit." },
-    });
+    gateway.failChat("a-reviewer", { code: "usage_limit", message: "Limit." });
     const notice = panel(page).getByRole("alert");
     await notice.getByText("Usage limit reached").waitFor();
     await notice.getByRole("button", { name: "Manage usage" }).waitFor();
     await page.close();
+    // The chat's list says it too: it is there on a page opened late.
+    const late = await open(gateway);
+    await panel(late).getByRole("alert").getByText("Usage limit reached").waitFor();
+    // Asked again, the chat awaits a reply and says no problem; failing again, it says it again.
+    await input(late).fill("Try again");
+    await input(late).press("Enter");
+    await panel(late).getByRole("status").getByText("Thinking").waitFor();
+    await panel(late).getByRole("alert").waitFor({ state: "detached" });
+    gateway.failChat("a-reviewer", { code: "usage_limit", message: "Limit." });
+    await panel(late).getByRole("alert").getByText("Usage limit reached").waitFor();
+    // Its next reply ends the problem.
+    gateway.addMessage("a-reviewer", reply("r3", "Here it is."));
+    await panel(late).getByText("Here it is.").waitFor();
+    await panel(late).getByRole("alert").waitFor({ state: "detached" });
+    await late.close();
   }),
 );
 

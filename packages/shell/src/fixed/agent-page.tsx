@@ -41,11 +41,15 @@ export function AgentPage({ agent: id }: { agent: string }) {
   const running = watched?.entry.status.state === "running";
   const models = useLoad(
     () =>
-      slot && running
-        ? api.call<{ models: { id: string; name: string }[]; current?: string }>(slot, "models")
+      running
+        ? api.call<{ models: { id: string; name: string }[]; current?: string }>(
+            "agents",
+            "models",
+            { agent: id },
+          )
         : Promise.resolve(undefined),
     [],
-    [slot, running],
+    [id, running],
   ).value;
   if (!watched)
     return (
@@ -60,23 +64,20 @@ export function AgentPage({ agent: id }: { agent: string }) {
     (c) => c.provider === entry.provider && c.id === entry.creatable,
   );
   const toSettings = () => go({ screen: "agent-settings", agent: id });
-  // What stopped it, if it's something to act on: what the chat offers, or starting it again.
+  // What is wrong, if it's something to act on: what the chat offers, or starting it again.
   const remedy: { label: string; run(): unknown } | undefined = (() => {
     if (entry.status.state === "down")
       return { label: "Start", run: () => api.call("agents", "start", { agent: id }) };
-    const detail = watched.status?.state === "error" ? watched.status.detail : undefined;
-    const action = detail && noticeOf(detail).action;
+    // While it works, its line says so: the problem is said again if the work fails too.
+    const working = watched.status?.state === "working";
+    const action = !working && watched.problem && noticeOf(watched.problem).action;
     if (!action) return undefined;
     if (action.run === "manage")
       return {
         label: action.label,
         run: () => window.open(USAGE, "_blank", "noopener,noreferrer"),
       };
-    if (action.run === "signIn") return { label: action.label, run: () => signIn() };
-    const { chat } = watched;
-    return slot && chat
-      ? { label: action.label, run: () => api.call(slot, "retry", { chat }) }
-      : undefined;
+    return { label: action.label, run: () => signIn() };
   })();
   const model = models?.models.find((m) => m.id === models.current)?.name ?? "Default";
   return (

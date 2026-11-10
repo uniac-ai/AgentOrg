@@ -275,24 +275,37 @@ test(
     const research = await open(gateway, "#/a/a-research");
     const line = research.getByRole("status", { name: "Now" });
     await line.waitFor();
-    gateway.setChatStatus("a-research", {
-      state: "error",
-      detail: { code: "unavailable", message: "ChatGPT plan usage is unavailable right now." },
+    // A problem with nothing to do about it is said, with no control.
+    gateway.failChat("a-research", {
+      code: "unavailable",
+      message: "ChatGPT plan usage is unavailable right now.",
     });
     await line.getByText("ChatGPT plan usage is unavailable right now.").waitFor();
-    await line.getByRole("button", { name: "Retry" }).click();
-    await research.waitForTimeout(300);
-    assert.ok(gateway.calls.some((c) => c.method === "retry"));
+    assert.equal(await line.getByRole("button").count(), 0);
 
-    gateway.setChatStatus("a-research", {
-      state: "error",
-      detail: { code: "usage_limit", message: "You've reached your plan's limit." },
+    gateway.failChat("a-research", {
+      code: "usage_limit",
+      message: "You've reached your plan's limit.",
     });
     const opened = research.context().waitForEvent("page");
     await line.getByRole("button", { name: "Manage usage" }).click();
     assert.match((await opened).url(), /chatgpt\.com\/settings\/usage|about:blank/);
+    // At work again, its line says so and offers nothing; the problem is said again if that fails.
+    gateway.setChatStatus("a-research", { state: "working" });
+    await line.getByRole("button").waitFor({ state: "detached" });
+    gateway.failChat("a-research", {
+      code: "usage_limit",
+      message: "You've reached your plan's limit.",
+    });
+    await line.getByRole("button", { name: "Manage usage" }).waitFor();
 
-    gateway.setChatStatus("a-research", { state: "idle" });
+    // Its chat's next reply ends the problem.
+    gateway.addMessage("a-research", {
+      id: "after",
+      role: "assistant",
+      text: "Back.",
+      at: new Date().toISOString(),
+    });
     await line.getByRole("button").waitFor({ state: "detached" });
     await research.close();
   }),
