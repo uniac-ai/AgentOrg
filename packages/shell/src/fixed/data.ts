@@ -17,6 +17,8 @@ export type McpProvider = Out<typeof connections.methods.providers>["providers"]
 export type Skill = Out<typeof skills.methods.list>["skills"][number];
 export type ChatMessage = Out<typeof chat.methods.history>["messages"][number];
 export type ChatStatus = Out<typeof chat.methods.state>;
+export type ChatEntry = z.output<typeof chat.events.chat.payload>;
+export type ChatProblem = NonNullable<ChatEntry["problem"]>;
 type Binding = Out<typeof hubBindings.methods.list>["bindings"][number];
 
 /** How often what has no event is read again: a server going down, say. */
@@ -124,58 +126,56 @@ function merged(was: ChatMessage[], message: ChatMessage, limit: number): ChatMe
 }
 
 /**
- * An agent's status and latest messages, from the chat a view shows for it, kept current while it
- * runs; and which chat that is, for a call that acts on it.
+ * Whether an agent works, and the latest messages and the problem of the chat a view shows for it,
+ * kept current while it runs.
  */
 export function useChatRecord(slot: string | undefined, running: boolean, limit: number) {
   const connection = useConnection();
   const [status, setStatus] = useState<ChatStatus>();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [shown, setShown] = useState<string>();
+  const [problem, setProblem] = useState<ChatProblem>();
   const view = useMemo(() => (slot ? chatView(slot) : undefined), [slot]);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a problem is its view's chat's.
+  useEffect(() => setProblem(undefined), [view]);
   useEffect(() => {
     setStatus(undefined);
-    setShown(view?.chat);
     if (!slot || !view || !running || connection !== "open") return;
     let live = true;
-    const hears = (payload: unknown) => {
-      const is = view.hears(payload);
-      if (is) setShown(view.chat);
-      return is;
-    };
     const read = async () => {
       try {
         const of = await view.find();
-        // An agent with no chat has said nothing and is doing nothing.
-        const [now, page] = of
-          ? await Promise.all([
-              api.call<ChatStatus>(slot, "state", { chat: of }),
-              api.call<{ messages: ChatMessage[] }>(slot, "history", { chat: of, limit }),
-            ])
-          : [{ state: "idle" as const }, { messages: [] }];
+        // The status is the agent's; the record is the chat's, and with no chat nothing was said.
+        // A chat's problem is on its entry, which the list gives for the newest chat.
+        const [now, page, newest] = await Promise.all([
+          api.call<ChatStatus>(slot, "state", {}),
+          of
+            ? api.call<{ messages: ChatMessage[] }>(slot, "history", { chat: of, limit })
+            : { messages: [] },
+          of ? api.call<{ chats: ChatEntry[] }>(slot, "list", { limit: 1 }) : { chats: [] },
+        ]);
         if (!live) return;
-        setShown(of);
         setStatus(now);
         setMessages(page.messages);
+        // A chat that is no longer the newest keeps what its events said of it.
+        const entry = newest.chats.find((one) => one.id === of);
+        if (entry) setProblem(entry.problem);
       } catch {
         // Not up yet: read again when its events are made again, or the agent changes.
       }
     };
     void read();
     const stops = [
-      api.subscribe(
-        slot,
-        "status",
-        (payload) => {
-          if (hears(payload)) setStatus(payload as ChatStatus);
-        },
-        { again: read },
-      ),
+      api.subscribe(slot, "status", (payload) => setStatus(payload as ChatStatus), { again: read }),
+      // A chat's entry says its problem, and that it is over with the chat's next reply.
+      api.subscribe(slot, "chat", (payload) => {
+        const entry = payload as ChatEntry;
+        if (entry.id === view.chat) setProblem(entry.problem);
+      }),
       api.subscribe(
         slot,
         "message",
         (payload) => {
-          if (hears(payload)) setMessages((was) => merged(was, payload as ChatMessage, limit));
+          if (view.hears(payload)) setMessages((was) => merged(was, payload as ChatMessage, limit));
         },
         { again: read },
       ),
@@ -185,7 +185,7 @@ export function useChatRecord(slot: string | undefined, running: boolean, limit:
       for (const stop of stops) stop();
     };
   }, [slot, view, running, limit, connection]);
-  return { status, messages, chat: shown };
+  return { status, messages, ...(problem ? { problem } : {}) };
 }
 
 export type Tone = "working" | "idle" | "starting" | "stopped" | "trouble";
@@ -209,12 +209,16 @@ export function lineOf(message: ChatMessage): string {
   return message.role === "user" ? `You: ${line}` : line;
 }
 
-/** What an agent is doing now: what runs it first, then its chat, then its connections. */
+/**
+ * What an agent is doing now: what runs it first, then whether it works, then its chat's problem,
+ * then its connections.
+ */
 export function nowOf(
   status: AgentEntry["status"],
   chatStatus: ChatStatus | undefined,
   messages: readonly ChatMessage[],
   mcp: readonly Mcp[] = [],
+  problem?: ChatProblem,
 ): Now {
   if (status.state === "starting") return { tone: "starting", text: "Starting" };
   if (status.state === "stopped") return { tone: "stopped", text: "Stopped" };
@@ -222,13 +226,11 @@ export function nowOf(
   const last = messages.at(-1);
   const at = last?.at;
   const when = at ? { at } : {};
-  if (chatStatus?.state === "error")
-    return { tone: "trouble", text: chatStatus.detail?.message ?? "Something went wrong", ...when };
-  if (chatStatus?.state === "thinking") return { tone: "working", text: "Thinking", ...when };
-  if (chatStatus?.state === "tool") {
+  if (chatStatus?.state === "working") {
     const running = messages.findLast((m) => m.tool?.state === "running");
-    return { tone: "working", text: running ? lineOf(running) : "Using a tool", ...when };
+    return { tone: "working", text: running ? lineOf(running) : "Thinking", ...when };
   }
+  if (problem) return { tone: "trouble", text: problem.message, ...when };
   const down = mcp.find((m) => m.status.state === "down");
   if (down)
     return { tone: "trouble", text: `${down.slot} is down, so its tools are left out`, ...when };

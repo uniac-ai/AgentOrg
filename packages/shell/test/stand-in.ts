@@ -33,6 +33,7 @@ const PERSON = "person";
 type Message = z.output<typeof chatInterface.methods.history.output>["messages"][number];
 type Status = z.output<typeof chatInterface.methods.state.output>;
 type ChatEntry = z.output<typeof chatInterface.events.chat.payload>;
+type Problem = NonNullable<ChatEntry["problem"]>;
 type ChatEvent = keyof typeof chatInterface.events;
 type Creatable = z.output<typeof agentsInterface.methods.creatable.output>["creatables"][number];
 type Units = z.output<typeof agentsInterface.methods.units.output>;
@@ -55,14 +56,17 @@ export interface Agent {
   mcp: { slot: string; connection: string; instance?: string }[];
   purpose?: string;
   units?: z.output<typeof agentsInterface.methods.get.output>["units"];
+  /** The model chosen for it; none is its provider's default. */
+  model?: string;
   /**
-   * The one chat the stand-in keeps for an agent, and its model. It has an `id` once something has
-   * been said in it; an agent with nothing said has no chat.
+   * The one chat the stand-in keeps for an agent, with the agent's status: whether it works. It
+   * has an `id` once something has been said in it; an agent with nothing said has no chat. Its
+   * `problem` is why its last message got no answer, until its next reply.
    */
   chat: {
     status: Status;
     messages: Message[];
-    current?: string;
+    problem?: Problem;
     id?: string;
   };
   /**
@@ -145,7 +149,7 @@ function seed() {
             { slot: "github", connection: "c-github" },
           ],
           chat: {
-            status: { state: "tool" },
+            status: { state: "working" },
             messages: [
               text("m1", "user", "Why are checkouts failing?", 8),
               tool("m2", "github__search_issues", "running", 6),
@@ -396,6 +400,11 @@ const TEMPLATES: Template[] = [
   },
 ];
 
+/** The models every agent here can use. */
+const MODELS = [
+  { id: "fast", name: "Fast" },
+  { id: "deep", name: "Deep" },
+];
 const FOLDERS: Record<string, string[]> = {
   "/": ["home"],
   "/home": ["me"],
@@ -569,9 +578,24 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
         changed();
         return {};
       },
+      // Stopping it is the one way to stop its work: whatever it was doing ends.
       stop: ({ agent }) => {
-        agentOf(agent).status = { state: "stopped" };
+        const stopped = agentOf(agent);
+        stopped.status = { state: "stopped" };
+        if (stopped.chat.status.state === "working") {
+          stopped.chat.status = { state: "idle" };
+          say(stopped, "status", stopped.chat.status);
+        }
         changed();
+        return {};
+      },
+      models: ({ agent }) => {
+        const { model } = agentOf(agent);
+        return { models: MODELS, ...(model ? { current: model } : {}) };
+      },
+      setModel: ({ agent, model }) => {
+        if (model) agentOf(agent).model = model;
+        else delete agentOf(agent).model;
         return {};
       },
       expose: (input) => {
@@ -723,7 +747,7 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
     return agent.chat.id;
   };
   const entryOf = (agent: Agent): ChatEntry => {
-    const { messages, status } = agent.chat;
+    const { messages, problem } = agent.chat;
     const first = messages.find((m) => m.role === "user");
     const latest = messages.findLast((m) => m.role === "assistant");
     return {
@@ -731,36 +755,31 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
       title: first?.text.split("\n")[0]?.slice(0, 200) ?? "",
       at: messages[0]?.at ?? at(0),
       ...(latest ? { latest: { id: latest.id, at: latest.at } } : {}),
-      state: status.state,
+      ...(problem ? { problem } : {}),
       archived: false,
     };
   };
   /**
-   * One of the chat's events, as the real interface has it: each names its chat. A test may say a
-   * status or a message of an agent nothing was sent to; that starts its chat here, where a real
-   * agent's chat starts only with a `send`.
+   * One of the chat's events, as the real interface has it: a message and its text name their
+   * chat, and the status is the agent's. A test may say a message of an agent nothing was sent
+   * to; that starts its chat here, where a real agent's chat starts only with a `send`.
    */
   const say = (agent: Agent, event: ChatEvent, payload: object = {}) =>
     emit(
       chatSlot(agent.agent),
       event,
       chatInterface.events[event].payload.parse(
-        event === "chat" ? entryOf(agent) : { ...payload, chat: startedChat(agent) },
+        event === "chat"
+          ? entryOf(agent)
+          : event === "status"
+            ? payload
+            : { ...payload, chat: startedChat(agent) },
       ),
     );
 
   const chatCall = (agent: Agent, method: string, input: Record<string, unknown>): unknown => {
-    const models = [
-      { id: "fast", name: "Fast" },
-      { id: "deep", name: "Deep" },
-    ];
-    if (method === "models")
-      return { models, ...(agent.chat.current ? { current: agent.chat.current } : {}) };
-    if (method === "setModel") {
-      if (input.model) agent.chat.current = String(input.model);
-      else delete agent.chat.current;
-      return {};
-    }
+    // The status is the agent's: it names no chat.
+    if (method === "state") return agent.chat.status;
     if (method === "list") {
       // The chat a view follows is never archived, and comes first whatever was said elsewhere:
       // it is the one chat this stand-in plays in full. The others follow, newest first by their
@@ -787,7 +806,6 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
     const named = method !== "send" || input.chat !== undefined;
     if (named && input.chat !== chatId(agent))
       throw new Refusal("unknown", "The agent has no such chat.");
-    if (method === "state") return agent.chat.status;
     if (method === "history") {
       const all = agent.chat.messages;
       const end = input.before ? all.findIndex((m) => m.id === input.before) : all.length;
@@ -806,39 +824,23 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
         agent.chat = {
           status: agent.chat.status,
           messages: [],
-          ...(agent.chat.current ? { current: agent.chat.current } : {}),
           id: `c-${agent.agent}-${++chatsStarted}`,
         };
       const message = text(`u${agent.chat.messages.length}`, "user", String(input.text), 0);
       agent.chat.messages.push(message);
-      agent.chat.status = { state: "thinking" };
+      // The status is said when it changes: an agent already at work says nothing more.
+      const idle = agent.chat.status.state === "idle";
+      agent.chat.status = { state: "working" };
       const chat = startedChat(agent);
       const said = () => {
         say(agent, "chat");
         say(agent, "message", message);
-        say(agent, "status", agent.chat.status);
+        if (idle) say(agent, "status", agent.chat.status);
       };
       // A real agent says these before it answers the call. A test may hold them back.
       if (sendDelayMs === 0) said();
       else setTimeout(said, sendDelayMs);
       return { chat, messageId: message.id };
-    }
-    if (method === "cancel") {
-      agent.chat.status = { state: "idle" };
-      say(agent, "status", agent.chat.status);
-      return {};
-    }
-    if (method === "retry") {
-      const refused = refusals.get("chat.retry");
-      if (refused) {
-        refusals.delete("chat.retry");
-        throw refused;
-      }
-      const at = agent.chat.messages.findLastIndex((m) => m.role === "user");
-      agent.chat.messages = agent.chat.messages.slice(0, at + 1);
-      agent.chat.status = { state: "thinking" };
-      say(agent, "status", agent.chat.status);
-      return { messageId: (agent.chat.messages[at] as Message).id };
     }
     throw new Refusal("invalid", `chat has no method ${method} here.`);
   };
@@ -861,8 +863,7 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
       const agent = agentOf(slot.slice(5).replaceAll("_", "-"));
       // A stopped agent stays connected: its chats are listed and read, and it takes no turn.
       if (agent.status.state === "stopped") {
-        if (method === "send" || method === "retry")
-          throw new Refusal("busy", "It is stopped. Start it to go on.");
+        if (method === "send") throw new Refusal("busy", "It is stopped. Start it to go on.");
       } else if (agent.status.state !== "running") {
         const error = new Refusal("not_connected", "Not running.");
         error.name = "NotConnected";
@@ -1136,10 +1137,22 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
     /** The next call of `slot.method` is refused. */
     refuseNext: (name: string, code: string, reason: string) =>
       refusals.set(name, new Refusal(code, reason)),
-    /** An agent's chat status, as its event says it and `state` will. */
+    /** Whether an agent works, as its event says it and `state` will. */
     setChatStatus(agent: string, status: Status) {
       agentOf(agent).chat.status = chatInterface.methods.state.output.parse(status);
       say(agentOf(agent), "status", status);
+    },
+    /**
+     * An agent's chat got no answer, as the service says it: its entry with the problem, then the
+     * agent idle. Its next reply ends the problem.
+     */
+    failChat(agent: string, problem: Problem) {
+      const failed = agentOf(agent);
+      failed.chat.problem = problem;
+      say(failed, "chat");
+      if (failed.chat.status.state === "idle") return;
+      failed.chat.status = { state: "idle" };
+      say(failed, "status", failed.chat.status);
     },
     /** How long the record takes to say what was sent. */
     delaySends: (ms: number) => {
@@ -1157,7 +1170,6 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
         title: chat.title,
         at: chat.said[0]?.at ?? at(0),
         ...(latest ? { latest: { id: latest.id, at: latest.at } } : {}),
-        state: "idle",
         archived: !!chat.archived,
       });
       const held = agentOf(agent);
@@ -1186,6 +1198,7 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
       const known = messages.findIndex((m) => m.id === message.id);
       if (known === -1) messages.push(message);
       else messages[known] = message;
+      if (message.role === "assistant") delete agentOf(agent).chat.problem;
       // What a person or the agent said tells the chat's entry too, as the service does.
       if (message.role !== "tool") say(agentOf(agent), "chat");
       say(agentOf(agent), "message", message);

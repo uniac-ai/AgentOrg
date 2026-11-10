@@ -1,7 +1,6 @@
 // Every agent's chats, as one list: what each is called, its last words, and whether it has said
 // something you haven't read. A chat is read when its thread has shown its reply; when each was
 // read is kept in the app's notes, so it survives restarts.
-import type { chat } from "@agentorg/interfaces";
 import {
   createContext,
   useCallback,
@@ -11,20 +10,17 @@ import {
   useRef,
   useState,
 } from "react";
-import type { z } from "zod";
 import { api, useConnection } from "../data.ts";
-import type { ChatMessage, Tone } from "./data.ts";
+import type { ChatEntry, ChatMessage, Tone } from "./data.ts";
 import { useAgents } from "./watch.tsx";
-
-type Entry = z.output<typeof chat.events.chat.payload>;
 
 export interface ListedChat {
   /** The agent it is with. */
   agent: { id: string; name: string; tone: Tone };
-  entry: Entry;
+  entry: ChatEntry;
   /** Its last words, in one line. */
   words: string;
-  /** Why its turn stopped, when it stopped on a problem. */
+  /** Why its last message got no answer, until its next reply. */
   problem?: string;
   /** When something was last said in it. */
   at: string;
@@ -133,7 +129,7 @@ function useRead() {
 
 interface Held {
   agent: string;
-  entry: Entry;
+  entry: ChatEntry;
   words: string;
   /** When its last words were said, once they are known. */
   said?: string;
@@ -185,7 +181,7 @@ function Follow({
           : undefined,
       );
     };
-    const told = (entry: Entry) => {
+    const told = (entry: ChatEntry) => {
       put(keyOf(agent, entry.id), (was) => ({ agent, words: "", ...was, entry }));
       if (asked.has(entry.id)) return;
       asked.add(entry.id);
@@ -201,11 +197,15 @@ function Follow({
     const list = async (archived: boolean) => {
       let before: string | undefined;
       do {
-        const { chats, more }: { chats: Entry[]; more: boolean } = await api.call(slot, "list", {
-          archived,
-          limit: PAGE,
-          ...(before ? { before } : {}),
-        });
+        const { chats, more }: { chats: ChatEntry[]; more: boolean } = await api.call(
+          slot,
+          "list",
+          {
+            archived,
+            limit: PAGE,
+            ...(before ? { before } : {}),
+          },
+        );
         if (over) return;
         for (const entry of chats) told(entry);
         before = more ? chats.at(-1)?.id : undefined;
@@ -218,8 +218,9 @@ function Follow({
     };
     // Followed before it is read, so nothing said between the two is missed.
     const stops = [
-      // A chat is told again when it is renamed, archived, or something is said in it.
-      api.subscribe(slot, "chat", (payload) => told(payload as Entry), { again: load }),
+      // A chat is told again when it is renamed or archived, something is said in it, or what was
+      // said got no answer.
+      api.subscribe(slot, "chat", (payload) => told(payload as ChatEntry), { again: load }),
       api.subscribe(slot, "message", (payload) => {
         const message = payload as ChatMessage & { chat: string };
         hears(message.chat, message);
@@ -254,11 +255,7 @@ export function AllChatsProvider({ children }: { children: React.ReactNode }) {
           // A deleted agent's chats go with it.
           const watched = byId.get(agent);
           if (!watched) return [];
-          // Why a turn stopped is known of the chat the agent's page follows, and of no other.
-          const problem =
-            watched.chat === entry.id && watched.status?.state === "error"
-              ? watched.status.detail?.message
-              : undefined;
+          const problem = entry.problem?.message;
           return [
             {
               agent: { id: agent, name: watched.entry.name, tone: watched.now.tone },

@@ -1,5 +1,5 @@
-// One agent's chat, over its `chat@1`. The record and the status come from the chat; the page keeps
-// only what it shows.
+// One agent's chat, over its `chat@1`. The record is the chat's and whether it works is the
+// agent's; the page keeps only what it shows.
 import { NotConnected, Refused } from "@agentorg/sdk";
 import {
   ArrowUpIcon,
@@ -8,8 +8,6 @@ import {
   ChevronRightIcon,
   CopyIcon,
   LoaderCircleIcon,
-  RefreshCwIcon,
-  SquareIcon,
   WrenchIcon,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
@@ -46,7 +44,6 @@ import { StateDot } from "./parts.tsx";
 import { useAgents } from "./watch.tsx";
 
 const PAGE = 100;
-const busyOf = (state: string) => state === "thinking" || state === "tool";
 
 const codeOf = (error: unknown) => ({
   code:
@@ -186,8 +183,10 @@ function Chat({
   /** The record, in order, and the text still streaming by id. */
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [streaming, setStreaming] = useState<ReadonlyMap<string, string>>(new Map());
-  const [busy, setBusy] = useState(false);
-  const [notice, setNotice] = useState<Notice>();
+  /** Whether the agent works, in this chat or another. */
+  const [working, setWorking] = useState(false);
+  /** A call of this page's that failed. */
+  const [failure, setFailure] = useState<Notice>();
   /** What the person sent, shown at once, until the record has it. */
   const [sending, setSending] = useState<readonly Sending[]>([]);
   const [hasEarlier, setHasEarlier] = useState(false);
@@ -202,8 +201,15 @@ function Chat({
   shown.current = messages;
   /** Which of the agent's chats this is: its newest, or the one the first message here starts. */
   const view = useMemo(() => chatView(slot), [slot]);
-  // A reply shown here is read.
-  const { read } = useAllChats();
+  // A reply shown here is read; and the chat's problem is its entry's, until its next reply.
+  const { read, chats } = useAllChats();
+  const problem = chats.find((one) => one.agent.id === agent && one.entry.id === view.chat)?.entry
+    .problem;
+  // A reply cut off by a problem never settles: it goes.
+  const failed = !!problem;
+  useEffect(() => {
+    if (failed) setStreaming(new Map());
+  }, [failed]);
   const replied = messages.findLast((m) => m.role === "assistant")?.at;
   useEffect(() => {
     if (view.chat && replied) read(agent, view.chat, replied);
@@ -212,8 +218,8 @@ function Chat({
   /** A recorded message's key in the thread: the one it was shown under at once, so it stays. */
   const keys = useRef(new Map<string, string>());
 
-  const failed = (error: unknown) =>
-    setNotice({ ...noticeOf(codeOf(error)), untilRead: error instanceof NotConnected });
+  const refused = (error: unknown) =>
+    setFailure({ ...noticeOf(codeOf(error)), untilRead: error instanceof NotConnected });
 
   useEffect(() => {
     if (connection !== "open") return;
@@ -226,34 +232,26 @@ function Chat({
       const since = shown.current.length;
       try {
         const of = await view.find();
-        // No chat yet: nothing was said, and the first message starts one.
-        const [{ messages: page, more }, now]: [
-          { messages: ChatMessage[]; more: boolean },
-          ChatStatus,
-        ] = of
-          ? await Promise.all([
-              api.call<{ messages: ChatMessage[]; more: boolean }>(slot, "history", {
+        // The status is the agent's. With no chat yet nothing was said, and the first message
+        // starts one.
+        const [{ messages: page, more }, now] = await Promise.all([
+          of
+            ? api.call<{ messages: ChatMessage[]; more: boolean }>(slot, "history", {
                 chat: of,
                 limit: PAGE,
-              }),
-              api.call<ChatStatus>(slot, "state", { chat: of }),
-            ])
-          : [{ messages: [], more: false }, { state: "idle" }];
+              })
+            : { messages: [], more: false },
+          api.call<ChatStatus>(slot, "state", {}),
+        ]);
         if (!live) return;
         const known = new Set(page.map((m) => m.id));
         setMessages([...page, ...shown.current.slice(since).filter((m) => !known.has(m.id))]);
         setHasEarlier(more);
-        setBusy(busyOf(now.state));
-        setNotice((was) =>
-          now.state === "error" && now.detail
-            ? noticeOf(now.detail)
-            : was?.untilRead
-              ? undefined
-              : was,
-        );
+        setWorking(now.state === "working");
+        setFailure((was) => (was?.untilRead ? undefined : was));
       } catch (error) {
         if (live && !(error instanceof NotConnected))
-          setNotice({ ...noticeOf(codeOf(error)), untilRead: true });
+          setFailure({ ...noticeOf(codeOf(error)), untilRead: true });
       }
     };
     const stops = [
@@ -302,13 +300,12 @@ function Chat({
         slot,
         "status",
         (payload) => {
-          if (!view.hears(payload)) return;
           const status = payload as ChatStatus;
-          setBusy(busyOf(status.state));
-          if (status.state === "thinking") setNotice(undefined);
-          // A reply cut off by a cancel or an error never settles: it goes.
-          if (status.state === "idle" || status.state === "error") setStreaming(new Map());
-          if (status.state === "error" && status.detail) setNotice(noticeOf(status.detail));
+          setWorking(status.state === "working");
+          // What went wrong on this page is over once the agent works again.
+          if (status.state === "working") setFailure(undefined);
+          // A reply cut off when the agent was stopped never settles: it goes.
+          if (status.state === "idle") setStreaming(new Map());
         },
         { again: load },
       ),
@@ -322,8 +319,13 @@ function Chat({
 
   const recorded = new Set(messages.map((m) => m.id));
   const unrecorded = sending.filter((m) => !m.messageId || !recorded.has(m.messageId));
-  // Until the record has what was sent: "Thinking" never drops out between the two.
-  const running = busy || unrecorded.length > 0;
+  // A chat is messages only: it awaits a reply while the newest thing said in it is the person's
+  // and the agent works. Until the record has what was sent, "Thinking" never drops out between
+  // the two.
+  const asked = messages.findLast((m) => m.role !== "tool")?.role === "user";
+  const awaiting = unrecorded.length > 0 || (working && asked);
+  // While it awaits a reply its problem is not said: the reply ends it, or it is said again.
+  const notice = failure ?? (problem && !awaiting ? noticeOf(problem) : undefined);
   const rows = useMemo(() => new Map(rowsOf(messages).map((row) => [row.id, row])), [messages]);
   const turns = useMemo(
     () => turnsOf(messages, unrecorded, streaming, keys.current),
@@ -331,12 +333,12 @@ function Chat({
   );
   const lastTurn = turns.at(-1);
   const toolRunning = messages.at(-1)?.tool?.state === "running";
-  const thinking = running && streaming.size === 0 && !toolRunning;
+  const thinking = awaiting && streaming.size === 0 && !toolRunning;
 
   const send = async () => {
     const body = text.trim();
-    if (!body || running) return;
-    setNotice(undefined);
+    if (!body) return;
+    setFailure(undefined);
     setText("");
     const id = `sending-${++sends.current}`;
     setSending((was) => [...was, { id, text: body }]);
@@ -354,26 +356,8 @@ function Chat({
     } catch (error) {
       setSending((was) => was.filter((m) => m.id !== id));
       setText(body);
-      failed(error);
+      refused(error);
     }
-  };
-  /** Runs the last turn again; the new reply takes the place of what followed the message. */
-  const retry = () => {
-    const of = view.chat;
-    if (!of) return;
-    setNotice(undefined);
-    const before = shown.current;
-    setMessages(before.slice(0, before.findLastIndex((m) => m.role === "user") + 1));
-    setStreaming(new Map());
-    api.call(slot, "retry", { chat: of }).catch((error) => {
-      setMessages(before);
-      failed(error);
-    });
-  };
-  /** Stops the turn. A first message still on its way has no chat to stop yet. */
-  const stop = async () => {
-    const of = view.chat;
-    if (of) await api.call(slot, "cancel", { chat: of }).catch(failed);
   };
   const earlier = async () => {
     const oldest = shown.current[0];
@@ -390,16 +374,14 @@ function Chat({
       });
       setHasEarlier(more);
     } catch (error) {
-      failed(error);
+      refused(error);
     }
   };
   const runNotice = (action: NonNullable<Notice["action"]>["run"]) => {
     if (action === "manage") window.open(USAGE, "_blank", "noopener,noreferrer");
-    else if (action === "signIn") void signIn().catch(failed);
-    else retry();
+    else void signIn().catch(refused);
   };
   const action = notice?.action;
-  const offered = action && (action.run !== "retry" || messages.some((m) => m.role === "user"));
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -440,8 +422,7 @@ function Chat({
                       rows={rows}
                       reduced={reduced}
                       isLast={turn === lastTurn}
-                      running={running}
-                      onRetry={retry}
+                      awaiting={awaiting}
                     />
                   )}
                 </MessageScrollerItem>
@@ -467,7 +448,7 @@ function Chat({
           >
             {notice.title && <b className="font-semibold">{notice.title}</b>}
             <span>{notice.text}</span>
-            {offered && (
+            {action && (
               <div>
                 <Button size="sm" onClick={() => runNotice(action.run)}>
                   {action.label}
@@ -504,11 +485,11 @@ function Chat({
               size="icon-sm"
               variant="default"
               className="ml-auto rounded-full"
-              aria-label={running ? "Stop" : "Send"}
-              disabled={!running && !text.trim()}
-              onClick={() => void (running ? stop() : send())}
+              aria-label="Send"
+              disabled={!text.trim()}
+              onClick={() => void send()}
             >
-              {running ? <SquareIcon className="fill-current" /> : <ArrowUpIcon />}
+              <ArrowUpIcon />
             </InputGroupButton>
           </InputGroupAddon>
         </InputGroup>
@@ -534,19 +515,17 @@ function Reply({
   rows,
   reduced,
   isLast,
-  running,
-  onRetry,
+  awaiting,
 }: {
   parts: Part[];
   rows: ReadonlyMap<string, Row>;
   reduced: boolean;
   isLast: boolean;
-  running: boolean;
-  onRetry(): void;
+  awaiting: boolean;
 }) {
   const [copied, setCopied] = useState(false);
   const texts = parts.flatMap((part) => (part.kind === "text" ? [part.text] : []));
-  const settled = !(isLast && running);
+  const settled = !(isLast && awaiting);
   return (
     <Message className="group/reply">
       <MessageContent className="gap-3">
@@ -589,11 +568,6 @@ function Reply({
               }}
             >
               {copied ? <CheckIcon /> : <CopyIcon />}
-            </Button>
-          )}
-          {isLast && (
-            <Button variant="ghost" size="icon-xs" aria-label="Retry" onClick={onRetry}>
-              <RefreshCwIcon />
             </Button>
           )}
         </MessageFooter>

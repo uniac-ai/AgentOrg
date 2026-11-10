@@ -62,16 +62,22 @@ test(
     const research = row(page, "Research");
     await research.getByText("Using github__search_issues").waitFor();
     const before = await box(research);
-    gateway.setChatStatus("a-research", { state: "thinking" });
-    await research.getByText("Thinking").waitFor();
-    assert.deepEqual(await box(research), before);
-    gateway.setChatStatus("a-research", {
-      state: "error",
-      detail: { code: "usage_limit", message: "You've reached your plan's limit." },
+    // An agent at work with no tool running is thinking.
+    gateway.setChatStatus("a-reviewer", { state: "working" });
+    await row(page, "Reviewer").getByText("Thinking").waitFor();
+    // What it was answering failed: its chat says the problem, and it is idle.
+    gateway.failChat("a-research", {
+      code: "usage_limit",
+      message: "You've reached your plan's limit.",
     });
     await research.getByText("You've reached your plan's limit.").waitFor();
     await research.getByRole("img", { name: "Has a problem" }).waitFor();
-    gateway.setChatStatus("a-research", { state: "idle" });
+    assert.deepEqual(await box(research), before);
+    // A page opened late reads the problem from the chat's entry.
+    const late = await open(gateway);
+    await row(late, "Research").getByText("You've reached your plan's limit.").waitFor();
+    await late.close();
+    // Its next reply ends the problem.
     gateway.addMessage("a-research", {
       id: "m9",
       role: "assistant",
@@ -141,7 +147,7 @@ test(
 );
 
 test(
-  "the model is read and chosen through the agent's chat",
+  "the model is the agent's, read and chosen through management",
   withGateway(async (gateway) => {
     const page = await open(gateway, "#/a/a-reviewer/settings");
     const model = page.getByRole("combobox", { name: "Model" });
@@ -154,13 +160,18 @@ test(
     await page.waitForFunction(
       () => document.querySelector('button[aria-label="Model"]')?.textContent === "Deep",
     );
-    assert.equal(gateway.agents.get("a-reviewer")?.chat.current, "deep");
+    assert.equal(gateway.agents.get("a-reviewer")?.model, "deep");
+    assert.ok(
+      gateway.calls.some(
+        (c) => c.slot === "agents" && c.method === "setModel" && c.input.agent === "a-reviewer",
+      ),
+    );
     await model.click();
     await page.getByRole("option", { name: "Default" }).click();
     await page.waitForFunction(
       () => document.querySelector('button[aria-label="Model"]')?.textContent === "Default",
     );
-    assert.equal(gateway.agents.get("a-reviewer")?.chat.current, undefined);
+    assert.equal(gateway.agents.get("a-reviewer")?.model, undefined);
     await page.close();
   }),
 );

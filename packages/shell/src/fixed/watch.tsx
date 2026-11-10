@@ -5,6 +5,7 @@ import {
   type AgentDetail,
   type AgentEntry,
   type ChatMessage,
+  type ChatProblem,
   type ChatStatus,
   getAgent,
   listAgents,
@@ -19,10 +20,11 @@ import {
 export interface Watched {
   entry: AgentEntry;
   slot?: string;
-  /** The chat shown for it, once it has one. */
-  chat?: string;
   detail?: AgentDetail;
+  /** Whether it works, in any chat. */
   status?: ChatStatus;
+  /** Why the chat shown got no answer, until its next reply. */
+  problem?: ChatProblem;
   messages: readonly ChatMessage[];
   now: Now;
 }
@@ -51,7 +53,11 @@ function Watch({
   tick: number;
   report(id: string, watched: Watched): void;
 }) {
-  const { status, messages, chat } = useChatRecord(slot, entry.status.state === "running", LATEST);
+  const { status, messages, problem } = useChatRecord(
+    slot,
+    entry.status.state === "running",
+    LATEST,
+  );
   // Whether a connection of its is down: nothing tells, so it's read again.
   const detail = useLoad(
     () => getAgent(entry.agent),
@@ -63,13 +69,13 @@ function Watch({
     report(entry.agent, {
       entry,
       ...(slot ? { slot } : {}),
-      ...(chat ? { chat } : {}),
       ...(detail ? { detail } : {}),
       ...(status ? { status } : {}),
+      ...(problem ? { problem } : {}),
       messages,
-      now: nowOf(entry.status, status, messages, detail?.mcp),
+      now: nowOf(entry.status, status, messages, detail?.mcp, problem),
     });
-  }, [entry, slot, chat, detail, status, messages]);
+  }, [entry, slot, detail, status, messages, problem]);
   return null;
 }
 
