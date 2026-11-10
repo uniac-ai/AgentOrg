@@ -4,8 +4,17 @@
  * management's tools, and management, which holds that authority, works out who is calling, what
  * that caller's unit allows, and whether the target is within its reach.
  */
-import type { Field, FieldValues, Problem, Template, ToolEntry, Unit } from "@agentorg/interfaces";
-import { Refused } from "@agentorg/sdk";
+import {
+  CHAT_TITLE_MAX,
+  type chat,
+  type Field,
+  type FieldValues,
+  type Problem,
+  type Template,
+  type ToolEntry,
+  type Unit,
+} from "@agentorg/interfaces";
+import { Refused, type Slot } from "@agentorg/sdk";
 import { z } from "zod";
 import { schemaOf, settle } from "./form.js";
 import type { AgentRecord, Offer, StackInput } from "./stack.js";
@@ -58,7 +67,8 @@ There is one create tool per template you may use. Read its description and fiel
 ## Working with it
 
 - \`agent_send\` gives it a message and returns at once. It works on its own after that. Your name is on the message's first line.
-- \`agent_get\` says how it stands and whether it is working. \`agent_read\` shows what it said. Check back when you need the result, rather than after every step.
+- A message with no chat named starts a new chat with it, and tells you which. Name that chat to go on in it. Start another only for work that is apart from the first.
+- \`agent_chats\` lists its chats and what each is doing. \`agent_read\` shows what was said in one. Check back when you need the result, rather than after every step.
 - Say what you want back and in what form. It knows only what you send it and its purpose.
 
 ## When it is done
@@ -525,20 +535,8 @@ const CreateArgs = z.object({
 const OnWhom = z.object({ agent: Id.optional().describe("One of your agents; you, if none.") });
 
 type Tool = z.infer<typeof ToolEntry>;
-interface ChatCalls {
-  send(input: { chat?: string; text: string }): Promise<{ chat: string; messageId: string }>;
-  history(input: { chat: string; before?: string; limit?: number }): Promise<{
-    messages: { id: string; role: string; text: string; at: string }[];
-    more: boolean;
-  }>;
-  state(input: { chat: string }): Promise<{ state: string }>;
-  list(input: { limit?: number }): Promise<{ chats: { id: string }[] }>;
-}
-/**
- * The chat an agent's control tools use: its newest that isn't archived, if it has one. A message
- * to an agent with none starts one.
- */
-const newestOf = async (chat: ChatCalls) => (await chat.list({ limit: 1 })).chats[0]?.id;
+/** What the control tools use of an agent's chats. */
+type ChatCalls = Pick<Slot<typeof chat>["call"], "send" | "history" | "list" | "state" | "rename">;
 /** What management's own interfaces answer, called as the person would. */
 type Person = (
   iface: "agents" | "connections" | "skills",
@@ -939,64 +937,92 @@ export function createControl(parts: ControlParts) {
     }),
     verb({
       name: "agent_get",
-      description: "What an agent is made of, how it stands, and whether it is working.",
+      description: "What an agent is made of and how it stands.",
       input: Target,
       needs: own,
       changes: false,
       async run(caller, bound, { agent }) {
         reachable(caller, bound, agent);
-        const [read, chat] = await Promise.all([
-          parts.person("agents", "get", { agent }),
-          parts
-            .chatOf(agent)
-            .then(async (one) => {
-              const chat = await newestOf(one);
-              return chat ? one.state({ chat }) : { state: "idle" };
-            })
-            .catch(() => undefined),
-        ]);
+        const read = await parts.person("agents", "get", { agent });
         // Its connections are what `connections` may see, and no more.
         const mcp = atLeast(REACH, bound.connections, "see")
           ? read.mcp
           : (read.mcp as { slot: string; status: unknown; instance?: string }[]).map(
               ({ slot, status, instance }) => ({ slot, status, ...(instance ? { instance } : {}) }),
             );
-        return { ...read, mcp, ...(chat ? { chat } : {}) };
+        return { ...read, mcp };
       },
     }),
     verb({
       name: "agent_send",
-      description: "Send an agent a message, with your name on it. It returns at once.",
-      input: Target.extend({ text: z.string().min(1).max(90_000).regex(/\S/) }),
+      description:
+        "Send an agent a message, with your name on it, in one of its chats or in a new one. It says which chat, and returns at once.",
+      input: Target.extend({
+        text: z.string().min(1).max(90_000).regex(/\S/),
+        chat: Id.optional().describe("The chat to go on in; a new chat, if none."),
+      }),
       needs: own,
       changes: true,
-      async run(caller, bound, { agent, text }) {
+      async run(caller, bound, { agent, text, chat }) {
         reachable(caller, bound, agent);
         // It says who it's from: otherwise it reads as if the person had typed it. The name is
         // on one line, quoted, so that no name can look like someone else.
         const name = (await callerName(caller)).replace(/\s+/g, " ").trim().slice(0, 128);
         const from = `An agent, "${name}", says:\n\n`;
         const one = await parts.chatOf(agent);
-        const chat = await newestOf(one);
-        return one.send({ ...(chat ? { chat } : {}), text: `${from}${text}` });
+        const sent = await one.send({ ...(chat ? { chat } : {}), text: `${from}${text}` });
+        // A chat is titled by its first line, which here is whose message it is: the chat it
+        // starts is called by what was asked. The message is sent either way.
+        if (!chat)
+          await one
+            .rename({ chat: sent.chat, title: text.trim().slice(0, CHAT_TITLE_MAX) })
+            .catch(() => {});
+        return sent;
+      },
+    }),
+    verb({
+      name: "agent_chats",
+      description:
+        "An agent's chats and what each is doing, the one last written in first, a page at a time.",
+      input: Target.extend({
+        archived: z.boolean().optional().describe("The archived ones instead."),
+        before: Id.optional().describe("The last chat of the page before, to list what follows."),
+      }),
+      needs: own,
+      changes: false,
+      async run(caller, bound, { agent, archived, before }) {
+        reachable(caller, bound, agent);
+        const one = await parts.chatOf(agent);
+        const { chats, more } = await one.list({
+          ...(archived ? { archived } : {}),
+          ...(before ? { before } : {}),
+        });
+        // Why a turn failed is the chat's status, not its entry: it is read for those that did.
+        const told = chats.map(async (entry) =>
+          entry.state === "error"
+            ? { ...entry, detail: (await one.state({ chat: entry.id })).detail }
+            : entry,
+        );
+        return { chats: await Promise.all(told), more };
       },
     }),
     verb({
       name: "agent_read",
-      description: "What was said with an agent, oldest first.",
+      description: "What was said in one of an agent's chats, oldest first.",
       input: Target.extend({
+        chat: Id.describe("The chat, from agent_chats or agent_send."),
         limit: z.number().int().min(1).max(READ_MAX).optional(),
         before: z.string().min(1).max(128).optional().describe("Read messages before this one."),
       }),
       needs: own,
       changes: false,
-      async run(caller, bound, { agent, limit, before }) {
+      async run(caller, bound, { agent, chat, limit, before }) {
         reachable(caller, bound, agent);
-        const one = await parts.chatOf(agent);
-        const chat = await newestOf(one);
-        const { messages, more } = chat
-          ? await one.history({ chat, limit: limit ?? READ_DEFAULT, ...(before ? { before } : {}) })
-          : { messages: [], more: false };
+        const { messages, more } = await (await parts.chatOf(agent)).history({
+          chat,
+          limit: limit ?? READ_DEFAULT,
+          ...(before ? { before } : {}),
+        });
         return {
           messages: messages.map(({ id, role, text, at }) => ({ id, role, text, at })),
           more,

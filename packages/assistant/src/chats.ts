@@ -4,7 +4,13 @@
  * entries are read when a chat is first asked for, all of them, and a chat's record when the chat
  * is first used; both then stay in memory.
  */
-import type { ChatEntry, ChatMessage, chat, kv } from "@agentorg/interfaces";
+import {
+  CHAT_TITLE_MAX,
+  type ChatEntry,
+  type ChatMessage,
+  type chat,
+  type kv,
+} from "@agentorg/interfaces";
 import { type Log, Refused, type Slot } from "@agentorg/sdk";
 import { z } from "zod";
 import type { Chat, createAgent } from "./agent.js";
@@ -26,7 +32,6 @@ const ENTRIES = "chats/";
 const recordOf = (id: string) => `chat/${id}/`;
 /** The chat that the one conversation an agent had before it had chats becomes. */
 const FIRST = "first";
-const TITLE_MAX = 200;
 const PAGE = 50;
 
 /** What is kept of a chat beside its record. */
@@ -51,7 +56,7 @@ interface Held {
 const titleOf = (text: string) =>
   head(
     (text.split("\n").find((line) => /\S/.test(line)) ?? "").replace(/\s+/g, " ").trim(),
-    TITLE_MAX,
+    CHAT_TITLE_MAX,
   );
 
 /** The store's keys under `prefix`, as a store of its own. */
@@ -256,7 +261,7 @@ export function createChats(options: {
         "busy",
         working.held === held
           ? "A turn is running. Wait for it, or cancel it."
-          : `It is working in another chat, "${working.held.stored.title}". Wait for it, or stop it there.`,
+          : "It is working in another chat. Wait for it, or stop it there.",
       );
     const mine = { held };
     working = mine;

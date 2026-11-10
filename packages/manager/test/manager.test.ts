@@ -231,6 +231,8 @@ async function setup(t: test.TestContext) {
     alsoFail?: string;
     settings?: string;
     chat?: string;
+    /** Chats whose turn failed, by id. */
+    failed?: string[];
     noTools?: boolean;
     skillName?: string;
     /** The slot a unit says it made, instead of the one it declared. */
@@ -260,7 +262,11 @@ async function setup(t: test.TestContext) {
   const running = new Map<string, { close(): void; slots: never; on?: never }>();
   const credentials = new Map<string, string>();
   const heard = new Map<string, number>();
+  /** Every message sent to each agent, in the order they came, whichever chat it was in. */
   const chats = new Map<string, { text: string }[]>();
+  /** Each agent's chats by id, the newest last: its title, when it started and where it is. */
+  type Started = Map<string, { title: string; at: string; archived: boolean }>;
+  const startedIn = new Map<string, Started>();
   /** Each agent's own side, to reach what is exposed to it as it would. */
   const contexts = new Map<
     string,
@@ -294,27 +300,70 @@ async function setup(t: test.TestContext) {
             exports: { chat },
             start(own) {
               contexts.set(actorId, own as never);
-              const said: { id: string; role: "user"; text: string; at: string }[] = [];
+              const said: { id: string; role: "user"; text: string; at: string; chat: string }[] =
+                [];
               chats.set(actorId, said);
+              const started: Started = new Map();
+              startedIn.set(actorId, started);
+              const failed = (chat: string) => (script.failed ?? []).includes(chat);
               own.exports.chat.implement({
-                // One chat, which its first message starts.
-                send({ text }) {
+                // A message with no chat starts one, titled by its first line, as the engine does.
+                send({ chat, text }) {
+                  if (chat !== undefined && !started.has(chat))
+                    throw new Refused("unknown", "This agent has no such chat.");
+                  const at = new Date().toISOString();
+                  const into = chat ?? `c${started.size + 1}`;
+                  if (chat === undefined)
+                    started.set(into, { title: text.split("\n")[0] ?? "", at, archived: false });
                   const id = `m-${said.length + 1}`;
-                  said.push({ id, role: "user", text, at: new Date().toISOString() });
-                  return { chat: "c1", messageId: id };
+                  said.push({ id, role: "user", text, at, chat: into });
+                  return { chat: into, messageId: id };
                 },
-                history: () => ({ messages: said, more: false }),
+                history({ chat }) {
+                  if (!started.has(chat))
+                    throw new Refused("unknown", "This agent has no such chat.");
+                  return {
+                    messages: said
+                      .filter((one) => one.chat === chat)
+                      .map(({ chat: _, ...message }) => message),
+                    more: false,
+                  };
+                },
                 cancel: () => ({}),
-                state: () => ({ state: "idle" as const }),
+                // A chat a test names as failed says so, with why.
+                state: ({ chat }) =>
+                  failed(chat)
+                    ? {
+                        state: "error" as const,
+                        detail: { code: "usage_limit", message: "Usage limit reached." },
+                      }
+                    : { state: "idle" as const },
                 retry: () => ({ messageId: "m-1" }),
-                list: () => ({
-                  chats: said[0]
-                    ? [{ id: "c1", title: "", at: said[0].at, state: "idle", archived: false }]
-                    : [],
-                  more: false,
-                }),
-                rename: () => ({}),
-                archive: () => ({}),
+                list({ archived = false, before }) {
+                  const ids = [...started.keys()].reverse();
+                  return {
+                    chats: ids
+                      .slice(before === undefined ? 0 : ids.indexOf(before) + 1)
+                      .map((id) => ({
+                        id,
+                        ...(started.get(id) as { title: string; at: string; archived: boolean }),
+                        state: failed(id) ? ("error" as const) : ("idle" as const),
+                      }))
+                      .filter((one) => one.archived === archived),
+                    more: false,
+                  };
+                },
+                // A title is one line: the first of what it is given.
+                rename({ chat, title }) {
+                  const one = started.get(chat);
+                  if (one) one.title = title.split("\n")[0] ?? "";
+                  return {};
+                },
+                archive({ chat, archived }) {
+                  const one = started.get(chat);
+                  if (one) one.archived = archived;
+                  return {};
+                },
                 models: () => ({ models: [] }),
                 setModel: () => ({}),
               });
@@ -604,6 +653,7 @@ async function setup(t: test.TestContext) {
     rejoin,
     exposedTo,
     chats,
+    startedIn,
     hub,
     person,
     dir,
@@ -1722,6 +1772,7 @@ test("an agent creates, messages, reads, stops and removes an agent of its own",
     "agent_list",
     "agent_get",
     "agent_send",
+    "agent_chats",
     "agent_read",
     "agent_stop",
     "agent_start",
@@ -1757,12 +1808,65 @@ test("an agent creates, messages, reads, stops and removes an agent of its own",
     (await call("agent_list", {})).agents.map((one: { agent: string }) => one.agent),
     [child],
   );
-  await call("agent_send", { agent: child, text: "Please start." });
+  const sent = await call("agent_send", { agent: child, text: "\nPlease start.\nThen report." });
   // It says who sent it, so it doesn't read as the person's.
-  assert.equal(s.chats.get(child)?.[0]?.text, 'An agent, "Parent", says:\n\nPlease start.');
-  assert.match((await call("agent_read", { agent: child })).messages[0].text, /Please start/);
+  assert.equal(
+    s.chats.get(child)?.[0]?.text,
+    'An agent, "Parent", says:\n\n\nPlease start.\nThen report.',
+  );
+  // The message started a chat, called by what was asked and not by whose message it is.
+  type Chat = { id: string; title: string; at: string; state: string };
+  const chatsOf = async () => (await call("agent_chats", { agent: child })).chats as Chat[];
+  assert.deepEqual(
+    (await chatsOf()).map((one) => [one.id, one.title, one.state]),
+    [[sent.chat, "Please start.", "idle"]],
+  );
+  const saidIn = (chat: string) => call("agent_read", { agent: child, chat });
+  assert.match((await saidIn(sent.chat)).messages[0].text, /Please start/);
+  // It goes on in that chat by naming it, and starts another by naming none.
+  const more = await call("agent_send", { agent: child, chat: sent.chat, text: "One more thing." });
+  assert.equal(more.chat, sent.chat);
+  const apart = await call("agent_send", { agent: child, text: "Something else." });
+  assert.notEqual(apart.chat, sent.chat);
+  assert.deepEqual(
+    (await chatsOf()).map((one) => one.title),
+    ["Something else.", "Please start."],
+  );
+  assert.equal((await saidIn(sent.chat)).messages.length, 2);
+  assert.equal((await saidIn(apart.chat)).messages.length, 1);
+  // A page follows the chat the one before ended on, and the archived are listed apart.
+  const page = (input: object) => call("agent_chats", { agent: child, ...input });
+  assert.deepEqual(
+    (await page({ before: apart.chat })).chats.map((one: Chat) => one.id),
+    [sent.chat],
+  );
+  (s.startedIn.get(child)?.get(sent.chat) as { archived: boolean }).archived = true;
+  assert.deepEqual(
+    (await chatsOf()).map((one) => one.id),
+    [apart.chat],
+  );
+  assert.deepEqual(
+    (await page({ archived: true })).chats.map((one: Chat) => one.id),
+    [sent.chat],
+  );
+  // Why a chat's turn failed is told with the chat.
+  s.script.failed = [apart.chat];
+  assert.deepEqual((await chatsOf())[0], {
+    id: apart.chat,
+    title: "Something else.",
+    at: (await chatsOf())[0]?.at,
+    state: "error",
+    archived: false,
+    detail: { code: "usage_limit", message: "Usage limit reached." },
+  });
+  // A refusal from the agent's chat is the tool's own: a chat it doesn't have.
+  const none = await tools.call({
+    name: "agent_send",
+    arguments: { agent: child, chat: "no-such", text: "Hello." },
+  });
+  assert.equal(none.failed, true);
+  assert.match(none.output, /no such chat/);
   const got = await call("agent_get", { agent: child });
-  assert.deepEqual(got.chat, { state: "idle" });
   assert.equal(got.purpose, "Do the small part.");
   await call("agent_stop", { agent: child });
   assert.equal((await s.calls.agents.get({ agent: child })).status.state, "stopped");
@@ -1824,6 +1928,7 @@ test("an agent reaches only what it made, and only through its unit", async (t) 
   for (const name of [
     "agent_get",
     "agent_send",
+    "agent_chats",
     "agent_read",
     "agent_stop",
     "agent_start",
@@ -1833,7 +1938,14 @@ test("an agent reaches only what it made, and only through its unit", async (t) 
   ]) {
     const answer = await two.tools.call({
       name,
-      arguments: { agent: child, text: "Hello", provider: "x", unit: "y", instance: "i" },
+      arguments: {
+        agent: child,
+        text: "Hello",
+        chat: "c1",
+        provider: "x",
+        unit: "y",
+        instance: "i",
+      },
     });
     assert.equal(answer.failed, true, name);
     assert.match(answer.output, /no agent/);

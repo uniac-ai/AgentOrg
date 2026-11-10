@@ -4,6 +4,8 @@ import { z } from "zod";
 const MessageId = z.string().min(1).max(128);
 const ChatModelId = z.string().min(1).max(128);
 const ChatId = z.string().min(1).max(128);
+/** The longest title a chat has. */
+export const CHAT_TITLE_MAX = 200;
 /** One chat of an agent's, where a call names it. */
 const OnChat = z.object({ chat: ChatId });
 
@@ -49,7 +51,7 @@ export const ChatStatus = z.object({
  */
 export const ChatEntry = z.object({
   id: ChatId,
-  title: z.string().max(200),
+  title: z.string().max(CHAT_TITLE_MAX),
   /** When it started: an ISO 8601 time. */
   at: z.string().max(64),
   latest: z.object({ id: MessageId, at: z.string().max(64) }).optional(),
@@ -120,7 +122,7 @@ export const chat = defineInterface({
     }),
     /** Give a chat another title: one line, so only the first line of `title` is kept. */
     rename: method({
-      input: OnChat.extend({ title: z.string().min(1).max(200).regex(/\S/) }),
+      input: OnChat.extend({ title: z.string().min(1).max(CHAT_TITLE_MAX).regex(/\S/) }),
       output: z.object({}),
     }),
     /** Put a chat among the archived ones, or back. It stays readable either way. */
