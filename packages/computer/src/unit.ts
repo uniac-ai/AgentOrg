@@ -118,7 +118,8 @@ export const computerUnit = (found: Found): z.input<typeof Unit> => ({
       value: "string",
       title: "Working directory",
       description:
-        "The folder it works in. Its file tools stay inside it by a check, not a sandbox. Removing the agent leaves it. With none, the service makes one, which goes with the computer.",
+        "The folder it works in. Left empty, it's a folder with the agent's name in ~/Agents, made if it's missing. Its file tools stay inside it by a check, not a sandbox. Removing the agent leaves it.",
+      placeholder: "~/Agents/{name}",
       visible: { field: "service", in: [LOCAL] },
     },
     {
@@ -136,7 +137,7 @@ export const computerUnit = (found: Found): z.input<typeof Unit> => ({
 
 export const WEB_UNIT: z.input<typeof Unit> = {
   id: WEB,
-  title: "Web",
+  title: "Web search",
   description: "Search the web and read pages.",
   form: [
     {

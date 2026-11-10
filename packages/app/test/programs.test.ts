@@ -95,7 +95,10 @@ const chatSlot = async (person: Person, agent: string) => {
   return bindings.find((b) => b.provider === agent && b.export === "chat")?.slot as string;
 };
 
-async function open(t: test.TestContext, computer?: { dataFolder: string; webUrl: string }) {
+async function open(
+  t: test.TestContext,
+  computer?: { dataFolder: string; webUrl: string; agentsFolder: string },
+) {
   const home = mkdtempSync(join(tmpdir(), "agentorg-programs-"));
   t.after(() => rmSync(home, { recursive: true, force: true }));
   const started: { app: App; person: Person }[] = [];
@@ -318,7 +321,8 @@ test("the bundled Assistant is a computer and the web, and its computer goes wit
   const data = join(root, "service");
   const workspace = join(root, "workspace");
   mkdirSync(workspace);
-  const s = await open(t, { dataFolder: data, webUrl: "http://127.0.0.1:9/mcp" });
+  const agentsFolder = join(root, "Agents");
+  const s = await open(t, { dataFolder: data, webUrl: "http://127.0.0.1:9/mcp", agentsFolder });
   const { person } = await s.start();
   const { templates } = await person.call<{
     templates: { id: string; units: { unit: string }[] }[];
@@ -406,15 +410,16 @@ test("the bundled Assistant is a computer and the web, and its computer goes wit
   assert.equal((await Computer.list(reached)).length, 0);
   assert.ok(existsSync(workspace), "the named folder stays");
 
-  // Touched by nobody: preselected on the service here, in a folder the service makes.
+  // Touched by nobody: preselected on the service here, in a folder named for the agent.
   const { agent: untouched } = await person.call<{ agent: string }>("agents", "create", {
     template: "assistant",
     name: "Right away",
   });
+  const folder = join(agentsFolder, "Right away");
   const [computer] = await Computer.list(reached);
   assert.equal(computer?.access, "terminal");
   assert.equal(computer?.browser, true);
-  const folder = computer?.workspace as string;
+  assert.equal(computer?.workspace, folder);
   assert.ok(existsSync(folder));
   const shown = await person.call<{
     mcp: { slot: string; origin?: { target: string } }[];
@@ -424,5 +429,6 @@ test("the bundled Assistant is a computer and the web, and its computer goes wit
     "the agent page says where it is",
   );
   await person.call("agents", "remove", { agent: untouched });
-  assert.equal(existsSync(folder), false, "the folder the service made goes with it");
+  assert.equal((await Computer.list(reached)).length, 0);
+  assert.ok(existsSync(folder), "it's a folder someone can see, so it stays");
 });
