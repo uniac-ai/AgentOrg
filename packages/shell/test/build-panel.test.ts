@@ -278,15 +278,31 @@ test(
     );
     await assistant.click();
 
-    await page.mouse.click(8, 8);
-    await page.waitForTimeout(200);
-    assert.equal(await window_.locator("#build-name").inputValue(), "Foreman", "a stray click");
+    // What opens from inside it counts as inside it.
+    await window_.getByRole("combobox", { name: "Where it runs" }).click();
+    await page.getByRole("option", { name: /^This computer/ }).click();
+    await window_.getByRole("button", { name: "Add a unit" }).click();
+    await page.keyboard.press("Escape");
+    await page.getByRole("menu").waitFor({ state: "detached" });
+    assert.equal(await window_.locator("#build-name").inputValue(), "Foreman");
 
+    for (const close of [
+      () => page.mouse.click(8, 8),
+      () => window_.getByRole("button", { name: "Close" }).click(),
+    ]) {
+      await close();
+      await window_.waitFor({ state: "detached" });
+      await page.getByRole("button", { name: "Create", exact: true }).first().click();
+      await window_.getByRole("button", { name: "Empty" }).waitFor();
+      assert.equal(await window_.locator("#build-name").count(), 0, "the plus starts clean");
+      await assistant.click();
+      await window_.locator("#build-name").waitFor();
+      assert.equal(await window_.locator("#build-name").inputValue(), "");
+    }
     await window_.getByRole("button", { name: "Close" }).click();
     await window_.waitFor({ state: "detached" });
     await page.getByRole("button", { name: "Create", exact: true }).first().click();
     await window_.getByRole("button", { name: "Empty" }).waitFor();
-    assert.equal(await window_.locator("#build-name").count(), 0, "the plus starts clean");
     assert.equal(await assistant.getAttribute("aria-pressed"), "false");
     assert.equal(await page.getByRole("button", { name: /in progress/ }).count(), 0);
     await page.close();
@@ -311,6 +327,7 @@ test(
     for (let i = 0; i < 6; i++) {
       await panel(page).getByRole("button", { name: "Add a unit" }).click();
       await page.getByRole("menuitem", { name: /^Web/ }).click();
+      await page.getByRole("menu").waitFor({ state: "detached" });
     }
     await page.waitForTimeout(450);
     const before = await name.boundingBox();

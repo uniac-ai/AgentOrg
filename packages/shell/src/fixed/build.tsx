@@ -49,7 +49,7 @@ export function CreateButton() {
 
 /**
  * Create, in one window: what to start from on the left, and once that's chosen a panel opening on
- * its right. Closing it clears it. A click outside does nothing while there's a stack in it.
+ * its right. A click outside closes it, and closing it clears it.
  */
 export function BuildDialog() {
   const { clear, draft, open, hide } = useBuilding();
@@ -60,9 +60,6 @@ export function BuildDialog() {
     <Dialog open={open} onOpenChange={(next) => !next && hide()}>
       <DialogContent
         className={`window flex flex-col gap-0 overflow-hidden p-0 ring-0 transition-[width,height] duration-300 ease-out motion-reduce:transition-none sm:max-w-none sm:flex-row ${size}`}
-        onInteractOutside={(event) => {
-          if (draft) event.preventDefault();
-        }}
         onCloseAutoFocus={clear}
         aria-describedby={undefined}
       >
@@ -212,7 +209,8 @@ function Stack() {
               />
             ))}
           </ol>
-          <DropdownMenu>
+          {/* Not modal: a modal menu dismissed with Escape swallows the next click outside the window. */}
+          <DropdownMenu modal={false}>
             <DropdownMenuTrigger asChild>
               <Button
                 type="button"
