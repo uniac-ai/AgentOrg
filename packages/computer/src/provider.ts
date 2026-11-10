@@ -116,7 +116,8 @@ function problems(
     if (values.service !== "exa") wrong.push({ field: "service", message: "Choose a service." });
     return wrong;
   }
-  if (values.service === LOCAL && !found) wrong.push({ field: "service", message: INSTALL_STEPS });
+  if ((values.service === LOCAL || values.service === undefined) && !found)
+    wrong.push({ field: "service", message: INSTALL_STEPS });
   else if (values.service === ANOTHER) {
     const given = secrets.includes("token") ? { token: "given" } : {};
     const { why } = parseConnection("url", { url: values.address }, given);
@@ -291,6 +292,13 @@ export async function startComputerProvider(
       metadata: { agent },
       ...(workspace ? { workspace } : {}),
     });
+    // The folder, so the person can find it: the service says where one it made is.
+    const folder =
+      workspace ??
+      (await computer.getInfo().then(
+        (info) => info.workspace,
+        () => null,
+      ));
     const where = local ? "this machine" : new URL(reached.apiUrl).host;
     const on = isolation === "container" ? `${where}, in a container` : `${where}, no isolation`;
     const servers = [];
@@ -298,7 +306,7 @@ export async function startComputerProvider(
       servers.push({
         slot: COMPUTER,
         url: at(reached.apiUrl, computer.getMcpUrl("computer")),
-        target: `${on}: ${SAYS[access]}${workspace ? ` in ${workspace}` : ""}`,
+        target: `${on}: ${SAYS[access]}${folder ? ` in ${folder}` : ""}`,
       });
     if (values.browser === true)
       servers.push({

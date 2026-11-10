@@ -346,6 +346,12 @@ test("the bundled Assistant is a computer and the web, and its computer goes wit
     stack: { base, units: [unit] },
   });
   assert.match(problems[0]?.message ?? "", /agentcomputer serve/);
+  // An untouched Assistant is refused the same way, and nothing is made.
+  await assert.rejects(
+    person.call("agents", "create", { template: "assistant", name: "Too soon" }),
+    /agentcomputer serve/,
+  );
+  assert.deepEqual((await person.call<{ agents: unknown[] }>("agents", "list")).agents, []);
   assert.equal(existsSync(join(data, "server.json")), false);
 
   const service = spawn(
@@ -399,4 +405,24 @@ test("the bundled Assistant is a computer and the web, and its computer goes wit
   await person.call("agents", "remove", { agent });
   assert.equal((await Computer.list(reached)).length, 0);
   assert.ok(existsSync(workspace), "the named folder stays");
+
+  // Touched by nobody: preselected on the service here, in a folder the service makes.
+  const { agent: untouched } = await person.call<{ agent: string }>("agents", "create", {
+    template: "assistant",
+    name: "Right away",
+  });
+  const [computer] = await Computer.list(reached);
+  assert.equal(computer?.access, "terminal");
+  assert.equal(computer?.browser, true);
+  const folder = computer?.workspace as string;
+  assert.ok(existsSync(folder));
+  const shown = await person.call<{
+    mcp: { slot: string; origin?: { target: string } }[];
+  }>("agents", "get", { agent: untouched });
+  assert.ok(
+    shown.mcp.find((one) => one.slot === "computer")?.origin?.target.endsWith(`in ${folder}`),
+    "the agent page says where it is",
+  );
+  await person.call("agents", "remove", { agent: untouched });
+  assert.equal(existsSync(folder), false, "the folder the service made goes with it");
 });

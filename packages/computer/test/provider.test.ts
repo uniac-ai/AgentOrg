@@ -197,7 +197,7 @@ test("the form says which service, found when it is read, and what each answer g
   const unit = (await units.units({})).units.find((one) => one.id === "computer");
   Unit.parse(unit);
   const service = form(unit, "service");
-  assert.equal(service?.required, true);
+  assert.equal((service as { default?: unknown }).default, "local", "found, so preselected");
   assert.deepEqual(
     service?.options?.map((one) => one.value),
     ["local", "another"],
@@ -237,16 +237,19 @@ test("with no service here, it says what to install and start, and nothing is ma
   const { units, apply, local, hub } = await setup(t, { service: false });
   const unit = (await units.units({})).units.find((one) => one.id === "computer");
   assert.match(form(unit, "service")?.options?.[0]?.description ?? "", /npm install -g/);
-  const { problems } = await units.check({
-    unit: "computer",
-    values: local("terminal"),
-    secrets: [],
-  });
-  assert.deepEqual(
-    problems.map((one) => one.field),
-    ["service"],
+  assert.equal(
+    (form(unit, "service") as { default?: unknown }).default,
+    undefined,
+    "nothing to preselect",
   );
-  assert.match(problems[0]?.message ?? "", /agentcomputer serve/);
+  for (const values of [local("terminal"), { access: "terminal" }]) {
+    const { problems } = await units.check({ unit: "computer", values, secrets: [] });
+    assert.deepEqual(
+      problems.map((one) => one.field),
+      ["service"],
+    );
+    assert.match(problems[0]?.message ?? "", /agentcomputer serve/);
+  }
   const before = hub.state.actors().length;
   await assert.rejects(apply(local("terminal")), refused("invalid"));
   assert.equal(hub.state.actors().length, before);
@@ -360,6 +363,8 @@ test("removing kills the computer: a named folder stays, one the service made go
   const [namedId, madeId] = [idOf(named.instance), idOf(made.instance)];
   const folder = (await Computer.getInfo(madeId, reached)).workspace as string;
   assert.ok(statSync(folder).isDirectory());
+  assert.ok(made.connections[0]?.target.endsWith(`in ${folder}`), "so the person can find it");
+  assert.ok(named.connections[0]?.target.endsWith(`in ${workspace}`));
 
   await units.remove({ instance: named.instance });
   await units.remove({ instance: made.instance });

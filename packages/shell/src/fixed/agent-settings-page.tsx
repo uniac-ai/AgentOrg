@@ -238,7 +238,9 @@ function McpRow({
         </span>
         <span className="flex min-w-0 items-center gap-2 text-[13px] text-muted-foreground tight:col-span-2 tight:row-start-2">
           {origin && <WhereIcon kind={origin.kind} />}
-          <span className="truncate font-mono text-xs">{origin?.target}</span>
+          <span className="truncate font-mono text-xs" title={origin?.target}>
+            {origin?.target}
+          </span>
         </span>
         <span className="min-w-0 truncate text-[13px] text-muted-foreground tight:col-span-2 tight:row-start-3">
           {origin && (

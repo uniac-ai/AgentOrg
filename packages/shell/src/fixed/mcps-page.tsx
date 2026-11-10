@@ -79,7 +79,10 @@ export function McpsPage({ focus, adding }: { focus?: string; adding?: boolean }
               </div>
               <span className="flex min-w-0 items-center gap-2 tight:col-span-2 tight:row-start-2">
                 {entry.origin && <WhereIcon kind={entry.origin.kind} />}
-                <span className="truncate font-mono text-xs text-muted-foreground">
+                <span
+                  className="truncate font-mono text-xs text-muted-foreground"
+                  title={entry.origin?.target}
+                >
                   {entry.origin?.target}
                 </span>
               </span>
