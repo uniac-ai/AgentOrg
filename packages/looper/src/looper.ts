@@ -7,7 +7,12 @@
  * thread already begun (its record holds something) may take, so new threads never keep a message
  * from one that is under way. A turn that finds no place waits for one, in the order it came. While
  * begun threads keep five turns running, a new thread goes on waiting. `WAITING` turns may wait;
- * past that a message is refused `busy`, and nothing of it is kept.
+ * past that a message that would start a turn is refused `busy`, and nothing of it is kept.
+ *
+ * A thread is marked in the store while a turn of it hasn't ended. A looper that closes under a
+ * turn, or goes without closing, leaves the mark, and `resume` on the same store goes on with that
+ * turn, once: the turn that goes on is not marked. A turn that ends, fails or is stopped leaves
+ * no mark.
  */
 import { createLoop, type Place } from "./loop.js";
 import { createRecord } from "./record.js";
@@ -28,6 +33,8 @@ export const WAITING = 16;
 
 /** Where a thread's record is kept in the looper's store. */
 const recordOf = (thread: string) => `thread/${encodeURIComponent(thread)}/`;
+/** Where a thread is marked while a turn of it hasn't ended. */
+const UNFINISHED = "unfinished/";
 
 /** The store's keys under `prefix`, as a store of its own. */
 function under(store: Store, prefix: string): Store {
@@ -75,11 +82,14 @@ export function createLooper(options: {
   log: Log;
 }) {
   const { store, out, log } = options;
-  const threads = new Map<string, ReturnType<typeof open>>();
+  type Held = ReturnType<typeof open>;
+  const threads = new Map<string, Held>();
   /** Set while it is stopped: no turn starts until it is started. */
   let stopped = options.stopped ?? false;
   /** Set when it closes: no turn starts after. */
   let closed = false;
+  /** Set once the turns that were cut off have been looked for. */
+  let looked = false;
   /** Refuse a turn that can't start now, whatever thread it is for. */
   const mayStart = () => {
     if (closed) throw new Refusal("unavailable", "This agent is closing.");
@@ -134,19 +144,65 @@ export function createLooper(options: {
 
   const open = (thread: string) => {
     const record = createRecord(under(store, recordOf(thread)), log);
-    const loop = createLoop({
-      request: options.request,
-      model: options.model,
-      enter,
+    const key = UNFINISHED + encodeURIComponent(thread);
+    const held = {
       record,
-      out: {
-        message: (message) => out.message(thread, message),
-        delta: (id, text) => out.delta(thread, id, text),
-        status: (status) => out.status(thread, status),
+      /** What is being asked of its loop now: messages, retries, going on. */
+      uses: 0,
+      /** Whether a turn of it is running, as its mark was last asked to say. */
+      marked: false,
+      /** Its mark's writes, one after another. */
+      writes: Promise.resolve(),
+      /** Keep its mark, or take it off, after any write before. */
+      mark(on: boolean) {
+        held.writes = held.writes
+          .then(() => (on ? store.set({ key, value: true }) : store.delete({ key })))
+          .then(
+            () => {},
+            (error: unknown) =>
+              log.error("A thread's mark couldn't be written.", { thread, error: String(error) }),
+          );
       },
-      log,
-    });
-    return { record, loop };
+      loop: createLoop({
+        request: options.request,
+        model: options.model,
+        enter,
+        record,
+        out: {
+          message: (message) => out.message(thread, message),
+          delta: (id, text) => out.delta(thread, id, text),
+          status(status) {
+            const running = status.state === "thinking" || status.state === "tool";
+            // A turn that starts is marked, but one that goes on from a cut-off has that mark
+            // taken off: it goes on once. A turn that ends takes its mark off, but one cut by the
+            // looper closing keeps it, for whoever opens the store next.
+            if (running && !held.marked) held.mark(!held.loop.resumed());
+            else if (!running && held.marked && !closed) held.mark(false);
+            held.marked = running;
+            out.status(thread, status);
+          },
+        },
+        log,
+      }),
+    };
+    return held;
+  };
+  /**
+   * Ask something of a thread's loop. A thread first named by an ask that fails, with nothing else
+   * asked of it meanwhile, was never used: nothing is held for it.
+   */
+  const using = async <T>(thread: string, ask: (loop: Held["loop"]) => Promise<T>) => {
+    const known = threads.has(thread);
+    const held = of(thread);
+    held.uses++;
+    try {
+      return await started(ask(held.loop));
+    } catch (error) {
+      if (!known && held.uses === 1) threads.delete(thread);
+      throw error;
+    } finally {
+      held.uses--;
+    }
   };
   const of = (thread: string) => {
     const found = threads.get(thread) ?? open(thread);
@@ -156,27 +212,26 @@ export function createLooper(options: {
 
   return {
     /**
-     * Start a turn in a thread with a message. The message is recorded and said at once; the turn
-     * waits for a place if none is free. Refused `busy` while the thread is in a turn or waiting
-     * for a place, while `WAITING` turns already wait, or while the looper is stopped; and
-     * `unavailable` once it has closed.
+     * Say a message in a thread. It is recorded and said at once. With no turn in the thread it
+     * starts one, which waits for a place if none is free; a turn running or waiting takes it at
+     * its next model request. Refused `busy` while `WAITING` turns already wait and it would start
+     * one more, or while the looper is stopped; and `unavailable` once it has closed.
      */
     async send(thread: string, text: string) {
       mayStart();
-      const known = threads.has(thread);
-      return started(of(thread).loop.send(text)).catch((error: unknown) => {
-        // A thread whose first message wasn't taken was never used: nothing is held for it.
-        if (!known) threads.delete(thread);
-        throw error;
-      });
+      const sent = await using(thread, (loop) => loop.send(text));
+      // Recorded as the looper closed, its turn was cut before it began: it is marked like one.
+      const held = threads.get(thread);
+      if (closed && held && !held.marked) held.mark(true);
+      return sent;
     },
     /**
      * Run a thread's last turn again; what followed its message goes from the record. Refused as
-     * `send` is.
+     * `send` is, and `busy` while the thread is in a turn or waiting for a place.
      */
     async retry(thread: string) {
       mayStart();
-      return started(of(thread).loop.retry());
+      return using(thread, (loop) => loop.retry());
     },
     /** Stop a thread's turn now. A call already running finishes, and its result is kept. */
     cancel: async (thread: string) => threads.get(thread)?.loop.cancel(),
@@ -202,7 +257,47 @@ export function createLooper(options: {
     start() {
       stopped = false;
     },
-    /** Close for good: every turn is cut, and none starts after. */
+    /**
+     * Go on with each turn that was cut off when this store was last used: by a looper closing
+     * under it, or going without closing. Each goes on once, and waits for a place like any turn.
+     * One that can't go on now keeps its mark for the next time. A stopped looper goes on with
+     * none, and its marks go. Whoever hosts the looper calls this when its model can be asked;
+     * once the marks have been read, a later call does nothing.
+     */
+    async resume() {
+      if (looked || closed) return;
+      looked = true;
+      const keys: string[] = [];
+      try {
+        let after: string | undefined;
+        do {
+          const page = await store.list({ prefix: UNFINISHED, ...(after ? { after } : {}) });
+          keys.push(...page.keys);
+          after = page.next ?? undefined;
+        } while (after);
+      } catch (error) {
+        looked = false;
+        throw error;
+      }
+      for (const key of keys) {
+        // Closed meanwhile: what is left stays marked, for whoever opens the store next.
+        if (closed) return;
+        const thread = decodeURIComponent(key.slice(UNFINISHED.length));
+        const held = of(thread);
+        try {
+          if (!stopped) await using(thread, (loop) => loop.resume());
+          // A thread in a turn now keeps the mark as that turn's, and a looper that has closed
+          // leaves it. Otherwise nothing goes on, and it goes.
+          if (!held.marked && !closed) held.mark(false);
+        } catch (error) {
+          log.warn("A turn that was cut off didn't go on.", { key, error: String(error) });
+        }
+      }
+    },
+    /**
+     * Close for good: every turn is cut, and none starts after. Each stays marked, for `resume`
+     * in whoever opens the store next.
+     */
     async close() {
       closed = true;
       await Promise.all([...threads.values()].map(({ loop }) => loop.cancel()));
@@ -210,6 +305,7 @@ export function createLooper(options: {
     /** Settles when every thread's latest turn has written all it will. */
     async settled() {
       await Promise.all([...threads.values()].map(({ loop }) => loop.settled()));
+      await Promise.all([...threads.values()].map(({ writes }) => writes));
     },
     /** Text the model writes while it answers `requestId`, for the reply it becomes. */
     delta(requestId: string, text: string) {

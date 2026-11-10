@@ -1,7 +1,8 @@
 /**
  * A loop: a turn sends its record and the tools to the model, runs each function the model calls,
  * and sends the results back, until the model answers without calling anything, or the turn has
- * made its `MAX_CALLS` calls.
+ * made its `MAX_CALLS` calls. A message said while a turn runs is recorded at once, and the turn
+ * takes it at its next model request.
  */
 import { argumentsOf, head, type LoopRecord, messageOf } from "./record.js";
 import { capped, runTool } from "./tools.js";
@@ -18,6 +19,11 @@ import {
 
 /** A brake on a turn, not a budget: nothing approves a call, and the person can stop it. */
 export const MAX_CALLS = 200;
+/** What a thread shows, and its model is told, when a turn that was cut off goes on. */
+const CUT_OFF = {
+  shown: "Cut off by a restart: going on from where it stopped.",
+  told: "This turn was cut off by a restart. Check what is already done before you repeat anything, then go on.",
+};
 
 type FunctionCall = Extract<Item, { type: "function_call" }>;
 /** Where a loop says what it does. */
@@ -39,6 +45,10 @@ interface Turn {
   place?: Place;
   /** Set until it has that place. */
   waiting?: boolean;
+  /** Set while it waits for its end to be taken: it writes nothing meanwhile. */
+  ending?: boolean;
+  /** Set on a turn that goes on from one that was cut off. */
+  resumed?: boolean;
 }
 /** A turn's place among the turns running: `entered` settles when it has it, or has left. */
 export interface Place {
@@ -68,9 +78,25 @@ export function createLoop(options: {
   /** A cancelled turn whose running call hasn't settled: the next turn waits for its records. */
   let draining: Promise<void> | undefined;
   /** Settles when the latest turn's loop has ended. */
-  let ending: Promise<void> | undefined;
+  let lastEnded: Promise<void> | undefined;
   /** The latest status, for a view that asks. */
   let latest: Status = { state: "idle" };
+  /** Set once a turn has started here: nothing that was cut off earlier is left to go on with. */
+  let began = false;
+  /** Counts the cancels, so that what was asked before one can tell when it is taken after it. */
+  let cancels = 0;
+  /** What is being taken now: the next thing asked is taken after it. */
+  let taking: Promise<unknown> = Promise.resolve();
+  /**
+   * Take what was asked in the order it was asked, one at a time: a message, a retry, a turn's
+   * end. `cancelled` says whether a cancel came between its asking and its taking.
+   */
+  const inOrder = <T>(take: (cancelled: boolean) => Promise<T>) => {
+    const at = cancels;
+    const taken = taking.then(() => take(at !== cancels));
+    taking = taken.catch(() => {});
+    return taken;
+  };
   const say = (next: Status) => {
     latest = next;
     out.status(next);
@@ -86,20 +112,17 @@ export function createLoop(options: {
    */
   const begin = (current: Turn, first?: () => Promise<void>) => {
     current.ended = placed(current, first)
-      .then(
-        () => status(current, { state: "idle" }),
-        (error: unknown) => {
-          if (current.cancelled) return;
-          log.error("A turn failed.", { error: String(error) });
-          status(current, { state: "error", detail: codeOf(error) });
-        },
-      )
+      .catch((error: unknown) => {
+        if (current.cancelled) return;
+        log.error("A turn failed.", { error: String(error) });
+        status(current, { state: "error", detail: codeOf(error) });
+      })
       .finally(() => {
         current.place?.leave();
         if (turn === current) turn = undefined;
       })
       .catch((error: unknown) => log.error("A turn's status failed.", { error: String(error) }));
-    ending = current.ended;
+    lastEnded = current.ended;
   };
   const show = (entry: Awaited<ReturnType<LoopRecord["append"]>>) => out.message(messageOf(entry));
   /** A call starting: shown as running, under the id its record will have when it ends. */
@@ -119,6 +142,7 @@ export function createLoop(options: {
     call: FunctionCall,
     result: { output: string; ok: boolean; code?: string },
     id: string,
+    read: number,
   ) => {
     const entry = {
       role: "tool" as const,
@@ -134,7 +158,7 @@ export function createLoop(options: {
       ],
     };
     try {
-      show(await record.append(entry, id));
+      show(await record.append(entry, id, read));
     } catch (error) {
       out.message(
         messageOf({
@@ -162,7 +186,7 @@ export function createLoop(options: {
     let calls = 0;
     for (;;) {
       const { instructions, tools, model: chosen } = await options.request();
-      const input = await record.input();
+      const { items: input, read } = await record.input();
       if (current.cancelled) return;
       const requestId = crypto.randomUUID();
       const replyId = crypto.randomUUID();
@@ -191,9 +215,28 @@ export function createLoop(options: {
               items: texts.map((content) => ({ type: "message", role: "assistant", content })),
             },
             replyId,
+            read,
           ),
         );
-      if (called.length === 0) return;
+      if (called.length === 0) {
+        if (current.cancelled) return;
+        // The turn's end is taken in order with what was asked, so a message being recorded now
+        // is recorded first. One said since this request read the record is answered before the
+        // turn ends. With none the turn is over at once: the next message taken starts another.
+        current.ending = true;
+        const over = await inOrder(async () => {
+          const more = await record.saidAfter(read);
+          if (current.cancelled) return true;
+          if (more) return false;
+          current.place?.leave();
+          status(current, { state: "idle" });
+          turn = undefined;
+          return true;
+        });
+        current.ending = false;
+        if (over) return;
+        continue;
+      }
       for (const [i, call] of called.entries()) {
         if (current.cancelled || calls >= MAX_CALLS) {
           const rest = called.slice(i);
@@ -207,7 +250,7 @@ export function createLoop(options: {
         const id = crypto.randomUUID();
         running(call, id);
         const result = await runTool(tools, call.name, call.arguments);
-        await answered(call, result, id);
+        await answered(call, result, id, read);
       }
       if (current.cancelled) return;
       if (calls >= MAX_CALLS)
@@ -234,54 +277,97 @@ export function createLoop(options: {
     current.waiting = true;
   };
 
+  const said = async (text: string, joined: boolean) => {
+    const entry = await record.append({
+      role: "user",
+      items: [{ type: "message", role: "user", content: text }],
+      ...(joined ? { joined: true as const } : {}),
+    });
+    show(entry);
+    return { messageId: entry.id };
+  };
+  /**
+   * Start a turn: `open` takes its place and keeps what opens it, then its loop runs, after `first`
+   * if `open` gives one. When `open` gives nothing, no turn starts. A turn `cancelled` before it
+   * started keeps what opens it and runs nothing.
+   */
+  const start = async <T>(
+    cancelled: boolean,
+    open: (current: Turn) => Promise<{ opened: T; first?: () => Promise<void> } | undefined>,
+  ) => {
+    const current: Turn = { cancelled };
+    if (!cancelled) turn = current;
+    began = true;
+    try {
+      // A cancelled turn's last call lands in the record before anything new does.
+      await draining;
+      draining = undefined;
+      const begun = await open(current);
+      if (begun) begin(current, begun.first);
+      else if (turn === current) turn = undefined;
+      return begun?.opened;
+    } catch (error) {
+      current.place?.leave();
+      if (turn === current) turn = undefined;
+      throw error;
+    }
+  };
+
   return {
-    /** Start a turn with a message; its progress is said through `out`. */
-    async send(text: string) {
-      if (turn) throw new Refusal("busy", "A turn is running. Wait for it, or cancel it.");
-      const current: Turn = { cancelled: false };
-      turn = current;
-      try {
-        // A cancelled turn's last call lands in the record before this message does.
-        await draining;
-        draining = undefined;
-        enter(current, !(await record.empty()));
-        const entry = await record.append({
-          role: "user",
-          items: [{ type: "message", role: "user", content: text }],
-        });
-        show(entry);
-        begin(current);
-        return { messageId: entry.id };
-      } catch (error) {
-        current.place?.leave();
-        if (turn === current) turn = undefined;
-        throw error;
-      }
-    },
+    /**
+     * Say a message. With no turn it starts one, whose progress is said through `out`. In a turn,
+     * running or waiting for its place, it is recorded and said at once, and the turn takes it at
+     * its next model request.
+     */
+    send: (text: string) =>
+      inOrder(async (cancelled) => {
+        if (turn) return said(text, true);
+        return (await start(cancelled, async (current) => {
+          enter(current, !(await record.empty()));
+          return { opened: await said(text, false) };
+        })) as { messageId: string };
+      }),
     /**
      * Run the last turn again, without recording its message again. What followed it goes
      * from the record, so the new reply takes its place; what its tools did stays done.
      */
-    async retry() {
-      if (turn) throw new Refusal("busy", "A turn is running. Wait for it, or cancel it.");
-      const current: Turn = { cancelled: false };
-      turn = current;
-      try {
-        await draining;
-        draining = undefined;
-        const last = await record.lastUser();
-        if (!last) throw new Refusal("nothing_to_retry", "No message has been sent yet.");
-        enter(current, true);
-        // What followed the message goes only once the turn has its place: cancelled while it
-        // waits, it has run nothing, and the reply it would have replaced stays.
-        begin(current, () => record.dropAfter(last.id));
-        return { messageId: last.id };
-      } catch (error) {
-        current.place?.leave();
-        if (turn === current) turn = undefined;
-        throw error;
-      }
-    },
+    retry: () =>
+      inOrder(async (cancelled) => {
+        if (turn) throw new Refusal("busy", "A turn is running. Wait for it, or cancel it.");
+        return (await start(cancelled, async (current) => {
+          const last = await record.lastUser();
+          if (!last) throw new Refusal("nothing_to_retry", "No message has been sent yet.");
+          enter(current, true);
+          // What followed the message goes only once the turn has its place: cancelled while it
+          // waits, it has run nothing, and the reply it would have replaced stays.
+          return { opened: { messageId: last.id }, first: () => record.dropAfter(last.id) };
+        })) as { messageId: string };
+      }),
+    /**
+     * Go on with a turn that was cut off before it ended, as by a restart: the thread shows one
+     * line saying so, and the model is told once to check what is already done. Nothing goes on in
+     * a thread with nothing kept, in one that has had a turn since the loop was made, or when a
+     * cancel comes first.
+     */
+    resume: () =>
+      inOrder(async (cancelled) => {
+        if (began || cancelled) return;
+        await start(false, async (current) => {
+          if ((await record.empty()) || current.cancelled) return undefined;
+          enter(current, true);
+          current.resumed = true;
+          show(
+            await record.append({
+              role: "tool",
+              text: CUT_OFF.shown,
+              items: [{ type: "message", role: "user", content: CUT_OFF.told }],
+            }),
+          );
+          return { opened: undefined };
+        });
+      }),
+    /** Whether the turn running now goes on from one that was cut off. */
+    resumed: () => turn?.resumed === true,
     /** The status now. */
     state: () => latest,
     /**
@@ -290,22 +376,25 @@ export function createLoop(options: {
      * for its place never starts.
      */
     async cancel() {
+      // Counted with no turn too: a message asked but not yet taken starts none after this.
+      cancels++;
       const current = turn;
       if (!current) return;
       current.cancelled = true;
       turn = undefined;
-      // A turn that will write nothing more gives its place back now: one still waiting for it, or
-      // one the model is answering. One in a call keeps its place until the call ends.
-      if (current.waiting || current.requestId) current.place?.leave();
-      // In a model call, nothing more is recorded; in a tool call, its result still is.
-      // A turn that hadn't begun leaves what was already running to be waited for.
-      if (!current.requestId) draining = current.ended ?? draining;
+      // A turn that will write nothing more gives its place back now: one still waiting for it,
+      // one the model is answering, or one waiting for its end. Any other keeps its place until it
+      // has written what it will, and what comes next waits for that: the reply it is storing,
+      // or the result of its running call.
+      const quiet = current.requestId !== undefined || current.ending === true;
+      if (current.waiting || quiet) current.place?.leave();
+      if (!quiet) draining = current.ended ?? draining;
       say({ state: "idle" });
       if (current.requestId) await model.cancel({ requestId: current.requestId }).catch(() => {});
     },
     /** Settles when the latest turn has written all it will. */
     settled: async () => {
-      await ending;
+      await lastEnded;
     },
     /** Settles when a stopped turn's running call has ended: at once, if none is running. */
     drained: async () => {

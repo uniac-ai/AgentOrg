@@ -291,7 +291,10 @@ export function createChats(options: {
     return held;
   };
   return {
-    /** Start a turn in a chat, or in a new chat this message starts. */
+    /**
+     * Say a message in a chat, or in a new chat it starts. With no turn in the chat it starts one;
+     * a turn running there takes it at its next model request.
+     */
     async send({ chat, text }: Input<"send">) {
       if (chat !== undefined) {
         await heldOf(chat);
@@ -363,7 +366,16 @@ export function createChats(options: {
      */
     stop: () => looper.stop(),
     start: () => looper.start(),
-    /** Close for good: its turns are cut, and none starts after. */
+    /** Go on with the turns that were cut off when the agent last ran, each once. */
+    async resume() {
+      // The chats first: what a turn says moves its chat in the list.
+      await load();
+      await looper.resume();
+    },
+    /**
+     * Close for good: its turns are cut, and none starts after. They stay marked, so the engine
+     * that opens this store next goes on with them.
+     */
     close: () => looper.close(),
     /** Settles when every chat's latest turn has written all it will. */
     async settled() {

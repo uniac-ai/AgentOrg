@@ -81,6 +81,14 @@ export function startEngine(
     log: ctx.log,
   });
   ctx.slots.model.on("delta", ({ requestId, text }) => chats.delta(requestId, text));
+  // A turn that was cut off when the agent last ran goes on once there is a model to ask.
+  ctx.slots.model.onBind(() => {
+    chats.resume().catch((error: unknown) =>
+      ctx.log.warn("The turns that were cut off couldn't be looked for.", {
+        error: String(error),
+      }),
+    );
+  });
   ctx.exports.chat.implement({
     send: (input) => chats.send(input),
     history: (input) => chats.history(input),
@@ -110,7 +118,10 @@ export function startEngine(
     /** Stop the agent: its turns are cut and none starts until `start`. Its chats stay readable. */
     stop: () => chats.stop(),
     start: () => chats.start(),
-    /** Close for good: its turns are cut, and none starts after. */
+    /**
+     * Close for good: its turns are cut, and none starts after. They go on in the engine that
+     * opens this store next.
+     */
     close: () => chats.close(),
     /** Settles when every chat's latest turn has written all it will. */
     settled: () => chats.settled(),

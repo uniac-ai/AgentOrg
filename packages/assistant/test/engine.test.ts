@@ -741,16 +741,85 @@ test("cancel during a tool call keeps its real result and skips the calls after 
     if (item.type === "function_call") assert.equal(input[i + 1]?.callId, item.callId);
 });
 
-test("a chat runs one turn at a time", async () => {
+test("a message sent in a chat whose turn is running is shown at once, and that turn answers it", async () => {
   const s = await setup();
-  const late = gate<Reply>();
-  s.script.push(() => late.shut);
+  const first = gate<Reply>();
+  s.script.push(() => first.shut, say("Both done."));
   const from = s.actor.emitted.length;
   await s.chat("send", { text: "First." });
-  await assert.rejects(s.chat("send", { text: "Second." }), { code: "busy" });
+  await until(() => s.requests.length === 1, "the model request");
+  await s.chat("send", { text: "Second." });
+  assert.deepEqual(s.messages(), ["user: First.", "user: Second."]);
+  // The answer on its way didn't see it, so the turn goes round once more before it ends.
+  first.open(say("First done."));
+  assert.deepEqual(await s.ended(from), { state: "idle" });
+  assert.deepEqual(
+    s.requests.map((request) => request.input.map((item) => item.content)),
+    [["First."], ["First.", "First done.", "Second."]],
+  );
+  assert.deepEqual(s.messages(), [
+    "user: First.",
+    "user: Second.",
+    "assistant: First done.",
+    "assistant: Both done.",
+  ]);
+  // A retry is still one at a time.
+  const late = gate<Reply>();
+  s.script.push(() => late.shut);
+  await s.chat("retry");
+  await assert.rejects(s.chat("retry"), { code: "busy" });
   late.open(say("Done."));
-  await s.ended(from);
-  await s.turn("Third.");
+  await s.host.settled();
+});
+
+test("a turn cut off as the engine closes goes on in the next, and one the person stopped doesn't", async () => {
+  const values = new Map<string, unknown>();
+  const s = await setup(values);
+  await s.turn("Hello.");
+  const marked = () => values.has(`loop/unfinished/${s.id()}`);
+  assert.equal(marked(), false, "a turn that ended leaves no mark");
+  const stopped = gate<Reply>();
+  s.script.push(() => stopped.shut);
+  await s.chat("send", { text: "Think." });
+  await until(() => s.requests.length === 2, "the model request");
+  assert.equal(marked(), true);
+  await s.chat("cancel");
+  stopped.open(say("Too late."));
+  await s.host.settled();
+  assert.equal(marked(), false, "stopped by the person");
+
+  const cut = gate<Reply>();
+  s.script.push(() => cut.shut);
+  await s.chat("send", { text: "Do the long thing." });
+  await until(() => s.requests.length === 3, "the model request");
+  await s.host.close();
+  cut.open(say("Too late."));
+  await s.host.settled();
+  assert.equal(marked(), true, "cut by the engine closing, as when the app restarts");
+
+  const again = await setup(values);
+  assert.deepEqual(await again.ended(0), { state: "idle" });
+  assert.deepEqual(
+    again.requests[0]?.input.map((item) => item.content),
+    [
+      "Hello.",
+      "ok",
+      "Think.",
+      "Do the long thing.",
+      "This turn was cut off by a restart. Check what is already done before you repeat anything, then go on.",
+    ],
+  );
+  // Its chat shows one line, then the reply.
+  assert.deepEqual(again.messages(), [
+    "tool: Cut off by a restart: going on from where it stopped.",
+    "assistant: ok",
+  ]);
+  await again.host.settled();
+  assert.equal(marked(), false);
+  // The next start finds nothing to go on with.
+  const third = await setup(values);
+  await third.turn("And now?");
+  assert.equal(third.requests.length, 1);
 });
 
 test("streamed text reaches the chat as the reply it becomes", async () => {
@@ -1009,9 +1078,9 @@ test("thousands of calls in one reply cost a handful of writes", async () => {
   );
   const before = s.store.writes.count;
   assert.equal((await s.turn("Flood.")).detail?.code, "limit");
-  // The chat's entry, twice: started, then with its message. The message, `MAX_CALLS` calls, and
-  // one entry answering the other 1,980.
-  assert.equal(s.store.writes.count - before, MAX_CALLS + 4);
+  // The chat's entry, twice: started, then with its message. The message, the mark that its turn
+  // hasn't ended, `MAX_CALLS` calls, and one entry answering the other 1,980.
+  assert.equal(s.store.writes.count - before, MAX_CALLS + 5);
   const input = (await s.chat("history", { limit: 200 })) as { messages: unknown[] };
   assert.equal(input.messages.length, 200, "a full page of what was recorded");
 });
@@ -1211,9 +1280,9 @@ test("an agent works in several chats at once, and past its places a chat waits 
   const three = await exchange(s, "A third.");
   assert.equal((await shownIn(s, three.chat)).at(-1)?.text, "ok");
   assert.equal((await listed(s)).chats.find((c) => c.id === one.chat)?.state, "thinking");
-  // A chat in its turn takes no second message, and stopping another chat stops nothing.
+  // A chat in its turn takes no retry, and stopping another chat stops nothing.
   await assert.rejects(
-    s.actor.call("chat", "send", { chat: one.chat, text: "And this." }),
+    s.actor.call("chat", "retry", { chat: one.chat }),
     (error: { code?: string; message?: string }) =>
       error.code === "busy" && /A turn is running/.test(error.message ?? ""),
   );

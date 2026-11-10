@@ -79,9 +79,10 @@ export interface Log {
 }
 
 /**
- * A message as a thread shows it. A `tool` message tells what was done with a tool: with `tool`, the
- * call it stands for, said as `running` when it starts and again under the same id when it ends;
- * without, its `text` says it in one line.
+ * A message as a thread shows it. A `tool` message tells what the loop did: with `tool`, the call
+ * it stands for, said as `running` when it starts and again under the same id when it ends;
+ * without, its `text` says it in one line, as for calls that never ran or a turn that goes on
+ * after it was cut off.
  */
 export interface Shown {
   id: string;

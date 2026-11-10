@@ -320,6 +320,29 @@ test("a provider restart brings running agents back, and leaves stopped ones sto
   assert.deepEqual(await s.texts(), ["user: remember this", "assistant: ok"]);
 });
 
+test("a turn the provider's restart cut off goes on when it is back", async (t) => {
+  const s = await setup(t);
+  await s.create();
+  let release = () => {};
+  s.gates.push(
+    new Promise<void>((resolve) => {
+      release = resolve;
+    }),
+  );
+  await s.talk.send({ text: "a long one" });
+  await until(() => s.requests.length === 1, "the request");
+  await s.restart();
+  release();
+  await until(() => s.requests.length === 2, "the turn to go on");
+  assert.match(String(s.requests[1]?.input.at(-1)?.content), /cut off by a restart/);
+  await until(async () => (await s.texts()).at(-1) === "assistant: ok", "its reply");
+  assert.deepEqual(await s.texts(), [
+    "user: a long one",
+    "tool: Cut off by a restart: going on from where it stopped.",
+    "assistant: ok",
+  ]);
+});
+
 test("a stopped agent whose connection ended is down until it is stopped or started again", async (t) => {
   const s = await setup(t);
   const { agent } = await s.create();

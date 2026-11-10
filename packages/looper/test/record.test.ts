@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createRecord, fitted, head } from "../src/record.ts";
+import { createRecord, fitted, head, INPUT_BUDGET } from "../src/record.ts";
 
 /** A store in memory, as the record uses it. */
 function store() {
@@ -83,22 +83,80 @@ test("the record is first read a few at a time, in order", async () => {
   assert.ok(most > 1 && most <= 16, `${most} at once`);
 });
 
-test("dropAfter forgets what followed a message, in memory and in the store", async () => {
+test("dropAfter forgets what followed a message up to the next user message, in memory and in the store", async () => {
   const s = store();
   const record = createRecord(s.calls as never, log);
+  const reply = { role: "assistant" as const, items: [] };
   const kept = await record.append(user("kept"));
-  await record.append(user("gone 1"));
-  await record.append(user("gone 2"));
+  await record.append(reply);
+  await record.append(reply);
+  await record.append(user("said since"));
   await record.dropAfter(kept.id);
-  assert.equal(s.values.size, 1);
+  assert.equal(s.values.size, 2);
   assert.deepEqual(
     (await record.page(undefined, 100)).messages.map((m) => m.text),
-    ["kept"],
+    ["kept", "said since"],
   );
   // And a new message after it isn't given a number that was used.
   await record.append(user("next"));
   assert.deepEqual(
     (await createRecord(s.calls as never, log).page(undefined, 100)).messages.map((m) => m.text),
-    ["kept", "next"],
+    ["kept", "said since", "next"],
   );
+});
+
+test("a message said during a turn is read after what was asked for without it, in one exchange", async () => {
+  const record = createRecord(store().calls as never, log);
+  const reply = (content: string) => ({
+    role: "assistant" as const,
+    items: [{ type: "message" as const, role: "assistant" as const, content }],
+  });
+  const during = (content: string) => ({ ...user(content), joined: true as const });
+  const large = "x".repeat(INPUT_BUDGET * 0.6);
+  await record.append(user("old"));
+  await record.append(reply("old reply"));
+  await record.append(user("open"));
+  const first = await record.input();
+  await record.append(during("one"));
+  assert.equal(await record.saidAfter(first.read), true);
+  // What came of the request that read up to `open` is ahead of `one`.
+  await record.append(reply(`to open ${large}`), undefined, first.read);
+  const second = await record.input();
+  assert.equal(await record.saidAfter(second.read), false);
+  await record.append(during("two"));
+  // What came of the request that read `one` follows it, and is ahead of `two` only.
+  await record.append(reply(`to one ${large}`), undefined, second.read);
+  await record.append(during("three"));
+  await record.append(reply("to two and three"), undefined, (await record.input()).read);
+  // The turn is over the budget, and stays whole from the message that opened it: it is one
+  // exchange, not four.
+  assert.deepEqual(
+    (await record.input()).items.map((item) =>
+      item.type === "message" ? item.content.slice(0, 7) : "",
+    ),
+    ["old", "old rep", "open", "to open", "one", "to one ", "two", "three", "to two "],
+  );
+});
+
+test("a user message is sent to the model only once it is stored", async () => {
+  const s = store();
+  const record = createRecord(s.calls as never, log);
+  await record.append(user("open"));
+  let stored: () => void = () => {};
+  const set = s.calls.set;
+  s.calls.set = async (input) => {
+    await new Promise<void>((resolve) => {
+      stored = resolve;
+    });
+    return set(input);
+  };
+  const appending = record.append({ ...user("on its way"), joined: true });
+  const before = await record.input();
+  assert.equal(before.items.length, 1);
+  assert.equal(await record.saidAfter(before.read), false);
+  stored();
+  await appending;
+  // Stored, it is after what that request read.
+  assert.equal(await record.saidAfter(before.read), true);
+  assert.equal((await record.input()).items.length, 2);
 });

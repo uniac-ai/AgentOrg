@@ -1,91 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {
-  createLooper,
-  type Json,
-  type OutputItem,
-  PLACES,
-  Refusal,
-  type Tool,
-  WAITING,
-} from "../src/index.ts";
-
-/**
- * A looper whose model answers a request only when the test says so, naming the request by the
- * last thing said to it. `asked` is what the model has been asked, in order.
- */
-function looperWith(
-  options: {
-    tools?: Tool[];
-    stopped?: boolean;
-    /** A model that never hears a cancel: its answer stays out. */
-    deaf?: boolean;
-    /** Awaited before each write to the store. */
-    writing?: (key: string) => Promise<void> | undefined;
-  } = {},
-) {
-  const values = new Map<string, Json>();
-  const said: string[] = [];
-  const asked: string[] = [];
-  const open = new Map<string, { id: string; answer(output: OutputItem[]): void; fail(): void }>();
-  const looper = createLooper({
-    store: {
-      get: async ({ key }) => (values.has(key) ? { value: values.get(key) as Json } : {}),
-      async set({ key, value }) {
-        await options.writing?.(key);
-        values.set(key, value);
-      },
-      delete: async ({ key }) => void values.delete(key),
-      list: async ({ prefix = "", after }) => ({
-        keys: [...values.keys()]
-          .filter((key) => key.startsWith(prefix) && (after === undefined || key > after))
-          .sort(),
-        next: null,
-      }),
-    },
-    model: {
-      respond: ({ requestId, input }) =>
-        new Promise((answer, fail) => {
-          const last = input.findLast((item) => item.type === "message" && item.role === "user");
-          const text = last?.type === "message" ? last.content : "";
-          asked.push(text);
-          open.set(text, {
-            id: requestId,
-            answer: (output) => answer({ output }),
-            fail: () => fail(new Refusal("cancelled", "The request was cancelled.")),
-          });
-        }),
-      async cancel({ requestId }) {
-        if (options.deaf) return;
-        for (const request of open.values()) if (request.id === requestId) request.fail();
-      },
-    },
-    request: async () => ({ instructions: "", tools: options.tools ?? [] }),
-    out: {
-      message: (thread, { role, text }) => said.push(`${thread}: ${role}: ${text}`),
-      delta() {},
-      status() {},
-    },
-    ...(options.stopped === undefined ? {} : { stopped: options.stopped }),
-    log: { info() {}, warn() {}, error() {} },
-  });
-  /** Answer the request that ends with `text`, or fail it. */
-  const answer = (text: string, output: OutputItem[] = says("Done.")) =>
-    open.get(text)?.answer(output);
-  const fail = (text: string) => open.get(text)?.fail();
-  /** Threads no message was sent in before, each sent one and left in its turn. */
-  const fill = async (names: string[]) => {
-    const before = asked.length;
-    for (const name of names) await looper.send(name, `Work ${name}.`);
-    while (asked.length < before + names.length) await idle();
-  };
-  return { looper, said, asked, answer, fail, fill };
-}
-const says = (content: string): OutputItem[] => [{ type: "message", role: "assistant", content }];
-/** Let everything that can happen now happen. */
-async function idle() {
-  for (let i = 0; i < 50; i++) await new Promise((soon) => setImmediate(soon));
-}
+import { PLACES, WAITING } from "../src/index.ts";
+import { gate, held, idle, looperWith } from "./support.ts";
 
 test("turns run side by side up to the places; the next waits its turn, its message already said", async () => {
   const { looper, said, asked, answer, fill } = looperWith();
@@ -98,9 +14,8 @@ test("turns run side by side up to the places; the next waits its turn, its mess
   assert.equal(asked.length, PLACES, "nothing more is asked of the model");
   assert.ok(said.includes("e: user: Work e."));
   assert.deepEqual(looper.state("e"), { state: "thinking" });
-  // A thread that waits is in its turn: it takes no second message, and no retry.
-  await assert.rejects(looper.send("e", "And this."), { name: "Refusal", code: "busy" });
-  await assert.rejects(looper.retry("e"), { code: "busy" });
+  // A thread that waits is in its turn: it takes no retry.
+  await assert.rejects(looper.retry("e"), { name: "Refusal", code: "busy" });
 
   // A place freed goes to whoever has waited longest.
   answer("Work b.");
@@ -171,26 +86,6 @@ test("the line for a place holds so many turns; past that a message is refused, 
   assert.ok(said.includes("one more: user: Hello again."));
   await looper.stop();
 });
-
-/** A tool that runs until the test lets it end. */
-function held() {
-  let finish: () => void = () => {};
-  const until = new Promise<void>((resolve) => {
-    finish = resolve;
-  });
-  const tool: Tool = {
-    name: "hold",
-    parameters: {},
-    run: async () => {
-      await until;
-      return { output: "held", ok: true };
-    },
-  };
-  const called: OutputItem[] = [
-    { type: "function_call", callId: "c1", name: "hold", arguments: "{}" },
-  ];
-  return { tool, called, finish };
-}
 
 test("a turn cancelled while it waits never starts, and one cancelled in a call keeps its place until the call ends", async () => {
   const { tool, called, finish } = held();
@@ -300,10 +195,7 @@ test("stopped, every turn is cut, running or waiting, and no message is taken un
 
 test("stopping answers when nothing more will be written: after a call still running, and a message being recorded", async () => {
   const { tool, called, finish } = held();
-  let recorded: () => void = () => {};
-  const late = new Promise<void>((resolve) => {
-    recorded = resolve;
-  });
+  const { shut: late, open: recorded } = gate();
   const { looper, said, asked, answer, fill } = looperWith({
     tools: [tool],
     writing: (key) => (key.startsWith("thread/late/") ? late : undefined),
