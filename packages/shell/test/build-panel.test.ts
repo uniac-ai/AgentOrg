@@ -591,3 +591,39 @@ test(
     await page.close();
   }),
 );
+
+test(
+  "a form that changed while it was open shows what's now chosen before anything is made",
+  withGateway(async (gateway) => {
+    gateway.changeForm("computer", (field) => {
+      delete field.required;
+    });
+    const page = await open(gateway);
+    await fromTemplate(page, "Assistant");
+    const computer = card(page, "Computer");
+    const create = panel(page).getByRole("button", { name: "Create", exact: true });
+    gateway.findProblems([{ unit: 0, field: "where", message: "No service is running here." }]);
+    await create.click();
+    await computer.getByText("No service is running here.").waitFor();
+
+    gateway.findProblems([]);
+    gateway.changeForm("computer", (field) => {
+      if (field.id === "where") field.default = "local";
+    });
+    await create.click();
+    await computer
+      .locator("[data-slot=field-description]", { hasText: "It acts as you on this Mac." })
+      .waitFor();
+    assert.equal(
+      await computer.getByRole("combobox", { name: "Where it runs" }).innerText(),
+      "This computer",
+    );
+    assert.equal(await computer.getByText("No service is running here.").count(), 0);
+    assert.equal(gateway.calls.filter((c) => c.method === "create").length, 0, "not yet");
+
+    await create.click();
+    await page.waitForURL(/#\/a\/a-6$/);
+    assert.equal(gateway.calls.filter((c) => c.method === "create").length, 1);
+    await page.close();
+  }),
+);

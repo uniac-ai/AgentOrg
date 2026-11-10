@@ -96,6 +96,20 @@ function useBuildingState() {
         )
         .then(reread),
     removeTemplate: (id: string) => api.call("agents", "removeTemplate", { id }).then(reread),
+    /** Reads the units again. True if a unit in the stack changed: it's then drawn as it now is. */
+    async refreshUnits() {
+      const { units } = await api.call<Pick<Catalog, "units">>("agents", "units");
+      const freshOf = (u: DraftUnit) =>
+        units.find((c) => c.provider === u.unit?.provider && c.id === u.id);
+      const stale = draft?.units.some((u) => {
+        const fresh = freshOf(u);
+        return fresh && JSON.stringify(fresh) !== JSON.stringify(u.unit);
+      });
+      if (!stale) return false;
+      reread();
+      change((was) => ({ units: was.units.map((u) => ({ ...u, unit: freshOf(u) ?? u.unit })) }));
+      return true;
+    },
     setProblems: (problems: StackProblem[]) =>
       setDraft((was) => (was ? { ...was, problems } : was)),
   };

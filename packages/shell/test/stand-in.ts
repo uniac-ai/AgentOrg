@@ -422,6 +422,7 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
   const creatables = options.creatables ?? CREATABLES;
   let problems: StackProblem[] = [];
   let templates = [...TEMPLATES];
+  let units = UNITS;
 
   const emit = (slot: string, event: string, payload: unknown) => {
     for (const s of subscribers)
@@ -471,7 +472,7 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
       },
       units: () => ({
         bases: creatables.map((c) => ({ ...c, providerName: "AgentOrg" })),
-        units: UNITS,
+        units,
       }),
       templates: () => ({ templates }),
       saveTemplate: (input) => {
@@ -838,6 +839,11 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
     agents,
     connections,
     calls,
+    /** A unit's form changes, as when what it depends on appears. */
+    changeForm(id: string, change: (field: Units["units"][number]["form"][number]) => void) {
+      units = structuredClone(units);
+      for (const field of units.find((u) => u.id === id)?.form ?? []) change(field);
+    },
     /** What `agents.check` finds wrong from now on. */
     findProblems: (found: StackProblem[]) => {
       problems = found;
