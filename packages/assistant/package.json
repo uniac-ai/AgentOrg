@@ -20,6 +20,7 @@
   },
   "dependencies": {
     "@agentorg/interfaces": "0.0.0",
+    "@agentorg/looper": "0.0.0",
     "@agentorg/sdk": "0.0.0",
     "zod": "^4.6.7"
   },

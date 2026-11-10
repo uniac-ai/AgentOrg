@@ -1,13 +1,12 @@
 /**
- * The assistant's record of one chat, kept in its `store` slot: one key per message, holding the
- * Responses items it stands for, and for a tool message the line the person sees. It is read once,
- * then kept in memory, and the oldest messages are deleted past a retention cap.
+ * The record a loop runs on, kept in a store: one key per message, holding the items a model reads
+ * for it, and for a tool message the line a person sees. It is read once, then kept in memory, and
+ * the oldest messages are deleted past a retention cap.
  */
-import { type ChatMessage, Item, type kv } from "@agentorg/interfaces";
-import type { Log, Slot } from "@agentorg/sdk";
 import { z } from "zod";
+import { Item, type Json, type Log, type Shown, type Store } from "./types.js";
 
-export type ResponseItem = z.output<typeof Item>;
+/** A message as the record keeps it. */
 export const Entry = z.object({
   id: z.string(),
   role: z.enum(["user", "assistant", "tool"]),
@@ -23,6 +22,8 @@ export type Entry = z.output<typeof Entry>;
 /** Where a record's messages are kept in its store. */
 export const MESSAGES = "msg/";
 const keyOf = (seq: number) => `${MESSAGES}${String(seq).padStart(12, "0")}`;
+// The record's limits are fixed here for now, sized for a host that carries a model request, or a
+// page of messages, in one piece of about a megabyte.
 /** What the model is sent of the past: the newest exchanges up to this many bytes of JSON. */
 export const INPUT_BUDGET = 400_000;
 /** At most this many messages are kept, in at most this many bytes, oldest deleted first. */
@@ -31,7 +32,7 @@ export const KEEP_BYTES = 16 * 1024 * 1024;
 /** A stored message's text, and a call's arguments, are cut to fit these, in bytes of JSON. */
 const MAX_TEXT = 192 * 1024;
 const MAX_ARGUMENTS = 16 * 1024;
-/** A history page stays well inside one frame. */
+/** A page of messages stays under this, so whatever carries it can do so in one piece. */
 const PAGE_BUDGET = 512 * 1024;
 const encoder = new TextEncoder();
 const size = (value: unknown) => encoder.encode(JSON.stringify(value)).byteLength;
@@ -50,7 +51,7 @@ export function fitted(text: string, max: number): string {
     kept = `${head(kept, Math.floor((kept.length * max) / bytes) - 16)}… (cut)`;
   return kept;
 }
-/** A chat message shows at most this much; the record keeps all of it. */
+/** A message shows at most this much; the record keeps all of it. */
 const MAX_SHOWN = 100_000;
 /** What the person sees of a message. */
 export const textOf = (entry: Entry) =>
@@ -64,10 +65,10 @@ export const argumentsOf = (args: string) =>
   size(args) > MAX_ARGUMENTS ? ARGUMENTS_LEFT_OUT : args;
 
 /**
- * A message as the chat shows it. A tool message whose call ran carries `tool`: the call's name,
- * how it ended, its arguments and its output.
+ * A message as it is shown. A tool message whose call ran carries `tool`: the call's name, how it
+ * ended, its arguments and its output.
  */
-export function messageOf(entry: Entry): z.input<typeof ChatMessage> {
+export function messageOf(entry: Entry): Shown {
   const message = { id: entry.id, role: entry.role, text: textOf(entry), at: entry.at };
   const call = entry.items.find((item) => item.type === "function_call");
   if (entry.role !== "tool" || !entry.state || !call) return message;
@@ -103,8 +104,8 @@ interface Kept {
   bytes: number;
 }
 
-export function createHistory(
-  store: Slot<typeof kv>["call"],
+export function createRecord(
+  store: Store,
   log: Log,
   limits = { keep: KEEP, keepBytes: KEEP_BYTES },
 ) {
@@ -124,7 +125,7 @@ export function createHistory(
           ...(after ? { after } : {}),
         });
         // A few at a time, in order: a long record shouldn't hold up the first send one read at
-        // a time, nor flood the Hub.
+        // a time, nor flood its store.
         for (let at = 0; at < page.keys.length; at += READS) {
           const keys = page.keys.slice(at, at + READS);
           const values = await Promise.all(keys.map((key) => store.get({ key })));
@@ -172,7 +173,7 @@ export function createHistory(
       state.records.push(record);
       state.bytes += record.bytes;
       try {
-        await store.set({ key, value: record.entry as z.core.util.JSONType });
+        await store.set({ key, value: record.entry as Json });
       } catch (error) {
         if (entry.role !== "tool") {
           state.records.splice(state.records.indexOf(record), 1);
@@ -217,7 +218,7 @@ export function createHistory(
     async lastUser(): Promise<Entry | undefined> {
       return (await load()).records.findLast((record) => record.entry.role === "user")?.entry;
     },
-    /** Messages before `before`, oldest first, as many as fit `limit` and one frame. */
+    /** Messages before `before`, oldest first, as many as fit `limit` and `PAGE_BUDGET`. */
     async page(before: string | undefined, limit: number) {
       const { records } = await load();
       const end =
@@ -243,9 +244,9 @@ export function createHistory(
      * those two are over the budget, their oldest function arguments and outputs are left out,
      * each call still paired with an output.
      */
-    async input(): Promise<ResponseItem[]> {
+    async input(): Promise<Item[]> {
       const { records } = await load();
-      const exchanges: ResponseItem[][] = [];
+      const exchanges: Item[][] = [];
       for (const { entry } of records) {
         if (entry.role === "user" || exchanges.length === 0) exchanges.push([]);
         exchanges.at(-1)?.push(...entry.items);
@@ -254,7 +255,7 @@ export function createHistory(
       while (exchanges.length > 2 && total > INPUT_BUDGET) total -= size(exchanges.shift());
       const items = exchanges.flat();
       for (let i = 0; i < items.length && total > INPUT_BUDGET; i++) {
-        const item = items[i] as ResponseItem;
+        const item = items[i] as Item;
         if (item.type === "function_call_output" && item.output !== LEFT_OUT) {
           total -= size(item.output) - size(LEFT_OUT);
           items[i] = { ...item, output: LEFT_OUT };
@@ -267,4 +268,4 @@ export function createHistory(
     },
   };
 }
-export type History = ReturnType<typeof createHistory>;
+export type LoopRecord = ReturnType<typeof createRecord>;

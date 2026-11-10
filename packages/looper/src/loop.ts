@@ -1,23 +1,29 @@
 /**
- * The agent loop: a turn sends the conversation and the tools to the model, runs each function the
- * model calls through its slot, and sends the results back, until the model answers without
- * calling anything, or the turn has made its `MAX_CALLS` calls.
+ * A loop: a turn sends its record and the tools to the model, runs each function the model calls,
+ * and sends the results back, until the model answers without calling anything, or the turn has
+ * made its `MAX_CALLS` calls.
  */
-import type { ChatMessage, llmSession } from "@agentorg/interfaces";
-import { type Log, Refused, type Slot } from "@agentorg/sdk";
-import type { z } from "zod";
-import { argumentsOf, type History, head, messageOf, type ResponseItem } from "./history.js";
-import { capped, codeOf, runTool, type Tools } from "./tools.js";
+import { argumentsOf, head, type LoopRecord, messageOf } from "./record.js";
+import { capped, runTool } from "./tools.js";
+import {
+  codeOf,
+  type Item,
+  type Log,
+  type Model,
+  Refusal,
+  type Shown,
+  type Status,
+  type Tool,
+} from "./types.js";
 
 /** A brake on a turn, not a budget: nothing approves a call, and the person can stop it. */
 export const MAX_CALLS = 200;
 
-type Status =
-  | { state: "idle" | "thinking" | "tool" }
-  | { state: "error"; detail: { code: string; message: string } };
-type FunctionCall = Extract<ResponseItem, { type: "function_call" }>;
-export interface Chat {
-  message(message: z.input<typeof ChatMessage>): void;
+type FunctionCall = Extract<Item, { type: "function_call" }>;
+/** Where a loop says what it does. */
+export interface LoopOut {
+  message(message: Shown): void;
+  /** Text of the reply `id` as the model writes it. */
   delta(id: string, text: string): void;
   status(status: Status): void;
 }
@@ -25,23 +31,24 @@ interface Turn {
   cancelled: boolean;
   /** The model request running now. */
   requestId?: string | undefined;
-  /** The chat id of the reply that request becomes, which its streamed text carries. */
+  /** The id of the reply that request becomes, which its streamed text carries. */
   replyId?: string | undefined;
   /** Settles when the turn's loop has ended. */
   ended?: Promise<void>;
 }
 
-export function createAgent(options: {
-  /** Read for each model request: what it's told and what it can call follow what it's bound to. */
-  request(): Promise<{ instructions: string; tools: Tools }>;
-  model: Slot<typeof llmSession>;
-  /** The model chosen for this agent, read for each request; none means the provider's default. */
-  chosenModel(): Promise<string | undefined>;
-  history: History;
-  chat: Chat;
+export function createLoop(options: {
+  /**
+   * Read for each model request, since any of it may change between two: what the model is told,
+   * what it can call, and which model to ask, none meaning the model's own default.
+   */
+  request(): Promise<{ instructions: string; tools: Tool[]; model?: string | undefined }>;
+  model: Model;
+  record: LoopRecord;
+  out: LoopOut;
   log: Log;
 }) {
-  const { model, history, chat, log } = options;
+  const { model, record, out, log } = options;
   let turn: Turn | undefined;
   /** A cancelled turn whose running call hasn't settled: the next turn waits for its records. */
   let draining: Promise<void> | undefined;
@@ -51,14 +58,14 @@ export function createAgent(options: {
   let latest: Status = { state: "idle" };
   const say = (next: Status) => {
     latest = next;
-    chat.status(next);
+    out.status(next);
   };
 
   /** A turn's status, while it is still the turn: a cancelled one has already said idle. */
   const status = (current: Turn, next: Status) => {
     if (turn === current) say(next);
   };
-  /** Run a turn on the record as it stands; its progress arrives as events. */
+  /** Run a turn on the record as it stands; its progress is said through `out`. */
   const begin = (current: Turn) => {
     current.ended = run(current)
       .then(
@@ -75,10 +82,10 @@ export function createAgent(options: {
       .catch((error: unknown) => log.error("A turn's status failed.", { error: String(error) }));
     ending = current.ended;
   };
-  const show = (entry: Awaited<ReturnType<History["append"]>>) => chat.message(messageOf(entry));
+  const show = (entry: Awaited<ReturnType<LoopRecord["append"]>>) => out.message(messageOf(entry));
   /** A call starting: shown as running, under the id its record will have when it ends. */
   const running = (call: FunctionCall, id: string) =>
-    chat.message({
+    out.message({
       id,
       role: "tool",
       text: `${call.name}: running`,
@@ -108,9 +115,9 @@ export function createAgent(options: {
       ],
     };
     try {
-      show(await history.append(entry, id));
+      show(await record.append(entry, id));
     } catch (error) {
-      chat.message(
+      out.message(
         messageOf({
           ...entry,
           id,
@@ -129,29 +136,28 @@ export function createAgent(options: {
     if (calls.length === 0) return;
     const text =
       calls.length === 1 ? `${calls[0]?.name}: ${code}` : `${calls.length} calls: ${code}`;
-    show(await history.append({ role: "tool", text, items: [] }));
+    show(await record.append({ role: "tool", text, items: [] }));
   };
 
   async function run(current: Turn) {
     let calls = 0;
     for (;;) {
       status(current, { state: "thinking" });
-      const { instructions, tools } = await options.request();
-      const input = await history.input();
-      const chosen = await options.chosenModel();
+      const { instructions, tools, model: chosen } = await options.request();
+      const input = await record.input();
       if (current.cancelled) return;
       const requestId = crypto.randomUUID();
       const replyId = crypto.randomUUID();
       current.requestId = requestId;
       current.replyId = replyId;
-      let output: Awaited<ReturnType<typeof model.call.respond>>["output"];
+      let output: Awaited<ReturnType<typeof model.respond>>["output"];
       try {
-        ({ output } = await model.call.respond({
+        ({ output } = await model.respond({
           requestId,
           ...(chosen ? { model: chosen } : {}),
           instructions,
           input,
-          tools: [...tools.values()].map((found) => found.tool),
+          tools: tools.map(({ run: _, ...tool }) => tool),
         }));
       } finally {
         current.requestId = undefined;
@@ -161,7 +167,7 @@ export function createAgent(options: {
       const called = output.filter((item): item is FunctionCall => item.type === "function_call");
       if (texts.length > 0 || called.length === 0)
         show(
-          await history.append(
+          await record.append(
             {
               role: "assistant",
               items: texts.map((content) => ({ type: "message", role: "assistant", content })),
@@ -187,21 +193,21 @@ export function createAgent(options: {
       }
       if (current.cancelled) return;
       if (calls >= MAX_CALLS)
-        throw new Refused("limit", `This turn stopped after ${MAX_CALLS} tool calls.`);
+        throw new Refusal("limit", `This turn stopped after ${MAX_CALLS} tool calls.`);
     }
   }
 
   return {
-    /** Start a turn with the person's message; its progress arrives as events. */
+    /** Start a turn with a message; its progress is said through `out`. */
     async send(text: string) {
-      if (turn) throw new Refused("busy", "A turn is running. Wait for it, or cancel it.");
+      if (turn) throw new Refusal("busy", "A turn is running. Wait for it, or cancel it.");
       const current: Turn = { cancelled: false };
       turn = current;
       try {
         // A cancelled turn's last call lands in the record before this message does.
         await draining;
         draining = undefined;
-        const entry = await history.append({
+        const entry = await record.append({
           role: "user",
           items: [{ type: "message", role: "user", content: text }],
         });
@@ -214,19 +220,19 @@ export function createAgent(options: {
       }
     },
     /**
-     * Run the last turn again, without recording the person's message again. What followed it goes
+     * Run the last turn again, without recording its message again. What followed it goes
      * from the record, so the new reply takes its place; what its tools did stays done.
      */
     async retry() {
-      if (turn) throw new Refused("busy", "A turn is running. Wait for it, or cancel it.");
+      if (turn) throw new Refusal("busy", "A turn is running. Wait for it, or cancel it.");
       const current: Turn = { cancelled: false };
       turn = current;
       try {
         await draining;
         draining = undefined;
-        const last = await history.lastUser();
-        if (!last) throw new Refused("nothing_to_retry", "No message has been sent yet.");
-        await history.dropAfter(last.id);
+        const last = await record.lastUser();
+        if (!last) throw new Refusal("nothing_to_retry", "No message has been sent yet.");
+        await record.dropAfter(last.id);
         begin(current);
         return { messageId: last.id };
       } catch (error) {
@@ -249,8 +255,7 @@ export function createAgent(options: {
       // A turn that hadn't begun leaves what was already running to be waited for.
       if (!current.requestId) draining = current.ended ?? draining;
       say({ state: "idle" });
-      if (current.requestId && model.bound)
-        await model.call.cancel({ requestId: current.requestId }).catch(() => {});
+      if (current.requestId) await model.cancel({ requestId: current.requestId }).catch(() => {});
     },
     /** Settles when the latest turn has written all it will. */
     settled: async () => {
@@ -262,7 +267,7 @@ export function createAgent(options: {
     },
     /** Streamed text of the model request running now, for the reply it becomes. */
     delta(requestId: string, text: string) {
-      if (turn?.requestId === requestId && turn.replyId) chat.delta(turn.replyId, text);
+      if (turn?.requestId === requestId && turn.replyId) out.delta(turn.replyId, text);
     },
   };
 }
