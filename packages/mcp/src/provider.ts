@@ -13,6 +13,7 @@ import {
   targetOf,
   UNITS,
 } from "./kinds.js";
+import { notPublic } from "./public.js";
 
 /** What is kept of a connection between runs, in the provider's private file. */
 const Stored = z.object({
@@ -149,6 +150,9 @@ export async function startMcpProvider(options: McpProviderOptions): Promise<Mcp
           if (!named.secrets) throw new Refused("invalid", named.why ?? "Its secrets don't fit.");
           const { spec, secrets: hidden, why } = parseConnection(kind, params, named.secrets);
           if (!spec) throw new Refused("invalid", why);
+          // Said now, as well as at each request.
+          const away = spec.kind === "url" && spec.public ? await notPublic(spec.url) : undefined;
+          if (away) throw new Refused("invalid", away);
           const { actorId, credential } = await ctx.slots.actors.call.create({ name });
           let connection: Connection | undefined;
           try {

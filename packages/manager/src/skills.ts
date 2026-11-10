@@ -101,6 +101,12 @@ export function createSkills(dir: string) {
   };
   return {
     has: (name: string) => read(name) !== undefined,
+    /** The name a skill's files give themselves; refused as `add` would refuse them. */
+    nameOf(files: SkillFiles) {
+      const manifest = files[MANIFEST];
+      if (manifest === undefined) throw new Refused("invalid", `A skill needs a ${MANIFEST}.`);
+      return entryOf(manifest).name;
+    },
     entry,
     read,
     list() {

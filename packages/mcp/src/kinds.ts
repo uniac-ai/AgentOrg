@@ -17,6 +17,7 @@ const UrlParams = z.strictObject({
       return !username && !password;
     }, "An address can't hold a user or a password: give a token as a secret.")
     .meta({ title: "Address" }),
+  public: z.boolean().optional().meta({ title: "Public addresses only" }),
 });
 /** The bearer token sent to the server on every request. */
 const UrlSecrets = z.strictObject({ token: SecretValue.optional().meta({ title: "Token" }) });
@@ -72,6 +73,14 @@ export const UNITS = [
         required: true,
       },
       { id: "token", type: "secret", value: "secret", title: "Token" },
+      {
+        id: "public",
+        type: "toggle",
+        value: "boolean",
+        title: "Public addresses only",
+        description:
+          "It reaches only https servers on the public internet, never this machine or its network, and follows no redirect.",
+      },
       NAME,
     ],
     needs: [],
@@ -140,6 +149,10 @@ export function parseConnection(
   // Named by what's wrong with their shape only: a refusal never repeats a value.
   if (!hidden.success) return { why: `${kind}: its secrets don't fit: ${found.title}.` };
   const spec = { kind, ...parsed.data } as Spec;
+  if (spec.kind === "url" && spec.public) {
+    if (new URL(spec.url).protocol !== "https:") return { why: "A public address is https." };
+    if ("token" in hidden.data) return { why: "A public-only connection takes no token." };
+  }
   if (spec.kind === "url" && "token" in hidden.data) {
     const url = new URL(spec.url);
     if (url.protocol === "http:" && !LOOPBACK.has(url.hostname))

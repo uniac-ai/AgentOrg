@@ -158,7 +158,7 @@ test("the provider offers its two kinds as units, each making one connection", a
   assert.deepEqual(
     offered.map((unit) => unit.form.map((field) => field.title)),
     [
-      ["Address", "Token", "Name"],
+      ["Address", "Token", "Public addresses only", "Name"],
       ["Command", "Arguments", "Working folder", "Secrets", "Name"],
     ],
   );
@@ -166,7 +166,7 @@ test("the provider offers its two kinds as units, each making one connection", a
   assert.deepEqual(
     offered.map((unit) => unit.form.map((field) => field.authority ?? null)),
     [
-      ["contacts", null, null],
+      ["contacts", null, null, null],
       ["runs", "runs", "runs", null, null],
     ],
   );
@@ -210,6 +210,21 @@ test("what doesn't fit its kind is refused", async (t) => {
       name: "X",
     }),
     refused("invalid"),
+  );
+});
+
+test("a public-only connection to this machine is refused before it's made", async (t) => {
+  const { units } = await setup(t);
+  await assert.rejects(
+    units.apply({
+      unit: "url",
+      values: { url: "https://127.0.0.1:9/mcp", public: true, slot: "tools" },
+      secrets: {},
+      needs: {},
+      agent: "person",
+      name: "Home",
+    }),
+    (error: unknown) => refused("invalid")(error) && /public internet/.test(String(error)),
   );
 });
 

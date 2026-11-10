@@ -146,6 +146,26 @@ const UNITS = [
     },
   },
   {
+    id: "url",
+    title: "A server at an address",
+    description: "A kind, as the built-in provider has.",
+    form: [
+      { id: "url", authority: "contacts", type: "text", value: "string", title: "Address" },
+      { id: "public", type: "toggle", value: "boolean", title: "Public addresses only" },
+      { id: "slot", type: "text", value: "string", title: "Name", required: true },
+    ],
+    needs: [],
+    gives: { slots: [{ field: "slot" }], skills: [], results: [] },
+  },
+  {
+    id: "runner",
+    title: "Runner",
+    description: "Runs a program.",
+    form: [{ id: "program", authority: "runs", type: "text", value: "string", title: "Program" }],
+    needs: [],
+    gives: { slots: [], skills: [], results: [] },
+  },
+  {
     id: "closed",
     title: "Closed",
     description: "Declares nothing, so an agent may set nothing of it.",
@@ -357,7 +377,7 @@ async function setup(t: test.TestContext) {
               ? ["files", ...(values.extra ? ["extra"] : [])]
               : unit === "terminal"
                 ? ["terminal"]
-                : unit === "stand-in"
+                : unit === "stand-in" || unit === "url"
                   ? [values.slot as string]
                   : unit === "computer"
                     ? ["computer", ...(values.browser ? ["browser"] : [])]
@@ -452,7 +472,7 @@ async function setup(t: test.TestContext) {
   for (
     let i = 0;
     (await caller.slots.agents.call.providers({})).providers.length < 1 ||
-    (await caller.slots.agents.call.units({})).units.length < 2 + UNITS.length;
+    (await caller.slots.agents.call.units({})).units.length < 1 + UNITS.length;
     i++
   ) {
     assert.ok(i < 300, "the providers never showed");
@@ -521,7 +541,7 @@ async function setup(t: test.TestContext) {
     await until(() => caller.slots.agents.bound);
     for (
       let i = 0;
-      (await caller.slots.agents.call.units({})).units.length < 2 + UNITS.length;
+      (await caller.slots.agents.call.units({})).units.length < 1 + UNITS.length;
       i++
     ) {
       assert.ok(i < 300, "the units never came back");
@@ -589,7 +609,7 @@ test("a provider counts once it has exposed its export to management", async (t)
   const mcp = await s.calls.connections.providers({});
   assert.deepEqual(
     mcp.providers.map((p) => [p.provider, p.name, p.kinds.map((k) => k.kind)]),
-    [[s.unitsActor.actorId, "Units", ["stand-in"]]],
+    [[s.unitsActor.actorId, "Units", ["stand-in", "url"]]],
   );
   // Un-exposed, it is gone: the Hub's binding was the only record.
   const { bindings } = await s.person.slots.bindings.call.list({ actor: s.management.actorId });
@@ -935,12 +955,14 @@ test("one MCP unit stands for a connection there is or any kind on offer", async
   const fields = Object.fromEntries((mcp?.form ?? []).map((field) => [field.id, field]));
   assert.deepEqual(
     fields.how?.options?.map((one) => one.value),
-    ["connection", "stand-in"],
+    ["connection", "stand-in", "url"],
   );
   assert.deepEqual(fields.connection?.visible, { field: "how", in: ["connection"] });
-  assert.deepEqual(fields.url?.visible, { field: "how", in: ["stand-in"] });
+  assert.deepEqual(fields.url?.visible, { field: "how", in: ["stand-in", "url"] });
+  // Shared by two kinds that say different things, it's closed to agents.
+  assert.equal(fields.url?.authority, undefined);
   assert.equal(fields.token?.value, "secret");
-  assert.deepEqual(Object.keys(fields), ["how", "connection", "url", "token", "slot"]);
+  assert.deepEqual(Object.keys(fields), ["how", "connection", "url", "token", "public", "slot"]);
 
   const connection = await s.picked();
   const check = async (values: object) =>
@@ -1025,6 +1047,7 @@ test("every unit on offer is listed, management's own among them", async (t) => 
       ["machine", "Units"],
       ["terminal", "Units"],
       ["computer", "Units"],
+      ["runner", "Units"],
       ["closed", "Units"],
       ["vault", "Units"],
     ],
@@ -1434,7 +1457,7 @@ test("an agent from before units reads and goes as it did", async (t) => {
 test("a connection the person makes is a unit that makes one, with no agent yet", async (t) => {
   const s = await setup(t);
   const [provider] = (await s.calls.connections.providers({})).providers;
-  assert.deepEqual(provider?.kinds, [
+  assert.deepEqual(provider?.kinds.slice(0, 1), [
     {
       kind: "stand-in",
       title: "Stand-in",
@@ -2323,6 +2346,179 @@ test("a child's control unit holds no more than its parent's, scope by scope", a
     (one) => one.unit === "control",
   )?.values;
   assert.deepEqual([values?.connections, values?.skills], ["none", "see"]);
+});
+
+test("an agent adds a connection by public address only, and it goes with the agent", async (t) => {
+  const s = await delegating(t);
+  const { agent, tools } = await s.parent(
+    { templates: ["helper"], connections: "add" },
+    undefined,
+    "Adder",
+  );
+  const call = async (name: string, args: object) => {
+    const answer = await tools.call({ name, arguments: args });
+    return { ...answer, value: answer.failed ? undefined : JSON.parse(answer.output) };
+  };
+  const added = await call("connection_add", { name: "Search", url: "https://mcp.example.com/" });
+  assert.equal(added.failed, undefined, added.output);
+  const { connection } = added.value;
+  assert.deepEqual(s.given.applied.at(-1)?.values, {
+    url: "https://mcp.example.com/",
+    public: true,
+    slot: "tools",
+  });
+  assert.deepEqual(s.given.applied.at(-1)?.secrets, {}, "no token");
+  const origin = (await s.calls.connections.get({ connection })).origin;
+  assert.deepEqual([origin?.madeBy, origin?.madeFor], [agent, agent]);
+  // Its own, so it may give it, without its being listed.
+  const given = await call("connection_expose", { connection, as: "search" });
+  assert.equal(given.failed, undefined, given.output);
+  // One it didn't make isn't its to remove.
+  const theirs = await s.picked();
+  assert.equal((await call("connection_remove", { connection: theirs })).failed, true);
+  assert.ok((await s.openActors()).includes(theirs));
+  // It goes with the agent.
+  await s.calls.agents.remove({ agent });
+  assert.ok(!(await s.openActors()).includes(connection));
+  await assert.rejects(s.calls.connections.get({ connection }), refused("unknown"));
+});
+
+test("an agent's skill takes no name there is, and only it and its agents see it", async (t) => {
+  const s = await delegating(t);
+  await s.calls.skills.add({ files: { "SKILL.md": SKILL("terminal", "The person's.") } });
+  const { tools } = await s.parent(
+    { templates: ["deputy"], skills: "add", depth: 2 },
+    undefined,
+    "Writer",
+  );
+  const call = (name: string, args: object) => tools.call({ name, arguments: args });
+  const taken = await call("skill_add", { files: { "SKILL.md": SKILL("terminal", "Mine now.") } });
+  assert.equal(taken.failed, true);
+  assert.match((await s.calls.skills.get({ name: "terminal" })).text, /The person's/);
+  const written = await call("skill_add", { files: { "SKILL.md": SKILL("notes-of-mine") } });
+  assert.equal(written.failed, undefined, written.output);
+  const seen = async (agentTools: ToolCalls) =>
+    JSON.parse((await agentTools.call({ name: "skill_list", arguments: {} })).output).skills.map(
+      (one: { name: string }) => one.name,
+    );
+  assert.ok((await seen(tools)).includes("notes-of-mine"));
+  const deputy = await s.made(tools, "create_deputy", {
+    name: "Deputy",
+    purpose: "P.",
+    units: { control: { skills: "see" } },
+  });
+  assert.ok(
+    (await seen(await s.exposedTo<ToolCalls>(deputy, "control"))).includes("notes-of-mine"),
+  );
+  const other = await s.parent({ templates: ["helper"], skills: "add" }, undefined, "Other");
+  assert.ok(!(await seen(other.tools)).includes("notes-of-mine"));
+  assert.equal(
+    (await other.tools.call({ name: "skill_get", arguments: { name: "notes-of-mine" } })).failed,
+    true,
+  );
+  assert.equal(
+    (await other.tools.call({ name: "skill_remove", arguments: { name: "notes-of-mine" } })).failed,
+    true,
+  );
+  assert.equal(
+    (await other.tools.call({ name: "skill_remove", arguments: { name: "terminal" } })).failed,
+    true,
+  );
+  // Nor can another give it to itself, by name.
+  assert.equal(
+    (await other.tools.call({ name: "skill_expose", arguments: { skill: "notes-of-mine" } }))
+      .failed,
+    true,
+  );
+  // The person sees everything.
+  assert.ok((await s.calls.skills.list({})).skills.some((one) => one.name === "notes-of-mine"));
+  // Replaced by the person, it's the person's: the agent can no longer remove it.
+  await s.calls.skills.add({ files: { "SKILL.md": SKILL("notes-of-mine", "The person's now.") } });
+  assert.equal((await call("skill_remove", { name: "notes-of-mine" })).failed, true);
+  assert.ok((await seen(other.tools)).includes("notes-of-mine"), "and everyone sees it");
+});
+
+test("an agent's template is its own, runs nothing, and stays within its bounds", async (t) => {
+  const s = await delegating(t);
+  const { tools } = await s.parent(
+    { templates: ["helper"], saveTemplates: true, depth: 2, limit: 2 },
+    undefined,
+    "Saver",
+  );
+  const save = (template: object) => tools.call({ name: "template_save", arguments: { template } });
+  const on = { provider: "Agents", creatable: "plain" };
+  const template = (id: string, units: object[] = []) => ({
+    id,
+    title: id,
+    description: "",
+    base: on,
+    units,
+  });
+  assert.match((await save(template("helper"))).output, /already/);
+  assert.match(
+    (
+      await save(
+        template("runs", [{ provider: "Units", unit: "runner", values: { program: "x" } }]),
+      )
+    ).output,
+    /can't set Program/,
+  );
+  // Its template holds only what it could have given itself.
+  const connection = await s.picked();
+  for (const units of [
+    [
+      {
+        provider: "Management",
+        unit: "mcp",
+        values: { how: "url", url: "http://127.0.0.1:9", slot: "h" },
+      },
+    ],
+    [{ provider: "Management", unit: "connection", values: { connection, slot: "theirs" } }],
+    [{ provider: "Management", unit: "skill", values: { skill: "anything" } }],
+  ])
+    assert.match((await save(template("sneak", units))).output, /can't set/);
+  assert.equal(
+    (
+      await save(
+        template("bigger", [
+          { provider: "Management", unit: "control", values: { templates: ["helper"], limit: 5 } },
+        ]),
+      )
+    ).failed,
+    true,
+  );
+  assert.equal(
+    (
+      await save(
+        template("deeper", [
+          { provider: "Management", unit: "control", values: { templates: ["helper"], depth: 2 } },
+        ]),
+      )
+    ).failed,
+    true,
+  );
+  const mine = await save(
+    template("mine", [{ provider: "Units", unit: "files", values: { folder: "/m" } }]),
+  );
+  assert.equal(mine.failed, undefined, mine.output);
+  // It can create from it, though the person didn't list it.
+  assert.ok((await s.names(tools)).includes("create_mine"));
+  await s.made(tools, "create_mine", { name: "M", purpose: "P." });
+  // Not another's to remove, nor the person's.
+  const other = await s.parent({ templates: ["helper"], saveTemplates: true }, undefined, "Other");
+  for (const id of ["mine", "helper"])
+    assert.equal(
+      (await other.tools.call({ name: "template_remove", arguments: { id } })).failed,
+      true,
+      id,
+    );
+  assert.equal(
+    (await tools.call({ name: "template_remove", arguments: { id: "mine" } })).failed,
+    undefined,
+  );
+  // Without the scope, there's no such tool.
+  const plain = await s.parent({ templates: ["helper"] }, undefined, "Plain");
+  assert.ok(!(await s.names(plain.tools)).includes("template_save"));
 });
 
 test("a parent's agents stay when it goes, as the person's", async (t) => {
