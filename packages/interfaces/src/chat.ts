@@ -73,9 +73,9 @@ export const chat = defineInterface({
   kind: "rpc",
   methods: {
     /**
-     * Start a turn with this message, in `chat` or in a new chat, and say which. An archived chat
-     * takes a message like any other, and stays archived. Refused `busy` when the provider can't
-     * take it now.
+     * Send this message in `chat`, or in a new chat; the answer says which. It starts a turn
+     * there, or joins the one running. An archived chat takes a message like any other, and stays
+     * archived. Refused `busy` when the provider can't take it now.
      */
     send: method({
       input: z.object({

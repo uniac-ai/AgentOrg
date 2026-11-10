@@ -254,3 +254,15 @@ test("a stop that lands as the line is written leaves nothing to go on with", as
   assert.deepEqual(second.asked, []);
   assert.deepEqual(marks(second.values), []);
 });
+
+test("stopped before the turns cut off were looked for, a looper goes on with none once started", async () => {
+  const first = looperWith();
+  await first.fill(["a"]);
+  const second = looperWith({ values: first.values });
+  await second.looper.stop();
+  assert.deepEqual(marks(second.values), []);
+  second.looper.start();
+  await second.looper.resume();
+  await idle();
+  assert.deepEqual(second.asked, []);
+});

@@ -210,6 +210,44 @@ export function createLooper(options: {
     return found;
   };
 
+  /**
+   * Go on with each turn that was cut off when this store was last used: by a looper closing
+   * under it, or going without closing. Each goes on once, and waits for a place like any turn.
+   * One that can't go on now keeps its mark for the next time. A stopped looper goes on with
+   * none, and its marks go: so does one stopped before it was asked to. Whoever hosts the looper calls this when a request can be made;
+   * once the marks have been read, a later call does nothing.
+   */
+  async function resume() {
+    if (looked || closed) return;
+    looked = true;
+    const keys: string[] = [];
+    try {
+      let after: string | undefined;
+      do {
+        const page = await store.list({ prefix: UNFINISHED, ...(after ? { after } : {}) });
+        keys.push(...page.keys);
+        after = page.next ?? undefined;
+      } while (after);
+    } catch (error) {
+      looked = false;
+      throw error;
+    }
+    for (const key of keys) {
+      // Closed meanwhile: what is left stays marked, for whoever opens the store next.
+      if (closed) return;
+      const thread = decodeURIComponent(key.slice(UNFINISHED.length));
+      const held = of(thread);
+      try {
+        if (!stopped) await using(thread, (loop) => loop.resume());
+        // A thread in a turn now keeps the mark as that turn's, and a looper that has closed
+        // leaves it. Otherwise nothing goes on, and it goes.
+        if (!held.marked && !closed) held.mark(false);
+      } catch (error) {
+        log.warn("A turn that was cut off didn't go on.", { key, error: String(error) });
+      }
+    }
+  }
+
   return {
     /**
      * Say a message in a thread. It is recorded and said at once. With no turn in the thread it
@@ -243,7 +281,7 @@ export function createLooper(options: {
     /**
      * Stop: every turn is cut, running or waiting, and none starts until `start`. A call already
      * running finishes first, so this answers when nothing more will be written. The records stay
-     * as they are, to be read.
+     * as they are, to be read. A turn that was cut off earlier no longer goes on.
      */
     async stop() {
       stopped = true;
@@ -252,48 +290,16 @@ export function createLooper(options: {
       // A message being recorded as this was asked is recorded first, and a call still running ends.
       await Promise.all(starting);
       await Promise.all(loops.map((loop) => loop.drained()));
+      // What was cut off earlier and hasn't gone on doesn't after a stop either: its marks go.
+      await resume().catch((error: unknown) =>
+        log.warn("The turns that were cut off couldn't be looked for.", { error: String(error) }),
+      );
     },
     /** Take messages again. The turns `stop` cut stay cut. */
     start() {
       stopped = false;
     },
-    /**
-     * Go on with each turn that was cut off when this store was last used: by a looper closing
-     * under it, or going without closing. Each goes on once, and waits for a place like any turn.
-     * One that can't go on now keeps its mark for the next time. A stopped looper goes on with
-     * none, and its marks go. Whoever hosts the looper calls this when its model can be asked;
-     * once the marks have been read, a later call does nothing.
-     */
-    async resume() {
-      if (looked || closed) return;
-      looked = true;
-      const keys: string[] = [];
-      try {
-        let after: string | undefined;
-        do {
-          const page = await store.list({ prefix: UNFINISHED, ...(after ? { after } : {}) });
-          keys.push(...page.keys);
-          after = page.next ?? undefined;
-        } while (after);
-      } catch (error) {
-        looked = false;
-        throw error;
-      }
-      for (const key of keys) {
-        // Closed meanwhile: what is left stays marked, for whoever opens the store next.
-        if (closed) return;
-        const thread = decodeURIComponent(key.slice(UNFINISHED.length));
-        const held = of(thread);
-        try {
-          if (!stopped) await using(thread, (loop) => loop.resume());
-          // A thread in a turn now keeps the mark as that turn's, and a looper that has closed
-          // leaves it. Otherwise nothing goes on, and it goes.
-          if (!held.marked && !closed) held.mark(false);
-        } catch (error) {
-          log.warn("A turn that was cut off didn't go on.", { key, error: String(error) });
-        }
-      }
-    },
+    resume,
     /**
      * Close for good: every turn is cut, and none starts after. Each stays marked, for `resume`
      * in whoever opens the store next.

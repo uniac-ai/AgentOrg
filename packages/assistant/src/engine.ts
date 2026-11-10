@@ -15,7 +15,7 @@ const MODEL_KEY = "settings/model";
 
 type Host = Pick<
   Context<{ model: typeof llmSession; settings: typeof agentSettings }, { chat: typeof chat }>,
-  "slots" | "exports" | "exposed" | "log"
+  "slots" | "exports" | "exposed" | "onExposed" | "log"
 >;
 
 export function startEngine(
@@ -43,7 +43,10 @@ export function startEngine(
     if (leftOut.length > 0) ctx.log.warn("Not everything is offered to the model.", { leftOut });
     else ctx.log.info("Everything is offered to the model again.");
   };
-  /** What a request says and offers, and to which model, read afresh: none of it outlives it. */
+  /**
+   * What a request says and offers, and to which model, read afresh: none of it outlives it.
+   * `leftOut` is what it couldn't offer, and why.
+   */
   const request = async () => {
     const settings = ctx.slots.settings.bound ? await ctx.slots.settings.call.get({}) : undefined;
     const told = settings
@@ -57,9 +60,10 @@ export function startEngine(
         .filter((slot) => listsTools(slot.described))
         .map((slot) => listedBy(slot.slot, slot)),
     );
-    const { tools, leftOut } = offered([...own, ...exposed.flatMap((one) => one.candidates)]);
-    report([...told.leftOut, ...exposed.flatMap((one) => one.leftOut), ...leftOut]);
-    return { instructions: told.instructions, tools, model: await chosen() };
+    const fitted = offered([...own, ...exposed.flatMap((one) => one.candidates)]);
+    const leftOut = [...told.leftOut, ...exposed.flatMap((one) => one.leftOut), ...fitted.leftOut];
+    report(leftOut);
+    return { instructions: told.instructions, tools: fitted.tools, model: await chosen(), leftOut };
   };
   /** The model slot as the looper asks it: what it refuses is told with its code. */
   const model: Model = {
@@ -81,14 +85,53 @@ export function startEngine(
     log: ctx.log,
   });
   ctx.slots.model.on("delta", ({ requestId, text }) => chats.delta(requestId, text));
-  // A turn that was cut off when the agent last ran goes on once there is a model to ask.
-  ctx.slots.model.onBind(() => {
-    chats.resume().catch((error: unknown) =>
-      ctx.log.warn("The turns that were cut off couldn't be looked for.", {
-        error: String(error),
-      }),
-    );
-  });
+  /**
+   * The turns that were cut off when the agent last ran go on once the model is bound, the
+   * settings answer, and no tools slot is away. As the agent starts, what it is bound to may not
+   * be running yet, so this is looked at again whenever that may have changed: a slot's provider
+   * is back, a tools slot is made or gone, or one says its tools changed. A tools slot that stays
+   * away holds them back; a message in a chat starts that chat's turn anyway.
+   */
+  let wentOn = false;
+  /** Each tools slot heard for its tools changing, with how to stop hearing it. */
+  const heard = new Map<object, () => void>();
+  const goOn = async () => {
+    for (const slot of ctx.exposed())
+      if (listsTools(slot.described) && !heard.has(slot)) heard.set(slot, slot.on("changed", look));
+    if (!ctx.slots.model.bound) return;
+    // Refused while the settings can't answer, as a turn's own request would be.
+    const { leftOut } = await request();
+    if (leftOut.some((one) => one.reason === "not_connected")) return;
+    await chats.resume();
+    done();
+  };
+  /** Nothing more is looked for: the turns have gone on, or the agent is stopped or closing. */
+  const done = () => {
+    wentOn = true;
+    for (const stop of heard.values()) stop();
+    heard.clear();
+  };
+  /** The look running now, and whether to look once more after it. */
+  let looking: Promise<void> | undefined;
+  let again = false;
+  const look = () => {
+    again = true;
+    looking ??= (async () => {
+      // A start binds its slots one after another in one go, and one not bound yet reads as one
+      // the agent doesn't have: so it looks once they all are.
+      await Promise.resolve();
+      while (again && !wentOn) {
+        again = false;
+        await goOn().catch((error: unknown) =>
+          ctx.log.info("Turns that were cut off aren't looked for yet.", { error: String(error) }),
+        );
+      }
+      looking = undefined;
+    })();
+  };
+  ctx.slots.model.onBind(look);
+  ctx.slots.settings.onBind(look);
+  ctx.onExposed(look);
   ctx.exports.chat.implement({
     send: (input) => chats.send(input),
     history: (input) => chats.history(input),
@@ -116,14 +159,23 @@ export function startEngine(
   });
   return {
     /** Stop the agent: its turns are cut and none starts until `start`. Its chats stay readable. */
-    stop: () => chats.stop(),
+    stop() {
+      done();
+      return chats.stop();
+    },
     start: () => chats.start(),
     /**
      * Close for good: its turns are cut, and none starts after. They go on in the engine that
      * opens this store next.
      */
-    close: () => chats.close(),
+    close() {
+      done();
+      return chats.close();
+    },
     /** Settles when every chat's latest turn has written all it will. */
-    settled: () => chats.settled(),
+    async settled() {
+      await looking;
+      await chats.settled();
+    },
   };
 }
