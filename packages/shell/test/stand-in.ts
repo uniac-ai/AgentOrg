@@ -449,6 +449,14 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
     shells: new Set<WebSocket>(),
     typed: [] as string[],
     resized: [] as { columns: number; rows: number }[],
+    /** `terminal@1`: every event so far, its sockets, and what they sent. */
+    terminal: {
+      events: [] as Record<string, unknown>[],
+      sockets: new Set<WebSocket>(),
+      input: [] as Record<string, unknown>[],
+      /** As many are running as may. */
+      full: false,
+    },
     /** Browser sockets, each with the tab it is shown, and what the operating ones sent. */
     screens: new Map<WebSocket, { shown: number | null; chose: boolean }>(),
     input: [] as Record<string, unknown>[],
@@ -924,6 +932,7 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
         socket.on("close", () => live.watchers.delete(socket));
       }
       if (surface.protocol === "screencast@1") screencast(socket, target.mode);
+      if (surface.protocol === "terminal@1") terminalSocket(socket, target.mode);
       if (surface.protocol === "pty@1") {
         live.shells.add(socket);
         socket.on("close", () => live.shells.delete(socket));
@@ -941,6 +950,44 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
       }
     });
   });
+  /** A `terminal@1` event, to every socket and to those that come later. */
+  const terminal = (event: Record<string, unknown>) => {
+    live.terminal.events.push(event);
+    for (const ws of live.terminal.sockets) ws.send(JSON.stringify(event));
+  };
+  const terminalSocket = (socket: WebSocket, mode: string) => {
+    const { events } = live.terminal;
+    for (const event of events) socket.send(JSON.stringify(event));
+    live.terminal.sockets.add(socket);
+    socket.on("close", () => live.terminal.sockets.delete(socket));
+    socket.on("message", (data) => {
+      const input = JSON.parse(String(data)) as Record<string, unknown>;
+      live.terminal.input.push(input);
+      // Watchers' input is dropped, as the service drops it.
+      if (mode !== "operate") return;
+      const at = new Date().toISOString();
+      const refuse = (message: string) => socket.send(JSON.stringify({ type: "refused", message }));
+      if (input.type === "open") {
+        if (live.terminal.full)
+          return refuse("64 terminals are running, which is the most at once.");
+        const id = `p${events.filter((e) => e.type === "start").length + 1}`;
+        terminal({ type: "start", id, by: "person", cmd: "zsh", workdir: "/work", tty: true, at });
+        return terminal({ type: "output", id, text: "work $ " });
+      }
+      const started = events.find((e) => e.type === "start" && e.id === input.id);
+      if (!started) return refuse("That terminal isn't there.");
+      if (events.some((e) => e.type === "exit" && e.id === input.id))
+        return refuse("That terminal has ended.");
+      if (input.type === "resize" && !started.tty) return refuse("A command has no size.");
+      // A shell echoes what's typed; a command, on pipes, doesn't.
+      if (input.type === "input" && started.tty)
+        terminal({
+          type: "output",
+          id: input.id,
+          text: String(input.text).replaceAll("\r", "\r\nwork $ "),
+        });
+    });
+  };
   /** The tabs, to one browser socket or to all, each told which one it is shown. */
   const tabs = (only?: WebSocket) => {
     for (const [ws, viewer] of live.screens)
@@ -1040,6 +1087,7 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
       live.commands.push(event);
       for (const ws of live.watchers) ws.send(JSON.stringify(event));
     },
+    terminal,
     /** A `screencast@1` event, to every browser socket. */
     screen(event: Record<string, unknown>) {
       for (const [ws] of live.screens) ws.send(JSON.stringify(event));

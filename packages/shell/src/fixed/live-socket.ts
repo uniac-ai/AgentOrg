@@ -16,7 +16,12 @@ export interface LiveTarget {
 export type LiveState =
   | { phase: "opening" }
   | { phase: "open" }
-  | { phase: "closed"; reason: string };
+  | {
+      phase: "closed";
+      reason: string;
+      /** It had opened and then closed without a word, as a peer that drops a socket leaves it. */
+      dropped: boolean;
+    };
 
 const reasonOf = (event: CloseEvent) => {
   if (event.code === SIGN_IN_AGAIN) return "Sign in again to see it.";
@@ -25,11 +30,13 @@ const reasonOf = (event: CloseEvent) => {
 
 /**
  * One socket to one surface while `target` is set. `onFrame` gets each frame after the surface
- * opens: text as a string, binary as an ArrayBuffer. `again` opens it anew after it closed.
+ * opens: text as a string, binary as an ArrayBuffer. `onOpen` is told as each socket opens, ahead
+ * of its first frame. `again` opens it anew after it closed.
  */
 export function useLive(
   target: LiveTarget | undefined,
   onFrame: (data: string | ArrayBuffer) => void,
+  onOpen?: () => void,
 ) {
   // Each state is that of one socket; a new target's is opening until its own socket says.
   const [held, setState] = useState<{ of: string; state: LiveState }>();
@@ -37,6 +44,8 @@ export function useLive(
   const socket = useRef<WebSocket>(undefined);
   const frames = useRef(onFrame);
   frames.current = onFrame;
+  const opens = useRef(onOpen);
+  opens.current = onOpen;
   const key = target ? `${target.agent}/${target.instance}/${target.surface}/${target.mode}` : "";
   const of = `${key}#${attempt}`;
   const state: LiveState = held?.of === of ? held.state : { phase: "opening" };
@@ -55,6 +64,7 @@ export function useLive(
       if (!open) {
         if (typeof event.data === "string" && JSON.parse(event.data).op === "live") {
           open = true;
+          opens.current?.();
           setState({ of, state: { phase: "open" } });
         }
         return;
@@ -63,7 +73,14 @@ export function useLive(
     };
     ws.onclose = (event) => {
       if (socket.current === ws)
-        setState({ of, state: { phase: "closed", reason: reasonOf(event) } });
+        setState({
+          of,
+          state: {
+            phase: "closed",
+            reason: reasonOf(event),
+            dropped: open && !event.reason && event.code !== 1000 && event.code !== 1001,
+          },
+        });
     };
     return () => {
       socket.current = undefined;
