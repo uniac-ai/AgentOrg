@@ -110,7 +110,9 @@ const OFFERED = [
   { id: "gpt-b", name: "B" },
 ];
 
-async function setup(values = new Map<string, unknown>()) {
+type Actor = ReturnType<typeof createTestContext<typeof engine.slots, typeof engine.exports>>;
+/** `rest` binds the rest of what the agent holds in the same go as its model, as at a start. */
+async function setup(values = new Map<string, unknown>(), rest?: (actor: Actor) => void) {
   const actor = createTestContext(engine, { actorId: "assistant", module: "logic" });
   await actor.start();
   const host = engines.at(-1) as (typeof engines)[number];
@@ -131,6 +133,7 @@ async function setup(values = new Map<string, unknown>()) {
       return {};
     },
   });
+  rest?.(actor as Actor);
   const statuses = (from = 0) =>
     actor.emitted
       .slice(from)
@@ -820,6 +823,69 @@ test("a turn cut off as the engine closes goes on in the next, and one the perso
   const third = await setup(values);
   await third.turn("And now?");
   assert.equal(third.requests.length, 1);
+});
+
+/** A store whose one chat is in a turn that was cut off as its engine closed. */
+async function cutOff() {
+  const values = new Map<string, unknown>();
+  const s = await setup(values);
+  const cut = gate<Reply>();
+  s.script.push(() => cut.shut);
+  await s.chat("send", { text: "Do the long thing." });
+  await until(() => s.requests.length === 1, "the model request");
+  await s.host.close();
+  cut.open(say("Too late."));
+  await s.host.settled();
+  return values;
+}
+const gone = (slot: string) => {
+  throw new NotConnected(slot);
+};
+/** Nothing has gone on, and no chat says it will. */
+async function waits(s: Awaited<ReturnType<typeof setup>>) {
+  for (let i = 0; i < 20; i++) await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(s.requests.length, 0);
+  assert.deepEqual(s.messages(), []);
+}
+const WENT_ON = ["tool: Cut off by a restart: going on from where it stopped.", "assistant: ok"];
+
+test("a turn that was cut off waits for the agent's settings to answer, and goes on with them", async () => {
+  // The agent is back before what holds its settings is running.
+  let away = true;
+  const s = await setup(await cutOff(), (actor) =>
+    actor.bind("settings", {
+      get: () => (away ? gone("settings") : { instructions: "Be kind.", skills: [] }),
+    }),
+  );
+  await waits(s);
+  away = false;
+  s.actor.usable("settings");
+  assert.deepEqual(await s.ended(0), { state: "idle" });
+  assert.equal(s.requests[0]?.instructions, "Be kind.");
+  assert.deepEqual(s.messages(), WENT_ON);
+  await s.host.settled();
+});
+
+test("a turn that was cut off waits for a tools slot that is away, and goes on with its tools or without the slot", async () => {
+  for (const back of ["changed", "gone"] as const) {
+    let away = true;
+    let flaky: { emit(event: "changed", payload: object): void } | undefined;
+    const s = await setup(await cutOff(), (actor) => {
+      flaky = actor.expose("flaky", tools, {
+        list: () => (away ? gone("flaky") : { tools: [entry("one")] }),
+        call: () => ({ output: "" }),
+      });
+    });
+    await waits(s);
+    // Its server is up, and it says so; or the slot is taken from the agent.
+    away = false;
+    if (back === "changed") flaky?.emit("changed", {});
+    else s.actor.unexpose("flaky");
+    assert.deepEqual(await s.ended(0), { state: "idle" });
+    assert.deepEqual(offeredNames(s.requests[0]), back === "changed" ? ["flaky__one"] : []);
+    assert.deepEqual(s.messages(), WENT_ON);
+    await s.host.settled();
+  }
 });
 
 test("streamed text reaches the chat as the reply it becomes", async () => {

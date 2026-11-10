@@ -21,6 +21,7 @@ import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { Computer } from "@agentorg/computer";
 import { HubState } from "@agentorg/hub";
+import { completed, fakeOpenAI, text } from "chatgpt/fake-openai";
 import WebSocket from "ws";
 import { type App, startApp } from "../src/index.ts";
 
@@ -152,6 +153,7 @@ const chatSlot = async (person: Person, agent: string) => {
 async function open(
   t: test.TestContext,
   computer?: { dataFolder: string; webUrl: string; agentsFolder: string },
+  fetch?: (request: Request) => Promise<Response>,
 ) {
   const home = mkdtempSync(join(tmpdir(), "agentorg-programs-"));
   t.after(() => rmSync(home, { recursive: true, force: true }));
@@ -159,7 +161,7 @@ async function open(
   const start = async () => {
     const app = await startApp({
       home,
-      firstRun: { log: () => {}, ...(computer ? { computer } : {}) },
+      firstRun: { log: () => {}, ...(computer ? { computer } : {}), ...(fetch ? { fetch } : {}) },
     });
     const person = personOf(app, home);
     started.push({ app, person });
@@ -176,7 +178,7 @@ async function open(
   return { home, start, stop };
 }
 
-const createAssistant = async (person: Person, name: string) => {
+const createAssistant = async (person: Person, name: string, purpose?: string) => {
   const { creatables } = await person.call<{ creatables: { provider: string; id: string }[] }>(
     "agents",
     "creatable",
@@ -187,6 +189,7 @@ const createAssistant = async (person: Person, name: string) => {
     await person.call<{ agent: string }>("agents", "create", {
       stack: { base: { provider: assistant.provider, creatable: assistant.id }, units: [] },
       name,
+      ...(purpose ? { purpose } : {}),
     })
   ).agent;
 };
@@ -303,6 +306,60 @@ test("an agent is made through agents, and the person reaches its chat, across a
   assert.equal(
     (await person.call<{ agents: { name: string }[] }>("agents", "list")).agents[0]?.name,
     "Scout",
+  );
+});
+
+test("a turn cut off as the app stops goes on when it is started again, with the agent's settings", async (t) => {
+  // The model, scripted: its next answer stays out while `held`, as when the app stops mid-turn.
+  const fake = await fakeOpenAI();
+  const asked: { instructions: string; said: unknown }[] = [];
+  let held = false;
+  const s = await open(t, undefined, async (request) => {
+    if (!request.url.endsWith("/responses")) return fake.handle(request);
+    const body = (await request.clone().json()) as { instructions: string; input: unknown[] };
+    asked.push({ instructions: body.instructions, said: body.input.at(-1) });
+    return held ? new Promise<Response>(() => {}) : fake.handle(request);
+  });
+  let { person } = await s.start();
+  const { authorizeUrl } = await person.call<{ authorizeUrl: string }>("login", "start", {
+    redirectUri: "http://127.0.0.1:4321/oauth/chatgpt",
+  });
+  await person.call("login", "complete", { callbackUrl: await fake.authorize(authorizeUrl) });
+  const agent = await createAssistant(person, "Scout", "Scouting ahead.");
+  const slot = await chatSlot(person, agent);
+  const reached = (one: Person) =>
+    one.call(slot, "list").then(
+      () => true,
+      () => false,
+    );
+  await until(() => reached(person), "the chat to be exposed");
+  held = true;
+  const { chat } = await person.call<{ chat: string }>(slot, "send", { text: "a long one" });
+  await until(() => asked.length === 1, "the model to be asked");
+  await s.stop();
+
+  // The agent is back before management, which holds its settings: the turn waits for them.
+  held = false;
+  fake.script({ events: [completed([text("Went on.")])] });
+  ({ person } = await s.start());
+  await until(() => reached(person), "the chat to be back");
+  const texts = async () =>
+    (await person.call<{ messages: { text: string }[] }>(slot, "history", { chat })).messages.map(
+      (message) => message.text,
+    );
+  await until(async () => (await texts()).at(-1) === "Went on.", "the turn to go on");
+  assert.deepEqual(await texts(), [
+    "a long one",
+    "Cut off by a restart: going on from where it stopped.",
+    "Went on.",
+  ]);
+  assert.equal(asked.length, 2);
+  // Told what its settings say, which only management can answer.
+  assert.match(String(asked[1]?.instructions), /What you are for: Scouting ahead\./);
+  assert.match(JSON.stringify(asked[1]?.said), /cut off by a restart/);
+  await until(
+    async () => (await person.call<{ state: string }>(slot, "state", { chat })).state === "idle",
+    "the turn to end",
   );
 });
 
