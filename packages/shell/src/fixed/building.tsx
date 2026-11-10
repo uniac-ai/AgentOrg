@@ -15,6 +15,8 @@ import {
 } from "./stack.ts";
 import { useAgents } from "./watch.tsx";
 
+/** How long the Create window takes to change size: its `duration-300`. */
+const WINDOW_MS = 300;
 const EMPTY: Catalog = { bases: [], units: [], templates: [] };
 
 function readCatalog(): Promise<Catalog> {
@@ -32,6 +34,14 @@ function useBuildingState() {
   const { list } = useAgents();
   const [draft, setDraft] = useState<Draft>();
   const [open, setOpen] = useState(false);
+  const [mode, setMode] = useState<Draft["mode"]>("agent");
+  /** The panel is closing: the stack stays drawn until the window has shrunk around it. */
+  const [collapsing, setCollapsing] = useState(false);
+  const collapse = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const settle = () => {
+    clearTimeout(collapse.current);
+    setCollapsing(false);
+  };
   const keys = useRef(0);
   const nextKey = () => ++keys.current;
 
@@ -45,15 +55,38 @@ function useBuildingState() {
     catalog,
     draft,
     open,
+    mode,
+    /** A stack is showing, and staying. */
+    expanded: !!draft && !collapsing,
     show() {
+      settle();
       setDraft(undefined);
+      setMode("agent");
       setOpen(true);
     },
     hide: () => setOpen(false),
     /** Once the window has gone: whatever was in it goes too. */
-    clear: () => setDraft(undefined),
+    clear() {
+      settle();
+      setDraft(undefined);
+      setMode("agent");
+    },
+    /** The chosen row, chosen again: the panel closes, at the pace the window moves. */
+    unselect() {
+      setCollapsing(true);
+      const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
+      collapse.current = setTimeout(
+        () => {
+          setDraft(undefined);
+          setCollapsing(false);
+        },
+        still ? 0 : WINDOW_MS,
+      );
+    },
     /** A template, or nothing, fills the panel. Choosing again keeps what was typed for an agent. */
     start(template?: Template, mode: Draft["mode"] = "agent") {
+      settle();
+      setMode(mode);
       const next = draftFrom(template, catalog, mode, nextKey);
       const offered = pickName(list.map((agent) => agent.name));
       setDraft((was) => ({

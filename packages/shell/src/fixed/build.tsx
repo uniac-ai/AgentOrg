@@ -52,8 +52,8 @@ export function CreateButton() {
  * its right. A click outside closes it, and closing it clears it.
  */
 export function BuildDialog() {
-  const { clear, draft, open, hide } = useBuilding();
-  const size = draft
+  const { clear, draft, expanded, open, hide } = useBuilding();
+  const size = expanded
     ? "h-[min(720px,calc(100dvh-2rem))] sm:w-[min(60rem,calc(100vw-2rem))]"
     : "h-[min(26rem,calc(100dvh-2rem))] sm:w-80";
   return (
@@ -78,13 +78,14 @@ export function BuildDialog() {
 }
 
 function Choose() {
-  const { catalog, draft, start } = useBuilding();
-  const mode = draft?.mode ?? "agent";
+  const { catalog, draft, expanded, mode, start, unselect } = useBuilding();
+  const isEmpty = expanded && !draft?.from;
+  const isChosen = (id: string) => expanded && draft?.from?.id === id;
   const row = (on: boolean) =>
     `flex min-h-12 w-full shrink-0 flex-col justify-center rounded-xl px-3 py-1.5 text-left hover:bg-[var(--hover)] ${on ? "bg-[var(--selected)]" : ""}`;
   return (
     <div
-      className={`flex flex-col sm:h-full sm:w-80 sm:shrink-0 ${draft ? "shrink-0" : "min-h-0 flex-1"}`}
+      className={`flex flex-col sm:h-full sm:w-80 sm:shrink-0 ${expanded ? "shrink-0" : "min-h-0 flex-1"}`}
     >
       <div className="flex h-11 shrink-0 items-center pr-10 pl-4">
         <DialogTitle className="text-[13px] font-semibold">
@@ -93,14 +94,14 @@ function Choose() {
       </div>
       <ul
         aria-label="Start from"
-        className={`no-bar px-2 pb-2 ${draft ? "flex gap-1 overflow-x-auto sm:block sm:min-h-0 sm:flex-1 sm:overflow-y-auto" : "min-h-0 flex-1 overflow-y-auto"}`}
+        className={`no-bar px-2 pb-2 flex gap-1 ${expanded ? "overflow-x-auto sm:min-h-0 sm:flex-1 sm:flex-col sm:overflow-y-auto" : "min-h-0 flex-1 flex-col overflow-y-auto"}`}
       >
         <li className="shrink-0">
           <button
             type="button"
-            aria-pressed={!!draft && !draft.from}
-            className={row(!!draft && !draft.from)}
-            onClick={() => start(undefined, mode)}
+            aria-pressed={isEmpty}
+            className={row(isEmpty)}
+            onClick={() => (isEmpty ? unselect() : start(undefined, mode))}
           >
             <span className="text-sm font-medium">Empty</span>
           </button>
@@ -109,13 +110,13 @@ function Choose() {
           <li key={t.id} className="shrink-0">
             <button
               type="button"
-              aria-pressed={draft?.from?.id === t.id}
-              className={row(draft?.from?.id === t.id)}
-              onClick={() => start(t, mode)}
+              aria-pressed={isChosen(t.id)}
+              className={row(isChosen(t.id))}
+              onClick={() => (isChosen(t.id) ? unselect() : start(t, mode))}
             >
               <span className="text-sm font-medium">{t.title}</span>
               <span
-                className={`truncate text-[13px] text-muted-foreground ${draft ? "hidden sm:block" : ""}`}
+                className={`truncate text-[13px] text-muted-foreground ${expanded ? "hidden sm:block" : ""}`}
               >
                 {t.description}
               </span>

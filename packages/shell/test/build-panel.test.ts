@@ -627,3 +627,47 @@ test(
     await page.close();
   }),
 );
+
+test(
+  "the rows don't touch, and the chosen one chosen again closes the panel",
+  withGateway(async (gateway) => {
+    const page = await open(gateway);
+    await page.getByRole("list", { name: "Your agents" }).waitFor();
+    await plus(page).click();
+    const window_ = panel(page);
+    const empty = window_.getByRole("button", { name: "Empty" });
+    const assistant = window_.getByRole("button", { name: /^Assistant/ });
+    await empty.waitFor();
+    await page.waitForTimeout(350);
+    const small = await window_.boundingBox();
+    const [a, b] = [await empty.boundingBox(), await assistant.boundingBox()];
+    assert.ok(a && b && small);
+    assert.ok(b.y >= a.y + a.height + 2, "a gap between them");
+
+    await assistant.click();
+    const name = window_.locator("#build-name");
+    await name.waitFor();
+    await page.waitForTimeout(450);
+    const big = await window_.boundingBox();
+    assert.ok(big && big.width > small.width);
+    const [c, d] = [await empty.boundingBox(), await assistant.boundingBox()];
+    assert.ok(c && d && d.y >= c.y + c.height + 2, "and once the panel is open");
+
+    await assistant.click();
+    assert.equal(await assistant.getAttribute("aria-pressed"), "false");
+    assert.equal(await name.count(), 1, "the panel stays while the window shrinks around it");
+    await name.waitFor({ state: "detached" });
+    await page.waitForTimeout(100);
+    assert.deepEqual(await window_.boundingBox(), small, "back as it was");
+
+    await empty.click();
+    await name.waitFor();
+    assert.equal(await empty.getAttribute("aria-pressed"), "true");
+    await empty.click();
+    await assistant.click();
+    await page.waitForTimeout(500);
+    assert.equal(await name.count(), 1, "choosing while it closes keeps it open");
+    assert.equal(await assistant.getAttribute("aria-pressed"), "true");
+    await page.close();
+  }),
+);
