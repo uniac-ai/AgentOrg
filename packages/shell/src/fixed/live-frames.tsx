@@ -1,6 +1,7 @@
 // An agent's live surfaces on its page. What draws each is chosen by its protocol alone, never by
 // which provider or unit offers it, so any unit can offer a surface in a protocol the page knows.
 import type { ComponentType } from "react";
+import { ScreencastView } from "./browser-view.tsx";
 import type { LiveTarget } from "./live-socket.ts";
 import { CommandsView, PtyView } from "./terminal-views.tsx";
 
@@ -16,11 +17,18 @@ export interface OpenSurface {
 /** The viewers there are, by protocol, and which frame each sits in. */
 export const VIEWERS: Record<
   string,
-  { frame: "terminal" | "browser"; View: ComponentType<{ target: LiveTarget }> }
+  { frame: "terminal" | "browser"; View: ComponentType<ViewerProps> }
 > = {
   "commands@1": { frame: "terminal", View: CommandsView },
   "pty@1": { frame: "terminal", View: PtyView },
+  "screencast@1": { frame: "browser", View: ScreencastView },
 };
+
+export interface ViewerProps {
+  target: LiveTarget;
+  /** Told when the agent starts or stops waiting for you to let go. */
+  onWaiting?(waiting: boolean): void;
+}
 
 export const targetOf = (agent: string, surface: OpenSurface): LiveTarget => ({
   agent,
@@ -30,7 +38,17 @@ export const targetOf = (agent: string, surface: OpenSurface): LiveTarget => ({
   mode: surface.operate && surface.protocol !== "commands@1" ? "operate" : "watch",
 });
 
-function Unavailable({ surface }: { surface: OpenSurface }) {
+function Unavailable({ surface, frame }: { surface: OpenSurface; frame?: boolean }) {
+  if (frame)
+    return (
+      <section
+        aria-label={surface.surface}
+        className="flex h-[440px] min-w-0 flex-col rounded-xl border"
+      >
+        <div className="h-9 shrink-0" />
+        <p className="px-3 text-[13px] text-muted-foreground">{surface.unavailable}</p>
+      </section>
+    );
   return (
     // biome-ignore lint/a11y/useSemanticElements: a pane of the frame, not a form.
     <div role="group" aria-label={surface.surface} className="flex min-h-0 min-w-0 flex-col">
@@ -59,4 +77,20 @@ export function TerminalFrame({ agent, surfaces }: { agent: string; surfaces: Op
       })}
     </section>
   );
+}
+
+/** A browser surface, in a frame of its own. */
+export function BrowserLive({
+  agent,
+  surface,
+  onWaiting,
+}: {
+  agent: string;
+  surface: OpenSurface;
+  onWaiting(waiting: boolean): void;
+}) {
+  const viewer = VIEWERS[surface.protocol];
+  if (!viewer) return null;
+  if (surface.unavailable) return <Unavailable surface={surface} frame />;
+  return <viewer.View target={targetOf(agent, surface)} onWaiting={onWaiting} />;
 }

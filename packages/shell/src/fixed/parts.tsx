@@ -11,6 +11,7 @@ const WORD: Record<Tone, string> = {
   idle: "Idle",
   starting: "Starting",
   stopped: "Stopped",
+  waiting: "Waiting for you",
 };
 const COLOR: Record<Tone, string> = {
   working: "bg-[var(--ok)] motion-safe:animate-pulse",
@@ -18,6 +19,7 @@ const COLOR: Record<Tone, string> = {
   idle: "bg-[var(--faint)]",
   starting: "",
   stopped: "border border-[var(--faint)]",
+  waiting: "bg-[var(--unread)] motion-safe:animate-pulse",
 };
 
 export function StateDot({ tone }: { tone: Tone }) {

@@ -129,7 +129,9 @@ test(
     await shell.getByText("The shell exited.").waitFor();
     await shell.getByRole("button", { name: "Open again" }).click();
     await shell.getByText("The shell exited.").waitFor({ state: "detached" });
-    assert.equal(gateway.live.opened.filter((o) => o.surface === "terminal").length, 2);
+    const opened = () => gateway.live.opened.filter((o) => o.surface === "terminal").length;
+    for (let n = 0; n < 80 && opened() < 2; n++) await page.waitForTimeout(50);
+    assert.equal(opened(), 2);
     await page.close();
   }),
 );

@@ -21,7 +21,7 @@ import {
   shortUrl,
 } from "./calls.ts";
 import { ago, type ChatMessage, useChatRecord, useEvery } from "./data.ts";
-import { type OpenSurface, TerminalFrame, VIEWERS } from "./live-frames.tsx";
+import { BrowserLive, type OpenSurface, TerminalFrame, VIEWERS } from "./live-frames.tsx";
 
 const seconds = (at: string | undefined, now: number) => {
   if (!at) return "";
@@ -268,19 +268,33 @@ export function Frames({
   slot,
   running,
   surfaces = [],
+  onWaiting = () => {},
 }: {
   agent: string;
   slot?: string;
   running: boolean;
   /** What of its units can be opened live; those the page has a viewer for take a frame's place. */
   surfaces?: OpenSurface[];
+  /** Told when the agent waits for you to let go of its browser. */
+  onWaiting?(waiting: boolean): void;
 }) {
   const { messages } = useChatRecord(slot, running, RECORD);
   const rows = useMemo(() => rowsOf(messages as ChatMessage[]), [messages]);
   useEvery(5000);
   const now = Date.now();
   const terminal = surfaces.filter((s) => VIEWERS[s.protocol]?.frame === "terminal");
-  if (terminal.length === 0)
+  const browser = surfaces.find((s) => VIEWERS[s.protocol]?.frame === "browser");
+  const browserFrame = browser ? (
+    <BrowserLive
+      key={`${browser.instance}/${browser.surface}`}
+      agent={agent}
+      surface={browser}
+      onWaiting={onWaiting}
+    />
+  ) : (
+    <BrowserFrame rows={rows} />
+  );
+  if (terminal.length === 0 && !browser)
     return (
       <div className="grid grid-cols-[minmax(0,2fr)_minmax(0,1fr)] gap-3 tight:grid-cols-1">
         <ComputerFrame rows={rows} now={now} />
@@ -290,9 +304,9 @@ export function Frames({
     );
   return (
     <div className="flex flex-col gap-3">
-      <TerminalFrame agent={agent} surfaces={terminal} />
+      {terminal.length > 0 && <TerminalFrame agent={agent} surfaces={terminal} />}
       <div className="grid grid-cols-[minmax(0,2fr)_minmax(0,1fr)] gap-3 tight:grid-cols-1">
-        <BrowserFrame rows={rows} />
+        {browserFrame}
         <FilesFrame rows={rows} />
       </div>
     </div>
