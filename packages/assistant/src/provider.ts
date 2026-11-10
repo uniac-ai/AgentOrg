@@ -1,7 +1,8 @@
 /**
  * The bundled agent provider: it offers one creatable, Assistant, and runs each agent in this
- * process as its own Actor on its own channel. Stopping an agent closes its channel; starting it
- * opens one. Each agent's record and model choice are kept in the provider's private folder.
+ * process as its own Actor on its own channel. A stopped agent stays on its channel, so its chats
+ * can be read, and runs no turn until it is started. Each agent's chats and model choice are kept
+ * in the provider's private folder.
  */
 import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
@@ -43,7 +44,7 @@ export interface AgentProviderOptions {
 }
 
 export interface AgentProvider {
-  /** Leave the Hub and stop every agent. They stay, and those not stopped resume at the next start. */
+  /** Leave the Hub, every agent with it. They stay, and rejoin at the next start as each was left. */
   close(): Promise<void>;
 }
 
@@ -104,10 +105,11 @@ export async function startAgentProvider(options: AgentProviderOptions): Promise
     return done;
   };
 
-  /** Join the Hub as the agent, with its engine running. */
+  /** Join the Hub as the agent, with its engine running, or stopped if it was left so. */
   const open = async (agent: string, one: Held) => {
     one.state = "starting";
     delete one.detail;
+    const { stopped } = stored[agent] as z.infer<typeof Stored>;
     let engine: Held["engine"];
     try {
       const channel = await connect({
@@ -121,12 +123,13 @@ export async function startAgentProvider(options: AgentProviderOptions): Promise
           engine = startEngine(ctx, {
             store: createLocalStore(folderOf(agent)),
             instructions: () => ASSISTANT_INSTRUCTIONS,
+            stopped,
           });
         },
       });
       one.channel = channel;
       one.engine = engine;
-      one.state = "running";
+      one.state = stopped ? "stopped" : "running";
       void channel.closed.then(() => {
         if (one.channel !== channel) return;
         delete one.channel;
@@ -144,17 +147,16 @@ export async function startAgentProvider(options: AgentProviderOptions): Promise
     const { channel, engine } = one;
     delete one.channel;
     if (!channel || !engine) return;
-    await engine.stop();
+    await engine.close();
     channel.close();
     await channel.closed;
     await engine.settled();
   };
 
   await Promise.all(
-    Object.entries(stored).map(async ([agent, { stopped }]) => {
+    Object.keys(stored).map(async (agent) => {
       const one: Held = { state: "stopped", queue: Promise.resolve() };
       agents.set(agent, one);
-      if (stopped) return;
       try {
         await open(agent, one);
       } catch (error) {
@@ -216,16 +218,24 @@ export async function startAgentProvider(options: AgentProviderOptions): Promise
             if (one.state === "running") return {};
             (stored[agent] as z.infer<typeof Stored>).stopped = false;
             save();
-            await open(agent, one);
+            // One whose connection ended joins again; one that is only stopped goes on.
+            if (!one.channel || !one.engine) await open(agent, one);
+            else {
+              one.engine.start();
+              one.state = "running";
+            }
             return {};
           }),
         stop: ({ agent }) =>
           inTurn(agent, async (one) => {
             (stored[agent] as z.infer<typeof Stored>).stopped = true;
             save();
-            await halt(one);
-            one.state = "stopped";
-            delete one.detail;
+            // One whose connection ended joins again, stopped, so that it can be read.
+            if (!one.channel || !one.engine) await open(agent, one);
+            else {
+              await one.engine.stop();
+              one.state = "stopped";
+            }
             return {};
           }),
         remove: ({ agent }) =>

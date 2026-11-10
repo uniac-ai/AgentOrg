@@ -73,7 +73,10 @@ export const agentProvider = defineInterface({
     }),
     status: method({ input: OnAgent, output: AgentStatus }),
     start: method({ input: OnAgent, output: z.object({}) }),
-    /** It ends the agent's process; its record, bindings and connections stay. */
+    /**
+     * Stop an agent, keeping it: it runs no turn until it is started. Its record, bindings and
+     * connections stay. Whether its chats can be read meanwhile is the provider's to say.
+     */
     stop: method({ input: OnAgent, output: z.object({}) }),
     /** Final: the agent's Actor is closed. */
     remove: method({ input: OnAgent, output: z.object({}) }),

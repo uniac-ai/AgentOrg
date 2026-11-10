@@ -23,6 +23,8 @@ export function startEngine(
     store: Slot<typeof kv>["call"];
     /** What the agent is told while no `settings` is bound. */
     instructions(): string;
+    /** Whether it starts stopped, as it was left. */
+    stopped?: boolean;
   },
 ) {
   const { store } = options;
@@ -60,6 +62,7 @@ export function startEngine(
   };
   const chats = createChats({
     store,
+    stopped: options.stopped ?? false,
     agent: (history, chat) =>
       createAgent({
         request,
@@ -104,8 +107,11 @@ export function startEngine(
     },
   });
   return {
-    /** Stop for good: the turn in progress is cut, and none starts after. */
+    /** Stop the agent: its turn is cut and none starts until `start`. Its chats stay readable. */
     stop: () => chats.stop(),
+    start: () => chats.start(),
+    /** Close for good: the turn in progress is cut, and none starts after. */
+    close: () => chats.close(),
     /** Settles when every chat's latest turn has written all it will. */
     settled: () => chats.settled(),
   };
