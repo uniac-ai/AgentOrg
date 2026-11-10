@@ -129,7 +129,7 @@ function Choose() {
 
 function Stack() {
   const building = useBuilding();
-  const { catalog, draft, hide, saveTemplate, setText, setProblems } = building;
+  const { catalog, draft, hide, refreshUnits, saveTemplate, setText, setProblems } = building;
   const nameField = useRef<HTMLInputElement>(null);
   // Typing can start at once.
   useEffect(() => nameField.current?.focus(), []);
@@ -151,6 +151,8 @@ function Stack() {
     }
     const stack = toStack(draft);
     act.run(async () => {
+      // A form can change while it's open. What's chosen, and what it grants, show before it's used.
+      if (await refreshUnits()) return;
       const { problems } = await api.call<{ problems: StackProblem[] }>("agents", "check", {
         stack,
       });
