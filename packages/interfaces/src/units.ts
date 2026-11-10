@@ -122,7 +122,7 @@ const OnInstance = z.object({ instance: Id });
 /** Something of an instance that can be watched or operated live, in a protocol the page knows. */
 export const LiveSurface = z.object({
   surface: Slug,
-  /** The frames it speaks, such as `pty@1`, `commands@1` or `screencast@1`. */
+  /** The frames it speaks, such as `terminal@1`, `files@1` or `screencast@1`. */
   protocol: z.string().min(1).max(64),
   /** Whether it can be operated, not only watched. */
   operate: z.boolean(),
