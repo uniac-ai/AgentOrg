@@ -8,7 +8,7 @@ import { Button } from "../ui/button.tsx";
 import { Checkbox } from "../ui/checkbox.tsx";
 import type { ViewerProps } from "./live-frames.tsx";
 import { useLive } from "./live-socket.ts";
-import { Closed } from "./terminal-views.tsx";
+import { Closed } from "./xterm.tsx";
 
 interface Tab {
   id: number;

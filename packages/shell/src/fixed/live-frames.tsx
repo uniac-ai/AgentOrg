@@ -4,6 +4,7 @@ import type { ComponentType } from "react";
 import { ScreencastView } from "./browser-view.tsx";
 import type { LiveTarget } from "./live-socket.ts";
 import { CommandsView, PtyView } from "./terminal-views.tsx";
+import { TerminalsView } from "./terminals.tsx";
 
 /** One surface of one of the agent's units, as its status says. */
 export interface OpenSurface {
@@ -21,6 +22,7 @@ export const VIEWERS: Record<
 > = {
   "commands@1": { frame: "terminal", View: CommandsView },
   "pty@1": { frame: "terminal", View: PtyView },
+  "terminal@1": { frame: "terminal", View: TerminalsView },
   "screencast@1": { frame: "browser", View: ScreencastView },
 };
 
@@ -56,12 +58,12 @@ function Unavailable({ surface, frame }: { surface: OpenSurface; frame?: boolean
   );
 }
 
-/** One pane per surface, side by side: the agent's commands, then your shell. */
+/** One pane per surface, side by side, on a window's surface. */
 export function TerminalFrame({ agent, surfaces }: { agent: string; surfaces: OpenSurface[] }) {
   return (
     <section
       aria-label="Terminal"
-      className="grid h-[320px] auto-cols-fr grid-flow-col divide-x overflow-hidden rounded-xl border tight:h-[440px] tight:grid-flow-row tight:divide-x-0 tight:divide-y"
+      className="grid h-[320px] auto-cols-fr grid-flow-col divide-x overflow-hidden rounded-xl border bg-background tight:h-[440px] tight:grid-flow-row tight:divide-x-0 tight:divide-y"
     >
       {surfaces.map((surface) => {
         const viewer = VIEWERS[surface.protocol];
