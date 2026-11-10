@@ -16,7 +16,7 @@ const COMPUTER = "computer";
  * Units whose values say what is run or reached: an agent can't change them, or a template it may
  * use would be any server or anyone's connection. A template offers one only with it filled in.
  */
-const FIXED_FOR_AGENTS = new Set(["command", "url", "connection", "skill"]);
+const FIXED_FOR_AGENTS = new Set(["command", "url", "connection", "mcp", "skill"]);
 /** The place that is the parent's own computer; every other place is a connection's id. */
 const OWN = "own";
 /** A new computer for the child, on the service its parent's computer runs on. */

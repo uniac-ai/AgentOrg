@@ -434,7 +434,7 @@ async function setup(t: test.TestContext) {
   for (
     let i = 0;
     (await caller.slots.agents.call.providers({})).providers.length < 1 ||
-    (await caller.slots.agents.call.units({})).units.length < 3 + UNITS.length;
+    (await caller.slots.agents.call.units({})).units.length < 2 + UNITS.length;
     i++
   ) {
     assert.ok(i < 300, "the providers never showed");
@@ -503,7 +503,7 @@ async function setup(t: test.TestContext) {
     await until(() => caller.slots.agents.bound);
     for (
       let i = 0;
-      (await caller.slots.agents.call.units({})).units.length < 3 + UNITS.length;
+      (await caller.slots.agents.call.units({})).units.length < 2 + UNITS.length;
       i++
     ) {
       assert.ok(i < 300, "the units never came back");
@@ -619,7 +619,7 @@ test("a stack is made, bound, exposed and recorded, with its chat to the person"
   assert.deepEqual(bySlot.files?.status, { state: "connected", tools: [{ name: "read" }] });
   assert.deepEqual(
     read.units.map((one) => one.unit),
-    ["connection", "files"],
+    ["mcp", "files"],
   );
   // What a unit made goes with the unit.
   await assert.rejects(
@@ -911,6 +911,82 @@ test("an agent is told what it's for", async (t) => {
   );
 });
 
+test("one MCP unit stands for a connection there is or any kind on offer", async (t) => {
+  const s = await setup(t);
+  const mcp = (await s.calls.agents.units({})).units.find((one) => one.id === "mcp");
+  const fields = Object.fromEntries((mcp?.form ?? []).map((field) => [field.id, field]));
+  assert.deepEqual(
+    fields.how?.options?.map((one) => one.value),
+    ["connection", "stand-in"],
+  );
+  assert.deepEqual(fields.connection?.visible, { field: "how", in: ["connection"] });
+  assert.deepEqual(fields.url?.visible, { field: "how", in: ["stand-in"] });
+  assert.equal(fields.token?.value, "secret");
+  assert.deepEqual(Object.keys(fields), ["how", "connection", "url", "token", "slot"]);
+
+  const connection = await s.picked();
+  const check = async (values: object) =>
+    (
+      await s.calls.agents.check({
+        stack: { base: s.base, units: [s.own("mcp", values)] },
+      } as never)
+    ).problems.map((one) => one.field);
+  assert.deepEqual(await check({ slot: "x" }), ["how"]);
+  assert.deepEqual(await check({ how: "nothing", slot: "x" }), ["how"]);
+  assert.deepEqual(await check({ how: "connection", slot: "x" }), ["connection"]);
+  // A field that isn't shown has no value, whatever was sent.
+  assert.deepEqual(await check({ how: "connection", connection, slot: "x", url: "y" }), []);
+
+  const secret = `secret-${crypto.randomUUID()}`;
+  const agent = await s.makeStack([
+    s.own("mcp", { how: "connection", connection, slot: "search" }),
+    { ...s.own("mcp", { how: "stand-in", url: "x", slot: "served" }), secrets: { token: secret } },
+  ]);
+  assert.deepEqual(s.given.applied.at(-1)?.values, { url: "x", slot: "served" });
+  assert.deepEqual(s.given.applied.at(-1)?.secrets, { token: secret });
+  const read = await s.calls.agents.get({ agent });
+  assert.deepEqual(read.mcp.map((one) => one.slot).sort(), ["search", "served"]);
+  assert.deepEqual(
+    read.units.map((one) => [one.unit, one.title, one.provider, one.values]),
+    [
+      ["mcp", "MCP", s.management.actorId, { how: "connection", connection, slot: "search" }],
+      ["mcp", "MCP", s.management.actorId, { how: "stand-in", url: "x", slot: "served" }],
+    ],
+  );
+  assert.ok(!JSON.stringify(read).includes(secret));
+  // A way not on offer can't be saved: nothing could tell which of its fields are secret.
+  const on = { provider: "Agents", creatable: "plain" };
+  const templated = (values: object) =>
+    s.calls.agents.saveTemplate({
+      id: "served",
+      title: "Served",
+      description: "",
+      base: on,
+      units: [{ provider: "Management", unit: "mcp", values }],
+    } as never);
+  await assert.rejects(templated({ how: "gone", slot: "x", token: "y" }), refused("unknown"));
+  await assert.rejects(
+    templated({ how: "stand-in", url: "x", slot: "y", token: "z" }),
+    refused("invalid"),
+  );
+  await templated({ how: "stand-in", url: "x", slot: "y" });
+
+  // The same name twice is the same conflict as for any unit.
+  assert.deepEqual(
+    (
+      await s.calls.agents.check({
+        agent,
+        unit: s.own("mcp", { how: "connection", connection, slot: "served" }),
+      } as never)
+    ).problems.map((one) => one.message),
+    ["The name served is already taken."],
+  );
+  for (const one of read.units) await s.calls.agents.removeUnit({ agent, instance: one.instance });
+  assert.deepEqual((await s.calls.agents.get({ agent })).mcp, []);
+  // And the person's own connection is still there, as the Connect page made it.
+  assert.ok((await s.openActors()).includes(connection));
+});
+
 test("every unit on offer is listed, management's own among them", async (t) => {
   const s = await setup(t);
   const { bases, units } = await s.calls.agents.units({});
@@ -924,11 +1000,10 @@ test("every unit on offer is listed, management's own among them", async (t) => 
   assert.deepEqual(
     units.map((one) => [one.id, one.providerName]),
     [
+      ["mcp", "Management"],
       ["agents", "Management"],
       ["skill", "Management"],
-      ["connection", "Management"],
       ["files", "Units"],
-      ["stand-in", "Units"],
       ["machine", "Units"],
       ["terminal", "Units"],
       ["computer", "Units"],
@@ -936,7 +1011,7 @@ test("every unit on offer is listed, management's own among them", async (t) => 
     ],
   );
   await s.calls.skills.add({ files: { "SKILL.md": SKILL("library-one") } });
-  const again = (await s.calls.agents.units({})).units[1];
+  const again = (await s.calls.agents.units({})).units[2];
   assert.deepEqual(
     again?.form[0]?.options?.map((one) => one.value),
     ["library-one"],
@@ -1048,7 +1123,7 @@ test("the Skill and Connection units are exposures, and read back as units", asy
     read.units.map((one) => [one.instance, one.unit, one.values]),
     [
       ["skill:handy", "skill", { skill: "handy" }],
-      ["slot:search", "connection", { connection, slot: "search" }],
+      ["slot:search", "mcp", { how: "connection", connection, slot: "search" }],
     ],
   );
   // No record of a unit: it is what is exposed. An exposure made by hand reads the same way.

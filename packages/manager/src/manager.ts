@@ -24,7 +24,7 @@ import type { z } from "zod";
 import { createControl } from "./control.js";
 import { schemaOf, secretsSchemaOf, settle } from "./form.js";
 import { createSkills, readSkillFolder } from "./skills.js";
-import { type AgentRecord, createStacks, Records } from "./stack.js";
+import { type AgentRecord, createStacks, Records, slotFieldOf } from "./stack.js";
 
 type Origin = z.infer<typeof ConnectionOrigin>;
 type Agents = Slot<typeof agentProvider>["call"];
@@ -57,19 +57,6 @@ const quiet: Log = { info() {}, warn() {}, error() {} };
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
 /** The slot a connection is made for by the person: no agent has it yet, so it names nothing. */
 const PERSON_SLOT = "tools";
-/** A unit that makes one connection and nothing else, by the field that names it, is a kind. */
-const slotFieldOf = ({ needs, gives, form }: z.infer<typeof Unit>) => {
-  const [slot] = gives.slots;
-  return slot &&
-    "field" in slot &&
-    gives.slots.length === 1 &&
-    !needs.length &&
-    !gives.skills.length &&
-    !gives.results.length &&
-    !form.some((field) => field.adds || field.options?.some((option) => option.adds))
-    ? slot.field
-    : undefined;
-};
 const alreadyGone = (error: unknown) => error instanceof Refused && error.code === "unknown";
 
 /**

@@ -82,7 +82,7 @@ export const UNITS = [
     description: "Starts an MCP server with this app's rights.",
     form: [
       { id: "command", type: "text", value: "string", title: "Command", required: true },
-      { id: "args", type: "text", value: "strings", title: "Arguments" },
+      { id: "args", type: "lines", value: "strings", title: "Arguments" },
       { id: "cwd", type: "directory", value: "string", title: "Working folder" },
       {
         id: LINES,

@@ -70,6 +70,8 @@ export const Field = z.object({
   description: Description.optional(),
   required: z.literal(true).optional(),
   default: FieldValue.optional(),
+  /** Greyed text of an empty field, saying what leaving it empty does. `{name}` is the agent's name. */
+  placeholder: z.string().max(256).optional(),
   visible: z.object({ field: FieldId, in: z.array(FieldValue).min(1).max(64) }).optional(),
   options: z
     .array(
@@ -153,6 +155,8 @@ export const unitProvider = defineInterface({
         needs: z.record(ResultKind, z.string().min(1).max(4096)),
         agent: Id,
         name: Title,
+        /** The name the person gave the agent. None for an agent an agent made, or for no agent. */
+        agentName: Title.optional(),
       }),
       output: z.object({
         instance: Id,

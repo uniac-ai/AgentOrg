@@ -123,6 +123,7 @@ async function setup(t: test.TestContext, { service = true, webUrl = "" } = {}) 
       credential: made.credential as string,
       dir,
       dataFolder: data,
+      agentsFolder: join(root, "Agents"),
       ...(webUrl ? { webUrl } : {}),
       timing: { firstDelayMs: 50, pingEveryMs: 200 },
     });
@@ -413,6 +414,50 @@ test("endpoints are at the address given, whatever the service calls itself", as
   const kept = JSON.parse(readFileSync(join(dir, "instances.json"), "utf8"));
   assert.match(kept[instance].links[0].url, new RegExp(`^http://localhost:${port}/`));
   await units.remove({ instance });
+});
+
+test("an agent with no folder named works in one with its name, which stays", async (t) => {
+  const { units, connected, running, root } = await setup(t);
+  const reached = running as Service;
+  const unit = (await units.units({})).units.find((one) => one.id === "computer");
+  assert.equal(
+    (form(unit, "workspace") as { placeholder?: string }).placeholder,
+    "~/Agents/{name}",
+  );
+  const make = (agentName?: string) =>
+    units.apply({
+      unit: "computer",
+      values: { service: "local", access: "files" },
+      secrets: {},
+      needs: {},
+      agent: "act_agent",
+      name: "Its computer",
+      ...(agentName ? { agentName } : {}),
+    });
+  const { instance } = await make("Scout / ../two");
+  await connected(instance);
+  const folder = join(root, "Agents", "Scout - ..-two");
+  assert.ok(statSync(folder).isDirectory());
+  assert.deepEqual(
+    (await Computer.list(reached)).map((one) => one.workspace),
+    [folder],
+  );
+  await units.remove({ instance });
+  assert.ok(existsSync(folder));
+  // An agent's own child gets no name to go by, and a folder the service makes.
+  const child = await make();
+  const [made] = await Computer.list(reached);
+  assert.ok(!made?.workspace?.startsWith(join(root, "Agents")));
+  await units.remove({ instance: child.instance });
+  // A name that would be somewhere else stays a folder in there.
+  for (const odd of [" ..", " ."]) {
+    const made2 = await make(odd);
+    const [one] = await Computer.list(reached);
+    assert.equal(one?.workspace, join(root, "Agents", "agent"));
+    await units.remove({ instance: made2.instance });
+  }
+  writeFileSync(join(root, "Agents", "taken"), "a file");
+  await assert.rejects(make("taken"), refused("invalid"));
 });
 
 test("a service that crashed isn't found, and its port gets no token", async (t) => {

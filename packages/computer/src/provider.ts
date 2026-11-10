@@ -77,6 +77,8 @@ export interface ComputerProviderOptions {
   dir: string;
   /** Where a service on this machine writes its address and token; the service's own default. */
   dataFolder?: string;
+  /** Where an agent's own folder goes when none is named; `~/Agents` by default. */
+  agentsFolder?: string;
   /** The hosted server the web unit connects to; Exa's by default. For tests. */
   webUrl?: string;
   log?: Log;
@@ -103,6 +105,12 @@ const defaultDataFolder = () =>
   (process.env.XDG_DATA_HOME
     ? join(process.env.XDG_DATA_HOME, "agentcomputer")
     : join(homedir(), ".local", "share", "agentcomputer"));
+
+/** A folder as a person writes it: `~/` is their home. */
+const fromHome = (folder: unknown) =>
+  typeof folder === "string" && folder.startsWith("~/")
+    ? join(homedir(), folder.slice(2))
+    : (folder as string | undefined);
 
 /** What is wrong with what was filled in; nothing means it can be applied. */
 function problems(
@@ -132,7 +140,7 @@ function problems(
       });
   } else if (!LEVELS.includes(values.access as string))
     wrong.push({ field: "access", message: "Choose what it can do." });
-  const { workspace } = values;
+  const workspace = fromHome(values.workspace);
   if (values.service === LOCAL && workspace !== undefined) {
     let folder = false;
     try {
@@ -269,12 +277,30 @@ export async function startComputerProvider(
     }
   }
 
+  /** The folder an agent with this name works in when none is named. It stays when the agent goes. */
+  const agentFolder = (agentName: string) => {
+    const safe =
+      agentName
+        .trim()
+        .replace(/[/\\\p{Cc}]/gu, "-")
+        .replace(/^\.+/, "")
+        .trim() || "agent";
+    const folder = join(options.agentsFolder ?? join(homedir(), "Agents"), safe);
+    try {
+      mkdirSync(folder, { recursive: true });
+    } catch {
+      throw new Refused("invalid", `The folder ${folder} can't be made.`);
+    }
+    return folder;
+  };
+
   /** Make the computer, and say what each of its endpoints is. */
   const makeComputer = async (
     values: Record<string, unknown>,
     secrets: Record<string, string>,
     name: string,
     agent: string,
+    agentName?: string,
   ) => {
     const local = values.service === LOCAL;
     const reached = local
@@ -283,7 +309,11 @@ export async function startComputerProvider(
     if (!reached) throw new Refused("invalid", INSTALL_STEPS);
     const { isolation } = await Computer.serviceInfo(reached);
     const access = values.access as Access | "none";
-    const workspace = (local ? values.workspace : values.path) as string | undefined;
+    const workspace = (
+      local
+        ? (fromHome(values.workspace) ?? (agentName ? agentFolder(agentName) : undefined))
+        : values.path
+    ) as string | undefined;
     const computer = await Computer.create({
       ...reached,
       access,
@@ -346,7 +376,7 @@ export async function startComputerProvider(
           known(unit);
           return { problems: problems(unit, values, await findLocal(), secrets) };
         },
-        async apply({ unit, values, secrets, name, agent }) {
+        async apply({ unit, values, secrets, name, agent, agentName }) {
           known(unit);
           const wrong = problems(unit, values, await findLocal(), Object.keys(secrets));
           if (wrong.length > 0)
@@ -359,7 +389,7 @@ export async function startComputerProvider(
                   servers: [{ slot: WEB, url: web.url, target: new URL(web.url).host }],
                   computer: undefined,
                 }
-              : await makeComputer(values, secrets, name, agent);
+              : await makeComputer(values, secrets, name, agent, agentName);
           const entry: Instance = { agent, links: [], ...(computer ? { computer } : {}) };
           const made: Connection[] = [];
           const connections: { slot: string; connection: string; target: string }[] = [];

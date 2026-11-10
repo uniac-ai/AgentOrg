@@ -46,6 +46,8 @@ const UnitRecord = z.object({
   results: z.array(UnitResult),
   connections: z.array(z.object({ slot: z.string(), connection: z.string() })),
   skills: z.array(z.string()),
+  /** It was added as the MCP unit, and reads back as one. */
+  viaMcp: z.literal(true).optional(),
 });
 /** What only management knows of an agent: where it came from, what it is told, and its skills. */
 export const AgentRecord = z.object({
@@ -99,6 +101,10 @@ type Provided<T> = { actor: string; call: T };
 /** Management's own units. They ask no provider: each is an exposure and is read back as one. */
 const SKILL_UNIT = "skill";
 const CONNECTION_UNIT = "connection";
+/** One exposure, however it's reached: it stands for the Connection unit or a kind of connection. */
+const MCP_UNIT = "mcp";
+const MCP_SLOT = "slot";
+const MCP_HOW = "how";
 const skillInstance = (name: string) => `skill:${name}`;
 const slotInstance = (slot: string) => `slot:${slot}`;
 
@@ -130,6 +136,7 @@ interface Placed {
   secrets: Record<string, string>;
   worked: Worked;
   needs: Record<string, number | string>;
+  viaMcp?: true;
 }
 /** An earlier unit: by position in a stack, by instance on a living agent. */
 interface Giver {
@@ -203,6 +210,20 @@ const refusal = (problems: TheProblem[]) =>
       .slice(0, MAX_MESSAGE),
   );
 
+/** A unit that makes one connection and nothing else, by the field that names it, is a kind. */
+export const slotFieldOf = ({ needs, gives, form }: TheUnit) => {
+  const [slot] = gives.slots;
+  return slot &&
+    "field" in slot &&
+    gives.slots.length === 1 &&
+    !needs.length &&
+    !gives.skills.length &&
+    !gives.results.length &&
+    !form.some((field) => field.adds || field.options?.some((option) => option.adds))
+    ? slot.field
+    : undefined;
+};
+
 export function createStacks(parts: StackParts) {
   const { self, hub, records, save, library, creating, log, changed, recordOf } = parts;
 
@@ -227,7 +248,53 @@ export function createStacks(parts: StackParts) {
       return actor && !origin.madeFor ? [{ value: connection, title: actor.name }] : [];
     });
   };
-  const ownUnits = async (): Promise<TheUnit[]> => [
+  /** The MCP unit: a connection there is, or any kind on offer, each with its own fields. */
+  const mcpUnit = (kinds: TheUnit[]): TheUnit => {
+    const fields = new Map<string, TheUnit["form"][number]>();
+    for (const kind of kinds)
+      for (const field of kind.form) {
+        if (
+          field.id === slotFieldOf(kind) ||
+          [MCP_HOW, MCP_SLOT, CONNECTION_UNIT].includes(field.id)
+        )
+          continue;
+        const shared = fields.get(field.id);
+        if (shared?.visible) shared.visible.in.push(kind.id);
+        else fields.set(field.id, { ...field, visible: { field: MCP_HOW, in: [kind.id] } });
+      }
+    return {
+      id: MCP_UNIT,
+      title: "MCP",
+      description: "A server's tools, for this agent to use.",
+      form: [
+        {
+          id: MCP_HOW,
+          type: "choice",
+          value: "string",
+          title: "How",
+          required: true,
+          options: [
+            { value: CONNECTION_UNIT, title: "A connection you have" },
+            ...kinds.map(({ id, title, description }) => ({ value: id, title, description })),
+          ],
+        },
+        {
+          id: CONNECTION_UNIT,
+          type: "connection",
+          value: "string",
+          title: "Connection",
+          required: true,
+          visible: { field: MCP_HOW, in: [CONNECTION_UNIT] },
+        },
+        ...fields.values(),
+        { id: MCP_SLOT, type: "text", value: "string", title: "Name", required: true },
+      ],
+      needs: [],
+      gives: { slots: [{ field: MCP_SLOT }], skills: [], results: [] },
+    };
+  };
+  const ownUnits = async (kinds: TheUnit[]): Promise<TheUnit[]> => [
+    mcpUnit(kinds),
     agentsUnit(
       templates()
         .slice(0, MAX_OPTIONS)
@@ -275,9 +342,8 @@ export function createStacks(parts: StackParts) {
 
   /** Every unit on offer now; a provider that doesn't answer offers none. */
   const catalog = async (): Promise<Offer[]> => {
-    const [providerName, mine, others] = await Promise.all([
+    const [providerName, others] = await Promise.all([
       parts.nameOf(self),
-      ownUnits(),
       parts.fromEach(parts.unitProviders(), async ({ actor, call }) => {
         const name = await parts.nameOf(actor);
         return (await call.units({})).units.map(
@@ -285,7 +351,12 @@ export function createStacks(parts: StackParts) {
         );
       }),
     ]);
-    return [...mine.map((unit) => ({ unit, provider: self, providerName })), ...others.flat()];
+    const offers = others.flat();
+    const kinds = offers.map((offer) => offer.unit).filter((unit) => slotFieldOf(unit));
+    return [
+      ...(await ownUnits(kinds)).map((unit) => ({ unit, provider: self, providerName })),
+      ...offers,
+    ];
   };
 
   const baseOf = async (base: StackBase) => {
@@ -320,13 +391,51 @@ export function createStacks(parts: StackParts) {
   };
 
   /** Everything that can be known about one unit before anything runs. `taken` grows by it. */
+  /** What the MCP unit stands for, as it was filled in: the unit that does the work. */
+  const throughMcp = (
+    asked: Pick<FilledUnit, "provider" | "unit" | "values" | "secrets">,
+    offers: Offer[],
+  ) => {
+    const own = offers.find((one) => one.provider === self && one.unit.id === MCP_UNIT);
+    if (asked.provider !== self || asked.unit !== MCP_UNIT || !own) return { filled: asked };
+    const settled = settle(own.unit.form, asked.values ?? {}, Object.keys(asked.secrets ?? {}));
+    if (settled.problems.length) return { problems: settled.problems };
+    const { [MCP_HOW]: how, [MCP_SLOT]: slot, ...values } = settled.values;
+    if (how === CONNECTION_UNIT)
+      return {
+        filled: {
+          provider: self,
+          unit: CONNECTION_UNIT,
+          values: { connection: values.connection as string, slot: slot as string },
+        },
+      };
+    const kind = offers.find(
+      (one) => one.provider !== self && one.unit.id === how && slotFieldOf(one.unit),
+    );
+    if (!kind) return { problems: [{ field: MCP_HOW, message: "That way isn't on offer now." }] };
+    return {
+      viaMcp: true as const,
+      filled: {
+        provider: kind.provider,
+        unit: kind.unit.id,
+        values: { ...values, [slotFieldOf(kind.unit) as string]: slot as string },
+        secrets: Object.fromEntries(
+          Object.entries(asked.secrets ?? {}).filter(([name]) => settled.secrets.includes(name)),
+        ),
+      },
+    };
+  };
+
   const place = async (
-    filled: Pick<FilledUnit, "provider" | "unit" | "values" | "secrets">,
+    asked: Pick<FilledUnit, "provider" | "unit" | "values" | "secrets">,
     picks: Record<string, number | string>,
     taken: Taken,
     offers: Offer[],
     ref: number | undefined,
   ): Promise<{ problems: TheProblem[]; placed?: Placed }> => {
+    const through = throughMcp(asked, offers);
+    if (!through.filled) return { problems: through.problems as TheProblem[] };
+    const { filled } = through;
     const offer = offers.find(
       (one) => one.provider === filled.provider && one.unit.id === filled.unit,
     );
@@ -393,7 +502,14 @@ export function createStacks(parts: StackParts) {
     );
     return {
       problems: problems.map((one) => ({ ...one, message: one.message.slice(0, MAX_MESSAGE) })),
-      placed: { offer, values: settled.values, secrets, worked, needs },
+      placed: {
+        offer,
+        values: settled.values,
+        secrets,
+        worked,
+        needs,
+        ...(through.viaMcp ? { viaMcp: true as const } : {}),
+      },
     };
   };
 
@@ -484,6 +600,8 @@ export function createStacks(parts: StackParts) {
         needs: handles,
         agent,
         name: `${work.name}: ${offer.unit.title}`.slice(0, MAX_NAME),
+        // Not for a child: a folder by a name it chose could be another agent's.
+        ...(record.parent ? {} : { agentName: work.name }),
       });
       undo.push(async () => {
         try {
@@ -527,6 +645,7 @@ export function createStacks(parts: StackParts) {
         results: applied.results,
         connections: applied.connections.map(({ slot, connection }) => ({ slot, connection })),
         skills: worked.skills.map((skill) => skill.name),
+        ...(placed.viaMcp ? { viaMcp: true as const } : {}),
       };
     } else if (offer.unit.id === CONNECTION_UNIT) {
       const slot = values.slot as string;
@@ -748,10 +867,10 @@ export function createStacks(parts: StackParts) {
             .map(async ({ slot, provider }) => {
               const { state, detail } = await connectionStatus(provider);
               return own(
-                CONNECTION_UNIT,
-                "Connection",
+                MCP_UNIT,
+                "MCP",
                 slotInstance(slot),
-                { connection: provider, slot },
+                { [MCP_HOW]: CONNECTION_UNIT, connection: provider, slot },
                 { state, ...(detail ? { detail } : {}) },
               );
             }),
@@ -771,10 +890,19 @@ export function createStacks(parts: StackParts) {
             }
             return {
               instance: unit.instance,
-              provider: unit.provider,
-              unit: unit.unit,
-              title: unit.title,
-              values: unit.values,
+              ...(unit.viaMcp
+                ? {
+                    provider: self,
+                    unit: MCP_UNIT,
+                    title: "MCP",
+                    values: { [MCP_HOW]: unit.unit, ...unit.values },
+                  }
+                : {
+                    provider: unit.provider,
+                    unit: unit.unit,
+                    title: unit.title,
+                    values: unit.values,
+                  }),
               needs: unit.needs,
               status,
             };
@@ -798,21 +926,29 @@ export function createStacks(parts: StackParts) {
       ]);
       return {
         bases: bases.flat(),
-        units: offers.map(({ unit, provider, providerName }) => ({
-          ...unit,
-          provider,
-          providerName,
-        })),
+        // What the MCP unit stands for isn't listed apart from it.
+        units: offers
+          .filter(
+            ({ unit, provider }) =>
+              !(provider === self ? unit.id === CONNECTION_UNIT : slotFieldOf(unit)),
+          )
+          .map(({ unit, provider, providerName }) => ({ ...unit, provider, providerName })),
       };
     },
     templates: () => ({ templates: templates() }),
     async saveTemplate(template: TheTemplate) {
       await baseProviderNamed(template.base.provider);
       const offers = await catalog();
-      for (const unit of template.units)
-        for (const field of offerNamed(offers, unit.provider, unit.unit).unit.form)
+      for (const unit of template.units) {
+        const { form } = offerNamed(offers, unit.provider, unit.unit).unit;
+        // A way not on offer now has fields no one can tell are secret, so it can't be kept.
+        const how = form.find((field) => field.id === MCP_HOW);
+        if (unit.unit === MCP_UNIT && !how?.options?.some((one) => one.value === unit.values?.how))
+          throw new Refused("unknown", `${String(unit.values?.how)} isn't on offer now.`);
+        for (const field of form)
           if (field.value === "secret" && unit.values?.[field.id] !== undefined)
             throw new Refused("invalid", `${field.title} is a secret: a template holds none.`);
+      }
       records.templates[template.id] = template;
       save();
       return {};
