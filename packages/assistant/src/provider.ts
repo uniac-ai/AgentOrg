@@ -144,7 +144,7 @@ export async function startAgentProvider(options: AgentProviderOptions): Promise
     const { channel, engine } = one;
     delete one.channel;
     if (!channel || !engine) return;
-    await engine.cancel();
+    await engine.stop();
     channel.close();
     await channel.closed;
     await engine.settled();

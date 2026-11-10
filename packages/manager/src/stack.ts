@@ -59,6 +59,8 @@ export const AgentRecord = z.object({
   purpose: z.string().optional(),
   template: z.string().optional(),
   units: z.array(UnitRecord).default([]),
+  /** Its export that is its chats, as its provider named it; `chat` for one kept before this was. */
+  chat: z.string().default("chat"),
   /** The agent that made it, which may be gone by now. */
   parent: z.object({ agent: z.string(), name: z.string() }).optional(),
   /** The parent's computer, when it shares one: its own reach, for agents it makes. */
@@ -1031,6 +1033,7 @@ export function createStacks(parts: StackParts) {
           instructions: creatable.instructions,
           skills: [],
           units: [],
+          chat: made.chat,
           ...(input.purpose ? { purpose: input.purpose } : {}),
           ...(stack.template ? { template: stack.template } : {}),
           ...(child ? { parent: child.parent } : {}),

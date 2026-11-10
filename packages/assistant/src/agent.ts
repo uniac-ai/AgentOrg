@@ -255,6 +255,10 @@ export function createAgent(options: {
     settled: async () => {
       await ending;
     },
+    /** Settles when a stopped turn's running call has ended: at once, if none is running. */
+    drained: async () => {
+      await draining;
+    },
     /** Streamed text of the model request running now, for the reply it becomes. */
     delta(requestId: string, text: string) {
       if (turn?.requestId === requestId && turn.replyId) chat.delta(turn.replyId, text);

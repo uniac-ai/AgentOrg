@@ -249,17 +249,17 @@ test("an agent is made through agents, and the person reaches its chat, across a
   assert.ok(slot);
   await until(
     () =>
-      person.call(slot, "state").then(
+      person.call(slot, "list").then(
         () => true,
         () => false,
       ),
     "the chat to be exposed",
   );
-  assert.deepEqual(await person.call(slot, "state"), { state: "idle" });
+  assert.deepEqual(await person.call(slot, "list"), { chats: [], more: false });
 
   // Its events reach the person too; with no sign-in, the turn ends in that error.
   const sub = await person.subscribe(slot, "status");
-  await person.call(slot, "send", { text: "hello" });
+  const { chat } = await person.call<{ chat: string }>(slot, "send", { text: "hello" });
   await until(
     () =>
       person.heard.some(
@@ -268,7 +268,9 @@ test("an agent is made through agents, and the person reaches its chat, across a
       ),
     "the turn to fail for want of a sign-in",
   );
-  const { messages } = await person.call<{ messages: { text: string }[] }>(slot, "history");
+  const { messages } = await person.call<{ messages: { text: string }[] }>(slot, "history", {
+    chat,
+  });
   assert.deepEqual(
     messages.map((message) => message.text),
     ["hello"],
@@ -278,17 +280,23 @@ test("an agent is made through agents, and the person reaches its chat, across a
   ({ person } = await s.start());
   await until(
     () =>
-      person.call(slot, "history").then(
+      person.call(slot, "history", { chat }).then(
         () => true,
         () => false,
       ),
     "the chat to be back",
   );
   assert.deepEqual(
-    (await person.call<{ messages: { text: string }[] }>(slot, "history")).messages.map(
+    (await person.call<{ messages: { text: string }[] }>(slot, "history", { chat })).messages.map(
       (message) => message.text,
     ),
     ["hello"],
+  );
+  assert.deepEqual(
+    (await person.call<{ chats: { id: string; title: string }[] }>(slot, "list")).chats.map(
+      (one) => [one.id, one.title],
+    ),
+    [[chat, "hello"]],
   );
   assert.equal(
     (await person.call<{ agents: { name: string }[] }>("agents", "list")).agents[0]?.name,
@@ -305,7 +313,7 @@ test("a slot not bound to the person is refused, and an exposure's name reaches 
   const slot = await chatSlot(person, agent);
   await until(
     () =>
-      person.call(slot, "state").then(
+      person.call(slot, "list").then(
         () => true,
         () => false,
       ),
@@ -314,7 +322,7 @@ test("a slot not bound to the person is refused, and an exposure's name reaches 
   await assert.rejects(person.call(slot, "nothing"), refused("invalid"));
   await person.call("agents", "remove", { agent });
   await until(
-    () => person.call(slot, "state").then(() => false, refused("invalid")),
+    () => person.call(slot, "list").then(() => false, refused("invalid")),
     "the slot to go",
   );
 });

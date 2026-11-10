@@ -526,13 +526,19 @@ const OnWhom = z.object({ agent: Id.optional().describe("One of your agents; you
 
 type Tool = z.infer<typeof ToolEntry>;
 interface ChatCalls {
-  send(input: { text: string }): Promise<{ messageId: string }>;
-  history(input: { before?: string; limit?: number }): Promise<{
+  send(input: { chat?: string; text: string }): Promise<{ chat: string; messageId: string }>;
+  history(input: { chat: string; before?: string; limit?: number }): Promise<{
     messages: { id: string; role: string; text: string; at: string }[];
     more: boolean;
   }>;
-  state(input: object): Promise<{ state: string }>;
+  state(input: { chat: string }): Promise<{ state: string }>;
+  list(input: { limit?: number }): Promise<{ chats: { id: string }[] }>;
 }
+/**
+ * The chat an agent's control tools use: its newest that isn't archived, if it has one. A message
+ * to an agent with none starts one.
+ */
+const newestOf = async (chat: ChatCalls) => (await chat.list({ limit: 1 })).chats[0]?.id;
 /** What management's own interfaces answer, called as the person would. */
 type Person = (
   iface: "agents" | "connections" | "skills",
@@ -943,7 +949,10 @@ export function createControl(parts: ControlParts) {
           parts.person("agents", "get", { agent }),
           parts
             .chatOf(agent)
-            .then((one) => one.state({}))
+            .then(async (one) => {
+              const chat = await newestOf(one);
+              return chat ? one.state({ chat }) : { state: "idle" };
+            })
             .catch(() => undefined),
         ]);
         // Its connections are what `connections` may see, and no more.
@@ -967,7 +976,9 @@ export function createControl(parts: ControlParts) {
         // on one line, quoted, so that no name can look like someone else.
         const name = (await callerName(caller)).replace(/\s+/g, " ").trim().slice(0, 128);
         const from = `An agent, "${name}", says:\n\n`;
-        return (await parts.chatOf(agent)).send({ text: `${from}${text}` });
+        const one = await parts.chatOf(agent);
+        const chat = await newestOf(one);
+        return one.send({ ...(chat ? { chat } : {}), text: `${from}${text}` });
       },
     }),
     verb({
@@ -981,10 +992,11 @@ export function createControl(parts: ControlParts) {
       changes: false,
       async run(caller, bound, { agent, limit, before }) {
         reachable(caller, bound, agent);
-        const { messages, more } = await (await parts.chatOf(agent)).history({
-          limit: limit ?? READ_DEFAULT,
-          ...(before ? { before } : {}),
-        });
+        const one = await parts.chatOf(agent);
+        const chat = await newestOf(one);
+        const { messages, more } = chat
+          ? await one.history({ chat, limit: limit ?? READ_DEFAULT, ...(before ? { before } : {}) })
+          : { messages: [], more: false };
         return {
           messages: messages.map(({ id, role, text, at }) => ({ id, role, text, at })),
           more,

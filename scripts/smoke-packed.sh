@@ -5,7 +5,8 @@
 # first run must make ChatGPT, the providers and management, all connected; an agent must be made
 # with `agentorg call agents create`; and the gateway must serve the shell and the sign-in page. Last, this build must start on a home the published 0.0.5
 # made: its old Actors closed, and `agents create` working; and on a home the published 0.0.6 made,
-# with a connection that must still answer. Run after `npm run build`.
+# with a connection that must still answer and an agent whose conversation must be its first chat.
+# Run after `npm run build`.
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -223,7 +224,7 @@ create="$(node -e '
 echo "agents create works on the 0.0.5 home"
 stop_app
 
-step "a home the published 0.0.6 made: its connection works on this build, and can be removed"
+step "a home the published 0.0.6 made: its connection and its agent's conversation work on this build"
 old6="$work/old6"
 mkdir "$old6"
 (cd "$old6" && echo '{"private":true}' >package.json &&
@@ -265,8 +266,50 @@ wait_answers() {
   return 1
 }
 wait_answers "$was" || { echo "0.0.6's connection never answered" >&2; cat "$work/old6.log" >&2; exit 1; }
+# An agent with something said to it, as 0.0.6 kept it: one conversation, reached at one slot.
+for _ in $(seq 1 60); do
+  "$was" call agents creatable --home "$home6" >"$work/creatable6.json" 2>/dev/null &&
+    grep -Eq '"id": ?"assistant"' "$work/creatable6.json" && break
+  sleep 0.5
+done
+grep -Eq '"id": ?"assistant"' "$work/creatable6.json" ||
+  { echo "0.0.6 offered no Assistant" >&2; cat "$work/old6.log" >&2; exit 1; }
+create="$(node -e '
+  const { creatables: [one] } = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+  console.log(JSON.stringify({ provider: one.provider, creatable: one.id, name: "Elder", answers: {} }));
+' "$work/creatable6.json")"
+"$was" call agents create "$create" --home "$home6" >/dev/null
+# The person's slot for a chat, asked of `agentorg` ($1) on the 0.0.6 home; empty if there is none.
+chat_slot() {
+  "$1" call bindings list '{"actor":"person"}' --home "$home6" 2>/dev/null |
+    node -e '
+      const { bindings } = JSON.parse(require("fs").readFileSync(0, "utf8"));
+      console.log(bindings.find((b) => b.export === "chat")?.slot ?? "");
+    '
+}
+slot="$(chat_slot "$was")"
+[ -n "$slot" ] || { echo "0.0.6 gave the person no chat" >&2; exit 1; }
+"$was" call "$slot" send '{"text":"Said on 0.0.6."}' --home "$home6" >/dev/null
 stop_app
 start_on "$agentorg" "$home6" "$work/up6.log"
+# Its chats changed shape, so the Hub dropped the person's reach to them: it must come back, at
+# the slot it had, with the conversation as the agent's first chat.
+for _ in $(seq 1 120); do
+  [ "$(chat_slot "$agentorg")" = "$slot" ] && break
+  kill -0 "$pid" 2>/dev/null || { cat "$work/up6.log" >&2; exit 1; }
+  sleep 0.5
+done
+[ "$(chat_slot "$agentorg")" = "$slot" ] ||
+  { echo "The person lost the 0.0.6 agent's chat on this build" >&2; cat "$work/up6.log" >&2; exit 1; }
+"$agentorg" call "$slot" list --home "$home6" |
+  node -e '
+    const { chats } = JSON.parse(require("fs").readFileSync(0, "utf8"));
+    if (chats.length !== 1 || chats[0].title !== "Said on 0.0.6.") {
+      console.error(JSON.stringify(chats));
+      process.exit(1);
+    }
+    console.log(`0.0.6'"'"'s conversation is the chat "${chats[0].title}"`);
+  '
 wait_answers "$agentorg" ||
   { echo "0.0.6's connection doesn't work on this build" >&2; cat "$work/up6.log" >&2; exit 1; }
 "$agentorg" call connections remove "{\"connection\":\"$connection\"}" --home "$home6" >/dev/null

@@ -1,15 +1,15 @@
 /**
- * The engine: one agent's chat, its loop, and what a request says and offers. Its host says where
- * the record is kept and what the agent is told when no `settings` is bound.
+ * The engine: one agent's chats, their loop, and what a request says and offers. Its host says
+ * where the records are kept and what the agent is told when no `settings` is bound.
  */
 import type { agentSettings, chat, kv, llmSession } from "@agentorg/interfaces";
 import { type Context, Refused, type Slot } from "@agentorg/sdk";
 import { createAgent } from "./agent.js";
-import { createHistory } from "./history.js";
+import { createChats } from "./chats.js";
 import { instructionsWith, skillTool } from "./settings.js";
 import { type Candidate, type LeftOut, listedBy, listsTools, offered } from "./tools.js";
 
-/** Where the agent keeps the model chosen for it, beside its record in the store. */
+/** Where the agent keeps the model chosen for it, beside its chats in the store. */
 const MODEL_KEY = "settings/model";
 
 type Host = Pick<
@@ -26,7 +26,6 @@ export function startEngine(
   },
 ) {
   const { store } = options;
-  const history = createHistory(store, ctx.log);
   /** The model chosen for this agent, if any; read for each request. */
   const chosen = async () => {
     const { value } = await store.get({ key: MODEL_KEY });
@@ -59,28 +58,35 @@ export function startEngine(
     report([...told.leftOut, ...exposed.flatMap((one) => one.leftOut), ...leftOut]);
     return { instructions: told.instructions, tools };
   };
-  const agent = createAgent({
-    request,
-    model: ctx.slots.model,
-    chosenModel: chosen,
-    history,
-    chat: {
+  const chats = createChats({
+    store,
+    agent: (history, chat) =>
+      createAgent({
+        request,
+        model: ctx.slots.model,
+        chosenModel: chosen,
+        history,
+        chat,
+        log: ctx.log,
+      }),
+    emit: {
       message: (message) => ctx.exports.chat.emit("message", message),
-      delta: (id, text) => ctx.exports.chat.emit("delta", { id, text }),
+      delta: (delta) => ctx.exports.chat.emit("delta", delta),
       status: (status) => ctx.exports.chat.emit("status", status),
+      chat: (entry) => ctx.exports.chat.emit("chat", entry),
     },
     log: ctx.log,
   });
-  ctx.slots.model.on("delta", ({ requestId, text }) => agent.delta(requestId, text));
+  ctx.slots.model.on("delta", ({ requestId, text }) => chats.delta(requestId, text));
   ctx.exports.chat.implement({
-    send: ({ text }) => agent.send(text),
-    history: ({ before, limit }) => history.page(before, limit ?? 50),
-    cancel: async () => {
-      await agent.cancel();
-      return {};
-    },
-    state: () => agent.state(),
-    retry: () => agent.retry(),
+    send: (input) => chats.send(input),
+    history: (input) => chats.history(input),
+    cancel: (input) => chats.cancel(input),
+    state: (input) => chats.state(input),
+    retry: (input) => chats.retry(input),
+    list: (input) => chats.list(input),
+    rename: (input) => chats.rename(input),
+    archive: (input) => chats.archive(input),
     models: async () => {
       const [{ models }, current] = await Promise.all([ctx.slots.model.call.models({}), chosen()]);
       return { models, ...(current ? { current } : {}) };
@@ -98,9 +104,9 @@ export function startEngine(
     },
   });
   return {
-    /** Stop the turn in progress. */
-    cancel: () => agent.cancel(),
-    /** Settles when the latest turn has written all it will. */
-    settled: () => agent.settled(),
+    /** Stop for good: the turn in progress is cut, and none starts after. */
+    stop: () => chats.stop(),
+    /** Settles when every chat's latest turn has written all it will. */
+    settled: () => chats.settled(),
   };
 }
