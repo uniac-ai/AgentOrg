@@ -216,6 +216,43 @@ test("a turn cancelled while it waits never starts, and one cancelled in a call 
   assert.ok(!asked.includes("Work e."));
 });
 
+test("a turn cancelled before it asks for a place takes none, and a retry cancelled in the line leaves its reply", async () => {
+  const { tool, called, finish } = held();
+  const { looper, said, asked, answer, fill } = looperWith({ tools: [tool] });
+  for (const begun of ["x", "y", "z"]) {
+    await fill([begun]);
+    answer(`Work ${begun}.`);
+    await looper.settled();
+  }
+  await fill(["a", "b", "c", "d"]);
+  answer("Work a.", called);
+  await looper.send("x", "More x.");
+  await looper.send("y", "More y.");
+  await idle();
+  assert.equal(asked.at(-1), "More x.", "five run, and one waits");
+
+  // Cut in its call, the thread is free for a message, which first waits for the call to end.
+  await looper.cancel("a");
+  const sending = looper.send("a", "Again.");
+  await looper.cancel("a");
+  finish();
+  await sending;
+  await idle();
+  assert.ok(said.includes("a: user: Again."));
+  assert.equal(asked.at(-1), "More y.", "the place went to the one that waited");
+
+  await looper.retry("z");
+  await looper.cancel("z");
+  assert.deepEqual(
+    (await looper.page("z", undefined, 10)).messages.map((message) => message.text),
+    ["Work z.", "Done."],
+  );
+  // Neither is left in the line: it takes all it holds.
+  for (let i = 0; i < WAITING; i++) await looper.send(`waits ${i}`, "Work.");
+  await looper.stop();
+  assert.ok(!asked.includes("Again."));
+});
+
 test("a turn that will write nothing more gives its place back: one that failed, and one cancelled while the model answers", async () => {
   const { looper, asked, answer, fail, fill } = looperWith({ deaf: true });
   await fill(["a", "b", "c", "d"]);

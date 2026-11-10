@@ -80,9 +80,12 @@ export function createLoop(options: {
   const status = (current: Turn, next: Status) => {
     if (turn === current) say(next);
   };
-  /** Run a turn on the record as it stands; its progress is said through `out`. */
-  const begin = (current: Turn) => {
-    current.ended = placed(current)
+  /**
+   * Run a turn on the record as it stands, after `first` if it is given; its progress is said
+   * through `out`.
+   */
+  const begin = (current: Turn, first?: () => Promise<void>) => {
+    current.ended = placed(current, first)
       .then(
         () => status(current, { state: "idle" }),
         (error: unknown) => {
@@ -213,14 +216,20 @@ export function createLoop(options: {
     }
   }
   /** A turn from its place to its end: it waits for the place already shown as thinking. */
-  async function placed(current: Turn) {
+  async function placed(current: Turn, first?: () => Promise<void>) {
     status(current, { state: "thinking" });
     await current.place?.entered;
     current.waiting = false;
-    if (!current.cancelled) await run(current);
+    if (current.cancelled) return;
+    await first?.();
+    await run(current);
   }
-  /** Take a turn's place, or its turn in the line for one, before anything of it is kept. */
+  /**
+   * Take a turn's place, or its turn in the line for one, before anything of it is kept. A turn
+   * cancelled already takes none: it runs nothing.
+   */
   const enter = (current: Turn, begun: boolean) => {
+    if (current.cancelled) return;
     current.place = options.enter(begun);
     current.waiting = true;
   };
@@ -263,9 +272,9 @@ export function createLoop(options: {
         const last = await record.lastUser();
         if (!last) throw new Refusal("nothing_to_retry", "No message has been sent yet.");
         enter(current, true);
-        // Cancelled already, it runs nothing, so what followed the message stays.
-        if (!current.cancelled) await record.dropAfter(last.id);
-        begin(current);
+        // What followed the message goes only once the turn has its place: cancelled while it
+        // waits, it has run nothing, and the reply it would have replaced stays.
+        begin(current, () => record.dropAfter(last.id));
         return { messageId: last.id };
       } catch (error) {
         current.place?.leave();

@@ -163,7 +163,12 @@ export function createLooper(options: {
      */
     async send(thread: string, text: string) {
       mayStart();
-      return started(of(thread).loop.send(text));
+      const known = threads.has(thread);
+      return started(of(thread).loop.send(text)).catch((error: unknown) => {
+        // A thread whose first message wasn't taken was never used: nothing is held for it.
+        if (!known) threads.delete(thread);
+        throw error;
+      });
     },
     /**
      * Run a thread's last turn again; what followed its message goes from the record. Refused as
