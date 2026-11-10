@@ -1088,30 +1088,78 @@ test("a provider's own error code reaches the subscriber as an error, whatever i
   assert.equal(first?.error?.code, "slow", "an error frame, not a reset");
 });
 
+/** The stand-in worker of `slow-worker.ts`, and an interface whose hash carries a marker for it. */
+const slowWorker = new URL("./slow-worker.js", import.meta.url);
+const marked = (marker: string) =>
+  ({
+    id: `${marker}@1`,
+    kind: "rpc",
+    methods: { run: { input: { type: "object" }, output: { type: "object" } } },
+    events: {},
+    hash: `sha256-${marker}`,
+  }) as unknown as DescribedInterface;
+const slowInput = { method: "run", side: "input" } as const;
+
 test("compiling has its own budget: a slow first compile passes, a slow check is still refused", async (t) => {
-  const workerUrl = new URL("./slow-worker.js", import.meta.url);
-  const iface = (marker: string) =>
-    ({
-      id: `${marker}@1`,
-      kind: "rpc",
-      methods: { run: { input: { type: "object" }, output: { type: "object" } } },
-      events: {},
-      hash: `sha256-${marker}`,
-    }) as unknown as DescribedInterface;
-  const input = { method: "run", side: "input" } as const;
-  const roomy = new Validators({ size: 1, workerUrl, budgetMs: 250, compileBudgetMs: 2000 });
+  const roomy = new Validators({
+    size: 1,
+    workerUrl: slowWorker,
+    budgetMs: 250,
+    compileBudgetMs: 2000,
+  });
   t.after(() => roomy.close());
-  await roomy.check("a", iface("slowcompile"), input, {}, "invalid");
+  await roomy.check("a", marked("slowcompile"), slowInput, {}, "invalid");
   await assert.rejects(
-    roomy.check("a", iface("slowcheck"), input, {}, "invalid"),
+    roomy.check("a", marked("slowcheck"), slowInput, {}, "invalid"),
     (e: Refused) => e.code === "invalid" && /check took over 250 ms/.test(e.message),
   );
-  const tight = new Validators({ size: 1, workerUrl, budgetMs: 250, compileBudgetMs: 300 });
+  const tight = new Validators({
+    size: 1,
+    workerUrl: slowWorker,
+    budgetMs: 250,
+    compileBudgetMs: 300,
+  });
   t.after(() => tight.close());
   await assert.rejects(
-    tight.check("a", iface("slowcompile"), input, {}, "bad_output"),
+    tight.check("a", marked("slowcompile"), slowInput, {}, "bad_output"),
     (e: Refused) => e.code === "bad_output" && /to compile/.test(e.message),
   );
+});
+
+test("a reply that came in time is taken, though this thread was busy past the budget", async (t) => {
+  const validators = new Validators({
+    size: 1,
+    workerUrl: slowWorker,
+    budgetMs: 100,
+    compileBudgetMs: 100,
+  });
+  t.after(() => validators.close());
+  /**
+   * Block this thread for `ms`, starting right after it has read its messages, so a budget that
+   * runs out meanwhile fires before the reply is read.
+   */
+  const away = (ms: number) =>
+    new Promise<void>((back) =>
+      setImmediate(() => {
+        const until = Date.now() + ms;
+        while (Date.now() < until);
+        back();
+      }),
+    );
+  // The worker is up, so the next job's budget starts as it is asked.
+  await validators.check("a", marked("warm"), slowInput, {}, "invalid");
+
+  // Answered 40 ms into its compile budget, once this thread is away, and it is away past it.
+  const compiling = validators.check("a", marked("pausecompile"), slowInput, {}, "invalid");
+  await away(400);
+  await compiling;
+
+  const checking = validators.check("a", marked("pausecheck"), slowInput, {}, "invalid");
+  // Long enough for the worker to say it has compiled, which starts the check's budget; the
+  // worker then pauses 40 ms, and answers while this thread is away past that budget.
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  await away(400);
+  await checking;
 });
 
 test("compiling never runs an Actor's patternProperties regex against its property names", async (t) => {

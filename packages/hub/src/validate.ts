@@ -110,7 +110,7 @@ export class Validators {
         // Compiled: from here the check's own, shorter budget runs.
         clearTimeout(busy.timer);
         busy.phase = "check";
-        busy.timer = setTimeout(() => this.#replace(slot), this.#budgetMs);
+        busy.timer = this.#lateAfter(slot, this.#budgetMs);
         return;
       }
       clearTimeout(busy.timer);
@@ -138,6 +138,24 @@ export class Validators {
     this.close(error);
   }
 
+  /**
+   * Start a budget for the job a worker has: a job still on it when it runs out is late, and its
+   * worker is replaced. The timer can fire late because this thread was busy, with the worker's
+   * reply already delivered, so messages are read once more (setImmediate runs after them) before
+   * the job is judged.
+   */
+  #lateAfter(slot: Slot, ms: number) {
+    const timer = setTimeout(
+      () =>
+        setImmediate(() => {
+          // Still this budget's job: no reply ended it or moved it on to the check's budget.
+          if (slot.busy?.timer === timer) this.#replace(slot);
+        }),
+      ms,
+    );
+    return timer;
+  }
+
   #replace(slot: Slot) {
     const index = this.#slots.indexOf(slot);
     if (index < 0) return;
@@ -160,7 +178,7 @@ export class Validators {
       // The budget runs from when a ready worker takes the job, not while it waits. Compiling gets
       // its own budget, per schema; the check's starts when the worker says it has compiled.
       const budget = this.#compileBudgetMs * Math.max(1, next.job.parts.length);
-      const timer = setTimeout(() => this.#replace(slot), budget);
+      const timer = this.#lateAfter(slot, budget);
       slot.busy = { ...next, timer, phase: "compile" };
       slot.worker.ref();
       try {
