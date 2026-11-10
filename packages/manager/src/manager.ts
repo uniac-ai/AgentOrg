@@ -336,6 +336,24 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
         }
         throw new Refused("not_connected", "That agent's chat can't be reached now.");
       };
+      /**
+       * An agent's chats reach the person, and management too for an agent another agent made. The
+       * Hub drops both when the agent comes back offering its chats in another shape, as after an
+       * upgrade, so they are made again each time it connects: nothing changes when they are there.
+       */
+      const reachChats = async (agent: string) => {
+        const record = records.agents[agent];
+        if (!record || !(await hub.actors.get({ actorId: agent })).connected) return;
+        for (const to of [PERSON_CALLER, ...(record.parent ? [options.actorId] : [])])
+          await hub.grants.expose({ provider: agent, export: record.chat, to });
+      };
+      const reaching = (agent: string) =>
+        void reachChats(agent).catch((error) => log.warn(`Reaching a chat: ${messageOf(error)}`));
+      ctx.slots.actors.on("changed", ({ actor }) => reaching(actor));
+      // And for those that connected while management was away, once it can ask.
+      ctx.slots.actors.onBind(() => {
+        for (const agent of Object.keys(records.agents)) reaching(agent);
+      });
       /** The person's own handlers, which an agent's control tools call after their checks. */
       const personHandlers: Partial<
         Record<"agents" | "connections" | "skills", Record<string, Handler>>

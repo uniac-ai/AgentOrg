@@ -129,10 +129,14 @@ async function cast(t: test.TestContext, options: HubOptions = {}) {
   /** One turn: the requests it made, from the first. */
   const turn = async (text: string, ms?: number) => {
     const from = requests.length;
-    await caller.slots.chat.call.send({ text });
+    const { chats } = await caller.slots.chat.call.list({});
+    const { chat } = await caller.slots.chat.call.send({
+      ...(chats[0] ? { chat: chats[0].id } : {}),
+      text,
+    });
     await until(
       async () =>
-        requests.length > from && (await caller.slots.chat.call.state({})).state === "idle",
+        requests.length > from && (await caller.slots.chat.call.state({ chat })).state === "idle",
       "the turn to end",
       ms,
     );

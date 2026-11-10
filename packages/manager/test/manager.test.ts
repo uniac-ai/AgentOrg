@@ -27,8 +27,9 @@ import {
   tools,
   unitProvider,
 } from "@agentorg/interfaces";
-import { Refused } from "@agentorg/sdk";
+import { defineInterface, type Interface, method, Refused } from "@agentorg/sdk";
 import { connect } from "@agentorg/sdk/client";
+import { z } from "zod";
 import { startManager } from "../src/index.ts";
 
 const until = async (condition: () => boolean, ms = 15_000) => {
@@ -257,6 +258,7 @@ async function setup(t: test.TestContext) {
       throw new Refused("failed", `${step} failed on cue.`);
   };
   const running = new Map<string, { close(): void; slots: never; on?: never }>();
+  const credentials = new Map<string, string>();
   const heard = new Map<string, number>();
   const chats = new Map<string, { text: string }[]>();
   /** Each agent's own side, to reach what is exposed to it as it would. */
@@ -283,6 +285,7 @@ async function setup(t: test.TestContext) {
         async create({ name }) {
           failing("agent");
           const { actorId, credential } = await ctx.slots.actors.call.create({ name });
+          credentials.set(actorId, credential as string);
           const client = await connect({
             hubUrl: server.url,
             actorId,
@@ -294,15 +297,24 @@ async function setup(t: test.TestContext) {
               const said: { id: string; role: "user"; text: string; at: string }[] = [];
               chats.set(actorId, said);
               own.exports.chat.implement({
+                // One chat, which its first message starts.
                 send({ text }) {
                   const id = `m-${said.length + 1}`;
                   said.push({ id, role: "user", text, at: new Date().toISOString() });
-                  return { messageId: id };
+                  return { chat: "c1", messageId: id };
                 },
                 history: () => ({ messages: said, more: false }),
                 cancel: () => ({}),
                 state: () => ({ state: "idle" as const }),
                 retry: () => ({ messageId: "m-1" }),
+                list: () => ({
+                  chats: said[0]
+                    ? [{ id: "c1", title: "", at: said[0].at, state: "idle", archived: false }]
+                    : [],
+                  more: false,
+                }),
+                rename: () => ({}),
+                archive: () => ({}),
                 models: () => ({ models: [] }),
                 setModel: () => ({}),
               });
@@ -541,11 +553,11 @@ async function setup(t: test.TestContext) {
       name,
     );
   /** Management stopped and started on its records, as a new release would be. */
-  const restart = async (edit: (kept: Record<string, never>) => void) => {
+  const restart = async (edit: (kept: Record<string, never>) => void | Promise<void>) => {
     await manager.close();
     const path = join(dir, "manager.json");
     const kept = JSON.parse(readFileSync(path, "utf8"));
-    edit(kept);
+    await edit(kept);
     writeFileSync(path, JSON.stringify(kept));
     manager = await startManagement();
     await until(() => caller.slots.agents.bound);
@@ -557,6 +569,20 @@ async function setup(t: test.TestContext) {
       assert.ok(i < 300, "the units never came back");
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
+  };
+  /** An agent leaves and comes back offering its chats as `offered`, as a new release's would. */
+  const rejoin = async (agent: string, offered: Interface) => {
+    running.get(agent)?.close();
+    const client = await connect({
+      hubUrl: server.url,
+      actorId: agent,
+      credential: credentials.get(agent) as string,
+      slots: { settings: agentSettings },
+      exports: { chat: offered },
+      start() {},
+    });
+    running.set(agent, client as never);
+    leaving.push(() => client.close());
   };
   /** What is exposed to an agent at a slot, once it has heard of it. */
   const exposedTo = async <T>(agent: string, slot: string) => {
@@ -575,6 +601,7 @@ async function setup(t: test.TestContext) {
   };
   return {
     restart,
+    rejoin,
     exposedTo,
     chats,
     hub,
@@ -627,6 +654,44 @@ test("a provider counts once it has exposed its export to management", async (t)
   await s.person.slots.grants.call.unexpose({ to: s.management.actorId, slot });
   for (let i = 0; (await s.calls.agents.providers({})).providers.length > 0; i++) {
     assert.ok(i < 300);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+});
+
+test("an agent that comes back offering its chats in another shape is reached again", async (t) => {
+  const s = await setup(t);
+  const agent = await s.makeFull(await s.picked());
+  const reached = async () =>
+    (await s.bindingsOf(PERSON)).filter((b) => b.provider === agent && b.export === "chat");
+  const dropped = () =>
+    s.hub.state.audit(0, 10_000).entries.filter((entry) => entry.kind === "binding.drop").length;
+  const [before] = await reached();
+  assert.ok(before);
+  // The Hub drops a binding whose provider offers another interface under the same name.
+  const reshaped = defineInterface({
+    name: "chat",
+    major: 1,
+    kind: "rpc",
+    methods: { ...chat.methods, more: method({ input: z.object({}), output: z.object({}) }) },
+    events: chat.events,
+  });
+  await s.rejoin(agent, reshaped);
+  assert.equal(dropped(), 1);
+  for (let i = 0; (await reached()).length === 0; i++) {
+    assert.ok(i < 300, "its chats never reached the person again");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  // Under the name it had, so what the person's pages keep by slot still holds.
+  assert.deepEqual(
+    (await reached()).map((b) => b.slot),
+    [before.slot],
+  );
+
+  // And when the agent came back while management was away, as it does when the app starts.
+  await s.restart(() => s.rejoin(agent, chat));
+  assert.equal(dropped(), 2);
+  for (let i = 0; (await reached()).length === 0; i++) {
+    assert.ok(i < 300, "its chats never reached the person again");
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
 });
@@ -689,6 +754,7 @@ test("a stack is made, bound, exposed and recorded, with its chat to the person"
       instructions: "Be plain.",
       skills: ["notes"],
       units: 1,
+      chat: "chat",
     },
   );
   assert.equal(kept.agents[agent].units[0].values.folder, "/work");

@@ -47,7 +47,7 @@ import {
 import { CallRow } from "./call-row.tsx";
 import { type Row, rowsOf } from "./calls.ts";
 import { DOCKED, useChats } from "./chats.tsx";
-import { ago, type ChatMessage, type ChatStatus, useAct } from "./data.ts";
+import { ago, type ChatMessage, type ChatStatus, chatView, useAct } from "./data.ts";
 import { type Notice, noticeOf } from "./notice.ts";
 import { Nothing, SidePanel, StateDot } from "./parts.tsx";
 import { useAgents } from "./watch.tsx";
@@ -289,6 +289,8 @@ function Chat({
   // What the async reads below merge into: always the latest.
   const shown = useRef(messages);
   shown.current = messages;
+  /** Which of the agent's chats this is: its newest, or the one the first message here starts. */
+  const view = useMemo(() => chatView(slot), [slot]);
   const sends = useRef(0);
   /** A recorded message's key in the thread: the one it was shown under at once, so it stays. */
   const keys = useRef(new Map<string, string>());
@@ -303,37 +305,46 @@ function Chat({
      * The record and the status now. The record outranks what streamed, and only what arrives
      * while the page is read is newer than it.
      */
-    const load = () => {
+    const load = async () => {
       const since = shown.current.length;
-      Promise.all([
-        api.call<{ messages: ChatMessage[]; more: boolean }>(slot, "history", { limit: PAGE }),
-        api.call<ChatStatus>(slot, "state"),
-      ]).then(
-        ([{ messages: page, more }, now]) => {
-          if (!live) return;
-          const known = new Set(page.map((m) => m.id));
-          setMessages([...page, ...shown.current.slice(since).filter((m) => !known.has(m.id))]);
-          setHasEarlier(more);
-          setBusy(busyOf(now.state));
-          setNotice((was) =>
-            now.state === "error" && now.detail
-              ? noticeOf(now.detail)
-              : was?.untilRead
-                ? undefined
-                : was,
-          );
-        },
-        (error) => {
-          if (live && !(error instanceof NotConnected))
-            setNotice({ ...noticeOf(codeOf(error)), untilRead: true });
-        },
-      );
+      try {
+        const of = await view.find();
+        // No chat yet: nothing was said, and the first message starts one.
+        const [{ messages: page, more }, now]: [
+          { messages: ChatMessage[]; more: boolean },
+          ChatStatus,
+        ] = of
+          ? await Promise.all([
+              api.call<{ messages: ChatMessage[]; more: boolean }>(slot, "history", {
+                chat: of,
+                limit: PAGE,
+              }),
+              api.call<ChatStatus>(slot, "state", { chat: of }),
+            ])
+          : [{ messages: [], more: false }, { state: "idle" }];
+        if (!live) return;
+        const known = new Set(page.map((m) => m.id));
+        setMessages([...page, ...shown.current.slice(since).filter((m) => !known.has(m.id))]);
+        setHasEarlier(more);
+        setBusy(busyOf(now.state));
+        setNotice((was) =>
+          now.state === "error" && now.detail
+            ? noticeOf(now.detail)
+            : was?.untilRead
+              ? undefined
+              : was,
+        );
+      } catch (error) {
+        if (live && !(error instanceof NotConnected))
+          setNotice({ ...noticeOf(codeOf(error)), untilRead: true });
+      }
     };
     const stops = [
       api.subscribe(
         slot,
         "message",
         (payload) => {
+          if (!view.hears(payload)) return;
           const message = payload as ChatMessage;
           setStreaming((was) => {
             if (!was.has(message.id)) return was;
@@ -362,6 +373,7 @@ function Chat({
         slot,
         "delta",
         (payload) => {
+          if (!view.hears(payload)) return;
           const { id, text: piece } = payload as { id: string; text: string };
           // A late piece of a reply already settled changes nothing.
           if (shown.current.some((m) => m.id === id)) return;
@@ -373,6 +385,7 @@ function Chat({
         slot,
         "status",
         (payload) => {
+          if (!view.hears(payload)) return;
           const status = payload as ChatStatus;
           setBusy(busyOf(status.state));
           if (status.state === "thinking") setNotice(undefined);
@@ -383,12 +396,12 @@ function Chat({
         { again: load },
       ),
     ];
-    load();
+    void load();
     return () => {
       live = false;
       for (const stop of stops) stop();
     };
-  }, [slot, connection]);
+  }, [slot, view, connection]);
 
   const recorded = new Set(messages.map((m) => m.id));
   const unrecorded = sending.filter((m) => !m.messageId || !recorded.has(m.messageId));
@@ -411,7 +424,14 @@ function Chat({
     const id = `sending-${++sends.current}`;
     setSending((was) => [...was, { id, text: body }]);
     try {
-      const { messageId } = await api.call<{ messageId: string }>(slot, "send", { text: body });
+      // In the chat shown, once it's known which that is. With none, this starts one.
+      const of = await view.find();
+      const sent = await api.call<{ chat: string; messageId: string }>(slot, "send", {
+        ...(of ? { chat: of } : {}),
+        text: body,
+      });
+      view.started(sent.chat);
+      const { messageId } = sent;
       keys.current.set(messageId, id);
       setSending((was) => was.map((m) => (m.id === id ? { ...m, messageId } : m)));
     } catch (error) {
@@ -422,23 +442,31 @@ function Chat({
   };
   /** Runs the last turn again; the new reply takes the place of what followed the message. */
   const retry = () => {
+    const of = view.chat;
+    if (!of) return;
     setNotice(undefined);
     const before = shown.current;
     setMessages(before.slice(0, before.findLastIndex((m) => m.role === "user") + 1));
     setStreaming(new Map());
-    api.call(slot, "retry").catch((error) => {
+    api.call(slot, "retry", { chat: of }).catch((error) => {
       setMessages(before);
       failed(error);
     });
   };
+  /** Stops the turn. A first message still on its way has no chat to stop yet. */
+  const stop = async () => {
+    const of = view.chat;
+    if (of) await api.call(slot, "cancel", { chat: of }).catch(failed);
+  };
   const earlier = async () => {
     const oldest = shown.current[0];
-    if (!oldest) return;
+    const of = view.chat;
+    if (!oldest || !of) return;
     try {
       const { messages: page, more } = await api.call<{
         messages: ChatMessage[];
         more: boolean;
-      }>(slot, "history", { before: oldest.id, limit: PAGE });
+      }>(slot, "history", { chat: of, before: oldest.id, limit: PAGE });
       setMessages((was) => {
         const known = new Set(was.map((m) => m.id));
         return [...page.filter((m) => !known.has(m.id)), ...was];
@@ -561,7 +589,7 @@ function Chat({
               className="ml-auto rounded-full"
               aria-label={running ? "Stop" : "Send"}
               disabled={!running && !text.trim()}
-              onClick={() => (running ? void api.call(slot, "cancel").catch(failed) : void send())}
+              onClick={() => void (running ? stop() : send())}
             >
               {running ? <SquareIcon className="fill-current" /> : <ArrowUpIcon />}
             </InputGroupButton>

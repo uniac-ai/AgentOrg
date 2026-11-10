@@ -148,16 +148,23 @@ async function setup(t: test.TestContext) {
     return answer;
   };
   const talk = caller.slots.chat.call;
+  /** The one chat of the agent the caller is bound to, once a message has started it. */
+  const one = async () => (await talk.list({})).chats[0]?.id;
   const turn = async (text: string) => {
     const from = requests.length;
-    await talk.send({ text });
+    const before = await one();
+    const { chat } = await talk.send({ ...(before ? { chat: before } : {}), text });
     await until(
-      async () => requests.length > from && (await talk.state({})).state === "idle",
+      async () => requests.length > from && (await talk.state({ chat })).state === "idle",
       "the turn to end",
     );
     return requests[from] as Request;
   };
-  const texts = async () => (await talk.history({})).messages.map((m) => `${m.role}: ${m.text}`);
+  const texts = async () => {
+    const chat = await one();
+    if (!chat) return [];
+    return (await talk.history({ chat })).messages.map((m) => `${m.role}: ${m.text}`);
+  };
   const restart = async () => {
     await running.current.close();
     running.current = await start();
@@ -171,6 +178,7 @@ async function setup(t: test.TestContext) {
     agents,
     create,
     talk,
+    one,
     turn,
     texts,
     restart,
@@ -234,7 +242,7 @@ test("stop and start keep the transcript, the model and the bindings", async (t)
   await s.agents.stop({ agent });
   assert.deepEqual(await s.agents.status({ agent }), { state: "stopped" });
   assert.equal(s.hub.connected(agent), false);
-  await assert.rejects(s.talk.history({}), NotConnected);
+  await assert.rejects(s.talk.list({}), NotConnected);
   // Stopping again changes nothing.
   await s.agents.stop({ agent });
 
@@ -243,7 +251,7 @@ test("stop and start keep the transcript, the model and the bindings", async (t)
   await until(() => s.caller.slots.chat.bound && s.hub.connected(agent), "the agent to be back");
   await until(
     () =>
-      s.talk.history({}).then(
+      s.talk.list({}).then(
         () => true,
         () => false,
       ),
@@ -279,14 +287,14 @@ test("stopping cuts a turn in progress, and what was said stays", async (t) => {
   await s.agents.start({ agent });
   await until(
     () =>
-      s.talk.history({}).then(
+      s.talk.list({}).then(
         () => true,
         () => false,
       ),
     "the chat to answer",
   );
   assert.deepEqual(await s.texts(), ["user: a long one"]);
-  assert.deepEqual(await s.talk.state({}), { state: "idle" });
+  assert.deepEqual(await s.talk.state({ chat: (await s.one()) as string }), { state: "idle" });
 });
 
 test("a provider restart brings running agents back, and leaves stopped ones stopped", async (t) => {
@@ -307,7 +315,7 @@ test("a provider restart brings running agents back, and leaves stopped ones sto
   assert.equal(s.hub.connected(down), false);
   await until(
     () =>
-      s.talk.history({}).then(
+      s.talk.list({}).then(
         () => true,
         () => false,
       ),

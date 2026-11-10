@@ -6,10 +6,15 @@ import { startEngine } from "../src/engine.ts";
 /** What the agent is told while no `settings` is bound. */
 export const INSTRUCTIONS = "You are the agent under test.";
 
+/** Each engine started, the latest last, for a test to stop as its host would. */
+export const engines: ReturnType<typeof startEngine>[] = [];
+
 export default defineActor({
   slots: { model: llmSession, store: kv, settings: agentSettings },
   exports: { chat },
   start(ctx) {
-    startEngine(ctx, { store: ctx.slots.store.call, instructions: () => INSTRUCTIONS });
+    engines.push(
+      startEngine(ctx, { store: ctx.slots.store.call, instructions: () => INSTRUCTIONS }),
+    );
   },
 });

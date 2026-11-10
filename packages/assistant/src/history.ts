@@ -1,5 +1,5 @@
 /**
- * The assistant's record of its chat, kept in its `store` slot: one key per message, holding the
+ * The assistant's record of one chat, kept in its `store` slot: one key per message, holding the
  * Responses items it stands for, and for a tool message the line the person sees. It is read once,
  * then kept in memory, and the oldest messages are deleted past a retention cap.
  */
@@ -8,7 +8,7 @@ import type { Log, Slot } from "@agentorg/sdk";
 import { z } from "zod";
 
 export type ResponseItem = z.output<typeof Item>;
-const Entry = z.object({
+export const Entry = z.object({
   id: z.string(),
   role: z.enum(["user", "assistant", "tool"]),
   /** What the person sees, for a tool message; the others show their message items. */
@@ -20,8 +20,9 @@ const Entry = z.object({
 });
 export type Entry = z.output<typeof Entry>;
 
-const PREFIX = "msg/";
-const keyOf = (seq: number) => `${PREFIX}${String(seq).padStart(12, "0")}`;
+/** Where a record's messages are kept in its store. */
+export const MESSAGES = "msg/";
+const keyOf = (seq: number) => `${MESSAGES}${String(seq).padStart(12, "0")}`;
 /** What the model is sent of the past: the newest exchanges up to this many bytes of JSON. */
 export const INPUT_BUDGET = 400_000;
 /** At most this many messages are kept, in at most this many bytes, oldest deleted first. */
@@ -93,8 +94,8 @@ const kept = (entry: Entry): Entry => ({
   }),
 });
 
-/** Stored messages read at once when the record is first loaded. */
-const READS = 16;
+/** Stored values read at once when what is kept is first loaded. */
+export const READS = 16;
 
 interface Kept {
   key: string;
@@ -117,14 +118,18 @@ export function createHistory(
       let bytes = 0;
       let after: string | undefined;
       do {
-        const page = await store.list({ prefix: PREFIX, limit: 1000, ...(after ? { after } : {}) });
+        const page = await store.list({
+          prefix: MESSAGES,
+          limit: 1000,
+          ...(after ? { after } : {}),
+        });
         // A few at a time, in order: a long record shouldn't hold up the first send one read at
         // a time, nor flood the Hub.
         for (let at = 0; at < page.keys.length; at += READS) {
           const keys = page.keys.slice(at, at + READS);
           const values = await Promise.all(keys.map((key) => store.get({ key })));
           keys.forEach((key, i) => {
-            last = Math.max(last, Number(key.slice(PREFIX.length)) || 0);
+            last = Math.max(last, Number(key.slice(MESSAGES.length)) || 0);
             const parsed = Entry.safeParse(values[i]?.value);
             if (!parsed.success) {
               log.warn("A stored message didn't read back; it is left out.", { key });
@@ -156,7 +161,11 @@ export function createHistory(
       const key = keyOf(++state.last);
       const record = {
         key,
-        entry: kept({ id: id ?? key.slice(PREFIX.length), at: new Date().toISOString(), ...entry }),
+        entry: kept({
+          id: id ?? key.slice(MESSAGES.length),
+          at: new Date().toISOString(),
+          ...entry,
+        }),
         bytes: 0,
       };
       record.bytes = size(record.entry);

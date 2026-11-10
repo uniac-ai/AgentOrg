@@ -13,7 +13,7 @@ export {
   SkillName,
   SkillPath,
 } from "./agent-settings.js";
-export { ChatMessage, ChatState, ChatStatus, ChatTool, chat } from "./chat.js";
+export { ChatEntry, ChatMessage, ChatState, ChatStatus, ChatTool, chat } from "./chat.js";
 export {
   ConnectionKind,
   ConnectionParams,
