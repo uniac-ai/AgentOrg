@@ -383,8 +383,8 @@ function UnitCard({
   problems: StackProblem[];
 }) {
   const { catalog, addUnit, removeUnit, setSecret, setValue } = useBuilding();
-  // What needs nothing from the person starts as one row, and can always be opened.
-  const [unfolded, setUnfolded] = useState(() => needsAttention(entry, above));
+  // What a template brings and needs nothing from the person starts as one row.
+  const [unfolded, setUnfolded] = useState(() => !!entry.added || needsAttention(entry, above));
   const found = problems.length > 0;
   useEffect(() => {
     if (found) setUnfolded(true);

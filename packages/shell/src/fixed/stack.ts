@@ -29,6 +29,8 @@ export interface DraftUnit {
   id: string;
   values: Values;
   secrets: Secrets;
+  /** The person added it, rather than a template bringing it. */
+  added?: true;
 }
 
 export interface Draft {

@@ -730,3 +730,18 @@ test(
     await page.close();
   }),
 );
+
+test(
+  "a unit added by hand starts open, even with nothing to fill",
+  withGateway(async (gateway) => {
+    const page = await open(gateway);
+    await page.getByRole("list", { name: "Your agents" }).waitFor();
+    await plus(page).click();
+    await panel(page).getByRole("button", { name: "Empty" }).click();
+    await panel(page).getByRole("button", { name: "Add a unit" }).click();
+    await page.getByRole("menuitem", { name: /^Web/ }).click();
+    await card(page, "Web").getByRole("combobox", { name: "Search service" }).waitFor();
+    assert.equal(await card(page, "Web").locator("[data-summary]").count(), 0);
+    await page.close();
+  }),
+);
