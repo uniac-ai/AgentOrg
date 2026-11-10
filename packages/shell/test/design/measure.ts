@@ -4,7 +4,7 @@
 //   node --experimental-strip-types test/design/measure.ts <design.html> <out.json>
 //
 // Build the shell first: the built side is served by the stand-in gateway. A part added to the
-// shell adds a probe here, and its screens to `SCREENS`.
+// shell adds its probe and its screens here, and its screens to pairs.ts.
 import { writeFileSync } from "node:fs";
 import { chromium, type Page } from "@playwright/test";
 import { type Agent, SESSION, standIn } from "../stand-in.ts";
@@ -27,14 +27,16 @@ interface Measured {
   gap: string;
 }
 type Parts = Record<string, Measured | string | number | null>;
+/** What a probe measures: the frame, or one window's own rows. */
+type Part = "frame" | "terminal" | "browser";
 type Gateway = Awaited<ReturnType<typeof standIn>>;
 
 /**
  * Runs in the page. `frame` measures the left bar, a drawer if one is open, the phone's head and
- * the page area, from the shell's top left. `terminal` measures the terminal window's own rows,
- * from the window's top left.
+ * the page area, from the shell's top left. `terminal` and `browser` measure those windows' own
+ * rows, from the window's top left.
  */
-const probe = (what: "frame" | "terminal"): Parts => {
+const probe = (what: Part): Parts => {
   const seen = (e: Element | null | undefined): e is HTMLElement =>
     !!e && (e as HTMLElement).getClientRects().length > 0;
   const round = (n: number) => Math.round(n * 100) / 100;
@@ -105,6 +107,47 @@ const probe = (what: "frame" | "terminal"): Parts => {
     const line = of(rows?.children[0], "w");
     if (line) line.box = ["-", "-", "fills", line.box[3] ?? 0];
     parts.line = line;
+    return parts;
+  }
+
+  if (what === "browser") {
+    const list = [...document.querySelectorAll('[role="tablist"][aria-label="Tabs"]')].find(seen);
+    const bar = list?.parentElement?.parentElement;
+    if (!list || !bar) return parts;
+    origin = bar.getBoundingClientRect();
+    parts.bar = of(bar, "w");
+    parts["bar.inner"] = of(bar.children[0], "w");
+    // The row of tabs is as wide as its tabs, which are the sample's.
+    parts.tablist = of(list, "w");
+    /** Measured from another left edge than the window's, where what comes before it differs. */
+    const from = (x: number, m: Measured | null) => {
+      if (m) m.box[0] = round(Number(m.box[0]) + origin.x - x);
+      return m;
+    };
+    // A tab you opened, in front, from its own left edge.
+    const tab = [...list.querySelectorAll('[role="tab"]')].find((t) => t.textContent === "New tab");
+    const whole = tab?.parentElement;
+    const left = whole?.getBoundingClientRect().x ?? 0;
+    parts.tab = from(left, of(whole));
+    parts["tab.name"] = from(left, of(tab));
+    const close = whole?.querySelector("button:not([role])");
+    parts["tab.close"] = from(left, of(close));
+    parts["tab.close.icon"] = from(left, of(close?.querySelector("svg")));
+    // The plus, from the end of the tabs.
+    const plus = bar.querySelector('button[aria-label="New tab"]');
+    const end = list.getBoundingClientRect().right;
+    parts.plus = from(end, of(plus));
+    parts["plus.icon"] = from(end, of(plus?.querySelector("svg")));
+    const where = bar.nextElementSibling;
+    parts.where = of(where, "w");
+    for (const name of ["Back", "Forward", "Reload"]) {
+      const button = where?.querySelector(`button[aria-label="${name}"]`);
+      parts[name] = of(button);
+      parts[`${name}.icon`] = of(button?.querySelector("svg"));
+    }
+    parts.address = of(where?.querySelector('[aria-label="Address"]'), "w");
+    // The page under them: as wide and tall as the window leaves it.
+    parts.page = of(where?.nextElementSibling, "wh");
     return parts;
   }
 
@@ -211,7 +254,7 @@ async function rest(page: Page, size: Size) {
   await page.waitForTimeout(900);
 }
 
-const measure = (page: Page, what: "frame" | "terminal") => page.evaluate(probe, what);
+const measure = (page: Page, what: Part) => page.evaluate(probe, what);
 const all: Record<string, Parts> = {};
 
 // The frame: each width in each theme, and the drawer from the rail's search and the phone's menu.
@@ -281,6 +324,43 @@ for (const theme of ["dark", "light"] as const) {
   await built.close();
   await gateway.close();
 }
+
+// The browser window: the design's own, and the built one, each with a tab you opened in front.
+for (const theme of ["dark", "light"] as const)
+  for (const side of ["design", "built"] as const) {
+    const gateway = side === "built" ? await standIn() : undefined;
+    if (gateway)
+      (gateway.agents.get("a-research") as Agent).units = [
+        {
+          instance: "i-computer",
+          provider: "units",
+          unit: "computer",
+          title: "Computer",
+          values: {},
+          needs: {},
+          status: {
+            state: "connected",
+            surfaces: [{ surface: "browser", protocol: "screencast@1", operate: true }],
+          },
+        },
+      ];
+    const page = gateway
+      ? await builtPage(gateway, "wide", theme, "#/a/a-research")
+      : await designPage("wide", theme);
+    if (!gateway) {
+      await page
+        .getByRole("navigation", { name: "Main" })
+        .getByRole("button", { name: "Research", exact: true })
+        .click();
+      await page.getByRole("button", { name: "Browser", exact: true }).click();
+    }
+    await page.getByRole("button", { name: "New tab", exact: true }).click();
+    await page.getByRole("tab", { name: "New tab", selected: true }).waitFor();
+    await rest(page, "wide");
+    all[`browser.${theme}.${side}`] = await measure(page, "browser");
+    await page.close();
+    await gateway?.close();
+  }
 
 await browser.close();
 writeFileSync(out, JSON.stringify(all, null, 1));
