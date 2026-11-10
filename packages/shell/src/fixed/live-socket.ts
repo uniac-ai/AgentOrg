@@ -31,16 +31,18 @@ export function useLive(
   target: LiveTarget | undefined,
   onFrame: (data: string | ArrayBuffer) => void,
 ) {
-  const [state, setState] = useState<LiveState>({ phase: "opening" });
+  // Each state is that of one socket; a new target's is opening until its own socket says.
+  const [held, setState] = useState<{ of: string; state: LiveState }>();
   const [attempt, setAttempt] = useState(0);
   const socket = useRef<WebSocket>(undefined);
   const frames = useRef(onFrame);
   frames.current = onFrame;
   const key = target ? `${target.agent}/${target.instance}/${target.surface}/${target.mode}` : "";
+  const of = `${key}#${attempt}`;
+  const state: LiveState = held?.of === of ? held.state : { phase: "opening" };
   // biome-ignore lint/correctness/useExhaustiveDependencies: the target is its key.
   useEffect(() => {
     if (!target) return;
-    setState({ phase: "opening" });
     const query = new URLSearchParams({ ...target });
     const scheme = location.protocol === "https:" ? "wss" : "ws";
     const ws = new WebSocket(`${scheme}://${location.host}/live?${query}`);
@@ -53,20 +55,21 @@ export function useLive(
       if (!open) {
         if (typeof event.data === "string" && JSON.parse(event.data).op === "live") {
           open = true;
-          setState({ phase: "open" });
+          setState({ of, state: { phase: "open" } });
         }
         return;
       }
       frames.current(event.data);
     };
     ws.onclose = (event) => {
-      if (socket.current === ws) setState({ phase: "closed", reason: reasonOf(event) });
+      if (socket.current === ws)
+        setState({ of, state: { phase: "closed", reason: reasonOf(event) } });
     };
     return () => {
       socket.current = undefined;
       ws.close();
     };
-  }, [key, attempt]);
+  }, [of]);
   return {
     state,
     send(data: string | Uint8Array<ArrayBuffer>) {

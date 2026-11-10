@@ -4,6 +4,7 @@ import { USAGE } from "../app.tsx";
 import { api, go, useLoad } from "../data.ts";
 import { signIn } from "../sign-in.ts";
 import { Button } from "../ui/button.tsx";
+import { ActivityLog } from "./activity-log.tsx";
 import { useBuilding } from "./building.tsx";
 import { useChats } from "./chats.tsx";
 import { More, Power, Tip } from "./controls.tsx";
@@ -35,6 +36,7 @@ export function AgentPage({ agent: id }: { agent: string }) {
   const creatables = useCreatables();
   const { catalog } = useBuilding();
   const [failed, setFailed] = useState<string>();
+  const [waiting, setWaiting] = useState(false);
   const act = useAct(setFailed);
   const slot = watched?.slot;
   const running = watched?.entry.status.state === "running";
@@ -106,11 +108,11 @@ export function AgentPage({ agent: id }: { agent: string }) {
         </div>
 
         <div role="status" aria-label="Now" className="flex h-8 items-center gap-2.5 text-[14px]">
-          <StateDot tone={failed ? "trouble" : now.tone} />
+          <StateDot tone={failed ? "trouble" : waiting ? "waiting" : now.tone} />
           <span
             className={`min-w-0 truncate ${failed || now.tone === "trouble" ? "text-[var(--bad)]" : ""}`}
           >
-            {failed ?? now.text}
+            {failed ?? (waiting ? "Waiting for you in the browser" : now.text)}
           </span>
           <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{ago(now.at)}</span>
           {remedy && (
@@ -171,7 +173,9 @@ export function AgentPage({ agent: id }: { agent: string }) {
               instance: unit.instance,
             })),
           )}
+          onWaiting={setWaiting}
         />
+        <ActivityLog agent={id} />
       </div>
     </Scroll>
   );

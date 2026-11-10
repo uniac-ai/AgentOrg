@@ -17,6 +17,11 @@ import { type WebSocket, WebSocketServer } from "ws";
 import type { z } from "zod";
 
 const DIST = new URL("../dist/", import.meta.url);
+/** A page's picture, 80 by 50, as `screencast@1` sends it. */
+const JPEG = Buffer.from(
+  "/9j/4AAQSkZJRgABAQAAAQABAAD/4gHYSUNDX1BST0ZJTEUAAQEAAAHIAAAAAAQwAABtbnRyUkdCIFhZWiAH4AABAAEAAAAAAABhY3NwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAA9tYAAQAAAADTLQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAlkZXNjAAAA8AAAACRyWFlaAAABFAAAABRnWFlaAAABKAAAABRiWFlaAAABPAAAABR3dHB0AAABUAAAABRyVFJDAAABZAAAAChnVFJDAAABZAAAAChiVFJDAAABZAAAAChjcHJ0AAABjAAAADxtbHVjAAAAAAAAAAEAAAAMZW5VUwAAAAgAAAAcAHMAUgBHAEJYWVogAAAAAAAAb6IAADj1AAADkFhZWiAAAAAAAABimQAAt4UAABjaWFlaIAAAAAAAACSgAAAPhAAAts9YWVogAAAAAAAA9tYAAQAAAADTLXBhcmEAAAAAAAQAAAACZmYAAPKnAAANWQAAE9AAAApbAAAAAAAAAABtbHVjAAAAAAAAAAEAAAAMZW5VUwAAACAAAAAcAEcAbwBvAGcAbABlACAASQBuAGMALgAgADIAMAAxADb/2wBDAA0JCgsKCA0LCgsODg0PEyAVExISEyccHhcgLikxMC4pLSwzOko+MzZGNywtQFdBRkxOUlNSMj5aYVpQYEpRUk//2wBDAQ4ODhMREyYVFSZPNS01T09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT0//wAARCAAyAFADASIAAhEBAxEB/8QAGAABAQEBAQAAAAAAAAAAAAAAAAUHAwb/xAAmEAEAAAQEBgMBAAAAAAAAAAAAAQIEEQMFFlQGEjVBo9FhgrJx/8QAGQEBAQADAQAAAAAAAAAAAAAAAAIBAwQF/8QAJREAAgEDAAsBAAAAAAAAAAAAAAECAxETBBIUFVFSYWKRoeEx/9oADAMBAAIRAxEAPwDRgEmQAAAAAAAAAAn1WdZdSVE2BUVHJiSWvLyTRteF+0PlUYSk7RVzDkl+soCVqPKN345/RqPKN345/S8FXlfgnJDiiqJWo8o3fjn9Go8o3fjn9GCryvwMkOKKo40tTg1dPLj08/Phz3tNaML2jbv/AB2ammnZlp3AAA8BxP1+p+n4g9+N+j18Mta1zXVp5Fa5lY1Qdu8u338OfZOplY1QN5dvv4Nk6krhjoFN9/3FVB5tSWvJy4nXFaqSACTIAAAAAAAAAAAH/9k=",
+  "base64",
+);
 const TYPES: Record<string, string> = {
   ".html": "text/html",
   ".js": "text/javascript",
@@ -431,7 +436,23 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
     shells: new Set<WebSocket>(),
     typed: [] as string[],
     resized: [] as { columns: number; rows: number }[],
+    /** Browser watchers and drivers, and what the drivers sent. */
+    screens: new Map<WebSocket, string>(),
+    input: [] as Record<string, unknown>[],
+    /** What the browser shows, as its events say. */
+    screen: {
+      tabs: {
+        type: "tabs",
+        tabs: [{ id: 1, url: "https://shop.example/checkout", title: "Checkout" }],
+        shown: 1,
+      },
+      viewport: { type: "viewport", width: 800, height: 500 },
+      agentWaiting: false,
+      driver: undefined as WebSocket | undefined,
+    },
   };
+  /** Control calls, newest last. */
+  const activity: z.output<typeof agentsInterface.methods.activity.output>["entries"] = [];
   let units = UNITS;
 
   const emit = (slot: string, event: string, payload: unknown) => {
@@ -494,6 +515,10 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
         return {};
       },
       check: () => ({ problems }),
+      activity: ({ agent }) => {
+        const about = activity.filter((e) => !agent || e.caller === agent || e.target === agent);
+        return { entries: about.reverse(), more: false };
+      },
       create: (input) => {
         const made = `a-${agents.size + 1}`;
         const { base, units } = input.stack as unknown as {
@@ -833,6 +858,7 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
         live.watchers.add(socket);
         socket.on("close", () => live.watchers.delete(socket));
       }
+      if (surface.protocol === "screencast@1") screencast(socket, target.mode);
       if (surface.protocol === "pty@1") {
         live.shells.add(socket);
         socket.on("close", () => live.shells.delete(socket));
@@ -850,6 +876,41 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
       }
     });
   });
+  /** The driver state each browser socket sees. */
+  const drivers = () => {
+    for (const [ws] of live.screens)
+      ws.send(
+        JSON.stringify({
+          type: "driver",
+          you: live.screen.driver === ws,
+          held: !!live.screen.driver,
+          agentWaiting: !!live.screen.driver && live.screen.agentWaiting,
+        }),
+      );
+  };
+  const screencast = (socket: WebSocket, mode: string) => {
+    live.screens.set(socket, mode);
+    socket.send(JSON.stringify(live.screen.tabs));
+    socket.send(JSON.stringify(live.screen.viewport));
+    socket.send(JPEG);
+    drivers();
+    socket.on("message", (data) => {
+      // Watchers' input is dropped, as the service drops it.
+      if (mode !== "operate") return;
+      const input = JSON.parse(String(data)) as Record<string, unknown>;
+      live.input.push(input);
+      // Input makes its socket the driver; release lets go.
+      const was = live.screen.driver;
+      if (input.type !== "release") live.screen.driver = socket;
+      else if (was === socket) live.screen.driver = undefined;
+      if (live.screen.driver !== was) drivers();
+    });
+    socket.on("close", () => {
+      live.screens.delete(socket);
+      if (live.screen.driver === socket) live.screen.driver = undefined;
+      drivers();
+    });
+  };
   sockets.on("connection", (socket) => {
     socket.on("message", (data) => {
       const message = JSON.parse(String(data));
@@ -905,6 +966,20 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
     command(event: Record<string, unknown>) {
       live.commands.push(event);
       for (const ws of live.watchers) ws.send(JSON.stringify(event));
+    },
+    /** A `screencast@1` event, to every browser socket. */
+    screen(event: Record<string, unknown>) {
+      if (event.type === "tabs") live.screen.tabs = event as typeof live.screen.tabs;
+      for (const [ws] of live.screens) ws.send(JSON.stringify(event));
+    },
+    /** The agent's browser calls wait for, or stop waiting for, whoever drives. */
+    agentWaits(waiting: boolean) {
+      live.screen.agentWaiting = waiting;
+      drivers();
+    },
+    /** A control call made, for `agents.activity`. */
+    controlled(entry: Omit<(typeof activity)[number], "seq">) {
+      activity.push({ seq: activity.length + 1, ...entry });
     },
     /** The service ends every shell, as when it exits. */
     endShells: (code: number, reason: string) => {
