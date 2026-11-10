@@ -745,3 +745,30 @@ test(
     await page.close();
   }),
 );
+
+test(
+  "a field's greyed text follows the name, isn't a value, and typing replaces it",
+  withGateway(async (gateway) => {
+    gateway.changeForm("computer", (field) => {
+      if (field.id === "workspace") delete field.required;
+    });
+    const page = await open(gateway);
+    await fromTemplate(page, "Assistant");
+    await choose(page, "Where it runs", /^This computer/);
+    const name = panel(page).locator("#build-name");
+    const offered = await name.getAttribute("placeholder");
+    const folder = card(page, "Computer").getByLabel("Working directory", { exact: true });
+    assert.equal(await folder.getAttribute("placeholder"), `~/Agents/${offered}`);
+    assert.equal(await folder.inputValue(), "");
+    await name.fill("Foreman");
+    assert.equal(await folder.getAttribute("placeholder"), "~/Agents/Foreman");
+
+    await panel(page).getByRole("button", { name: "Create", exact: true }).click();
+    await page.waitForURL(/#\/a\/a-6$/);
+    const sent = gateway.calls.find((c) => c.method === "create")?.input as {
+      stack: { units: { values: Record<string, unknown> }[] };
+    };
+    assert.equal("workspace" in (sent.stack.units[0]?.values ?? {}), false, "left unset");
+    await page.close();
+  }),
+);
