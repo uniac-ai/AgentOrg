@@ -188,7 +188,7 @@ export function useChatRecord(slot: string | undefined, running: boolean, limit:
   return { status, messages, chat: shown };
 }
 
-export type Tone = "working" | "idle" | "starting" | "stopped" | "trouble" | "waiting";
+export type Tone = "working" | "idle" | "starting" | "stopped" | "trouble";
 
 export interface Now {
   tone: Tone;

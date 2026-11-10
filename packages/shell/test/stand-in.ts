@@ -449,20 +449,11 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
     shells: new Set<WebSocket>(),
     typed: [] as string[],
     resized: [] as { columns: number; rows: number }[],
-    /** Browser watchers and drivers, and what the drivers sent. */
-    screens: new Map<WebSocket, string>(),
+    /** Browser sockets, each with the tab it is shown, and what the operating ones sent. */
+    screens: new Map<WebSocket, { shown: number | null; chose: boolean }>(),
     input: [] as Record<string, unknown>[],
-    /** What the browser shows, as its events say. */
-    screen: {
-      tabs: {
-        type: "tabs",
-        tabs: [{ id: 1, url: "https://shop.example/checkout", title: "Checkout" }],
-        shown: 1,
-      },
-      viewport: { type: "viewport", width: 800, height: 500 },
-      agentWaiting: false,
-      driver: undefined as WebSocket | undefined,
-    },
+    /** The browser's tabs, shared by everyone. */
+    tabs: [{ id: 1, url: "https://shop.example/checkout", title: "Checkout" }],
   };
   /** Control calls, newest last. */
   const activity: z.output<typeof agentsInterface.methods.activity.output>["entries"] = [];
@@ -950,40 +941,42 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
       }
     });
   });
-  /** The driver state each browser socket sees. */
-  const drivers = () => {
-    for (const [ws] of live.screens)
-      ws.send(
-        JSON.stringify({
-          type: "driver",
-          you: live.screen.driver === ws,
-          held: !!live.screen.driver,
-          agentWaiting: !!live.screen.driver && live.screen.agentWaiting,
-        }),
-      );
+  /** The tabs, to one browser socket or to all, each told which one it is shown. */
+  const tabs = (only?: WebSocket) => {
+    for (const [ws, viewer] of live.screens)
+      if (!only || ws === only)
+        ws.send(JSON.stringify({ type: "tabs", tabs: live.tabs, shown: viewer.shown }));
+  };
+  /** A tab opens: sockets that haven't picked one are shown it, as the service follows the work. */
+  const tabOpened = (tab: (typeof live.tabs)[number], by?: WebSocket) => {
+    live.tabs.push(tab);
+    for (const [ws, viewer] of live.screens) if (ws === by || !viewer.chose) viewer.shown = tab.id;
+    tabs();
   };
   const screencast = (socket: WebSocket, mode: string) => {
-    live.screens.set(socket, mode);
-    socket.send(JSON.stringify(live.screen.tabs));
-    socket.send(JSON.stringify(live.screen.viewport));
+    const viewer = { shown: live.tabs.at(-1)?.id ?? null, chose: false };
+    live.screens.set(socket, viewer);
+    tabs(socket);
+    socket.send(JSON.stringify({ type: "viewport", width: 800, height: 500 }));
     socket.send(JPEG);
-    drivers();
     socket.on("message", (data) => {
       // Watchers' input is dropped, as the service drops it.
       if (mode !== "operate") return;
       const input = JSON.parse(String(data)) as Record<string, unknown>;
       live.input.push(input);
-      // Input makes its socket the driver; release lets go.
-      const was = live.screen.driver;
-      if (input.type !== "release") live.screen.driver = socket;
-      else if (was === socket) live.screen.driver = undefined;
-      if (live.screen.driver !== was) drivers();
+      if (input.type !== "tab") return;
+      // Showing or opening a tab makes the socket's page its own from then on.
+      if (input.action === "open") {
+        viewer.chose = true;
+        const id = Math.max(0, ...live.tabs.map((t) => t.id)) + 1;
+        return tabOpened({ id, url: "about:blank", title: "" }, socket);
+      }
+      if (input.action !== "show" || !live.tabs.some((t) => t.id === input.id)) return;
+      viewer.chose = true;
+      viewer.shown = Number(input.id);
+      tabs();
     });
-    socket.on("close", () => {
-      live.screens.delete(socket);
-      if (live.screen.driver === socket) live.screen.driver = undefined;
-      drivers();
-    });
+    socket.on("close", () => live.screens.delete(socket));
   };
   sockets.on("connection", (socket) => {
     socket.on("message", (data) => {
@@ -1049,14 +1042,10 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
     },
     /** A `screencast@1` event, to every browser socket. */
     screen(event: Record<string, unknown>) {
-      if (event.type === "tabs") live.screen.tabs = event as typeof live.screen.tabs;
       for (const [ws] of live.screens) ws.send(JSON.stringify(event));
     },
-    /** The agent's browser calls wait for, or stop waiting for, whoever drives. */
-    agentWaits(waiting: boolean) {
-      live.screen.agentWaiting = waiting;
-      drivers();
-    },
+    /** The agent opens a tab. */
+    tabOpens: (tab: (typeof live.tabs)[number]) => tabOpened(tab),
     /** A control call made, for `agents.activity`. */
     controlled(entry: Omit<(typeof activity)[number], "seq">) {
       activity.push({ seq: activity.length + 1, ...entry });

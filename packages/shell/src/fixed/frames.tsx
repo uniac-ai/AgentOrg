@@ -268,15 +268,12 @@ export function Frames({
   slot,
   running,
   surfaces = [],
-  onWaiting = () => {},
 }: {
   agent: string;
   slot?: string;
   running: boolean;
   /** What of its units can be opened live; those the page has a viewer for take a frame's place. */
   surfaces?: OpenSurface[];
-  /** Told when the agent waits for you to let go of its browser. */
-  onWaiting?(waiting: boolean): void;
 }) {
   const { messages } = useChatRecord(slot, running, RECORD);
   const rows = useMemo(() => rowsOf(messages as ChatMessage[]), [messages]);
@@ -285,12 +282,7 @@ export function Frames({
   const terminal = surfaces.filter((s) => VIEWERS[s.protocol]?.frame === "terminal");
   const browser = surfaces.find((s) => VIEWERS[s.protocol]?.frame === "browser");
   const browserFrame = browser ? (
-    <BrowserLive
-      key={`${browser.instance}/${browser.surface}`}
-      agent={agent}
-      surface={browser}
-      onWaiting={onWaiting}
-    />
+    <BrowserLive key={`${browser.instance}/${browser.surface}`} agent={agent} surface={browser} />
   ) : (
     <BrowserFrame rows={rows} />
   );
