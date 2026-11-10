@@ -1,7 +1,8 @@
 /**
- * The agents unit: what lets an agent make and manage agents of its own, within what the person
- * allowed. The agent holds no authority of the Hub's. It calls management's tools, and management,
- * which holds that authority, works out who is calling and what that caller's unit allows.
+ * AgentOrg control: what lets an agent reach what the person's own surface reaches, within the
+ * scopes the person set on its unit. The agent holds no authority of the Hub's. It calls
+ * management's tools, and management, which holds that authority, works out who is calling, what
+ * that caller's unit allows, and whether the target is within its reach.
  */
 import type { Field, FieldValues, Problem, Template, ToolEntry, Unit } from "@agentorg/interfaces";
 import { Refused } from "@agentorg/sdk";
@@ -9,8 +10,13 @@ import { z } from "zod";
 import { schemaOf, settle } from "./form.js";
 import type { AgentRecord, Offer, StackInput } from "./stack.js";
 
-export const AGENTS_UNIT = "agents";
-export const AGENTS_SLOT = "agents";
+export const AGENTS_UNIT = "control";
+export const AGENTS_SLOT = "control";
+/** Each scope's answers, each containing the one before. */
+const AGENTS = ["none", "own", "all"];
+const REACH = ["none", "see", "use", "add"];
+const atLeast = (answers: string[], value: string, least: string) =>
+  answers.indexOf(value) >= answers.indexOf(least);
 const COMPUTER = "computer";
 /** The place that is the parent's own computer; every other place is a connection's id. */
 const OWN = "own";
@@ -37,11 +43,11 @@ const SKILL = "delegating";
 const SKILL_FILE = "SKILL.md";
 const SKILL_TEXT = `---
 name: ${SKILL}
-description: How to hand work to agents of your own and see it through. Use it before creating an agent, and whenever you have work that can run apart from yours.
+description: How to hand work to agents of your own and see it through, and what else your control tools reach. Use it before creating an agent, and whenever you have work that can run apart from yours.
 ---
-You can create agents and manage the ones you created, with the tools of your \`agents\` connection.
+Your \`control\` connection's tools reach what the person allowed you: agents, and perhaps connections, skills and templates. A tool you don't have is one you weren't given.
 
-## Before you create one
+## Before you create an agent
 
 Do the work yourself when it is short. An agent costs model usage from the plan everyone here shares, and you have a limit on how many you can have. Use one when work can run apart from yours, or needs a shape you were not given.
 
@@ -49,14 +55,13 @@ There is one create tool per template you may use. Read its description and fiel
 
 ## Working with it
 
-- \`send\` gives it a message and returns at once. It works on its own after that.
-- \`status\` says whether it is thinking or idle. \`read\` shows what it said. Check back when you need the result, rather than after every step.
+- \`agent_send\` gives it a message and returns at once. It works on its own after that. Your name is on the message's first line.
+- \`agent_get\` says how it stands and whether it is working. \`agent_read\` shows what it said. Check back when you need the result, rather than after every step.
 - Say what you want back and in what form. It knows only what you send it and its purpose.
-- You cannot see or reach any agent you did not create.
 
 ## When it is done
 
-\`remove\` it when its work is finished, so your limit is free for the next one. \`stop\` it to keep it for later. The person sees every agent you create on their Agents page, and can stop or remove any of them.
+\`agent_remove\` it when its work is finished, so your limit is free for the next one. \`agent_stop\` it to keep it for later. You can remove only agents you made, and theirs. The person sees every agent you create on their Agents page, and every change you make through these tools, and can undo any of it.
 `;
 export const skillFile = (path: string) => (path === SKILL_FILE ? SKILL_TEXT : undefined);
 
@@ -75,9 +80,27 @@ export function agentsUnit(
 ): TheUnit {
   return {
     id: AGENTS_UNIT,
-    title: "Agents",
-    description: "It can create and manage agents of its own, within what you allow here.",
+    title: "AgentOrg control",
+    description:
+      "It can reach what you reach in AgentOrg, as far as you allow here. Each answer says what it grants.",
     form: [
+      {
+        id: "agents",
+        authority: "setting",
+        type: "choice",
+        value: "string",
+        title: "Agents",
+        default: "own",
+        options: [
+          { value: "none", title: "None", description: "It can't create or manage agents." },
+          { value: "own", title: "Its own", description: "It creates and manages its own agents." },
+          {
+            value: "all",
+            title: "All",
+            description: "It also sees, messages, stops and starts every other agent.",
+          },
+        ],
+      },
       {
         id: "templates",
         authority: "setting",
@@ -87,6 +110,54 @@ export function agentsUnit(
         description: "What its agents can be made from.",
         required: true,
         options: templates,
+      },
+      {
+        id: "saveTemplates",
+        authority: "setting",
+        type: "toggle",
+        value: "boolean",
+        title: "Save templates of its own",
+        default: false,
+      },
+      {
+        id: "connections",
+        authority: "setting",
+        type: "choice",
+        value: "string",
+        title: "Connections",
+        default: "none",
+        options: [
+          { value: "none", title: "None" },
+          { value: "see", title: "See", description: "It lists them." },
+          {
+            value: "use",
+            title: "Use",
+            description: "It gives those listed below to itself and its agents.",
+          },
+          { value: "add", title: "Add", description: "It adds new ones by public address." },
+        ],
+      },
+      {
+        id: "listed",
+        authority: "setting",
+        type: "connection",
+        value: "strings",
+        title: "Connections it may use",
+        visible: { field: "connections", in: ["use", "add"] },
+      },
+      {
+        id: "skills",
+        authority: "setting",
+        type: "choice",
+        value: "string",
+        title: "Skills",
+        default: "none",
+        options: [
+          { value: "none", title: "None" },
+          { value: "see", title: "See", description: "It lists and reads them." },
+          { value: "use", title: "Use", description: "It gives them to itself and its agents." },
+          { value: "add", title: "Add", description: "It writes new ones." },
+        ],
       },
       {
         id: "places",
@@ -190,6 +261,11 @@ export function reachProblems(
 }
 
 interface Bound {
+  agents: string;
+  saveTemplates: boolean;
+  connections: string;
+  listed: string[];
+  skills: string;
   templates: string[];
   places: string[];
   access: string;
@@ -198,6 +274,11 @@ interface Bound {
   depth: number;
 }
 const boundOf = (values: Values): Bound => ({
+  agents: String(values.agents ?? "own"),
+  saveTemplates: values.saveTemplates === true,
+  connections: String(values.connections ?? "none"),
+  listed: (values.listed ?? []) as string[],
+  skills: String(values.skills ?? "none"),
   templates: (values.templates ?? []) as string[],
   places: (values.places ?? []) as string[],
   access: String(values.access ?? "none"),
@@ -356,8 +437,13 @@ function withinLimit(field: TheField, value: Value | undefined, limit: unknown):
 }
 
 /** The form an agent fills for one unit: what it may set, with the template's values as defaults. */
-function formFor(self: string, unit: Shape["units"][number], bound: Bound) {
-  const fields = unit.offer.unit.form.filter(settable);
+function formFor(
+  self: string,
+  unit: Shape["units"][number],
+  bound: Bound,
+  opens: (field: TheField) => boolean = settable,
+) {
+  const fields = unit.offer.unit.form.filter(opens);
   const narrowed = isAgentsUnit(self, unit.offer)
     ? fields.flatMap((field) => cutToLimit(field, limitOf(bound, field)))
     : fields;
@@ -425,67 +511,18 @@ function narrowedForChild(
   return { problems, values };
 }
 
-const Target = z.object({ agent: z.string().min(1).max(128) });
+const Id = z.string().min(1).max(128);
+const Target = z.object({ agent: Id.describe("An agent's id, from agent_list.") });
 const CreateArgs = z.object({
   name: z.string().min(1).max(128),
   purpose: z.string().min(1).max(2000),
   place: z.string().max(128).optional(),
   units: z.record(z.string(), z.record(z.string(), z.unknown())).optional(),
 });
-const SendArgs = Target.extend({ text: z.string().min(1).max(100_000).regex(/\S/) });
-const ReadArgs = Target.extend({
-  limit: z.number().int().min(1).max(READ_MAX).optional(),
-  before: z.string().min(1).max(128).optional(),
-});
+/** One of its own agents, or itself when none is named. */
+const OnWhom = z.object({ agent: Id.optional().describe("One of your agents; you, if none.") });
 
 type Tool = z.infer<typeof ToolEntry>;
-const TARGET = {
-  type: "object",
-  properties: { agent: { type: "string", description: "The agent's id, from `list`." } },
-  required: ["agent"],
-};
-const FIXED_TOOLS: Tool[] = [
-  {
-    name: "list",
-    description: "The agents you created, each with what it's for and how it stands.",
-    inputSchema: { type: "object", properties: {} },
-  },
-  {
-    name: "status",
-    description: "How one of your agents stands, and whether it is working.",
-    inputSchema: TARGET,
-  },
-  {
-    name: "send",
-    description: "Send one of your agents a message. It returns at once; the agent works after.",
-    inputSchema: {
-      type: "object",
-      properties: { ...TARGET.properties, text: { type: "string" } },
-      required: ["agent", "text"],
-    },
-  },
-  {
-    name: "read",
-    description: "What was said with one of your agents, oldest first.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        ...TARGET.properties,
-        limit: { type: "number", maximum: READ_MAX, default: READ_DEFAULT },
-        before: { type: "string", description: "Read messages before this one." },
-      },
-      required: ["agent"],
-    },
-  },
-  { name: "stop", description: "Stop one of your agents, keeping it.", inputSchema: TARGET },
-  { name: "start", description: "Start one of your agents again.", inputSchema: TARGET },
-  {
-    name: "remove",
-    description: "Remove one of your agents, for good. Agents it made stay, as the person's.",
-    inputSchema: TARGET,
-  },
-];
-
 interface ChatCalls {
   send(input: { text: string }): Promise<{ messageId: string }>;
   history(input: { before?: string; limit?: number }): Promise<{
@@ -493,6 +530,26 @@ interface ChatCalls {
     more: boolean;
   }>;
   state(input: object): Promise<{ state: string }>;
+}
+/** What management's own interfaces answer, called as the person would. */
+type Person = (
+  iface: "agents" | "connections" | "skills",
+  method: string,
+  input: object,
+  /** Who it's made as: the agent, so what it makes is recorded as its own. */
+  caller?: string,
+) => Promise<
+  // biome-ignore lint/suspicious/noExplicitAny: each method answers its own shape.
+  any
+>;
+
+/** One control call that changed something, or was refused: never a message or a secret. */
+export interface Activity {
+  caller: string;
+  tool: string;
+  target?: string;
+  outcome: "done" | "refused";
+  reason?: string;
 }
 
 export interface ControlParts {
@@ -523,6 +580,14 @@ export interface ControlParts {
   start(agent: string): Promise<unknown>;
   stop(agent: string): Promise<unknown>;
   remove(agent: string): Promise<unknown>;
+  /** Management's interfaces, as the person reaches them. */
+  person: Person;
+  /** Where each connection came from, to know which an agent made. */
+  madeBy(connection: string): string | undefined;
+  /** Whether the library has a skill of this name. */
+  hasSkill(name: string): boolean;
+  /** Keep a line of the control log. */
+  log(entry: Activity): void;
 }
 
 /** Text that fits a tool's output, saying so when it was cut. */
@@ -551,15 +616,55 @@ export function createControl(parts: ControlParts) {
   };
   const childrenOf = (caller: string) =>
     Object.entries(records.agents).filter(([, record]) => record.parent?.agent === caller);
-  /** The same refusal whether the agent doesn't exist or isn't the caller's to reach. */
-  const childOf = (caller: string, agent: string) => {
-    const record = records.agents[agent];
-    if (record?.parent?.agent !== caller)
-      throw new Refused("unknown", `You have no agent ${agent}.`);
-    return record;
+  const nobody = (agent: string) => new Refused("unknown", `You have no agent ${agent}.`);
+  /** One of the agents it made: the same refusal whether it doesn't exist or isn't its own. */
+  const ownChild = (caller: string, agent: string) => {
+    if (records.agents[agent]?.parent?.agent !== caller) throw nobody(agent);
+    return agent;
+  };
+  /** An agent it may see and talk to: its own, or with `all`, any other. */
+  const reachable = (caller: string, bound: Bound, agent: string) => {
+    if (agent === caller || !records.agents[agent]) throw nobody(agent);
+    return bound.agents === "all" ? agent : ownChild(caller, agent);
+  };
+  /** One it made, or one they made, at any depth: what removing can reach. */
+  const descendant = (caller: string, agent: string) => {
+    const seen = new Set<string>();
+    for (let at = records.agents[agent]?.parent?.agent; at && !seen.has(at); ) {
+      if (at === caller) return agent;
+      seen.add(at);
+      at = records.agents[at]?.parent?.agent;
+    }
+    throw nobody(agent);
+  };
+  /** Itself, or one of its own: where it may give what it holds. */
+  const selfOrOwn = (caller: string, agent?: string) =>
+    agent === undefined || agent === caller ? caller : ownChild(caller, agent);
+  /** Whether it may fill a field: one that is how something works, or what it already holds. */
+  const mayFill = (caller: string, bound: Bound, field: TheField, value: unknown) => {
+    if (settable(field)) return true;
+    if (field.authority !== "holds") return false;
+    // What it holds is a connection, by the field's type, or else a skill there is.
+    if (field.type !== "connection")
+      return (
+        atLeast(REACH, bound.skills, "use") &&
+        [value ?? []].flat().every((one) => parts.hasSkill(String(one)))
+      );
+    return (
+      atLeast(REACH, bound.connections, "use") &&
+      [value ?? []]
+        .flat()
+        .every((one) => bound.listed.includes(String(one)) || parts.madeBy(String(one)) === caller)
+    );
   };
 
-  const createTool = (template: TheTemplate, shape: Shape, bound: Bound, reach: Reach): Tool => ({
+  const createTool = (
+    template: TheTemplate,
+    shape: Shape,
+    bound: Bound,
+    reach: Reach,
+    opens: (field: TheField) => boolean,
+  ): Tool => ({
     name: `create_${template.id}`,
     description:
       `Create an agent from the template "${template.title}". ${template.description}`.slice(
@@ -580,8 +685,8 @@ export function createControl(parts: ControlParts) {
             description: "Only what should differ from the template.",
             properties: Object.fromEntries(
               shape.units
-                .filter((unit) => unit.offer.unit.form.some(settable))
-                .map((unit) => [unit.key, schemaOf(formFor(self, unit, bound))])
+                .filter((unit) => unit.offer.unit.form.some(opens))
+                .map((unit) => [unit.key, schemaOf(formFor(self, unit, bound, opens))])
                 .concat(
                   shape.computer && shape.places?.includes(NEW)
                     ? [
@@ -600,18 +705,16 @@ export function createControl(parts: ControlParts) {
     ),
   });
 
-  const list = async (caller: string) => {
-    const holding = holdingOf(caller);
-    if (!holding) return [];
-    const { record, bound } = holding;
+  const createTools = async (caller: string, record: TheAgent, bound: Bound) => {
+    if (!atLeast(AGENTS, bound.agents, "own")) return [];
     const offers = await parts.catalog();
     const reach = await reachNow(caller, record);
-    const creates = parts.templates().flatMap((template) => {
+    const opens = (field: TheField) => mayFill(caller, bound, field, undefined);
+    return parts.templates().flatMap((template) => {
       if (!bound.templates.includes(template.id)) return [];
       const shape = shapeOf(self, template, offers, bound, reach);
-      return shape ? [createTool(template, shape, bound, reach)] : [];
+      return shape ? [createTool(template, shape, bound, reach, opens)] : [];
     });
-    return [...creates, ...FIXED_TOOLS];
   };
 
   const create = (caller: string, id: string, input: unknown) =>
@@ -623,6 +726,8 @@ export function createControl(parts: ControlParts) {
       if (!holding || !template || !holding.bound.templates.includes(id))
         throw new Refused("unknown", `You can't create from ${id}.`);
       const { record, bound } = holding;
+      if (!atLeast(AGENTS, bound.agents, "own"))
+        throw new Refused("unknown", `You can't create from ${id}.`);
       if (childrenOf(caller).length >= bound.limit)
         throw new Refused("limit", `You already have the ${bound.limit} agents you can have.`);
       if (Object.keys(records.agents).length + parts.creatingCount() >= HOME_CAP)
@@ -667,8 +772,9 @@ export function createControl(parts: ControlParts) {
           ? [{ slot: COMPUTER, connection: args.place }]
           : [];
 
+      const opens = (field: TheField) => mayFill(caller, bound, field, undefined);
       const known = new Set(
-        shape.units.filter((unit) => unit.offer.unit.form.some(settable)).map((unit) => unit.key),
+        shape.units.filter((unit) => unit.offer.unit.form.some(opens)).map((unit) => unit.key),
       );
       if (fresh) known.add(COMPUTER);
       for (const key of Object.keys(args.units ?? {}))
@@ -679,7 +785,7 @@ export function createControl(parts: ControlParts) {
         // A secret is refused for what it is when the stack is checked.
         for (const id of Object.keys(given)) {
           const field = form.find((one) => one.id === id);
-          if (field && !settable(field) && field.value !== "secret")
+          if (field && !mayFill(caller, bound, field, given[id]) && field.value !== "secret")
             problems.push({ field: id, message: `An agent can't set ${field.title}.` });
         }
         let values: Values = { ...unit.values, ...given };
@@ -747,41 +853,102 @@ export function createControl(parts: ControlParts) {
       );
     });
 
-  const run = async (caller: string, name: string, input: unknown) => {
-    if (name.startsWith("create_")) return create(caller, name.slice("create_".length), input);
-    switch (name) {
-      case "list":
+  const callerName = (caller: string) => parts.nameOf(caller).catch(() => caller);
+
+  /**
+   * The tools, one per verb of the person's interfaces, each with the scope it needs. Apart from
+   * creating, each calls what the person's surface calls, after the checks here.
+   */
+  interface Verb<T extends z.ZodType> {
+    name: string;
+    description: string;
+    input: T;
+    needs(bound: Bound): boolean;
+    /** Whether it changes anything, and so goes in the control log. */
+    changes: boolean;
+    run(caller: string, bound: Bound, args: z.infer<T>): Promise<unknown>;
+  }
+  const verb = <T extends z.ZodType>(one: Verb<T>) => one as unknown as Verb<z.ZodType>;
+  const own = (bound: Bound) => atLeast(AGENTS, bound.agents, "own");
+  const sees = (scope: "connections" | "skills", least: string) => (bound: Bound) =>
+    atLeast(REACH, bound[scope], least);
+  /** Something to give: a connection or a skill, to itself or one of its own, as the person would. */
+  const giving = {
+    connection: z.object({
+      agent: OnWhom.shape.agent,
+      connection: Id,
+      as: z.string().min(1).max(129).optional().describe("The name it is known by."),
+    }),
+    skill: z.object({ agent: OnWhom.shape.agent, skill: z.string().min(1).max(64) }),
+  };
+  const VERBS: Verb<z.ZodType>[] = [
+    verb({
+      name: "agent_list",
+      description: "The agents you can reach, each with what it's for and how it stands.",
+      input: z.object({}),
+      needs: own,
+      changes: false,
+      async run(caller, bound) {
+        const { agents } = await parts.person("agents", "list", {});
         return {
-          agents: await Promise.all(
-            childrenOf(caller).map(async ([agent, record]) => ({
-              agent,
-              name: await parts.nameOf(agent),
-              purpose: record.purpose,
-              template: record.template,
-              status: await parts.statusOf(agent, record.provider),
-            })),
+          agents: (agents as { agent: string }[]).filter(
+            ({ agent }) =>
+              agent !== caller &&
+              (bound.agents === "all" || records.agents[agent]?.parent?.agent === caller),
           ),
         };
-      case "status": {
-        const { agent } = Target.parse(input);
-        const record = childOf(caller, agent);
-        const [status, chat] = await Promise.all([
-          parts.statusOf(agent, record.provider),
+      },
+    }),
+    verb({
+      name: "agent_get",
+      description: "What an agent is made of, how it stands, and whether it is working.",
+      input: Target,
+      needs: own,
+      changes: false,
+      async run(caller, bound, { agent }) {
+        reachable(caller, bound, agent);
+        const [read, chat] = await Promise.all([
+          parts.person("agents", "get", { agent }),
           parts
             .chatOf(agent)
             .then((one) => one.state({}))
             .catch(() => undefined),
         ]);
-        return { status, ...(chat ? { chat } : {}) };
-      }
-      case "send": {
-        const { agent, text } = SendArgs.parse(input);
-        childOf(caller, agent);
-        return (await parts.chatOf(agent)).send({ text });
-      }
-      case "read": {
-        const { agent, limit, before } = ReadArgs.parse(input);
-        childOf(caller, agent);
+        // Its connections are what `connections` may see, and no more.
+        const mcp = atLeast(REACH, bound.connections, "see")
+          ? read.mcp
+          : (read.mcp as { slot: string; status: unknown; instance?: string }[]).map(
+              ({ slot, status, instance }) => ({ slot, status, ...(instance ? { instance } : {}) }),
+            );
+        return { ...read, mcp, ...(chat ? { chat } : {}) };
+      },
+    }),
+    verb({
+      name: "agent_send",
+      description: "Send an agent a message, with your name on it. It returns at once.",
+      input: Target.extend({ text: z.string().min(1).max(90_000).regex(/\S/) }),
+      needs: own,
+      changes: true,
+      async run(caller, bound, { agent, text }) {
+        reachable(caller, bound, agent);
+        // It says who it's from: otherwise it reads as if the person had typed it. The name is
+        // on one line, quoted, so that no name can look like someone else.
+        const name = (await callerName(caller)).replace(/\s+/g, " ").trim().slice(0, 128);
+        const from = `An agent, "${name}", says:\n\n`;
+        return (await parts.chatOf(agent)).send({ text: `${from}${text}` });
+      },
+    }),
+    verb({
+      name: "agent_read",
+      description: "What was said with an agent, oldest first.",
+      input: Target.extend({
+        limit: z.number().int().min(1).max(READ_MAX).optional(),
+        before: z.string().min(1).max(128).optional().describe("Read messages before this one."),
+      }),
+      needs: own,
+      changes: false,
+      async run(caller, bound, { agent, limit, before }) {
+        reachable(caller, bound, agent);
         const { messages, more } = await (await parts.chatOf(agent)).history({
           limit: limit ?? READ_DEFAULT,
           ...(before ? { before } : {}),
@@ -790,27 +957,247 @@ export function createControl(parts: ControlParts) {
           messages: messages.map(({ id, role, text, at }) => ({ id, role, text, at })),
           more,
         };
-      }
-      case "stop":
-      case "start":
-      case "remove": {
-        const { agent } = Target.parse(input);
-        childOf(caller, agent);
-        await parts[name](agent);
-        return {};
-      }
-      default:
-        throw new Refused("unknown", `There is no tool ${name}.`);
-    }
+      },
+    }),
+    verb({
+      name: "agent_stop",
+      description: "Stop an agent, keeping it.",
+      input: Target,
+      needs: own,
+      changes: true,
+      run: async (caller, bound, { agent }) => parts.stop(reachable(caller, bound, agent)),
+    }),
+    verb({
+      name: "agent_start",
+      description: "Start an agent again.",
+      input: Target,
+      needs: own,
+      changes: true,
+      run: async (caller, bound, { agent }) => parts.start(reachable(caller, bound, agent)),
+    }),
+    verb({
+      name: "agent_remove",
+      description:
+        "Remove an agent you made, or one they made, for good. Agents it made stay, as the person's.",
+      input: Target,
+      needs: own,
+      changes: true,
+      run: async (caller, _, { agent }) => parts.remove(descendant(caller, agent)),
+    }),
+    verb({
+      name: "agent_add_unit",
+      description:
+        "Add a unit to one of your agents, from unit_list. Only fields you may set can be given.",
+      input: Target.extend({
+        provider: Id,
+        unit: z.string().min(1).max(64),
+        values: z.record(z.string(), z.unknown()).optional(),
+      }),
+      needs: own,
+      changes: true,
+      async run(caller, bound, { agent, provider, unit, values = {} }) {
+        ownChild(caller, agent);
+        const offer = (await parts.catalog()).find(
+          (one) => one.provider === provider && one.unit.id === unit,
+        );
+        if (!offer) throw new Refused("unknown", `${provider} offers no unit ${unit}.`);
+        // Each comes only at creation, where its bounds are applied.
+        if (offer.unit.id === COMPUTER || isAgentsUnit(self, offer))
+          throw new Refused("invalid", `${offer.unit.title} comes only when an agent is made.`);
+        for (const [id, value] of Object.entries(values)) {
+          const field = offer.unit.form.find((one) => one.id === id);
+          if (field && !mayFill(caller, bound, field, value))
+            throw new Refused("invalid", `An agent can't set ${field.title}.`);
+        }
+        return parts.person(
+          "agents",
+          "addUnit",
+          { agent, unit: { provider, unit, values } },
+          caller,
+        );
+      },
+    }),
+    verb({
+      name: "agent_remove_unit",
+      description: "Remove a unit from one of your agents, by its instance, from agent_get.",
+      input: Target.extend({ instance: Id }),
+      needs: own,
+      changes: true,
+      run: async (caller, _, { agent, instance }) =>
+        parts.person("agents", "removeUnit", { agent: ownChild(caller, agent), instance }),
+    }),
+    verb({
+      name: "template_list",
+      description: "The templates there are.",
+      input: z.object({}),
+      needs: own,
+      changes: false,
+      run: async () => parts.person("agents", "templates", {}),
+    }),
+    verb({
+      name: "unit_list",
+      description: "The units there are, each with its form.",
+      input: z.object({}),
+      needs: own,
+      changes: false,
+      async run(_, bound) {
+        const listed = await parts.person("agents", "units", {});
+        if (atLeast(REACH, bound.connections, "see")) return listed;
+        // The places its own unit could list are the person's connections, which it may not see.
+        return {
+          ...listed,
+          units: (listed.units as { id: string; provider: string; form: TheField[] }[]).map(
+            (unit) =>
+              unit.provider === self && unit.id === AGENTS_UNIT
+                ? {
+                    ...unit,
+                    form: unit.form.map((field) =>
+                      field.id === "places"
+                        ? {
+                            ...field,
+                            options: field.options?.filter((one) => [OWN, NEW].includes(one.value)),
+                          }
+                        : field,
+                    ),
+                  }
+                : unit,
+          ),
+        };
+      },
+    }),
+    verb({
+      name: "connection_list",
+      description: "The person's connections to MCP servers.",
+      input: z.object({}),
+      needs: sees("connections", "see"),
+      changes: false,
+      run: async () => parts.person("connections", "list", {}),
+    }),
+    verb({
+      name: "connection_get",
+      description: "One connection: where it came from and how it stands.",
+      input: z.object({ connection: Id }),
+      needs: sees("connections", "see"),
+      changes: false,
+      run: async (_, __, { connection }) => parts.person("connections", "get", { connection }),
+    }),
+    verb({
+      name: "connection_expose",
+      description: "Give a connection you may use to yourself or one of your agents.",
+      input: giving.connection,
+      needs: sees("connections", "use"),
+      changes: true,
+      async run(caller, bound, { agent, connection, as }) {
+        if (!bound.listed.includes(connection) && parts.madeBy(connection) !== caller)
+          throw new Refused("unknown", `You may not use ${connection}.`);
+        return parts.person("agents", "expose", {
+          agent: selfOrOwn(caller, agent),
+          connection,
+          ...(as ? { as } : {}),
+        });
+      },
+    }),
+    verb({
+      name: "connection_unexpose",
+      description: "Take a connection back from yourself or one of your agents, by its name.",
+      input: z.object({ agent: OnWhom.shape.agent, slot: z.string().min(1).max(129) }),
+      needs: sees("connections", "use"),
+      changes: true,
+      run: async (caller, _, { agent, slot }) =>
+        parts.person("agents", "unexpose", { agent: selfOrOwn(caller, agent), slot }),
+    }),
+    verb({
+      name: "skill_list",
+      description: "The skills there are.",
+      input: z.object({}),
+      needs: sees("skills", "see"),
+      changes: false,
+      run: async () => parts.person("skills", "list", {}),
+    }),
+    verb({
+      name: "skill_get",
+      description: "One skill's text and files.",
+      input: z.object({ name: z.string().min(1).max(64) }),
+      needs: sees("skills", "see"),
+      changes: false,
+      run: async (_, __, { name }) => parts.person("skills", "get", { name }),
+    }),
+    verb({
+      name: "skill_expose",
+      description: "Give a skill to yourself or one of your agents.",
+      input: giving.skill,
+      needs: sees("skills", "use"),
+      changes: true,
+      run: async (caller, _, { agent, skill }) =>
+        parts.person("agents", "expose", { agent: selfOrOwn(caller, agent), skill }),
+    }),
+    verb({
+      name: "skill_unexpose",
+      description: "Take a skill back from yourself or one of your agents.",
+      input: giving.skill,
+      needs: sees("skills", "use"),
+      changes: true,
+      run: async (caller, _, { agent, skill }) =>
+        parts.person("agents", "unexpose", { agent: selfOrOwn(caller, agent), skill }),
+    }),
+  ];
+  const toolOf = (one: Verb<z.ZodType>): Tool => ({
+    name: one.name,
+    description: one.description,
+    inputSchema: JSON.parse(JSON.stringify(z.toJSONSchema(one.input))),
+  });
+  /** What a call is about, for the log. */
+  const targetOf = (input: unknown) => {
+    if (!input || typeof input !== "object") return undefined;
+    const { agent, connection, skill, instance } = input as Record<string, unknown>;
+    const found = [agent, connection, skill, instance].find((one) => typeof one === "string");
+    return found === undefined ? undefined : String(found).slice(0, 256);
   };
 
   return {
-    list,
+    async list(caller: string) {
+      const holding = holdingOf(caller);
+      if (!holding) return [];
+      const { record, bound } = holding;
+      return [
+        ...(await createTools(caller, record, bound)),
+        ...VERBS.filter((one) => one.needs(bound)).map(toolOf),
+      ];
+    },
     /** A tool that ran and failed answers `failed`, for the caller's model to read. */
     async call(caller: string, name: string, input: unknown) {
-      if (!holdingOf(caller)) throw new Refused("unknown", `There is no tool ${name}.`);
+      // The log mustn't turn a call that was done into one that failed.
+      const note = (entry: Activity) => {
+        try {
+          parts.log(entry);
+        } catch {
+          // Its failure is the log's own.
+        }
+      };
+      const holding = holdingOf(caller);
+      if (!holding) throw new Refused("unknown", `There is no tool ${name}.`);
+      const creates = name.startsWith("create_");
+      const one = VERBS.find((each) => each.name === name);
+      const target = targetOf(input);
       try {
-        return { output: fit(await run(caller, name, input)) };
+        let output: unknown;
+        if (creates) output = await create(caller, name.slice("create_".length), input);
+        else {
+          if (!one?.needs(holding.bound)) throw new Refused("unknown", `There is no tool ${name}.`);
+          output = await one.run(caller, holding.bound, one.input.parse(input));
+        }
+        if (creates || one?.changes)
+          note({
+            caller,
+            tool: name,
+            outcome: "done",
+            ...(creates
+              ? { target: (output as { agent: string }).agent }
+              : target
+                ? { target }
+                : {}),
+          });
+        return { output: fit(output ?? {}) };
       } catch (error) {
         const text =
           error instanceof z.ZodError
@@ -818,6 +1205,13 @@ export function createControl(parts: ControlParts) {
             : error instanceof Error
               ? error.message
               : String(error);
+        note({
+          caller,
+          tool: name.slice(0, 128),
+          outcome: "refused",
+          ...(target ? { target } : {}),
+          reason: text.slice(0, 2000),
+        });
         return { output: text.slice(0, OUTPUT_MAX), failed: true as const };
       }
     },
