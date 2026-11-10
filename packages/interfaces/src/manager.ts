@@ -228,7 +228,7 @@ export const agents = defineInterface({
       }),
     }),
     start: method({ input: OnAgent, output: z.object({}) }),
-    /** Ends the agent's process, and a turn in progress with it; all else about it stays. */
+    /** Stops the agent: a turn in progress ends, and it runs none until started; all else stays. */
     stop: method({ input: OnAgent, output: z.object({}) }),
     /** Expose a skill or a connection to the agent; `as` names a connection's slot. */
     expose: method({

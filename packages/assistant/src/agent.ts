@@ -246,7 +246,8 @@ export function createAgent(options: {
       current.cancelled = true;
       turn = undefined;
       // In a model call, nothing more is recorded; in a tool call, its result still is.
-      if (!current.requestId) draining = current.ended;
+      // A turn that hadn't begun leaves what was already running to be waited for.
+      if (!current.requestId) draining = current.ended ?? draining;
       say({ state: "idle" });
       if (current.requestId && model.bound)
         await model.call.cancel({ requestId: current.requestId }).catch(() => {});

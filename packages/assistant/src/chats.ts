@@ -95,6 +95,8 @@ export function createChats(options: {
   store: Store;
   /** A chat's loop, on its record, saying what it does through `chat`. */
   agent(history: History, chat: Chat): Agent;
+  /** Whether the agent is stopped when its chats are first held. */
+  stopped: boolean;
   emit: {
     message(message: Emitted<"message">): void;
     delta(delta: Emitted<"delta">): void;
@@ -108,8 +110,15 @@ export function createChats(options: {
   let working: { held: Held } | undefined;
   /** The chat that last had it: a turn stopped there may have a call still running. */
   let last: Held | undefined;
-  /** Set when the engine stops: no turn starts after. */
-  let stopped = false;
+  /** Set while the agent is stopped: no turn starts until it is started. */
+  let stopped = options.stopped;
+  /** Set when the engine closes: no turn starts after. */
+  let closed = false;
+  /** Refuse a turn that can't start now, whatever chat it is for. */
+  const mayStart = () => {
+    if (closed) throw new Refused("unavailable", "This agent is closing.");
+    if (stopped) throw new Refused("busy", "It is stopped. Start it to go on.");
+  };
   /** The highest place in the list given so far. */
   let top = 0;
   /** Entries being written, one after another, so the latest written is the latest said. */
@@ -255,7 +264,7 @@ export function createChats(options: {
    * doesn't start; once it has, its status gives it back.
    */
   const turn = async <T>(held: Held, start: () => Promise<T>) => {
-    if (stopped) throw new Refused("unavailable", "This agent is stopping.");
+    mayStart();
     if (working)
       throw new Refused(
         "busy",
@@ -268,6 +277,8 @@ export function createChats(options: {
     try {
       // A turn stopped in another chat may have a call still running: it ends before this starts.
       if (last !== held) await last?.agent.drained();
+      // The agent may have been stopped meanwhile.
+      mayStart();
       last = held;
       return await start();
     } catch (error) {
@@ -296,7 +307,7 @@ export function createChats(options: {
           // Its entry first: a record with no entry would be a chat nobody can find.
           await store.set({ key: ENTRIES + held.id, value: held.stored });
           found.set(held.id, held);
-          if (stopped) throw new Refused("unavailable", "This agent is stopping.");
+          mayStart();
           const { messageId } = await held.agent.send(text);
           return { chat: held.id, messageId };
         } catch (error) {
@@ -342,9 +353,24 @@ export function createChats(options: {
       await keep(await heldOf(chat), "archived", archived);
       return {};
     },
-    /** Stop for good: the turn in progress is cut, and none starts after. */
+    /**
+     * Stop the agent: the turn in progress is cut, and none starts until it is started. A call
+     * already running finishes first, so this answers when nothing more will be written. Its chats
+     * stay as they are, to be read.
+     */
     async stop() {
       stopped = true;
+      const held = working?.held;
+      await held?.agent.cancel();
+      // A call still running, in this turn or one stopped before it, is recorded first.
+      await Promise.all([held?.agent.drained(), last?.agent.drained()]);
+    },
+    start() {
+      stopped = false;
+    },
+    /** Close for good: the turn in progress is cut, and none starts after. */
+    async close() {
+      closed = true;
       await working?.held.agent.cancel();
     },
     /** Settles when every chat's latest turn has written all it will. */

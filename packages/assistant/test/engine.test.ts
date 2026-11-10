@@ -1327,19 +1327,19 @@ test("a call still running in a stopped turn ends before another chat's turn sta
   assert.equal((await shownIn(s, one.chat)).at(-1)?.text, "layout__place: done");
 });
 
-test("a stopped engine cuts its turn and starts no other", async () => {
+test("a closing engine cuts its turn and starts no other", async () => {
   const s = await setup();
   const one = await exchange(s, "One.");
   const late = gate<Reply>();
   s.script.push(() => late.shut);
   await s.actor.call("chat", "send", { chat: one.chat, text: "Think." });
   await until(() => s.requests.length === 2, "the model request");
-  await s.host.stop();
+  await s.host.close();
   assert.equal(s.cancels.length, 1);
-  const stopping = { code: "unavailable" };
-  await assert.rejects(s.actor.call("chat", "send", { chat: one.chat, text: "More." }), stopping);
-  await assert.rejects(s.actor.call("chat", "send", { text: "Something new." }), stopping);
-  await assert.rejects(s.actor.call("chat", "retry", { chat: one.chat }), stopping);
+  const closing = { code: "unavailable" };
+  await assert.rejects(s.actor.call("chat", "send", { chat: one.chat, text: "More." }), closing);
+  await assert.rejects(s.actor.call("chat", "send", { text: "Something new." }), closing);
+  await assert.rejects(s.actor.call("chat", "retry", { chat: one.chat }), closing);
   assert.equal((await listed(s)).chats.length, 1);
   late.open(say("Too late."));
   await s.host.settled();
@@ -1347,6 +1347,43 @@ test("a stopped engine cuts its turn and starts no other", async () => {
     (await shownIn(s, one.chat)).map((m) => m.text),
     ["One.", "ok", "Think."],
   );
+});
+
+test("a stopped agent's chats are read and kept as they are, and take nothing until it starts", async () => {
+  const s = await setup();
+  const one = await exchange(s, "One.");
+  const two = await exchange(s, "Two.");
+  await s.actor.call("chat", "archive", { chat: one.chat, archived: true });
+  const late = gate<Reply>();
+  s.script.push(() => late.shut);
+  await s.actor.call("chat", "send", { chat: two.chat, text: "Think." });
+  await until(() => s.requests.length === 3, "the model request");
+  await s.host.stop();
+  assert.equal(s.cancels.length, 1, "its turn is cut");
+  late.open(say("Too late."));
+  await s.host.settled();
+
+  const stopped = { code: "busy", message: /It is stopped/ };
+  await assert.rejects(s.actor.call("chat", "send", { chat: two.chat, text: "More." }), stopped);
+  await assert.rejects(s.actor.call("chat", "send", { text: "Something new." }), stopped);
+  await assert.rejects(s.actor.call("chat", "retry", { chat: two.chat }), stopped);
+  // Each chat is listed where it was put, and can be read, renamed and put elsewhere.
+  const placed = async () => [
+    (await listed(s)).chats.map((chat) => chat.id),
+    (await listed(s, { archived: true })).chats.map((chat) => chat.id),
+  ];
+  assert.deepEqual(await placed(), [[two.chat], [one.chat]]);
+  assert.deepEqual(
+    (await shownIn(s, two.chat)).map((m) => m.text),
+    ["Two.", "ok", "Think."],
+  );
+  await s.actor.call("chat", "rename", { chat: two.chat, title: "Second" });
+  await s.actor.call("chat", "archive", { chat: one.chat, archived: false });
+  assert.deepEqual(await placed(), [[two.chat, one.chat], []]);
+
+  s.host.start();
+  assert.equal((await listed(s)).chats[0]?.title, "Second");
+  assert.equal((await exchange(s, "Go on.", two.chat)).chat, two.chat);
 });
 
 test("the chats are listed a page at a time, newest first", async () => {
