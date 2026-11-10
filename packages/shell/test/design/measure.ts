@@ -8,6 +8,7 @@
 import { writeFileSync } from "node:fs";
 import { chromium, type Page } from "@playwright/test";
 import { type Agent, SESSION, standIn } from "../stand-in.ts";
+import { noted, readChat, unreadReply } from "./unread.ts";
 
 const [design, out] = process.argv.slice(2);
 if (!design || !out) throw new Error("usage: measure.ts <design.html> <out.json>");
@@ -27,14 +28,15 @@ interface Measured {
   gap: string;
 }
 type Parts = Record<string, Measured | string | number | null>;
-/** What a probe measures: the frame, or one window's own rows. */
-type Part = "frame" | "terminal" | "browser";
+/** What a probe measures: the frame, one window's own rows, or the chat in its layer. */
+type Part = "frame" | "terminal" | "browser" | "chat";
 type Gateway = Awaited<ReturnType<typeof standIn>>;
 
 /**
  * Runs in the page. `frame` measures the left bar, a drawer if one is open, the phone's head and
  * the page area, from the shell's top left. `terminal` and `browser` measure those windows' own
- * rows, from the window's top left.
+ * rows, from the window's top left. `chat` measures the collapsed chat and its panel, from the
+ * shell's top left.
  */
 const probe = (what: Part): Parts => {
   const seen = (e: Element | null | undefined): e is HTMLElement =>
@@ -148,6 +150,74 @@ const probe = (what: Part): Parts => {
     parts.address = of(where?.querySelector('[aria-label="Address"]'), "w");
     // The page under them: as wide and tall as the window leaves it.
     parts.page = of(where?.nextElementSibling, "wh");
+    return parts;
+  }
+
+  if (what === "chat") {
+    const shell = document.querySelector("[data-shell]");
+    if (!shell) return parts;
+    origin = shell.getBoundingClientRect();
+    // Collapsed: the column the layer counts, the pill at its foot, the chat button and its count,
+    // and the faces behind it.
+    const column = document.querySelector("[data-chat-column]");
+    const pill = column?.querySelector('[role="group"]');
+    parts.column = of(column);
+    parts.pill = of(pill);
+    const button = pill?.querySelector("button");
+    parts["pill.button"] = of(button);
+    parts["pill.button.icon"] = of(button?.querySelector("svg"));
+    parts["pill.count"] = of(button?.querySelector("span"));
+    [...(pill?.querySelectorAll("li") ?? [])].forEach((face, i) => {
+      parts[`pill.face${i}`] = of(face);
+      const disc = of(face.querySelector("button > span > span"));
+      // A face's colours are its agent's own, and so is the size its letters would have.
+      if (disc) disc.bg = disc.font = "the agent's";
+      parts[`pill.face${i}.disc`] = disc;
+    });
+    // Open: the panel, its head, its list and its foot.
+    const panel = document.querySelector('aside[aria-label="Chats"]');
+    parts.panel = of(panel);
+    const head = panel?.querySelector("header");
+    parts["panel.head"] = of(head);
+    // A text is as wide as what it says, which is the sample's.
+    parts["panel.title"] = of(head?.querySelector("h2"), "w");
+    parts["panel.close"] = of(head?.querySelector('button[aria-label="Close chats"]'));
+    const list = panel?.querySelector("ul");
+    parts["panel.list"] = of(list);
+    const rows = [...(list?.querySelectorAll("li > button") ?? [])];
+    parts["row.first"] = of(rows[0]);
+    parts["row.second"] = of(rows[1]);
+    // One row with something unread and one without, part by part.
+    for (const [name, row] of [
+      ["unread", rows.find((r) => r.querySelector('[aria-label="New"]'))],
+      ["read", rows.find((r) => !r.querySelector('[aria-label="New"]'))],
+    ] as const) {
+      const top = row?.getBoundingClientRect().y ?? 0;
+      const inRow = (m: Measured | null) => {
+        if (m) m.box[1] = round(Number(m.box[1]) + origin.y - top);
+        return m;
+      };
+      const [face, words, side] = row ? [...row.children] : [];
+      const disc = inRow(of(face?.children[0]));
+      if (disc) disc.bg = "the agent's";
+      parts[`row.${name}.face`] = inRow(of(face));
+      parts[`row.${name}.face.disc`] = disc;
+      parts[`row.${name}.words`] = inRow(of(words));
+      parts[`row.${name}.title`] = inRow(of(words?.children[0]));
+      parts[`row.${name}.under`] = inRow(of(words?.children[1]));
+      parts[`row.${name}.agent`] = inRow(of(words?.children[1]?.children[0], "w"));
+      // The last words start where the agent's name ends.
+      const last = inRow(of(words?.children[1]?.children[1], "w"));
+      if (last) last.box[0] = "after the name";
+      parts[`row.${name}.last`] = last;
+      parts[`row.${name}.side`] = inRow(of(side));
+      // The age ends at the row's edge, so where it starts is how long it is.
+      const when = inRow(of(side?.children[0], "w"));
+      if (when) when.box[0] = "ends at the edge";
+      parts[`row.${name}.when`] = when;
+      parts[`row.${name}.mark`] = inRow(of(side?.children[1]));
+    }
+    parts["panel.foot"] = of(list?.nextElementSibling);
     return parts;
   }
 
@@ -358,6 +428,38 @@ for (const theme of ["dark", "light"] as const)
     await page.getByRole("tab", { name: "New tab", selected: true }).waitFor();
     await rest(page, "wide");
     all[`browser.${theme}.${side}`] = await measure(page, "browser");
+    await page.close();
+    await gateway?.close();
+  }
+
+// The chat in the layer: collapsed with one, two and three chats unread, at rest and under the
+// pointer, then open on its list.
+for (const theme of ["dark", "light"] as const)
+  for (const side of ["design", "built"] as const) {
+    const gateway = side === "built" ? await standIn() : undefined;
+    const page = gateway
+      ? await builtPage(gateway, "wide", theme)
+      : await designPage("wide", theme);
+    if (gateway) await noted(gateway);
+    for (const unread of [1, 2, 3]) {
+      // One more chat says something: in the design by its own control, in the build by its agent.
+      if (!gateway) {
+        if (unread > 1) await page.getByRole("button", { name: "A reply arrives" }).click();
+      } else unreadReply(gateway, unread);
+      await page.getByRole("button", { name: `Chats, ${unread} new` }).waitFor();
+      await rest(page, "wide");
+      all[`chat.collapsed.${unread}.${theme}.${side}`] = await measure(page, "chat");
+      await page
+        .getByRole("group", { name: "Chats, collapsed" })
+        .hover({ position: { x: 44, y: 24 } });
+      await page.waitForTimeout(500);
+      all[`chat.widened.${unread}.${theme}.${side}`] = await measure(page, "chat");
+    }
+    // And one with nothing unread, to be measured beside them.
+    if (gateway) readChat(gateway);
+    await page.getByRole("button", { name: "Chats, 3 new" }).click();
+    await rest(page, "wide");
+    all[`chat.panel.${theme}.${side}`] = await measure(page, "chat");
     await page.close();
     await gateway?.close();
   }

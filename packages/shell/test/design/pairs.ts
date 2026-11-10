@@ -5,6 +5,7 @@
 // Build the shell first. A part added to the shell adds its screens here.
 import { chromium, type Page } from "@playwright/test";
 import { type Agent, SESSION, standIn } from "../stand-in.ts";
+import { noted, readChat, unreadReply } from "./unread.ts";
 
 const [design, out] = process.argv.slice(2);
 if (!design || !out) throw new Error("usage: pairs.ts <design.html> <out dir>");
@@ -22,6 +23,8 @@ interface Screen {
   hash?: string;
   /** The built side's computer has a browser. */
   browser?: boolean;
+  /** Three of the built side's agents have said something you haven't read. */
+  unread?: boolean;
   /** Terminals the built side is given, as the design's sample has them. */
   terminals?: { cmd: string; running: boolean }[];
   design(page: Page): Promise<unknown>;
@@ -39,6 +42,11 @@ const browserWindow = (page: Page) =>
 const ownTab = async (page: Page) => {
   await page.getByRole("button", { name: "New tab", exact: true }).click();
   await page.getByRole("tab", { name: "New tab", selected: true }).waitFor();
+};
+/** The design's own control makes one more chat say something. */
+const twoMoreReplies = async (page: Page) => {
+  for (let n = 0; n < 2; n++) await page.getByRole("button", { name: "A reply arrives" }).click();
+  await page.getByRole("button", { name: "Chats, 3 new" }).waitFor();
 };
 const SCREENS: Screen[] = [
   {
@@ -62,6 +70,25 @@ const SCREENS: Screen[] = [
         ? page.getByRole("button", { name: "Menu" })
         : railSearch(page)
       ).click(),
+  },
+  {
+    name: "chat-collapsed",
+    sizes: ["wide", "phone"],
+    themes: ["dark", "light"],
+    unread: true,
+    design: twoMoreReplies,
+    built: (page) => page.getByRole("button", { name: "Chats, 3 new" }).waitFor(),
+  },
+  {
+    name: "chat-panel",
+    sizes: ["wide", "phone"],
+    themes: ["dark", "light"],
+    unread: true,
+    design: async (page) => {
+      await twoMoreReplies(page);
+      await page.getByRole("button", { name: "Chats, 3 new" }).click();
+    },
+    built: (page) => page.getByRole("button", { name: "Chats, 3 new" }).click(),
   },
   {
     name: "terminal",
@@ -173,6 +200,11 @@ for (const screen of SCREENS)
             await page.evaluate(() => {
               document.documentElement.dataset.theme = "light";
             });
+          if (screen.unread) {
+            await noted(gateway);
+            for (const n of [1, 2, 3]) unreadReply(gateway, n);
+            readChat(gateway);
+          }
           await screen.built(page);
         } else {
           await page.goto(`file://${design}`);
