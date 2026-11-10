@@ -994,10 +994,18 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
       if (!only || ws === only)
         ws.send(JSON.stringify({ type: "tabs", tabs: live.tabs, shown: viewer.shown }));
   };
+  /** The newest tab's id: one is never given twice. */
+  let lastTab = 1;
   /** A tab opens: sockets that haven't picked one are shown it, as the service follows the work. */
   const tabOpened = (tab: (typeof live.tabs)[number], by?: WebSocket) => {
     live.tabs.push(tab);
-    for (const [ws, viewer] of live.screens) if (ws === by || !viewer.chose) viewer.shown = tab.id;
+    lastTab = Math.max(lastTab, tab.id);
+    // Shown to whoever opened it, and to those who picked none or are shown none.
+    for (const [ws, viewer] of live.screens)
+      if (ws === by || !viewer.chose || viewer.shown === null) {
+        viewer.shown = tab.id;
+        ws.send(JPEG);
+      }
     tabs();
   };
   const screencast = (socket: WebSocket, mode: string) => {
@@ -1015,10 +1023,22 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
       // Showing or opening a tab makes the socket's page its own from then on.
       if (input.action === "open") {
         viewer.chose = true;
-        const id = Math.max(0, ...live.tabs.map((t) => t.id)) + 1;
-        return tabOpened({ id, url: "about:blank", title: "" }, socket);
+        const url = typeof input.url === "string" ? input.url : "about:blank";
+        return tabOpened({ id: lastTab + 1, url, title: "" }, socket);
       }
-      if (input.action !== "show" || !live.tabs.some((t) => t.id === input.id)) return;
+      if (!live.tabs.some((t) => t.id === input.id)) return;
+      if (input.action === "close") {
+        // A closed tab's sockets are shown the newest that is left, or none.
+        live.tabs = live.tabs.filter((t) => t.id !== input.id);
+        for (const [ws, other] of live.screens)
+          if (other.shown === input.id) {
+            other.shown = live.tabs.at(-1)?.id ?? null;
+            // The page now shown comes with its picture.
+            if (other.shown !== null) ws.send(JPEG);
+          }
+        return tabs();
+      }
+      if (input.action !== "show") return;
       viewer.chose = true;
       viewer.shown = Number(input.id);
       tabs();

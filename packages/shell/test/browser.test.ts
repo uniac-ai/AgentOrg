@@ -1,7 +1,7 @@
 // The live browser (`screencast@1`) and the control log, over the stand-in.
 import assert from "node:assert/strict";
 import test from "node:test";
-import { type Browser, chromium, type Page } from "@playwright/test";
+import { type Browser, chromium, type Locator, type Page } from "@playwright/test";
 import { type Agent, SESSION, standIn } from "./stand-in.ts";
 
 let browser: Browser;
@@ -49,6 +49,14 @@ const until = async (check: () => boolean, what: string) => {
 };
 const PAGE = 'canvas[aria-label="Page"]';
 /** Where the page's picture is: it moves if any row of the frame above it changes height. */
+/** The page's picture is drawn: its blue bar is there. */
+const pictured = (page: Page) =>
+  page.waitForFunction(() => {
+    const c = document.querySelector<HTMLCanvasElement>('canvas[aria-label="Page"]');
+    if (!c || c.width !== 80) return false;
+    const [r, , b] = c.getContext("2d")?.getImageData(30, 35, 1, 1).data ?? [];
+    return (b ?? 0) > 150 && (r ?? 255) < 120;
+  });
 const box = (page: Page) =>
   page.locator(PAGE).evaluate((e) => JSON.stringify(e.getBoundingClientRect()));
 
@@ -59,13 +67,7 @@ test(
     const page = await open(gateway);
     const frame = page.getByRole("region", { name: "Browser" });
     await frame.waitFor();
-    await page.waitForFunction(() => {
-      const c = document.querySelector<HTMLCanvasElement>('canvas[aria-label="Page"]');
-      if (!c || c.width !== 80) return false;
-      // The picture is drawn: its blue bar is there.
-      const [r, , b] = c.getContext("2d")?.getImageData(30, 35, 1, 1).data ?? [];
-      return (b ?? 0) > 150 && (r ?? 255) < 120;
-    });
+    await pictured(page);
     assert.equal(
       await frame.getByRole("tab", { name: "Checkout" }).getAttribute("aria-selected"),
       "true",
@@ -188,7 +190,7 @@ test(
     await selected("Checkout");
     assert.deepEqual(gateway.live.input.at(-1), { type: "tab", action: "show", id: 1 });
 
-    await frame.getByRole("button", { name: "New tab" }).click();
+    await frame.getByRole("button", { name: "New tab", exact: true }).click();
     await until(() => gateway.live.tabs.length === 3, "your tab");
     assert.deepEqual(gateway.live.input.at(-1), { type: "tab", action: "open" });
     // Your new tab is in front, named as an empty one, with an empty address to type in.
@@ -197,7 +199,7 @@ test(
 
     // An address half typed belongs to its tab, also when the next tab is as empty.
     await frame.getByLabel("Address").fill("docs.example");
-    await frame.getByRole("button", { name: "New tab" }).click();
+    await frame.getByRole("button", { name: "New tab", exact: true }).click();
     const front = (n: number) =>
       frame.getByRole("tab").nth(n).and(page.locator('[aria-selected="true"]')).waitFor();
     await front(3);
@@ -213,6 +215,136 @@ test(
 );
 
 test(
+  "the window's rows are where the design puts them: tabs with their Close and the plus, then the address",
+  withGateway(async (gateway) => {
+    withSurfaces(gateway, [BROWSER]);
+    const page = await open(gateway);
+    const frame = page.getByRole("region", { name: "Browser" });
+    await frame.getByRole("tab", { name: "Checkout", selected: true }).waitFor();
+    const origin = await frame.boundingBox();
+    assert.ok(origin);
+    /** A part's box from inside the window's edge. */
+    const boxOf = async (part: Locator) => {
+      const b = await part.boundingBox();
+      assert.ok(b, `${part} is on the page`);
+      const round = (n: number) => Math.round(n * 100) / 100;
+      return {
+        x: round(b.x - origin.x - 1),
+        y: round(b.y - origin.y - 1),
+        w: b.width,
+        h: b.height,
+      };
+    };
+    // A first row 44 tall: a tab 32 tall holding its name, then its Close, 20 across, 4 from its end.
+    const tab = frame.getByRole("tab", { name: "Checkout" });
+    const whole = await boxOf(tab.locator("xpath=.."));
+    const close = await boxOf(frame.getByRole("button", { name: "Close Checkout" }));
+    assert.deepEqual([whole.x, whole.y, whole.h], [8, 6, 32]);
+    assert.deepEqual([close.y, close.w, close.h], [12, 20, 20]);
+    assert.equal(Math.round((whole.x + whole.w - (close.x + close.w)) * 100) / 100, 4);
+    assert.equal(await tab.evaluate((e) => getComputedStyle(e).fontSize), "13px");
+    // The plus, 28 across, 4 after the tabs.
+    const plus = await boxOf(frame.getByRole("button", { name: "New tab", exact: true }));
+    assert.deepEqual(plus, {
+      x: Math.round((whole.x + whole.w + 4) * 100) / 100,
+      y: 8,
+      w: 28,
+      h: 28,
+    });
+    // A second row 40 tall: three buttons 28 across, 2 apart, then the address, 32 tall.
+    const button = (name: string) => boxOf(frame.getByRole("button", { name }));
+    assert.deepEqual(await button("Back"), { x: 8, y: 50, w: 28, h: 28 });
+    assert.deepEqual(await button("Forward"), { x: 38, y: 50, w: 28, h: 28 });
+    assert.deepEqual(await button("Reload"), { x: 68, y: 50, w: 28, h: 28 });
+    const address = await boxOf(frame.getByLabel("Address"));
+    assert.deepEqual([address.x, address.y, address.h], [102, 48, 32]);
+    // Then the page, inset 8, with rounded corners.
+    const pageArea = frame.locator('canvas[aria-label="Page"]').locator("xpath=..");
+    const area = await boxOf(pageArea);
+    assert.deepEqual([area.x, area.y], [8, 88]);
+    assert.equal(await pageArea.evaluate((e) => getComputedStyle(e).borderTopLeftRadius), "10px");
+    await page.close();
+  }),
+);
+
+test(
+  "every tab has a Close: it closes that tab and moves the ones after it up, and the last leaves no page",
+  withGateway(async (gateway) => {
+    withSurfaces(gateway, [BROWSER]);
+    gateway.tabOpens({ id: 2, url: "https://docs.example/retries", title: "Retries" });
+    gateway.tabOpens({ id: 3, url: "https://shop.example/cart", title: "Cart" });
+    const page = await open(gateway);
+    const frame = page.getByRole("region", { name: "Browser" });
+    const tab = (name: string) => frame.getByRole("tab", { name });
+    const front = (name: string) => frame.getByRole("tab", { name, selected: true }).waitFor();
+    const close = (name: string) => frame.getByRole("button", { name: `Close ${name}` }).click();
+    await front("Cart");
+    await pictured(page);
+    assert.equal(await frame.getByRole("button", { name: /^Close / }).count(), 3);
+    const at = async (name: string) => {
+      const found = await tab(name).boundingBox();
+      assert.ok(found, `${name} has a tab`);
+      return found.x;
+    };
+    const [checkout, retries] = [await at("Checkout"), await at("Retries")];
+    const before = await box(page);
+
+    // One that isn't in front: it goes, the one before it stays, the one after takes its place.
+    await close("Retries");
+    await tab("Retries").waitFor({ state: "detached" });
+    assert.equal(await at("Checkout"), checkout);
+    assert.equal(await at("Cart"), retries);
+    await front("Cart");
+    assert.equal(await box(page), before, "the page under the tabs doesn't move");
+
+    // The one in front, with two others left: the newest of them comes to the front.
+    gateway.tabOpens({ id: 4, url: "https://docs.example/sessions", title: "Sessions" });
+    await front("Sessions");
+    await close("Sessions");
+    await front("Cart");
+    await close("Cart");
+    await front("Checkout");
+
+    // The last, while its page asks for a file: no tab, no address, nothing asked and no picture.
+    gateway.screen({ type: "file-chooser", open: true, multiple: false });
+    await frame.getByRole("dialog", { name: "The page asks" }).waitFor();
+    await close("Checkout");
+    await tab("Checkout").waitFor({ state: "detached" });
+    assert.deepEqual(
+      gateway.live.input.filter((i) => i.action === "close").map((i) => i.id),
+      [2, 4, 3, 1],
+    );
+    assert.equal(await frame.getByRole("tab").count(), 0);
+    assert.equal(await frame.getByLabel("Address").inputValue(), "");
+    assert.equal(await frame.getByRole("dialog", { name: "The page asks" }).count(), 0);
+    assert.ok(
+      await frame.getByRole("button", { name: "Back" }).isDisabled(),
+      "nowhere to go back in",
+    );
+    assert.equal(
+      await frame.locator('canvas[aria-label="Page"]').evaluate((c: HTMLCanvasElement) => {
+        const pixels = c.getContext("2d")?.getImageData(0, 0, c.width, c.height).data ?? [];
+        return pixels.some((value) => value !== 0);
+      }),
+      false,
+      "what the last tab looked like is gone",
+    );
+
+    // An address typed with no tab to go there in opens one, named by its site until it has a title.
+    await frame.getByLabel("Address").fill("docs.example/start");
+    await frame.getByLabel("Address").press("Enter");
+    await front("docs.example");
+    assert.deepEqual(gateway.live.input.at(-1), {
+      type: "tab",
+      action: "open",
+      url: "https://docs.example/start",
+    });
+    assert.equal(await box(page), before, "nor when a tab comes back");
+    await page.close();
+  }),
+);
+
+test(
   "a browser you may only watch shows the page and what it asks, with nothing to press",
   withGateway(async (gateway) => {
     withSurfaces(gateway, [{ ...BROWSER, operate: false }]);
@@ -222,7 +354,8 @@ test(
     assert.equal(gateway.live.opened.at(-1)?.mode, "watch");
     assert.ok(await frame.getByRole("button", { name: "Back" }).isDisabled());
     assert.ok(await frame.getByRole("tab", { name: "Checkout" }).isDisabled());
-    assert.equal(await frame.getByRole("button", { name: "New tab" }).count(), 0);
+    assert.equal(await frame.getByRole("button", { name: "New tab", exact: true }).count(), 0);
+    assert.equal(await frame.getByRole("button", { name: /^Close / }).count(), 0);
 
     gateway.screen({ type: "dialog", open: true, kind: "confirm", message: "Leave this page?" });
     const asks = frame.getByRole("dialog", { name: "The page asks" });
@@ -240,6 +373,8 @@ test(
     const frame = page.getByRole("region", { name: "Browser" });
     await frame.getByRole("button", { name: "Back" }).and(page.locator(":enabled")).waitFor();
     const asks = frame.getByRole("dialog", { name: "The page asks" });
+    // The text over the page is the shell's, not the page's own dark on white.
+    const shellText = await frame.evaluate((e) => getComputedStyle(e).color);
 
     gateway.screen({
       type: "dialog",
@@ -248,6 +383,7 @@ test(
       message: "Your name?",
       defaultValue: "Sam",
     });
+    assert.equal(await asks.evaluate((e) => getComputedStyle(e).color), shellText);
     await asks.getByLabel("Answer").fill("Sam Lee");
     await asks.getByRole("button", { name: "OK" }).click();
     await until(() => gateway.live.input.some((i) => i.type === "dialog"), "the answer");

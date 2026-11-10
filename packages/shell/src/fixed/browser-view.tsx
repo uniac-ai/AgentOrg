@@ -2,7 +2,7 @@
 // the address bar and what the page asks (a dialog, files, a choice from a list) are drawn here.
 // Where you may operate it, it opens ready for your input: nobody holds the browser, so you and the
 // agent use it at once, and the page shown is this viewer's own.
-import { ArrowLeftIcon, ArrowRightIcon, PlusIcon, RotateCwIcon } from "lucide-react";
+import { ArrowLeftIcon, ArrowRightIcon, PlusIcon, RotateCwIcon, XIcon } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 import { Button } from "../ui/button.tsx";
 import { Checkbox } from "../ui/checkbox.tsx";
@@ -33,6 +33,12 @@ type Asked =
 
 /** A tab that has gone nowhere yet. */
 const BLANK = "about:blank";
+/** A tab's name: its page's title, else the site it is on, else that it is new. */
+const nameOf = (tab: Tab) => {
+  if (tab.title) return tab.title;
+  if (!tab.url || tab.url === BLANK) return "New tab";
+  return /^https?:/.test(tab.url) && URL.canParse(tab.url) ? new URL(tab.url).host : tab.url;
+};
 
 /** Keys that are typed as text; the rest are pressed by name. */
 const typed = (event: React.KeyboardEvent) =>
@@ -57,12 +63,14 @@ export function ScreencastView({ target }: ViewerProps) {
   const canvas = useRef<HTMLCanvasElement>(null);
   /** The keys held down in the page: one let go there was pressed there. */
   const held = useRef(new Set<string>());
+  /** No tab is shown, so a picture still on its way belongs to none. */
+  const none = useRef(false);
   const live = useLive(target, (data) => {
     if (typeof data !== "string") {
       void createImageBitmap(new Blob([data], { type: "image/jpeg" })).then(
         (image) => {
           const c = canvas.current;
-          if (!c) return;
+          if (!c || none.current) return;
           if (c.width !== image.width || c.height !== image.height) {
             c.width = image.width;
             c.height = image.height;
@@ -74,8 +82,15 @@ export function ScreencastView({ target }: ViewerProps) {
       return;
     }
     const event = JSON.parse(data) as Event;
-    if (event.type === "tabs") setTabs({ tabs: event.tabs, shown: event.shown });
-    else if (event.type === "viewport") setViewport({ width: event.width, height: event.height });
+    if (event.type === "tabs") {
+      setTabs({ tabs: event.tabs, shown: event.shown });
+      // With no tab shown there is no page: what the last one looked like goes.
+      none.current = event.shown === null;
+      if (event.shown === null) {
+        const c = canvas.current;
+        c?.getContext("2d")?.clearRect(0, 0, c.width, c.height);
+      }
+    } else if (event.type === "viewport") setViewport({ width: event.width, height: event.height });
     else if (event.type === "choice" || event.open) setAsked(event);
     else setAsked((was) => (was?.type === event.type ? undefined : was));
   });
@@ -97,7 +112,10 @@ export function ScreencastView({ target }: ViewerProps) {
   };
   // A list belongs to the page it opened on, and the service says nothing of it on another.
   // biome-ignore lint/correctness/useExhaustiveDependencies: dropped when the tab shown changes.
-  useEffect(() => setAsked((was) => (was?.type === "choice" ? undefined : was)), [tabs.shown]);
+  useEffect(
+    () => setAsked((was) => (was?.type === "choice" || tabs.shown === null ? undefined : was)),
+    [tabs.shown],
+  );
   // The wheel is the page's once the page has focus, and then it scrolls nothing else. Until then
   // it scrolls what's around the frame, and nothing of the agent's.
   useEffect(() => {
@@ -117,50 +135,90 @@ export function ScreencastView({ target }: ViewerProps) {
     return () => page?.removeEventListener("wheel", wheel);
   });
   const BUTTONS = ["left", "middle", "right"] as const;
+  const visit = () => {
+    if (!address) return;
+    // An address bar's habits: a name with no scheme is a site, and the page takes the keys. With
+    // no tab to go there in, it opens one.
+    const to = address.includes("://") ? address : `https://${address}`;
+    send(tabs.shown === null ? { type: "tab", action: "open", url: to } : { type: "navigate", to });
+    canvas.current?.focus({ preventScroll: true });
+  };
   return (
     <section
       aria-label="Browser"
-      className="flex h-[440px] min-w-0 flex-col overflow-hidden rounded-xl border has-[canvas:focus]:border-[var(--unread)] has-[canvas:focus]:ring-1 has-[canvas:focus]:ring-[var(--unread)]"
+      className="flex h-[440px] min-w-0 flex-col overflow-hidden rounded-xl border bg-background text-[15px] leading-[1.5] has-[canvas:focus]:border-[var(--unread)] has-[canvas:focus]:ring-1 has-[canvas:focus]:ring-[var(--unread)]"
     >
-      <div className="flex h-9 shrink-0 items-end gap-1 bg-[var(--canvas)] px-2">
-        <div role="tablist" aria-label="Tabs" className="no-bar flex min-w-0 gap-1 overflow-x-auto">
-          {tabs.tabs.map((tab) => (
-            <button
-              key={tab.id}
-              type="button"
-              role="tab"
-              aria-selected={tab.id === tabs.shown}
-              disabled={!operating}
-              title={tab.url}
-              onClick={() => send({ type: "tab", action: "show", id: tab.id })}
-              className={`h-7 max-w-44 min-w-0 shrink truncate rounded-t-lg px-3 text-xs ${tab.id === tabs.shown ? "bg-background text-foreground" : "text-muted-foreground"}`}
-            >
-              {tab.title || (tab.url === BLANK ? "New tab" : tab.url)}
-            </button>
-          ))}
-        </div>
-        {canOperate && (
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-xs"
-            aria-label="New tab"
-            disabled={!operating}
-            onClick={() => send({ type: "tab", action: "open" })}
-            className="mb-0.5 shrink-0"
+      {/* The first row: its tabs, with the plus beside them. */}
+      <div className="flex h-11 shrink-0 items-center gap-1 pr-1.5 pl-2">
+        <div className="flex min-w-0 flex-1 items-center gap-1">
+          <div
+            role="tablist"
+            aria-label="Tabs"
+            className="no-bar flex min-w-0 gap-1 overflow-x-auto"
           >
-            <PlusIcon />
-          </Button>
-        )}
+            {tabs.tabs.map((tab) => {
+              const on = tab.id === tabs.shown;
+              // Where you may only watch, a tab is its name alone.
+              if (!canOperate)
+                return (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    role="tab"
+                    aria-selected={on}
+                    disabled
+                    className={`h-8 min-w-0 shrink truncate rounded-lg px-3 text-[13px] ${on ? "bg-[var(--selected)] font-medium text-foreground" : "text-muted-foreground"}`}
+                  >
+                    {nameOf(tab)}
+                  </button>
+                );
+              return (
+                <span
+                  key={tab.id}
+                  className={`flex h-8 min-w-0 shrink items-center rounded-lg ${on ? "bg-[var(--selected)]" : "hover:bg-[var(--hover)]"}`}
+                >
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={on}
+                    disabled={!operating}
+                    onClick={() => send({ type: "tab", action: "show", id: tab.id })}
+                    className={`h-8 min-w-0 truncate pr-1 pl-3 text-[13px] ${on ? "font-medium" : "text-muted-foreground"}`}
+                  >
+                    {nameOf(tab)}
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={`Close ${nameOf(tab)}`}
+                    disabled={!operating}
+                    onClick={() => send({ type: "tab", action: "close", id: tab.id })}
+                    className="mr-1 grid size-5 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-[var(--hover)]"
+                  >
+                    <XIcon className="size-3" />
+                  </button>
+                </span>
+              );
+            })}
+          </div>
+          {canOperate && (
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="New tab"
+              disabled={!operating}
+              onClick={() => send({ type: "tab", action: "open" })}
+            >
+              <PlusIcon />
+            </Button>
+          )}
+        </div>
       </div>
+      {/* The second row: where it is. */}
       <form
-        className="flex h-10 shrink-0 items-center gap-1 border-b px-2"
+        className="flex h-10 shrink-0 items-center gap-0.5 px-2"
         onSubmit={(event) => {
           event.preventDefault();
-          if (!address) return;
-          // An address bar's habits: a name with no scheme is a site, and the page takes the keys.
-          send({ type: "navigate", to: address.includes("://") ? address : `https://${address}` });
-          canvas.current?.focus({ preventScroll: true });
+          visit();
         }}
       >
         {(["back", "forward", "reload"] as const).map((to) => {
@@ -170,9 +228,9 @@ export function ScreencastView({ target }: ViewerProps) {
               key={to}
               type="button"
               variant="ghost"
-              size="icon-xs"
+              size="icon-sm"
               aria-label={to[0]?.toUpperCase() + to.slice(1)}
-              disabled={!operating}
+              disabled={!operating || tabs.shown === null}
               onClick={() => send({ type: "navigate", to })}
             >
               <Icon />
@@ -184,11 +242,13 @@ export function ScreencastView({ target }: ViewerProps) {
           readOnly={!operating}
           value={address ?? url}
           onChange={(event) => setAddress(event.target.value)}
+          inputMode="url"
+          enterKeyHint="go"
           spellCheck={false}
-          className="h-7 min-w-0 flex-1 rounded-lg bg-[var(--raised)] px-2.5 font-mono text-xs outline-none"
+          className="ml-1 h-8 min-w-0 flex-1 rounded-full bg-[var(--raised)] px-3.5 font-mono text-xs outline-none"
         />
       </form>
-      <div className="relative flex min-h-0 flex-1 items-center justify-center bg-[var(--canvas)]">
+      <div className="relative m-2 mt-1 flex min-h-0 flex-1 items-center justify-center overflow-hidden rounded-lg bg-white text-[#111]">
         <canvas
           ref={canvas}
           aria-label="Page"
@@ -266,7 +326,7 @@ function AskedOverlay({
     <div
       role="dialog"
       aria-label="The page asks"
-      className="absolute inset-x-6 top-6 mx-auto flex max-w-sm flex-col gap-3 rounded-xl border bg-background p-4 text-[13px] shadow-lg"
+      className="absolute inset-x-6 top-6 mx-auto flex max-w-sm flex-col gap-3 rounded-xl border bg-background p-4 text-[13px] text-foreground shadow-lg"
     >
       {asked.type === "dialog" && (
         <>

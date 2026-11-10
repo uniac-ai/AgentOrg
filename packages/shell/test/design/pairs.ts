@@ -20,6 +20,8 @@ interface Screen {
   sizes: Size[];
   themes: Theme[];
   hash?: string;
+  /** The built side's computer has a browser. */
+  browser?: boolean;
   /** Terminals the built side is given, as the design's sample has them. */
   terminals?: { cmd: string; running: boolean }[];
   design(page: Page): Promise<unknown>;
@@ -32,6 +34,12 @@ const railSearch = (page: Page) =>
     .getByRole("button", { name: "Search", exact: true });
 const terminalWindow = (page: Page) =>
   page.getByRole("tablist", { name: "Terminals" }).locator("xpath=../../..");
+const browserWindow = (page: Page) =>
+  page.getByRole("tablist", { name: "Tabs" }).locator("xpath=../../..");
+const ownTab = async (page: Page) => {
+  await page.getByRole("button", { name: "New tab", exact: true }).click();
+  await page.getByRole("tab", { name: "New tab", selected: true }).waitFor();
+};
 const SCREENS: Screen[] = [
   {
     name: "frame",
@@ -75,6 +83,23 @@ const SCREENS: Screen[] = [
     built: async () => {},
     part: terminalWindow,
   },
+  {
+    name: "browser",
+    sizes: ["wide"],
+    themes: ["dark", "light"],
+    hash: "#/a/a-research",
+    browser: true,
+    design: async (page) => {
+      await page
+        .getByRole("navigation", { name: "Main" })
+        .getByRole("button", { name: "Research", exact: true })
+        .click();
+      await page.getByRole("button", { name: "Browser", exact: true }).click();
+      await ownTab(page);
+    },
+    built: ownTab,
+    part: browserWindow,
+  },
 ];
 
 const browser = await chromium.launch();
@@ -89,6 +114,21 @@ for (const screen of SCREENS)
           viewport: { width, height: side === "design" ? height + CONTROLS : height },
         });
         if (gateway) {
+          if (screen.browser)
+            (gateway.agents.get("a-research") as Agent).units = [
+              {
+                instance: "i-computer",
+                provider: "units",
+                unit: "computer",
+                title: "Computer",
+                values: {},
+                needs: {},
+                status: {
+                  state: "connected",
+                  surfaces: [{ surface: "browser", protocol: "screencast@1", operate: true }],
+                },
+              },
+            ];
           if (screen.terminals) {
             (gateway.agents.get("a-research") as Agent).units = [
               {
