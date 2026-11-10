@@ -3,7 +3,6 @@
 import type { ComponentType } from "react";
 import { ScreencastView } from "./browser-view.tsx";
 import type { LiveTarget } from "./live-socket.ts";
-import { CommandsView, PtyView } from "./terminal-views.tsx";
 import { TerminalsView } from "./terminals.tsx";
 
 /** One surface of one of the agent's units, as its status says. */
@@ -20,8 +19,6 @@ export const VIEWERS: Record<
   string,
   { frame: "terminal" | "browser"; View: ComponentType<ViewerProps> }
 > = {
-  "commands@1": { frame: "terminal", View: CommandsView },
-  "pty@1": { frame: "terminal", View: PtyView },
   "terminal@1": { frame: "terminal", View: TerminalsView },
   "screencast@1": { frame: "browser", View: ScreencastView },
 };
@@ -34,8 +31,7 @@ export const targetOf = (agent: string, surface: OpenSurface): LiveTarget => ({
   agent,
   instance: surface.instance,
   surface: surface.surface,
-  // A surface you can operate is opened to be; one you can't, to watch.
-  mode: surface.operate && surface.protocol !== "commands@1" ? "operate" : "watch",
+  mode: surface.operate ? "operate" : "watch",
 });
 
 function Unavailable({ surface, frame }: { surface: OpenSurface; frame?: boolean }) {
@@ -58,7 +54,7 @@ function Unavailable({ surface, frame }: { surface: OpenSurface; frame?: boolean
   );
 }
 
-/** One pane per surface, side by side, on a window's surface. */
+/** The terminals' frame, on a window's surface: a pane for each surface it is given. */
 export function TerminalFrame({ agent, surfaces }: { agent: string; surfaces: OpenSurface[] }) {
   return (
     <section

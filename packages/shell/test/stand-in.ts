@@ -444,11 +444,6 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
   /** What the live surfaces have heard and said. */
   const live = {
     opened: [] as { agent: string; instance: string; surface: string; mode: string }[],
-    commands: [] as Record<string, unknown>[],
-    watchers: new Set<WebSocket>(),
-    shells: new Set<WebSocket>(),
-    typed: [] as string[],
-    resized: [] as { columns: number; rows: number }[],
     /** `terminal@1`: every event so far, its sockets, and what they sent. */
     terminal: {
       events: [] as Record<string, unknown>[],
@@ -926,28 +921,8 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
       if (!surface) return socket.close(4404, "No such surface.");
       live.opened.push(target);
       socket.send(JSON.stringify({ op: "live", protocol: surface.protocol }));
-      if (surface.protocol === "commands@1") {
-        for (const event of live.commands) socket.send(JSON.stringify(event));
-        live.watchers.add(socket);
-        socket.on("close", () => live.watchers.delete(socket));
-      }
       if (surface.protocol === "screencast@1") screencast(socket, target.mode);
       if (surface.protocol === "terminal@1") terminalSocket(socket, target.mode);
-      if (surface.protocol === "pty@1") {
-        live.shells.add(socket);
-        socket.on("close", () => live.shells.delete(socket));
-        socket.send(Buffer.from("0$ "));
-        socket.on("message", (frame: Buffer) => {
-          const body = frame.subarray(1).toString();
-          if (frame[0] === 0x30) {
-            live.typed.push(body);
-            // A shell echoes what's typed.
-            socket.send(
-              Buffer.concat([Buffer.from("0"), Buffer.from(body.replaceAll("\r", "\r\n$ "))]),
-            );
-          } else if (frame[0] === 0x31) live.resized.push(JSON.parse(body));
-        });
-      }
     });
   });
   /** A `terminal@1` event, to every socket and to those that come later. */
@@ -1102,11 +1077,6 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
       for (const field of units.find((u) => u.id === id)?.form ?? []) change(field);
     },
     live,
-    /** A `commands@1` event, to every watcher and to those who come later. */
-    command(event: Record<string, unknown>) {
-      live.commands.push(event);
-      for (const ws of live.watchers) ws.send(JSON.stringify(event));
-    },
     terminal,
     /** A `screencast@1` event, to every browser socket. */
     screen(event: Record<string, unknown>) {
@@ -1117,10 +1087,6 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
     /** A control call made, for `agents.activity`. */
     controlled(entry: Omit<(typeof activity)[number], "seq">) {
       activity.push({ seq: activity.length + 1, ...entry });
-    },
-    /** The service ends every shell, as when it exits. */
-    endShells: (code: number, reason: string) => {
-      for (const ws of live.shells) ws.close(code, reason);
     },
     /** What `agents.check` finds wrong from now on. */
     findProblems: (found: StackProblem[]) => {

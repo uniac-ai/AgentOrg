@@ -48,8 +48,8 @@ function withTerminals(gateway: Gateway, operate = true) {
   gateway.terminal({ type: "output", id: "c2", stream: "stdout", text: "ready on :4173\n" });
   return start;
 }
-async function open(gateway: Gateway): Promise<Page> {
-  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+async function open(gateway: Gateway, viewport = { width: 1440, height: 900 }): Promise<Page> {
+  const page = await browser.newPage({ viewport });
   page.setDefaultTimeout(8000);
   await page.addInitScript((session) => localStorage.setItem("agentorg.session", session), SESSION);
   await page.goto(`${gateway.url}/#/a/a-research`);
@@ -91,6 +91,9 @@ test(
     const page = await open(gateway);
     await front(page, "npm run dev");
     assert.deepEqual(await pane(page).getByRole("tab").allInnerTexts(), ["npm ci", "npm run dev"]);
+    // The live terminals stand where the record's Computer frame would be.
+    assert.equal(await page.getByRole("region", { name: "Terminal" }).count(), 1);
+    assert.equal(await page.getByRole("region", { name: "Computer" }).count(), 0);
     await says(page, "$ npm run dev");
     await says(page, "ready on :4173");
     assert.equal(await pane(page).getByLabel("Folder").innerText(), "/work/app");
@@ -469,6 +472,31 @@ test(
     await pane(page).getByRole("tab", { name: "npm ci" }).click();
     await front(page, "npm ci");
     assert.equal(await inView(), true);
+    await page.close();
+  }),
+);
+
+test(
+  "on a phone the tabs, the plus, the folder and the terminal all end inside the frame",
+  withGateway(async (gateway) => {
+    const start = withTerminals(gateway);
+    for (let n = 0; n < 6; n++) start(`m${n}`, `npm run build:package-${n}`);
+    const page = await open(gateway, { width: 390, height: 844 });
+    await front(page, "npm run build:package-5");
+    const edge = async (part: Locator) => {
+      const box = await part.boundingBox();
+      assert.ok(box, `${part} is on the page`);
+      return box.x + box.width;
+    };
+    const right = await edge(pane(page));
+    assert.ok(right <= 390, "the frame is within the screen");
+    for (const part of [
+      pane(page).getByRole("button", { name: "New terminal" }),
+      pane(page).getByLabel("Folder"),
+      pane(page).locator(".xterm-screen"),
+      pane(page).getByRole("tab", { selected: true }),
+    ])
+      assert.ok((await edge(part)) <= right, `${part} ends inside the frame`);
     await page.close();
   }),
 );
