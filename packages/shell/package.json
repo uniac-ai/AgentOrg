@@ -16,7 +16,7 @@
   ],
   "scripts": {
     "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.json && tsc -p tsconfig.test.json && node scripts/build.js",
-    "test": "node --experimental-strip-types --no-warnings --test --test-timeout=60000 \"test/**/*.test.ts\""
+    "test": "node --experimental-strip-types --no-warnings --test --test-concurrency=3 --test-timeout=60000 \"test/**/*.test.ts\""
   },
   "devDependencies": {
     "@agentorg/interfaces": "0.0.0",
