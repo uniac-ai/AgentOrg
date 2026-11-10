@@ -209,6 +209,13 @@ test("the form says which service, found when it is read, and what each answer g
   assert.deepEqual(form(unit, "workspace")?.visible, { field: "service", in: ["local"] });
   assert.deepEqual(form(unit, "path")?.visible, { field: "service", in: ["another"] });
   assert.equal(form(unit, "where"), undefined);
+  // What an agent may set: how far it reaches, within bounds. Where it runs, never.
+  const authority = (id: string) =>
+    (form(unit, id) as { authority?: string } | undefined)?.authority;
+  assert.deepEqual(
+    ["service", "address", "token", "access", "browser", "workspace", "path"].map(authority),
+    [undefined, undefined, undefined, "setting", "setting", undefined, undefined],
+  );
   assert.deepEqual(
     form(unit, "access")
       ?.options?.at(-1)

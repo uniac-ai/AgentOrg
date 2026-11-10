@@ -11,6 +11,7 @@ import {
   agents,
   chat,
   connections,
+  Field,
   hubActors,
   hubAudit,
   hubBindings,
@@ -481,4 +482,12 @@ test("chat@1 sends, pages its history and reports status with a refusal's code",
     { state: "error", detail: { code: "usage_limit", message: "Usage limit reached." } },
   ]);
   assert.throws(() => binding.emit("status", { state: "done" }), { code: "bad_output" });
+});
+
+test("a field says what an agent may do with it, from a closed list", () => {
+  const field = { id: "mode", type: "text", value: "string", title: "Mode" } as const;
+  for (const authority of ["setting", "holds", "contacts", "instructs", "runs"])
+    assert.ok(Field.safeParse({ ...field, authority }).success, authority);
+  assert.equal(Field.safeParse({ ...field, authority: "anything" }).success, false);
+  assert.equal(Field.parse(field).authority, undefined, "none declared: closed");
 });

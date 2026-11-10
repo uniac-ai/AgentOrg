@@ -259,8 +259,11 @@ export function createStacks(parts: StackParts) {
         )
           continue;
         const shared = fields.get(field.id);
-        if (shared?.visible) shared.visible.in.push(kind.id);
-        else fields.set(field.id, { ...field, visible: { field: MCP_HOW, in: [kind.id] } });
+        if (shared?.visible) {
+          shared.visible.in.push(kind.id);
+          // Shared, it's open to an agent only if every kind says so.
+          if (shared.authority !== field.authority) delete shared.authority;
+        } else fields.set(field.id, { ...field, visible: { field: MCP_HOW, in: [kind.id] } });
       }
     return {
       id: MCP_UNIT,
@@ -283,6 +286,7 @@ export function createStacks(parts: StackParts) {
           type: "connection",
           value: "string",
           title: "Connection",
+          authority: "holds",
           required: true,
           visible: { field: MCP_HOW, in: [CONNECTION_UNIT] },
         },
@@ -308,6 +312,7 @@ export function createStacks(parts: StackParts) {
       form: [
         {
           id: "skill",
+          authority: "holds",
           type: "choice",
           value: "string",
           title: "Skill",
@@ -328,6 +333,7 @@ export function createStacks(parts: StackParts) {
       form: [
         {
           id: "connection",
+          authority: "holds",
           type: "connection",
           value: "string",
           title: "Connection",
@@ -390,7 +396,6 @@ export function createStacks(parts: StackParts) {
     }
   };
 
-  /** Everything that can be known about one unit before anything runs. `taken` grows by it. */
   /** What the MCP unit stands for, as it was filled in: the unit that does the work. */
   const throughMcp = (
     asked: Pick<FilledUnit, "provider" | "unit" | "values" | "secrets">,
@@ -426,6 +431,7 @@ export function createStacks(parts: StackParts) {
     };
   };
 
+  /** Everything that can be known about one unit before anything runs. `taken` grows by it. */
   const place = async (
     asked: Pick<FilledUnit, "provider" | "unit" | "values" | "secrets">,
     picks: Record<string, number | string>,

@@ -17,7 +17,7 @@ export const LOCAL = "local";
 export const ANOTHER = "another";
 /** What to do when there is no service here: the app never starts or ships one. */
 export const INSTALL_STEPS =
-  "No AgentComputer is running on this machine. Install it with `npm install -g @agentorg/computer`, start it with `agentcomputer serve`, and try again.";
+  "No AgentComputer is running on this machine. Install it with npm install -g @agentorg/computer, start it with agentcomputer serve, and try again.";
 
 /** How the service on this machine isolates its computers, if one is running. */
 export type Found = { isolation: "none" | "container" } | undefined;
@@ -72,6 +72,7 @@ export const computerUnit = (found: Found): z.input<typeof Unit> => ({
     },
     {
       id: "access",
+      authority: "setting",
       type: "choice",
       value: "string",
       title: "What it can do",
@@ -105,6 +106,7 @@ export const computerUnit = (found: Found): z.input<typeof Unit> => ({
     },
     {
       id: "browser",
+      authority: "setting",
       type: "toggle",
       value: "boolean",
       title: "Browser",
@@ -142,6 +144,7 @@ export const WEB_UNIT: z.input<typeof Unit> = {
   form: [
     {
       id: "service",
+      authority: "setting",
       type: "choice",
       value: "string",
       title: "Service",

@@ -70,6 +70,13 @@ export const Field = z.object({
   description: Description.optional(),
   required: z.literal(true).optional(),
   default: FieldValue.optional(),
+  /**
+   * What an agent may do with this field, by what it says. `setting`: how the unit works, within
+   * bounds. `holds`: something the person already has. `contacts`: an address to reach. `instructs`:
+   * text that will steer an agent. `runs`: a program to start with someone's rights, which an
+   * agent may never set. With none, no agent may set it.
+   */
+  authority: z.enum(["setting", "holds", "contacts", "instructs", "runs"]).optional(),
   /** Greyed text of an empty field, saying what leaving it empty does. `{name}` is the agent's name. */
   placeholder: z.string().max(256).optional(),
   visible: z.object({ field: FieldId, in: z.array(FieldValue).min(1).max(64) }).optional(),

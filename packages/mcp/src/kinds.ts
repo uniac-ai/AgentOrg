@@ -64,6 +64,7 @@ export const UNITS = [
     form: [
       {
         id: "url",
+        authority: "contacts",
         type: "text",
         value: "string",
         title: "Address",
@@ -81,9 +82,16 @@ export const UNITS = [
     title: "A local server this machine starts",
     description: "Starts an MCP server with this app's rights.",
     form: [
-      { id: "command", type: "text", value: "string", title: "Command", required: true },
-      { id: "args", type: "lines", value: "strings", title: "Arguments" },
-      { id: "cwd", type: "directory", value: "string", title: "Working folder" },
+      {
+        id: "command",
+        authority: "runs",
+        type: "text",
+        value: "string",
+        title: "Command",
+        required: true,
+      },
+      { id: "args", authority: "runs", type: "lines", value: "strings", title: "Arguments" },
+      { id: "cwd", authority: "runs", type: "directory", value: "string", title: "Working folder" },
       {
         id: LINES,
         type: "environment",
