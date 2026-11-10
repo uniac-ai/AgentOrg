@@ -1,7 +1,8 @@
-// The frame around the pages, at both widths, in a real browser over the stand-in gateway.
+// The frame around the pages, wide, as a rail and on a phone, in a real browser over the stand-in
+// gateway.
 import assert from "node:assert/strict";
 import test from "node:test";
-import { type Browser, chromium, type Page } from "@playwright/test";
+import { type Browser, chromium, type Locator, type Page } from "@playwright/test";
 import { SESSION, standIn } from "./stand-in.ts";
 
 let browser: Browser;
@@ -71,6 +72,108 @@ test(
   }),
 );
 
+/** A part's box as [x, y, width, height]. */
+const boxOf = async (part: Locator) => {
+  const box = await part.boundingBox();
+  assert.ok(box, `${part} is on the page`);
+  return [box.x, box.y, box.width, box.height];
+};
+
+test(
+  "wide, the frame's parts are where the design puts them",
+  withGateway(async (gateway) => {
+    const page = await open(gateway, WIDE);
+    const nav = page.getByRole("navigation", { name: "Main" });
+    const row = (name: string) => nav.getByRole("button", { name, exact: true });
+    await row("Working Research").waitFor();
+    assert.deepEqual(await boxOf(nav), [0, 0, 236, 900]);
+    assert.deepEqual(await boxOf(row("Home")), [10, 12, 216, 40]);
+    assert.deepEqual(await boxOf(nav.getByRole("searchbox")), [10, 60, 180, 36]);
+    assert.deepEqual(await boxOf(row("Create")), [194, 62, 32, 32]);
+    // Rows are 40 tall and 42 apart.
+    assert.deepEqual(await boxOf(row("Working Research")), [10, 106, 216, 40]);
+    assert.deepEqual(await boxOf(row("Idle Reviewer")), [10, 148, 216, 40]);
+    assert.deepEqual(await boxOf(row("Has a problem Triage")), [10, 190, 216, 40]);
+    assert.deepEqual(await boxOf(row("Templates")), [10, 808, 216, 40]);
+    assert.deepEqual(await boxOf(row("Settings")), [10, 850, 216, 40]);
+    // A face is 28 across in its row, and its mark is 8, at the face's foot on the right.
+    const mark = row("Working Research").getByRole("img", { name: "Working" });
+    assert.deepEqual(await boxOf(mark.locator("xpath=..")), [18, 112, 28, 28]);
+    assert.deepEqual(await boxOf(mark), [38, 132, 8, 8]);
+    assert.equal(
+      await row("Working Research").evaluate((e) => getComputedStyle(e).fontSize),
+      "15px",
+    );
+    // The page is everything beside the bar, with no frame of its own.
+    const main = page.locator("main");
+    assert.deepEqual(await boxOf(main), [236, 0, 1204, 900]);
+    assert.deepEqual(
+      await main.evaluate((e) => {
+        const style = getComputedStyle(e);
+        return [style.backgroundColor, style.borderTopLeftRadius];
+      }),
+      ["rgba(0, 0, 0, 0)", "0px"],
+    );
+    await page.close();
+  }),
+);
+
+test(
+  "as a rail, the frame's parts are where the design puts them, and so is the drawer its search opens",
+  withGateway(async (gateway) => {
+    const page = await open(gateway, { width: 800, height: 900 });
+    const nav = page.getByRole("navigation", { name: "Main" });
+    await nav.getByRole("button", { name: "Working Research" }).waitFor();
+    assert.deepEqual(await boxOf(nav), [0, 0, 60, 900]);
+    assert.deepEqual(await boxOf(nav.getByRole("button", { name: "Home" })), [8, 12, 44, 40]);
+    assert.deepEqual(
+      await boxOf(nav.getByRole("button", { name: "Search", exact: true })),
+      [14, 60, 32, 32],
+    );
+    assert.deepEqual(await boxOf(nav.getByRole("button", { name: "Create" })), [14, 96, 32, 32]);
+    assert.deepEqual(
+      await boxOf(nav.getByRole("button", { name: "Working Research" })),
+      [8, 138, 44, 40],
+    );
+    assert.deepEqual(await boxOf(page.locator("main")), [60, 0, 740, 900]);
+    await nav.getByRole("button", { name: "Search", exact: true }).click();
+    const drawer = page.getByRole("dialog").getByRole("navigation", { name: "Main" });
+    assert.deepEqual(await boxOf(drawer), [0, 0, 272, 900]);
+    assert.deepEqual(await boxOf(drawer.getByRole("searchbox")), [10, 60, 216, 36]);
+    // A click on the page behind it closes it.
+    await page.locator("[data-drawer-overlay]").click({ position: { x: 600, y: 400 } });
+    await drawer.waitFor({ state: "detached" });
+    await page.close();
+  }),
+);
+
+test(
+  "on a phone, the frame's parts are where the design puts them, and so is the drawer behind Menu",
+  withGateway(async (gateway) => {
+    const page = await open(gateway, PHONE);
+    const head = page.getByRole("banner");
+    assert.deepEqual(await boxOf(head), [0, 0, 390, 48]);
+    assert.deepEqual(await boxOf(head.getByRole("button", { name: "Menu" })), [8, 8, 32, 32]);
+    assert.deepEqual(await boxOf(page.locator("main")), [0, 48, 390, 796]);
+    await head.getByRole("button", { name: "Menu" }).click();
+    const menu = page.getByRole("dialog").getByRole("navigation", { name: "Main" });
+    assert.deepEqual(await boxOf(menu), [0, 0, 272, 844]);
+    assert.deepEqual(await boxOf(menu.getByRole("button", { name: "Home" })), [10, 12, 252, 40]);
+    assert.equal(
+      await menu.getByRole("searchbox").evaluate((e) => e === document.activeElement),
+      false,
+      "opened as a menu, its search isn't taken to be wanted",
+    );
+    // Create from the drawer: its window opens once the drawer is gone, and has the keyboard.
+    await menu.getByRole("button", { name: "Create" }).click();
+    await menu.waitFor({ state: "detached" });
+    const create = page.getByRole("dialog", { name: "Create" });
+    await create.getByRole("button", { name: "Empty" }).waitFor();
+    await page.waitForFunction(() => document.activeElement?.closest('[role="dialog"]'));
+    await page.close();
+  }),
+);
+
 test(
   "search narrows the agents by name, and what it leaves out comes back",
   withGateway(async (gateway) => {
@@ -89,8 +192,11 @@ test(
     await search.fill("zzz");
     assert.deepEqual(await names(), []);
     assert.deepEqual(await nav.getByRole("button", { name: "Settings" }).boundingBox(), still);
-    await search.fill("");
-    assert.equal((await names()).length, 5);
+    // Narrowed to a rail, which has no field to show or clear a search, every agent is there.
+    await search.fill("re");
+    await page.setViewportSize({ width: 800, height: 900 });
+    await nav.getByRole("button", { name: "Triage" }).waitFor();
+    assert.equal(await nav.getByRole("list", { name: "Agents" }).getByRole("listitem").count(), 5);
     await page.close();
   }),
 );
@@ -125,12 +231,12 @@ test(
     // What was typed went with the drawer, and the keyboard is back where it was.
     assert.equal(await nav.getByRole("list", { name: "Agents" }).getByRole("listitem").count(), 5);
     const search = nav.getByRole("button", { name: "Search", exact: true });
-    assert.equal(await search.evaluate((e) => e === document.activeElement), true);
+    await search.and(page.locator(":focus")).waitFor();
     await search.click();
     await field.waitFor();
     await page.keyboard.press("Escape");
     await drawer.waitFor({ state: "detached" });
-    assert.equal(await search.evaluate((e) => e === document.activeElement), true);
+    await search.and(page.locator(":focus")).waitFor();
     // A long list scrolls in the rail as in the bar, with no bar of its own showing.
     assert.deepEqual(
       await nav.getByRole("list", { name: "Agents" }).evaluate((list) => {

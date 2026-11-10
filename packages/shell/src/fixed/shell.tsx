@@ -8,21 +8,11 @@ import {
   SearchIcon,
   SettingsIcon,
 } from "lucide-react";
-import { useLayoutEffect, useState, useSyncExternalStore } from "react";
+import { Dialog } from "radix-ui";
+import { useLayoutEffect, useRef, useState } from "react";
 import type { LoginStatus } from "../app.tsx";
 import { go, type Route, useRoute } from "../data.ts";
 import { Button } from "../ui/button.tsx";
-import {
-  Sidebar,
-  SidebarContent,
-  SidebarFooter,
-  SidebarHeader,
-  SidebarMenu,
-  SidebarMenuButton,
-  SidebarMenuItem,
-  SidebarProvider,
-  useSidebar,
-} from "../ui/sidebar.tsx";
 import { TooltipProvider } from "../ui/tooltip.tsx";
 import { AgentPage } from "./agent-page.tsx";
 import { AgentSettingsPage } from "./agent-settings-page.tsx";
@@ -33,6 +23,7 @@ import { ChatPanel } from "./chat.tsx";
 import { ChatsProvider, useChats } from "./chats.tsx";
 import { Face } from "./face.tsx";
 import { McpsPage } from "./mcps-page.tsx";
+import { WORD } from "./parts.tsx";
 import { SettingsPage } from "./settings-page.tsx";
 import { SkillsPage } from "./skills-page.tsx";
 import { TemplatesPage } from "./templates-page.tsx";
@@ -63,151 +54,171 @@ const inSettings = (route: Route) =>
   route.screen === "mcps" ||
   (route.screen === "settings" && route.tab !== "templates");
 
-/** Under this width the bar is a rail of faces: its names go, and its search opens the whole bar. */
-const RAIL = "(max-width: 959px)";
-const useRail = () =>
-  useSyncExternalStore(
-    (changed) => {
-      const media = matchMedia(RAIL);
-      media.addEventListener("change", changed);
-      return () => media.removeEventListener("change", changed);
-    },
-    () => matchMedia(RAIL).matches,
-  );
-
-/** One row of the bar: what it shows first stays in the rail, and its name goes. */
+/** One row of the left bar. As a rail, what a row shows first stays and its name goes. */
 function BarRow({
-  label,
   current,
   onClick,
+  label,
+  name = label,
+  rail,
   children,
 }: {
-  label: string;
   current: boolean;
   onClick(): void;
+  label: string;
+  /** What a screen reader is told, where it is more than the label. */
+  name?: string;
+  rail: boolean;
   children: React.ReactNode;
 }) {
   return (
-    <SidebarMenuItem>
-      <SidebarMenuButton
-        tooltip={label}
-        isActive={current}
-        aria-current={current ? "page" : undefined}
-        onClick={onClick}
-        className="h-10 gap-3 rounded-xl px-2 text-[15px] group-data-[collapsible=icon]:size-11! hover:not-data-[active=true]:bg-[var(--hover)]"
-      >
-        <span className="grid size-7 shrink-0 place-items-center [&>svg]:size-[18px]">
-          {children}
-        </span>
-        <span>{label}</span>
-      </SidebarMenuButton>
-    </SidebarMenuItem>
+    <button
+      type="button"
+      aria-current={current ? "page" : undefined}
+      aria-label={name}
+      title={label}
+      onClick={onClick}
+      className={`flex h-10 w-full min-w-0 shrink-0 items-center gap-3 rounded-xl px-2 text-left text-[15px] hover:bg-[var(--hover)] ${rail ? "rail:justify-center rail:px-0" : ""} ${current ? "bg-[var(--selected)] font-medium" : ""}`}
+    >
+      <span className="grid size-7 shrink-0 place-items-center">{children}</span>
+      <span className={`min-w-0 flex-1 truncate ${rail ? "rail:hidden" : ""}`}>{label}</span>
+    </button>
   );
 }
 
 /**
- * The left bar: where you are, and the way back. Home is its first row, then a row that never
- * scrolls away, search with Create beside it. The agents scroll beneath, and Templates and
- * Settings stay at the foot.
+ * The left bar, on every page: where you are, and the way back. It carries no name or mark of the
+ * product: Home is its first row. Then a row that never scrolls away, search with Create beside
+ * it. The agents scroll beneath, and Templates and Settings stay at the foot. Narrow, it is a rail
+ * of faces; its search, and a phone's menu button, open the whole bar as a drawer.
  */
-function Bar() {
+function LeftBar({
+  drawer = false,
+  searching = false,
+  onGo,
+  onSearch,
+  onCreate,
+}: {
+  drawer?: boolean;
+  /** A drawer opened to search, so its field is ready. */
+  searching?: boolean;
+  /** Told when a row took you somewhere, so a drawer can close. */
+  onGo?: () => void;
+  /** What the rail's search does. */
+  onSearch?: (event: React.MouseEvent) => void;
+  onCreate(): void;
+}) {
   const route = useRoute();
   const { list, byId } = useAgents();
-  const { show } = useBuilding();
-  const { state, isMobile, openMobile, setOpenMobile } = useSidebar();
-  // Each bar has its own search: the drawer's goes when it closes.
   const [query, setQuery] = useState("");
+  const rail = !drawer;
   const to = (next: Route) => {
     go(next);
-    setOpenMobile(false);
+    onGo?.();
   };
-  // The rail has no field, so nothing there is narrowed.
-  const wanted = state === "collapsed" ? "" : query.trim().toLowerCase();
-  const shown = list.filter((agent) => agent.name.toLowerCase().includes(wanted));
+  const wanted = query.trim().toLowerCase();
   const current = "agent" in route ? route.agent : undefined;
   return (
-    <nav aria-label="Main" className="flex min-h-0 flex-1 flex-col">
-      <SidebarHeader className="gap-2 p-2.5 pt-3 pb-0 group-data-[collapsible=icon]:px-2">
-        <SidebarMenu>
-          <BarRow
-            label="Home"
-            current={route.screen === "home"}
-            onClick={() => to({ screen: "home" })}
-          >
-            <HomeIcon />
-          </BarRow>
-        </SidebarMenu>
-        <search className="flex items-center gap-1 group-data-[collapsible=icon]:flex-col">
-          <input
-            type="search"
-            aria-label="Search"
-            placeholder="Search"
-            // biome-ignore lint/a11y/noAutofocus: the rail's Search opened the drawer for this field.
-            autoFocus={openMobile && !isMobile}
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            className="h-9 min-w-0 flex-1 rounded-full bg-[var(--raised)] px-3.5 text-sm outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring group-data-[collapsible=icon]:hidden"
-          />
+    <nav
+      aria-label="Main"
+      className={
+        drawer
+          ? "flex h-full w-[272px] flex-col gap-0.5 bg-[var(--canvas)] p-2.5 pt-3 shadow-2xl"
+          : "flex w-[236px] shrink-0 flex-col gap-0.5 p-2.5 pt-3 rail:w-[60px] rail:px-2 phone:hidden"
+      }
+    >
+      <BarRow
+        rail={rail}
+        current={route.screen === "home"}
+        onClick={() => to({ screen: "home" })}
+        label="Home"
+      >
+        <span className="relative">
+          <HomeIcon className="size-[18px]" />
+        </span>
+      </BarRow>
+      {/* Search, with Create beside it. This row stays put however long the list beneath grows. */}
+      <search className={`mt-1.5 flex shrink-0 items-center gap-1 ${rail ? "rail:flex-col" : ""}`}>
+        <input
+          type="search"
+          aria-label="Search"
+          placeholder="Search"
+          // biome-ignore lint/a11y/noAutofocus: the rail's Search opened the drawer for this field.
+          autoFocus={searching}
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          className={`h-9 min-w-0 flex-1 rounded-full bg-[var(--raised)] px-3.5 text-sm outline-none placeholder:text-muted-foreground ${rail ? "rail:hidden" : ""}`}
+        />
+        {rail && (
           <Button
             variant="ghost"
             size="icon"
+            className="hidden rail:inline-flex"
             aria-label="Search"
-            className="hidden group-data-[collapsible=icon]:inline-flex"
-            // The rail's search opens the whole bar over the page, with the field ready.
-            onClick={() => setOpenMobile(true)}
+            onClick={onSearch}
           >
             <SearchIcon />
           </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label="Create"
-            onClick={() => {
-              setOpenMobile(false);
-              show();
-            }}
-          >
-            <PlusIcon />
-          </Button>
-        </search>
-      </SidebarHeader>
-      <SidebarContent className="no-bar p-2.5 pt-2 pb-0 group-data-[collapsible=icon]:overflow-y-auto group-data-[collapsible=icon]:px-2">
-        <SidebarMenu aria-label="Agents">
-          {shown.map((agent) => (
-            <BarRow
-              key={agent.agent}
-              label={agent.name}
-              current={current === agent.agent}
-              onClick={() => to({ screen: "agent", agent: agent.agent })}
-            >
-              <Face
-                id={agent.agent}
-                name={agent.name}
-                tone={byId.get(agent.agent)?.now.tone ?? "idle"}
-              />
-            </BarRow>
-          ))}
-        </SidebarMenu>
-      </SidebarContent>
-      <SidebarFooter className="p-2.5 pt-1 group-data-[collapsible=icon]:px-2">
-        <SidebarMenu>
-          <BarRow label="Templates" current={inTemplates(route)} onClick={() => to(TEMPLATES)}>
-            <LayoutTemplateIcon />
-          </BarRow>
-          <BarRow label="Settings" current={inSettings(route)} onClick={() => to(SETTINGS)}>
-            <SettingsIcon />
-          </BarRow>
-        </SidebarMenu>
-      </SidebarFooter>
+        )}
+        <Button variant="ghost" size="icon" aria-label="Create" title="Create" onClick={onCreate}>
+          <PlusIcon />
+        </Button>
+      </search>
+      <div className="no-bar mt-2 flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto">
+        <ul aria-label="Agents" className="flex flex-col gap-0.5">
+          {list.map((agent) => {
+            const tone = byId.get(agent.agent)?.now.tone ?? "idle";
+            // The rail has no field to show or clear a search, so there it narrows nothing.
+            const found = agent.name.toLowerCase().includes(wanted);
+            if (drawer && !found) return null;
+            return (
+              <li key={agent.agent} className={found ? undefined : "hidden rail:list-item"}>
+                <BarRow
+                  rail={rail}
+                  current={current === agent.agent}
+                  onClick={() => to({ screen: "agent", agent: agent.agent })}
+                  label={agent.name}
+                  name={`${WORD[tone]} ${agent.name}`}
+                >
+                  <Face agent={{ id: agent.agent, name: agent.name, tone }} size={28} />
+                </BarRow>
+              </li>
+            );
+          })}
+        </ul>
+      </div>
+      <BarRow
+        rail={rail}
+        current={inTemplates(route)}
+        onClick={() => to(TEMPLATES)}
+        label="Templates"
+      >
+        <LayoutTemplateIcon className="size-[18px]" />
+      </BarRow>
+      <BarRow rail={rail} current={inSettings(route)} onClick={() => to(SETTINGS)} label="Settings">
+        <SettingsIcon className="size-[18px]" />
+      </BarRow>
     </nav>
   );
 }
 
-/** On a phone the bar is behind this, and the top of the page names the place. */
-function PhoneHead() {
+function Frame({ login }: { login?: LoginStatus }) {
   const route = useRoute();
   const { list } = useAgents();
-  const { openMobile, setOpenMobile } = useSidebar();
+  const chats = useChats();
+  /** The whole bar as a drawer: from a phone's menu button, or from the rail's search. */
+  const [drawer, setDrawer] = useState<"menu" | "search">();
+  /** What opened the drawer, which has the keyboard again when it closes. */
+  const opener = useRef<HTMLElement | null>(null);
+  /** Create was pressed in the drawer: its window opens once the drawer has closed. */
+  const creating = useRef(false);
+  /** The drawer is drawn inside the shell, so it has the shell's type. */
+  const [shell, setShell] = useState<HTMLElement | null>(null);
+  const { show } = useBuilding();
+  const open = (how: "menu" | "search", event: React.MouseEvent) => {
+    opener.current = event.currentTarget as HTMLElement;
+    setDrawer(how);
+  };
   const place =
     route.screen === "home"
       ? "Home"
@@ -217,38 +228,62 @@ function PhoneHead() {
           ? "Templates"
           : "Settings";
   return (
-    <header className="flex h-12 shrink-0 items-center gap-1 px-2 sm:hidden">
-      <Button
-        variant="ghost"
-        size="icon"
-        aria-label="Menu"
-        aria-expanded={openMobile}
-        onClick={() => setOpenMobile(true)}
-      >
-        <MenuIcon />
-      </Button>
-      <span className="min-w-0 truncate text-[17px] font-semibold">{place}</span>
-    </header>
-  );
-}
-
-function Frame({ login }: { login?: LoginStatus }) {
-  const route = useRoute();
-  const chats = useChats();
-  const rail = useRail();
-  return (
-    <SidebarProvider
+    <div
+      ref={setShell}
       data-shell
-      open={!rail}
-      className="@container/app relative h-full min-h-0 bg-[var(--canvas)] text-foreground"
+      className="@container/app relative flex h-full min-h-0 w-full overflow-hidden bg-[var(--canvas)] text-[15px] leading-[1.5] text-foreground"
     >
-      <Sidebar collapsible="icon" className="group-data-[side=left]:border-r-0">
-        <Bar />
-      </Sidebar>
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col sm:p-2 sm:pl-0">
-        <PhoneHead />
-        <div className="relative flex min-h-0 flex-1 gap-2">
-          <main className="window @container/main relative min-w-0 flex-1 overflow-hidden rounded-2xl bg-background max-sm:rounded-none max-sm:after:hidden">
+      {/* The page: the bar and what's beside it. */}
+      <LeftBar onSearch={(event) => open("search", event)} onCreate={show} />
+      <Dialog.Root open={!!drawer} onOpenChange={(next) => !next && setDrawer(undefined)}>
+        <Dialog.Portal container={shell}>
+          <Dialog.Overlay
+            data-drawer-overlay
+            className="fixed inset-0 z-30 bg-black/40"
+            onClick={() => setDrawer(undefined)}
+          />
+          <Dialog.Content
+            aria-describedby={undefined}
+            className="fixed inset-y-0 left-0 z-40 outline-none"
+            // A click on the page behind closes it, as it lands, and not the press before it.
+            onPointerDownOutside={(event) => event.preventDefault()}
+            onCloseAutoFocus={(event) => {
+              event.preventDefault();
+              opener.current?.focus();
+              if (creating.current) show();
+              creating.current = false;
+            }}
+          >
+            <Dialog.Title className="sr-only">Menu</Dialog.Title>
+            <LeftBar
+              drawer
+              searching={drawer === "search"}
+              onGo={() => setDrawer(undefined)}
+              onCreate={() => {
+                creating.current = true;
+                setDrawer(undefined);
+              }}
+            />
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+      <div className="relative flex min-w-0 flex-1 flex-col">
+        <header className="hidden h-12 shrink-0 items-center gap-1 px-2 phone:flex">
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label="Menu"
+            aria-expanded={!!drawer}
+            onClick={(event) => open("menu", event)}
+          >
+            <MenuIcon />
+          </Button>
+          <span className="min-w-0 truncate text-[17px] font-semibold">{place}</span>
+        </header>
+        {/* A row, for the chat panel that sits beside the page. */}
+        <div className="relative flex min-h-0 flex-1">
+          {/* The pages are set in the type they were built in, not the frame's. */}
+          <main className="@container/main relative min-h-0 min-w-0 flex-1 text-[14px] leading-[1.45]">
             {route.screen === "home" && <AgentsPage />}
             {route.screen === "agent" && <AgentPage key={route.agent} agent={route.agent} />}
             {route.screen === "agent-settings" && (
@@ -269,7 +304,7 @@ function Frame({ login }: { login?: LoginStatus }) {
               variant="secondary"
               size="icon-lg"
               aria-label={chats.fresh > 0 ? `Chats, ${chats.fresh} new` : "Chats"}
-              className="absolute right-3 bottom-3 z-20 size-12 rounded-full shadow-lg"
+              className="absolute right-5 bottom-5 z-20 size-12 rounded-full shadow-lg"
               onClick={chats.toggle}
             >
               <MessageCircleIcon />
@@ -286,6 +321,6 @@ function Frame({ login }: { login?: LoginStatus }) {
         </div>
       </div>
       <BuildDialog />
-    </SidebarProvider>
+    </div>
   );
 }

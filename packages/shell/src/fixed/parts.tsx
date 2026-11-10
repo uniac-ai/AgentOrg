@@ -5,7 +5,8 @@ import { go, type Route } from "../data.ts";
 import { Button } from "../ui/button.tsx";
 import type { Tone } from "./data.ts";
 
-const WORD: Record<Tone, string> = {
+/** An agent's state, in a word. */
+export const WORD: Record<Tone, string> = {
   working: "Working",
   trouble: "Has a problem",
   idle: "Idle",
