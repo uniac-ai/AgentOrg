@@ -34,22 +34,39 @@ const fits = (page: Page) =>
   page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
 
 test(
-  "the top bar runs the full width, and the left bar starts below it",
+  "the left bar runs the window's height: Home first, search with Create beside it, the agents, then Templates and Settings at the foot",
   withGateway(async (gateway) => {
     const page = await open(gateway, WIDE);
     const nav = page.getByRole("navigation", { name: "Main" });
     await nav.getByRole("button", { name: "Research" }).waitFor();
-    const crumbs = await page.getByRole("navigation", { name: "breadcrumb" }).boundingBox();
-    const left = await nav.boundingBox();
-    assert.ok(crumbs && left);
-    assert.ok(crumbs.x < 40, "the top bar starts at the window's edge");
-    assert.ok(left.y >= crumbs.y + crumbs.height, "the left bar is below it");
-    const search = await nav.getByRole("searchbox", { name: "Search agents" }).boundingBox();
+    const bar = await nav.boundingBox();
+    assert.deepEqual(bar, { x: 0, y: 0, width: 236, height: WIDE.height });
+    assert.equal(await page.getByRole("banner").filter({ visible: true }).count(), 0, "no top bar");
+    assert.equal(await nav.getByRole("button").first().innerText(), "Home");
+    const home = await nav.getByRole("button", { name: "Home" }).boundingBox();
+    assert.ok(home && home.y < 20, "nothing above Home");
+    assert.equal(
+      await nav.getByRole("button", { name: "Home" }).getAttribute("aria-current"),
+      "page",
+    );
+    assert.doesNotMatch(await nav.innerText(), /AgentOrg/, "no product name in the bar");
+    const y = async (name: string) => {
+      const box = await nav.getByRole("button", { name, exact: true }).boundingBox();
+      assert.ok(box, name);
+      return box.y + box.height / 2;
+    };
+    const search = await nav.getByRole("searchbox", { name: "Search" }).boundingBox();
     const plus = await nav.getByRole("button", { name: "Create" }).boundingBox();
     assert.ok(search && plus);
-    assert.ok(Math.abs(search.y + search.height / 2 - (plus.y + plus.height / 2)) < 1, "one row");
+    assert.ok(Math.abs(search.y + search.height / 2 - (await y("Create"))) < 1, "one row");
     assert.ok(plus.x > search.x + search.width - 1, "the plus on its right");
-    assert.ok(search.y < (await nav.getByRole("button", { name: "Agents" }).boundingBox())!.y);
+    const last = await nav.getByRole("button", { name: "Broken" }).boundingBox();
+    assert.ok(last);
+    assert.ok((await y("Home")) < search.y, "Home above the search row");
+    assert.ok(search.y < (await nav.getByRole("button", { name: "Research" }).boundingBox())!.y);
+    assert.ok(last.y + last.height < (await y("Templates")), "Templates below the agents");
+    assert.ok((await y("Templates")) < (await y("Settings")), "Settings last");
+    assert.ok(WIDE.height - (await y("Settings")) < 60, "at the foot");
     await page.close();
   }),
 );
@@ -59,18 +76,74 @@ test(
   withGateway(async (gateway) => {
     const page = await open(gateway, WIDE);
     const nav = page.getByRole("navigation", { name: "Main" });
-    const names = () => nav.getByRole("listitem").allInnerTexts();
+    const names = () =>
+      nav.getByRole("list", { name: "Agents" }).getByRole("listitem").allInnerTexts();
     await nav.getByRole("button", { name: "Research" }).waitFor();
-    const search = nav.getByRole("searchbox", { name: "Search agents" });
+    const search = nav.getByRole("searchbox", { name: "Search" });
+    const still = await nav.getByRole("button", { name: "Settings" }).boundingBox();
     await search.fill("re");
     assert.deepEqual(
-      (await names()).map((n) => n.trim()),
+      (await names()).map((n) => n.split("\n").at(-1)),
       ["Research", "Reviewer", "Weekly report"],
     );
     await search.fill("zzz");
-    assert.deepEqual(await names(), ["No agent by that name"]);
+    assert.deepEqual(await names(), []);
+    assert.deepEqual(await nav.getByRole("button", { name: "Settings" }).boundingBox(), still);
     await search.fill("");
     assert.equal((await names()).length, 5);
+    await page.close();
+  }),
+);
+
+test(
+  "narrow, the bar is a rail of faces, and its search opens the whole bar with the field ready",
+  withGateway(async (gateway) => {
+    const page = await open(gateway, { width: 820, height: 900 });
+    const nav = page.getByRole("navigation", { name: "Main" });
+    await nav.getByRole("button", { name: "Research" }).waitFor();
+    assert.equal((await nav.boundingBox())?.width, 60);
+    assert.equal(await nav.getByRole("searchbox").isVisible(), false);
+    const face = await nav.getByRole("button", { name: "Research" }).boundingBox();
+    assert.ok(face && face.x >= 0 && face.x + face.width <= 60, "a row is its face alone");
+    const main = await page.locator("main").boundingBox();
+
+    await nav.getByRole("button", { name: "Search", exact: true }).click();
+    const drawer = page.getByRole("dialog").getByRole("navigation", { name: "Main" });
+    const field = drawer.getByRole("searchbox", { name: "Search" });
+    await field.waitFor();
+    assert.equal((await page.getByRole("dialog").boundingBox())?.width, 272);
+    assert.equal(await field.evaluate((e) => e === document.activeElement), true, "ready to type");
+    assert.deepEqual(
+      await page.locator("main").boundingBox(),
+      main,
+      "over the page, moving nothing",
+    );
+    await field.fill("tri");
+    await drawer.getByRole("button", { name: "Triage" }).click();
+    await drawer.waitFor({ state: "detached" });
+    await page.waitForURL(/#\/a\/a-triage/);
+    // What was typed went with the drawer, and the keyboard is back where it was.
+    assert.equal(await nav.getByRole("list", { name: "Agents" }).getByRole("listitem").count(), 5);
+    const search = nav.getByRole("button", { name: "Search", exact: true });
+    assert.equal(await search.evaluate((e) => e === document.activeElement), true);
+    await search.click();
+    await field.waitFor();
+    await page.keyboard.press("Escape");
+    await drawer.waitFor({ state: "detached" });
+    assert.equal(await search.evaluate((e) => e === document.activeElement), true);
+    // A long list scrolls in the rail as in the bar, with no bar of its own showing.
+    assert.deepEqual(
+      await nav.getByRole("list", { name: "Agents" }).evaluate((list) => {
+        const style = getComputedStyle(list.parentElement as Element);
+        return [style.overflowY, style.scrollbarWidth];
+      }),
+      ["auto", "none"],
+    );
+    assert.equal(
+      await nav.getByRole("button", { name: "Triage" }).getAttribute("aria-current"),
+      "page",
+      "the rail shows where you are",
+    );
     await page.close();
   }),
 );
@@ -103,10 +176,14 @@ test(
     await page.getByRole("list", { name: "Your agents" }).waitFor();
     assert.equal(await page.getByRole("navigation", { name: "Main" }).isVisible(), false);
     assert.equal(await fits(page), true, "agents");
-    await page
-      .getByRole("button", { name: "Create", exact: true })
-      .filter({ visible: true })
-      .click();
+    // The bar is behind the menu button, and the top of the page names the place.
+    const head = page.getByRole("banner");
+    assert.equal(await head.innerText(), "Home");
+    await head.getByRole("button", { name: "Menu" }).click();
+    const drawer = page.getByRole("dialog").getByRole("navigation", { name: "Main" });
+    assert.equal(await drawer.getByRole("button").first().innerText(), "Home");
+    await drawer.getByRole("button", { name: "Create", exact: true }).click();
+    await drawer.waitFor({ state: "detached" });
     const stack = page.getByRole("dialog", { name: "Create" });
     await stack.getByRole("button", { name: /^Assistant/ }).click();
     await stack.getByLabel("Name").fill("Foreman");
@@ -118,7 +195,10 @@ test(
     await stack.getByRole("button", { name: "Create", exact: true }).waitFor();
     await page.keyboard.press("Escape");
     await stack.waitFor({ state: "detached" });
-    await page.getByRole("button", { name: "Settings" }).filter({ visible: true }).click();
+    await head.getByRole("button", { name: "Menu" }).click();
+    await drawer.getByRole("button", { name: "Settings" }).click();
+    await drawer.waitFor({ state: "detached" });
+    assert.equal(await head.innerText(), "Settings");
     const skills = page.getByRole("tab", { name: "Skills" });
     const account = page.getByRole("tab", { name: "Account" });
     await skills.waitFor();

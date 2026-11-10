@@ -46,24 +46,26 @@ const withGateway = (run: (gateway: Gateway) => Promise<void>) => async () => {
 };
 
 test(
-  "the toggle never moves, and the panel sits beside the page, over it, or on all of it",
+  "the chat button sits at the foot on the right; its panel is beside the page, over it or on all of it, and closes by its own Close",
   withGateway(async (gateway) => {
     let page = await open(gateway);
     const before = await box(toggle(page));
+    assert.ok(before);
+    assert.ok(1440 - (before.x + before.width) < 40 && 900 - (before.y + before.height) < 40);
     const width = (await box(main(page)))?.width as number;
     await toggle(page).click();
     await panel(page).waitFor();
-    assert.deepEqual(await box(toggle(page)), before);
+    assert.equal(await toggle(page).count(), 0, "open, the panel stands for the button");
     assert.ok(((await box(main(page)))?.width as number) < width, "beside the page");
     await page
       .getByRole("navigation", { name: "Main" })
       .getByRole("button", { name: "Settings" })
       .click();
     await page.getByRole("tab", { name: "Skills" }).waitFor();
-    assert.deepEqual(await box(toggle(page)), before);
     await panel(page).waitFor();
-    await toggle(page).click();
+    await panel(page).getByRole("button", { name: "Close" }).click();
     await panel(page).waitFor({ state: "detached" });
+    assert.deepEqual(await box(toggle(page)), before, "back where it was");
     await page.close();
 
     page = await open(gateway, "#/", 900);
@@ -107,7 +109,7 @@ test(
   withGateway(async (gateway) => {
     const page = await open(gateway);
     await startChat(page, "Reviewer");
-    await toggle(page).click();
+    await panel(page).getByRole("button", { name: "Close" }).click();
     await panel(page).waitFor({ state: "detached" });
     gateway.addMessage("a-reviewer", reply("r9", "All clear on #482."));
     await page.getByRole("button", { name: "Chats, 1 new" }).waitFor();
@@ -119,6 +121,7 @@ test(
     await session.getByRole("img", { name: "New" }).waitFor();
     await session.getByText("All clear on #482.").waitFor();
     await session.click();
+    await panel(page).getByRole("button", { name: "Close" }).click();
     await page.getByRole("button", { name: "Chats", exact: true }).waitFor();
     assert.deepEqual(gateway.notes.get("ui/chats"), {
       sessions: [{ agent: "a-reviewer", read: "r9" }],

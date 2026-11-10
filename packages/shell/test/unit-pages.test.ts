@@ -23,7 +23,7 @@ test(
     const page = await open(gateway);
     await page
       .getByRole("navigation", { name: "Main" })
-      .getByRole("button", { name: "Settings" })
+      .getByRole("button", { name: "Templates" })
       .click();
     const list = page.getByRole("list", { name: "Templates" });
     const assistant = list.getByRole("listitem").filter({ hasText: "Assistant" });
