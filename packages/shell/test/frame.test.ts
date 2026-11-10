@@ -152,6 +152,11 @@ test(
     const window_ = page.getByRole("dialog", { name: "Create" });
     await window_.getByRole("button", { name: "Empty" }).waitFor();
     assert.equal(await window_.evaluate((el) => getComputedStyle(el).transitionProperty), "none");
+    const empty = window_.getByRole("button", { name: "Empty" });
+    await empty.click();
+    await window_.locator("#build-name").waitFor();
+    await empty.click();
+    await window_.locator("#build-name").waitFor({ state: "detached", timeout: 200 });
     await page.close();
   }),
 );
