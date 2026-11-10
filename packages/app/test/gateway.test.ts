@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
 import { connect as connectTcp } from "node:net";
 import { tmpdir } from "node:os";
@@ -116,6 +116,107 @@ test("a sign-in code works once, for the same origin, and gives a session in the
     });
     assert.equal(cross.status, 403);
   }
+});
+
+/** Apps on one home, one after another, each closed before the home goes. */
+function restarting(t: test.TestContext) {
+  const home = mkdtempSync(join(tmpdir(), "agentorg-app-"));
+  const apps: App[] = [];
+  t.after(async () => {
+    for (const app of apps) await app.close();
+    rmSync(home, { recursive: true, force: true });
+  });
+  return {
+    home,
+    /** Start on the home, at `port` or any free one. */
+    async start(port?: number) {
+      const app = await startApp({ home, firstRun: { log: () => {} }, ...(port ? { port } : {}) });
+      apps.push(app);
+      return app;
+    },
+  };
+}
+/** What a tab saying `session` first gets: its call answered, or the code its socket closes with. */
+async function tabWith(app: App, session: string) {
+  const tab = api(app, { Origin: app.url });
+  await tab.opened;
+  tab.send({ op: "hello", session });
+  const got = await Promise.race([
+    tab.call("actors", "list").then((reply) => (reply.error ? "refused" : "answered")),
+    tab.closedWith,
+  ]);
+  tab.close();
+  return got;
+}
+
+test("a tab stays signed in when the app starts again at its address, and no other session is taken", async (t) => {
+  const { home, start } = restarting(t);
+  const first = await start();
+  const port = Number(new URL(first.url).port);
+  const session = (await signIn(first)).session as string;
+  const unused = new URL(first.signInUrl()).hash.slice(1);
+  const token = readFileSync(join(home, "cli-token"), "utf8").trim();
+  assert.equal(await tabWith(first, session), "answered");
+  // What is kept is not the session: reading the file signs no one in.
+  const kept = readFileSync(join(home, "sessions.json"), "utf8");
+  assert.ok(!kept.includes(session));
+  assert.equal(statSync(join(home, "sessions.json")).mode & 0o777, 0o600);
+  await first.close();
+
+  const second = await start(port);
+  assert.equal(second.url, first.url);
+  assert.equal(await tabWith(second, session), "answered", "the session from before");
+  assert.equal(await tabWith(second, "a-session-nobody-was-given"), 4401);
+  for (const hash of (JSON.parse(kept) as { hashes: string[] }).hashes)
+    assert.equal(await tabWith(second, hash), 4401, "what the file holds is no session");
+  // A code and the CLI's token don't outlast the app.
+  const late = await fetch(`${second.url}/api/session`, {
+    method: "POST",
+    headers: { Origin: second.url, "Content-Type": "application/json" },
+    body: JSON.stringify({ code: unused }),
+  });
+  assert.equal(late.status, 403);
+  assert.notEqual(readFileSync(join(home, "cli-token"), "utf8").trim(), token);
+
+  // At another address the kept sessions are dropped, there and for good: a tab couldn't say
+  // one there, and what a tab left on the old address goes on saying is worth nothing.
+  await second.close();
+  const elsewhere = await start();
+  assert.notEqual(elsewhere.url, first.url);
+  assert.equal(await tabWith(elsewhere, session), 4401);
+  await elsewhere.close();
+  const back = await start(port);
+  assert.equal(await tabWith(back, session), 4401);
+});
+
+test("sessions that don't read back are no reason not to start: everyone signs in again", async (t) => {
+  const { home, start } = restarting(t);
+  const first = await start();
+  const session = (await signIn(first)).session as string;
+  await first.close();
+  writeFileSync(join(home, "sessions.json"), "not json");
+  const second = await start(Number(new URL(first.url).port));
+  assert.equal(await tabWith(second, session), 4401);
+  assert.equal(await tabWith(second, (await signIn(second)).session as string), "answered");
+});
+
+test("the sessions kept are the newest 256, the oldest dropped first", () => {
+  const written: string[][] = [];
+  const kept = { read: () => written.at(-1), write: (hashes: string[]) => written.push(hashes) };
+  const signIn = new SignIn({ kept });
+  // 258 given: the first two are dropped.
+  const sessions = Array.from({ length: 258 }, () => signIn.redeem(signIn.code()) as string);
+  assert.equal(written.at(-1)?.length, 256);
+  const again = new SignIn({ kept });
+  assert.deepEqual(
+    [sessions[0], sessions[1], sessions[2], sessions.at(-1)].map((one) => again.isSession(one)),
+    [false, false, true, true],
+  );
+  // What isn't a list of strings is read as far as it is one, and never throws.
+  const last = sessions.at(-1) as string;
+  const odd = new SignIn({ kept: { read: () => [7, null, written.at(-1)?.at(-1)], write() {} } });
+  assert.equal(odd.isSession(last), true);
+  assert.equal(new SignIn({ kept: { read: () => ({ a: 1 }), write() {} } }).isSession(last), false);
 });
 
 test("a code expires after 60 s", () => {

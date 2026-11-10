@@ -128,7 +128,35 @@ export async function startApp(options: AppOptions): Promise<App> {
   });
   writePrivate(join(home, "url"), `${listener.url}\n`);
 
-  const signIn = new SignIn();
+  // A tab signed in before the app last stopped is still signed in, if the app is at the address
+  // it was then: what is kept is each session's hash, in a file only its owner reads. At another
+  // address they are dropped. A tab keeps its session by address, so it couldn't say one here, and
+  // a tab left open on the old address goes on saying its session to whatever answers there.
+  const sessions = join(home, "sessions.json");
+  const signIn = new SignIn({
+    kept: {
+      read() {
+        try {
+          const kept = JSON.parse(readFileSync(sessions, "utf8")) as {
+            at?: unknown;
+            hashes?: unknown;
+          };
+          if (kept.at === origin) return kept.hashes;
+          rmSync(sessions);
+        } catch {
+          // None kept, or none that reads back.
+        }
+        return undefined;
+      },
+      write(hashes) {
+        try {
+          writePrivate(sessions, `${JSON.stringify({ at: origin, hashes })}\n`);
+        } catch {
+          // A home that can't be written still signs the tab in: only the next start forgets it.
+        }
+      },
+    },
+  });
   const credential = readFileSync(join(home, "person-credential"), "utf8").trim();
   /** The app's own notes: what the shell remembers. */
   const notes = new Notes(join(home, "app-notes.json"));
