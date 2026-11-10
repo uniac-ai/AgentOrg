@@ -2,9 +2,11 @@
  * A loop: a turn sends its record and the tools to the model, runs each function the model calls,
  * and sends the results back, until the model answers without calling anything, or the turn has
  * made its `MAX_CALLS` calls. A message said while a turn runs is recorded at once, and the turn
- * takes it at its next model request.
+ * takes it at its next model request. A loop is one piece of work's: its messages come in the
+ * threads the work follows, and what comes of a request is kept in the thread of the newest
+ * message that request read.
  */
-import { argumentsOf, head, type LoopRecord, messageOf } from "./record.js";
+import { argumentsOf, head, type LoopRecord, messageOf, userEntry } from "./record.js";
 import { capped, runTool } from "./tools.js";
 import {
   codeOf,
@@ -26,12 +28,15 @@ const CUT_OFF = {
 };
 
 type FunctionCall = Extract<Item, { type: "function_call" }>;
-/** Where a loop says what it does. */
+/** Where a loop says what it does, each message with the thread it is shown in. */
 export interface LoopOut {
-  message(message: Shown): void;
+  message(thread: string, message: Shown): void;
   /** Text of the reply `id` as the model writes it. */
-  delta(id: string, text: string): void;
+  delta(thread: string, id: string, text: string): void;
+  /** What it is doing. */
   status(status: Status): void;
+  /** A message in `thread` got no answer, and why: said before the `error` status. */
+  failed(thread: string, problem: { code: string; message: string }): void;
 }
 interface Turn {
   cancelled: boolean;
@@ -49,6 +54,10 @@ interface Turn {
   ending?: boolean;
   /** Set on a turn that goes on from one that was cut off. */
   resumed?: boolean;
+  /** The thread it answers in now: that of the newest message its latest request read. */
+  thread?: string;
+  /** The threads it has taken a message in: each is told if it fails. */
+  took: Set<string>;
 }
 /** A turn's place among the turns running: `entered` settles when it has it, or has left. */
 export interface Place {
@@ -112,7 +121,11 @@ export function createLoop(options: {
       .catch((error: unknown) => {
         if (current.cancelled) return;
         log.error("A turn failed.", { error: String(error) });
-        status(current, { state: "error", detail: codeOf(error) });
+        // Every thread it took a message in, and the one it was answering in, is told.
+        const detail = codeOf(error);
+        for (const thread of new Set([...current.took, current.thread ?? record.id]))
+          out.failed(thread, detail);
+        status(current, { state: "error", detail });
       })
       .finally(() => {
         current.place?.leave();
@@ -121,10 +134,11 @@ export function createLoop(options: {
       .catch((error: unknown) => log.error("A turn's status failed.", { error: String(error) }));
     lastEnded = current.ended;
   };
-  const show = (entry: Awaited<ReturnType<LoopRecord["append"]>>) => out.message(messageOf(entry));
+  const show = ({ entry, thread }: Awaited<ReturnType<LoopRecord["append"]>>) =>
+    out.message(thread, messageOf(entry));
   /** A call starting: shown as running, under the id its record will have when it ends. */
-  const running = (call: FunctionCall, id: string) =>
-    out.message({
+  const running = (call: FunctionCall, id: string, thread: string) =>
+    out.message(thread, {
       id,
       role: "tool",
       text: `${call.name}: running`,
@@ -140,6 +154,7 @@ export function createLoop(options: {
     result: { output: string; ok: boolean; code?: string },
     id: string,
     read: number,
+    thread: string,
   ) => {
     const entry = {
       role: "tool" as const,
@@ -155,9 +170,10 @@ export function createLoop(options: {
       ],
     };
     try {
-      show(await record.append(entry, id, read));
+      show(await record.append(entry, { thread, id, read }));
     } catch (error) {
       out.message(
+        thread,
         messageOf({
           ...entry,
           id,
@@ -172,19 +188,20 @@ export function createLoop(options: {
    * Note calls that won't run, in one message however many there are. They never ran, so the
    * record leaves them out: what the model is sent next holds only calls with their outputs.
    */
-  const skipped = async (calls: FunctionCall[], code: string) => {
+  const skipped = async (calls: FunctionCall[], code: string, thread: string) => {
     if (calls.length === 0) return;
     const text =
       calls.length === 1 ? `${calls[0]?.name}: ${code}` : `${calls.length} calls: ${code}`;
-    show(await record.append({ role: "tool", text, items: [] }));
+    show(await record.append({ role: "tool", text, items: [] }, { thread }));
   };
 
   async function run(current: Turn) {
     let calls = 0;
     for (;;) {
       const { instructions, tools, model: chosen } = await options.request();
-      const { items: input, read } = await record.input();
+      const { items: input, read, thread } = await record.input();
       if (current.cancelled) return;
+      current.thread = thread;
       const requestId = crypto.randomUUID();
       const replyId = crypto.randomUUID();
       current.requestId = requestId;
@@ -211,8 +228,7 @@ export function createLoop(options: {
               role: "assistant",
               items: texts.map((content) => ({ type: "message", role: "assistant", content })),
             },
-            replyId,
-            read,
+            { thread, id: replyId, read },
           ),
         );
       if (called.length === 0) {
@@ -237,7 +253,7 @@ export function createLoop(options: {
       for (const [i, call] of called.entries()) {
         if (current.cancelled || calls >= MAX_CALLS) {
           const rest = called.slice(i);
-          await skipped(rest, current.cancelled ? "cancelled" : "limit");
+          await skipped(rest, current.cancelled ? "cancelled" : "limit", thread);
           break;
         }
         calls++;
@@ -245,9 +261,9 @@ export function createLoop(options: {
         // A call that has started runs to its end, and its real result is kept: it may have
         // taken effect.
         const id = crypto.randomUUID();
-        running(call, id);
+        running(call, id, thread);
         const result = await runTool(tools, call.name, call.arguments);
-        await answered(call, result, id, read);
+        await answered(call, result, id, read, thread);
       }
       if (current.cancelled) return;
       if (calls >= MAX_CALLS)
@@ -261,6 +277,8 @@ export function createLoop(options: {
     await current.place?.entered;
     current.waiting = false;
     if (current.cancelled) return;
+    // Where it answers until a request says: so a failure before one names its thread.
+    current.thread = await record.where();
     await run(current);
   }
   /**
@@ -273,14 +291,13 @@ export function createLoop(options: {
     current.waiting = true;
   };
 
-  const said = async (text: string, joined: boolean) => {
-    const entry = await record.append({
-      role: "user",
-      items: [{ type: "message", role: "user", content: text }],
-      ...(joined ? { joined: true as const } : {}),
-    });
-    show(entry);
-    return { messageId: entry.id };
+  const said = async (text: string, thread: string, joined: boolean) => {
+    const kept = await record.append(
+      { ...userEntry(text), ...(joined ? { joined: true as const } : {}) },
+      { thread },
+    );
+    show(kept);
+    return { messageId: kept.entry.id };
   };
   /**
    * Start a turn: `open` takes its place and keeps what opens it, then its loop runs. When `open`
@@ -291,7 +308,7 @@ export function createLoop(options: {
     cancelled: boolean,
     open: (current: Turn) => Promise<{ opened: T } | undefined>,
   ) => {
-    const current: Turn = { cancelled };
+    const current: Turn = { cancelled, took: new Set() };
     if (!cancelled) turn = current;
     began = true;
     try {
@@ -311,23 +328,49 @@ export function createLoop(options: {
 
   return {
     /**
-     * Say a message. With no turn it starts one, whose progress is said through `out`. In a turn,
-     * running or waiting for its place, it is recorded and said at once, and the turn takes it at
-     * its next model request.
+     * Say a message in a thread the work follows. With no turn it starts one, whose progress is
+     * said through `out`. In a turn, running or waiting for its place, it is recorded and said at
+     * once, and the turn takes it at its next model request.
      */
-    send: (text: string) =>
+    send: (text: string, thread: string) =>
       inOrder(async (cancelled) => {
-        if (turn) return said(text, true);
+        if (turn) {
+          turn.took.add(thread);
+          return said(text, thread, true);
+        }
         return (await start(cancelled, async (current) => {
-          enter(current, !(await record.empty()));
-          return { opened: await said(text, false) };
+          enter(current, await record.begun());
+          current.took.add(thread);
+          return { opened: await said(text, thread, false) };
         })) as { messageId: string };
       }),
     /**
-     * Go on with a turn that was cut off before it ended, as by a restart: the thread shows one
-     * line saying so, and the model is told once to check what is already done. Nothing goes on in
-     * a thread with nothing kept, in one that has had a turn since the loop was made, or when a
-     * cancel comes first.
+     * Take the messages waiting in `thread`, which the work has come to follow, as its own, and
+     * answer them: in the turn running, or in one this starts. With none waiting no turn starts.
+     * When a cancel came first nothing is taken, and it says so with `false`.
+     */
+    adopt: (thread: string) =>
+      inOrder(async (cancelled) => {
+        if (cancelled) return false;
+        if (turn) {
+          turn.took.add(thread);
+          await record.adopt(thread, true);
+          return true;
+        }
+        await start(false, async (current) => {
+          enter(current, await record.begun());
+          current.took.add(thread);
+          if ((await record.adopt(thread, false)) > 0) return { opened: undefined };
+          current.place?.leave();
+          return undefined;
+        });
+        return true;
+      }),
+    /**
+     * Go on with a turn that was cut off before it ended, as by a restart: the thread it was
+     * answering in shows one line saying so, and the model is told once to check what is already
+     * done. Nothing goes on in work with nothing kept, in work that has had a turn since the loop
+     * was made, or when a cancel comes first.
      */
     resume: () =>
       inOrder(async (cancelled) => {
@@ -336,12 +379,18 @@ export function createLoop(options: {
           if ((await record.empty()) || current.cancelled) return undefined;
           enter(current, true);
           current.resumed = true;
+          // In the thread of the message it was answering.
+          const thread = await record.where();
+          current.took.add(thread);
           show(
-            await record.append({
-              role: "tool",
-              text: CUT_OFF.shown,
-              items: [{ type: "message", role: "user", content: CUT_OFF.told }],
-            }),
+            await record.append(
+              {
+                role: "tool",
+                text: CUT_OFF.shown,
+                items: [{ type: "message", role: "user", content: CUT_OFF.told }],
+              },
+              { thread },
+            ),
           );
           return { opened: undefined };
         });
@@ -382,7 +431,8 @@ export function createLoop(options: {
     },
     /** Streamed text of the model request running now, for the reply it becomes. */
     delta(requestId: string, text: string) {
-      if (turn?.requestId === requestId && turn.replyId) out.delta(turn.replyId, text);
+      if (turn?.requestId === requestId && turn.replyId)
+        out.delta(turn.thread ?? record.id, turn.replyId, text);
     },
   };
 }

@@ -90,7 +90,7 @@ export function startEngine(
    * settings answer, and no tools slot is away. As the agent starts, what it is bound to may not
    * be running yet, so this is looked at again whenever that may have changed: a slot's provider
    * is back, a tools slot is made or gone, or one says its tools changed. A tools slot that stays
-   * away holds them back; a message in a chat starts that chat's turn anyway.
+   * away holds them back; a message in a chat starts a turn anyway.
    */
   let wentOn = false;
   /** Each tools slot heard for its tools changing, with how to stop hearing it. */

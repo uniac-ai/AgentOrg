@@ -112,6 +112,14 @@ const OFFERED = [
 
 type Actor = ReturnType<typeof createTestContext<typeof engine.slots, typeof engine.exports>>;
 /** `rest` binds the rest of what the agent holds in the same go as its model, as at a start. */
+/** The main loop's answer in these tests: every message nothing follows starts new work. */
+const NEW_WORK = {
+  type: "function_call",
+  callId: "route",
+  name: "route",
+  arguments: '{"title":"Work"}',
+};
+
 async function setup(values = new Map<string, unknown>(), rest?: (actor: Actor) => void) {
   const actor = createTestContext(engine, { actorId: "assistant", module: "logic" });
   await actor.start();
@@ -119,11 +127,21 @@ async function setup(values = new Map<string, unknown>(), rest?: (actor: Actor) 
   const store = memory(values);
   actor.bind("store", store.handlers);
   const requests: Request[] = [];
+  /** What the main loop was asked, and the arguments it answers `route` with when a test says. */
+  const routed: Request[] = [];
+  const routing: { to?: string } = {};
   const cancels: string[] = [];
   const script: Step[] = [];
   const model = actor.bind("model", {
     models: () => ({ models: OFFERED }),
     respond: async (request) => {
+      // The main loop is answered at once, with new work; `requests` and `script` are the workers'.
+      if (request.tools?.some((tool) => tool.name === "route")) {
+        routed.push(request as Request);
+        return {
+          output: [routing.to ? { ...NEW_WORK, arguments: routing.to } : NEW_WORK],
+        } as never;
+      }
       requests.push(request as Request);
       const next = script.shift() ?? say("ok");
       return (typeof next === "function" ? await next(request as Request) : next) as never;
@@ -190,6 +208,8 @@ async function setup(values = new Map<string, unknown>(), rest?: (actor: Actor) 
     host,
     store,
     requests,
+    routed,
+    routing,
     cancels,
     script,
     model,
@@ -1054,7 +1074,7 @@ test("history pages back, survives a restart, and skips what doesn't read back",
   assert.equal(all.messages.length, 9);
   await restarted.turn("After.");
   // Twelve messages and the chat's entry.
-  assert.equal(values.size, 13);
+  assert.equal([...values.keys()].filter((key) => key.startsWith("chat")).length, 13);
   assert.ok(restarted.actor.logs.some((line) => line.level === "warn"));
 });
 
@@ -1138,8 +1158,9 @@ test("thousands of calls in one reply cost a handful of writes", async () => {
   assert.equal((await s.turn("Flood."))?.code, "limit");
   // The chat's entry, three times: started, with its message, and with its problem. The message,
   // the mark that its turn hasn't ended, `MAX_CALLS` calls, and one entry answering the other
-  // 1,980.
-  assert.equal(s.store.writes.count - before, MAX_CALLS + 6);
+  // 1,980. And two for a new chat's first message: the mark that it waits for the main loop, and
+  // the work's record.
+  assert.equal(s.store.writes.count - before, MAX_CALLS + 8);
   const input = (await s.chat("history", { limit: 200 })) as { messages: unknown[] };
   assert.equal(input.messages.length, 200, "a full page of what was recorded");
 });
@@ -1221,6 +1242,7 @@ type Listed = {
   archived: boolean;
 };
 type Setup = Awaited<ReturnType<typeof setup>>;
+type Sent = { chat: string; messageId: string };
 const listed = (s: Setup, input: Record<string, unknown> = {}) =>
   s.actor.call("chat", "list", input) as Promise<{ chats: Listed[]; more: boolean }>;
 /** Send a message in a chat, or in a new one, and wait for that chat's reply, or for its problem. */
@@ -1338,6 +1360,52 @@ test("an agent works in several chats at once, and past its places a chat waits 
   for (const other of others) other.open(say("Done too."));
   await s.host.settled();
   assert.equal((await shownIn(s, waits.chat)).at(-1)?.text, "ok");
+});
+
+test("a message in a new chat that carries on work under way is answered by that work, in the new chat", async () => {
+  const s = await setup();
+  const late = gate<Reply>();
+  s.script.push(() => late.shut, say("Chart added."));
+  const from = s.actor.emitted.length;
+  const one = (await s.actor.call("chat", "send", { text: "Write the report." })) as Sent;
+  await until(() => s.requests.length === 1, "the work's request");
+  // The main loop is put the new chat's message with the work under way, and gives it to that.
+  s.routing.to = JSON.stringify({ work: one.chat });
+  const two = (await s.actor.call("chat", "send", { text: "Add a chart." })) as Sent;
+  assert.notEqual(two.chat, one.chat);
+  await until(() => s.routed.length === 2, "the main loop to be asked");
+  assert.equal(
+    s.routed[1]?.input.at(-1)?.content,
+    `Work under way:\n- ${one.chat}: Work\n\nWhat came in:\nAdd a chart.`,
+  );
+  // Its request is the looper's own words and one function: nothing of the agent's.
+  assert.equal(s.routed[1]?.input.length, 1);
+  assert.match(String(s.routed[1]?.instructions), /^You are the front desk\./);
+  assert.notEqual(s.routed[1]?.instructions, s.requests[0]?.instructions);
+  assert.deepEqual(
+    s.routed[1]?.tools?.map((tool) => tool.name),
+    ["route"],
+  );
+  late.open(say("Report done."));
+  await s.host.settled();
+  // The work read the second chat's message after the reply that hadn't, and answered it there.
+  assert.deepEqual(
+    s.requests[1]?.input.map((item) => item.content),
+    ["Write the report.", "Report done.", "Add a chart."],
+  );
+  assert.deepEqual(
+    (await shownIn(s, one.chat)).map((m) => m.text),
+    ["Write the report.", "Report done."],
+  );
+  assert.deepEqual(
+    (await shownIn(s, two.chat)).map((m) => m.text),
+    ["Add a chart.", "Chart added."],
+  );
+  // Each chat has its own newest reply, and the agent was at work once for all of it.
+  const { chats } = await listed(s);
+  const reply = (await shownIn(s, two.chat)).at(-1);
+  assert.equal(chats.find((c) => c.id === two.chat)?.latest?.id, reply?.id);
+  assert.deepEqual(s.statuses(from), [{ state: "working" }, { state: "idle" }]);
 });
 
 test("a chat is renamed and archived, stays readable, and is kept as it was left", async () => {

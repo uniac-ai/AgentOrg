@@ -160,10 +160,10 @@ export function createChats(options: {
   /** The chats, by id, once their entries are read. */
   const chats = new Map<string, Held>();
   let loaded: Promise<Map<string, Held>> | undefined;
-  /** The chats whose loops are at work now: the agent is working while there is one. */
-  const atWork = new Set<string>();
-  const stateNow = () => ({ state: atWork.size > 0 ? ("working" as const) : ("idle" as const) });
-  /** The chats' loops: a chat is the looper's thread of the same name. */
+  /** Whether the agent is working, as its looper last said. */
+  let working = false;
+  const stateNow = () => ({ state: working ? ("working" as const) : ("idle" as const) });
+  /** The agent's loops: a chat is the looper's thread of the same name. */
   const looper = forChats(
     createLooper({
       store: forLooper(store),
@@ -176,19 +176,17 @@ export function createChats(options: {
           emit.message({ ...message, chat: thread });
         },
         delta: (thread, id, text) => emit.delta({ chat: thread, id, text }),
-        status(thread, status) {
-          const was = atWork.size > 0;
-          if (status.state === "thinking" || status.state === "tool") atWork.add(thread);
-          else atWork.delete(thread);
-          // A turn that failed left its chat's message with no answer: the chat is told why,
-          // before the agent is said to be idle.
+        working(on) {
+          working = on;
+          emit.status(stateNow());
+        },
+        // A message in the chat got no answer: the chat is told why. The looper says this before
+        // it says the agent is idle.
+        failed(thread, { code, message }) {
           const held = chats.get(thread);
-          if (status.state === "error" && held) {
-            const { code, message } = status.detail;
-            held.stored.problem = { code: head(code, 128), message: head(message, 2000) };
-            told(held);
-          }
-          if (atWork.size > 0 !== was) emit.status(stateNow());
+          if (!held) return;
+          held.stored.problem = { code: head(code, 128), message: head(message, 2000) };
+          told(held);
         },
       },
       stopped: options.stopped,
@@ -321,8 +319,10 @@ export function createChats(options: {
   };
   return {
     /**
-     * Say a message in a chat, or in a new chat it starts. With no turn in the chat it starts one;
-     * a turn running there takes it at its next model request.
+     * Say a message in a chat, or in a new chat it starts. A new chat's first message is put to
+     * the agent's main loop, which gives it to new work or to work in a turn; from then on the
+     * chat's messages are that work's: with no turn of it running one starts a turn, and a turn
+     * running takes it at its next model request.
      */
     async send({ chat, text }: Input<"send">) {
       if (chat !== undefined) {
@@ -388,18 +388,18 @@ export function createChats(options: {
      */
     stop: () => looper.stop(),
     start: () => looper.start(),
-    /** Go on with the turns that were cut off when the agent last ran, each once. */
+    /** Go on with what was cut off when the agent last ran, each once: turns, and messages waiting. */
     async resume() {
       // The chats first: what a turn says moves its chat in the list.
       await load();
       await looper.resume();
     },
     /**
-     * Close for good: its turns are cut, and none starts after. They stay marked, so the engine
-     * that opens this store next goes on with them.
+     * Close for good: its turns are cut, and none starts after. They stay marked, as do messages
+     * no work has taken, so the engine that opens this store next goes on with them.
      */
     close: () => looper.close(),
-    /** Settles when every chat's latest turn has written all it will. */
+    /** Settles when every piece of work's latest turn has written all it will. */
     async settled() {
       await loaded?.catch(() => undefined);
       await looper.settled();

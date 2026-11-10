@@ -70,6 +70,13 @@ async function cast(t: test.TestContext, options: HubOptions = {}) {
   backing.exports.model.implement({
     models: async () => ({ models: [] }),
     respond: async (request) => {
+      // The main loop is answered at once, with new work; `requests` are the workers'.
+      if (request.tools?.some((tool) => tool.name === "route"))
+        return {
+          output: [
+            { type: "function_call", callId: "r", name: "route", arguments: '{"title":"Work"}' },
+          ],
+        };
       requests.push(request as Request);
       await new Promise((resolve) => setTimeout(resolve, delays.shift() ?? 0));
       return {

@@ -6,9 +6,9 @@ import {
   type OutputItem,
   Refusal,
   type Shown,
-  type Status,
   type Tool,
 } from "../src/index.ts";
+import { newWork } from "./support.ts";
 
 /**
  * A looper on a store in memory, a model that answers from `replies`, and what it said. The store
@@ -20,7 +20,9 @@ function looperWith(
   values = new Map<string, Json>(),
 ) {
   const said: { thread: string; message: Shown }[] = [];
-  const statuses: { thread: string; status: Status }[] = [];
+  /** Each time it said whether anything is at work, and each message that got no answer. */
+  const working: boolean[] = [];
+  const failures: { thread: string; problem: { code: string; message: string } }[] = [];
   const deltas: { thread: string; id: string; text: string }[] = [];
   const requests: { requestId: string; instructions: string; input: unknown[]; tools: unknown }[] =
     [];
@@ -39,6 +41,8 @@ function looperWith(
     },
     model: {
       async respond(request) {
+        // The main loop is answered at once, with new work; `requests` are the workers'.
+        if (request.tools.some((tool) => tool.name === "route")) return { output: newWork() };
         requests.push(structuredClone(request));
         const reply = await (replies.shift() ?? []);
         if (reply instanceof Error) throw reply;
@@ -50,11 +54,12 @@ function looperWith(
     out: {
       message: (thread, message) => said.push({ thread, message }),
       delta: (thread, id, text) => deltas.push({ thread, id, text }),
-      status: (thread, status) => statuses.push({ thread, status }),
+      working: (on) => void working.push(on),
+      failed: (thread, problem) => void failures.push({ thread, problem }),
     },
     log: { info() {}, warn() {}, error() {} },
   });
-  return { looper, values, said, statuses, deltas, requests };
+  return { looper, values, said, working, failures, deltas, requests };
 }
 const says = (content: string): OutputItem[] => [{ type: "message", role: "assistant", content }];
 const calls = (name: string, args: string): OutputItem[] => [
@@ -73,7 +78,7 @@ test("a message is answered in its thread, through the tools it was given, on th
       },
     },
   ];
-  const { looper, values, said, statuses, requests } = looperWith(
+  const { looper, values, said, working, requests } = looperWith(
     [calls("look", '{"at":"it"}'), says("It is there."), says("Elsewhere.")],
     tools,
   );
@@ -96,10 +101,8 @@ test("a message is answered in its thread, through the tools it was given, on th
     ],
   );
   assert.equal(said[0]?.message.id, messageId);
-  assert.deepEqual(
-    statuses.filter(({ thread }) => thread === "one").map(({ status }) => status.state),
-    ["thinking", "tool", "thinking", "idle"],
-  );
+  // At work from each message until its answer, said once each way.
+  assert.deepEqual(working, [true, false, true, false]);
   // Each thread's record is its own: the second request of the first holds the call and its
   // output, and the other thread's request holds none of it.
   assert.deepEqual(
@@ -108,7 +111,9 @@ test("a message is answered in its thread, through the tools it was given, on th
   );
   assert.equal(requests[2]?.instructions, "Be brief.");
   assert.deepEqual(
-    [...values.keys()].map((key) => key.replace(/\d+$/, "")),
+    [...values.keys()]
+      .filter((key) => key.startsWith("thread/"))
+      .map((key) => key.replace(/\d+$/, "")),
     [...Array(3).fill("thread/one/msg/"), ...Array(2).fill("thread/two/msg/")],
   );
   assert.deepEqual(
@@ -129,14 +134,15 @@ test("a message is answered in its thread, through the tools it was given, on th
   assert.equal(again.requests[0]?.input.length, 5);
 });
 
-test("a thread's name can be anything: its record's keys hold it as one part", async () => {
+test("a thread's name can be anything: its keys hold it as one part, as its work's do", async () => {
   const { looper, values } = looperWith([says("Yes.")]);
   await looper.send("a/b c", "Hello?");
   await looper.settled();
-  assert.deepEqual(
-    [...values.keys()],
-    ["thread/a%2Fb%20c/msg/000000000001", "thread/a%2Fb%20c/msg/000000000002"],
-  );
+  assert.deepEqual([...values.keys()].filter((key) => !key.startsWith("main/")).sort(), [
+    "thread/a%2Fb%20c/msg/000000000001",
+    "thread/a%2Fb%20c/msg/000000000002",
+    "work/a%2Fb%20c",
+  ]);
 });
 
 test("a refusal is shown with its code, and anything else thrown as `failed`", async () => {
@@ -156,7 +162,7 @@ test("a refusal is shown with its code, and anything else thrown as `failed`", a
       },
     },
   ];
-  const { looper, said, statuses } = looperWith(
+  const { looper, said, failures } = looperWith(
     [
       [...calls("refuses", ""), ...calls("breaks", "")],
       new Refusal("usage_limit", "The limit is reached."),
@@ -173,16 +179,16 @@ test("a refusal is shown with its code, and anything else thrown as `failed`", a
       '{"error":{"code":"failed","message":"The call failed."}}',
     ],
   );
-  assert.deepEqual(statuses.at(-1)?.status, {
-    state: "error",
-    detail: { code: "usage_limit", message: "The limit is reached." },
+  assert.deepEqual(failures.at(-1), {
+    thread: "one",
+    problem: { code: "usage_limit", message: "The limit is reached." },
   });
   // A message after a failure starts a turn like any other.
   await looper.send("one", "Go on.");
   await looper.settled();
-  assert.deepEqual(statuses.at(-1)?.status, {
-    state: "error",
-    detail: { code: "failed", message: "The call failed." },
+  assert.deepEqual(failures.at(-1), {
+    thread: "one",
+    problem: { code: "failed", message: "The call failed." },
   });
 });
 

@@ -1,8 +1,10 @@
 import { createLooper, type Json, type OutputItem, Refusal, type Tool } from "../src/index.ts";
 
 /**
- * A looper whose model answers a request only when the test says so, naming the request by the
- * last thing said to it. `asked` is what the model has been asked, in order.
+ * A looper whose model answers a worker's request only when the test says so, naming the request by
+ * the last thing said to it. `asked` is what the model has been asked for workers, in order. The
+ * main loop's requests are answered at once, with new work, unless `routing` says otherwise;
+ * `routed` is what it was put, and `mains` its requests whole.
  */
 export function looperWith(
   options: {
@@ -17,11 +19,19 @@ export function looperWith(
     values?: Map<string, Json>;
     /** Called as each message is said. */
     saying?: (line: string) => void;
+    /** What the main loop answers when put `text`: by default, new work. */
+    routing?: (text: string) => OutputItem[] | Promise<OutputItem[]> | undefined;
   } = {},
 ) {
   const values = options.values ?? new Map<string, Json>();
   const said: string[] = [];
   const asked: string[] = [];
+  const routed: string[] = [];
+  /** Each request the main loop made, as the model got it. */
+  const mains: { instructions: string; tools: unknown[]; input: string[] }[] = [];
+  /** Each time it said whether anything is at work, and each message that got no answer. */
+  const working: boolean[] = [];
+  const failures: string[] = [];
   /** What each request held, in the order the model reads it. */
   const inputs: string[][] = [];
   const open = new Map<string, { id: string; answer(output: OutputItem[]): void; fail(): void }>();
@@ -47,10 +57,28 @@ export function looperWith(
       },
     },
     model: {
-      respond: ({ requestId, input }) =>
+      respond: ({ requestId, instructions, input, tools }) =>
         new Promise((answer, fail) => {
           const last = input.findLast((item) => item.type === "message" && item.role === "user");
           const text = last?.type === "message" ? last.content : "";
+          if (tools.some((tool) => tool.name === "route")) {
+            routed.push(text);
+            mains.push({
+              instructions,
+              tools,
+              input: input.map((item) => (item.type === "message" ? item.content : item.type)),
+            });
+            open.set("the main loop", {
+              id: requestId,
+              answer: () => {},
+              fail: () => fail(gone()),
+            });
+            Promise.resolve(options.routing?.(text) ?? newWork()).then(
+              (output) => answer({ output }),
+              fail,
+            );
+            return;
+          }
           asked.push(text);
           inputs.push(
             input.map((item) =>
@@ -64,7 +92,7 @@ export function looperWith(
           open.set(text, {
             id: requestId,
             answer: (output) => answer({ output }),
-            fail: () => fail(new Refusal("cancelled", "The request was cancelled.")),
+            fail: () => fail(gone()),
           });
         }),
       async cancel({ requestId }) {
@@ -79,7 +107,8 @@ export function looperWith(
         options.saying?.(`${thread}: ${role}: ${text}`);
       },
       delta() {},
-      status() {},
+      working: (on) => void working.push(on),
+      failed: (thread, { code }) => void failures.push(`${thread}: ${code}`),
     },
     ...(options.stopped === undefined ? {} : { stopped: options.stopped }),
     log: { info() {}, warn() {}, error() {} },
@@ -94,8 +123,33 @@ export function looperWith(
     for (const name of names) await looper.send(name, `Work ${name}.`);
     while (asked.length < before + names.length) await idle();
   };
-  return { looper, values, said, asked, inputs, answer, fail, fill };
+  return {
+    looper,
+    values,
+    said,
+    asked,
+    inputs,
+    routed,
+    mains,
+    working,
+    failures,
+    answer,
+    fail,
+    fill,
+  };
 }
+const gone = () => new Refusal("cancelled", "The request was cancelled.");
+/** The main loop's answers: new work with a title, or a piece of work under way by its id. */
+const route = (said: { work?: string; title?: string }): OutputItem[] => [
+  {
+    type: "function_call",
+    callId: `route-${crypto.randomUUID()}`,
+    name: "route",
+    arguments: JSON.stringify(said),
+  },
+];
+export const newWork = (title = "Work") => route({ title });
+export const routeTo = (work: string) => route({ work });
 export const says = (content: string): OutputItem[] => [
   { type: "message", role: "assistant", content },
 ];
