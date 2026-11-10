@@ -135,29 +135,28 @@ export function startEngine(
   ctx.exports.chat.implement({
     send: (input) => chats.send(input),
     history: (input) => chats.history(input),
-    cancel: (input) => chats.cancel(input),
-    state: (input) => chats.state(input),
-    retry: (input) => chats.retry(input),
+    state: async () => chats.state(),
     list: (input) => chats.list(input),
     rename: (input) => chats.rename(input),
     archive: (input) => chats.archive(input),
-    models: async () => {
+  });
+  return {
+    /** The models the agent can use, and the one chosen for it. */
+    async models() {
       const [{ models }, current] = await Promise.all([ctx.slots.model.call.models({}), chosen()]);
       return { models, ...(current ? { current } : {}) };
     },
-    setModel: async ({ model }) => {
+    /** Choose the model for its next requests, kept with it; with none, the provider's default. */
+    async setModel(model: string | undefined) {
       if (!model) {
         await store.delete({ key: MODEL_KEY });
-        return {};
+        return;
       }
       const { models } = await ctx.slots.model.call.models({});
       if (!models.some((offered) => offered.id === model))
         throw new Refused("unknown", `${model} isn't one of the models offered.`);
       await store.set({ key: MODEL_KEY, value: model });
-      return {};
     },
-  });
-  return {
     /** Stop the agent: its turns are cut and none starts until `start`. Its chats stay readable. */
     stop() {
       done();

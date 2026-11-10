@@ -107,6 +107,8 @@ const Stored = z.object({
   /** Its place in the list: the highest is the chat a message was last sent in. */
   order: z.number(),
   latest: z.object({ id: z.string(), at: z.string() }).optional(),
+  /** Why its last message got no answer, until its next reply. */
+  problem: z.object({ code: z.string(), message: z.string() }).optional(),
   archived: z.boolean(),
 });
 type Stored = z.output<typeof Stored>;
@@ -158,6 +160,9 @@ export function createChats(options: {
   /** The chats, by id, once their entries are read. */
   const chats = new Map<string, Held>();
   let loaded: Promise<Map<string, Held>> | undefined;
+  /** The chats whose loops are at work now: the agent is working while there is one. */
+  const atWork = new Set<string>();
+  const stateNow = () => ({ state: atWork.size > 0 ? ("working" as const) : ("idle" as const) });
   /** The chats' loops: a chat is the looper's thread of the same name. */
   const looper = forChats(
     createLooper({
@@ -171,7 +176,19 @@ export function createChats(options: {
           emit.message({ ...message, chat: thread });
         },
         delta: (thread, id, text) => emit.delta({ chat: thread, id, text }),
-        status: (thread, status) => emit.status({ ...status, chat: thread }),
+        status(thread, status) {
+          const was = stateNow().state;
+          if (status.state === "thinking" || status.state === "tool") atWork.add(thread);
+          else atWork.delete(thread);
+          // A turn that failed is its chat's problem, told with the chat.
+          const held = chats.get(thread);
+          if (status.state === "error" && held)
+            met(held, {
+              code: head(status.detail.code, 128),
+              message: head(status.detail.message, 2000),
+            });
+          if (stateNow().state !== was) emit.status(stateNow());
+        },
       },
       stopped: options.stopped,
       log,
@@ -183,7 +200,7 @@ export function createChats(options: {
     title: stored.title,
     at: stored.at,
     ...(stored.latest ? { latest: stored.latest } : {}),
-    state: looper.state(id).state,
+    ...(stored.problem ? { problem: stored.problem } : {}),
     archived: stored.archived,
   });
   /** Write a chat's entry as it now is, after any write before it. */
@@ -193,16 +210,31 @@ export function createChats(options: {
     writing = written.catch(() => {});
     return written;
   };
-  /** A message sent in a chat moves it to the front of the list; a reply is what is new in it. */
-  const sent = (held: Held, message: Message) => {
-    if (message.role === "tool") return;
-    held.stored.order = ++top;
-    if (message.role === "assistant") held.stored.latest = { id: message.id, at: message.at };
-    // The message is recorded already: an entry that can't be written is behind until the next.
+  /** Keep a chat's entry as it now is, and say it. */
+  const told = (held: Held) => {
+    // What it tells is already so: an entry that can't be written is behind until the next.
     save(held).catch((error: unknown) =>
       log.error("A chat's entry couldn't be stored.", { chat: held.id, error: String(error) }),
     );
     emit.chat(entryOf(held));
+  };
+  /**
+   * A message sent in a chat moves it to the front of the list; a reply is what is new in it, and
+   * ends any problem it had.
+   */
+  const sent = (held: Held, message: Message) => {
+    if (message.role === "tool") return;
+    held.stored.order = ++top;
+    if (message.role === "assistant") {
+      held.stored.latest = { id: message.id, at: message.at };
+      delete held.stored.problem;
+    }
+    told(held);
+  };
+  /** A chat's message got no answer: it has that problem until its next reply. */
+  const met = (held: Held, problem: NonNullable<Stored["problem"]>) => {
+    held.stored.problem = problem;
+    told(held);
   };
   /** Change what a chat is called or where it is listed: a change the store refuses isn't made. */
   const keep = async <K extends "title" | "archived">(held: Held, key: K, value: Stored[K]) => {
@@ -325,15 +357,8 @@ export function createChats(options: {
     },
     history: async ({ chat, before, limit }: Input<"history">) =>
       looper.page((await heldOf(chat)).id, before, limit ?? PAGE),
-    async cancel({ chat }: Input<"cancel">) {
-      await looper.cancel((await heldOf(chat)).id);
-      return {};
-    },
-    state: async ({ chat }: Input<"state">) => looper.state((await heldOf(chat)).id),
-    async retry({ chat }: Input<"retry">) {
-      await heldOf(chat);
-      return looper.retry(chat);
-    },
+    /** What the agent is doing now. */
+    state: stateNow,
     /**
      * The chats after `before` in the list, the one a message was last sent in first. `before`
      * holds its place whether it is archived or not, so a page never leaves out a chat that hasn't

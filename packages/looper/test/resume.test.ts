@@ -66,7 +66,7 @@ test("every turn left running goes on, each once", async () => {
   await third.looper.stop();
 });
 
-test("a turn that ended, failed or was stopped leaves no mark, and a retried one cut off goes on", async () => {
+test("a turn that ended, failed or was stopped leaves no mark, and one started after a failure and cut off goes on", async () => {
   const { looper, values, answer, fail, fill } = looperWith();
   await fill(["ended", "failed", "cancelled", "stopped"]);
   assert.equal(marks(values).length, 4);
@@ -80,15 +80,15 @@ test("a turn that ended, failed or was stopped leaves no mark, and a retried one
   assert.deepEqual(marks(values), []);
 
   looper.start();
-  await looper.retry("failed");
-  await until(() => marks(values).length === 1, "the retry's mark");
+  await looper.send("failed", "Go on.");
+  await until(() => marks(values).length === 1, "the new turn's mark");
   await looper.close();
   await looper.settled();
   assert.deepEqual(marks(values), ["unfinished/failed"]);
   const again = looperWith({ values });
   await again.looper.resume();
-  await until(() => again.asked.length === 1, "the retried turn to go on");
-  assert.deepEqual(again.inputs, [["Work failed.", TOLD]]);
+  await until(() => again.asked.length === 1, "that turn to go on");
+  assert.deepEqual(again.inputs, [["Work failed.", "Go on.", TOLD]]);
   await again.looper.stop();
 });
 

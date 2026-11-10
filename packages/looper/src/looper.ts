@@ -147,7 +147,7 @@ export function createLooper(options: {
     const key = UNFINISHED + encodeURIComponent(thread);
     const held = {
       record,
-      /** What is being asked of its loop now: messages, retries, going on. */
+      /** What is being asked of its loop now: messages, going on. */
       uses: 0,
       /** Whether a turn of it is running, as its mark was last asked to say. */
       marked: false,
@@ -262,14 +262,6 @@ export function createLooper(options: {
       const held = threads.get(thread);
       if (closed && held && !held.marked) held.mark(true);
       return sent;
-    },
-    /**
-     * Run a thread's last turn again; what followed its message goes from the record. Refused as
-     * `send` is, and `busy` while the thread is in a turn or waiting for a place.
-     */
-    async retry(thread: string) {
-      mayStart();
-      return using(thread, (loop) => loop.retry());
     },
     /** Stop a thread's turn now. A call already running finishes, and its result is kept. */
     cancel: async (thread: string) => threads.get(thread)?.loop.cancel(),

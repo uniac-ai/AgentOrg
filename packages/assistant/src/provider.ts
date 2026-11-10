@@ -98,6 +98,12 @@ export async function startAgentProvider(options: AgentProviderOptions): Promise
     if (!found) throw new Refused("unknown", `This provider made no agent ${agent}.`);
     return found;
   };
+  /** An agent's engine: none while its connection to the Hub is down. */
+  const engineOf = (agent: string) => {
+    const { engine, detail } = held(agent);
+    if (!engine) throw new Refused("unavailable", detail ?? "It isn't running.");
+    return engine;
+  };
   const inTurn = <T>(agent: string, work: (one: Held) => Promise<T>) => {
     const one = held(agent);
     const done = one.queue.then(() => work(one));
@@ -238,6 +244,11 @@ export async function startAgentProvider(options: AgentProviderOptions): Promise
             }
             return {};
           }),
+        models: ({ agent }) => engineOf(agent).models(),
+        async setModel({ agent, model }) {
+          await engineOf(agent).setModel(model);
+          return {};
+        },
         remove: ({ agent }) =>
           inTurn(agent, async (one) => {
             await halt(one);

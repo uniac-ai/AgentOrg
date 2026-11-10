@@ -36,12 +36,6 @@ test("a message said while the model answers is recorded at once, and the turn a
     "Second done.",
     "All done.",
   ]);
-
-  // A retry runs the last message again, with what was said before it.
-  await looper.retry("a");
-  await until(() => asked.length === 4, "the retry");
-  assert.deepEqual(inputs[3], ["First.", "First done.", "Second.", "Third."]);
-  await looper.stop();
 });
 
 test("a message said while a tool runs is in the next request, after the call", async () => {
@@ -258,25 +252,4 @@ test("a message the store refuses while its turn runs is never read by the model
   answer("Hold it.");
   await looper.settled();
   assert.equal(asked.length, 2);
-});
-
-test("a retry waiting for its place keeps a message said since it was asked", async () => {
-  const { looper, inputs, answer, fill } = looperWith();
-  for (const begun of ["x", "y"]) {
-    await fill([begun]);
-    answer(`Work ${begun}.`, says(`Did ${begun}.`));
-    await looper.settled();
-  }
-  await fill(["a", "b", "c", "d"]);
-  await looper.send("y", "More y.");
-  await idle();
-  await looper.retry("x");
-  await looper.send("x", "And this.");
-  assert.deepEqual(await texts(looper, "x"), ["Work x.", "Did x.", "And this."]);
-  answer("Work a.");
-  await until(() => inputs.at(-1)?.[0] === "Work x.", "the retry's request");
-  // Its place is here: the reply it replaces goes, and what was said since stays.
-  assert.deepEqual(inputs.at(-1), ["Work x.", "And this."]);
-  assert.deepEqual(await texts(looper, "x"), ["Work x.", "And this."]);
-  await looper.stop();
 });

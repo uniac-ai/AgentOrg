@@ -459,7 +459,7 @@ test("account.login@1 takes only a loopback redirect on 127.0.0.1", async () => 
   );
 });
 
-test("chat@1 sends in a chat or starts one, pages its history and reports status with a refusal's code", async () => {
+test("chat@1 sends in a chat or starts one, pages its history, and says only whether the agent is working", async () => {
   const t = createTestContext(client);
   await t.start();
   const binding = t.bind("chat", {
@@ -468,6 +468,7 @@ test("chat@1 sends in a chat or starts one, pages its history and reports status
       messages: [{ id: "m1", role: "tool", text: "layout__place", at: "2026-11-06T00:00:00Z" }],
       more: false,
     }),
+    state: () => ({ state: "working" as const }),
   });
   assert.deepEqual(await t.ctx.slots.chat.call.send({ text: "hi" }), {
     chat: "c1",
@@ -477,29 +478,23 @@ test("chat@1 sends in a chat or starts one, pages its history and reports status
   await assert.rejects(t.ctx.slots.chat.call.send({ text: "   " }), { code: "invalid" });
   const page = await t.ctx.slots.chat.call.history({ chat: "c1", limit: 10 });
   assert.equal(page.messages[0]?.role, "tool");
-  // Everything but `send` names its chat.
+  // A chat's own calls name it; the agent's status names none.
   await assert.rejects(t.ctx.slots.chat.call.history({} as never), { code: "invalid" });
+  assert.deepEqual(await t.ctx.slots.chat.call.state({}), { state: "working" });
   const states: unknown[] = [];
   t.ctx.slots.chat.on("status", (status) => states.push(status));
-  binding.emit("status", {
-    chat: "c1",
-    state: "error",
-    detail: { code: "usage_limit", message: "Usage limit reached." },
-  });
-  assert.deepEqual(states, [
-    {
-      chat: "c1",
-      state: "error",
-      detail: { code: "usage_limit", message: "Usage limit reached." },
-    },
-  ]);
-  assert.throws(() => binding.emit("status", { chat: "c1", state: "done" } as never), {
-    code: "bad_output",
-  });
-  assert.throws(() => binding.emit("status", { state: "idle" } as never), { code: "bad_output" });
+  binding.emit("status", { state: "working" });
+  binding.emit("status", { state: "idle" });
+  assert.deepEqual(states, [{ state: "working" }, { state: "idle" }]);
+  // A chat is never said to think, to use a tool or to have failed.
+  for (const state of ["thinking", "tool", "error"])
+    assert.throws(() => binding.emit("status", { state } as never), { code: "bad_output" });
+  // And nothing in it stops, runs again or chooses a model.
+  for (const gone of ["cancel", "retry", "models", "setModel"])
+    assert.equal(gone in chat.methods, false, gone);
 });
 
-test("chat@1 lists an agent's chats, and renames and archives one", async () => {
+test("chat@1 lists an agent's chats, with the problem one stopped on, and renames and archives one", async () => {
   const t = createTestContext(client);
   await t.start();
   const entry = {
@@ -507,7 +502,6 @@ test("chat@1 lists an agent's chats, and renames and archives one", async () => 
     title: "Plan the week",
     at: "2026-11-06T00:00:00Z",
     latest: { id: "m2", at: "2026-11-06T00:00:05Z" },
-    state: "idle" as const,
     archived: false,
   };
   const binding = t.bind("chat", {
@@ -526,7 +520,16 @@ test("chat@1 lists an agent's chats, and renames and archives one", async () => 
   const seen: unknown[] = [];
   t.ctx.slots.chat.on("chat", (one) => seen.push(one));
   binding.emit("chat", { ...entry, archived: true });
-  assert.deepEqual(seen, [{ ...entry, archived: true }]);
+  // A problem is told with the chat it is in, with the code a view offers an action for.
+  const problem = { code: "usage_limit", message: "Usage limit reached." };
+  binding.emit("chat", { ...entry, problem });
+  assert.deepEqual(seen, [
+    { ...entry, archived: true },
+    { ...entry, problem },
+  ]);
+  assert.throws(() => binding.emit("chat", { ...entry, problem: { code: "x" } } as never), {
+    code: "bad_output",
+  });
 });
 
 test("a field says what an agent may do with it, from a closed list", () => {

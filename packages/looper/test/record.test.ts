@@ -83,28 +83,6 @@ test("the record is first read a few at a time, in order", async () => {
   assert.ok(most > 1 && most <= 16, `${most} at once`);
 });
 
-test("dropAfter forgets what followed a message up to the next user message, in memory and in the store", async () => {
-  const s = store();
-  const record = createRecord(s.calls as never, log);
-  const reply = { role: "assistant" as const, items: [] };
-  const kept = await record.append(user("kept"));
-  await record.append(reply);
-  await record.append(reply);
-  await record.append(user("said since"));
-  await record.dropAfter(kept.id);
-  assert.equal(s.values.size, 2);
-  assert.deepEqual(
-    (await record.page(undefined, 100)).messages.map((m) => m.text),
-    ["kept", "said since"],
-  );
-  // And a new message after it isn't given a number that was used.
-  await record.append(user("next"));
-  assert.deepEqual(
-    (await createRecord(s.calls as never, log).page(undefined, 100)).messages.map((m) => m.text),
-    ["kept", "said since", "next"],
-  );
-});
-
 test("a message said during a turn is read after what was asked for without it, in one exchange", async () => {
   const record = createRecord(store().calls as never, log);
   const reply = (content: string) => ({

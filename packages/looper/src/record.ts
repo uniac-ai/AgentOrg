@@ -222,33 +222,9 @@ export function createRecord(
       }
       return record.entry;
     },
-    /**
-     * Forget what followed the message `id`, up to the next user message: a retry takes the place
-     * of what came of its message, and keeps what was said since.
-     */
-    async dropAfter(id: string) {
-      const state = await load();
-      const at = state.records.findLastIndex((record) => record.entry.id === id);
-      if (at === -1) return;
-      const next = state.records.findIndex((record, i) => i > at && record.entry.role === "user");
-      const count = (next === -1 ? state.records.length : next) - at - 1;
-      for (const gone of state.records.splice(at + 1, count)) {
-        state.bytes -= gone.bytes;
-        await store.delete({ key: gone.key }).catch((error: unknown) =>
-          log.warn("A replaced message couldn't be deleted.", {
-            key: gone.key,
-            error: String(error),
-          }),
-        );
-      }
-    },
     /** Whether nothing is kept. */
     async empty(): Promise<boolean> {
       return (await load()).records.length === 0;
-    },
-    /** The person's last message, if any. */
-    async lastUser(): Promise<Entry | undefined> {
-      return (await load()).records.findLast((record) => record.entry.role === "user")?.entry;
     },
     /** Messages before `before`, oldest first, as many as fit `limit` and `PAGE_BUDGET`. */
     async page(before: string | undefined, limit: number) {

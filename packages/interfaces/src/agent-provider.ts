@@ -38,6 +38,14 @@ const OnAgent = z.object({ agent: Id });
  * How an agent stands now, as what runs it knows: `starting`, `running`, `stopped` by the person,
  * or `down`, which it didn't ask for. `detail` says why it is down.
  */
+/** A model's id, as its provider names it. */
+export const ModelId = z.string().min(1).max(128);
+/** The models an agent can use, and the one chosen; none chosen means the provider's default. */
+export const AgentModels = z.object({
+  models: z.array(z.object({ id: ModelId, name: z.string().max(256) })),
+  current: ModelId.optional(),
+});
+
 export const AgentStatus = z.object({
   state: z.enum(["starting", "running", "stopped", "down"]),
   detail: z.string().max(2000).optional(),
@@ -78,6 +86,16 @@ export const agentProvider = defineInterface({
      * connections stay. Whether its chats can be read meanwhile is the provider's to say.
      */
     stop: method({ input: OnAgent, output: z.object({}) }),
+    /** The models an agent can use, and the one chosen. */
+    models: method({ input: OnAgent, output: AgentModels }),
+    /**
+     * Choose the model for an agent's next requests, kept with the agent; with no `model`, go back
+     * to the provider's default. Refused `unknown` when the model isn't one of `models`.
+     */
+    setModel: method({
+      input: OnAgent.extend({ model: ModelId.optional() }),
+      output: z.object({}),
+    }),
     /** Final: the agent's Actor is closed. */
     remove: method({ input: OnAgent, output: z.object({}) }),
   },

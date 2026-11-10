@@ -1,10 +1,12 @@
 export { Account, accountLogin, LoginState } from "./account-login.js";
 export {
+  AgentModels,
   AgentStatus,
   Answers,
   agentProvider,
   Creatable,
   CreatableId,
+  ModelId,
 } from "./agent-provider.js";
 export {
   agentSettings,
@@ -17,7 +19,7 @@ export {
   CHAT_TITLE_MAX,
   ChatEntry,
   ChatMessage,
-  ChatState,
+  ChatProblem,
   ChatStatus,
   ChatTool,
   chat,
