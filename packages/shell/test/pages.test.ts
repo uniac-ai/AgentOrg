@@ -197,9 +197,23 @@ test(
     const nav = page.getByRole("navigation", { name: "Main" });
     await nav.getByRole("button", { name: "Research" }).waitFor();
     assert.deepEqual(
-      (await nav.getByRole("button").allInnerTexts()).map((t) => t.trim()),
-      ["", "Agents", "Research", "Reviewer", "Triage", "Weekly report", "Broken", "Settings"],
+      (await nav.getByRole("button").allInnerTexts()).map((t) => t.split("\n").at(-1)),
+      [
+        "Home",
+        "",
+        "Research",
+        "Reviewer",
+        "Triage",
+        "Weekly report",
+        "Broken",
+        "Templates",
+        "Settings",
+      ],
     );
+    // A face is the agent's initials, and its state is in the row's name whether or not it shows.
+    const weeklyRow = nav.getByRole("button", { name: "Stopped Weekly report", exact: true });
+    assert.equal((await weeklyRow.innerText()).split("\n")[0], "WR");
+    await nav.getByRole("button", { name: "Working Research", exact: true }).waitFor();
     const settings = await nav.getByRole("button", { name: "Settings" }).boundingBox();
     assert.ok(settings && settings.y + settings.height > 860, "at the bottom");
     await nav.getByRole("button", { name: "Create" }).click();
@@ -238,10 +252,12 @@ test(
     await main.getByRole("button", { name: "Research settings" }).click();
     await page.waitForURL(/\/a\/a-research\/settings$/);
     await main.getByRole("region", { name: "MCPs" }).getByText("github", { exact: true }).waitFor();
-    await page
-      .getByRole("navigation", { name: "breadcrumb" })
-      .getByRole("button", { name: "Research" })
-      .click();
+    // The bar is the way back.
+    const research = page
+      .getByRole("navigation", { name: "Main" })
+      .getByRole("button", { name: "Research" });
+    assert.equal(await research.getAttribute("aria-current"), "page");
+    await research.click();
     await page.waitForURL(/\/a\/a-research$/);
     await page.close();
   }),

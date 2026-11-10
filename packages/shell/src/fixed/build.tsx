@@ -40,16 +40,6 @@ import {
   toStack,
 } from "./stack.ts";
 
-/** The plus: the Create window, clean each time. */
-export function CreateButton() {
-  const { show } = useBuilding();
-  return (
-    <Button variant="ghost" size="icon-sm" aria-label="Create" onClick={show}>
-      <PlusIcon />
-    </Button>
-  );
-}
-
 /**
  * Create, in one window: what to start from on the left, and once that's chosen a panel opening on
  * its right. A click outside closes it, and closing it clears it.

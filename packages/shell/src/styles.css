@@ -21,11 +21,6 @@
     @slot;
   }
 }
-@custom-variant wide {
-  @container app (width >= 40rem) {
-    @slot;
-  }
-}
 @custom-variant dock {
   @container app (width >= 68.75rem) {
     @slot;
@@ -152,6 +147,12 @@
   --color-border: var(--line);
   --color-input: var(--line-strong);
   --color-ring: var(--ring);
+  --color-sidebar: var(--canvas);
+  --color-sidebar-foreground: var(--fg);
+  --color-sidebar-accent: var(--selected);
+  --color-sidebar-accent-foreground: var(--fg);
+  --color-sidebar-border: transparent;
+  --color-sidebar-ring: var(--ring);
   --radius-sm: 6px;
   --radius-md: 8px;
   --radius-lg: 10px;

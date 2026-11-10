@@ -344,8 +344,11 @@ test(
     const first = nav.getByRole("button").nth(0);
     await first.waitFor();
     const before = await first.boundingBox();
-    for (const name of [/^Settings$/, /Research$/, /^Agents$/]) {
+    for (const name of [/^Settings$/, /Research$/, /^Templates$/, /^Home$/]) {
       await nav.getByRole("button", { name }).click();
+      assert.deepEqual(await first.boundingBox(), before);
+      // The bar marks where you are.
+      await nav.getByRole("button", { name }).and(page.locator('[aria-current="page"]')).waitFor();
       assert.deepEqual(await first.boundingBox(), before);
     }
     await page.close();

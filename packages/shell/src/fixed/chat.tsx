@@ -117,7 +117,7 @@ function useReducedMotion(): boolean {
   );
 }
 
-/** The chats, one session per agent, in the panel the top bar opens. */
+/** The chats, one session per agent, in the panel the chat button opens. */
 export function ChatPanel() {
   const { open, thread } = useChats();
   if (!open) return null;
@@ -128,11 +128,23 @@ export function ChatPanel() {
   );
 }
 
+function ClosePanel() {
+  const { close } = useChats();
+  return (
+    <Button variant="ghost" size="icon-sm" aria-label="Close" onClick={close}>
+      <XIcon />
+    </Button>
+  );
+}
+
 function List() {
   const { sessions, show } = useChats();
   return (
     <>
-      <h2 className="flex h-11 shrink-0 items-center px-4 text-[13px] font-semibold">Chats</h2>
+      <header className="flex h-11 shrink-0 items-center justify-between pr-2 pl-4">
+        <h2 className="text-[13px] font-semibold">Chats</h2>
+        <ClosePanel />
+      </header>
       <ul className="no-bar min-h-0 flex-1 overflow-y-auto px-2 pb-2">
         {sessions.map((session) => (
           <li key={session.agent}>
@@ -227,6 +239,7 @@ function Thread({ agent: id }: { agent: string }) {
             <DropdownMenuItem onSelect={() => drop(id)}>Remove from Chats</DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
+        <ClosePanel />
       </header>
       {entry.status.state !== "running" ? (
         <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
