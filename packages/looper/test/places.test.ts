@@ -68,7 +68,7 @@ test("the line for a place holds so many turns; past that a message is refused, 
   const full = {
     name: "Refusal",
     code: "busy",
-    message: "Too many turns are waiting. Wait for one to start, or cancel one.",
+    message: "Too many turns are waiting. Wait for one to start.",
   };
   await assert.rejects(looper.send("one more", "Hello."), full);
   assert.ok(!said.includes("one more: user: Hello."));

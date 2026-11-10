@@ -135,7 +135,7 @@ export function startEngine(
   ctx.exports.chat.implement({
     send: (input) => chats.send(input),
     history: (input) => chats.history(input),
-    state: async () => chats.state(),
+    state: () => chats.state(),
     list: (input) => chats.list(input),
     rename: (input) => chats.rename(input),
     archive: (input) => chats.archive(input),

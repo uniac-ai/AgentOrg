@@ -286,17 +286,11 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
         removeAgent,
       });
 
-      const startAgent = async (agent: string) => {
-        const { provider } = recordOf(agent);
-        return named(agentProviders(), provider, "agent provider").call.start({ agent });
-      };
-      const stopAgent = async (agent: string) => {
-        const { provider } = recordOf(agent);
-        return named(agentProviders(), provider, "agent provider").call.stop({ agent });
-      };
-      /** An agent's own provider, which holds what management doesn't: its model. */
+      /** An agent's own provider, which runs it and keeps its model. */
       const makerOf = (agent: string) =>
         named(agentProviders(), recordOf(agent).provider, "agent provider").call;
+      const startAgent = async (agent: string) => makerOf(agent).start({ agent });
+      const stopAgent = async (agent: string) => makerOf(agent).stop({ agent });
       /** Its units and connections go first: if one can't, the agent is here to be tried again. */
       const removeWhole = (agent: string) =>
         stacks.serial(agent, async () => {

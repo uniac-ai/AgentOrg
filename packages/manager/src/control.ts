@@ -68,7 +68,7 @@ There is one create tool per template you may use. Read its description and fiel
 
 - \`agent_send\` gives it a message and returns at once. It works on its own after that. Your name is on the message's first line.
 - A message with no chat named starts a new chat with it, and tells you which. Name that chat to go on in it. Start another only for work that is apart from the first.
-- \`agent_chats\` lists its chats, with any problem one stopped on, and says whether it is working. \`agent_read\` shows what was said in one. Check back when you need the result, rather than after every step.
+- \`agent_chats\` lists its chats and says whether it is working. A chat with a \`problem\` has a message that got no answer: send it another once the problem is dealt with. \`agent_read\` shows what was said in one. Check back when you need the result, rather than after every step.
 - Say what you want back and in what form. It knows only what you send it and its purpose.
 
 ## When it is done
@@ -983,7 +983,7 @@ export function createControl(parts: ControlParts) {
     verb({
       name: "agent_chats",
       description:
-        "An agent's chats, each with its newest reply and any problem it stopped on, the one last written in first, a page at a time; and whether the agent is working now.",
+        "An agent's chats, the one last written in first, a page at a time: each with when it last replied and, if a message in it got no answer, the problem; and whether the agent is working now.",
       input: Target.extend({
         archived: z.boolean().optional().describe("The archived ones instead."),
         before: Id.optional().describe("The last chat of the page before, to list what follows."),
@@ -997,7 +997,7 @@ export function createControl(parts: ControlParts) {
           ...(archived ? { archived } : {}),
           ...(before ? { before } : {}),
         });
-        return { ...(await one.state({})), chats, more };
+        return { working: (await one.state({})).state === "working", chats, more };
       },
     }),
     verb({

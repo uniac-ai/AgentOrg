@@ -36,15 +36,15 @@ export const ChatMessage = z.object({
 /** What the agent is doing: `working` while it answers anything, in any chat. */
 export const ChatStatus = z.object({ state: z.enum(["idle", "working"]) });
 /**
- * Why a chat's last message got no answer. `code` is the refusal's code, such as the model's
+ * Why a message in a chat got no answer. `code` is the refusal's code, such as the model's
  * `usage_limit` or `not_signed_in`, so a view can offer the right action.
  */
-export const ChatProblem = z.object({ code: z.string().max(128), message: z.string().max(2000) });
+const ChatProblem = z.object({ code: z.string().max(128), message: z.string().max(2000) });
 
 /**
  * One of an agent's chats, as a list shows it. Its `title` is its first message's first line until
  * it is renamed. `latest` is its newest reply, so a view can tell what is new without reading the
- * chat. `problem` is there while what answered a message in it failed, until its next reply.
+ * chat. `problem` is there while a message in it got no answer, until its next reply.
  */
 export const ChatEntry = z.object({
   id: ChatId,
@@ -60,8 +60,8 @@ export const ChatEntry = z.object({
  * `chat@1`: an agent's chats. A chat is the messages sent in it and nothing more: `send` with no
  * `chat` starts one, and with one, goes on in it. Messages and streaming text arrive as events,
  * each naming its chat. What works is the agent, not a chat: `status` says when it starts and
- * stops, and nothing here stops it or chooses its model. Events are live only: `history` is a
- * chat's record, `state` the agent's status now, and `list` the chats. A provider that can't take
+ * when it is done. Events are live only: `history` is a chat's record, `state` the agent's status
+ * now, and `list` the chats. A provider that can't take
  * a message now refuses it `busy`. A call naming a chat the agent doesn't have is refused
  * `unknown`.
  */
@@ -71,9 +71,9 @@ export const chat = defineInterface({
   kind: "rpc",
   methods: {
     /**
-     * Send this message in `chat`, or in a new chat; the answer says which. It starts a turn
-     * there, or joins the one running. An archived chat takes a message like any other, and stays
-     * archived. Refused `busy` when the provider can't take it now.
+     * Send this message in `chat`, or in a new chat; the result says which. The agent answers it
+     * in that chat. An archived chat takes a message like any other, and stays archived. Refused
+     * `busy` when the provider can't take it now.
      */
     send: method({
       input: z.object({
@@ -125,8 +125,8 @@ export const chat = defineInterface({
     /** The agent's status, when it changes. */
     status: event(ChatStatus),
     /**
-     * A chat as it now is: it was started, renamed or archived, a message was sent in it, or it
-     * met a problem.
+     * A chat as it now is: it was started, renamed or archived, a message was sent in it, or one
+     * got no answer.
      */
     chat: event(ChatEntry),
   },

@@ -371,6 +371,8 @@ test("a stopped agent whose connection ended is down until it is stopped or star
     async () => (await s.agents.status({ agent })).state === "down",
     "the agent to be down",
   );
+  // Off its channel, it can't say its models.
+  await assert.rejects(s.agents.models({ agent }), { code: "unavailable" });
   // Stopped again, it joins as it was left: read, and taking nothing.
   await s.agents.stop({ agent });
   assert.deepEqual(await s.agents.status({ agent }), { state: "stopped" });

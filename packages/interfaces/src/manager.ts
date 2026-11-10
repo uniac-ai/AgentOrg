@@ -1,13 +1,6 @@
 import { defineInterface, method } from "@agentorg/sdk";
 import { z } from "zod";
-import {
-  AgentModels,
-  AgentStatus,
-  Answers,
-  Creatable,
-  CreatableId,
-  ModelId,
-} from "./agent-provider.js";
+import { AgentModels, AgentStatus, Answers, Creatable, CreatableId } from "./agent-provider.js";
 import { SKILL_FILE_MAX, SkillEntry, SkillName, SkillPath } from "./agent-settings.js";
 import {
   ConnectionKind,
@@ -18,6 +11,7 @@ import {
   ConnectionTarget,
 } from "./connection.js";
 import { Id, SlotName } from "./hub.js";
+import { ModelId } from "./llm-session.js";
 import {
   FieldValues,
   LiveMode,

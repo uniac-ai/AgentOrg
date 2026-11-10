@@ -106,9 +106,7 @@ export function createLoop(options: {
   const status = (current: Turn, next: Status) => {
     if (turn === current) say(next);
   };
-  /**
-   * Run a turn on the record as it stands; its progress is said through `out`.
-   */
+  /** Run a turn on the record as it stands; its progress is said through `out`. */
   const begin = (current: Turn) => {
     current.ended = placed(current)
       .catch((error: unknown) => {
@@ -286,8 +284,8 @@ export function createLoop(options: {
   };
   /**
    * Start a turn: `open` takes its place and keeps what opens it, then its loop runs. When `open`
-   * gives nothing, no turn starts. A turn `cancelled` before it
-   * started keeps what opens it and runs nothing.
+   * gives nothing, no turn starts. A turn `cancelled` before it started keeps what opens it and
+   * runs nothing.
    */
   const start = async <T>(
     cancelled: boolean,

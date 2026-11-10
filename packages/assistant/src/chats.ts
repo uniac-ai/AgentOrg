@@ -107,7 +107,7 @@ const Stored = z.object({
   /** Its place in the list: the highest is the chat a message was last sent in. */
   order: z.number(),
   latest: z.object({ id: z.string(), at: z.string() }).optional(),
-  /** Why its last message got no answer, until its next reply. */
+  /** Why a message in it got no answer, until its next reply. */
   problem: z.object({ code: z.string(), message: z.string() }).optional(),
   archived: z.boolean(),
 });
@@ -177,17 +177,18 @@ export function createChats(options: {
         },
         delta: (thread, id, text) => emit.delta({ chat: thread, id, text }),
         status(thread, status) {
-          const was = stateNow().state;
+          const was = atWork.size > 0;
           if (status.state === "thinking" || status.state === "tool") atWork.add(thread);
           else atWork.delete(thread);
-          // A turn that failed is its chat's problem, told with the chat.
+          // A turn that failed left its chat's message with no answer: the chat is told why,
+          // before the agent is said to be idle.
           const held = chats.get(thread);
-          if (status.state === "error" && held)
-            met(held, {
-              code: head(status.detail.code, 128),
-              message: head(status.detail.message, 2000),
-            });
-          if (stateNow().state !== was) emit.status(stateNow());
+          if (status.state === "error" && held) {
+            const { code, message } = status.detail;
+            held.stored.problem = { code: head(code, 128), message: head(message, 2000) };
+            told(held);
+          }
+          if (atWork.size > 0 !== was) emit.status(stateNow());
         },
       },
       stopped: options.stopped,
@@ -210,7 +211,7 @@ export function createChats(options: {
     writing = written.catch(() => {});
     return written;
   };
-  /** Keep a chat's entry as it now is, and say it. */
+  /** Say a chat's entry as it now is; its write follows. */
   const told = (held: Held) => {
     // What it tells is already so: an entry that can't be written is behind until the next.
     save(held).catch((error: unknown) =>
@@ -220,7 +221,7 @@ export function createChats(options: {
   };
   /**
    * A message sent in a chat moves it to the front of the list; a reply is what is new in it, and
-   * ends any problem it had.
+   * its message has its answer.
    */
   const sent = (held: Held, message: Message) => {
     if (message.role === "tool") return;
@@ -231,11 +232,7 @@ export function createChats(options: {
     }
     told(held);
   };
-  /** A chat's message got no answer: it has that problem until its next reply. */
-  const met = (held: Held, problem: NonNullable<Stored["problem"]>) => {
-    held.stored.problem = problem;
-    told(held);
-  };
+
   /** Change what a chat is called or where it is listed: a change the store refuses isn't made. */
   const keep = async <K extends "title" | "archived">(held: Held, key: K, value: Stored[K]) => {
     const was = held.stored[key];

@@ -392,7 +392,7 @@ async function setup(t: test.TestContext) {
           stopped.add(agent);
           return {};
         },
-        // Its one model, or the one chosen for it.
+        // The models it offers, and the one chosen for the agent.
         models: ({ agent }) => ({
           models: MODELS,
           ...(chosen.has(agent) ? { current: chosen.get(agent) as string } : {}),
@@ -1842,9 +1842,9 @@ test("an agent creates, messages, reads, stops and removes an agent of its own",
     [[sent.chat, "Please start."]],
   );
   // And whether it is working now, which is the agent's to say, not a chat's.
-  assert.equal((await call("agent_chats", { agent: child })).state, "idle");
+  assert.equal((await call("agent_chats", { agent: child })).working, false);
   s.script.working = true;
-  assert.equal((await call("agent_chats", { agent: child })).state, "working");
+  assert.equal((await call("agent_chats", { agent: child })).working, true);
   const saidIn = (chat: string) => call("agent_read", { agent: child, chat });
   assert.match((await saidIn(sent.chat)).messages[0].text, /Please start/);
   // It goes on in that chat by naming it, and starts another by naming none.
@@ -1873,7 +1873,7 @@ test("an agent creates, messages, reads, stops and removes an agent of its own",
     (await page({ archived: true })).chats.map((one: Chat) => one.id),
     [sent.chat],
   );
-  // A problem a chat stopped on is told with the chat.
+  // A message that got no answer is told with its chat, as its problem.
   s.script.failed = [apart.chat];
   assert.deepEqual((await chatsOf())[0], {
     id: apart.chat,

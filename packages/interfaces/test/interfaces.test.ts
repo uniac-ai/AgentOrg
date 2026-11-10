@@ -494,7 +494,7 @@ test("chat@1 sends in a chat or starts one, pages its history, and says only whe
     assert.equal(gone in chat.methods, false, gone);
 });
 
-test("chat@1 lists an agent's chats, with the problem one stopped on, and renames and archives one", async () => {
+test("chat@1 lists an agent's chats, with why a message in one got no answer, and renames and archives one", async () => {
   const t = createTestContext(client);
   await t.start();
   const entry = {

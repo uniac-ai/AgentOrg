@@ -134,11 +134,7 @@ export function createLooper(options: {
       placed.add(place);
       take();
     } else if (waiting.length < WAITING) waiting.push({ place, begun, take });
-    else
-      throw new Refusal(
-        "busy",
-        "Too many turns are waiting. Wait for one to start, or cancel one.",
-      );
+    else throw new Refusal("busy", "Too many turns are waiting. Wait for one to start.");
     return place;
   };
 
