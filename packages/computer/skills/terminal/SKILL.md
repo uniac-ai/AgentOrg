@@ -24,6 +24,12 @@ Pass `chars`, with `\n` to press Enter. `\u0003` is Ctrl-C and interrupts it. `\
 
 Commands run without a terminal, so a program that needs a full screen, such as an editor or `top`, won't work. Use a non-interactive form: `git --no-pager`, `git commit -m`, a package manager's `--yes`.
 
+## Sessions on your computer
+
+`computer__list_sessions` lists them, running or lately ended: each command you started and each shell a person opened, with its `session_id` and who started it. Use it to find a command whose `session_id` you no longer have. `computer__write_stdin` reads and types into a person's shell too, by its `session_id`.
+
+A person's shell is theirs. Read it when the task needs it. Type into it only when they asked you to. It is on a terminal, unlike your commands: what you type joins anything they have already typed, `\u0003` interrupts what they are running, and `\u0004` at its prompt closes it.
+
 ## Good habits
 
 - Read what a command said before you run the next one, and when one fails, find out why before trying something else.

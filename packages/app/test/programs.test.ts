@@ -545,7 +545,7 @@ test("a socket from the person reaches a computer's surfaces live, with no token
     fill: [{ values: { service: "local", workspace } }],
     name: "Watched",
   });
-  type Surfaces = { surface: string; protocol: string; unavailable?: string }[];
+  type Surfaces = { surface: string; protocol: string }[];
   const units = (
     await person.call<{
       units: { instance: string; unit: string; status: { surfaces?: Surfaces } }[];
@@ -556,10 +556,10 @@ test("a socket from the person reaches a computer's surfaces live, with no token
   assert.deepEqual(
     surfaces.map((one) => [one.surface, one.protocol]),
     [
-      ["commands", "commands@1"],
-      ["terminal", "pty@1"],
+      ["terminal", "terminal@1"],
       ["files", "files@1"],
       ["browser", "screencast@1"],
+      ["load", "metrics@1"],
     ],
   );
   // A page never holds a ticket: `/api` won't give one.
@@ -567,7 +567,7 @@ test("a socket from the person reaches a computer's surfaces live, with no token
     person.call("agents", "live", {
       agent,
       instance: computer?.instance,
-      surface: "commands",
+      surface: "terminal",
       mode: "watch",
     }),
     refused("forbidden"),
@@ -594,25 +594,35 @@ test("a socket from the person reaches a computer's surfaces live, with no token
     return { socket, frames };
   };
 
-  const watch = await live("commands", "watch");
-  assert.deepEqual(JSON.parse(watch.frames[0] as string), { op: "live", protocol: "commands@1" });
+  // A terminal@1 event is one JSON frame.
+  type Event = { type?: string; id?: string; by?: string; text?: string; message?: string };
+  const events = (frames: string[]) => frames.map((one) => JSON.parse(one) as Event);
+  const wrote = (frames: string[], text: string) =>
+    events(frames).some((one) => one.type === "output" && one.text?.includes(text));
+
+  // Watching, a person sees what the agent's command wrote.
+  const watch = await live("terminal", "watch");
+  assert.deepEqual(JSON.parse(watch.frames[0] as string), { op: "live", protocol: "terminal@1" });
   const run = await Computer.connect(held.id, { ...reached, accessToken: held.token });
   await run.commands.run("echo live-proof");
   await run.close();
-  await until(
-    () => watch.frames.some((one) => one.includes("live-proof")),
-    "the command to be seen",
-  );
+  await until(() => wrote(watch.frames, "live-proof"), "the command to be seen");
 
-  const terminal = surfaces.find((one) => one.surface === "terminal");
-  if (!terminal?.unavailable) {
-    const shell = await live("terminal", "operate");
-    shell.socket.send(Buffer.concat([Buffer.from([0x30]), Buffer.from("echo pty-proof\n")]));
-    await until(
-      () => shell.frames.some((one) => one.includes("pty-proof") && !one.includes("echo pty")),
-      "the shell to answer",
+  // Operating, a person opens a shell of their own and types into it. A service without node-pty
+  // refuses the shell, and the rest isn't shown here.
+  const shell = await live("terminal", "operate");
+  shell.socket.send(JSON.stringify({ type: "open", columns: 80, rows: 24 }));
+  const opened = () =>
+    events(shell.frames).find(
+      (one) => one.type === "refused" || (one.type === "start" && one.by === "person"),
     );
-  }
+  await until(() => opened() !== undefined, "the shell to open, or to be refused");
+  const answer = opened();
+  if (answer?.type === "start") {
+    const typed = { type: "input", id: answer.id, text: "echo shell-$((40+2))\n" };
+    shell.socket.send(JSON.stringify(typed));
+    await until(() => wrote(shell.frames, "shell-42"), "the shell to answer");
+  } else assert.match(answer?.message ?? "", /node-pty/);
   for (const secret of [reached.apiKey, held.token])
     assert.ok(!heard.some((one) => one.includes(secret)), "no token reaches the page");
   await person.call("agents", "remove", { agent });

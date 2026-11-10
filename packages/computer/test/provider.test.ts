@@ -293,7 +293,7 @@ test("check says what's wrong by field, and changes nothing", async (t) => {
   assert.deepEqual(await Computer.list(reached), []);
 });
 
-test("on a real service, an agent runs a command and edits a file, through tools", async (t) => {
+test("on a real service, an agent runs a command, lists it and edits a file, through tools", async (t) => {
   const { apply, local, asAgent, connected, workspace, units } = await setup(t);
   const { instance, connections } = await apply(local("terminal"));
   assert.deepEqual(
@@ -310,6 +310,10 @@ test("on a real service, an agent runs a command and edits a file, through tools
   assert.equal(ran.failed, undefined);
   assert.match(ran.output, /the person's file/);
   assert.equal(readFileSync(join(workspace, "made.txt"), "utf8"), "from-the-agent\n");
+  // It lists its sessions, the command it just ran among them.
+  const sessions = await computer.call({ name: "list_sessions", arguments: {} });
+  assert.equal(sessions.failed, undefined);
+  assert.match(sessions.output, /cat seen\.txt/);
   const edited = await computer.call({
     name: "edit",
     arguments: { path: "seen.txt", old_text: "person's", new_text: "edited" },
@@ -349,11 +353,15 @@ test("on a real service, an agent reads a page with its browser", async (t) => {
     ["browser"],
   );
   await connected(instance);
-  // Its picture can be opened live: the service says so, and gives a ticket for it.
+  // Its picture can be opened live: the service says so, and gives a ticket for it. How busy the
+  // computer is can only be watched.
   const { surfaces } = await units.status({ instance });
   assert.deepEqual(
     surfaces?.map(({ surface, protocol, operate }) => [surface, protocol, operate]),
-    [["browser", "screencast@1", true]],
+    [
+      ["browser", "screencast@1", true],
+      ["load", "metrics@1", false],
+    ],
   );
   const ticket = await units.live({ instance, surface: "browser", mode: "watch" });
   assert.equal(ticket.protocol, "screencast@1");
@@ -438,10 +446,10 @@ test("endpoints are at the address given, whatever the service calls itself", as
   assert.match(kept[instance].links[0].url, new RegExp(`^http://localhost:${port}/`));
   // So is a live session's socket.
   const status = await units.status({ instance });
-  assert.ok(status.surfaces?.some((one) => one.surface === "commands"));
-  const ticket = await units.live({ instance, surface: "commands", mode: "watch" });
+  assert.ok(status.surfaces?.some((one) => one.surface === "terminal"));
+  const ticket = await units.live({ instance, surface: "terminal", mode: "watch" });
   assert.match(ticket.url, new RegExp(`^ws://localhost:${port}/`));
-  assert.equal(ticket.protocol, "commands@1");
+  assert.equal(ticket.protocol, "terminal@1");
   await assert.rejects(
     units.live({ instance, surface: "nothing", mode: "watch" }),
     refused("unknown"),
