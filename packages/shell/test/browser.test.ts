@@ -47,11 +47,13 @@ const until = async (check: () => boolean, what: string) => {
   for (let n = 0; n < 80 && !check(); n++) await new Promise((r) => setTimeout(r, 50));
   assert.ok(check(), what);
 };
-const box = (page: Page, name: string) =>
-  page.getByRole("region", { name }).evaluate((e) => JSON.stringify(e.getBoundingClientRect()));
+const PAGE = 'canvas[aria-label="Page"]';
+/** Where the page's picture is: it moves if any row of the frame above it changes height. */
+const box = (page: Page) =>
+  page.locator(PAGE).evaluate((e) => JSON.stringify(e.getBoundingClientRect()));
 
 test(
-  "the page is watched until you take over, then your input drives it until you let go",
+  "the browser opens to operate: a click, keys and an address reach the page",
   withGateway(async (gateway) => {
     withSurfaces(gateway, [BROWSER]);
     const page = await open(gateway);
@@ -69,21 +71,16 @@ test(
       "true",
     );
     assert.equal(await frame.getByLabel("Address").inputValue(), "https://shop.example/checkout");
-    assert.ok(
-      await frame.getByRole("button", { name: "Back" }).isDisabled(),
-      "watching, nothing to press",
+    await frame.getByRole("button", { name: "Back" }).and(page.locator(":enabled")).waitFor();
+    assert.deepEqual(
+      gateway.live.opened.map((o) => o.mode),
+      ["operate"],
+      "one socket, opened to operate",
     );
-    assert.deepEqual(gateway.live.opened.at(-1)?.mode, "watch");
-    const before = await box(page, "Browser");
-
-    await frame.getByRole("button", { name: "Take over" }).click();
-    await frame.getByRole("button", { name: "Let go" }).waitFor();
-    assert.equal(gateway.live.opened.at(-1)?.mode, "operate");
-    assert.equal(await box(page, "Browser"), before, "taking over moves nothing");
+    const before = await box(page);
 
     // A click lands where it was made, in the page's own pixels.
-    const canvas = frame.locator('canvas[aria-label="Page"]');
-    const shown = await canvas.boundingBox();
+    const shown = await frame.locator(PAGE).boundingBox();
     assert.ok(shown);
     await page.mouse.click(shown.x + shown.width / 4, shown.y + shown.height / 2);
     await until(
@@ -97,14 +94,7 @@ test(
       JSON.stringify(down),
     );
 
-    // The input made you the driver, so the agent's browser calls wait for you.
-    gateway.agentWaits(true);
-    await frame.getByText("Agent waiting").waitFor();
-    await page
-      .getByRole("status", { name: "Now" })
-      .getByText("Waiting for you in the browser")
-      .waitFor();
-    assert.equal(await box(page, "Browser"), before, "driving moves nothing");
+    assert.equal(await box(page), before, "your input moves nothing");
 
     await page.keyboard.type("ab");
     await page.keyboard.press("Enter");
@@ -119,8 +109,14 @@ test(
       ["a", "b", "down Enter", "up Enter"],
     );
 
-    await frame.getByLabel("Address").fill("https://shop.example/cart");
+    // An address with no scheme is a site's, and the keys are the page's once it's sent.
+    await frame.getByLabel("Address").fill("shop.example/cart");
     await frame.getByLabel("Address").press("Enter");
+    await page.waitForFunction((at) => document.activeElement?.matches(at), PAGE);
+    // Tab walks past the page, which would keep every key: only a click or an address goes in.
+    await frame.getByLabel("Address").focus();
+    await page.keyboard.press("Tab");
+    assert.equal(await page.evaluate((at) => document.activeElement?.matches(at), PAGE), false);
     await frame.getByRole("button", { name: "Reload" }).click();
     await until(
       () => gateway.live.input.filter((i) => i.type === "navigate").length === 2,
@@ -130,70 +126,121 @@ test(
       gateway.live.input.filter((i) => i.type === "navigate").map((i) => i.to),
       ["https://shop.example/cart", "reload"],
     );
-
-    gateway.screen({
-      type: "tabs",
-      tabs: [
-        { id: 1, url: "https://shop.example/checkout", title: "Checkout" },
-        { id: 2, url: "https://docs.example/retries", title: "Retries" },
-      ],
-      shown: 1,
-    });
-    await frame.getByRole("tab", { name: "Retries" }).click();
-    await until(() => gateway.live.input.some((i) => i.type === "tab"), "the tab");
-    assert.deepEqual(
-      gateway.live.input.find((i) => i.type === "tab"),
-      { type: "tab", action: "show", id: 2 },
-    );
-
-    await frame.getByRole("button", { name: "Let go" }).click();
-    await frame.getByRole("button", { name: "Take over" }).waitFor();
-    assert.ok(gateway.live.input.some((i) => i.type === "release"));
-    await until(() => gateway.live.opened.at(-1)?.mode === "watch", "watching again");
     assert.equal(
-      await page.getByRole("status", { name: "Now" }).getByText("Waiting for you").count(),
-      0,
-      "the Now line is the agent's again",
+      gateway.live.input.filter((i) => i.type === "key").length,
+      2,
+      "the Enter that sent the address isn't the page's",
     );
-    assert.equal(await box(page, "Browser"), before, "letting go moves nothing");
+
     await page.close();
   }),
 );
 
 test(
-  "when the service lets go for you, the frame goes back to watching",
+  "the wheel is the page's once you've clicked in it, and until then scrolls what's around it",
   withGateway(async (gateway) => {
     withSurfaces(gateway, [BROWSER]);
-    const page = await open(gateway);
+    // Short enough that the agent's page scrolls.
+    const page = await open(gateway, { width: 1440, height: 500 });
     const frame = page.getByRole("region", { name: "Browser" });
-    await frame.getByRole("button", { name: "Take over" }).click();
-    await frame.getByRole("button", { name: "Let go" }).waitFor();
-    await frame.getByRole("button", { name: "Reload" }).click();
-    await until(() => gateway.live.screen.driver !== undefined, "driving");
-    // As after a minute with no input.
-    gateway.live.screen.driver = undefined;
-    gateway.agentWaits(false);
-    await frame.getByRole("button", { name: "Take over" }).waitFor();
+    await frame.getByRole("button", { name: "Back" }).and(page.locator(":enabled")).waitFor();
+    const scrolled = () =>
+      page.evaluate(() =>
+        [...document.querySelectorAll("*")].reduce((sum, e) => sum + e.scrollTop, 0),
+      );
+    await frame.locator(PAGE).hover();
+    const under = await scrolled();
+    assert.ok(under > 0, "the frame is below the fold");
+
+    await page.mouse.wheel(0, -30);
+    await page.waitForFunction(
+      (was) => [...document.querySelectorAll("*")].reduce((sum, e) => sum + e.scrollTop, 0) < was,
+      under,
+    );
+
+    await frame.locator(PAGE).click();
+    const held = await scrolled();
+    await page.mouse.wheel(0, -30);
+    await until(() => gateway.live.input.some((i) => i.action === "wheel"), "the wheel");
+    assert.equal(gateway.live.input[0]?.action, "down", "nothing was sent before the click");
+    await page.waitForTimeout(100);
+    assert.equal(await scrolled(), held, "what's around the page stays where it is");
     await page.close();
   }),
 );
 
 test(
-  "what the page asks is shown to whoever watches and answered by whoever drives",
+  "tabs are drawn as the service says, and New tab asks for one and shows it empty",
   withGateway(async (gateway) => {
     withSurfaces(gateway, [BROWSER]);
     const page = await open(gateway);
     const frame = page.getByRole("region", { name: "Browser" });
-    await frame.waitFor();
-    await until(() => gateway.live.screens.size === 1, "watching");
+    const selected = (name: string) => frame.getByRole("tab", { name, selected: true }).waitFor();
+    await selected("Checkout");
+    const before = await box(page);
+
+    // Until you pick one, the tab in front follows the newest.
+    gateway.tabOpens({ id: 2, url: "https://docs.example/retries", title: "Retries" });
+    await selected("Retries");
+    assert.equal(await frame.getByLabel("Address").inputValue(), "https://docs.example/retries");
+
+    await frame.getByRole("tab", { name: "Checkout" }).click();
+    await selected("Checkout");
+    assert.deepEqual(gateway.live.input.at(-1), { type: "tab", action: "show", id: 1 });
+
+    await frame.getByRole("button", { name: "New tab" }).click();
+    await until(() => gateway.live.tabs.length === 3, "your tab");
+    assert.deepEqual(gateway.live.input.at(-1), { type: "tab", action: "open" });
+    // Your new tab is in front, named as an empty one, with an empty address to type in.
+    await selected("New tab");
+    assert.equal(await frame.getByLabel("Address").inputValue(), "");
+
+    // An address half typed belongs to its tab, also when the next tab is as empty.
+    await frame.getByLabel("Address").fill("docs.example");
+    await frame.getByRole("button", { name: "New tab" }).click();
+    const front = (n: number) =>
+      frame.getByRole("tab").nth(n).and(page.locator('[aria-selected="true"]')).waitFor();
+    await front(3);
+    assert.equal(await frame.getByLabel("Address").inputValue(), "");
+
+    // The agent goes on in a tab of its own: it appears in the row and yours stays in front.
+    gateway.tabOpens({ id: 5, url: "https://shop.example/cart", title: "Cart" });
+    await frame.getByRole("tab", { name: "Cart" }).waitFor();
+    await front(3);
+    assert.equal(await box(page), before, "tabs coming and going move nothing");
+    await page.close();
+  }),
+);
+
+test(
+  "a browser you may only watch shows the page and what it asks, with nothing to press",
+  withGateway(async (gateway) => {
+    withSurfaces(gateway, [{ ...BROWSER, operate: false }]);
+    const page = await open(gateway);
+    const frame = page.getByRole("region", { name: "Browser" });
+    await frame.getByRole("tab", { name: "Checkout" }).waitFor();
+    assert.equal(gateway.live.opened.at(-1)?.mode, "watch");
+    assert.ok(await frame.getByRole("button", { name: "Back" }).isDisabled());
+    assert.ok(await frame.getByRole("tab", { name: "Checkout" }).isDisabled());
+    assert.equal(await frame.getByRole("button", { name: "New tab" }).count(), 0);
 
     gateway.screen({ type: "dialog", open: true, kind: "confirm", message: "Leave this page?" });
     const asks = frame.getByRole("dialog", { name: "The page asks" });
     await asks.getByText("Leave this page?").waitFor();
     assert.equal(await asks.getByRole("button").count(), 0, "a watcher can't answer");
+    await page.close();
+  }),
+);
 
-    await frame.getByRole("button", { name: "Take over" }).click();
-    await frame.getByRole("button", { name: "Let go" }).waitFor();
+test(
+  "what the page asks is answered in the frame",
+  withGateway(async (gateway) => {
+    withSurfaces(gateway, [BROWSER]);
+    const page = await open(gateway);
+    const frame = page.getByRole("region", { name: "Browser" });
+    await frame.getByRole("button", { name: "Back" }).and(page.locator(":enabled")).waitFor();
+    const asks = frame.getByRole("dialog", { name: "The page asks" });
+
     gateway.screen({
       type: "dialog",
       open: true,
@@ -245,6 +292,16 @@ test(
       gateway.live.input.find((i) => i.type === "choice"),
       { type: "choice", values: ["s", "m"] },
     );
+
+    // A list left open goes when another tab comes in front: it was the other page's.
+    gateway.screen({
+      type: "choice",
+      multiple: false,
+      options: [{ value: "s", label: "Small", selected: true }],
+    });
+    await asks.getByText("Small").waitFor();
+    gateway.tabOpens({ id: 2, url: "https://docs.example/retries", title: "Retries" });
+    await asks.waitFor({ state: "detached" });
     await page.close();
   }),
 );

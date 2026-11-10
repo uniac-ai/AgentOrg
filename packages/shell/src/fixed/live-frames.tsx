@@ -26,8 +26,6 @@ export const VIEWERS: Record<
 
 export interface ViewerProps {
   target: LiveTarget;
-  /** Told when the agent starts or stops waiting for you to let go. */
-  onWaiting?(waiting: boolean): void;
 }
 
 export const targetOf = (agent: string, surface: OpenSurface): LiveTarget => ({
@@ -80,17 +78,9 @@ export function TerminalFrame({ agent, surfaces }: { agent: string; surfaces: Op
 }
 
 /** A browser surface, in a frame of its own. */
-export function BrowserLive({
-  agent,
-  surface,
-  onWaiting,
-}: {
-  agent: string;
-  surface: OpenSurface;
-  onWaiting(waiting: boolean): void;
-}) {
+export function BrowserLive({ agent, surface }: { agent: string; surface: OpenSurface }) {
   const viewer = VIEWERS[surface.protocol];
   if (!viewer) return null;
   if (surface.unavailable) return <Unavailable surface={surface} frame />;
-  return <viewer.View target={targetOf(agent, surface)} onWaiting={onWaiting} />;
+  return <viewer.View target={targetOf(agent, surface)} />;
 }

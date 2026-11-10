@@ -1,8 +1,8 @@
 // `screencast@1`: a live picture of the agent's browser. Only the page's pixels come, so the tabs,
 // the address bar and what the page asks (a dialog, files, a choice from a list) are drawn here.
-// It opens to watch; Take over opens it to operate, and your first input there makes you the driver:
-// while you are, the agent's browser calls wait.
-import { ArrowLeftIcon, ArrowRightIcon, RotateCwIcon } from "lucide-react";
+// Where you may operate it, it opens ready for your input: nobody holds the browser, so you and the
+// agent use it at once, and the page shown is this viewer's own.
+import { ArrowLeftIcon, ArrowRightIcon, PlusIcon, RotateCwIcon } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 import { Button } from "../ui/button.tsx";
 import { Checkbox } from "../ui/checkbox.tsx";
@@ -24,13 +24,15 @@ type Event =
       type: "choice";
       multiple: boolean;
       options: { value: string; label: string; selected: boolean }[];
-    }
-  | { type: "driver"; you: boolean; held: boolean; agentWaiting: boolean };
+    };
 
 type Asked =
   | Extract<Event, { type: "dialog" }>
   | Extract<Event, { type: "file-chooser" }>
   | Extract<Event, { type: "choice" }>;
+
+/** A tab that has gone nowhere yet. */
+const BLANK = "about:blank";
 
 /** Keys that are typed as text; the rest are pressed by name. */
 const typed = (event: React.KeyboardEvent) =>
@@ -43,20 +45,19 @@ const base64 = async (file: File) => {
   return btoa(text);
 };
 
-export function ScreencastView({ target, onWaiting }: ViewerProps) {
+export function ScreencastView({ target }: ViewerProps) {
   const canOperate = target.mode === "operate";
-  const [driving, setDriving] = useState(false);
   const [tabs, setTabs] = useState<{ tabs: Tab[]; shown: number | null }>({
     tabs: [],
     shown: null,
   });
   const [viewport, setViewport] = useState({ width: 1280, height: 800 });
-  const [driver, setDriver] = useState({ you: false, held: false, agentWaiting: false });
   const [asked, setAsked] = useState<Asked>();
   const [address, setAddress] = useState<string>();
   const canvas = useRef<HTMLCanvasElement>(null);
-  const drove = useRef(false);
-  const live = useLive({ ...target, mode: driving ? "operate" : "watch" }, (data) => {
+  /** The keys held down in the page: one let go there was pressed there. */
+  const held = useRef(new Set<string>());
+  const live = useLive(target, (data) => {
     if (typeof data !== "string") {
       void createImageBitmap(new Blob([data], { type: "image/jpeg" })).then(
         (image) => {
@@ -75,72 +76,91 @@ export function ScreencastView({ target, onWaiting }: ViewerProps) {
     const event = JSON.parse(data) as Event;
     if (event.type === "tabs") setTabs({ tabs: event.tabs, shown: event.shown });
     else if (event.type === "viewport") setViewport({ width: event.width, height: event.height });
-    else if (event.type === "driver") {
-      setDriver(event);
-      // The service let go for you (no input for a while): back to watching.
-      if (event.you) drove.current = true;
-      else if (drove.current) {
-        drove.current = false;
-        setDriving(false);
-      }
-    } else if (event.type === "choice" || event.open) setAsked(event);
+    else if (event.type === "choice" || event.open) setAsked(event);
     else setAsked((was) => (was?.type === event.type ? undefined : was));
   });
-  const operating = driving && live.state.phase === "open";
-  const waiting = operating && driver.you && driver.agentWaiting;
-  useEffect(() => {
-    onWaiting?.(waiting);
-    return () => onWaiting?.(false);
-  }, [waiting, onWaiting]);
+  const operating = canOperate && live.state.phase === "open";
   const send = (input: Record<string, unknown>) => {
     if (operating) live.send(JSON.stringify(input));
   };
   const shown = tabs.tabs.find((tab) => tab.id === tabs.shown);
+  const url = shown && shown.url !== BLANK ? shown.url : "";
   // The address shown follows the page, until you start typing one.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: reset when the page moves.
-  useEffect(() => setAddress(undefined), [shown?.url]);
-  const point = (event: React.PointerEvent | React.WheelEvent) => {
-    const box = (event.currentTarget as HTMLCanvasElement).getBoundingClientRect();
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset when the tab or its page changes.
+  useEffect(() => setAddress(undefined), [tabs.shown, url]);
+  const point = (event: { clientX: number; clientY: number }) => {
+    const box = canvas.current?.getBoundingClientRect() ?? new DOMRect(0, 0, 1, 1);
     return {
       x: ((event.clientX - box.left) / box.width) * viewport.width,
       y: ((event.clientY - box.top) / box.height) * viewport.height,
     };
   };
+  // A list belongs to the page it opened on, and the service says nothing of it on another.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: dropped when the tab shown changes.
+  useEffect(() => setAsked((was) => (was?.type === "choice" ? undefined : was)), [tabs.shown]);
+  // The wheel is the page's once the page has focus, and then it scrolls nothing else. Until then
+  // it scrolls what's around the frame, and nothing of the agent's.
+  useEffect(() => {
+    const page = canvas.current;
+    const wheel = (event: WheelEvent) => {
+      if (document.activeElement !== page) return;
+      event.preventDefault();
+      send({
+        type: "mouse",
+        action: "wheel",
+        deltaX: event.deltaX,
+        deltaY: event.deltaY,
+        ...point(event),
+      });
+    };
+    page?.addEventListener("wheel", wheel, { passive: false });
+    return () => page?.removeEventListener("wheel", wheel);
+  });
   const BUTTONS = ["left", "middle", "right"] as const;
-  const letGo = () => {
-    send({ type: "release" });
-    setDriving(false);
-  };
   return (
     <section
       aria-label="Browser"
-      className={`flex h-[440px] min-w-0 flex-col overflow-hidden rounded-xl border ${operating ? "border-[var(--unread)] ring-1 ring-[var(--unread)]" : ""}`}
+      className="flex h-[440px] min-w-0 flex-col overflow-hidden rounded-xl border has-[canvas:focus]:border-[var(--unread)] has-[canvas:focus]:ring-1 has-[canvas:focus]:ring-[var(--unread)]"
     >
-      <div
-        role="tablist"
-        aria-label="Tabs"
-        className="no-bar flex h-9 shrink-0 items-end gap-1 overflow-x-auto bg-[var(--canvas)] px-2"
-      >
-        {tabs.tabs.map((tab) => (
-          <button
-            key={tab.id}
+      <div className="flex h-9 shrink-0 items-end gap-1 bg-[var(--canvas)] px-2">
+        <div role="tablist" aria-label="Tabs" className="no-bar flex min-w-0 gap-1 overflow-x-auto">
+          {tabs.tabs.map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              role="tab"
+              aria-selected={tab.id === tabs.shown}
+              disabled={!operating}
+              title={tab.url}
+              onClick={() => send({ type: "tab", action: "show", id: tab.id })}
+              className={`h-7 max-w-44 min-w-0 shrink truncate rounded-t-lg px-3 text-xs ${tab.id === tabs.shown ? "bg-background text-foreground" : "text-muted-foreground"}`}
+            >
+              {tab.title || (tab.url === BLANK ? "New tab" : tab.url)}
+            </button>
+          ))}
+        </div>
+        {canOperate && (
+          <Button
             type="button"
-            role="tab"
-            aria-selected={tab.id === tabs.shown}
+            variant="ghost"
+            size="icon-xs"
+            aria-label="New tab"
             disabled={!operating}
-            title={tab.url}
-            onClick={() => send({ type: "tab", action: "show", id: tab.id })}
-            className={`h-7 max-w-44 min-w-0 shrink truncate rounded-t-lg px-3 text-xs ${tab.id === tabs.shown ? "bg-background text-foreground" : "text-muted-foreground"}`}
+            onClick={() => send({ type: "tab", action: "open" })}
+            className="mb-0.5 shrink-0"
           >
-            {tab.title || tab.url}
-          </button>
-        ))}
+            <PlusIcon />
+          </Button>
+        )}
       </div>
       <form
         className="flex h-10 shrink-0 items-center gap-1 border-b px-2"
         onSubmit={(event) => {
           event.preventDefault();
-          if (address) send({ type: "navigate", to: address });
+          if (!address) return;
+          // An address bar's habits: a name with no scheme is a site, and the page takes the keys.
+          send({ type: "navigate", to: address.includes("://") ? address : `https://${address}` });
+          canvas.current?.focus({ preventScroll: true });
         }}
       >
         {(["back", "forward", "reload"] as const).map((to) => {
@@ -162,45 +182,21 @@ export function ScreencastView({ target, onWaiting }: ViewerProps) {
         <input
           aria-label="Address"
           readOnly={!operating}
-          value={address ?? shown?.url ?? ""}
+          value={address ?? url}
           onChange={(event) => setAddress(event.target.value)}
           spellCheck={false}
           className="h-7 min-w-0 flex-1 rounded-lg bg-[var(--raised)] px-2.5 font-mono text-xs outline-none"
         />
-        {operating ? (
-          <>
-            {waiting && (
-              <span className="shrink-0 pl-1 text-xs text-[var(--unread)] tight:hidden">
-                Agent waiting
-              </span>
-            )}
-            <Button type="button" size="xs" onClick={letGo}>
-              Let go
-            </Button>
-          </>
-        ) : (
-          canOperate && (
-            <Button
-              type="button"
-              size="xs"
-              variant="secondary"
-              disabled={driving}
-              onClick={() => setDriving(true)}
-            >
-              Take over
-            </Button>
-          )
-        )}
       </form>
       <div className="relative flex min-h-0 flex-1 items-center justify-center bg-[var(--canvas)]">
         <canvas
           ref={canvas}
           aria-label="Page"
-          tabIndex={operating ? 0 : -1}
+          tabIndex={-1}
           className={`max-h-full max-w-full bg-white outline-none ${operating ? "cursor-default" : "pointer-events-none"}`}
           onPointerDown={(event) => {
             const at = point(event);
-            // Keys go to the page from here on; the page around it stays where it is.
+            // Keys and the wheel go to the page from here on; what's around it stays where it is.
             event.currentTarget.focus({ preventScroll: true });
             event.currentTarget.setPointerCapture(event.pointerId);
             send({ type: "mouse", action: "down", button: BUTTONS[event.button] ?? "left", ...at });
@@ -216,17 +212,9 @@ export function ScreencastView({ target, onWaiting }: ViewerProps) {
           onPointerMove={(event) => {
             if (event.buttons) send({ type: "mouse", action: "move", ...point(event) });
           }}
-          onWheel={(event) =>
-            send({
-              type: "mouse",
-              action: "wheel",
-              deltaX: event.deltaX,
-              deltaY: event.deltaY,
-              ...point(event),
-            })
-          }
           onKeyDown={(event) => {
             event.preventDefault();
+            held.current.add(event.key);
             send(
               typed(event)
                 ? { type: "text", text: event.key }
@@ -234,13 +222,15 @@ export function ScreencastView({ target, onWaiting }: ViewerProps) {
             );
           }}
           onKeyUp={(event) => {
-            if (!typed(event)) send({ type: "key", action: "up", key: event.key });
+            if (held.current.delete(event.key) && !typed(event))
+              send({ type: "key", action: "up", key: event.key });
           }}
         />
         {asked && (
           <AskedOverlay
+            key={asked.type === "dialog" ? asked.message : asked.type}
             asked={asked}
-            you={operating}
+            operating={operating}
             send={send}
             done={() => setAsked(undefined)}
           />
@@ -251,15 +241,15 @@ export function ScreencastView({ target, onWaiting }: ViewerProps) {
   );
 }
 
-/** What the page asked: shown to everyone watching, answered by whoever drives. */
+/** What the page asked: shown to everyone watching, answered where you may operate. */
 function AskedOverlay({
   asked,
-  you,
+  operating,
   send,
   done,
 }: {
   asked: Asked;
-  you: boolean;
+  operating: boolean;
   send(input: Record<string, unknown>): void;
   done(): void;
 }) {
@@ -284,13 +274,13 @@ function AskedOverlay({
           {asked.kind === "prompt" && (
             <input
               aria-label="Answer"
-              disabled={!you}
+              disabled={!operating}
               value={text}
               onChange={(e) => setText(e.target.value)}
               className="h-8 rounded-md border px-2"
             />
           )}
-          {you && (
+          {operating && (
             <div className="flex justify-end gap-2">
               {asked.kind !== "alert" && (
                 <Button
@@ -320,7 +310,7 @@ function AskedOverlay({
       {asked.type === "file-chooser" && (
         <>
           <p>{asked.multiple ? "Choose files" : "Choose a file"}</p>
-          {you && (
+          {operating && (
             <div className="flex items-center justify-between gap-2">
               <input
                 aria-label="Files"
@@ -361,7 +351,7 @@ function AskedOverlay({
                   >
                     <Checkbox
                       id={`${id}-${n}`}
-                      disabled={!you}
+                      disabled={!operating}
                       checked={picked.includes(option.value)}
                       onCheckedChange={(on) =>
                         setPicked(
@@ -374,7 +364,7 @@ function AskedOverlay({
                 ) : (
                   <button
                     type="button"
-                    disabled={!you}
+                    disabled={!operating}
                     onClick={() => answer({ type: "choice", values: [option.value] })}
                     className={`flex h-8 w-full items-center rounded-md px-2 text-left hover:bg-[var(--hover)] ${option.selected ? "font-semibold" : ""}`}
                   >
@@ -384,7 +374,7 @@ function AskedOverlay({
               </li>
             ))}
           </ul>
-          {asked.multiple && you && (
+          {asked.multiple && operating && (
             <div className="flex justify-end">
               <Button size="xs" onClick={() => answer({ type: "choice", values: picked })}>
                 Done
