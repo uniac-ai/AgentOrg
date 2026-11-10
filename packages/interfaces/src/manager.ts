@@ -1,6 +1,6 @@
 import { defineInterface, method } from "@agentorg/sdk";
 import { z } from "zod";
-import { AgentStatus, Answers, Creatable, CreatableId } from "./agent-provider.js";
+import { AgentModels, AgentStatus, Answers, Creatable, CreatableId } from "./agent-provider.js";
 import { SKILL_FILE_MAX, SkillEntry, SkillName, SkillPath } from "./agent-settings.js";
 import {
   ConnectionKind,
@@ -11,6 +11,7 @@ import {
   ConnectionTarget,
 } from "./connection.js";
 import { Id, SlotName } from "./hub.js";
+import { ModelId } from "./llm-session.js";
 import {
   FieldValues,
   LiveMode,
@@ -228,8 +229,21 @@ export const agents = defineInterface({
       }),
     }),
     start: method({ input: OnAgent, output: z.object({}) }),
-    /** Stops the agent: a turn in progress ends, and it runs none until started; all else stays. */
+    /**
+     * Stops the agent: whatever it was doing ends, and it does nothing until started; all else
+     * stays. This is the one way to stop an agent's work.
+     */
     stop: method({ input: OnAgent, output: z.object({}) }),
+    /** The models the agent can use, and the one chosen, as its provider says. */
+    models: method({ input: OnAgent, output: AgentModels }),
+    /**
+     * Choose the model for the agent's next requests; with no `model`, go back to its provider's
+     * default. Refused `unknown` when the model isn't one of `models`.
+     */
+    setModel: method({
+      input: OnAgent.extend({ model: ModelId.optional() }),
+      output: z.object({}),
+    }),
     /** Expose a skill or a connection to the agent; `as` names a connection's slot. */
     expose: method({
       input: z.union([

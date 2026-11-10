@@ -14,8 +14,6 @@ test("turns run side by side up to the places; the next waits its turn, its mess
   assert.equal(asked.length, PLACES, "nothing more is asked of the model");
   assert.ok(said.includes("e: user: Work e."));
   assert.deepEqual(looper.state("e"), { state: "thinking" });
-  // A thread that waits is in its turn: it takes no retry.
-  await assert.rejects(looper.retry("e"), { name: "Refusal", code: "busy" });
 
   // A place freed goes to whoever has waited longest.
   answer("Work b.");
@@ -70,7 +68,7 @@ test("the line for a place holds so many turns; past that a message is refused, 
   const full = {
     name: "Refusal",
     code: "busy",
-    message: "Too many turns are waiting. Wait for one to start, or cancel one.",
+    message: "Too many turns are waiting. Wait for one to start.",
   };
   await assert.rejects(looper.send("one more", "Hello."), full);
   assert.ok(!said.includes("one more: user: Hello."));
@@ -111,10 +109,10 @@ test("a turn cancelled while it waits never starts, and one cancelled in a call 
   assert.ok(!asked.includes("Work e."));
 });
 
-test("a turn cancelled before it asks for a place takes none, and a retry cancelled in the line leaves its reply", async () => {
+test("a turn cancelled before it asks for a place takes none", async () => {
   const { tool, called, finish } = held();
   const { looper, said, asked, answer, fill } = looperWith({ tools: [tool] });
-  for (const begun of ["x", "y", "z"]) {
+  for (const begun of ["x", "y"]) {
     await fill([begun]);
     answer(`Work ${begun}.`);
     await looper.settled();
@@ -136,13 +134,7 @@ test("a turn cancelled before it asks for a place takes none, and a retry cancel
   assert.ok(said.includes("a: user: Again."));
   assert.equal(asked.at(-1), "More y.", "the place went to the one that waited");
 
-  await looper.retry("z");
-  await looper.cancel("z");
-  assert.deepEqual(
-    (await looper.page("z", undefined, 10)).messages.map((message) => message.text),
-    ["Work z.", "Done."],
-  );
-  // Neither is left in the line: it takes all it holds.
+  // It is not left in the line: the line takes all it holds.
   for (let i = 0; i < WAITING; i++) await looper.send(`waits ${i}`, "Work.");
   await looper.stop();
   assert.ok(!asked.includes("Again."));
@@ -178,7 +170,6 @@ test("stopped, every turn is cut, running or waiting, and no message is taken un
   const stopped = { name: "Refusal", code: "busy", message: "It is stopped. Start it to go on." };
   await assert.rejects(looper.send("a", "More."), stopped);
   await assert.rejects(looper.send("new", "Hello."), stopped);
-  await assert.rejects(looper.retry("a"), stopped);
   assert.ok(!said.includes("a: user: More."));
   // One made stopped starts stopped.
   await assert.rejects(looperWith({ stopped: true }).looper.send("a", "Hello."), stopped);

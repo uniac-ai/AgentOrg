@@ -153,9 +153,9 @@ async function setup(t: test.TestContext) {
   const turn = async (text: string) => {
     const from = requests.length;
     const before = await one();
-    const { chat } = await talk.send({ ...(before ? { chat: before } : {}), text });
+    await talk.send({ ...(before ? { chat: before } : {}), text });
     await until(
-      async () => requests.length > from && (await talk.state({ chat })).state === "idle",
+      async () => requests.length > from && (await talk.state({})).state === "idle",
       "the turn to end",
     );
     return requests[from] as Request;
@@ -237,7 +237,7 @@ test("stop and start keep the transcript, the model and the bindings", async (t)
   const { agent } = await s.create();
   s.replies.push(say("first reply"));
   await s.turn("first");
-  await s.talk.setModel({ model: "gpt-b" });
+  await s.agents.setModel({ agent, model: "gpt-b" });
 
   const chat = (await s.one()) as string;
   await s.agents.stop({ agent });
@@ -253,7 +253,6 @@ test("stop and start keep the transcript, the model and the bindings", async (t)
   const stopped = { code: "busy", message: /It is stopped/ };
   await assert.rejects(s.talk.send({ chat, text: "second" }), stopped);
   await assert.rejects(s.talk.send({ text: "second" }), stopped);
-  await assert.rejects(s.talk.retry({ chat }), stopped);
   assert.equal(s.requests.length, 1);
   // Stopping again changes nothing.
   await s.agents.stop({ agent });
@@ -261,7 +260,15 @@ test("stop and start keep the transcript, the model and the bindings", async (t)
   await s.agents.start({ agent });
   assert.deepEqual(await s.agents.status({ agent }), { state: "running" });
   assert.deepEqual(await s.texts(), ["user: first", "assistant: first reply"]);
-  assert.equal((await s.talk.models({})).current, "gpt-b");
+  assert.deepEqual(await s.agents.models({ agent }), {
+    models: [
+      { id: "gpt-a", name: "A" },
+      { id: "gpt-b", name: "B" },
+    ],
+    current: "gpt-b",
+  });
+  await assert.rejects(s.agents.setModel({ agent, model: "gpt-z" }), { code: "unknown" });
+  await assert.rejects(s.agents.models({ agent: "act_none" }), { code: "unknown" });
   const request = await s.turn("second");
   assert.equal(request.model, "gpt-b");
   assert.deepEqual(
@@ -289,7 +296,7 @@ test("stopping cuts a turn in progress, and what was said stays", async (t) => {
   release();
   await s.agents.start({ agent });
   assert.deepEqual(await s.texts(), ["user: a long one"]);
-  assert.deepEqual(await s.talk.state({ chat: (await s.one()) as string }), { state: "idle" });
+  assert.deepEqual(await s.talk.state({}), { state: "idle" });
 });
 
 test("a provider restart brings running agents back, and leaves stopped ones stopped", async (t) => {
@@ -364,6 +371,8 @@ test("a stopped agent whose connection ended is down until it is stopped or star
     async () => (await s.agents.status({ agent })).state === "down",
     "the agent to be down",
   );
+  // Off its channel, it can't say its models.
+  await assert.rejects(s.agents.models({ agent }), { code: "unavailable" });
   // Stopped again, it joins as it was left: read, and taking nothing.
   await s.agents.stop({ agent });
   assert.deepEqual(await s.agents.status({ agent }), { state: "stopped" });

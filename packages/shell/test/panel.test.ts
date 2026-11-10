@@ -160,11 +160,8 @@ test(
       title: "Route today's issues",
       said: [said("t1", "user", "Route today's issues", 60)],
     });
-    // Research's turn stopped on a problem.
-    gateway.setChatStatus("a-research", {
-      state: "error",
-      detail: { code: "failed", message: "The model refused it." },
-    });
+    // Research's last message got no answer.
+    gateway.failChat("a-research", { code: "failed", message: "The model refused it." });
     gateway.addChat("a-research", {
       id: "c-kept",
       title: "An old question",

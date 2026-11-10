@@ -158,7 +158,7 @@ export function AgentSettingsPage({ agent: id }: { agent: string }) {
 
         <aside className="flex min-w-0 flex-col gap-7">
           <Section title="Model">
-            <ModelPicker slot={running ? slot : undefined} />
+            <ModelPicker {...(running ? { agent: id } : {})} />
             <p className="mt-1.5 truncate text-[13px] text-muted-foreground">
               {agent.creatable} from{" "}
               <Jump to={{ screen: "settings", tab: "providers" }}>
@@ -291,17 +291,21 @@ function McpRow({
   );
 }
 
-/** The model, read and set through the agent's chat, so it's there only while the agent runs. */
-function ModelPicker({ slot }: { slot?: string }) {
+/** The agent's model, as its provider says it: there only while the agent runs. */
+function ModelPicker({ agent }: { agent?: string }) {
   const [changed, setChanged] = useState(0);
   const act = useAct();
   const models = useLoad(
     () =>
-      slot
-        ? api.call<{ models: { id: string; name: string }[]; current?: string }>(slot, "models")
+      agent
+        ? api.call<{ models: { id: string; name: string }[]; current?: string }>(
+            "agents",
+            "models",
+            { agent },
+          )
         : Promise.resolve(undefined),
     [],
-    [slot, changed],
+    [agent, changed],
   ).value;
   return (
     <>
@@ -310,7 +314,8 @@ function ModelPicker({ slot }: { slot?: string }) {
         value={models ? (models.current ?? DEFAULT) : DEFAULT}
         onValueChange={(model) =>
           act.run(
-            () => api.call(slot as string, "setModel", model === DEFAULT ? {} : { model }),
+            () =>
+              api.call("agents", "setModel", { agent, ...(model === DEFAULT ? {} : { model }) }),
             () => setChanged((was) => was + 1),
           )
         }

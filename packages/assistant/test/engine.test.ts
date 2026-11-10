@@ -138,24 +138,31 @@ async function setup(values = new Map<string, unknown>(), rest?: (actor: Actor) 
     actor.emitted
       .slice(from)
       .filter((e) => e.event === "status")
-      .map((e) => {
-        const { chat: _, ...status } = e.payload as { chat: string; state: string };
-        return status as { state: string; detail?: { code: string; message: string } };
-      });
-  /** Wait for the turn begun at `from` to end: its first idle or error status. */
+      .map((e) => e.payload as { state: string });
+  /** The test's one chat, once it has one. */
+  let one: string | undefined;
+  /**
+   * Wait for the agent to go idle after `from`, and give the problem the test's chat was left with,
+   * if it was: what its `chat` event last said since.
+   */
   const ended = async (from: number) => {
-    let end: ReturnType<typeof statuses>[number] | undefined;
-    await until(() => {
-      end = statuses(from).find((s) => s.state === "idle" || s.state === "error");
-      return end !== undefined;
-    }, "the turn to end");
-    return end as NonNullable<typeof end>;
+    await until(() => statuses(from).some((s) => s.state === "idle"), "the agent to go idle");
+    type Told = { id: string; problem?: { code: string; message: string } };
+    return actor.emitted
+      .slice(from)
+      .filter((e) => e.event === "chat")
+      .map((e) => e.payload as Told)
+      .findLast((told) => one === undefined || told.id === one)?.problem;
+  };
+  /** Stop the agent, as its Stop does, and start it again once that has answered. */
+  const cut = async () => {
+    await host.stop();
+    host.start();
   };
   /**
    * A call on the test's one chat: the chat the store already holds, or the one its first `send`
    * starts.
    */
-  let one: string | undefined;
   const chat = async (method: string, input: Record<string, unknown> = {}) => {
     one ??= ((await actor.call("chat", "list", {})) as { chats: { id: string }[] }).chats[0]?.id;
     const result = await actor.call("chat", method, { ...(one ? { chat: one } : {}), ...input });
@@ -190,6 +197,7 @@ async function setup(values = new Map<string, unknown>(), rest?: (actor: Actor) 
     id,
     turn,
     ended,
+    cut,
     statuses,
     messages,
   };
@@ -515,9 +523,7 @@ test("bound settings that can't answer end the turn rather than run it without i
       throw new NotConnected("settings");
     },
   });
-  const end = await s.turn("hello");
-  assert.equal(end.state, "error");
-  assert.equal(end.detail?.code, "not_connected");
+  assert.equal((await s.turn("hello"))?.code, "not_connected");
   assert.equal(s.requests.length, 0);
 });
 
@@ -531,23 +537,20 @@ test("the model is chosen per agent, kept with it, and the provider's default un
   const values = new Map<string, unknown>();
   const s = await setup(values);
   const offered = OFFERED;
-  assert.deepEqual(await s.actor.call("chat", "models", {}), { models: offered });
+  assert.deepEqual(await s.host.models(), { models: offered });
   await s.turn("With the default.");
   assert.equal(s.requests.at(-1)?.model, undefined);
 
-  await s.actor.call("chat", "setModel", { model: "gpt-b" });
-  assert.deepEqual(await s.actor.call("chat", "models", {}), { models: offered, current: "gpt-b" });
+  await s.host.setModel("gpt-b");
+  assert.deepEqual(await s.host.models(), { models: offered, current: "gpt-b" });
   await s.turn("With the choice.");
   assert.equal(s.requests.at(-1)?.model, "gpt-b");
-  await assert.rejects(s.actor.call("chat", "setModel", { model: "gpt-z" }), { code: "unknown" });
+  await assert.rejects(s.host.setModel("gpt-z"), { code: "unknown" });
 
   // Kept with the agent, across a restart of its process.
   const again = await setup(values);
-  assert.deepEqual(await again.actor.call("chat", "models", {}), {
-    models: offered,
-    current: "gpt-b",
-  });
-  await again.actor.call("chat", "setModel", {});
+  assert.deepEqual(await again.host.models(), { models: offered, current: "gpt-b" });
+  await again.host.setModel(undefined);
   await again.turn("Back to the default.");
   assert.equal(again.requests.at(-1)?.model, undefined);
 });
@@ -590,7 +593,7 @@ test("a function call runs through its slot, and its result or refusal goes back
     },
     say("Placed the board."),
   );
-  assert.deepEqual(await s.turn("Show me the board."), { state: "idle" });
+  assert.equal(await s.turn("Show me the board."), undefined);
   assert.deepEqual(placed, [
     { actor: "board", module: "panel" },
     { actor: "board", module: "logic" },
@@ -622,7 +625,7 @@ test("a function call runs through its slot, and its result or refusal goes back
     if (item.type === "function_call") assert.equal(last[i + 1]?.callId, item.callId);
 });
 
-test("a turn makes at most MAX_CALLS tool calls, and says so as its error", async () => {
+test("a turn makes at most MAX_CALLS tool calls, and says so as its chat's problem", async () => {
   const s = await setup();
   let runs = 0;
   s.actor.expose(
@@ -636,24 +639,21 @@ test("a turn makes at most MAX_CALLS tool calls, and says so as its error", asyn
     }),
   );
   for (let i = 0; i < MAX_CALLS + 10; i++) s.script.push(calls(callTool("layout__get", {})));
-  const from = s.actor.emitted.length;
-  assert.equal((await s.turn("Loop.")).detail?.code, "limit");
+  assert.equal((await s.turn("Loop."))?.code, "limit");
   assert.equal(runs, MAX_CALLS);
   assert.equal(s.requests.length, MAX_CALLS);
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(s.statuses(from).at(-1)?.state, "error", "no idle after the limit");
   // Many calls in one reply: those past the limit are answered "limit", so every call is paired.
   s.script.length = 0;
   s.script.push(
     calls(...Array.from({ length: MAX_CALLS + 5 }, (_, i) => callTool("layout__get", {}, `m${i}`))),
   );
   runs = 0;
-  assert.equal((await s.turn("Many.")).detail?.code, "limit");
+  assert.equal((await s.turn("Many."))?.code, "limit");
   assert.equal(runs, MAX_CALLS);
   assert.equal(s.messages().filter((m) => m === "tool: 5 calls: limit").length, 1);
 });
 
-test("cancel stops the model's response, and the next turn can start at once", async () => {
+test("stopping the agent stops the model's response, and started again it takes a message at once", async () => {
   const s = await setup();
   const late = gate();
   // As the model Actor does, the cancelled response is refused `cancelled`.
@@ -665,19 +665,19 @@ test("cancel stops the model's response, and the next turn can start at once", a
   const from = s.actor.emitted.length;
   await s.chat("send", { text: "Think long." });
   await until(() => s.requests.length === 1, "the model request");
-  await s.chat("cancel", {});
+  await s.cut();
   assert.deepEqual(s.cancels, [s.requests[0]?.requestId]);
   assert.deepEqual(s.statuses(from).at(-1), { state: "idle" });
   // Not busy: a new turn starts while the old reply is still out.
   await s.turn("Next.");
   late.open();
-  for (let i = 0; i < 5; i++) await new Promise((resolve) => setImmediate(resolve));
+  await s.host.settled();
   assert.deepEqual(s.messages(), ["user: Think long.", "user: Next.", "assistant: ok"]);
-  // A cancel isn't a failure.
+  // Being stopped isn't a failure.
   assert.equal(s.actor.logs.filter((line) => line.message === "A turn failed.").length, 0);
 });
 
-test("a cancel before the model is asked means it is never asked", async () => {
+test("stopped before the model is asked, a turn never asks it", async () => {
   const values = new Map<string, unknown>();
   const s = await setup(values);
   await s.turn("Hello.");
@@ -693,14 +693,14 @@ test("a cancel before the model is asked means it is never asked", async () => {
   });
   const sending = s.chat("send", { text: "Never mind." });
   await new Promise((resolve) => setImmediate(resolve));
-  await s.chat("cancel", {});
+  const cutting = s.cut();
   saved.open();
-  await sending;
-  for (let i = 0; i < 20; i++) await new Promise((resolve) => setImmediate(resolve));
+  await Promise.all([sending, cutting]);
+  await s.host.settled();
   assert.equal(s.requests.length, asked);
 });
 
-test("cancel during a tool call keeps its real result and skips the calls after it", async () => {
+test("stopped during a tool call, a turn keeps the call's real result and skips the calls after it", async () => {
   const s = await setup();
   const running = gate();
   const release = gate();
@@ -727,16 +727,17 @@ test("cancel during a tool call keeps its real result and skips the calls after 
   const from = s.actor.emitted.length;
   await s.chat("send", { text: "Place it twice." });
   await running.shut;
-  await s.chat("cancel", {});
-  assert.deepEqual(s.statuses(from).at(-1), { state: "idle" });
+  const cutting = s.cut();
+  await until(() => s.statuses(from).at(-1)?.state === "idle", "the agent to say it is idle");
   release.open();
+  await cutting;
   await until(() => s.messages().length === 3, "both calls recorded");
   assert.equal(entered, 1);
   assert.deepEqual(s.messages().slice(1), [
     "tool: layout__place: done",
     "tool: layout__place: cancelled",
   ]);
-  assert.equal(s.requests.length, 1, "no model call after the cancel");
+  assert.equal(s.requests.length, 1, "no model call after the stop");
   // The next turn starts clean, with every call answered.
   await s.turn("Next.");
   const input = s.requests.at(-1)?.input ?? [];
@@ -755,7 +756,7 @@ test("a message sent in a chat whose turn is running is shown at once, and that 
   assert.deepEqual(s.messages(), ["user: First.", "user: Second."]);
   // The answer on its way didn't see it, so the turn goes round once more before it ends.
   first.open(say("First done."));
-  assert.deepEqual(await s.ended(from), { state: "idle" });
+  assert.equal(await s.ended(from), undefined);
   assert.deepEqual(
     s.requests.map((request) => request.input.map((item) => item.content)),
     [["First."], ["First.", "First done.", "Second."]],
@@ -766,12 +767,6 @@ test("a message sent in a chat whose turn is running is shown at once, and that 
     "assistant: First done.",
     "assistant: Both done.",
   ]);
-  // A retry is still one at a time.
-  const late = gate<Reply>();
-  s.script.push(() => late.shut);
-  await s.chat("retry");
-  await assert.rejects(s.chat("retry"), { code: "busy" });
-  late.open(say("Done."));
   await s.host.settled();
 });
 
@@ -786,7 +781,7 @@ test("a turn cut off as the engine closes goes on in the next, and one the perso
   await s.chat("send", { text: "Think." });
   await until(() => s.requests.length === 2, "the model request");
   assert.equal(marked(), true);
-  await s.chat("cancel");
+  await s.cut();
   stopped.open(say("Too late."));
   await s.host.settled();
   assert.equal(marked(), false, "stopped by the person");
@@ -801,7 +796,7 @@ test("a turn cut off as the engine closes goes on in the next, and one the perso
   assert.equal(marked(), true, "cut by the engine closing, as when the app restarts");
 
   const again = await setup(values);
-  assert.deepEqual(await again.ended(0), { state: "idle" });
+  assert.equal(await again.ended(0), undefined);
   assert.deepEqual(
     again.requests[0]?.input.map((item) => item.content),
     [
@@ -860,7 +855,7 @@ test("a turn that was cut off waits for the agent's settings to answer, and goes
   await waits(s);
   away = false;
   s.actor.usable("settings");
-  assert.deepEqual(await s.ended(0), { state: "idle" });
+  assert.equal(await s.ended(0), undefined);
   assert.equal(s.requests[0]?.instructions, "Be kind.");
   assert.deepEqual(s.messages(), WENT_ON);
   await s.host.settled();
@@ -881,7 +876,7 @@ test("a turn that was cut off waits for a tools slot that is away, and goes on w
     away = false;
     if (back === "changed") flaky?.emit("changed", {});
     else s.actor.unexpose("flaky");
-    assert.deepEqual(await s.ended(0), { state: "idle" });
+    assert.equal(await s.ended(0), undefined);
     assert.deepEqual(offeredNames(s.requests[0]), back === "changed" ? ["flaky__one"] : []);
     assert.deepEqual(s.messages(), WENT_ON);
     await s.host.settled();
@@ -913,24 +908,54 @@ test("streamed text reaches the chat as the reply it becomes", async () => {
   assert.notEqual(next.messageId, reply?.id);
 });
 
-test("a refusal from the model ends the turn with its code, and no idle after", async () => {
-  const s = await setup();
+test("a refusal from the model is its chat's problem, with its code, until the chat's next reply", async () => {
+  const values = new Map<string, unknown>();
+  const s = await setup(values);
   for (const code of ["usage_limit", "not_signed_in", "unavailable", "ineligible"]) {
     s.script.push(() => {
       throw new Refused(code, `refused: ${code}`);
     });
+    // Told with the chat before the agent is said to be idle, and by its list after.
     const from = s.actor.emitted.length;
-    const status = await s.turn("Try.");
-    assert.deepEqual(status, { state: "error", detail: { code, message: `refused: ${code}` } });
-    await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(s.statuses(from).at(-1)?.state, "error");
+    assert.deepEqual(await s.turn("Try."), { code, message: `refused: ${code}` });
+    const since = s.actor.emitted.slice(from);
+    const told = since.findIndex((e) => (e.payload as { problem?: object }).problem !== undefined);
+    const idle = since.findIndex((e) => (e.payload as { state?: string }).state === "idle");
+    assert.ok(told !== -1 && told < idle, "a view never hears idle without the reason");
+    assert.deepEqual((await listed(s)).chats[0]?.problem, { code, message: `refused: ${code}` });
   }
+  assert.ok(s.actor.logs.some((line) => line.message === "A turn failed."));
+  // It is kept with the chat: an agent that starts again still tells it.
+  await s.host.close();
+  const again = await setup(values);
+  const first = s.id();
+  const problem = async () => (await listed(again)).chats.find((one) => one.id === first)?.problem;
+  assert.equal((await problem())?.code, "ineligible");
+  // Another chat's reply is not this chat's.
+  await exchange(again, "Elsewhere.");
+  assert.equal((await problem())?.code, "ineligible");
+  // A message is how one sends again: its turn reads what went unanswered too, and its reply
+  // ends the problem.
+  const from = again.actor.emitted.length;
+  await again.actor.call("chat", "send", { chat: first, text: "Go on." });
+  await until(() => again.statuses(from).some((one) => one.state === "idle"), "its turn to end");
+  assert.equal(await problem(), undefined);
+  assert.deepEqual(
+    again.requests
+      .at(-1)
+      ?.input.slice(-2)
+      .map((item) => item.content),
+    ["Try.", "Go on."],
+  );
+});
+
+test("a model that is not connected is the chat's problem too", async () => {
+  const s = await setup();
   s.actor.unbind("model");
-  assert.deepEqual((await s.turn("Anyone?")).detail, {
+  assert.deepEqual(await s.turn("Anyone?"), {
     code: "not_connected",
     message: "model is not connected.",
   });
-  assert.ok(s.actor.logs.some((line) => line.message === "A turn failed."));
 });
 
 test("a long output keeps its head and its tail, and says how much was cut", () => {
@@ -972,7 +997,7 @@ test("outputs are capped, refusals too, and a long reply is shown in part", asyn
     calls(callTool("actors__list", {}, "a"), callTool("layout__remove", { id: "x" }, "b")),
     say(long),
   );
-  assert.deepEqual(await s.turn("Big."), { state: "idle" });
+  assert.equal(await s.turn("Big."), undefined);
   const sent = s.requests.at(-1)?.input ?? [];
   const outputs = sent.filter((i) => i.type === "function_call_output");
   assert.equal(outputs.length, 2);
@@ -1103,39 +1128,6 @@ test("a latest exchange over the budget leaves out its oldest outputs, never a c
   assert.ok(outputs.some((item) => String(item.output).startsWith("(Left out")));
 });
 
-test("a cancelled turn's running call is recorded before the next message", async () => {
-  const s = await setup();
-  const release = gate();
-  let entered = false;
-  s.actor.expose(
-    "layout",
-    tools,
-    listing({
-      get: async () => {
-        entered = true;
-        await release.shut;
-        return { home: [] };
-      },
-    }),
-  );
-  s.script.push(calls(callTool("layout__get", {}, "c1"), callTool("layout__get", {}, "c2")));
-  await s.chat("send", { text: "One." });
-  await until(() => entered, "the call to start");
-  await s.chat("cancel", {});
-  const sending = s.chat("send", { text: "Two." });
-  release.open();
-  await sending;
-  await until(() => s.messages().includes("assistant: ok"), "the second turn");
-  assert.deepEqual(s.messages(), [
-    "user: One.",
-    "tool: layout__get: done",
-    "tool: layout__get: cancelled",
-    "user: Two.",
-    "assistant: ok",
-  ]);
-  assert.equal(s.actor.logs.filter((line) => line.message === "A turn failed.").length, 0);
-});
-
 test("thousands of calls in one reply cost a handful of writes", async () => {
   const s = await setup();
   s.actor.expose("layout", tools, listing({ get: () => ({ home: [] }) }));
@@ -1143,10 +1135,11 @@ test("thousands of calls in one reply cost a handful of writes", async () => {
     calls(...Array.from({ length: 2000 }, (_, i) => callTool("layout__get", {}, `x${i}`))),
   );
   const before = s.store.writes.count;
-  assert.equal((await s.turn("Flood.")).detail?.code, "limit");
-  // The chat's entry, twice: started, then with its message. The message, the mark that its turn
-  // hasn't ended, `MAX_CALLS` calls, and one entry answering the other 1,980.
-  assert.equal(s.store.writes.count - before, MAX_CALLS + 5);
+  assert.equal((await s.turn("Flood."))?.code, "limit");
+  // The chat's entry, three times: started, with its message, and with its problem. The message,
+  // the mark that its turn hasn't ended, `MAX_CALLS` calls, and one entry answering the other
+  // 1,980.
+  assert.equal(s.store.writes.count - before, MAX_CALLS + 6);
   const input = (await s.chat("history", { limit: 200 })) as { messages: unknown[] };
   assert.equal(input.messages.length, 200, "a full page of what was recorded");
 });
@@ -1155,10 +1148,10 @@ test("a long message is stored once, under storage's value limit, and a big call
   const s = await setup();
   s.actor.expose("layout", tools, listing({ get: () => ({ home: [] }) }));
   // 45,000 CJK characters are 135 KB of UTF-8: stored twice, they would pass 256 KiB.
-  assert.deepEqual(await s.turn("漢".repeat(45_000)), { state: "idle" });
+  assert.equal(await s.turn("漢".repeat(45_000)), undefined);
   const big = { pad: "x".repeat(190_000) };
   s.script.push(calls(callTool("layout__get", big, "big")), say("done"));
-  assert.deepEqual(await s.turn("Big arguments."), { state: "idle" });
+  assert.equal(await s.turn("Big arguments."), undefined);
   for (const value of s.store.values.values())
     assert.ok(bytes(JSON.stringify(value)) <= VALUE_LIMIT);
   // The call ran and is recorded, its arguments left out of the record.
@@ -1188,70 +1181,35 @@ test("calls with large arguments never take a request past its budget", async ()
   );
 });
 
-test("state says what the agent is doing, for a view that opens late", async () => {
+test("state says whether the agent is working, in any chat, for a view that opens late", async () => {
   const s = await setup();
+  const state = () => s.actor.call("chat", "state", {});
+  assert.deepEqual(await state(), { state: "idle" });
   const late = gate<Reply>();
   s.script.push(() => late.shut);
   const from = s.actor.emitted.length;
   await s.chat("send", { text: "Think." });
   await until(() => s.requests.length === 1, "the model request");
-  assert.deepEqual(await s.chat("state", {}), { state: "thinking" });
+  assert.deepEqual(await state(), { state: "working" });
+  // A second chat at work changes nothing anyone is told: the agent was working already.
+  const other = gate<Reply>();
+  s.script.push(() => other.shut);
+  await s.actor.call("chat", "send", { text: "Think too." });
+  await until(() => s.requests.length === 2, "the second request");
   late.open(say("Done."));
-  await s.ended(from);
-  assert.deepEqual(await s.chat("state", {}), { state: "idle" });
+  await until(() => s.messages().includes("assistant: Done."), "the first reply");
+  assert.deepEqual(await state(), { state: "working" });
+  other.open(say("Done too."));
+  await s.host.settled();
+  assert.deepEqual(await state(), { state: "idle" });
+  assert.deepEqual(s.statuses(from), [{ state: "working" }, { state: "idle" }]);
+
+  // A failure leaves the agent idle too.
   s.script.push(() => {
     throw new Refused("usage_limit", "Usage limit reached.");
   });
-  await s.turn("Again.");
-  assert.deepEqual(await s.chat("state", {}), {
-    state: "error",
-    detail: { code: "usage_limit", message: "Usage limit reached." },
-  });
-});
-
-test("retry runs the last turn again without recording the message twice", async () => {
-  const s = await setup();
-  s.script.push(() => {
-    throw new Refused("unavailable", "Try again later.");
-  });
-  const first = (await s.chat("send", { text: "Hello." })) as { messageId: string };
-  await s.ended(0);
-  const from = s.actor.emitted.length;
-  const again = (await s.chat("retry", {})) as { messageId: string };
-  assert.equal(again.messageId, first.messageId);
-  assert.deepEqual(await s.ended(from), { state: "idle" });
-  const input = s.requests.at(-1)?.input ?? [];
-  assert.equal(input.filter((item) => item.content === "Hello.").length, 1);
-  assert.deepEqual(s.messages(), ["user: Hello.", "assistant: ok"]);
-  // Not during a turn.
-  const late = gate<Reply>();
-  s.script.push(() => late.shut);
-  await s.chat("retry", {});
-  await assert.rejects(s.chat("retry", {}), { code: "busy" });
-  late.open(say("Done."));
-});
-
-test("retry replaces what followed the person's message, in the record and the model's input", async () => {
-  const s = await setup();
-  s.script.push(() => say("The first answer."));
-  await s.chat("send", { text: "Hello." });
-  await s.ended(0);
-  assert.deepEqual(s.messages(), ["user: Hello.", "assistant: The first answer."]);
-  const from = s.actor.emitted.length;
-  s.script.push(() => say("The second answer."));
-  await s.chat("retry", {});
-  await s.ended(from);
-  // The model isn't sent the reply it is being asked to replace.
-  const input = s.requests.at(-1)?.input ?? [];
-  assert.equal(input.filter((item) => item.content === "The first answer.").length, 0);
-  assert.equal(input.filter((item) => item.content === "Hello.").length, 1);
-  const { messages } = (await s.chat("history", {})) as {
-    messages: { role: string; text: string }[];
-  };
-  assert.deepEqual(
-    messages.map((m) => `${m.role}: ${m.text}`),
-    ["user: Hello.", "assistant: The second answer."],
-  );
+  assert.equal((await s.turn("Again."))?.code, "usage_limit");
+  assert.deepEqual(await state(), { state: "idle" });
 });
 
 type Listed = {
@@ -1259,20 +1217,30 @@ type Listed = {
   title: string;
   at: string;
   latest?: { id: string; at: string };
-  state: string;
+  problem?: { code: string; message: string };
   archived: boolean;
 };
 type Setup = Awaited<ReturnType<typeof setup>>;
 const listed = (s: Setup, input: Record<string, unknown> = {}) =>
   s.actor.call("chat", "list", input) as Promise<{ chats: Listed[]; more: boolean }>;
-/** A turn in a chat, or in a new one: where it went, once it has ended. */
+/** Send a message in a chat, or in a new one, and wait for that chat's reply, or for its problem. */
 async function exchange(s: Setup, text: string, chat?: string) {
   const from = s.actor.emitted.length;
   const sent = (await s.actor.call("chat", "send", { text, ...(chat ? { chat } : {}) })) as {
     chat: string;
     messageId: string;
   };
-  await s.ended(from);
+  type Told = { id: string; chat?: string; role?: string; problem?: object };
+  await until(() => {
+    const since = s.actor.emitted.slice(from).map((e) => ({ ...e, told: e.payload as Told }));
+    // The chat's entry is said once for the message itself, with whatever it had before.
+    const own = since.findIndex((e) => e.event === "chat" && e.told.id === sent.chat);
+    return since.some((e, i) =>
+      e.event === "chat"
+        ? i > own && e.told.id === sent.chat && e.told.problem !== undefined
+        : e.event === "message" && e.told.chat === sent.chat && e.told.role === "assistant",
+    );
+  }, "the chat to be answered");
   return sent;
 }
 const shownIn = async (s: Setup, chat: string) =>
@@ -1291,10 +1259,10 @@ test("a message with no chat starts one, titled by its first line, with a record
   let { chats, more } = await listed(s);
   assert.equal(more, false);
   assert.deepEqual(
-    chats.map((one) => [one.id, one.title, one.state, one.archived]),
+    chats.map((one) => [one.id, one.title, one.archived]),
     [
-      [boats.chat, "Boats now.", "idle", false],
-      [trees.chat, "Tell me about trees.", "idle", false],
+      [boats.chat, "Boats now.", false],
+      [trees.chat, "Tell me about trees.", false],
     ],
   );
   // What is new in a chat is its newest reply.
@@ -1322,14 +1290,18 @@ test("a message with no chat starts one, titled by its first line, with a record
     chats.map((one) => one.id),
     [trees.chat, boats.chat],
   );
-  // Every event names its chat, and a chat's entry is said again as it moves on.
+  // Every message names its chat, and a chat's entry is said again as it moves on. The agent's
+  // status names none.
   for (const e of s.actor.emitted) {
-    const payload = e.payload as { chat: string; id: string };
-    assert.ok([trees.chat, boats.chat].includes(e.event === "chat" ? payload.id : payload.chat));
+    const payload = e.payload as { chat?: string; id: string };
+    if (e.event === "status") assert.equal(payload.chat, undefined);
+    else
+      assert.ok(
+        [trees.chat, boats.chat].includes(e.event === "chat" ? payload.id : `${payload.chat}`),
+      );
   }
   const said = s.actor.emitted.filter((e) => e.event === "chat").map((e) => e.payload as Listed);
-  // Said with its reply, while the turn was ending: `status` then says it is idle.
-  assert.deepEqual(said.at(-1), { ...chats[0], state: "thinking" });
+  assert.deepEqual(said.at(-1), chats[0]);
   assert.equal(said[0]?.latest, undefined, "started, with no reply yet");
 });
 
@@ -1345,16 +1317,7 @@ test("an agent works in several chats at once, and past its places a chat waits 
   await exchange(s, "Me too.", two.chat);
   const three = await exchange(s, "A third.");
   assert.equal((await shownIn(s, three.chat)).at(-1)?.text, "ok");
-  assert.equal((await listed(s)).chats.find((c) => c.id === one.chat)?.state, "thinking");
-  // A chat in its turn takes no retry, and stopping another chat stops nothing.
-  await assert.rejects(
-    s.actor.call("chat", "retry", { chat: one.chat }),
-    (error: { code?: string; message?: string }) =>
-      error.code === "busy" && /A turn is running/.test(error.message ?? ""),
-  );
-  await s.actor.call("chat", "cancel", { chat: two.chat });
-  assert.deepEqual(await s.actor.call("chat", "state", { chat: one.chat }), { state: "thinking" });
-  assert.equal(s.cancels.length, 0);
+  assert.deepEqual(await s.actor.call("chat", "state", {}), { state: "working" });
 
   // With four turns running, a new chat's message is taken and shown, and its turn waits.
   const others = [gate<Reply>(), gate<Reply>(), gate<Reply>()];
@@ -1370,9 +1333,6 @@ test("an agent works in several chats at once, and past its places a chat waits 
     (await shownIn(s, waits.chat)).map((m) => m.text),
     ["And me."],
   );
-  assert.deepEqual(await s.actor.call("chat", "state", { chat: waits.chat }), {
-    state: "thinking",
-  });
   late.open(say("Done."));
   await until(() => s.requests.length === 9, "the turn that waited");
   for (const other of others) other.open(say("Done too."));
@@ -1406,9 +1366,6 @@ test("a chat is renamed and archived, stays readable, and is kept as it was left
   for (const [method, input] of [
     ["send", { text: "Hello." }],
     ["history", {}],
-    ["state", {}],
-    ["cancel", {}],
-    ["retry", {}],
     ["rename", { title: "Other" }],
     ["archive", { archived: true }],
   ] as const)
@@ -1451,7 +1408,6 @@ test("a closing engine cuts its turns and starts no other", async () => {
   const closing = { code: "unavailable" };
   await assert.rejects(s.actor.call("chat", "send", { chat: one.chat, text: "More." }), closing);
   await assert.rejects(s.actor.call("chat", "send", { text: "Something new." }), closing);
-  await assert.rejects(s.actor.call("chat", "retry", { chat: one.chat }), closing);
   assert.equal((await listed(s)).chats.length, 1);
   late.open(say("Too late."));
   await s.host.settled();
@@ -1478,7 +1434,6 @@ test("a stopped agent's chats are read and kept as they are, and take nothing un
   const stopped = { code: "busy", message: /It is stopped/ };
   await assert.rejects(s.actor.call("chat", "send", { chat: two.chat, text: "More." }), stopped);
   await assert.rejects(s.actor.call("chat", "send", { text: "Something new." }), stopped);
-  await assert.rejects(s.actor.call("chat", "retry", { chat: two.chat }), stopped);
   // Each chat is listed where it was put, and can be read, renamed and put elsewhere.
   const placed = async () => [
     (await listed(s)).chats.map((chat) => chat.id),
@@ -1566,7 +1521,6 @@ test("the conversation an agent had before it had chats becomes its first chat",
         title: "Plan the week.",
         at: "2026-11-01T10:00:01.000Z",
         latest: { id: "reply-4", at: "2026-11-01T10:00:04.000Z" },
-        state: "idle",
         archived: false,
       },
     ],
@@ -1585,10 +1539,7 @@ test("the conversation an agent had before it had chats becomes its first chat",
     [...values.keys()].filter((key) => !key.startsWith("chat")),
     ["settings/model"],
   );
-  assert.equal(
-    ((await s.actor.call("chat", "models", {})) as { current?: string }).current,
-    "gpt-b",
-  );
+  assert.equal((await s.host.models()).current, "gpt-b");
   // It goes on from where it was.
   const sent = await exchange(s, "One more thing.", "first");
   assert.equal(sent.messageId, "000000000005");
@@ -1625,7 +1576,7 @@ test("a move to the first chat that was cut short goes on, with the entry it beg
   assert.ok(![...values.keys()].some((key) => key.startsWith("msg/")));
 });
 
-test("a first chat's entry that doesn't read back is made again, and a record with nothing of the person's has nothing to retry", async () => {
+test("a first chat's entry that doesn't read back is made again, and the chat takes a message", async () => {
   const values = new Map<string, unknown>([
     ["chats/first", { not: "an entry" }],
     formerly(1, "assistant", "Hello. What shall we do?"),
@@ -1635,10 +1586,6 @@ test("a first chat's entry that doesn't read back is made again, and a record wi
     (await listed(s)).chats.map((one) => [one.id, one.title]),
     [["first", "Hello. What shall we do?"]],
   );
-  await assert.rejects(s.actor.call("chat", "retry", { chat: "first" }), {
-    code: "nothing_to_retry",
-  });
-  // Refused, so the chat is free.
   assert.equal((await exchange(s, "Plan the week.", "first")).chat, "first");
 });
 
@@ -1661,7 +1608,7 @@ test("a first message that can't be recorded starts no chat, and leaves the agen
   assert.equal((await exchange(s, "Hello again.")).messageId, "000000000001");
 });
 
-test("a reply the store refuses ends the turn with the store's own code", async () => {
+test("a reply the store refuses is the chat's problem, with the store's own code", async () => {
   const values = new Map<string, unknown>();
   const s = await setup(values);
   const store = memory(values);
@@ -1672,10 +1619,7 @@ test("a reply the store refuses ends the turn with the store's own code", async 
       return store.handlers.set(input);
     },
   });
-  assert.deepEqual(await s.turn("Hello."), {
-    state: "error",
-    detail: { code: "quota", message: "The store is full." },
-  });
+  assert.deepEqual(await s.turn("Hello."), { code: "quota", message: "The store is full." });
 });
 
 test("a chat's messages asked for while the store can't be read fail with the store's own error", async () => {
@@ -1707,7 +1651,7 @@ test("a chat's messages asked for while the store can't be read fail with the st
   );
 });
 
-test("a reply being recorded as its turn is cancelled is still its chat's newest", async () => {
+test("a reply being recorded as its turn is stopped is still its chat's newest", async () => {
   const values = new Map<string, unknown>();
   const s = await setup(values);
   const store = memory(values);
@@ -1726,8 +1670,9 @@ test("a reply being recorded as its turn is cancelled is still its chat's newest
   s.script.push(say("Just in time."));
   await s.chat("send", { text: "Hello." });
   await writing.shut;
-  await s.chat("cancel");
+  const stopping = s.host.stop();
   written.open();
+  await stopping;
   await s.host.settled();
   const [chat] = (await listed(s)).chats;
   const reply = (await shownIn(s, s.id())).at(-1);

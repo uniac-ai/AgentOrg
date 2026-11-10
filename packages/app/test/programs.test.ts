@@ -262,16 +262,16 @@ test("an agent is made through agents, and the person reaches its chat, across a
   );
   assert.deepEqual(await person.call(slot, "list"), { chats: [], more: false });
 
-  // Its events reach the person too; with no sign-in, the turn ends in that error.
-  const sub = await person.subscribe(slot, "status");
+  // Its events reach the person too; with no sign-in, the chat is told to have that problem.
+  const sub = await person.subscribe(slot, "chat");
   const { chat } = await person.call<{ chat: string }>(slot, "send", { text: "hello" });
+  type Told = { id?: string; problem?: { code: string } } | undefined;
   await until(
     () =>
       person.heard.some(
-        (reply) =>
-          reply.sub === sub && (reply.payload as { state?: string } | undefined)?.state === "error",
+        (reply) => reply.sub === sub && (reply.payload as Told)?.problem?.code === "not_signed_in",
       ),
-    "the turn to fail for want of a sign-in",
+    "the chat to be told it has no sign-in",
   );
   const { messages } = await person.call<{ messages: { text: string }[] }>(slot, "history", {
     chat,
@@ -358,7 +358,7 @@ test("a turn cut off as the app stops goes on when it is started again, with the
   assert.match(String(asked[1]?.instructions), /What you are for: Scouting ahead\./);
   assert.match(JSON.stringify(asked[1]?.said), /cut off by a restart/);
   await until(
-    async () => (await person.call<{ state: string }>(slot, "state", { chat })).state === "idle",
+    async () => (await person.call<{ state: string }>(slot, "state")).state === "idle",
     "the turn to end",
   );
 });

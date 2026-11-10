@@ -8,7 +8,7 @@ import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "n
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { agentProvider, agentSettings, chat, hubActors, llmSession } from "@agentorg/interfaces";
-import { type Log, Refused } from "@agentorg/sdk";
+import { type Log, NotConnected, Refused } from "@agentorg/sdk";
 import { connect } from "@agentorg/sdk/client";
 import { z } from "zod";
 import { startEngine } from "./engine.js";
@@ -98,6 +98,22 @@ export async function startAgentProvider(options: AgentProviderOptions): Promise
     if (!found) throw new Refused("unknown", `This provider made no agent ${agent}.`);
     return found;
   };
+  /** An agent's engine, while it is on its channel: running, or stopped. */
+  const engineOf = (agent: string) => {
+    const { channel, engine, detail } = held(agent);
+    if (!channel || !engine) throw new Refused("unavailable", detail ?? "It isn't running.");
+    return engine;
+  };
+  /**
+   * What an agent's model answered. A model that is away is refused as that, where the bare
+   * error would reach the caller as its own slot being away.
+   */
+  const ofModel = <T>(asked: Promise<T>) =>
+    asked.catch((error: unknown) => {
+      if (error instanceof NotConnected)
+        throw new Refused("not_connected", "Its model isn't connected.");
+      throw error;
+    });
   const inTurn = <T>(agent: string, work: (one: Held) => Promise<T>) => {
     const one = held(agent);
     const done = one.queue.then(() => work(one));
@@ -236,6 +252,13 @@ export async function startAgentProvider(options: AgentProviderOptions): Promise
               await one.engine.stop();
               one.state = "stopped";
             }
+            return {};
+          }),
+        models: ({ agent }) => ofModel(engineOf(agent).models()),
+        // In the agent's turn, so a choice never lands after the agent is removed.
+        setModel: ({ agent, model }) =>
+          inTurn(agent, async () => {
+            await ofModel(engineOf(agent).setModel(model));
             return {};
           }),
         remove: ({ agent }) =>

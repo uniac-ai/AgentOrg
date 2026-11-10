@@ -88,7 +88,7 @@ export function createLoop(options: {
   /** What is being taken now: the next thing asked is taken after it. */
   let taking: Promise<unknown> = Promise.resolve();
   /**
-   * Take what was asked in the order it was asked, one at a time: a message, a retry, a turn's
+   * Take what was asked in the order it was asked, one at a time: a message, going on, a turn's
    * end. `cancelled` says whether a cancel came between its asking and its taking.
    */
   const inOrder = <T>(take: (cancelled: boolean) => Promise<T>) => {
@@ -106,12 +106,9 @@ export function createLoop(options: {
   const status = (current: Turn, next: Status) => {
     if (turn === current) say(next);
   };
-  /**
-   * Run a turn on the record as it stands, after `first` if it is given; its progress is said
-   * through `out`.
-   */
-  const begin = (current: Turn, first?: () => Promise<void>) => {
-    current.ended = placed(current, first)
+  /** Run a turn on the record as it stands; its progress is said through `out`. */
+  const begin = (current: Turn) => {
+    current.ended = placed(current)
       .catch((error: unknown) => {
         if (current.cancelled) return;
         log.error("A turn failed.", { error: String(error) });
@@ -259,12 +256,11 @@ export function createLoop(options: {
     }
   }
   /** A turn from its place to its end: it waits for the place already shown as thinking. */
-  async function placed(current: Turn, first?: () => Promise<void>) {
+  async function placed(current: Turn) {
     status(current, { state: "thinking" });
     await current.place?.entered;
     current.waiting = false;
     if (current.cancelled) return;
-    await first?.();
     await run(current);
   }
   /**
@@ -287,13 +283,13 @@ export function createLoop(options: {
     return { messageId: entry.id };
   };
   /**
-   * Start a turn: `open` takes its place and keeps what opens it, then its loop runs, after `first`
-   * if `open` gives one. When `open` gives nothing, no turn starts. A turn `cancelled` before it
-   * started keeps what opens it and runs nothing.
+   * Start a turn: `open` takes its place and keeps what opens it, then its loop runs. When `open`
+   * gives nothing, no turn starts. A turn `cancelled` before it started keeps what opens it and
+   * runs nothing.
    */
   const start = async <T>(
     cancelled: boolean,
-    open: (current: Turn) => Promise<{ opened: T; first?: () => Promise<void> } | undefined>,
+    open: (current: Turn) => Promise<{ opened: T } | undefined>,
   ) => {
     const current: Turn = { cancelled };
     if (!cancelled) turn = current;
@@ -303,7 +299,7 @@ export function createLoop(options: {
       await draining;
       draining = undefined;
       const begun = await open(current);
-      if (begun) begin(current, begun.first);
+      if (begun) begin(current);
       else if (turn === current) turn = undefined;
       return begun?.opened;
     } catch (error) {
@@ -325,22 +321,6 @@ export function createLoop(options: {
         return (await start(cancelled, async (current) => {
           enter(current, !(await record.empty()));
           return { opened: await said(text, false) };
-        })) as { messageId: string };
-      }),
-    /**
-     * Run the last turn again, without recording its message again. What followed it goes
-     * from the record, so the new reply takes its place; what its tools did stays done.
-     */
-    retry: () =>
-      inOrder(async (cancelled) => {
-        if (turn) throw new Refusal("busy", "A turn is running. Wait for it, or cancel it.");
-        return (await start(cancelled, async (current) => {
-          const last = await record.lastUser();
-          if (!last) throw new Refusal("nothing_to_retry", "No message has been sent yet.");
-          enter(current, true);
-          // What followed the message goes only once the turn has its place: cancelled while it
-          // waits, it has run nothing, and the reply it would have replaced stays.
-          return { opened: { messageId: last.id }, first: () => record.dropAfter(last.id) };
         })) as { messageId: string };
       }),
     /**

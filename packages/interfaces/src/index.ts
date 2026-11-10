@@ -17,7 +17,6 @@ export {
   CHAT_TITLE_MAX,
   ChatEntry,
   ChatMessage,
-  ChatState,
   ChatStatus,
   ChatTool,
   chat,

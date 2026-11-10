@@ -1,6 +1,7 @@
 import { defineInterface, method } from "@agentorg/sdk";
 import { z } from "zod";
 import { Id, Name } from "./hub.js";
+import { ModelId } from "./llm-session.js";
 
 const Title = z.string().min(1).max(128);
 const Description = z.string().max(2000);
@@ -42,11 +43,17 @@ export const AgentStatus = z.object({
   state: z.enum(["starting", "running", "stopped", "down"]),
   detail: z.string().max(2000).optional(),
 });
+/** The models an agent can use, and the one chosen; none chosen means the provider's default. */
+export const AgentModels = z.object({
+  models: z.array(z.object({ id: ModelId, name: z.string().max(256) })),
+  current: ModelId.optional(),
+});
 
 /**
  * `agent.provider@1`: a program that makes agents: an execution system and its way of running one.
- * It says what it can create, and makes, starts, stops and removes the agents it made; each is an
- * Actor. `status`, `start`, `stop` and `remove` are refused `unknown` for an agent it didn't make.
+ * It says what it can create, and makes, starts, stops and removes the agents it made, and keeps
+ * the model chosen for each; each is an Actor. A call naming an agent it didn't make is refused
+ * `unknown`.
  */
 export const agentProvider = defineInterface({
   name: "agent.provider",
@@ -74,10 +81,20 @@ export const agentProvider = defineInterface({
     status: method({ input: OnAgent, output: AgentStatus }),
     start: method({ input: OnAgent, output: z.object({}) }),
     /**
-     * Stop an agent, keeping it: it runs no turn until it is started. Its record, bindings and
+     * Stop an agent, keeping it: it does nothing until it is started. Its record, bindings and
      * connections stay. Whether its chats can be read meanwhile is the provider's to say.
      */
     stop: method({ input: OnAgent, output: z.object({}) }),
+    /** The models an agent can use, and the one chosen. */
+    models: method({ input: OnAgent, output: AgentModels }),
+    /**
+     * Choose the model for an agent's next requests, kept with the agent; with no `model`, go back
+     * to the provider's default. Refused `unknown` when the model isn't one of `models`.
+     */
+    setModel: method({
+      input: OnAgent.extend({ model: ModelId.optional() }),
+      output: z.object({}),
+    }),
     /** Final: the agent's Actor is closed. */
     remove: method({ input: OnAgent, output: z.object({}) }),
   },

@@ -2,7 +2,8 @@ import { defineInterface, event, method } from "@agentorg/sdk";
 import { z } from "zod";
 
 const RequestId = z.string().min(1).max(128);
-const ModelId = z.string().min(1).max(128);
+/** A model's id, as whoever offers the model names it. */
+export const ModelId = z.string().min(1).max(128);
 const CallId = z.string().min(1).max(256);
 /** A function tool's name, as the Responses API takes it. */
 const ToolName = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/);

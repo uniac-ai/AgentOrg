@@ -43,6 +43,10 @@ const refused = (code: string) => (error: unknown) =>
 const SKILL = (name: string, text = "Use it well.") =>
   `---\nname: ${name}\ndescription: The ${name} skill.\n---\n${text}\n`;
 
+const MODELS = [
+  { id: "small", name: "Small" },
+  { id: "large", name: "Large" },
+];
 const CREATABLES = [
   { id: "plain", title: "Plain", description: "No needs.", instructions: "Be plain.", asks: [] },
   {
@@ -233,6 +237,8 @@ async function setup(t: test.TestContext) {
     chat?: string;
     /** Chats whose turn failed, by id. */
     failed?: string[];
+    /** Whether an agent says it is working. */
+    working?: boolean;
     noTools?: boolean;
     skillName?: string;
     /** The slot a unit says it made, instead of the one it declared. */
@@ -279,6 +285,7 @@ async function setup(t: test.TestContext) {
     bindings: [{ slot: "actors", provider: "hub", export: "actors" }],
   });
   const stopped = new Set<string>();
+  const chosen = new Map<string, string>();
   const agentsProvider = await connect({
     hubUrl: server.url,
     actorId: agentActor.actorId,
@@ -329,16 +336,8 @@ async function setup(t: test.TestContext) {
                     more: false,
                   };
                 },
-                cancel: () => ({}),
-                // A chat a test names as failed says so, with why.
-                state: ({ chat }) =>
-                  failed(chat)
-                    ? {
-                        state: "error" as const,
-                        detail: { code: "usage_limit", message: "Usage limit reached." },
-                      }
-                    : { state: "idle" as const },
-                retry: () => ({ messageId: "m-1" }),
+                // The agent is working when a test says so.
+                state: () => ({ state: script.working ? ("working" as const) : ("idle" as const) }),
                 list({ archived = false, before }) {
                   const ids = [...started.keys()].reverse();
                   return {
@@ -347,7 +346,10 @@ async function setup(t: test.TestContext) {
                       .map((id) => ({
                         id,
                         ...(started.get(id) as { title: string; at: string; archived: boolean }),
-                        state: failed(id) ? ("error" as const) : ("idle" as const),
+                        // A chat a test names as failed has that problem.
+                        ...(failed(id)
+                          ? { problem: { code: "usage_limit", message: "Usage limit reached." } }
+                          : {}),
                       }))
                       .filter((one) => one.archived === archived),
                     more: false,
@@ -364,8 +366,6 @@ async function setup(t: test.TestContext) {
                   if (one) one.archived = archived;
                   return {};
                 },
-                models: () => ({ models: [] }),
-                setModel: () => ({}),
               });
               own.slots.settings.on("changed", () => {
                 heard.set(actorId, (heard.get(actorId) ?? 0) + 1);
@@ -390,6 +390,18 @@ async function setup(t: test.TestContext) {
         },
         stop: ({ agent }) => {
           stopped.add(agent);
+          return {};
+        },
+        // The models it offers, and the one chosen for the agent.
+        models: ({ agent }) => ({
+          models: MODELS,
+          ...(chosen.has(agent) ? { current: chosen.get(agent) as string } : {}),
+        }),
+        setModel({ agent, model }) {
+          if (model && !MODELS.some((one) => one.id === model))
+            throw new Refused("unknown", `${model} isn't one of the models offered.`);
+          if (model) chosen.set(agent, model);
+          else chosen.delete(agent);
           return {};
         },
         async remove({ agent }) {
@@ -815,6 +827,14 @@ test("a stack is made, bound, exposed and recorded, with its chat to the person"
   assert.deepEqual((await s.calls.agents.list({})).agents[0]?.status, { state: "stopped" });
   await s.calls.agents.start({ agent });
   assert.deepEqual((await s.calls.agents.list({})).agents[0]?.status, { state: "running" });
+  // Its model is its provider's to tell and to keep: management passes both on.
+  assert.deepEqual(await s.calls.agents.models({ agent }), { models: MODELS });
+  await s.calls.agents.setModel({ agent, model: "large" });
+  assert.deepEqual(await s.calls.agents.models({ agent }), { models: MODELS, current: "large" });
+  await assert.rejects(s.calls.agents.setModel({ agent, model: "none" }), refused("unknown"));
+  await s.calls.agents.setModel({ agent });
+  assert.equal((await s.calls.agents.models({ agent })).current, undefined);
+  await assert.rejects(s.calls.agents.models({ agent: "act_none" }), refused("unknown"));
   // A provider that can't answer shows its agent as down; nothing was stored to go stale.
   s.script.fail = "agent.status";
   assert.equal((await s.calls.agents.list({})).agents[0]?.status.state, "down");
@@ -1815,12 +1835,16 @@ test("an agent creates, messages, reads, stops and removes an agent of its own",
     'An agent, "Parent", says:\n\n\nPlease start.\nThen report.',
   );
   // The message started a chat, called by what was asked and not by whose message it is.
-  type Chat = { id: string; title: string; at: string; state: string };
+  type Chat = { id: string; title: string; at: string };
   const chatsOf = async () => (await call("agent_chats", { agent: child })).chats as Chat[];
   assert.deepEqual(
-    (await chatsOf()).map((one) => [one.id, one.title, one.state]),
-    [[sent.chat, "Please start.", "idle"]],
+    (await chatsOf()).map((one) => [one.id, one.title]),
+    [[sent.chat, "Please start."]],
   );
+  // And whether it is working now, which is the agent's to say, not a chat's.
+  assert.equal((await call("agent_chats", { agent: child })).working, false);
+  s.script.working = true;
+  assert.equal((await call("agent_chats", { agent: child })).working, true);
   const saidIn = (chat: string) => call("agent_read", { agent: child, chat });
   assert.match((await saidIn(sent.chat)).messages[0].text, /Please start/);
   // It goes on in that chat by naming it, and starts another by naming none.
@@ -1849,15 +1873,14 @@ test("an agent creates, messages, reads, stops and removes an agent of its own",
     (await page({ archived: true })).chats.map((one: Chat) => one.id),
     [sent.chat],
   );
-  // Why a chat's turn failed is told with the chat.
+  // A message that got no answer is told with its chat, as its problem.
   s.script.failed = [apart.chat];
   assert.deepEqual((await chatsOf())[0], {
     id: apart.chat,
     title: "Something else.",
     at: (await chatsOf())[0]?.at,
-    state: "error",
     archived: false,
-    detail: { code: "usage_limit", message: "Usage limit reached." },
+    problem: { code: "usage_limit", message: "Usage limit reached." },
   });
   // A refusal from the agent's chat is the tool's own: a chat it doesn't have.
   const none = await tools.call({
