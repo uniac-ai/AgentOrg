@@ -30,8 +30,10 @@ const TYPES: Record<string, string> = {
 export const SESSION = "stand-in-session";
 const PERSON = "person";
 
-type Message = z.output<typeof chatInterface.events.message.payload>;
+type Message = z.output<typeof chatInterface.methods.history.output>["messages"][number];
 type Status = z.output<typeof chatInterface.methods.state.output>;
+type ChatEntry = z.output<typeof chatInterface.events.chat.payload>;
+type ChatEvent = keyof typeof chatInterface.events;
 type Creatable = z.output<typeof agentsInterface.methods.creatable.output>["creatables"][number];
 type Units = z.output<typeof agentsInterface.methods.units.output>;
 type Template = z.output<typeof agentsInterface.methods.templates.output>["templates"][number];
@@ -53,7 +55,16 @@ export interface Agent {
   mcp: { slot: string; connection: string; instance?: string }[];
   purpose?: string;
   units?: z.output<typeof agentsInterface.methods.get.output>["units"];
-  chat: { status: Status; messages: Message[]; current?: string };
+  /**
+   * The one chat the stand-in keeps for an agent, and its model. It has an `id` once something has
+   * been said in it; an agent with nothing said has no chat.
+   */
+  chat: {
+    status: Status;
+    messages: Message[];
+    current?: string;
+    id?: string;
+  };
 }
 
 const at = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
@@ -419,6 +430,8 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
   const calls: Call[] = [];
   const notes = new Map<string, unknown>();
   const refusals = new Map<string, Refusal>();
+  /** Calls that wait to be answered, by `slot.method`, until a test lets them go. */
+  const holds = new Map<string, Promise<void>>();
   const subscribers = new Set<{
     socket: WebSocket;
     sub: number;
@@ -699,11 +712,65 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
     skills: skillsInterface as unknown as Interface,
   };
 
+  let chatsStarted = 0;
+  /** The id of an agent's chat, if anything has been said in it. A seeded record is a chat. */
+  const chatId = (agent: Agent): string | undefined => {
+    if (!agent.chat.id && agent.chat.messages.length > 0) agent.chat.id = `c-${agent.agent}`;
+    return agent.chat.id;
+  };
+  /** The id of its chat, started now if it had none. */
+  const startedChat = (agent: Agent): string => {
+    agent.chat.id = chatId(agent) ?? `c-${agent.agent}-${++chatsStarted}`;
+    return agent.chat.id;
+  };
+  const entryOf = (agent: Agent): ChatEntry => {
+    const { messages, status } = agent.chat;
+    const first = messages.find((m) => m.role === "user");
+    const latest = messages.findLast((m) => m.role === "assistant");
+    return {
+      id: startedChat(agent),
+      title: first?.text.split("\n")[0]?.slice(0, 200) ?? "",
+      at: messages[0]?.at ?? at(0),
+      ...(latest ? { latest: { id: latest.id, at: latest.at } } : {}),
+      state: status.state,
+      archived: false,
+    };
+  };
+  /**
+   * One of the chat's events, as the real interface has it: each names its chat. A test may say a
+   * status or a message of an agent nothing was sent to; that starts its chat here, where a real
+   * agent's chat starts only with a `send`.
+   */
+  const say = (agent: Agent, event: ChatEvent, payload: object = {}) =>
+    emit(
+      chatSlot(agent.agent),
+      event,
+      chatInterface.events[event].payload.parse(
+        event === "chat" ? entryOf(agent) : { ...payload, chat: startedChat(agent) },
+      ),
+    );
+
   const chatCall = (agent: Agent, method: string, input: Record<string, unknown>): unknown => {
     const models = [
       { id: "fast", name: "Fast" },
       { id: "deep", name: "Deep" },
     ];
+    if (method === "models")
+      return { models, ...(agent.chat.current ? { current: agent.chat.current } : {}) };
+    if (method === "setModel") {
+      if (input.model) agent.chat.current = String(input.model);
+      else delete agent.chat.current;
+      return {};
+    }
+    if (method === "list") {
+      // One chat, never archived: it is the first page of those that aren't, and nothing else.
+      const listed = chatId(agent) && !input.archived && !input.before;
+      return { chats: listed ? [entryOf(agent)] : [], more: false };
+    }
+    // Every other call is on a chat. `send` alone may name none, and then starts one.
+    const named = method !== "send" || input.chat !== undefined;
+    if (named && input.chat !== chatId(agent))
+      throw new Refusal("unknown", "The agent has no such chat.");
     if (method === "state") return agent.chat.status;
     if (method === "history") {
       const all = agent.chat.messages;
@@ -717,18 +784,32 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
         refusals.delete("chat.send");
         throw refused;
       }
+      // With no chat named, it is a new chat: what was said before isn't in it. Its id is made
+      // here, since one made from the record would be the old chat's again.
+      if (input.chat === undefined)
+        agent.chat = {
+          status: agent.chat.status,
+          messages: [],
+          ...(agent.chat.current ? { current: agent.chat.current } : {}),
+          id: `c-${agent.agent}-${++chatsStarted}`,
+        };
       const message = text(`u${agent.chat.messages.length}`, "user", String(input.text), 0);
       agent.chat.messages.push(message);
       agent.chat.status = { state: "thinking" };
-      setTimeout(() => {
-        emit(chatSlot(agent.agent), "message", message);
-        emit(chatSlot(agent.agent), "status", agent.chat.status);
-      }, sendDelayMs);
-      return { messageId: message.id };
+      const chat = startedChat(agent);
+      const said = () => {
+        say(agent, "chat");
+        say(agent, "message", message);
+        say(agent, "status", agent.chat.status);
+      };
+      // A real agent says these before it answers the call. A test may hold them back.
+      if (sendDelayMs === 0) said();
+      else setTimeout(said, sendDelayMs);
+      return { chat, messageId: message.id };
     }
     if (method === "cancel") {
       agent.chat.status = { state: "idle" };
-      emit(chatSlot(agent.agent), "status", agent.chat.status);
+      say(agent, "status", agent.chat.status);
       return {};
     }
     if (method === "retry") {
@@ -740,15 +821,8 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
       const at = agent.chat.messages.findLastIndex((m) => m.role === "user");
       agent.chat.messages = agent.chat.messages.slice(0, at + 1);
       agent.chat.status = { state: "thinking" };
-      emit(chatSlot(agent.agent), "status", agent.chat.status);
+      say(agent, "status", agent.chat.status);
       return { messageId: (agent.chat.messages[at] as Message).id };
-    }
-    if (method === "models")
-      return { models, ...(agent.chat.current ? { current: agent.chat.current } : {}) };
-    if (method === "setModel") {
-      if (input.model) agent.chat.current = String(input.model);
-      else delete agent.chat.current;
-      return {};
     }
     throw new Refusal("invalid", `chat has no method ${method} here.`);
   };
@@ -927,22 +1001,28 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
       if (message.op !== "call") return;
       const input = (message.input ?? {}) as Record<string, unknown>;
       calls.push({ slot: message.slot, method: message.method, input });
-      try {
-        const result = person(message.slot, message.method, input);
-        socket.send(JSON.stringify({ id: message.id, result }));
-      } catch (error) {
-        const refusal = error as Refusal;
-        socket.send(
-          JSON.stringify({
-            id: message.id,
-            error: {
-              name: refusal.name,
-              code: refusal.code ?? "failed",
-              message: refusal.message,
-            },
-          }),
-        );
-      }
+      const answer = () => {
+        try {
+          const result = person(message.slot, message.method, input);
+          socket.send(JSON.stringify({ id: message.id, result }));
+        } catch (error) {
+          const refusal = error as Refusal;
+          socket.send(
+            JSON.stringify({
+              id: message.id,
+              error: {
+                name: refusal.name,
+                code: refusal.code ?? "failed",
+                message: refusal.message,
+              },
+            }),
+          );
+        }
+      };
+      const slot = message.slot.startsWith("chat_") ? "chat" : message.slot;
+      const held = holds.get(`${slot}.${message.method}`);
+      if (held) void held.then(answer);
+      else answer();
     });
     socket.on("close", () => {
       for (const s of subscribers) if (s.socket === socket) subscribers.delete(s);
@@ -989,28 +1069,47 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
     findProblems: (found: StackProblem[]) => {
       problems = found;
     },
+    /** Calls of `slot.method` aren't answered until what this returns is called. */
+    hold(name: string): () => void {
+      let release = () => {};
+      holds.set(name, new Promise<void>((done) => (release = done)));
+      return () => {
+        holds.delete(name);
+        release();
+      };
+    },
     /** The next call of `slot.method` is refused. */
     refuseNext: (name: string, code: string, reason: string) =>
       refusals.set(name, new Refusal(code, reason)),
     /** An agent's chat status, as its event says it and `state` will. */
     setChatStatus(agent: string, status: Status) {
-      agentOf(agent).chat.status = chatInterface.events.status.payload.parse(status);
-      emit(chatSlot(agent), "status", status);
+      agentOf(agent).chat.status = chatInterface.methods.state.output.parse(status);
+      say(agentOf(agent), "status", status);
     },
     /** How long the record takes to say what was sent. */
     delaySends: (ms: number) => {
       sendDelayMs = ms;
     },
-    delta: (agent: string, id: string, text: string) =>
-      emit(chatSlot(agent), "delta", chatInterface.events.delta.payload.parse({ id, text })),
+    delta: (agent: string, id: string, text: string) => say(agentOf(agent), "delta", { id, text }),
     addMessage(agent: string, message: Message) {
       const { messages } = agentOf(agent).chat;
-      const parsed = chatInterface.events.message.payload.parse(message);
-      const known = messages.findIndex((m) => m.id === parsed.id);
-      if (known === -1) messages.push(parsed);
-      else messages[known] = parsed;
-      emit(chatSlot(agent), "message", message);
+      const known = messages.findIndex((m) => m.id === message.id);
+      if (known === -1) messages.push(message);
+      else messages[known] = message;
+      say(agentOf(agent), "message", message);
     },
+    /** A message in another chat of the agent's: one this stand-in doesn't keep, and no view shows. */
+    addElsewhere: (agent: string, message: Message) =>
+      emit(
+        chatSlot(agent),
+        "message",
+        chatInterface.events.message.payload.parse({ ...message, chat: "c-elsewhere" }),
+      ),
+    /** The agent's chat as the stand-in has it: which, and what was said in it. */
+    chatOf: (agent: string) => ({
+      id: chatId(agentOf(agent)),
+      messages: agentOf(agent).chat.messages.map((m) => m.text),
+    }),
     changed,
     notes,
     close: async () => {

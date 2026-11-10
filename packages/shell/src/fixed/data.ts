@@ -1,7 +1,7 @@
 // What the fixed pages read: management's three slots and each agent's own chat.
 import type { agents, chat, connections, hubBindings, skills } from "@agentorg/interfaces";
 import { NotConnected, Refused } from "@agentorg/sdk";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { z } from "zod";
 import { api, useConnection, useLoad } from "../data.ts";
 import { lineOfRow, rowsOf } from "./calls.ts";
@@ -15,7 +15,7 @@ export type Mcp = AgentDetail["mcp"][number];
 export type ConnectionEntry = Out<typeof connections.methods.list>["connections"][number];
 export type McpProvider = Out<typeof connections.methods.providers>["providers"][number];
 export type Skill = Out<typeof skills.methods.list>["skills"][number];
-export type ChatMessage = z.output<typeof chat.events.message.payload>;
+export type ChatMessage = Out<typeof chat.methods.history>["messages"][number];
 export type ChatStatus = Out<typeof chat.methods.state>;
 type Binding = Out<typeof hubBindings.methods.list>["bindings"][number];
 
@@ -67,6 +67,55 @@ export function useChatSlots(): ReadonlyMap<string, string> {
   );
 }
 
+/**
+ * Which of an agent's chats a view shows. A view shows one: the agent's newest that isn't archived
+ * when the view first reads, or the one its first message starts. Once chosen it stays, so a chat
+ * that becomes the newest later doesn't take the view over.
+ */
+export function chatView(slot: string) {
+  let shown: string | undefined;
+  /** Whether the list has answered. Until it has, no event can say which chat this is. */
+  let settled = false;
+  /** A chat heard of while the list was being read: it may have started after the list was made. */
+  let heard: string | undefined;
+  let finding: Promise<string | undefined> | undefined;
+  return {
+    /** The chat shown, once one is chosen. */
+    get chat() {
+      return shown;
+    },
+    /** The chat to show, chosen by the first call that reaches the agent; none while it has none. */
+    find(): Promise<string | undefined> {
+      if (shown) return Promise.resolve(shown);
+      finding ??= api
+        .call<Out<typeof chat.methods.list>>(slot, "list", { limit: 1 })
+        .then((reply) => {
+          shown ??= reply.chats[0]?.id ?? heard;
+          settled = true;
+          return shown;
+        })
+        .finally(() => {
+          finding = undefined;
+        });
+      return finding;
+    },
+    /** A message of this view's started a chat: with none chosen, it is the one shown. */
+    started(started: string) {
+      shown ??= started;
+    },
+    /**
+     * Hears an event, and says whether it is of the chat shown. This also chooses: with no chat
+     * and a list that said there is none, the first chat heard of becomes the one shown.
+     */
+    hears(payload: unknown): boolean {
+      const of = (payload as { chat: string }).chat;
+      if (!shown && settled) shown = of;
+      if (!shown) heard = of;
+      return of === shown;
+    },
+  };
+}
+
 /** The latest word on an id replaces the earlier: a tool call running, then ended. */
 function merged(was: ChatMessage[], message: ChatMessage, limit: number): ChatMessage[] {
   const at = was.findIndex((m) => m.id === message.id);
@@ -74,36 +123,60 @@ function merged(was: ChatMessage[], message: ChatMessage, limit: number): ChatMe
   return next.slice(-limit);
 }
 
-/** An agent's status and latest messages, from its chat, kept current while it runs. */
+/**
+ * An agent's status and latest messages, from the chat a view shows for it, kept current while it
+ * runs; and which chat that is, for a call that acts on it.
+ */
 export function useChatRecord(slot: string | undefined, running: boolean, limit: number) {
   const connection = useConnection();
   const [status, setStatus] = useState<ChatStatus>();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [shown, setShown] = useState<string>();
+  const view = useMemo(() => (slot ? chatView(slot) : undefined), [slot]);
   useEffect(() => {
     setStatus(undefined);
-    if (!slot || !running || connection !== "open") return;
+    setShown(view?.chat);
+    if (!slot || !view || !running || connection !== "open") return;
     let live = true;
-    const read = () => {
-      Promise.all([
-        api.call<ChatStatus>(slot, "state"),
-        api.call<{ messages: ChatMessage[] }>(slot, "history", { limit }),
-      ]).then(
-        ([now, page]) => {
-          if (!live) return;
-          setStatus(now);
-          setMessages(page.messages);
-        },
-        // Not up yet: read again when its events are made again, or the agent changes.
-        () => {},
-      );
+    const hears = (payload: unknown) => {
+      const is = view.hears(payload);
+      if (is) setShown(view.chat);
+      return is;
     };
-    read();
+    const read = async () => {
+      try {
+        const of = await view.find();
+        // An agent with no chat has said nothing and is doing nothing.
+        const [now, page] = of
+          ? await Promise.all([
+              api.call<ChatStatus>(slot, "state", { chat: of }),
+              api.call<{ messages: ChatMessage[] }>(slot, "history", { chat: of, limit }),
+            ])
+          : [{ state: "idle" as const }, { messages: [] }];
+        if (!live) return;
+        setShown(of);
+        setStatus(now);
+        setMessages(page.messages);
+      } catch {
+        // Not up yet: read again when its events are made again, or the agent changes.
+      }
+    };
+    void read();
     const stops = [
-      api.subscribe(slot, "status", (payload) => setStatus(payload as ChatStatus), { again: read }),
+      api.subscribe(
+        slot,
+        "status",
+        (payload) => {
+          if (hears(payload)) setStatus(payload as ChatStatus);
+        },
+        { again: read },
+      ),
       api.subscribe(
         slot,
         "message",
-        (payload) => setMessages((was) => merged(was, payload as ChatMessage, limit)),
+        (payload) => {
+          if (hears(payload)) setMessages((was) => merged(was, payload as ChatMessage, limit));
+        },
         { again: read },
       ),
     ];
@@ -111,8 +184,8 @@ export function useChatRecord(slot: string | undefined, running: boolean, limit:
       live = false;
       for (const stop of stops) stop();
     };
-  }, [slot, running, limit, connection]);
-  return { status, messages };
+  }, [slot, view, running, limit, connection]);
+  return { status, messages, chat: shown };
 }
 
 export type Tone = "working" | "idle" | "starting" | "stopped" | "trouble" | "waiting";

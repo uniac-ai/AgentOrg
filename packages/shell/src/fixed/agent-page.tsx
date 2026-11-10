@@ -74,7 +74,10 @@ export function AgentPage({ agent: id }: { agent: string }) {
         run: () => window.open(USAGE, "_blank", "noopener,noreferrer"),
       };
     if (action.run === "signIn") return { label: action.label, run: () => signIn() };
-    return slot ? { label: action.label, run: () => api.call(slot, "retry") } : undefined;
+    const { chat } = watched;
+    return slot && chat
+      ? { label: action.label, run: () => api.call(slot, "retry", { chat }) }
+      : undefined;
   })();
   const model = models?.models.find((m) => m.id === models.current)?.name ?? "Default";
   return (

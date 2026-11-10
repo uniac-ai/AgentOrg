@@ -35,6 +35,11 @@ const withGateway = (run: (gateway: Gateway) => Promise<void>) => async () => {
     await gateway.close();
   }
 };
+/** Waits for what the stand-in will see, which nothing on the page shows. */
+async function until(seen: () => boolean) {
+  for (let i = 0; i < 100 && !seen(); i++) await new Promise((done) => setTimeout(done, 20));
+  assert.ok(seen(), "it never happened");
+}
 const reply = (id: string, text: string) => ({
   id,
   role: "assistant" as const,
@@ -242,5 +247,98 @@ test(
       assert.deepEqual(bad, [], String(width));
       await page.close();
     }
+  }),
+);
+
+test(
+  "a first message starts a chat, and the next goes on in it",
+  withGateway(async (gateway) => {
+    assert.equal(gateway.chatOf("a-triage").id, undefined, "Triage has no chat yet");
+    const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    page.setDefaultTimeout(8000);
+    await page.addInitScript(
+      (session) => localStorage.setItem("agentorg.session", session),
+      SESSION,
+    );
+    await page.goto(`${gateway.url}/#/a/a-triage`);
+    await page.getByRole("main").getByRole("button", { name: "Chat", exact: true }).click();
+    await input(page).fill("Route today's issues");
+    await input(page).press("Enter");
+    await panel(page).getByText("Route today's issues").waitFor();
+    // What shows at once is the page's own; the chat exists when the agent has the message.
+    await until(() => gateway.calls.some((c) => c.method === "send"));
+    const { id } = gateway.chatOf("a-triage");
+    assert.ok(id, "the message started a chat");
+    gateway.addMessage("a-triage", reply("t1", "Routed seven."));
+    gateway.setChatStatus("a-triage", { state: "idle" });
+    await panel(page).getByText("Routed seven.").waitFor();
+    await panel(page).getByRole("button", { name: "Send", exact: true }).waitFor();
+
+    await input(page).fill("And yesterday's?");
+    await input(page).press("Enter");
+    await panel(page).getByText("And yesterday's?").waitFor();
+    // A send that named no chat would have started another, with none of this in it.
+    assert.deepEqual(gateway.chatOf("a-triage"), {
+      id,
+      messages: ["Route today's issues", "Routed seven.", "And yesterday's?"],
+    });
+    const sends = gateway.calls.filter((c) => c.method === "send").map((c) => c.input.chat);
+    assert.deepEqual(
+      sends,
+      [undefined, id],
+      "the first names no chat, the next names the one it made",
+    );
+    await page.close();
+  }),
+);
+
+test(
+  "a message sent before the page knows the agent's chat waits, and goes in that chat",
+  withGateway(async (gateway) => {
+    const { id } = gateway.chatOf("a-reviewer");
+    const release = gateway.hold("chat.list");
+    const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    page.setDefaultTimeout(8000);
+    await page.addInitScript(
+      (session) => localStorage.setItem("agentorg.session", session),
+      SESSION,
+    );
+    await page.goto(`${gateway.url}/#/a/a-reviewer`);
+    await page.getByRole("main").getByRole("button", { name: "Chat", exact: true }).click();
+    await input(page).fill("Sent early");
+    await input(page).press("Enter");
+    await panel(page).getByText("Sent early").waitFor();
+    await new Promise((done) => setTimeout(done, 300));
+    assert.equal(gateway.calls.filter((c) => c.method === "send").length, 0, "not sent yet");
+
+    release();
+    await until(() => gateway.calls.some((c) => c.method === "send"));
+    // Sent with no chat named, it would have started a new one and left the record behind.
+    assert.equal(gateway.calls.find((c) => c.method === "send")?.input.chat, id);
+    await panel(page).getByText("Reviewed #482").first().waitFor();
+    assert.equal(gateway.chatOf("a-reviewer").id, id);
+    await page.close();
+  }),
+);
+
+test(
+  "what is said in another chat of the agent's stays out of this one",
+  withGateway(async (gateway) => {
+    const page = await open(gateway);
+    const now = page.getByRole("main").getByRole("status", { name: "Now" });
+    gateway.addMessage("a-reviewer", reply("r3", "Said in this one."));
+    await panel(page).getByText("Said in this one.").waitFor();
+    await now.getByText("Said in this one.").waitFor();
+    // The other chat speaks last, then this one streams: by then both readers have heard it.
+    gateway.addElsewhere("a-reviewer", reply("x1", "Said in another chat."));
+    gateway.delta("a-reviewer", "r4", "Still writing");
+    await panel(page).getByText("Still writing").waitFor();
+    assert.equal(await panel(page).getByText("Said in another chat.").count(), 0);
+    assert.match(
+      (await now.textContent()) ?? "",
+      /Said in this one\./,
+      "the agent's page keeps to it too",
+    );
+    await page.close();
   }),
 );
