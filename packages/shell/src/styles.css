@@ -26,11 +26,6 @@
     @slot;
   }
 }
-@custom-variant dock {
-  @container app (width >= 68.75rem) {
-    @slot;
-  }
-}
 @custom-variant tight {
   @container main (width < 44rem) {
     @slot;
@@ -208,6 +203,19 @@
     box-shadow:
       inset 0 0 0 0.5px var(--edge),
       0 1px 2px rgb(0 0 0 / 0.08);
+  }
+  /* The layer over the page: one inset from the screen's edges, and the chat's two widths, as a
+     panel and collapsed (at rest, and under the pointer or the keyboard). */
+  [data-shell] {
+    --inset: 20px;
+    --panel: 420px;
+    --tab: 64px;
+    --tab-open: 80px;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    [data-chat-column] * {
+      transition: none;
+    }
   }
   /* What is at work breathes. */
   @keyframes breathe {

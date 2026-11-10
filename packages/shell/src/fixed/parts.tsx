@@ -39,18 +39,6 @@ export function StateDot({ tone }: { tone: Tone }) {
   );
 }
 
-/** The right side of the screen: beside the page, over it, or all of it on a phone. */
-export function SidePanel({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <aside
-      aria-label={label}
-      className="window absolute inset-y-0 right-0 z-20 flex w-[400px] max-w-full flex-col overflow-hidden rounded-2xl bg-background shadow-xl dock:relative dock:z-auto dock:shrink-0 dock:shadow-none phone:inset-0 phone:w-full phone:rounded-none phone:shadow-none phone:after:hidden"
-    >
-      {children}
-    </aside>
-  );
-}
-
 /** A connection's kind as where it is: a URL is remote, anything else runs on this computer. */
 export function WhereIcon({ kind }: { kind: string }) {
   const Icon = kind === "url" ? GlobeIcon : LaptopIcon;

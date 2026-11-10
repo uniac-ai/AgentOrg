@@ -65,6 +65,11 @@ export interface Agent {
     current?: string;
     id?: string;
   };
+  /**
+   * Its other chats: listed and read like the one above, but nothing is sent in them here. Each
+   * is what a list says of it and what was said in it.
+   */
+  others?: { entry: ChatEntry; messages: Message[] }[];
 }
 
 const at = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
@@ -757,10 +762,27 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
       return {};
     }
     if (method === "list") {
-      // One chat, never archived: it is the first page of those that aren't, and nothing else.
-      const listed = chatId(agent) && !input.archived && !input.before;
-      return { chats: listed ? [entryOf(agent)] : [], more: false };
+      // The chat a view follows is never archived, and comes first whatever was said elsewhere:
+      // it is the one chat this stand-in plays in full. The others follow, newest first by their
+      // last message, a page at a time.
+      const lastOf = (one: { entry: ChatEntry; messages: Message[] }) =>
+        Date.parse(one.messages.findLast((m) => m.role !== "tool")?.at ?? one.entry.at);
+      const own = chatId(agent) && !input.archived ? [entryOf(agent)] : [];
+      const others = (agent.others ?? [])
+        .filter((other) => other.entry.archived === !!input.archived)
+        .sort((a, b) => lastOf(b) - lastOf(a))
+        .map((other) => other.entry);
+      const all = [...own, ...others];
+      const from = input.before ? all.findIndex((entry) => entry.id === input.before) + 1 : 0;
+      const end = from + Number(input.limit ?? 50);
+      return { chats: all.slice(from, end), more: all.length > end };
     }
+    const other = agent.others?.find((one) => one.entry.id === input.chat);
+    if (other && method === "history")
+      return {
+        messages: other.messages.slice(-Number(input.limit ?? 100)),
+        more: other.messages.length > Number(input.limit ?? 100),
+      };
     // Every other call is on a chat. `send` alone may name none, and then starts one.
     const named = method !== "send" || input.chat !== undefined;
     if (named && input.chat !== chatId(agent))
@@ -837,7 +859,11 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
     }
     if (slot.startsWith("chat_")) {
       const agent = agentOf(slot.slice(5).replaceAll("_", "-"));
-      if (agent.status.state !== "running") {
+      // A stopped agent stays connected: its chats are listed and read, and it takes no turn.
+      if (agent.status.state === "stopped") {
+        if (method === "send" || method === "retry")
+          throw new Refusal("busy", "It is stopped. Start it to go on.");
+      } else if (agent.status.state !== "running") {
         const error = new Refusal("not_connected", "Not running.");
         error.name = "NotConnected";
         throw error;
@@ -877,6 +903,12 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
       });
     }
     if (slot === "store") {
+      // A refusal of the store is of one key: `store.get.<key>`.
+      const refused = refusals.get(`store.${method}.${String(input.key)}`);
+      if (refused) {
+        refusals.delete(`store.${method}.${String(input.key)}`);
+        throw refused;
+      }
       if (method === "get")
         return notes.has(String(input.key)) ? { value: notes.get(String(input.key)) } : {};
       notes.set(String(input.key), input.value);
@@ -1114,11 +1146,48 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
       sendDelayMs = ms;
     },
     delta: (agent: string, id: string, text: string) => say(agentOf(agent), "delta", { id, text }),
+    /** Another chat of the agent's, as its list will say it; told to whoever is listening. */
+    addChat(
+      agent: string,
+      chat: { id: string; title: string; said: Message[]; archived?: boolean },
+    ) {
+      const latest = chat.said.findLast((m) => m.role === "assistant");
+      const entry = chatInterface.events.chat.payload.parse({
+        id: chat.id,
+        title: chat.title,
+        at: chat.said[0]?.at ?? at(0),
+        ...(latest ? { latest: { id: latest.id, at: latest.at } } : {}),
+        state: "idle",
+        archived: !!chat.archived,
+      });
+      const held = agentOf(agent);
+      held.others = [...(held.others ?? []), { entry, messages: chat.said }];
+      emit(chatSlot(agent), "chat", entry);
+    },
+    /**
+     * A message in another chat of the agent's, as the service says it: what a person or the agent
+     * said tells the chat's entry first, with a reply as its latest; then the message.
+     */
+    sayIn(agent: string, chat: string, message: Message) {
+      const other = agentOf(agent).others?.find((one) => one.entry.id === chat);
+      if (!other) throw new Error(`${agent} has no chat ${chat}`);
+      other.messages.push(message);
+      if (message.role === "assistant")
+        other.entry = { ...other.entry, latest: { id: message.id, at: message.at } };
+      if (message.role !== "tool") emit(chatSlot(agent), "chat", other.entry);
+      emit(
+        chatSlot(agent),
+        "message",
+        chatInterface.events.message.payload.parse({ ...message, chat }),
+      );
+    },
     addMessage(agent: string, message: Message) {
       const { messages } = agentOf(agent).chat;
       const known = messages.findIndex((m) => m.id === message.id);
       if (known === -1) messages.push(message);
       else messages[known] = message;
+      // What a person or the agent said tells the chat's entry too, as the service does.
+      if (message.role !== "tool") say(agentOf(agent), "chat");
       say(agentOf(agent), "message", message);
     },
     /** A message in another chat of the agent's: one this stand-in doesn't keep, and no view shows. */
