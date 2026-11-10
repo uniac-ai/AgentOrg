@@ -1,5 +1,7 @@
 // Measures the shell as built against its design, with one probe run on both, and prints every
-// difference. The design is a self-contained page of the same parts with sample data.
+// difference. The design is a self-contained page of the same parts with sample data. It also
+// lists the controls and marks seen in each region: the built side may lack one the design has,
+// which is printed and passes, and fails when it shows one the design doesn't.
 //
 //   node --experimental-strip-types test/design/measure.ts <design.html> <out.json>
 //
@@ -36,7 +38,9 @@ type Gateway = Awaited<ReturnType<typeof standIn>>;
  * Runs in the page. `frame` measures the left bar, a drawer if one is open, the phone's head and
  * the page area, from the shell's top left. `terminal` and `browser` measure those windows' own
  * rows, from the window's top left. `chat` measures the collapsed chat and its panel, from the
- * shell's top left.
+ * shell's top left. Each also lists the controls and marks seen in its regions: the bar, a
+ * drawer, the phone's head, a window, the collapsed chat and its panel. The page area is not
+ * listed: its pages are not the design's yet.
  */
 const probe = (what: Part): Parts => {
   const seen = (e: Element | null | undefined): e is HTMLElement =>
@@ -73,6 +77,41 @@ const probe = (what: Part): Parts => {
     };
   };
   const parts: Parts = {};
+  /**
+   * The controls and marks a person can see in a region, each by its kind and its name: buttons,
+   * links, tabs, fields, dialogs, and what speaks up or marks a state. Plain text isn't listed: it
+   * is the sample's. What repeats with the sample (a tab, a row, a face) is listed once, by the
+   * first word of its name, whatever it is called and however many there are.
+   */
+  const KINDS = {
+    button: 'button:not([role="tab"]), [role="button"]',
+    link: "a[href]",
+    tab: '[role="tab"]',
+    field: 'input:not([type="hidden"]), textarea, select, [contenteditable="true"]',
+    dialog: '[role="dialog"]',
+    alert: '[role="alert"]',
+    status: '[role="status"]',
+    mark: '[role="img"]',
+  };
+  const shows = (e: Element) => {
+    if (!seen(e)) return false;
+    const style = getComputedStyle(e);
+    return style.visibility !== "hidden" && style.opacity !== "0";
+  };
+  const controls = (name: string, region: Element | null | undefined, except = "") => {
+    if (!seen(region)) return;
+    const all = new Set<string>();
+    for (const [kind, selector] of Object.entries(KINDS))
+      for (const e of region.querySelectorAll(selector)) {
+        if (!shows(e) || (except && e.closest(except))) continue;
+        const label = e.getAttribute("aria-label") ?? e.getAttribute("title");
+        const said =
+          (label ?? e.textContent ?? "").split(",")[0]?.trim().replace(/\d+/g, "#") ?? "";
+        const repeats = e.closest('li, [role="tablist"]');
+        all.add(`${kind}: ${repeats ? (label ? said.split(" ")[0] : "") : said}`.trim());
+      }
+    parts[`${name}.seen`] = [...all].sort().join(" | ");
+  };
 
   if (what === "terminal") {
     const list = [...document.querySelectorAll('[role="tablist"][aria-label="Terminals"]')].find(
@@ -81,6 +120,7 @@ const probe = (what: Part): Parts => {
     const bar = list?.parentElement?.parentElement;
     if (!list || !bar) return parts;
     origin = bar.getBoundingClientRect();
+    controls("window", bar.parentElement);
     // The window is as wide and as tall as its frame, so what fills it has no width of its own.
     parts.bar = of(bar, "w");
     parts["bar.inner"] = of(bar.children[0], "w");
@@ -117,6 +157,7 @@ const probe = (what: Part): Parts => {
     const bar = list?.parentElement?.parentElement;
     if (!list || !bar) return parts;
     origin = bar.getBoundingClientRect();
+    controls("window", bar.parentElement);
     parts.bar = of(bar, "w");
     parts["bar.inner"] = of(bar.children[0], "w");
     // The row of tabs is as wide as its tabs, which are the sample's.
@@ -161,6 +202,8 @@ const probe = (what: Part): Parts => {
     // and the faces behind it.
     const column = document.querySelector("[data-chat-column]");
     const pill = column?.querySelector('[role="group"]');
+    controls("column", column);
+    controls("panel", document.querySelector('aside[aria-label="Chats"]'));
     parts.column = of(column);
     parts.pill = of(pill);
     const button = pill?.querySelector("button");
@@ -229,6 +272,8 @@ const probe = (what: Part): Parts => {
   parts.bars = navs.length;
   navs.forEach((nav, n) => {
     const at = navs.length > 1 && n === navs.length - 1 ? "drawer" : "bar";
+    // The agents are the sample's: there are as many rows as agents.
+    controls(at, nav, 'ul[aria-label="Agents"]');
     const button = (name: string) =>
       [...nav.querySelectorAll("button")].find(
         (b) => seen(b) && (b.title === name || b.getAttribute("aria-label") === name),
@@ -281,6 +326,7 @@ const probe = (what: Part): Parts => {
   parts.main = main;
   const head = [...document.querySelectorAll("header")].find(seen);
   parts.head = of(head);
+  controls("head", head);
   parts["head.menu"] = of(head?.querySelector("button"));
   parts["head.place"] = of(head?.querySelector("span"));
   parts.overlay = of(
@@ -468,15 +514,34 @@ await browser.close();
 writeFileSync(out, JSON.stringify(all, null, 1));
 let rows = 0;
 let different = 0;
+/** Where the built side shows fewer controls or marks than the design: a part not built yet. */
+const fewer: string[] = [];
 for (const key of Object.keys(all).filter((k) => k.endsWith(".design"))) {
   const [drawn, built] = [all[key] ?? {}, all[key.replace(/design$/, "built")] ?? {}];
   for (const part of new Set([...Object.keys(drawn), ...Object.keys(built)])) {
     rows++;
     const [x, y] = [JSON.stringify(drawn[part]), JSON.stringify(built[part])];
     if (x === y) continue;
+    const at = `${key.replace(/\.design$/, "")}  ${part}`;
+    // What is seen may lack something the design has, and never has something it doesn't.
+    if (part.endsWith(".seen")) {
+      const [has, shows] = [drawn[part], built[part]].map((one) => String(one ?? "").split(" | "));
+      const more = (shows as string[]).filter((one) => one && !(has as string[]).includes(one));
+      if (more.length === 0) {
+        const less = (has as string[]).filter((one) => !(shows as string[]).includes(one));
+        fewer.push(`${at}: the design also has ${less.join(", ")}`);
+        continue;
+      }
+      different++;
+      console.log(`${at}\n   built and not in the design: ${more.join(", ")}`);
+      continue;
+    }
     different++;
-    console.log(`${key.replace(/\.design$/, "")}  ${part}\n   design ${x}\n   built  ${y}`);
+    console.log(`${at}\n   design ${x}\n   built  ${y}`);
   }
 }
-console.log(`${rows - different} of ${rows} rows equal`);
+if (fewer.length > 0) console.log(`Seen in the design and not built:\n  ${fewer.join("\n  ")}`);
+console.log(
+  `${rows - different - fewer.length} of ${rows} rows equal, ${fewer.length} with less seen than the design, ${different} different`,
+);
 process.exitCode = different ? 1 : 0;

@@ -115,8 +115,19 @@ test(
     await frame.getByLabel("Address").fill("shop.example/cart");
     await frame.getByLabel("Address").press("Enter");
     await page.waitForFunction((at) => document.activeElement?.matches(at), PAGE);
-    // Tab walks past the page, which would keep every key: only a click or an address goes in.
+    // The window and its page look the same whether or not the page has the keys.
+    const look = () =>
+      frame.evaluate((e) =>
+        [e, e.querySelector("canvas")?.parentElement, e.querySelector("canvas")].map((part) => {
+          const style = getComputedStyle(part as Element);
+          // An outline with no style draws nothing, whatever its colour.
+          return [style.border, style.boxShadow, style.outlineStyle, style.backgroundColor];
+        }),
+      );
+    const withKeys = await look();
     await frame.getByLabel("Address").focus();
+    assert.deepEqual(await look(), withKeys);
+    // Tab walks past the page, which would keep every key: only a click or an address goes in.
     await page.keyboard.press("Tab");
     assert.equal(await page.evaluate((at) => document.activeElement?.matches(at), PAGE), false);
     await frame.getByRole("button", { name: "Reload" }).click();
