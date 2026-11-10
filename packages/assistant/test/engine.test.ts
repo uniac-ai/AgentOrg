@@ -1204,7 +1204,7 @@ test("an agent runs one turn at a time, whichever chat it is in", async () => {
   await s.actor.call("chat", "send", { chat: one.chat, text: "Think." });
   await until(() => s.requests.length === 3, "the model request");
   const elsewhere = (error: { code?: string; message?: string }) =>
-    error.code === "busy" && /another chat, "One\."/.test(error.message ?? "");
+    error.code === "busy" && /in another chat/.test(error.message ?? "");
   await assert.rejects(
     s.actor.call("chat", "send", { chat: two.chat, text: "Me too." }),
     elsewhere,
