@@ -20,7 +20,7 @@
     "test": "node --test \"dist/test/**/*.test.js\""
   },
   "dependencies": {
-    "@agentorg/computer": "0.0.4",
+    "@agentorg/computer": "0.0.6",
     "@agentorg/interfaces": "0.0.0",
     "@agentorg/mcp": "0.0.0",
     "@agentorg/sdk": "0.0.0",

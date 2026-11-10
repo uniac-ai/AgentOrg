@@ -8,7 +8,7 @@ import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { Computer, ComputerError } from "@agentorg/computer";
+import { Computer, ComputerError, type LiveSurface } from "@agentorg/computer";
 import { hubActors, type Problem, unitProvider } from "@agentorg/interfaces";
 import { Connection, parseConnection, type Timing } from "@agentorg/mcp";
 import { type Log, Refused } from "@agentorg/sdk";
@@ -496,7 +496,7 @@ export async function startComputerProvider(
           try {
             const session = await Computer.createLiveSession(
               found.computer.id,
-              { surface: surface as "commands" | "terminal", mode },
+              { surface: surface as LiveSurface, mode },
               reached,
             );
             return {

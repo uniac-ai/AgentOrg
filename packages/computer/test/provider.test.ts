@@ -347,6 +347,15 @@ test("on a real service, an agent reads a page with its browser", async (t) => {
     ["browser"],
   );
   await connected(instance);
+  // Its picture can be opened live: the service says so, and gives a ticket for it.
+  const { surfaces } = await units.status({ instance });
+  assert.deepEqual(
+    surfaces?.map(({ surface, protocol, operate }) => [surface, protocol, operate]),
+    [["browser", "screencast@1", true]],
+  );
+  const ticket = await units.live({ instance, surface: "browser", mode: "watch" });
+  assert.equal(ticket.protocol, "screencast@1");
+  assert.match(ticket.url, /^ws:\/\/127\.0\.0\.1:\d+\//);
   const browser = await asAgent(connections[0]?.connection as string);
   const opened = await browser.call({
     name: "browser_navigate",
