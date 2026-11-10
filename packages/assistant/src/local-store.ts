@@ -1,7 +1,7 @@
 /**
  * The engine's record when it runs as an ordinary program: one small JSON file per key, in the
  * agent's own folder. A new message writes one file, however long the record is, and each write
- * lands whole. It answers as `kv@1` does, so the history reads it as it reads any store.
+ * lands whole. It answers as `kv@1` does, so the engine reads it as it reads any store.
  */
 import { randomUUID } from "node:crypto";
 import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";

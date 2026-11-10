@@ -1,0 +1,24 @@
+{
+  "name": "@agentorg/looper",
+  "version": "0.0.0",
+  "private": true,
+  "description": "An agent's loops: a model and its tools run on a record, taking messages by thread. It knows nothing of what hosts it.",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    }
+  },
+  "files": [
+    "dist/src"
+  ],
+  "scripts": {
+    "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.json",
+    "test": "node --test \"dist/test/**/*.test.js\""
+  },
+  "dependencies": {
+    "zod": "^4.6.7"
+  }
+}

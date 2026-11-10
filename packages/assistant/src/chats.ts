@@ -1,8 +1,7 @@
 /**
- * An agent's chats: each one's entry and record in the store, its own loop, and the one turn this
+ * An agent's chats: each one's entry in the store, the looper's thread it is, and the one turn this
  * engine has them share. A chat is made by the message that starts it and is never deleted. The
- * entries are read when a chat is first asked for, all of them, and a chat's record when the chat
- * is first used; both then stay in memory.
+ * entries are read when a chat is first asked for, all of them, and then stay in memory.
  */
 import {
   CHAT_TITLE_MAX,
@@ -11,13 +10,20 @@ import {
   type chat,
   type kv,
 } from "@agentorg/interfaces";
+import {
+  createLooper,
+  Entry,
+  type Store as LooperStore,
+  type Model,
+  Refusal,
+  type Tool,
+  textOf,
+} from "@agentorg/looper";
 import { type Log, Refused, type Slot } from "@agentorg/sdk";
 import { z } from "zod";
-import type { Chat, createAgent } from "./agent.js";
-import { createHistory, Entry, type History, head, MESSAGES, READS, textOf } from "./history.js";
+import { head, relayed } from "./tools.js";
 
 type Store = Slot<typeof kv>["call"];
-type Agent = ReturnType<typeof createAgent>;
 type Listed = z.input<typeof ChatEntry>;
 type Message = z.input<typeof ChatMessage>;
 type Input<M extends keyof (typeof chat)["methods"]> = z.output<
@@ -27,9 +33,45 @@ type Emitted<E extends keyof (typeof chat)["events"]> = z.input<
   (typeof chat)["events"][E]["payload"]
 >;
 
-/** A chat's entry is kept under `chats/<id>`, and its record under `chat/<id>/`. */
+/** A chat's entry is kept under `chats/<id>`. */
 const ENTRIES = "chats/";
-const recordOf = (id: string) => `chat/${id}/`;
+/**
+ * The looper's keys in the agent's store. A chat is a thread by its id, and a thread's record is
+ * where a chat's has always been, under `chat/<id>/`; anything else the looper keeps is under
+ * `loop/`. A list is of one or of the other, never across both. What the store refuses, the looper
+ * is told as its own refusal.
+ */
+const THREADS = "thread/";
+const CHATS = "chat/";
+const REST = "loop/";
+const toStore = (key: string) =>
+  key.startsWith(THREADS) ? CHATS + key.slice(THREADS.length) : REST + key;
+const fromStore = (key: string) =>
+  key.startsWith(CHATS) ? THREADS + key.slice(CHATS.length) : key.slice(REST.length);
+function forLooper(store: Store): LooperStore {
+  return {
+    get: ({ key }) => relayed(store.get({ key: toStore(key) })),
+    set: ({ key, value }) => relayed(store.set({ key: toStore(key), value })),
+    delete: ({ key }) => relayed(store.delete({ key: toStore(key) })),
+    async list({ prefix = "", after, limit }) {
+      const page = await relayed(
+        store.list({
+          prefix: toStore(prefix),
+          ...(after === undefined ? {} : { after: toStore(after) }),
+          ...(limit === undefined ? {} : { limit }),
+        }),
+      );
+      return {
+        keys: page.keys.map(fromStore),
+        next: page.next === null ? null : fromStore(page.next),
+      };
+    },
+  };
+}
+/** Where the one conversation an agent had before it had chats was kept. */
+const LEGACY = "msg/";
+/** Stored values read at once when the entries, or that conversation, are first loaded. */
+const READS = 16;
 /** The chat that the one conversation an agent had before it had chats becomes. */
 const FIRST = "first";
 const PAGE = 50;
@@ -48,8 +90,6 @@ type Stored = z.output<typeof Stored>;
 interface Held {
   id: string;
   stored: Stored;
-  history: History;
-  agent: Agent;
 }
 
 /** A title from a message: its first line with anything in it, on one line. */
@@ -58,26 +98,6 @@ const titleOf = (text: string) =>
     (text.split("\n").find((line) => /\S/.test(line)) ?? "").replace(/\s+/g, " ").trim(),
     CHAT_TITLE_MAX,
   );
-
-/** The store's keys under `prefix`, as a store of its own. */
-function under(store: Store, prefix: string): Store {
-  return {
-    get: ({ key }) => store.get({ key: prefix + key }),
-    set: ({ key, value }) => store.set({ key: prefix + key, value }),
-    delete: ({ key }) => store.delete({ key: prefix + key }),
-    async list({ prefix: inner = "", after, limit }) {
-      const page = await store.list({
-        prefix: prefix + inner,
-        ...(after === undefined ? {} : { after: prefix + after }),
-        ...(limit === undefined ? {} : { limit }),
-      });
-      return {
-        keys: page.keys.map((key) => key.slice(prefix.length)),
-        next: page.next === null ? null : page.next.slice(prefix.length),
-      };
-    },
-  };
-}
 
 /** Every key under `prefix`, in order. */
 async function keysUnder(store: Store, prefix: string) {
@@ -93,8 +113,9 @@ async function keysUnder(store: Store, prefix: string) {
 
 export function createChats(options: {
   store: Store;
-  /** A chat's loop, on its record, saying what it does through `chat`. */
-  agent(history: History, chat: Chat): Agent;
+  /** The agent's model, and what a request to it says and offers, as its looper asks for them. */
+  model: Model;
+  request(): Promise<{ instructions: string; tools: Tool[]; model?: string | undefined }>;
   /** Whether the agent is stopped when its chats are first held. */
   stopped: boolean;
   emit: {
@@ -123,14 +144,37 @@ export function createChats(options: {
   let top = 0;
   /** Entries being written, one after another, so the latest written is the latest said. */
   let writing: Promise<unknown> = Promise.resolve();
+  /** The chats, by id, once their entries are read. */
+  const chats = new Map<string, Held>();
   let loaded: Promise<Map<string, Held>> | undefined;
+  /** The chats' loops: a chat is the looper's thread of the same name. */
+  const looper = createLooper({
+    store: forLooper(store),
+    model: options.model,
+    request: options.request,
+    out: {
+      message(thread, message) {
+        const held = chats.get(thread);
+        if (held) sent(held, message);
+        emit.message({ ...message, chat: thread });
+      },
+      delta: (thread, id, text) => emit.delta({ chat: thread, id, text }),
+      status(thread, status) {
+        // The turn is given back before anyone hears it is over: the next may start at once.
+        if (working?.held.id === thread && (status.state === "idle" || status.state === "error"))
+          working = undefined;
+        emit.status({ ...status, chat: thread });
+      },
+    },
+    log,
+  });
 
-  const entryOf = ({ id, stored, agent }: Held): Listed => ({
+  const entryOf = ({ id, stored }: Held): Listed => ({
     id,
     title: stored.title,
     at: stored.at,
     ...(stored.latest ? { latest: stored.latest } : {}),
-    state: agent.state().state,
+    state: looper.state(id).state,
     archived: stored.archived,
   });
   /** Write a chat's entry as it now is, after any write before it. */
@@ -163,36 +207,13 @@ export function createChats(options: {
     }
     emit.chat(entryOf(held));
   };
-  const hold = (id: string, stored: Stored): Held => {
-    const history = createHistory(under(store, recordOf(id)), log);
-    const held: Held = {
-      id,
-      stored,
-      history,
-      agent: options.agent(history, {
-        message(message) {
-          sent(held, message);
-          emit.message({ ...message, chat: id });
-        },
-        delta: (message, text) => emit.delta({ chat: id, id: message, text }),
-        status(status) {
-          // The turn is given back before anyone hears it is over: the next may start at once.
-          if (working?.held === held && (status.state === "idle" || status.state === "error"))
-            working = undefined;
-          emit.status({ ...status, chat: id });
-        },
-      }),
-    };
-    return held;
-  };
-
   /**
    * The conversation an agent had before it had chats becomes its first chat. Its entry is written
    * before any message moves, from all of them, so a move cut short goes on from where it stopped
    * with the entry it began with.
    */
   const adopt = async () => {
-    const keys = await keysUnder(store, MESSAGES);
+    const keys = await keysUnder(store, LEGACY);
     if (keys.length === 0) return;
     const values: unknown[] = [];
     for (let at = 0; at < keys.length; at += READS)
@@ -218,10 +239,12 @@ export function createChats(options: {
       };
       await store.set({ key: ENTRIES + FIRST, value: stored });
     }
-    const record = under(store, recordOf(FIRST));
     for (const [i, key] of keys.entries()) {
       if (values[i] !== undefined)
-        await record.set({ key, value: values[i] as z.core.util.JSONType });
+        await store.set({
+          key: `${CHATS}${FIRST}/${key}`,
+          value: values[i] as z.core.util.JSONType,
+        });
       await store.delete({ key });
     }
     log.info("The conversation it had is now its first chat.", { messages: keys.length });
@@ -230,7 +253,6 @@ export function createChats(options: {
     if (loaded) return loaded;
     const attempt = (async () => {
       await adopt();
-      const found = new Map<string, Held>();
       const keys = await keysUnder(store, ENTRIES);
       for (let at = 0; at < keys.length; at += READS) {
         const some = keys.slice(at, at + READS);
@@ -242,11 +264,11 @@ export function createChats(options: {
             log.warn("A chat's entry didn't read back; the chat is left out.", { key });
             return;
           }
-          found.set(id, hold(id, stored.data));
+          chats.set(id, { id, stored: stored.data });
           top = Math.max(top, stored.data.order);
         });
       }
-      return found;
+      return chats;
     })();
     loaded = attempt;
     attempt.catch(() => {
@@ -276,14 +298,16 @@ export function createChats(options: {
     working = mine;
     try {
       // A turn stopped in another chat may have a call still running: it ends before this starts.
-      if (last !== held) await last?.agent.drained();
+      if (last && last !== held) await looper.drained(last.id);
       // The agent may have been stopped meanwhile.
       mayStart();
       last = held;
       return await start();
     } catch (error) {
       if (working === mine) working = undefined;
-      throw error;
+      // What the looper refuses is refused as the chat's; what the store refused comes back as it was.
+      if (!(error instanceof Refusal)) throw error;
+      throw error.cause ?? new Refused(error.code, error.message);
     }
   };
 
@@ -292,23 +316,26 @@ export function createChats(options: {
     async send({ chat, text }: Input<"send">) {
       if (chat !== undefined) {
         const held = await heldOf(chat);
-        const { messageId } = await turn(held, () => held.agent.send(text));
+        const { messageId } = await turn(held, () => looper.send(chat, text));
         return { chat, messageId };
       }
       const found = await load();
-      const held = hold(crypto.randomUUID(), {
-        title: titleOf(text),
-        at: new Date().toISOString(),
-        order: ++top,
-        archived: false,
-      });
+      const held: Held = {
+        id: crypto.randomUUID(),
+        stored: {
+          title: titleOf(text),
+          at: new Date().toISOString(),
+          order: ++top,
+          archived: false,
+        },
+      };
       return turn(held, async () => {
         try {
           // Its entry first: a record with no entry would be a chat nobody can find.
           await store.set({ key: ENTRIES + held.id, value: held.stored });
           found.set(held.id, held);
           mayStart();
-          const { messageId } = await held.agent.send(text);
+          const { messageId } = await looper.send(held.id, text);
           return { chat: held.id, messageId };
         } catch (error) {
           found.delete(held.id);
@@ -318,15 +345,14 @@ export function createChats(options: {
       });
     },
     history: async ({ chat, before, limit }: Input<"history">) =>
-      (await heldOf(chat)).history.page(before, limit ?? PAGE),
+      looper.page((await heldOf(chat)).id, before, limit ?? PAGE),
     async cancel({ chat }: Input<"cancel">) {
-      await (await heldOf(chat)).agent.cancel();
+      await looper.cancel((await heldOf(chat)).id);
       return {};
     },
-    state: async ({ chat }: Input<"state">) => (await heldOf(chat)).agent.state(),
+    state: async ({ chat }: Input<"state">) => looper.state((await heldOf(chat)).id),
     async retry({ chat }: Input<"retry">) {
-      const held = await heldOf(chat);
-      return turn(held, () => held.agent.retry());
+      return turn(await heldOf(chat), () => looper.retry(chat));
     },
     /**
      * The chats after `before` in the list, the one a message was last sent in first. `before`
@@ -361,9 +387,9 @@ export function createChats(options: {
     async stop() {
       stopped = true;
       const held = working?.held;
-      await held?.agent.cancel();
+      if (held) await looper.cancel(held.id);
       // A call still running, in this turn or one stopped before it, is recorded first.
-      await Promise.all([held?.agent.drained(), last?.agent.drained()]);
+      await Promise.all([held, last].map((one) => one && looper.drained(one.id)));
     },
     start() {
       stopped = false;
@@ -371,17 +397,17 @@ export function createChats(options: {
     /** Close for good: the turn in progress is cut, and none starts after. */
     async close() {
       closed = true;
-      await working?.held.agent.cancel();
+      if (working) await looper.cancel(working.held.id);
     },
     /** Settles when every chat's latest turn has written all it will. */
     async settled() {
-      const found = await loaded?.catch(() => undefined);
-      await Promise.all([...(found?.values() ?? [])].map((held) => held.agent.settled()));
+      await loaded?.catch(() => undefined);
+      await looper.settled();
       await writing;
     },
     /** Streamed text of the model request running now. */
     delta(requestId: string, text: string) {
-      working?.held.agent.delta(requestId, text);
+      looper.delta(requestId, text);
     },
   };
 }

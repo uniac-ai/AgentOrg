@@ -1,13 +1,14 @@
 /**
- * The engine: one agent's chats, their loop, and what a request says and offers. Its host says
- * where the records are kept and what the agent is told when no `settings` is bound.
+ * The engine: the looper bound to one agent. Its chats are the looper's threads, its model is the
+ * agent's `model` slot, and what a request says and offers is read from what the agent is bound to.
+ * Its host says where the records are kept and what the agent is told when no `settings` is bound.
  */
 import type { agentSettings, chat, kv, llmSession } from "@agentorg/interfaces";
+import type { Model } from "@agentorg/looper";
 import { type Context, Refused, type Slot } from "@agentorg/sdk";
-import { createAgent } from "./agent.js";
 import { createChats } from "./chats.js";
 import { instructionsWith, skillTool } from "./settings.js";
-import { type Candidate, type LeftOut, listedBy, listsTools, offered } from "./tools.js";
+import { type Candidate, type LeftOut, listedBy, listsTools, offered, relayed } from "./tools.js";
 
 /** Where the agent keeps the model chosen for it, beside its chats in the store. */
 const MODEL_KEY = "settings/model";
@@ -42,7 +43,7 @@ export function startEngine(
     if (leftOut.length > 0) ctx.log.warn("Not everything is offered to the model.", { leftOut });
     else ctx.log.info("Everything is offered to the model again.");
   };
-  /** What a request says and offers, read afresh: nothing here outlives the request. */
+  /** What a request says and offers, and to which model, read afresh: none of it outlives it. */
   const request = async () => {
     const settings = ctx.slots.settings.bound ? await ctx.slots.settings.call.get({}) : undefined;
     const told = settings
@@ -58,20 +59,19 @@ export function startEngine(
     );
     const { tools, leftOut } = offered([...own, ...exposed.flatMap((one) => one.candidates)]);
     report([...told.leftOut, ...exposed.flatMap((one) => one.leftOut), ...leftOut]);
-    return { instructions: told.instructions, tools };
+    return { instructions: told.instructions, tools, model: await chosen() };
+  };
+  /** The model slot as the looper asks it: what it refuses is told with its code. */
+  const model: Model = {
+    respond: (asked) => relayed(ctx.slots.model.call.respond(asked)),
+    // A model that is gone has nothing to stop.
+    cancel: async (asked) => (ctx.slots.model.bound ? ctx.slots.model.call.cancel(asked) : {}),
   };
   const chats = createChats({
     store,
     stopped: options.stopped ?? false,
-    agent: (history, chat) =>
-      createAgent({
-        request,
-        model: ctx.slots.model,
-        chosenModel: chosen,
-        history,
-        chat,
-        log: ctx.log,
-      }),
+    model,
+    request: () => relayed(request()),
     emit: {
       message: (message) => ctx.exports.chat.emit("message", message),
       delta: (delta) => ctx.exports.chat.emit("delta", delta),

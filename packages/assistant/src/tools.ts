@@ -4,7 +4,8 @@
  * `<slot>__<name>`, and a call runs through the slot, so the Hub checks and audits it like any
  * other.
  */
-import { type Tool, type ToolEntry, tools as toolsInterface } from "@agentorg/interfaces";
+import { type ToolEntry, tools as toolsInterface } from "@agentorg/interfaces";
+import { type Outcome, Refusal, type Tool } from "@agentorg/looper";
 import {
   type DescribedInterface,
   describeInterface,
@@ -13,26 +14,14 @@ import {
   Refused,
 } from "@agentorg/sdk";
 import type { z } from "zod";
-import { head } from "./history.js";
 
-/** How a function call ended, as the model and the record see it. */
-export interface Outcome {
-  output: string;
-  ok: boolean;
-  code?: string;
-}
-interface Found {
-  tool: z.input<typeof Tool>;
-  run(input: unknown): Promise<Outcome>;
-}
-export type Tools = Map<string, Found>;
 /** A tool as its slot gives it, before it has the name a request offers it under. */
 export interface Candidate {
   slot: string;
   name: string;
   description?: string;
   parameters: Record<string, z.core.util.JSONType>;
-  run: Found["run"];
+  run(input: unknown): Promise<Outcome>;
 }
 /**
  * Something the model isn't offered, and why: `name` (past 64 characters as a function name),
@@ -45,8 +34,6 @@ export interface LeftOut {
   reason: string;
 }
 
-/** A function's output keeps this many characters, so one result can't fill a request. */
-export const MAX_OUTPUT = 30_000;
 /** What a request can carry: its tools count, and, with the record and instructions, one frame. */
 export const MAX_TOOLS = 128;
 export const TOOLS_BUDGET = 256 * 1024;
@@ -55,7 +42,13 @@ const MAX_DESCRIPTION = 1024;
 const encoder = new TextEncoder();
 const TOOLS_ID = describeInterface(toolsInterface).id;
 
-/** The code and message of anything a call or a turn can throw. */
+/** The first `length` UTF-16 units of `text`, never ending inside a surrogate pair. */
+export function head(text: string, length: number): string {
+  const cut = text.slice(0, length);
+  return /[\uD800-\uDBFF]$/.test(cut) ? cut.slice(0, -1) : cut;
+}
+
+/** The code and message of what a call through a slot threw. */
 export function codeOf(error: unknown): { code: string; message: string } {
   if (error instanceof Refused) return { code: error.code, message: error.message };
   if (error instanceof NotConnected)
@@ -65,16 +58,16 @@ export function codeOf(error: unknown): { code: string; message: string } {
 }
 
 /**
- * `text`, or its first and last `MAX_OUTPUT / 2` characters with what was cut between them: a
- * failing command's error is at the end, and what it was doing at the start.
+ * A call through a slot, as the looper is told how it went: what the slot refuses is the looper's
+ * `Refusal`, with the code to show and the slot's own error as its cause.
  */
-export function capped(text: string): string {
-  if (text.length <= MAX_OUTPUT) return text;
-  // Between characters: never half of a surrogate pair at either cut.
-  const head = text.slice(0, MAX_OUTPUT / 2).replace(/[\uD800-\uDBFF]$/, "");
-  const tail = text.slice(-MAX_OUTPUT / 2).replace(/^[\uDC00-\uDFFF]/, "");
-  return `${head}\n… [${text.length - head.length - tail.length} characters cut] …\n${tail}`;
-}
+export const relayed = <T>(call: Promise<T>): Promise<T> =>
+  call.catch((error: unknown) => {
+    const { code, message } = codeOf(error);
+    throw code === "failed" && !(error instanceof Refused)
+      ? error
+      : new Refusal(code, message, { cause: error });
+  });
 
 /** Whether a slot is a `tools@1`, whose tools are whatever it lists. */
 export const listsTools = (described: DescribedInterface) => described.id === TOOLS_ID;
@@ -118,8 +111,8 @@ export async function listedBy(
  * can't have becomes `_`. Candidates are taken in order, so the first ones given are the ones kept
  * when a request is full; what doesn't fit is reported, never sent.
  */
-export function offered(candidates: Candidate[]): { tools: Tools; leftOut: LeftOut[] } {
-  const tools: Tools = new Map();
+export function offered(candidates: Candidate[]): { tools: Tool[]; leftOut: LeftOut[] } {
+  const tools = new Map<string, Tool>();
   const leftOut: LeftOut[] = [];
   let bytes = 0;
   for (const { slot, name, description, parameters, run } of candidates) {
@@ -143,33 +136,7 @@ export function offered(candidates: Candidate[]): { tools: Tools; leftOut: LeftO
       continue;
     }
     bytes += size;
-    tools.set(toolName, { tool, run });
+    tools.set(toolName, { ...tool, run: (input) => relayed(run(input)) });
   }
-  return { tools, leftOut };
-}
-
-const failure = ({ code, message }: { code: string; message: string }) =>
-  JSON.stringify({ error: { code, message } });
-
-/** Run a function call through its slot: the result, or the refusal, as the function's output. */
-export async function runTool(tools: Tools, name: string, args: string): Promise<Outcome> {
-  const refused = (code: string, message: string) => ({
-    output: failure({ code, message }),
-    ok: false,
-    code,
-  });
-  const found = tools.get(name);
-  if (!found) return refused("unknown_tool", `No tool is named ${name.slice(0, 64)}.`);
-  let input: unknown;
-  try {
-    input = args.trim() === "" ? {} : JSON.parse(args);
-  } catch {
-    return refused("invalid", "The arguments aren't JSON.");
-  }
-  try {
-    return await found.run(input);
-  } catch (error) {
-    const { code, message } = codeOf(error);
-    return refused(code, message);
-  }
+  return { tools: [...tools.values()], leftOut };
 }

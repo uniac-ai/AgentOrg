@@ -15,6 +15,7 @@
     "packages/manager",
     "packages/computer",
     "packages/chatgpt",
+    "packages/looper",
     "packages/assistant",
     "packages/shell",
     "packages/app"

@@ -1,13 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { tools } from "@agentorg/interfaces";
+import { capped, INPUT_BUDGET, MAX_CALLS, MAX_OUTPUT } from "@agentorg/looper";
 import { defineInterface, method, NotConnected, OutcomeUnknown, Refused } from "@agentorg/sdk";
 import { createTestContext } from "@agentorg/sdk/testing";
 import { z } from "zod";
-import { MAX_CALLS } from "../src/agent.ts";
-import { INPUT_BUDGET } from "../src/history.ts";
 import { MAX_INSTRUCTIONS } from "../src/settings.ts";
-import { capped, MAX_OUTPUT, MAX_TOOLS, TOOLS_BUDGET } from "../src/tools.ts";
+import { MAX_TOOLS, TOOLS_BUDGET } from "../src/tools.ts";
 import engine, { engines, INSTRUCTIONS } from "./engine-actor.ts";
 
 /** An interface that isn't `tools@1`. */
@@ -1172,6 +1171,11 @@ test("a message with no chat starts one, titled by its first line, with a record
     s.requests[1]?.input.map((item) => item.content),
     ["Boats now."],
   );
+  // A chat's record is kept under its id, a key per message.
+  assert.deepEqual(
+    [...s.store.values.keys()].filter((key) => key.startsWith(`chat/${boats.chat}/`)),
+    [`chat/${boats.chat}/msg/000000000001`, `chat/${boats.chat}/msg/000000000002`],
+  );
   await exchange(s, "Go on.", trees.chat);
   assert.deepEqual(
     s.requests[2]?.input.map((item) => item.content),
@@ -1547,4 +1551,49 @@ test("a first message that can't be recorded starts no chat, and leaves the agen
   assert.equal(s.actor.emitted.length, 0);
   s.actor.bind("store", store.handlers);
   assert.equal((await exchange(s, "Hello again.")).messageId, "000000000001");
+});
+
+test("a reply the store refuses ends the turn with the store's own code", async () => {
+  const values = new Map<string, unknown>();
+  const s = await setup(values);
+  const store = memory(values);
+  s.actor.bind("store", {
+    ...store.handlers,
+    set: (input) => {
+      if (input.key.endsWith("/msg/000000000002")) throw new Refused("quota", "The store is full.");
+      return store.handlers.set(input);
+    },
+  });
+  assert.deepEqual(await s.turn("Hello."), {
+    state: "error",
+    detail: { code: "quota", message: "The store is full." },
+  });
+});
+
+test("a reply being recorded as its turn is cancelled is still its chat's newest", async () => {
+  const values = new Map<string, unknown>();
+  const s = await setup(values);
+  const store = memory(values);
+  const writing = gate();
+  const written = gate();
+  s.actor.bind("store", {
+    ...store.handlers,
+    set: async (input) => {
+      if (input.key.endsWith("/msg/000000000002")) {
+        writing.open();
+        await written.shut;
+      }
+      return store.handlers.set(input);
+    },
+  });
+  s.script.push(say("Just in time."));
+  await s.chat("send", { text: "Hello." });
+  await writing.shut;
+  await s.chat("cancel");
+  written.open();
+  await s.host.settled();
+  const [chat] = (await listed(s)).chats;
+  const reply = (await shownIn(s, s.id())).at(-1);
+  assert.equal(reply?.text, "Just in time.");
+  assert.equal(chat?.latest?.id, reply?.id);
 });

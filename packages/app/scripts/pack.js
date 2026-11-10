@@ -32,6 +32,7 @@ const BUNDLED = [
   "mcp",
   "manager",
   "chatgpt",
+  "looper",
   "assistant",
   "computer",
 ];
