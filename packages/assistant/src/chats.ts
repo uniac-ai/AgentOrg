@@ -68,6 +68,30 @@ function forLooper(store: Store): LooperStore {
     },
   };
 }
+/**
+ * The looper as the chats call it: every call into it passes here. What the looper refuses is
+ * refused as the chat's, and what the store refused comes back as the store's own error.
+ */
+function forChats<T extends object>(looper: T): T {
+  const outward = (error: unknown): never => {
+    if (!(error instanceof Refusal)) throw error;
+    throw error.cause ?? new Refused(error.code, error.message);
+  };
+  return new Proxy(looper, {
+    get(target, name, receiver) {
+      const member: unknown = Reflect.get(target, name, receiver);
+      if (typeof member !== "function") return member;
+      return (...given: unknown[]) => {
+        try {
+          const result: unknown = member.apply(target, given);
+          return result instanceof Promise ? result.catch(outward) : result;
+        } catch (error) {
+          return outward(error);
+        }
+      };
+    },
+  });
+}
 /** Where the one conversation an agent had before it had chats was kept. */
 const LEGACY = "msg/";
 /** Stored values read at once when the entries, or that conversation, are first loaded. */
@@ -148,26 +172,28 @@ export function createChats(options: {
   const chats = new Map<string, Held>();
   let loaded: Promise<Map<string, Held>> | undefined;
   /** The chats' loops: a chat is the looper's thread of the same name. */
-  const looper = createLooper({
-    store: forLooper(store),
-    model: options.model,
-    request: options.request,
-    out: {
-      message(thread, message) {
-        const held = chats.get(thread);
-        if (held) sent(held, message);
-        emit.message({ ...message, chat: thread });
+  const looper = forChats(
+    createLooper({
+      store: forLooper(store),
+      model: options.model,
+      request: options.request,
+      out: {
+        message(thread, message) {
+          const held = chats.get(thread);
+          if (held) sent(held, message);
+          emit.message({ ...message, chat: thread });
+        },
+        delta: (thread, id, text) => emit.delta({ chat: thread, id, text }),
+        status(thread, status) {
+          // The turn is given back before anyone hears it is over: the next may start at once.
+          if (working?.held.id === thread && (status.state === "idle" || status.state === "error"))
+            working = undefined;
+          emit.status({ ...status, chat: thread });
+        },
       },
-      delta: (thread, id, text) => emit.delta({ chat: thread, id, text }),
-      status(thread, status) {
-        // The turn is given back before anyone hears it is over: the next may start at once.
-        if (working?.held.id === thread && (status.state === "idle" || status.state === "error"))
-          working = undefined;
-        emit.status({ ...status, chat: thread });
-      },
-    },
-    log,
-  });
+      log,
+    }),
+  );
 
   const entryOf = ({ id, stored }: Held): Listed => ({
     id,
@@ -305,9 +331,7 @@ export function createChats(options: {
       return await start();
     } catch (error) {
       if (working === mine) working = undefined;
-      // What the looper refuses is refused as the chat's; what the store refused comes back as it was.
-      if (!(error instanceof Refusal)) throw error;
-      throw error.cause ?? new Refused(error.code, error.message);
+      throw error;
     }
   };
 

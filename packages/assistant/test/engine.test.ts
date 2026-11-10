@@ -1570,6 +1570,35 @@ test("a reply the store refuses ends the turn with the store's own code", async 
   });
 });
 
+test("a chat's messages asked for while the store can't be read fail with the store's own error", async () => {
+  const values = new Map<string, unknown>();
+  const { chat } = await exchange(await setup(values), "Hello.");
+  // A start later: the chat's record isn't read until it is asked for.
+  const s = await setup(values);
+  await listed(s);
+  const store = memory(values);
+  const away = (error: Error) =>
+    s.actor.bind("store", {
+      ...store.handlers,
+      list: () => {
+        throw error;
+      },
+    });
+  away(new Refused("unavailable", "The store is away."));
+  await assert.rejects(s.actor.call("chat", "history", { chat }), {
+    name: "Refused",
+    code: "unavailable",
+    message: "The store is away.",
+  });
+  away(new NotConnected("store"));
+  await assert.rejects(s.actor.call("chat", "history", { chat }), { name: "NotConnected" });
+  s.actor.bind("store", store.handlers);
+  assert.deepEqual(
+    (await shownIn(s, chat)).map((m) => m.text),
+    ["Hello.", "ok"],
+  );
+});
+
 test("a reply being recorded as its turn is cancelled is still its chat's newest", async () => {
   const values = new Map<string, unknown>();
   const s = await setup(values);
