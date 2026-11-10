@@ -1,15 +1,15 @@
-// An agent's face: a colour worked out from its id, so a rename keeps it, and initials from its
-// name. Its state is on it: a mark while it works, starts or has a problem, faded when it's stopped,
-// and named for a screen reader in every state.
+// An agent's face: a colour from its id and initials from its name. Its state is on it: a mark
+// while it works or has a problem, a spinner while it starts, faded when it's stopped.
+import { LoaderCircleIcon } from "lucide-react";
 import type { Tone } from "./data.ts";
-import { StateDot } from "./parts.tsx";
+import { WORD } from "./parts.tsx";
 
 /** FNV-1a over the id, onto one of 24 hues. */
 const hueOf = (id: string) =>
   (([...id].reduce((h, ch) => Math.imul(h ^ ch.charCodeAt(0), 16777619) >>> 0, 2166136261) >>> 23) %
     24) *
   15;
-/** One letter for one word, two for more. */
+/** One letter for one word, two for more: "Release notes" is RN. */
 const initials = (name: string) =>
   name
     .split(/\s+/)
@@ -17,30 +17,66 @@ const initials = (name: string) =>
     .slice(0, 2)
     .map((word) => [...word][0]?.toUpperCase())
     .join("");
+/** An agent's colours, worked out from its id alone, so a rename keeps them. */
+export const tintOf = (id: string) => {
+  const h = hueOf(id);
+  return {
+    from: `oklch(0.80 0.11 ${h})`,
+    to: `oklch(0.60 0.14 ${(h + 48) % 360})`,
+    soft: `oklch(0.62 0.10 ${h} / 0.28)`,
+  };
+};
 
-export function Face({ id, name, tone }: { id: string; name: string; tone: Tone }) {
-  const hue = hueOf(id);
-  const letters = initials(name);
+const MARK: Partial<Record<Tone, string>> = {
+  working: "bg-[var(--ok)] pulse",
+  trouble: "bg-[var(--bad)]",
+};
+
+export function Face({
+  agent,
+  size = 40,
+  plain = false,
+  bare = false,
+}: {
+  agent: { id: string; name: string; tone: Tone };
+  size?: number;
+  /** Without its state. */
+  plain?: boolean;
+  /** Without its letters. */
+  bare?: boolean;
+}) {
+  const tint = tintOf(agent.id);
+  const mark = MARK[agent.tone];
+  const dot = Math.max(8, Math.round(size * 0.24));
+  const letters = initials(agent.name);
   return (
-    <span className="relative inline-block size-7 shrink-0">
+    <span className="relative inline-block shrink-0" style={{ width: size, height: size }}>
       <span
         aria-hidden
-        className={`grid size-full place-items-center rounded-full font-semibold text-white ${letters.length > 1 ? "text-[10px]" : "text-xs"} ${tone === "stopped" ? "opacity-45 grayscale" : ""}`}
+        className={`grid size-full place-items-center rounded-full font-semibold text-white ${agent.tone === "stopped" ? "opacity-45 grayscale" : ""}`}
         style={{
-          background: `linear-gradient(140deg, oklch(0.80 0.11 ${hue}), oklch(0.60 0.14 ${(hue + 48) % 360}))`,
+          background: `linear-gradient(140deg, ${tint.from}, ${tint.to})`,
+          fontSize: Math.round(size * ([...letters].length > 1 ? 0.36 : 0.42)),
         }}
       >
-        {letters}
+        {!bare && letters}
       </span>
-      <span
-        className={
-          tone === "working" || tone === "trouble" || tone === "starting"
-            ? "absolute -right-0.5 -bottom-0.5 grid place-items-center rounded-full bg-[var(--canvas)] p-0.5 [&>*]:mx-0"
-            : "sr-only"
-        }
-      >
-        <StateDot tone={tone} />
-      </span>
+      {!plain && agent.tone === "starting" && (
+        <LoaderCircleIcon
+          role="img"
+          aria-label={WORD.starting}
+          className="absolute -right-0.5 -bottom-0.5 animate-spin rounded-full bg-background text-muted-foreground motion-reduce:animate-none"
+          style={{ width: dot + 2, height: dot + 2 }}
+        />
+      )}
+      {!plain && mark && (
+        <span
+          role="img"
+          aria-label={WORD[agent.tone]}
+          className={`absolute right-0 bottom-0 rounded-full ring-2 ring-background ${mark}`}
+          style={{ width: dot, height: dot }}
+        />
+      )}
     </span>
   );
 }
