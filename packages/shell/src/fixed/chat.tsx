@@ -8,11 +8,9 @@ import {
   ChevronRightIcon,
   CopyIcon,
   LoaderCircleIcon,
-  MoreHorizontalIcon,
   RefreshCwIcon,
   SquareIcon,
   WrenchIcon,
-  XIcon,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Streamdown } from "streamdown";
@@ -22,12 +20,6 @@ import { signIn } from "../sign-in.ts";
 import { Bubble, BubbleContent } from "../ui/bubble.tsx";
 import { Button } from "../ui/button.tsx";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible.tsx";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "../ui/dropdown-menu.tsx";
 import {
   InputGroup,
   InputGroupAddon,
@@ -44,12 +36,13 @@ import {
   MessageScrollerProvider,
   MessageScrollerViewport,
 } from "../ui/message-scroller.tsx";
+import { useAllChats } from "./all-chats.tsx";
 import { CallRow } from "./call-row.tsx";
 import { type Row, rowsOf } from "./calls.ts";
-import { DOCKED, useChats } from "./chats.tsx";
-import { ago, type ChatMessage, type ChatStatus, chatView, useAct } from "./data.ts";
+import { useChats } from "./chats.tsx";
+import { type ChatMessage, type ChatStatus, chatView, useAct } from "./data.ts";
 import { type Notice, noticeOf } from "./notice.ts";
-import { Nothing, SidePanel, StateDot } from "./parts.tsx";
+import { StateDot } from "./parts.tsx";
 import { useAgents } from "./watch.tsx";
 
 const PAGE = 100;
@@ -117,91 +110,16 @@ function useReducedMotion(): boolean {
   );
 }
 
-/** The chats, one session per agent, in the panel the chat button opens. */
-export function ChatPanel() {
-  const { open, thread } = useChats();
-  if (!open) return null;
-  return (
-    <SidePanel label="Chats">
-      {thread ? <Thread key={thread} agent={thread} /> : <List />}
-    </SidePanel>
-  );
-}
-
-function ClosePanel() {
-  const { close } = useChats();
-  return (
-    <Button variant="ghost" size="icon-sm" aria-label="Close" onClick={close}>
-      <XIcon />
-    </Button>
-  );
-}
-
-function List() {
-  const { sessions, show } = useChats();
-  return (
-    <>
-      <header className="flex h-11 shrink-0 items-center justify-between pr-2 pl-4">
-        <h2 className="text-[13px] font-semibold">Chats</h2>
-        <ClosePanel />
-      </header>
-      <ul className="no-bar min-h-0 flex-1 overflow-y-auto px-2 pb-2">
-        {sessions.map((session) => (
-          <li key={session.agent}>
-            <button
-              type="button"
-              onClick={() => show(session.agent)}
-              className="flex h-16 w-full items-center gap-2 rounded-xl px-2 text-left hover:bg-[var(--hover)]"
-            >
-              {session.fresh ? (
-                <span
-                  role="img"
-                  aria-label="New"
-                  className="size-2 shrink-0 rounded-full bg-[var(--unread)]"
-                />
-              ) : (
-                <span className="size-2 shrink-0" />
-              )}
-              <span className="min-w-0 flex-1">
-                <span
-                  className={`block truncate text-sm ${session.fresh ? "font-semibold" : "font-medium"}`}
-                >
-                  {session.name}
-                </span>
-                {session.working ? (
-                  <span className="thinking block w-fit text-[13px]">Working</span>
-                ) : (
-                  <span className="block truncate text-[13px] text-muted-foreground">
-                    {session.preview}
-                  </span>
-                )}
-              </span>
-              <span className="shrink-0 self-start pt-3 text-xs tabular-nums text-muted-foreground">
-                {ago(session.at)}
-              </span>
-            </button>
-          </li>
-        ))}
-        {sessions.length === 0 && (
-          <li className="px-2">
-            <Nothing>Start one with Chat on an agent.</Nothing>
-          </li>
-        )}
-      </ul>
-    </>
-  );
-}
-
-function Thread({ agent: id }: { agent: string }) {
-  const { show, close, drop, drafts } = useChats();
+/** One agent's thread, with the control that closes what it is shown in at the end of its head. */
+export function Thread({ agent: id, close }: { agent: string; close: React.ReactNode }) {
+  const { show, drafts } = useChats();
   const { byId } = useAgents();
-  const shell = useRef<HTMLDivElement>(null);
   const act = useAct();
   const watched = byId.get(id);
   if (!watched) return null;
   const { entry, slot, now } = watched;
   return (
-    <div ref={shell} className="flex min-h-0 flex-1 flex-col">
+    <div className="flex min-h-0 flex-1 flex-col">
       <header className="flex h-11 shrink-0 items-center gap-1.5 px-2">
         <Button
           variant="ghost"
@@ -215,31 +133,11 @@ function Thread({ agent: id }: { agent: string }) {
         <Button
           variant="link"
           className="h-auto min-w-0 truncate border-0 p-0 text-[13px] font-semibold text-foreground"
-          onClick={() => {
-            go({ screen: "agent", agent: id });
-            // Over the page, the panel gets out of its way; docked, it stays beside it.
-            const width = shell.current?.closest("[data-shell]")?.clientWidth ?? 0;
-            if (width < DOCKED) close();
-          }}
+          onClick={() => go({ screen: "agent", agent: id })}
         >
           {entry.name}
         </Button>
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              className="ml-auto"
-              aria-label={`${entry.name} chat options`}
-            >
-              <MoreHorizontalIcon />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            <DropdownMenuItem onSelect={() => drop(id)}>Remove from Chats</DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-        <ClosePanel />
+        <span className="ml-auto">{close}</span>
       </header>
       {entry.status.state !== "running" ? (
         <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
@@ -304,6 +202,12 @@ function Chat({
   shown.current = messages;
   /** Which of the agent's chats this is: its newest, or the one the first message here starts. */
   const view = useMemo(() => chatView(slot), [slot]);
+  // A reply shown here is read.
+  const { read } = useAllChats();
+  const replied = messages.findLast((m) => m.role === "assistant")?.at;
+  useEffect(() => {
+    if (view.chat && replied) read(agent, view.chat, replied);
+  }, [read, agent, view, replied]);
   const sends = useRef(0);
   /** A recorded message's key in the thread: the one it was shown under at once, so it stays. */
   const keys = useRef(new Map<string, string>());

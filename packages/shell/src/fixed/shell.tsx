@@ -3,7 +3,6 @@ import {
   HomeIcon,
   LayoutTemplateIcon,
   MenuIcon,
-  MessageCircleIcon,
   PlusIcon,
   SearchIcon,
   SettingsIcon,
@@ -17,11 +16,12 @@ import { TooltipProvider } from "../ui/tooltip.tsx";
 import { AgentPage } from "./agent-page.tsx";
 import { AgentSettingsPage } from "./agent-settings-page.tsx";
 import { AgentsPage } from "./agents-page.tsx";
+import { AllChatsProvider } from "./all-chats.tsx";
 import { BuildDialog } from "./build.tsx";
 import { BuildingProvider, useBuilding } from "./building.tsx";
-import { ChatPanel } from "./chat.tsx";
-import { ChatsProvider, useChats } from "./chats.tsx";
+import { ChatsProvider } from "./chats.tsx";
 import { Face } from "./face.tsx";
+import { Layer } from "./layer.tsx";
 import { McpsPage } from "./mcps-page.tsx";
 import { WORD } from "./parts.tsx";
 import { SettingsPage } from "./settings-page.tsx";
@@ -37,9 +37,11 @@ export function FixedShell({ login }: { login?: LoginStatus }) {
     <AgentsProvider>
       <TooltipProvider>
         <ChatsProvider>
-          <BuildingProvider>
-            <Frame login={login} />
-          </BuildingProvider>
+          <AllChatsProvider>
+            <BuildingProvider>
+              <Frame login={login} />
+            </BuildingProvider>
+          </AllChatsProvider>
         </ChatsProvider>
       </TooltipProvider>
     </AgentsProvider>
@@ -205,7 +207,6 @@ function LeftBar({
 function Frame({ login }: { login?: LoginStatus }) {
   const route = useRoute();
   const { list } = useAgents();
-  const chats = useChats();
   /** The whole bar as a drawer: from a phone's menu button, or from the rail's search. */
   const [drawer, setDrawer] = useState<"menu" | "search">();
   /** What opened the drawer, which has the keyboard again when it closes. */
@@ -280,46 +281,25 @@ function Frame({ login }: { login?: LoginStatus }) {
           </Button>
           <span className="min-w-0 truncate text-[17px] font-semibold">{place}</span>
         </header>
-        {/* A row, for the chat panel that sits beside the page. */}
-        <div className="relative flex min-h-0 flex-1">
-          {/* The pages are set in the type they were built in, not the frame's. */}
-          <main className="@container/main relative min-h-0 min-w-0 flex-1 text-[14px] leading-[1.45]">
-            {route.screen === "home" && <AgentsPage />}
-            {route.screen === "agent" && <AgentPage key={route.agent} agent={route.agent} />}
-            {route.screen === "agent-settings" && (
-              <AgentSettingsPage key={route.agent} agent={route.agent} />
-            )}
-            {route.screen === "skills" && <SkillsPage focus={route.focus} adding={route.adding} />}
-            {route.screen === "mcps" && <McpsPage focus={route.focus} adding={route.adding} />}
-            {route.screen === "settings" &&
-              (route.tab === "templates" ? (
-                <TemplatesPage />
-              ) : (
-                <SettingsPage tab={route.tab} login={login} />
-              ))}
-          </main>
-          <ChatPanel />
-          {!chats.open && (
-            <Button
-              variant="secondary"
-              size="icon-lg"
-              aria-label={chats.fresh > 0 ? `Chats, ${chats.fresh} new` : "Chats"}
-              className="absolute right-5 bottom-5 z-20 size-12 rounded-full shadow-lg"
-              onClick={chats.toggle}
-            >
-              <MessageCircleIcon />
-              {chats.fresh > 0 && (
-                <span
-                  aria-hidden
-                  className="absolute -top-0.5 -right-0.5 grid size-4 place-items-center rounded-full bg-[var(--unread)] text-[10px] font-semibold text-white"
-                >
-                  {chats.fresh}
-                </span>
-              )}
-            </Button>
+        {/* The pages are set in the type they were built in, not the frame's. */}
+        <main className="@container/main relative min-h-0 flex-1 text-[14px] leading-[1.45]">
+          {route.screen === "home" && <AgentsPage />}
+          {route.screen === "agent" && <AgentPage key={route.agent} agent={route.agent} />}
+          {route.screen === "agent-settings" && (
+            <AgentSettingsPage key={route.agent} agent={route.agent} />
           )}
-        </div>
+          {route.screen === "skills" && <SkillsPage focus={route.focus} adding={route.adding} />}
+          {route.screen === "mcps" && <McpsPage focus={route.focus} adding={route.adding} />}
+          {route.screen === "settings" &&
+            (route.tab === "templates" ? (
+              <TemplatesPage />
+            ) : (
+              <SettingsPage tab={route.tab} login={login} />
+            ))}
+        </main>
       </div>
+      {/* Over the page, bar included: the one layer, with the chat. */}
+      <Layer />
       <BuildDialog />
     </div>
   );
