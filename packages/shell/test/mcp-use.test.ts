@@ -174,10 +174,10 @@ test(
     assert.match(text, /Tests 1 failed/);
     assert.match(text, /npm run e2e[\s\S]*checked \d+ s ago[\s\S]*still going/);
     assert.match(text, /npm run dev[\s\S]*checked 6 min ago/);
-    const files = computer.getByRole("list", { name: "Changed files" });
+    const files = page.getByRole("region", { name: "Changed files" });
     assert.match(await files.innerText(), /shop\/src\/retry\.ts\s+\+1 −1/);
 
-    await files.getByRole("button").click();
+    await files.getByRole("button", { name: /retry\.ts/ }).click();
     const diff = page.getByRole("dialog", { name: "shop/src/retry.ts" });
     assert.match(await diff.locator(".diff-code-delete").innerText(), /session\.pay/);
     await page.keyboard.press("Escape");
@@ -197,10 +197,8 @@ test(
       "Clicked Pay now",
     ]);
 
-    const updates = page.getByRole("region", { name: "Updates" });
-    await updates.getByText("Tried localhost:4173/checkout, 3 steps").waitFor();
-    await updates.getByText("Reproducing it now.").click();
-    await page.getByRole("complementary", { name: "Chats" }).waitFor();
+    assert.equal(await page.getByRole("region", { name: "Updates" }).count(), 0);
+    assert.equal(await computer.getByRole("list").count(), 0, "changed files are their own list");
     await page.close();
   }),
 );
@@ -215,7 +213,7 @@ test(
     await page.close();
 
     const live = await open(gateway, "#/a/a-research");
-    const frames = ["Computer", "Browser", "Updates"].map((name) =>
+    const frames = ["Computer", "Browser", "Changed files"].map((name) =>
       live.getByRole("region", { name }),
     );
     await frames[0]?.getByText("npm test").waitFor();
@@ -260,5 +258,42 @@ test(
     const box = await computer.boundingBox();
     assert.ok(box && box.x >= 0 && box.x + box.width <= 390);
     await page.close();
+  }),
+);
+
+test(
+  "the Now line says what stopped it and offers what can be done",
+  withTask(async (gateway) => {
+    const page = await open(gateway, "#/a/a-broken");
+    const now = page.getByRole("status", { name: "Now" });
+    await now.getByText("Its program exited.").waitFor();
+    await now.getByRole("button", { name: "Start" }).click();
+    await page.waitForTimeout(300);
+    assert.ok(gateway.calls.some((c) => c.method === "start" && c.input.agent === "a-broken"));
+    await page.close();
+
+    const research = await open(gateway, "#/a/a-research");
+    const line = research.getByRole("status", { name: "Now" });
+    await line.waitFor();
+    gateway.setChatStatus("a-research", {
+      state: "error",
+      detail: { code: "unavailable", message: "ChatGPT plan usage is unavailable right now." },
+    });
+    await line.getByText("ChatGPT plan usage is unavailable right now.").waitFor();
+    await line.getByRole("button", { name: "Retry" }).click();
+    await research.waitForTimeout(300);
+    assert.ok(gateway.calls.some((c) => c.method === "retry"));
+
+    gateway.setChatStatus("a-research", {
+      state: "error",
+      detail: { code: "usage_limit", message: "You've reached your plan's limit." },
+    });
+    const opened = research.context().waitForEvent("page");
+    await line.getByRole("button", { name: "Manage usage" }).click();
+    assert.match((await opened).url(), /chatgpt\.com\/settings\/usage|about:blank/);
+
+    gateway.setChatStatus("a-research", { state: "idle" });
+    await line.getByRole("button").waitFor({ state: "detached" });
+    await research.close();
   }),
 );

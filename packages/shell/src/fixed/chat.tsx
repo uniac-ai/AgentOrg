@@ -48,45 +48,12 @@ import { CallRow } from "./call-row.tsx";
 import { type Row, rowsOf } from "./calls.ts";
 import { DOCKED, useChats } from "./chats.tsx";
 import { ago, type ChatMessage, type ChatStatus, useAct } from "./data.ts";
+import { type Notice, noticeOf } from "./notice.ts";
 import { Nothing, SidePanel, StateDot } from "./parts.tsx";
 import { useAgents } from "./watch.tsx";
 
 const PAGE = 100;
 const busyOf = (state: string) => state === "thinking" || state === "tool";
-
-interface Notice {
-  title?: string;
-  text: string;
-  action?: { label: string; run: "manage" | "signIn" | "retry" };
-  /** A failed read, or the chat not being there: a good read ends it. */
-  untilRead?: boolean;
-}
-
-/** What a turn ending in error shows, in OpenAI's words for plan usage. */
-function noticeOf(detail: { code: string; message: string }): Notice {
-  switch (detail.code) {
-    case "usage_limit":
-      return {
-        title: "Usage limit reached",
-        text: "Review your plan or this app's limit in ChatGPT settings.",
-        action: { label: "Manage usage", run: "manage" },
-      };
-    case "not_signed_in":
-      return {
-        text: "Sign in with ChatGPT to chat on your plan.",
-        action: { label: "Continue with ChatGPT", run: "signIn" },
-      };
-    case "unavailable":
-      return {
-        text: "ChatGPT plan usage is unavailable right now.",
-        action: { label: "Retry", run: "retry" },
-      };
-    case "ineligible":
-      return { text: "This ChatGPT account isn't eligible to use its plan in this app." };
-    default:
-      return { text: detail.message };
-  }
-}
 
 const codeOf = (error: unknown) => ({
   code:
