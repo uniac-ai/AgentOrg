@@ -107,9 +107,8 @@ test(
       .getByRole("button", { name: "Create", exact: true })
       .filter({ visible: true })
       .click();
-    const chooser = page.getByRole("dialog", { name: "Create" });
-    await chooser.getByRole("button", { name: /^Assistant/ }).click();
-    const stack = page.getByRole("dialog", { name: /^New agent/ });
+    const stack = page.getByRole("dialog", { name: "Create" });
+    await stack.getByRole("button", { name: /^Assistant/ }).click();
     await stack.getByLabel("Name").fill("Foreman");
     await page.waitForTimeout(250);
     const box = await stack.boundingBox();
@@ -132,6 +131,27 @@ test(
     const action = await page.getByRole("button", { name: "Add skill" }).boundingBox();
     assert.ok(action && action.x + action.width <= PHONE.width, "what it offers stays in view");
     assert.equal(await fits(page), true, "settings");
+    await page.close();
+  }),
+);
+
+test(
+  "the Create window doesn't animate its size when motion is reduced",
+  withGateway(async (gateway) => {
+    const page = await browser.newPage({ viewport: WIDE, reducedMotion: "reduce" });
+    page.setDefaultTimeout(8000);
+    await page.addInitScript(
+      (session) => localStorage.setItem("agentorg.session", session),
+      SESSION,
+    );
+    await page.goto(`${gateway.url}/#/`);
+    await page
+      .getByRole("navigation", { name: "Main" })
+      .getByRole("button", { name: "Create" })
+      .click();
+    const window_ = page.getByRole("dialog", { name: "Create" });
+    await window_.getByRole("button", { name: "Empty" }).waitFor();
+    assert.equal(await window_.evaluate((el) => getComputedStyle(el).transitionProperty), "none");
     await page.close();
   }),
 );

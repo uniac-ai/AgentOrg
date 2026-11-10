@@ -4,13 +4,12 @@ import {
   BotIcon,
   ChevronRightIcon,
   CpuIcon,
-  MoreHorizontalIcon,
   PlugIcon,
   PlusIcon,
   SparklesIcon,
   XIcon,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, go } from "../data.ts";
 import { Button } from "../ui/button.tsx";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../ui/dialog.tsx";
@@ -20,7 +19,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "../ui/dropdown-menu.tsx";
-import { Field, FieldDescription, FieldGroup, FieldLabel } from "../ui/field.tsx";
+import { Field, FieldDescription, FieldLabel } from "../ui/field.tsx";
 import { Input } from "../ui/input.tsx";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select.tsx";
 import { useBuilding } from "./building.tsx";
@@ -33,85 +32,107 @@ import {
   isReady,
   isShown,
   missingNeeds,
+  nameOf,
   type StackProblem,
   toStack,
 } from "./stack.ts";
 
-/** The plus: it opens the popup, on the stack in progress if there is one. */
+/** The plus: the Create window, clean each time. */
 export function CreateButton() {
-  const { draft, open, show } = useBuilding();
-  const waiting = draft && !open;
+  const { show } = useBuilding();
   return (
-    <Button
-      variant="ghost"
-      size="icon-sm"
-      aria-label={waiting ? "Create, one in progress" : "Create"}
-      className="relative"
-      onClick={show}
-    >
+    <Button variant="ghost" size="icon-sm" aria-label="Create" onClick={show}>
       <PlusIcon />
-      {waiting && (
-        <span
-          aria-hidden
-          className="absolute top-1 right-1 size-1.5 rounded-full bg-[var(--unread)]"
-        />
-      )}
     </Button>
   );
 }
 
 /**
- * Create, in one box from choosing to finishing. A click outside does nothing while there's a
- * stack, and closing puts it away for the plus to bring back: only Discard loses it.
+ * Create, in one window: what to start from on the left, and once that's chosen a panel opening on
+ * its right. A click outside closes it, and closing it clears it.
  */
 export function BuildDialog() {
-  const { draft, open, hide } = useBuilding();
+  const { clear, draft, open, hide } = useBuilding();
+  const size = draft
+    ? "h-[min(720px,calc(100dvh-2rem))] sm:w-[min(60rem,calc(100vw-2rem))]"
+    : "h-[min(26rem,calc(100dvh-2rem))] sm:w-80";
   return (
     <Dialog open={open} onOpenChange={(next) => !next && hide()}>
       <DialogContent
-        className="window flex h-[min(720px,calc(100dvh-2rem))] flex-col gap-0 overflow-hidden p-0 ring-0 sm:max-w-xl"
-        onInteractOutside={(event) => {
-          if (draft) event.preventDefault();
-        }}
+        className={`window flex flex-col gap-0 overflow-hidden p-0 ring-0 transition-[width,height] duration-300 ease-out motion-reduce:transition-none sm:max-w-none sm:flex-row ${size}`}
+        onCloseAutoFocus={clear}
         aria-describedby={undefined}
       >
-        {draft ? <Stack /> : <Choose />}
+        <Choose />
+        {draft && (
+          <div className="min-h-0 min-w-0 flex-1 overflow-hidden sm:border-l">
+            {/* Its own width, so nothing reflows while the window opens around it. */}
+            <div className="h-full w-full sm:w-[40rem] sm:max-w-[calc(100vw-22rem)]">
+              <Stack />
+            </div>
+          </div>
+        )}
       </DialogContent>
     </Dialog>
   );
 }
 
 function Choose() {
-  const { catalog, start } = useBuilding();
-  const row =
-    "flex min-h-12 w-full flex-col justify-center rounded-xl px-3 py-1.5 text-left hover:bg-[var(--hover)]";
+  const { catalog, draft, start } = useBuilding();
+  const mode = draft?.mode ?? "agent";
+  const row = (on: boolean) =>
+    `flex min-h-12 w-full shrink-0 flex-col justify-center rounded-xl px-3 py-1.5 text-left hover:bg-[var(--hover)] ${on ? "bg-[var(--selected)]" : ""}`;
   return (
-    <>
+    <div
+      className={`flex flex-col sm:h-full sm:w-80 sm:shrink-0 ${draft ? "shrink-0" : "min-h-0 flex-1"}`}
+    >
       <div className="flex h-11 shrink-0 items-center pr-10 pl-4">
-        <DialogTitle className="text-[13px] font-semibold">Create</DialogTitle>
+        <DialogTitle className="text-[13px] font-semibold">
+          {mode === "template" ? "New template" : "Create"}
+        </DialogTitle>
       </div>
-      <ul aria-label="Start from" className="no-bar min-h-0 flex-1 overflow-y-auto px-2 pb-2">
-        <li>
-          <button type="button" className={row} onClick={() => start()}>
+      <ul
+        aria-label="Start from"
+        className={`no-bar px-2 pb-2 ${draft ? "flex gap-1 overflow-x-auto sm:block sm:min-h-0 sm:flex-1 sm:overflow-y-auto" : "min-h-0 flex-1 overflow-y-auto"}`}
+      >
+        <li className="shrink-0">
+          <button
+            type="button"
+            aria-pressed={!!draft && !draft.from}
+            className={row(!!draft && !draft.from)}
+            onClick={() => start(undefined, mode)}
+          >
             <span className="text-sm font-medium">Empty</span>
           </button>
         </li>
         {catalog.templates.map((t) => (
-          <li key={t.id}>
-            <button type="button" className={row} onClick={() => start(t)}>
+          <li key={t.id} className="shrink-0">
+            <button
+              type="button"
+              aria-pressed={draft?.from?.id === t.id}
+              className={row(draft?.from?.id === t.id)}
+              onClick={() => start(t, mode)}
+            >
               <span className="text-sm font-medium">{t.title}</span>
-              <span className="truncate text-[13px] text-muted-foreground">{t.description}</span>
+              <span
+                className={`truncate text-[13px] text-muted-foreground ${draft ? "hidden sm:block" : ""}`}
+              >
+                {t.description}
+              </span>
             </button>
           </li>
         ))}
       </ul>
-    </>
+    </div>
   );
 }
 
 function Stack() {
   const building = useBuilding();
-  const { catalog, draft, discard, done, saveTemplate, setText, setProblems } = building;
+  const { catalog, draft, hide, saveTemplate, setText, setProblems } = building;
+  const nameField = useRef<HTMLInputElement>(null);
+  // Typing can start at once.
+  useEffect(() => nameField.current?.focus(), []);
   const act = useAct();
   const [saving, setSaving] = useState(false);
   if (!draft) return null;
@@ -122,8 +143,8 @@ function Stack() {
     const purpose = draft.purpose.trim();
     if (isTemplate) {
       act.run(async () => {
-        await saveTemplate(draft.name.trim(), purpose);
-        done();
+        await saveTemplate(nameOf(draft), purpose);
+        hide();
         go({ screen: "settings", tab: "templates" });
       });
       return;
@@ -139,10 +160,10 @@ function Stack() {
       }
       const { agent } = await api.call<{ agent: string }>("agents", "create", {
         stack,
-        name: draft.name.trim(),
+        name: nameOf(draft),
         ...(purpose ? { purpose } : {}),
       });
-      done();
+      hide();
       go({ screen: "agent", agent });
     });
   };
@@ -150,57 +171,34 @@ function Stack() {
   return (
     <>
       <form
-        className="flex min-h-0 flex-1 flex-col"
+        className="flex h-full min-h-0 flex-col"
         onSubmit={(event) => {
           event.preventDefault();
           finish();
         }}
       >
-        <header className="flex h-11 shrink-0 items-center gap-1 pr-10 pl-4">
-          <DialogTitle className="min-w-0 flex-1 truncate text-[13px] font-semibold">
-            {isTemplate ? "New template" : "New agent"}
-            {draft.from && (
-              <span className="font-normal text-muted-foreground"> from {draft.from.title}</span>
-            )}
-          </DialogTitle>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button type="button" variant="ghost" size="icon-sm" aria-label="Build options">
-                <MoreHorizontalIcon />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              {!isTemplate && (
-                <DropdownMenuItem onSelect={() => setSaving(true)}>
-                  Save as template…
-                </DropdownMenuItem>
-              )}
-              <DropdownMenuItem variant="destructive" onSelect={discard}>
-                Discard
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </header>
-        <div className="no-bar min-h-0 flex-1 overflow-y-auto px-3.5 pb-3">
-          <FieldGroup className="gap-3">
-            <Field>
-              <FieldLabel htmlFor="build-name">Name</FieldLabel>
-              <Input
-                id="build-name"
-                value={draft.name}
-                onChange={(e) => setText({ name: e.target.value })}
-              />
-            </Field>
-            <Field>
-              <FieldLabel htmlFor="build-purpose">What it's for</FieldLabel>
-              <Input
-                id="build-purpose"
-                value={draft.purpose}
-                onChange={(e) => setText({ purpose: e.target.value })}
-              />
-            </Field>
-          </FieldGroup>
-          <ol aria-label="Units" className="mt-4 flex flex-col gap-2">
+        <div className="grid shrink-0 gap-3 border-b px-3.5 pt-3 pb-3 sm:grid-cols-2 sm:pt-5 sm:pr-12">
+          <Field className="gap-1.5">
+            <FieldLabel htmlFor="build-name">Name</FieldLabel>
+            <Input
+              id="build-name"
+              ref={nameField}
+              placeholder={draft.suggested}
+              value={draft.name}
+              onChange={(e) => setText({ name: e.target.value })}
+            />
+          </Field>
+          <Field className="gap-1.5">
+            <FieldLabel htmlFor="build-purpose">What it's for</FieldLabel>
+            <Input
+              id="build-purpose"
+              value={draft.purpose}
+              onChange={(e) => setText({ purpose: e.target.value })}
+            />
+          </Field>
+        </div>
+        <div className="no-bar min-h-0 flex-1 overflow-y-auto px-3.5 py-3">
+          <ol aria-label="Units" className="flex flex-col gap-2">
             <BaseCard />
             {draft.units.map((unit, i) => (
               <UnitCard
@@ -211,7 +209,8 @@ function Stack() {
               />
             ))}
           </ol>
-          <DropdownMenu>
+          {/* Not modal: a modal menu dismissed with Escape swallows the next click outside the window. */}
+          <DropdownMenu modal={false}>
             <DropdownMenuTrigger asChild>
               <Button
                 type="button"
@@ -239,6 +238,17 @@ function Stack() {
           </DropdownMenu>
         </div>
         <footer className="flex shrink-0 items-center justify-end gap-3 border-t px-3.5 py-2.5">
+          {!isTemplate && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="mr-auto text-muted-foreground"
+              onClick={() => setSaving(true)}
+            >
+              Save as template…
+            </Button>
+          )}
           {(act.failed || overall.length > 0) && (
             <p role="alert" className="mr-auto min-w-0 text-[13px] text-[var(--bad)]">
               {act.failed ?? overall.map((p) => p.message).join(" ")}

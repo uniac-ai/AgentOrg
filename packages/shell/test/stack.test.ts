@@ -9,6 +9,8 @@ import {
   givesOf,
   isReady,
   isShown,
+  nameOf,
+  pickName,
   toStack,
 } from "../src/fixed/stack.ts";
 
@@ -76,6 +78,7 @@ const base = {
 const draftOf = (values: Draft["units"][number]["values"], secrets = {}): Draft => ({
   mode: "agent",
   name: "N",
+  suggested: "",
   purpose: "",
   base,
   answers: {},
@@ -152,4 +155,18 @@ test("what's chosen says what it means, for any unit, in the form's order", () =
     },
   ];
   assert.deepEqual(chosenNotes({ one: "a", many: ["x"] }, described), ["First.", "Second."]);
+});
+
+test("the name offered is one no agent has, and it's what an untouched field means", () => {
+  const first = pickName([], () => 0);
+  assert.notEqual(
+    pickName([first], () => 0),
+    first,
+  );
+  assert.deepEqual(
+    [nameOf({ name: " ", suggested: "Wren" }), nameOf({ name: "Mine", suggested: "Wren" })],
+    ["Wren", "Mine"],
+  );
+  assert.equal(isReady({ ...draftOf({ access: "none" }), name: "", suggested: "Wren" }), true);
+  assert.equal(isReady({ ...draftOf({ access: "none" }), name: "", suggested: "" }), false);
 });
