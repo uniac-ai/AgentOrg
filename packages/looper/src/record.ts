@@ -214,6 +214,10 @@ export function createRecord(
         );
       }
     },
+    /** Whether nothing is kept. */
+    async empty(): Promise<boolean> {
+      return (await load()).records.length === 0;
+    },
     /** The person's last message, if any. */
     async lastUser(): Promise<Entry | undefined> {
       return (await load()).records.findLast((record) => record.entry.role === "user")?.entry;

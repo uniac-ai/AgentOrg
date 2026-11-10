@@ -35,6 +35,16 @@ interface Turn {
   replyId?: string | undefined;
   /** Settles when the turn's loop has ended. */
   ended?: Promise<void>;
+  /** Its place among the turns running, or in the line for one. */
+  place?: Place;
+  /** Set until it has that place. */
+  waiting?: boolean;
+}
+/** A turn's place among the turns running: `entered` settles when it has it, or has left. */
+export interface Place {
+  entered: Promise<void>;
+  /** Give the place back, or stop waiting for it. */
+  leave(): void;
 }
 
 export function createLoop(options: {
@@ -44,6 +54,11 @@ export function createLoop(options: {
    */
   request(): Promise<{ instructions: string; tools: Tool[]; model?: string | undefined }>;
   model: Model;
+  /**
+   * Ask for a place for a turn about to start, or a turn in the line for one. `begun` says whether
+   * its record held anything before it. It throws when the turn can't be taken now.
+   */
+  enter(begun: boolean): Place;
   record: LoopRecord;
   out: LoopOut;
   log: Log;
@@ -65,9 +80,12 @@ export function createLoop(options: {
   const status = (current: Turn, next: Status) => {
     if (turn === current) say(next);
   };
-  /** Run a turn on the record as it stands; its progress is said through `out`. */
-  const begin = (current: Turn) => {
-    current.ended = run(current)
+  /**
+   * Run a turn on the record as it stands, after `first` if it is given; its progress is said
+   * through `out`.
+   */
+  const begin = (current: Turn, first?: () => Promise<void>) => {
+    current.ended = placed(current, first)
       .then(
         () => status(current, { state: "idle" }),
         (error: unknown) => {
@@ -77,6 +95,7 @@ export function createLoop(options: {
         },
       )
       .finally(() => {
+        current.place?.leave();
         if (turn === current) turn = undefined;
       })
       .catch((error: unknown) => log.error("A turn's status failed.", { error: String(error) }));
@@ -142,7 +161,6 @@ export function createLoop(options: {
   async function run(current: Turn) {
     let calls = 0;
     for (;;) {
-      status(current, { state: "thinking" });
       const { instructions, tools, model: chosen } = await options.request();
       const input = await record.input();
       if (current.cancelled) return;
@@ -194,8 +212,27 @@ export function createLoop(options: {
       if (current.cancelled) return;
       if (calls >= MAX_CALLS)
         throw new Refusal("limit", `This turn stopped after ${MAX_CALLS} tool calls.`);
+      status(current, { state: "thinking" });
     }
   }
+  /** A turn from its place to its end: it waits for the place already shown as thinking. */
+  async function placed(current: Turn, first?: () => Promise<void>) {
+    status(current, { state: "thinking" });
+    await current.place?.entered;
+    current.waiting = false;
+    if (current.cancelled) return;
+    await first?.();
+    await run(current);
+  }
+  /**
+   * Take a turn's place, or its turn in the line for one, before anything of it is kept. A turn
+   * cancelled already takes none: it runs nothing.
+   */
+  const enter = (current: Turn, begun: boolean) => {
+    if (current.cancelled) return;
+    current.place = options.enter(begun);
+    current.waiting = true;
+  };
 
   return {
     /** Start a turn with a message; its progress is said through `out`. */
@@ -207,6 +244,7 @@ export function createLoop(options: {
         // A cancelled turn's last call lands in the record before this message does.
         await draining;
         draining = undefined;
+        enter(current, !(await record.empty()));
         const entry = await record.append({
           role: "user",
           items: [{ type: "message", role: "user", content: text }],
@@ -215,6 +253,7 @@ export function createLoop(options: {
         begin(current);
         return { messageId: entry.id };
       } catch (error) {
+        current.place?.leave();
         if (turn === current) turn = undefined;
         throw error;
       }
@@ -232,10 +271,13 @@ export function createLoop(options: {
         draining = undefined;
         const last = await record.lastUser();
         if (!last) throw new Refusal("nothing_to_retry", "No message has been sent yet.");
-        await record.dropAfter(last.id);
-        begin(current);
+        enter(current, true);
+        // What followed the message goes only once the turn has its place: cancelled while it
+        // waits, it has run nothing, and the reply it would have replaced stays.
+        begin(current, () => record.dropAfter(last.id));
         return { messageId: last.id };
       } catch (error) {
+        current.place?.leave();
         if (turn === current) turn = undefined;
         throw error;
       }
@@ -244,13 +286,17 @@ export function createLoop(options: {
     state: () => latest,
     /**
      * Stop the turn now: its model request is cancelled, no further call starts, and a new turn
-     * may begin at once. A call already running finishes, and its result is kept.
+     * may begin at once. A call already running finishes, and its result is kept. A turn waiting
+     * for its place never starts.
      */
     async cancel() {
       const current = turn;
       if (!current) return;
       current.cancelled = true;
       turn = undefined;
+      // A turn that will write nothing more gives its place back now: one still waiting for it, or
+      // one the model is answering. One in a call keeps its place until the call ends.
+      if (current.waiting || current.requestId) current.place?.leave();
       // In a model call, nothing more is recorded; in a tool call, its result still is.
       // A turn that hadn't begun leaves what was already running to be waited for.
       if (!current.requestId) draining = current.ended ?? draining;

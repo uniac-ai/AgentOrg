@@ -107,10 +107,10 @@ export function startEngine(
     },
   });
   return {
-    /** Stop the agent: its turn is cut and none starts until `start`. Its chats stay readable. */
+    /** Stop the agent: its turns are cut and none starts until `start`. Its chats stay readable. */
     stop: () => chats.stop(),
     start: () => chats.start(),
-    /** Close for good: the turn in progress is cut, and none starts after. */
+    /** Close for good: its turns are cut, and none starts after. */
     close: () => chats.close(),
     /** Settles when every chat's latest turn has written all it will. */
     settled: () => chats.settled(),

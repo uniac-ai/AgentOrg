@@ -741,7 +741,7 @@ test("cancel during a tool call keeps its real result and skips the calls after 
     if (item.type === "function_call") assert.equal(input[i + 1]?.callId, item.callId);
 });
 
-test("one turn at a time", async () => {
+test("a chat runs one turn at a time", async () => {
   const s = await setup();
   const late = gate<Reply>();
   s.script.push(() => late.shut);
@@ -1198,44 +1198,51 @@ test("a message with no chat starts one, titled by its first line, with a record
   assert.equal(said[0]?.latest, undefined, "started, with no reply yet");
 });
 
-test("an agent runs one turn at a time, whichever chat it is in", async () => {
+test("an agent works in several chats at once, and past its places a chat waits its turn", async () => {
   const s = await setup();
   const one = await exchange(s, "One.");
   const two = await exchange(s, "Two.");
   const late = gate<Reply>();
   s.script.push(() => late.shut);
-  const from = s.actor.emitted.length;
   await s.actor.call("chat", "send", { chat: one.chat, text: "Think." });
   await until(() => s.requests.length === 3, "the model request");
-  const elsewhere = (error: { code?: string; message?: string }) =>
-    error.code === "busy" && /in another chat/.test(error.message ?? "");
-  await assert.rejects(
-    s.actor.call("chat", "send", { chat: two.chat, text: "Me too." }),
-    elsewhere,
-  );
-  await assert.rejects(s.actor.call("chat", "retry", { chat: two.chat }), elsewhere);
-  // A message that would start a chat starts none.
-  await assert.rejects(s.actor.call("chat", "send", { text: "A third." }), elsewhere);
-  assert.equal((await listed(s)).chats.length, 2);
-  assert.equal([...s.store.values.keys()].filter((key) => key.startsWith("chats/")).length, 2);
-  assert.deepEqual(await s.actor.call("chat", "state", { chat: two.chat }), { state: "idle" });
+  // Another chat is answered meanwhile, and a message starts a third.
+  await exchange(s, "Me too.", two.chat);
+  const three = await exchange(s, "A third.");
+  assert.equal((await shownIn(s, three.chat)).at(-1)?.text, "ok");
   assert.equal((await listed(s)).chats.find((c) => c.id === one.chat)?.state, "thinking");
-  // Stopping another chat stops nothing.
+  // A chat in its turn takes no second message, and stopping another chat stops nothing.
+  await assert.rejects(
+    s.actor.call("chat", "send", { chat: one.chat, text: "And this." }),
+    (error: { code?: string; message?: string }) =>
+      error.code === "busy" && /A turn is running/.test(error.message ?? ""),
+  );
   await s.actor.call("chat", "cancel", { chat: two.chat });
   assert.deepEqual(await s.actor.call("chat", "state", { chat: one.chat }), { state: "thinking" });
   assert.equal(s.cancels.length, 0);
-  late.open(say("Done."));
-  await s.ended(from);
-  await exchange(s, "Now.", two.chat);
 
-  // A stopped turn frees the agent at once.
-  const never = gate<Reply>();
-  s.script.push(() => never.shut);
-  await s.actor.call("chat", "send", { chat: one.chat, text: "Think again." });
-  await until(() => s.requests.length === 5, "the model request");
-  await s.actor.call("chat", "cancel", { chat: one.chat });
-  assert.equal(s.cancels.length, 1);
-  assert.equal((await exchange(s, "Then me.", two.chat)).chat, two.chat);
+  // With four turns running, a new chat's message is taken and shown, and its turn waits.
+  const others = [gate<Reply>(), gate<Reply>(), gate<Reply>()];
+  for (const other of others) {
+    s.script.push(() => other.shut);
+    await s.actor.call("chat", "send", { text: "Think too." });
+  }
+  await until(() => s.requests.length === 8, "four turns running");
+  const waits = (await s.actor.call("chat", "send", { text: "And me." })) as { chat: string };
+  for (let i = 0; i < 20; i++) await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(s.requests.length, 8, "nothing is asked of the model for it yet");
+  assert.deepEqual(
+    (await shownIn(s, waits.chat)).map((m) => m.text),
+    ["And me."],
+  );
+  assert.deepEqual(await s.actor.call("chat", "state", { chat: waits.chat }), {
+    state: "thinking",
+  });
+  late.open(say("Done."));
+  await until(() => s.requests.length === 9, "the turn that waited");
+  for (const other of others) other.open(say("Done too."));
+  await s.host.settled();
+  assert.equal((await shownIn(s, waits.chat)).at(-1)?.text, "ok");
 });
 
 test("a chat is renamed and archived, stays readable, and is kept as it was left", async () => {
@@ -1297,41 +1304,7 @@ test("a rename the store refuses isn't made", async () => {
   assert.equal(s.actor.emitted.length, said);
 });
 
-test("a call still running in a stopped turn ends before another chat's turn starts", async () => {
-  const s = await setup();
-  const started = gate();
-  const placed = gate<unknown>();
-  s.actor.expose(
-    "layout",
-    tools,
-    listing({
-      place: () => {
-        started.open();
-        return placed.shut;
-      },
-    }),
-  );
-  const one = await exchange(s, "One.");
-  const two = await exchange(s, "Two.");
-  s.script.push(calls(callTool("layout__place", {}, "c1")));
-  await s.actor.call("chat", "send", { chat: one.chat, text: "Place it." });
-  await started.shut;
-  await s.actor.call("chat", "cancel", { chat: one.chat });
-  const asked = s.requests.length;
-  const from = s.actor.emitted.length;
-  const sending = s.actor.call("chat", "send", { chat: two.chat, text: "Now me." });
-  for (let i = 0; i < 20; i++) await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(s.requests.length, asked, "nothing is asked of the model while the call runs");
-  // Nothing else is taken meanwhile.
-  await assert.rejects(s.actor.call("chat", "send", { text: "And me." }), { code: "busy" });
-  placed.open({ id: "p1" });
-  await sending;
-  await s.ended(from);
-  assert.equal(s.requests.length, asked + 1);
-  assert.equal((await shownIn(s, one.chat)).at(-1)?.text, "layout__place: done");
-});
-
-test("a closing engine cuts its turn and starts no other", async () => {
+test("a closing engine cuts its turns and starts no other", async () => {
   const s = await setup();
   const one = await exchange(s, "One.");
   const late = gate<Reply>();
@@ -1530,7 +1503,7 @@ test("a first chat's entry that doesn't read back is made again, and a record wi
   await assert.rejects(s.actor.call("chat", "retry", { chat: "first" }), {
     code: "nothing_to_retry",
   });
-  // Refused, so the agent is free.
+  // Refused, so the chat is free.
   assert.equal((await exchange(s, "Plan the week.", "first")).chat, "first");
 });
 
