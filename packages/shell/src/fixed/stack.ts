@@ -150,6 +150,10 @@ export const missingNeeds = (unit: DraftUnit, above: readonly DraftUnit[]) =>
 export const nameOf = (draft: Pick<Draft, "name" | "suggested">) =>
   draft.name.trim() || draft.suggested;
 
+/** A field's greyed text. An agent's name fills it in; a template has no agent to name yet. */
+export const placeholderOf = (field: Field, name: string | undefined) =>
+  name ? field.placeholder?.replaceAll("{name}", name) : field.placeholder;
+
 /** A card opens by itself only when there's something on it to do. */
 export const needsAttention = (unit: DraftUnit, above: readonly DraftUnit[]) =>
   !unit.unit ||

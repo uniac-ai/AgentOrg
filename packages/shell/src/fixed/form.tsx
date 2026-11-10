@@ -15,7 +15,7 @@ import { type ConnectionEntry, listConnections } from "./data.ts";
 import { FolderPicker } from "./folder-picker.tsx";
 import { Jump } from "./parts.tsx";
 import type { Field, Values } from "./stack.ts";
-import { fieldValue } from "./stack.ts";
+import { fieldValue, placeholderOf } from "./stack.ts";
 
 type Value = Values[string];
 const PLAIN: Record<string, string> = {
@@ -42,12 +42,14 @@ interface Option {
 
 function OneOf({
   id,
+  hint,
   field,
   options,
   value,
   onChange,
 }: {
   id: string;
+  hint?: string | undefined;
   field: Field;
   options: Option[];
   value: string;
@@ -57,7 +59,7 @@ function OneOf({
   return (
     <Select value={value} onValueChange={onChange}>
       <SelectTrigger id={id} aria-label={field.title} className="w-full">
-        <SelectValue placeholder="Choose">{chosen?.title}</SelectValue>
+        <SelectValue placeholder={hint ?? "Choose"}>{chosen?.title}</SelectValue>
       </SelectTrigger>
       <SelectContent>
         {options.map((o) => (
@@ -154,6 +156,7 @@ function ConnectionField({
 
 export function FormField({
   id,
+  agentName,
   field,
   values,
   secret,
@@ -162,6 +165,8 @@ export function FormField({
   onSecret,
 }: {
   id: string;
+  /** What `{name}` in a field's greyed text stands for. */
+  agentName?: string | undefined;
   field: Field;
   values: Values;
   secret: string;
@@ -170,6 +175,7 @@ export function FormField({
   onSecret(value: string): void;
 }) {
   const control = controlOf(field);
+  const hint = placeholderOf(field, agentName);
   const [browsing, setBrowsing] = useState(false);
   const value = fieldValue(field, values);
   const text = typeof value === "string" || typeof value === "number" ? String(value) : "";
@@ -218,6 +224,7 @@ export function FormField({
       {control === "choice" && (
         <OneOf
           id={id}
+          hint={hint}
           field={field}
           options={field.options ?? []}
           value={text}
@@ -239,6 +246,7 @@ export function FormField({
       {control === "lines" && (
         <Textarea
           id={id}
+          placeholder={hint}
           value={list.join("\n")}
           onChange={(e) => onChange(e.target.value.split("\n"))}
         />
@@ -248,6 +256,7 @@ export function FormField({
           <Input
             id={id}
             type="number"
+            placeholder={hint}
             min={field.min}
             max={field.max}
             step={field.step}
@@ -261,6 +270,7 @@ export function FormField({
         <Input
           id={id}
           type="password"
+          placeholder={hint}
           autoComplete="off"
           value={secret}
           onChange={(e) => onSecret(e.target.value)}
@@ -271,6 +281,7 @@ export function FormField({
           <Input
             id={id}
             spellCheck={false}
+            placeholder={hint}
             className={control === "directory" ? "font-mono text-xs" : ""}
             value={text}
             onChange={(e) => onChange(e.target.value)}

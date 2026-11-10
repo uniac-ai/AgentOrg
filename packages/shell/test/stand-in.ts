@@ -266,6 +266,7 @@ const UNITS: Units["units"] = [
         title: "Working directory",
         required: true,
         description: "The folder it works in. It is never deleted.",
+        placeholder: "~/Agents/{name}",
         visible: { field: "where", in: ["local"] },
       },
       {

@@ -382,7 +382,7 @@ function UnitCard({
   above: DraftUnit[];
   problems: StackProblem[];
 }) {
-  const { catalog, addUnit, removeUnit, setSecret, setValue } = useBuilding();
+  const { catalog, draft, addUnit, removeUnit, setSecret, setValue } = useBuilding();
   // What a template brings and needs nothing from the person starts as one row.
   const [unfolded, setUnfolded] = useState(() => !!entry.added || needsAttention(entry, above));
   const found = problems.length > 0;
@@ -454,6 +454,9 @@ function UnitCard({
                 <FormField
                   key={field.id}
                   id={`unit-${key}-${field.id}`}
+                  agentName={
+                    draft?.mode === "agent" ? draft.name.trim() || draft.suggested : undefined
+                  }
                   field={field}
                   values={values}
                   secret={secrets[field.id] ?? ""}

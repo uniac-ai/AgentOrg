@@ -12,6 +12,7 @@ import {
   nameOf,
   needsAttention,
   pickName,
+  placeholderOf,
   toStack,
 } from "../src/fixed/stack.ts";
 
@@ -179,4 +180,11 @@ test("a card asks for attention only when there's something on it to do", () => 
   assert.equal(needsAttention(entry({ access: "read" }), []), true, "a required field is empty");
   assert.equal(needsAttention(entry({ access: "read", dir: "/x" }), []), false);
   assert.equal(needsAttention({ key: 1, id: "gone", values: {}, secrets: {} }, []), true);
+});
+
+test("{name} in greyed text is the agent's name, and stays as written with no agent", () => {
+  const field = { ...(form[2] as Field), placeholder: "~/Agents/{name}/{name}" };
+  assert.equal(placeholderOf(field, "Wren"), "~/Agents/Wren/Wren");
+  assert.equal(placeholderOf(field, undefined), "~/Agents/{name}/{name}");
+  assert.equal(placeholderOf(form[2] as Field, "Wren"), undefined);
 });
