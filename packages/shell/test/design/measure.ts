@@ -10,7 +10,7 @@
 import { writeFileSync } from "node:fs";
 import { chromium, type Page } from "@playwright/test";
 import { type Agent, SESSION, standIn } from "../stand-in.ts";
-import { noted, readChat, unreadReply } from "./unread.ts";
+import { noted, readChat, sampleChats, unreadReply } from "./unread.ts";
 
 const [design, out] = process.argv.slice(2);
 if (!design || !out) throw new Error("usage: measure.ts <design.html> <out.json>");
@@ -31,14 +31,15 @@ interface Measured {
 }
 type Parts = Record<string, Measured | string | number | null>;
 /** What a probe measures: the frame, one window's own rows, or the chat in its layer. */
-type Part = "frame" | "terminal" | "browser" | "chat";
+type Part = "frame" | "terminal" | "browser" | "chat" | "thread";
 type Gateway = Awaited<ReturnType<typeof standIn>>;
 
 /**
  * Runs in the page. `frame` measures the left bar, a drawer if one is open, the phone's head and
  * the page area, from the shell's top left. `terminal` and `browser` measure those windows' own
  * rows, from the window's top left. `chat` measures the collapsed chat and its panel, from the
- * shell's top left. Each also lists the controls and marks seen in its regions: the bar, a
+ * shell's top left. `thread` measures one chat, a chat about to be started, and the chats the bar's
+ * search finds, from the shell's top left. Each also lists the controls and marks seen in its regions: the bar, a
  * drawer, the phone's head, a window, the collapsed chat and its panel. The page area is not
  * listed: its pages are not the design's yet.
  */
@@ -191,6 +192,61 @@ const probe = (what: Part): Parts => {
     parts.address = of(where?.querySelector('[aria-label="Address"]'), "w");
     // The page under them: as wide and tall as the window leaves it.
     parts.page = of(where?.nextElementSibling, "wh");
+    return parts;
+  }
+
+  if (what === "thread") {
+    const shell = document.querySelector("[data-shell]");
+    const panel = document.querySelector('aside[aria-label="Chats"]');
+    if (!shell) return parts;
+    origin = shell.getBoundingClientRect();
+    controls("panel", panel);
+    // One chat, or one about to be started: its head, what was said, and where to write.
+    const head = panel?.querySelector("header");
+    parts.head = of(head);
+    parts["head.back"] = of(head?.querySelector('button[aria-label="All chats"]'));
+    const face = head?.querySelector('button[aria-label$="page"]');
+    parts["head.face"] = of(face);
+    const disc = of(face?.querySelector("span > span") ?? face?.children[0]?.children[0]);
+    if (disc) disc.bg = "the agent's";
+    parts["head.face.disc"] = disc;
+    const title = head?.querySelector("h2");
+    parts["head.title"] = of(title, "w");
+    parts["head.agent"] = of(title?.nextElementSibling, "w");
+    parts["head.options"] = of(head?.querySelector('button[aria-label="Chat options"]'));
+    parts["head.close"] = of(head?.querySelector('button[aria-label="Close chats"]'));
+    const said = panel?.querySelector(".whitespace-pre-wrap");
+    parts.said = of(said);
+    const call = panel?.querySelector("[data-call]");
+    parts.call = of(call);
+    parts["call.line"] = of(call?.querySelector("button"));
+    parts["call.words"] = of(call?.querySelector("button > span"));
+    const reply = panel?.querySelector(".prose-chat");
+    parts.reply = of(reply);
+    parts["reply.copy"] = of(panel?.querySelector('button[aria-label="Copy"]'));
+    const wrong = panel?.querySelector('[role="alert"]');
+    parts.wrong = of(wrong);
+    parts["wrong.words"] = of(wrong?.children[0], "w");
+    const box = panel?.querySelector('textarea[aria-label="Message"]');
+    const group = box?.closest('[data-slot="input-group"]') ?? box?.parentElement;
+    parts.composer = of(group);
+    parts["composer.box"] = of(box);
+    parts["composer.send"] = of(panel?.querySelector('button[aria-label="Send"]'));
+    // A chat about to be started: who with, and the room where the first thing will be written.
+    const who = panel?.querySelector('ul[aria-label="Who with"]');
+    parts.who = of(who);
+    const first = who?.querySelector("button");
+    parts["who.first"] = of(first);
+    parts["who.first.face"] = of(first?.children[0]);
+    parts["who.first.name"] = of(first?.children[1]);
+    parts["new.room"] = box ? null : of(who?.parentElement?.nextElementSibling?.children[0]);
+    // Chats found from the bar's search.
+    const found = document.querySelector('ul[aria-label="Chats found"]');
+    parts.found = of(found);
+    const row = found?.querySelector("button");
+    parts["found.row"] = of(row);
+    parts["found.row.icon"] = of(row?.children[0]);
+    parts["found.row.title"] = of(row?.children[1], "w");
     return parts;
   }
 
@@ -506,6 +562,43 @@ for (const theme of ["dark", "light"] as const)
     await page.getByRole("button", { name: "Chats, 3 new" }).click();
     await rest(page, "wide");
     all[`chat.panel.${theme}.${side}`] = await measure(page, "chat");
+    await page.close();
+    await gateway?.close();
+  }
+
+// One chat, a chat with a problem, a chat about to be started, and chats found from the bar: the
+// design's sample chats, and the same two on the built side.
+for (const theme of ["dark", "light"] as const)
+  for (const side of ["design", "built"] as const) {
+    const gateway = side === "built" ? await standIn() : undefined;
+    if (gateway) sampleChats(gateway);
+    const page = gateway
+      ? await builtPage(gateway, "wide", theme)
+      : await designPage("wide", theme);
+    const panel = page.getByRole("complementary", { name: "Chats" });
+    const at = async (state: string) => {
+      await rest(page, "wide");
+      all[`thread.${state}.${theme}.${side}`] = await measure(page, "thread");
+    };
+    await page.getByRole("button", { name: /^Chats/ }).click();
+    await panel.getByRole("button", { name: /Review #482/ }).click();
+    await panel.getByRole("heading", { name: "Review #482" }).waitFor();
+    await at("chat");
+    await panel.getByRole("button", { name: "All chats" }).click();
+    await panel.getByRole("button", { name: /Route today's issues/ }).click();
+    await panel.getByRole("alert").waitFor();
+    await at("problem");
+    await panel.getByRole("button", { name: "All chats" }).click();
+    await panel.getByRole("button", { name: "New chat" }).click();
+    await panel.getByRole("heading", { name: "New chat" }).waitFor();
+    await at("new");
+    await panel.getByRole("list", { name: "Who with" }).locator("button:enabled").first().click();
+    await panel.getByRole("textbox", { name: "Message" }).waitFor();
+    await at("picked");
+    await panel.getByRole("button", { name: "Close chats" }).click();
+    await page.getByRole("searchbox", { name: "Search" }).fill("Route today");
+    await page.getByRole("list", { name: "Chats found" }).waitFor();
+    await at("found");
     await page.close();
     await gateway?.close();
   }

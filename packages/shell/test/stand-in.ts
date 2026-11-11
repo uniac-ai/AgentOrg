@@ -59,19 +59,23 @@ export interface Agent {
   /** The model chosen for it; none is its provider's default. */
   model?: string;
   /**
-   * The one chat the stand-in keeps for an agent, with the agent's status: whether it works. It
+   * The chat a test speaks in through `addMessage`, with the agent's status: whether it works. It
    * has an `id` once something has been said in it; an agent with nothing said has no chat. Its
-   * `problem` is why its last message got no answer, until its next reply.
+   * `problem` is why its last message got no answer, until its next reply. A message sent with
+   * no chat named starts a new one here, and this one joins the others.
    */
   chat: {
     status: Status;
     messages: Message[];
     problem?: Problem;
     id?: string;
+    /** What it was renamed to; until then its first message's first line. */
+    title?: string;
+    archived?: boolean;
   };
   /**
-   * Its other chats: listed and read like the one above, but nothing is sent in them here. Each
-   * is what a list says of it and what was said in it.
+   * Its other chats: listed, read, sent in, renamed and archived like the one above. Each is what
+   * a list says of it and what was said in it.
    */
   others?: { entry: ChatEntry; messages: Message[] }[];
 }
@@ -736,6 +740,8 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
   };
 
   let chatsStarted = 0;
+  /** How many messages were sent, so each has its own id. */
+  let sent = 0;
   /** The id of an agent's chat, if anything has been said in it. A seeded record is a chat. */
   const chatId = (agent: Agent): string | undefined => {
     if (!agent.chat.id && agent.chat.messages.length > 0) agent.chat.id = `c-${agent.agent}`;
@@ -752,11 +758,11 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
     const latest = messages.findLast((m) => m.role === "assistant");
     return {
       id: startedChat(agent),
-      title: first?.text.split("\n")[0]?.slice(0, 200) ?? "",
+      title: agent.chat.title ?? first?.text.split("\n")[0]?.slice(0, 200) ?? "",
       at: messages[0]?.at ?? at(0),
       ...(latest ? { latest: { id: latest.id, at: latest.at } } : {}),
       ...(problem ? { problem } : {}),
-      archived: false,
+      archived: !!agent.chat.archived,
     };
   };
   /**
@@ -778,15 +784,20 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
     );
 
   const chatCall = (agent: Agent, method: string, input: Record<string, unknown>): unknown => {
+    const refused = refusals.get(`chat.${method}`);
+    if (refused) {
+      refusals.delete(`chat.${method}`);
+      throw refused;
+    }
     // The status is the agent's: it names no chat.
     if (method === "state") return agent.chat.status;
     if (method === "list") {
-      // The chat a view follows is never archived, and comes first whatever was said elsewhere:
-      // it is the one chat this stand-in plays in full. The others follow, newest first by their
-      // last message, a page at a time.
+      // The chat the stand-in plays in full comes first whatever was said elsewhere. The others
+      // follow, newest first by their last message, a page at a time.
       const lastOf = (one: { entry: ChatEntry; messages: Message[] }) =>
         Date.parse(one.messages.findLast((m) => m.role !== "tool")?.at ?? one.entry.at);
-      const own = chatId(agent) && !input.archived ? [entryOf(agent)] : [];
+      const own =
+        chatId(agent) && !!agent.chat.archived === !!input.archived ? [entryOf(agent)] : [];
       const others = (agent.others ?? [])
         .filter((other) => other.entry.archived === !!input.archived)
         .sort((a, b) => lastOf(b) - lastOf(a))
@@ -796,45 +807,61 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
       const end = from + Number(input.limit ?? 50);
       return { chats: all.slice(from, end), more: all.length > end };
     }
-    const other = agent.others?.find((one) => one.entry.id === input.chat);
-    if (other && method === "history")
-      return {
-        messages: other.messages.slice(-Number(input.limit ?? 100)),
-        more: other.messages.length > Number(input.limit ?? 100),
-      };
     // Every other call is on a chat. `send` alone may name none, and then starts one.
+    const other = agent.others?.find((one) => one.entry.id === input.chat);
     const named = method !== "send" || input.chat !== undefined;
-    if (named && input.chat !== chatId(agent))
+    if (named && !other && input.chat !== chatId(agent))
       throw new Refusal("unknown", "The agent has no such chat.");
     if (method === "history") {
-      const all = agent.chat.messages;
+      const all = other ? other.messages : agent.chat.messages;
       const end = input.before ? all.findIndex((m) => m.id === input.before) : all.length;
       const limit = Number(input.limit ?? 100);
       return { messages: all.slice(Math.max(0, end - limit), end), more: end > limit };
     }
+    if (method === "rename" || method === "archive") {
+      const change =
+        method === "rename"
+          ? { title: String(input.title).split("\n")[0] as string }
+          : { archived: !!input.archived };
+      if (other) other.entry = { ...other.entry, ...change };
+      else Object.assign(agent.chat, change);
+      emit(chatSlot(agent.agent), "chat", other ? other.entry : entryOf(agent));
+      return {};
+    }
     if (method === "send") {
-      const refused = refusals.get("chat.send");
-      if (refused) {
-        refusals.delete("chat.send");
-        throw refused;
-      }
-      // With no chat named, it is a new chat: what was said before isn't in it. Its id is made
-      // here, since one made from the record would be the old chat's again.
-      if (input.chat === undefined)
+      // With no chat named, it is a new chat. The one played in full until now is kept among the
+      // others, and the new one's id is made here.
+      if (input.chat === undefined) {
+        if (chatId(agent))
+          agent.others = [
+            ...(agent.others ?? []),
+            { entry: entryOf(agent), messages: agent.chat.messages },
+          ];
         agent.chat = {
           status: agent.chat.status,
           messages: [],
           id: `c-${agent.agent}-${++chatsStarted}`,
         };
-      const message = text(`u${agent.chat.messages.length}`, "user", String(input.text), 0);
-      agent.chat.messages.push(message);
+      }
+      const record = other ? other.messages : agent.chat.messages;
+      const message = text(`u${record.length}-${++sent}`, "user", String(input.text), 0);
+      record.push(message);
       // The status is said when it changes: an agent already at work says nothing more.
       const idle = agent.chat.status.state === "idle";
       agent.chat.status = { state: "working" };
-      const chat = startedChat(agent);
+      const chat = other ? other.entry.id : startedChat(agent);
       const said = () => {
-        say(agent, "chat");
-        say(agent, "message", message);
+        if (other) {
+          emit(chatSlot(agent.agent), "chat", other.entry);
+          emit(
+            chatSlot(agent.agent),
+            "message",
+            chatInterface.events.message.payload.parse({ ...message, chat }),
+          );
+        } else {
+          say(agent, "chat");
+          say(agent, "message", message);
+        }
         if (idle) say(agent, "status", agent.chat.status);
       };
       // A real agent says these before it answers the call. A test may hold them back.
@@ -1162,7 +1189,7 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
     /** Another chat of the agent's, as its list will say it; told to whoever is listening. */
     addChat(
       agent: string,
-      chat: { id: string; title: string; said: Message[]; archived?: boolean },
+      chat: { id: string; title: string; said: Message[]; archived?: boolean; problem?: Problem },
     ) {
       const latest = chat.said.findLast((m) => m.role === "assistant");
       const entry = chatInterface.events.chat.payload.parse({
@@ -1170,6 +1197,7 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
         title: chat.title,
         at: chat.said[0]?.at ?? at(0),
         ...(latest ? { latest: { id: latest.id, at: latest.at } } : {}),
+        ...(chat.problem ? { problem: chat.problem } : {}),
         archived: !!chat.archived,
       });
       const held = agentOf(agent);

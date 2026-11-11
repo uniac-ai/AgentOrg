@@ -33,7 +33,7 @@ export function AgentsPage() {
 
 function AgentRow({ agent }: { agent: AgentEntry }) {
   const watched = useAgents().byId.get(agent.agent);
-  const { chatWith } = useChats();
+  const { newChat } = useChats();
   const creatables = useCreatables();
   const [failed, setFailed] = useState<string>();
   const now = watched?.now;
@@ -69,7 +69,8 @@ function AgentRow({ agent }: { agent: AgentEntry }) {
             variant="ghost"
             size="icon-sm"
             aria-label={`Chat with ${agent.name}`}
-            onClick={() => chatWith(agent.agent)}
+            disabled={agent.status.state === "stopped"}
+            onClick={() => newChat(agent.agent)}
           >
             <MessageCircleIcon />
           </Button>

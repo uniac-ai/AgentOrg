@@ -156,12 +156,13 @@
 }
 
 :root {
-  --line-strong: rgb(255 255 255 / 0.14);
+  /* 14%, at the step of 255 nearest to it: what is mixed from it comes out as in the design. */
+  --line-strong: #ffffff24;
   --edge: rgb(255 255 255 / 0.1);
   --unread: rgb(10 132 255);
 }
 :root[data-theme="light"] {
-  --line-strong: rgb(0 0 0 / 0.14);
+  --line-strong: #00000024;
   --edge: rgb(0 0 0 / 0.1);
   --unread: rgb(0 122 255);
 }
@@ -260,10 +261,6 @@
 }
 @layer components {
   /* Agent text: the width and rhythm of a page, not a bubble. */
-  .prose-chat {
-    font-size: 14px;
-    line-height: 1.6;
-  }
   .prose-chat :where(p, ul, ol) {
     margin: 0 0 0.75em;
   }

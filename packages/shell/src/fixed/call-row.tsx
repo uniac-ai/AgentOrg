@@ -27,7 +27,7 @@ const ICON = {
   other: WrenchIcon,
 } as const;
 const PRE =
-  "rounded-lg bg-[var(--raised)] px-3 py-2 font-mono text-xs whitespace-pre-wrap break-words text-muted-foreground";
+  "rounded-lg bg-[var(--raised)] px-2.5 py-1.5 font-mono text-xs whitespace-pre-wrap break-words text-muted-foreground";
 
 /** `edit` answers with a plain unified diff; the parser wants a git header above it. */
 export function DiffView({ edit }: { edit: Edit }) {
@@ -167,22 +167,22 @@ export function CallRow({ row }: { row: Call }) {
     </>
   );
   const shape =
-    "flex h-8 w-full items-center gap-2 rounded-lg px-1 text-left text-muted-foreground";
+    "flex h-7 w-full items-center gap-2 rounded-lg px-1 text-left text-muted-foreground";
   if (body === null)
     return (
-      <div data-call className={`${shape} text-[13px] [[data-call]+&]:-mt-2`}>
+      <div data-call className={`${shape} text-[13px] [[data-call]+&]:-mt-1.5`}>
         {line}
         <span className="size-3.5 shrink-0" />
       </div>
     );
   return (
-    <Collapsible data-call className="group/tool rounded-lg text-[13px] [[data-call]+&]:-mt-2">
+    <Collapsible data-call className="group/tool rounded-lg text-[13px] [[data-call]+&]:-mt-1.5">
       <CollapsibleTrigger className={`${shape} hover:bg-[var(--hover)] hover:text-foreground`}>
         {line}
         <ChevronRightIcon className="size-3.5 shrink-0 transition-transform group-data-[state=open]/tool:rotate-90 motion-reduce:transition-none" />
       </CollapsibleTrigger>
       <CollapsibleContent>
-        <div className="mt-1 mb-1 ml-6">{body}</div>
+        <div className="mt-1 mb-1 ml-5">{body}</div>
       </CollapsibleContent>
     </Collapsible>
   );

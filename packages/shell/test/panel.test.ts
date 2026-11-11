@@ -64,10 +64,12 @@ const boxOf = async (part: Locator) => {
   assert.ok(box, `${part} is on the page`);
   return [box.x, box.y, box.width, box.height].map((n) => Math.round(n * 100) / 100);
 };
-const startChat = async (page: Page, name: string) => {
-  await main(page)
-    .getByRole("button", { name: `Chat with ${name}` })
-    .click();
+/** Opens an agent's newest chat, from the list. */
+const openNewest = async (page: Page, name: string) => {
+  if (!(await panel(page).count())) await chatButton(page).click();
+  const all = panel(page).getByRole("button", { name: "All chats" });
+  if (await all.count()) await all.click();
+  await rows(page).filter({ hasText: name }).first().click();
   await panel(page).getByRole("textbox", { name: "Message" }).waitFor();
 };
 const reply = (id: string, text: string) => ({
@@ -219,7 +221,7 @@ test(
     });
     // What is said in a chat takes it to the top, with its words.
     await closeChats(page);
-    await startChat(page, "Reviewer");
+    await openNewest(page, "Reviewer");
     await panel(page).getByRole("textbox", { name: "Message" }).fill("Look at #490 too");
     await panel(page).getByRole("button", { name: "Send" }).click();
     await panel(page).getByRole("button", { name: "All chats" }).click();
@@ -293,10 +295,15 @@ test(
       ["a-triage", "Triage's first"],
     ] as const)
       gateway.addChat(agent, { id: "first", title, said: [said(`${agent}-1`, "user", title, 90)] });
-    // Triage has a newer chat too: the one its thread shows.
-    gateway.addMessage("a-triage", said("t-newer", "user", "Route today's issues", 5));
     const page = await open(gateway);
     gateway.sayIn("a-triage", "first", reply("f1", "Routed."));
+    // Triage has a newer chat too: something was said in it after that.
+    gateway.addMessage("a-triage", {
+      id: "t-newer",
+      role: "user",
+      text: "Route today's issues",
+      at: new Date(Date.now() + 1000).toISOString(),
+    });
     await pill(page).getByRole("button", { name: "Chats, 1 new" }).click();
     await rows(page).nth(4).waitFor();
     assert.equal(await rows(page).filter({ hasText: "Research's first" }).count(), 1);
@@ -305,12 +312,17 @@ test(
     assert.equal(await routed.getByRole("img", { name: "New" }).count(), 1);
     assert.equal(await panel(page).getByRole("img", { name: "New" }).count(), 1);
 
-    // A row opens its agent's thread, which shows the agent's newest chat: this one, not being
-    // that, has not been on screen, and stays new.
+    // A row opens the chat it names: Triage's, and not Research's of the same id, nor Triage's
+    // newer one.
     await routed.click();
-    await panel(page).getByText("Route today's issues").waitFor();
+    await panel(page).getByRole("heading", { name: "Triage's first" }).waitFor();
+    await panel(page).locator(".prose-chat").getByText("Routed.").waitFor();
+    assert.equal(await panel(page).getByText("Route today's issues").count(), 0);
+    // Shown, it is read.
     await panel(page).getByRole("button", { name: "All chats" }).click();
-    await routed.getByRole("img", { name: "New" }).waitFor();
+    await routed.waitFor();
+    await until(() => panel(page).getByRole("img", { name: "New" }).count(), 0);
+    assert.deepEqual(Object.keys(noteAt(gateway) ?? {}), ["a-triage first"]);
     await page.close();
   }),
 );
@@ -346,7 +358,7 @@ test(
     for (const [i, name] of ["Reviewer", "Research"].entries()) {
       const tab = tabs[i] as Page;
       await pill(tab).getByRole("button", { name: "Chats, 2 new" }).waitFor();
-      await startChat(tab, name);
+      await openNewest(tab, name);
       await panel(tab)
         .getByText((replies[i] as { text: string }).text)
         .waitFor();
@@ -373,7 +385,7 @@ test(
     const shown = reply("r9", "All clear on #482.");
     gateway.addMessage("a-reviewer", shown);
     // A reply shown before the note is read is marked once it is, beside what the note held.
-    await startChat(page, "Reviewer");
+    await openNewest(page, "Reviewer");
     await panel(page).getByText("All clear on #482.").waitFor();
     assert.deepEqual(gateway.notes.get("ui/read"), kept, "nothing is written until it is read");
     await until(() => gateway.notes.get("ui/read"), {
@@ -478,7 +490,7 @@ test(
   "what arrives in the open chat is read as it comes",
   withGateway(async (gateway) => {
     const page = await open(gateway);
-    await startChat(page, "Reviewer");
+    await openNewest(page, "Reviewer");
     gateway.addMessage("a-reviewer", reply("r9", "Looking now."));
     await panel(page).getByText("Looking now.").waitFor();
     await panel(page).getByRole("button", { name: "All chats" }).click();
@@ -494,7 +506,7 @@ test(
   "half-typed text waits in its chat",
   withGateway(async (gateway) => {
     const page = await open(gateway);
-    await startChat(page, "Reviewer");
+    await openNewest(page, "Reviewer");
     await panel(page).getByRole("textbox", { name: "Message" }).fill("half a thought");
     await panel(page).getByRole("button", { name: "All chats" }).click();
     await rows(page).filter({ hasText: "Reviewer" }).click();
@@ -510,7 +522,7 @@ test(
   "the panel stays open across pages, and a deleted agent's chats go from the list",
   withGateway(async (gateway) => {
     const page = await open(gateway);
-    await startChat(page, "Reviewer");
+    await openNewest(page, "Reviewer");
     await page
       .getByRole("navigation", { name: "Main" })
       .getByRole("button", { name: "Settings" })

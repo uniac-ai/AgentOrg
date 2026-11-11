@@ -5,7 +5,7 @@
 // Build the shell first. A part added to the shell adds its screens here.
 import { chromium, type Page } from "@playwright/test";
 import { type Agent, SESSION, standIn } from "../stand-in.ts";
-import { noted, readChat, unreadReply } from "./unread.ts";
+import { noted, readChat, sampleChats, unreadReply } from "./unread.ts";
 
 const [design, out] = process.argv.slice(2);
 if (!design || !out) throw new Error("usage: pairs.ts <design.html> <out dir>");
@@ -25,6 +25,8 @@ interface Screen {
   browser?: boolean;
   /** Three of the built side's agents have said something you haven't read. */
   unread?: boolean;
+  /** The built side has the design's sample chats to open. */
+  chats?: boolean;
   /** Terminals the built side is given, as the design's sample has them. */
   terminals?: { cmd: string; running: boolean }[];
   design(page: Page): Promise<unknown>;
@@ -42,6 +44,13 @@ const browserWindow = (page: Page) =>
 const ownTab = async (page: Page) => {
   await page.getByRole("button", { name: "New tab", exact: true }).click();
   await page.getByRole("tab", { name: "New tab", selected: true }).waitFor();
+};
+/** One chat, opened from the list. */
+const chatNamed = async (page: Page, title: RegExp) => {
+  await page.getByRole("button", { name: /^Chats/ }).click();
+  const panel = page.getByRole("complementary", { name: "Chats" });
+  await panel.getByRole("button", { name: title }).click();
+  await panel.getByRole("button", { name: "All chats" }).waitFor();
 };
 /** The design's own control makes one more chat say something. */
 const twoMoreReplies = async (page: Page) => {
@@ -89,6 +98,36 @@ const SCREENS: Screen[] = [
       await page.getByRole("button", { name: "Chats, 3 new" }).click();
     },
     built: (page) => page.getByRole("button", { name: "Chats, 3 new" }).click(),
+  },
+  ...(
+    [
+      ["chat-thread", (page: Page) => chatNamed(page, /Review #482/)],
+      ["chat-problem", (page: Page) => chatNamed(page, /Route today's issues/)],
+      [
+        "chat-new",
+        async (page: Page) => {
+          await page.getByRole("button", { name: /^Chats/ }).click();
+          await page.getByRole("button", { name: "New chat" }).click();
+        },
+      ],
+    ] as const
+  ).map(
+    ([name, reach]): Screen => ({
+      name,
+      sizes: ["wide", "phone"],
+      themes: ["dark", "light"],
+      chats: true,
+      design: reach,
+      built: reach,
+    }),
+  ),
+  {
+    name: "chats-found",
+    sizes: ["wide"],
+    themes: ["dark", "light"],
+    chats: true,
+    design: (page) => page.getByRole("searchbox", { name: "Search" }).fill("Route today"),
+    built: (page) => page.getByRole("searchbox", { name: "Search" }).fill("Route today"),
   },
   {
     name: "terminal",
@@ -200,6 +239,7 @@ for (const screen of SCREENS)
             await page.evaluate(() => {
               document.documentElement.dataset.theme = "light";
             });
+          if (screen.chats) sampleChats(gateway);
           if (screen.unread) {
             await noted(gateway);
             for (const n of [1, 2, 3]) unreadReply(gateway, n);
