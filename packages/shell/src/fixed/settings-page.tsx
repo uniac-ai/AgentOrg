@@ -33,7 +33,8 @@ export function SettingsFrame({
   children: React.ReactNode;
 }) {
   return (
-    <div className="flex h-full tight:flex-col">
+    // Set in the type it was built in, not the frame's.
+    <div className="flex h-full text-[14px] leading-[1.45] tight:flex-col">
       <div className="flex w-48 shrink-0 flex-col gap-3 p-3 tight:w-auto tight:flex-row tight:items-center tight:gap-2 tight:pb-0">
         <Tabs
           className="no-bar min-w-0 tight:flex-1 tight:overflow-x-auto"

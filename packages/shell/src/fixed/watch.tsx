@@ -32,11 +32,10 @@ export interface Watched {
 interface Agents {
   list: AgentEntry[];
   loaded: boolean;
-  failed: boolean;
   byId: ReadonlyMap<string, Watched>;
 }
 
-const Context = createContext<Agents>({ list: [], loaded: false, failed: false, byId: new Map() });
+const Context = createContext<Agents>({ list: [], loaded: false, byId: new Map() });
 export const useAgents = () => useContext(Context);
 
 /** How many of the latest messages each watch keeps. */
@@ -90,14 +89,13 @@ export function AgentsProvider({ children }: { children: React.ReactNode }) {
     () => ({
       list,
       loaded: agents.loaded,
-      failed: !!agents.error,
       byId: new Map(
         list.flatMap((a) =>
           watched.has(a.agent) ? [[a.agent, watched.get(a.agent) as Watched]] : [],
         ),
       ),
     }),
-    [list, agents.loaded, agents.error, watched],
+    [list, agents.loaded, watched],
   );
   return (
     <Context.Provider value={value}>

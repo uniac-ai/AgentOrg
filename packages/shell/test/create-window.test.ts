@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  agentsRead,
   browser,
   card,
   choose,
@@ -19,7 +20,7 @@ test(
   "Create is one window: choosing opens a panel beside the list, smoothly, and it starts clean each time",
   withGateway(async (gateway) => {
     const page = await open(gateway);
-    await page.getByRole("list", { name: "Your agents" }).waitFor();
+    await agentsRead(page);
     await plus(page).click();
     const window_ = panel(page);
     await window_.getByRole("button", { name: "Empty" }).waitFor();
@@ -95,7 +96,7 @@ test(
   "the name is offered, greyed, and used if nothing is typed; only the units scroll",
   withGateway(async (gateway) => {
     const page = await open(gateway);
-    await page.getByRole("list", { name: "Your agents" }).waitFor();
+    await agentsRead(page);
     await plus(page).click();
     await panel(page).getByRole("button", { name: "Empty" }).click();
     const name = panel(page).locator("#build-name");
@@ -156,7 +157,7 @@ test(
   "the rows don't touch, and the chosen one chosen again closes the panel",
   withGateway(async (gateway) => {
     const page = await open(gateway);
-    await page.getByRole("list", { name: "Your agents" }).waitFor();
+    await agentsRead(page);
     await plus(page).click();
     const window_ = panel(page);
     const empty = window_.getByRole("button", { name: "Empty" });
@@ -252,7 +253,7 @@ test(
   "a unit added by hand starts open, even with nothing to fill",
   withGateway(async (gateway) => {
     const page = await open(gateway);
-    await page.getByRole("list", { name: "Your agents" }).waitFor();
+    await agentsRead(page);
     await plus(page).click();
     await panel(page).getByRole("button", { name: "Empty" }).click();
     await panel(page).getByRole("button", { name: "Add a unit" }).click();

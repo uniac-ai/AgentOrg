@@ -41,8 +41,8 @@ interface Measured {
   gap: string;
 }
 type Parts = Record<string, Measured | string | number | null>;
-/** What a probe measures: the frame, one window's own rows, or the chat in its layer. */
-type Part = "frame" | "terminal" | "browser" | "chat" | "thread";
+/** What a probe measures: the frame, one window's own rows, the chat in its layer, or Home. */
+type Part = "frame" | "terminal" | "browser" | "chat" | "thread" | "home";
 type Gateway = Awaited<ReturnType<typeof standIn>>;
 
 /**
@@ -50,10 +50,11 @@ type Gateway = Awaited<ReturnType<typeof standIn>>;
  * the page area, from the shell's top left. `terminal` and `browser` measure those windows' own
  * rows, from the window's top left. `chat` measures the collapsed chat and its panel, from the
  * shell's top left. A window is also measured in the cases the design draws for it: what was
- * typed refused, its view closed, only watched, no tab, and the page asking. `thread` measures one chat, a chat about to be started, and the chats the bar's
+ * typed refused, its view closed, only watched, no tab, and the page asking. `home` measures
+ * Home's two sections, from the shell's top left. `thread` measures one chat, a chat about to be started, and the chats the bar's
  * search finds, from the shell's top left. Each also lists the controls and marks seen in its regions: the bar, a
- * drawer, the phone's head, a window, the collapsed chat and its panel. The page area is not
- * listed: its pages are not the design's yet.
+ * drawer, the phone's head, a window, the collapsed chat and its panel, and Home. The page
+ * area is not listed on a page that isn't the design's yet.
  */
 const probe = (what: Part): Parts => {
   const seen = (e: Element | null | undefined): e is HTMLElement =>
@@ -269,6 +270,28 @@ const probe = (what: Part): Parts => {
     return parts;
   }
 
+  if (what === "home") {
+    const shell = document.querySelector("[data-shell]");
+    const page = document.querySelector("main");
+    if (!shell || !page) return parts;
+    origin = shell.getBoundingClientRect();
+    controls("page", page);
+    // Its two sections, each a head and its rows. How tall a section is, is how many chats it has.
+    for (const [key, label] of [
+      ["needs", "Needs you"],
+      ["recent", "Recent"],
+    ] as const) {
+      const section = page.querySelector(`section[aria-label="${label}"]`);
+      parts[key] = of(section, "h");
+      const head = section?.children[0];
+      parts[`${key}.head`] = of(head);
+      parts[`${key}.title`] = of(head?.querySelector("h2"));
+      parts[`${key}.all`] = of(head?.querySelector("button"));
+      parts[`${key}.row`] = of(section?.querySelector("li button"));
+    }
+    return parts;
+  }
+
   if (what === "thread") {
     const shell = document.querySelector("[data-shell]");
     const panel = document.querySelector('aside[aria-label="Chats"]');
@@ -450,9 +473,8 @@ const probe = (what: Part): Parts => {
     row("Templates", button("Templates"));
     row("Settings", button("Settings"));
   });
-  // The page area's own box and surface. Its type is the pages', which are not the frame's.
+  // The page area's own box and surface.
   const main = of(document.querySelector("main"));
-  if (main) main.font = "the pages'";
   parts.main = main;
   const head = [...document.querySelectorAll("header")].find(seen);
   parts.head = of(head);
@@ -706,6 +728,25 @@ for (const theme of ["dark", "light"] as const)
     await page.close();
     await gateway?.close();
   }
+
+// Home: the chats that need you and the recent ones, wide and on a phone. The built side has as
+// many that need you as the design's sample: one with a problem, one with a reply not yet read.
+for (const size of ["wide", "phone"] as const)
+  for (const theme of ["dark", "light"] as const)
+    for (const side of ["design", "built"] as const) {
+      const gateway = side === "built" ? await standIn() : undefined;
+      if (gateway) sampleChats(gateway);
+      const page = gateway ? await builtPage(gateway, size, theme) : await designPage(size, theme);
+      if (gateway) {
+        await noted(gateway);
+        unreadReply(gateway, 1);
+      }
+      await page.getByRole("region", { name: "Needs you" }).getByRole("button").nth(1).waitFor();
+      await rest(page, size);
+      all[`home.${size}.${theme}.${side}`] = await measure(page, "home");
+      await page.close();
+      await gateway?.close();
+    }
 
 // One chat, a chat with a problem, a chat about to be started, and chats found from the bar: the
 // design's sample chats, and the same two on the built side.

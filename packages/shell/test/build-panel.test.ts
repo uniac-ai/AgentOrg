@@ -3,6 +3,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  agentsRead,
   browser,
   card,
   choose,
@@ -135,7 +136,7 @@ test(
   "what the check finds shows where it is, and a refusal says why",
   withGateway(async (gateway) => {
     const page = await open(gateway);
-    await page.getByRole("list", { name: "Your agents" }).waitFor();
+    await agentsRead(page);
     await plus(page).click();
     await chooser(page).getByRole("button", { name: "Empty" }).click();
     await panel(page).getByLabel("Name").fill("Solo");
@@ -172,7 +173,7 @@ test(
   "every field type draws, and a type the host doesn't know gets the plain control",
   withGateway(async (gateway) => {
     const page = await open(gateway);
-    await page.getByRole("list", { name: "Your agents" }).waitFor();
+    await agentsRead(page);
     await plus(page).click();
     await chooser(page).getByRole("button", { name: "Empty" }).click();
     await panel(page).getByRole("button", { name: "Add a unit" }).click();

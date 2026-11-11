@@ -16,12 +16,12 @@ import { Button } from "../ui/button.tsx";
 import { TooltipProvider } from "../ui/tooltip.tsx";
 import { AgentPage } from "./agent-page.tsx";
 import { AgentSettingsPage } from "./agent-settings-page.tsx";
-import { AgentsPage } from "./agents-page.tsx";
 import { AllChatsProvider, useAllChats } from "./all-chats.tsx";
 import { BuildDialog } from "./build.tsx";
 import { BuildingProvider, useBuilding } from "./building.tsx";
 import { ChatsProvider, useChats } from "./chats.tsx";
 import { Face } from "./face.tsx";
+import { HomePage } from "./home-page.tsx";
 import { Layer } from "./layer.tsx";
 import { McpsPage } from "./mcps-page.tsx";
 import { WORD } from "./parts.tsx";
@@ -309,9 +309,8 @@ function Frame({ login }: { login?: LoginStatus }) {
           </Button>
           <span className="min-w-0 truncate text-[17px] font-semibold">{place}</span>
         </header>
-        {/* The pages are set in the type they were built in, not the frame's. */}
-        <main className="@container/main relative min-h-0 flex-1 text-[14px] leading-[1.45]">
-          {route.screen === "home" && <AgentsPage />}
+        <main className="@container/main relative min-h-0 flex-1">
+          {route.screen === "home" && <HomePage />}
           {route.screen === "agent" && <AgentPage key={route.agent} agent={route.agent} />}
           {route.screen === "agent-settings" && (
             <AgentSettingsPage key={route.agent} agent={route.agent} />
