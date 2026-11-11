@@ -19,6 +19,7 @@ import {
 } from "../ui/dropdown-menu.tsx";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select.tsx";
 import { useBuilding } from "./building.tsx";
+import { shortUrl } from "./calls.ts";
 import {
   type AgentDetail,
   type AgentEntry,
@@ -258,7 +259,10 @@ function McpRow({
         </span>
         <span className="flex min-w-0 items-center gap-2 text-muted-foreground">
           {origin && <WhereIcon kind={origin.kind} />}
-          <span className="truncate font-mono text-xs">{unit ?? origin?.target}</span>
+          {/* An address is said without its scheme. */}
+          <span className="truncate font-mono text-xs">
+            {unit ?? (origin?.kind === "url" ? shortUrl(origin.target) : origin?.target)}
+          </span>
         </span>
         <CollapsibleTrigger asChild>
           <Button variant="ghost" size="icon-xs" aria-label={`${mcp.slot} tools`}>

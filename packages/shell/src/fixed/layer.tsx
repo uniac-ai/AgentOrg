@@ -4,13 +4,17 @@
 // own Close.
 import { ArchiveIcon, ChevronLeftIcon, MessageCircleIcon, SquarePenIcon } from "lucide-react";
 import { useEffect, useRef } from "react";
+import { api } from "../data.ts";
 import { Button } from "../ui/button.tsx";
 import { useAllChats } from "./all-chats.tsx";
 import { ChatRow, CloseChats } from "./chat-parts.tsx";
 import { useChats } from "./chats.tsx";
+import { Computer, surfacesOf, windowsOf } from "./computer.tsx";
+import { useComputers } from "./computers.tsx";
 import { useEvery } from "./data.ts";
 import { Face } from "./face.tsx";
 import { NewChat, Thread } from "./thread.tsx";
+import { useAgents } from "./watch.tsx";
 
 /** How many faces the collapsed chat shows; the count on its button says how many are unread. */
 const FACES = 3;
@@ -188,11 +192,74 @@ function ChatPanel() {
   );
 }
 
-/** The layer's parts, over the page. */
+/** Where a window ends: one gap short of the chat, at the width the chat has. */
+const ROOM = {
+  pill: "right-[calc(var(--inset)+var(--tab)+var(--gap))]",
+  panel: "right-[calc(var(--inset)+var(--panel)+var(--gap))] narrow:right-[var(--inset)]",
+};
+
+/**
+ * The layer's parts, over the page: the chat at the right, and to its left a window, an agent's
+ * computer, in the room the chat leaves. Neither moves or resizes the other. Where the open chat
+ * leaves a window too little room the two overlap, the one opened last on top; on a phone each
+ * takes the screen.
+ */
 export function Layer() {
   const { open } = useChats();
+  const { shown } = useComputers();
+  const { byId } = useAgents();
   /** Whether the chat has been open: collapsed after that, it is collapsed by its Close. */
   const opened = useRef(false);
   if (open) opened.current = true;
-  return open ? <ChatPanel /> : <ChatPill returned={opened.current} />;
+  // Which of the two was opened last, worked out as each opens so neither is drawn under the
+  // other first.
+  const last = useRef({ open, shown, onTop: "chat" as "chat" | "window" });
+  if (open && !last.current.open) last.current.onTop = "chat";
+  if (shown && shown !== last.current.shown) last.current.onTop = "window";
+  Object.assign(last.current, { open, shown });
+  const { onTop } = last.current;
+  const owner = shown ? byId.get(shown) : undefined;
+  const surfaces = surfacesOf(owner?.detail);
+  return (
+    <>
+      {shown && owner && windowsOf(surfaces).length > 0 && (
+        <Window
+          key={shown}
+          className={`${ROOM[open ? "panel" : "pill"]} ${onTop === "window" ? "narrow:z-[60]" : ""}`}
+        >
+          <Computer
+            agent={{ id: shown, name: owner.entry.name, tone: owner.now.tone }}
+            surfaces={surfaces}
+            onStart={() => void api.call("agents", "start", { agent: shown }).catch(() => {})}
+            overlay
+          />
+        </Window>
+      )}
+      {open ? <ChatPanel /> : <ChatPill returned={opened.current} />}
+    </>
+  );
+}
+
+/** The layer's window. It takes the keyboard when it opens, and gives it back where it was. */
+function Window({ className, children }: { className: string; children: React.ReactNode }) {
+  const group = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const from = document.activeElement;
+    group.current?.focus();
+    return () => {
+      if (from instanceof HTMLElement && from.isConnected) from.focus();
+    };
+  }, []);
+  return (
+    // biome-ignore lint/a11y/useSemanticElements: the layer's window, not a form.
+    <div
+      ref={group}
+      tabIndex={-1}
+      role="group"
+      aria-label="Window"
+      className={`absolute top-[var(--inset)] bottom-[var(--inset)] left-[var(--inset)] z-40 flex outline-none ${className} phone:!inset-0 phone:!z-[60]`}
+    >
+      {children}
+    </div>
+  );
 }

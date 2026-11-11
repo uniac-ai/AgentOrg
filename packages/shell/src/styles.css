@@ -26,6 +26,11 @@
     @slot;
   }
 }
+@custom-variant narrow {
+  @container app (width < 68.75rem) {
+    @slot;
+  }
+}
 @custom-variant tight {
   @container main (width < 44rem) {
     @slot;
@@ -205,10 +210,12 @@
       inset 0 0 0 0.5px var(--edge),
       0 1px 2px rgb(0 0 0 / 0.08);
   }
-  /* The layer over the page: one inset from the screen's edges, and the chat's two widths, as a
-     panel and collapsed (at rest, and under the pointer or the keyboard). */
+  /* The layer over the page: one inset from the screen's edges, one gap between its parts, and
+     the chat's two widths, as a panel and collapsed (at rest, and under the pointer or the
+     keyboard). */
   [data-shell] {
     --inset: 20px;
+    --gap: 12px;
     --panel: 420px;
     --tab: 64px;
     --tab-open: 80px;

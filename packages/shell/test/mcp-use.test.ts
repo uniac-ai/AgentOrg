@@ -170,39 +170,12 @@ test(
 );
 
 test(
-  "beside its live surfaces, the frames show what the record says of its browser and what it changed",
-  withTask(async (gateway) => {
-    computerWith(gateway, "terminal", false);
-    const page = await open(gateway, "#/a/a-research");
-    const files = page.getByRole("region", { name: "Changed files" });
-    await files.getByText("shop/src/retry.ts").waitFor();
-    assert.match(await files.innerText(), /shop\/src\/retry\.ts\s+\+1 −1/);
-
-    await files.getByRole("button", { name: /retry\.ts/ }).click();
-    const diff = page.getByRole("dialog", { name: "shop/src/retry.ts" });
-    assert.match(await diff.locator(".diff-code-delete").innerText(), /session\.pay/);
-    await page.keyboard.press("Escape");
-    await diff.waitFor({ state: "detached" });
-
-    const browserFrame = page.getByRole("region", { name: "Browser" });
-    assert.deepEqual((await browserFrame.innerText()).split("\n").slice(1), [
-      "localhost:4173/checkout",
-      "Checkout",
-      "Opened localhost:4173/checkout",
-      "Typed in e14",
-      "Clicked Pay now",
-    ]);
-    await page.close();
-  }),
-);
-
-test(
   "at phone width the agent's page keeps inside its width, and its head wraps",
   withTask(async (gateway) => {
     computerWith(gateway, "terminal", false);
     const page = await open(gateway, "#/a/a-research", { width: 390, height: 844 });
     const main = page.getByRole("main");
-    const terminal = main.getByRole("region", { name: "Terminal" });
+    const terminal = main.getByRole("group", { name: "Terminal" });
     await terminal.waitFor();
     assert.equal(
       await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),

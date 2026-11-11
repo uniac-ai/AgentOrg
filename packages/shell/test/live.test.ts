@@ -1,4 +1,5 @@
-// The frames an agent's live surfaces sit in, chosen by protocol, over the stand-in's `/live`.
+// An agent's computer on its page: its frame, the windows its surfaces give it, and its load,
+// over the stand-in's `/live`.
 import assert from "node:assert/strict";
 import test from "node:test";
 import { type Browser, chromium, type Page } from "@playwright/test";
@@ -14,6 +15,7 @@ type Gateway = Awaited<ReturnType<typeof standIn>>;
 type Surface = { surface: string; protocol: string; operate: boolean; unavailable?: string };
 const TERMINAL: Surface = { surface: "terminal", protocol: "terminal@1", operate: true };
 
+const BROWSER: Surface = { surface: "browser", protocol: "screencast@1", operate: true };
 const LOAD: Surface = { surface: "load", protocol: "metrics@1", operate: false };
 
 /** Research's computer, with these surfaces. */
@@ -54,28 +56,68 @@ const withGateway = (run: (gateway: Gateway) => Promise<void>) => async () => {
 };
 
 test(
-  "a surface that can't be opened here says why, and one the page has no viewer for isn't drawn",
+  "an agent's computer is one frame: its name, the window in front, and a dock that changes it",
   withGateway(async (gateway) => {
     withSurfaces(gateway, [
-      { ...TERMINAL, unavailable: "The computer has no terminal." },
+      TERMINAL,
+      BROWSER,
+      // One the page has no window for isn't in it.
       { surface: "radio", protocol: "radio@9", operate: false },
     ]);
     const page = await open(gateway);
-    await page
-      .getByRole("region", { name: "Terminal" })
-      .getByText("The computer has no terminal.")
+    const frame = page.getByRole("main").getByRole("region", { name: "Research's computer" });
+    await frame.getByRole("heading", { name: "Research's computer" }).waitFor();
+    const dock = frame.getByRole("navigation", { name: "Dock" });
+    const inFront = () =>
+      dock
+        .getByRole("button")
+        .evaluateAll((all) =>
+          all.map(
+            (b) => `${b.getAttribute("aria-label")}${b.getAttribute("aria-current") ? "*" : ""}`,
+          ),
+        );
+    // The browser first, whatever order the computer lists them in.
+    assert.deepEqual(await inFront(), ["Browser*", "Terminal"]);
+    await frame
+      .getByRole("group", { name: "Browser" })
+      .getByRole("tablist", { name: "Tabs" })
       .waitFor();
-    // The frame holds the one pane that says why, and nothing for a protocol it has no viewer for.
-    assert.equal(
-      await page.getByRole("region", { name: "Terminal" }).getByRole("group").count(),
-      1,
+    assert.equal(await frame.getByRole("group", { name: "Terminal" }).count(), 0);
+    await page.waitForTimeout(300);
+    assert.deepEqual(
+      gateway.live.opened.map((o) => o.surface),
+      ["browser"],
+      "only the window in front is opened",
     );
-    assert.equal(await page.getByText("radio").count(), 0);
-    assert.equal(
-      gateway.live.opened.some((o) => o.surface === "terminal"),
-      false,
-      "not opened",
-    );
+    await dock.getByRole("button", { name: "Terminal" }).click();
+    await frame.getByRole("group", { name: "Terminal" }).waitFor();
+    assert.deepEqual(await inFront(), ["Browser", "Terminal*"]);
+    assert.equal(await frame.getByRole("group", { name: "Browser" }).count(), 0);
+    // The one picked stays in front when the page comes back to its computer.
+    await page.getByRole("main").getByRole("tab", { name: "Chats" }).click();
+    await page.getByRole("main").getByRole("tab", { name: "Computer" }).click();
+    await frame.getByRole("group", { name: "Terminal" }).waitFor();
+    assert.deepEqual(await inFront(), ["Browser", "Terminal*"]);
+    await page.close();
+  }),
+);
+
+test(
+  "a stopped agent's computer says so, with the way to start it, and has no dock or meters",
+  withGateway(async (gateway) => {
+    withSurfaces(gateway, [TERMINAL, LOAD]);
+    (gateway.agents.get("a-research") as Agent).status = { state: "stopped" };
+    const page = await open(gateway);
+    const frame = page.getByRole("main").getByRole("region", { name: "Research's computer" });
+    await frame.getByText("Research is stopped").waitFor();
+    assert.equal(await frame.getByRole("navigation", { name: "Dock" }).count(), 0);
+    assert.equal(await frame.getByRole("group").count(), 0);
+    await page.waitForTimeout(300);
+    assert.equal(gateway.live.opened.length, 0, "nothing of it is opened");
+    await frame.getByRole("button", { name: "Start" }).click();
+    await frame.getByRole("group", { name: "Terminal" }).waitFor();
+    await frame.getByRole("navigation", { name: "Dock" }).waitFor();
+    assert.ok(gateway.calls.some((c) => c.method === "start" && c.input.agent === "a-research"));
     await page.close();
   }),
 );
@@ -83,7 +125,10 @@ test(
 test(
   "an agent with no window to show has no Computer tab: its page is its chats",
   withGateway(async (gateway) => {
-    withSurfaces(gateway, [{ surface: "radio", protocol: "radio@9", operate: false }]);
+    withSurfaces(gateway, [
+      { surface: "radio", protocol: "radio@9", operate: false },
+      { ...TERMINAL, unavailable: "The computer has no terminal." },
+    ]);
     const page = await open(gateway);
     const main = page.getByRole("main");
     await main.getByRole("list", { name: "Chats with Research" }).waitFor();
@@ -103,7 +148,7 @@ test(
     const selected = () => tabs.getByRole("tab", { selected: true }).innerText();
     await main
       .getByRole("tabpanel", { name: "Computer" })
-      .getByRole("region", { name: "Terminal" })
+      .getByRole("group", { name: "Terminal" })
       .waitFor();
     assert.deepEqual(await tabs.getByRole("tab").allInnerTexts(), ["Computer", "Chats"]);
     assert.equal(await selected(), "Computer");
@@ -113,13 +158,13 @@ test(
       .getByRole("tabpanel", { name: "Chats" })
       .getByRole("list", { name: "Chats with Research" })
       .waitFor();
-    assert.equal(await main.getByRole("region", { name: "Terminal" }).count(), 0);
+    assert.equal(await main.getByRole("group", { name: "Terminal" }).count(), 0);
     // The address alone opens the same tab, and Back returns to the first.
     await page.reload();
     await main.getByRole("list", { name: "Chats with Research" }).waitFor();
     assert.equal(await selected(), "Chats");
     await page.goBack();
-    await main.getByRole("region", { name: "Terminal" }).waitFor();
+    await main.getByRole("group", { name: "Terminal" }).waitFor();
     assert.equal(await selected(), "Computer");
     await page.close();
   }),
@@ -145,7 +190,7 @@ test(
   withGateway(async (gateway) => {
     withSurfaces(gateway, [TERMINAL, LOAD]);
     const page = await open(gateway);
-    await page.getByRole("main").getByRole("region", { name: "Terminal" }).waitFor();
+    await page.getByRole("main").getByRole("group", { name: "Terminal" }).waitFor();
     await until(() => gateway.live.load.sockets.size === 1, "its load is opened");
     assert.deepEqual(
       gateway.live.opened.filter((o) => o.surface === "load").map((o) => o.mode),
@@ -190,7 +235,7 @@ test(
   withGateway(async (gateway) => {
     withSurfaces(gateway, [TERMINAL, { ...LOAD, unavailable: "It can't be read here." }]);
     const quiet = await open(gateway);
-    await quiet.getByRole("main").getByRole("region", { name: "Terminal" }).waitFor();
+    await quiet.getByRole("main").getByRole("group", { name: "Terminal" }).waitFor();
     await quiet.waitForTimeout(300);
     assert.equal(await quiet.getByRole("meter").count(), 0);
     assert.equal(gateway.live.opened.filter((o) => o.surface === "load").length, 0, "not opened");
@@ -231,7 +276,7 @@ test(
   withGateway(async (gateway) => {
     withSurfaces(gateway, [TERMINAL]);
     const page = await open(gateway);
-    const terminal = page.getByRole("main").getByRole("region", { name: "Terminal" });
+    const terminal = page.getByRole("main").getByRole("group", { name: "Terminal" });
     await terminal.waitFor();
     await until(() => gateway.live.terminal.sockets.size === 1, "its terminals are open");
     const opened = gateway.live.opened.length;

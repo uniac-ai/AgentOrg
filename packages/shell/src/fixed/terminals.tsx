@@ -5,7 +5,7 @@ import type { Terminal } from "@xterm/xterm";
 import { LoaderCircleIcon, PlusIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "../ui/button.tsx";
-import type { ViewerProps } from "./live-frames.tsx";
+import type { ViewerProps } from "./computer.tsx";
 import { useLive } from "./live-socket.ts";
 import { Closed, Xterm } from "./xterm.tsx";
 
@@ -51,7 +51,7 @@ const pieces = (text: string) => {
 /** A drop this soon after the last is not opened again by itself: the person is told instead. */
 const SETTLED_MS = 5000;
 
-export function TerminalsView({ target }: ViewerProps) {
+export function TerminalsView({ target, corner }: ViewerProps) {
   const operate = target.mode === "operate";
   const [terms] = useState(() => new Map<string, Term>());
   const [, setDrawn] = useState(0);
@@ -181,12 +181,7 @@ export function TerminalsView({ target }: ViewerProps) {
     }
   };
   return (
-    // biome-ignore lint/a11y/useSemanticElements: a pane of the frame, not a form.
-    <div
-      role="group"
-      aria-label="Terminals"
-      className="flex min-h-0 min-w-0 flex-col text-[15px] leading-[1.5]"
-    >
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col text-[15px] leading-[1.5]">
       {/* The first row: its tabs, with the plus beside them. */}
       <div className="flex h-11 shrink-0 items-center gap-1 pr-1.5 pl-2">
         <div className="flex min-w-0 flex-1 items-center gap-1">
@@ -244,6 +239,7 @@ export function TerminalsView({ target }: ViewerProps) {
             </Button>
           )}
         </div>
+        {corner}
       </div>
       {/* The second row: where it is. */}
       <div className="flex h-10 shrink-0 items-center gap-0.5 px-2">

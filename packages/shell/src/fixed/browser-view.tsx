@@ -6,7 +6,7 @@ import { ArrowLeftIcon, ArrowRightIcon, PlusIcon, RotateCwIcon, XIcon } from "lu
 import { useEffect, useId, useRef, useState } from "react";
 import { Button } from "../ui/button.tsx";
 import { Checkbox } from "../ui/checkbox.tsx";
-import type { ViewerProps } from "./live-frames.tsx";
+import type { ViewerProps } from "./computer.tsx";
 import { useLive } from "./live-socket.ts";
 import { Closed } from "./xterm.tsx";
 
@@ -51,7 +51,7 @@ const base64 = async (file: File) => {
   return btoa(text);
 };
 
-export function ScreencastView({ target }: ViewerProps) {
+export function ScreencastView({ target, corner }: ViewerProps) {
   const canOperate = target.mode === "operate";
   const [tabs, setTabs] = useState<{ tabs: Tab[]; shown: number | null }>({
     tabs: [],
@@ -149,10 +149,7 @@ export function ScreencastView({ target }: ViewerProps) {
     canvas.current?.focus({ preventScroll: true });
   };
   return (
-    <section
-      aria-label="Browser"
-      className="flex h-[440px] min-w-0 flex-col overflow-hidden rounded-xl border bg-background text-[15px] leading-[1.5]"
-    >
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col text-[15px] leading-[1.5]">
       {/* The first row: its tabs, with the plus beside them. */}
       <div className="flex h-11 shrink-0 items-center gap-1 pr-1.5 pl-2">
         <div className="flex min-w-0 flex-1 items-center gap-1">
@@ -203,6 +200,7 @@ export function ScreencastView({ target }: ViewerProps) {
             <PlusIcon />
           </Button>
         </div>
+        {corner}
       </div>
       {/* The second row: where it is. */}
       <form
@@ -288,7 +286,7 @@ export function ScreencastView({ target }: ViewerProps) {
         )}
       </div>
       <Closed state={live.state} again={live.again} />
-    </section>
+    </div>
   );
 }
 

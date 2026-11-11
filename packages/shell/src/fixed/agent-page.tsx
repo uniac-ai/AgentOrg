@@ -8,12 +8,11 @@ import { Button } from "../ui/button.tsx";
 import { useAllChats } from "./all-chats.tsx";
 import { ChatRow } from "./chat-parts.tsx";
 import { useChats } from "./chats.tsx";
+import { Computer, surfacesOf, targetOf, windowsOf } from "./computer.tsx";
 import { ComputerLoad, LOAD } from "./computer-load.tsx";
 import { More } from "./controls.tsx";
 import { useAct, useCreatables } from "./data.ts";
 import { Face, MARK } from "./face.tsx";
-import { Frames } from "./frames.tsx";
-import { targetOf, VIEWERS } from "./live-frames.tsx";
 import { Setup } from "./setup.tsx";
 import { useAgents } from "./watch.tsx";
 
@@ -42,12 +41,11 @@ export function AgentPage({
   );
   const stopped = entry.status.state === "stopped";
   const off = stopped || entry.status.state === "down";
-  // Its computer is the unit that offers a window to open live, with that unit's own word on
-  // how busy it is.
-  const computer = detail.units.find((unit) =>
-    unit.status.surfaces?.some((s) => VIEWERS[s.protocol]),
-  );
-  const load = computer?.status.surfaces?.find((s) => s.protocol === LOAD && !s.unavailable);
+  // Its computer is what its units can show live: its windows, and its own word on how busy it is.
+  const surfaces = surfacesOf(detail);
+  const computer = windowsOf(surfaces).length > 0;
+  const load = surfaces.find((s) => s.protocol === LOAD && !s.unavailable);
+  const start = () => act.run(() => api.call("agents", "start", { agent: id }));
   const tabs: { id: AgentTab; title: string }[] = [
     ...(computer ? [{ id: "computer" as const, title: "Computer" }] : []),
     { id: "chats", title: "Chats" },
@@ -103,11 +101,7 @@ export function AgentPage({
           </span>
           {/* An agent that isn't running is started where it says so. */}
           {off && (
-            <Button
-              className="ml-1 h-8 rounded-full px-4"
-              disabled={act.busy}
-              onClick={() => act.run(() => api.call("agents", "start", { agent: id }))}
-            >
+            <Button className="ml-1 h-8 rounded-full px-4" disabled={act.busy} onClick={start}>
               Start
             </Button>
           )}
@@ -135,22 +129,14 @@ export function AgentPage({
           {...(tabs.length > 1 ? { role: "tabpanel", "aria-label": tab?.title } : {})}
           className="pt-5"
         >
-          {tab?.id === "computer" && computer && (
+          {tab?.id === "computer" && (
             <div className="grid grid-cols-[minmax(0,1fr)_200px] gap-8 tight:grid-cols-1">
-              <Frames
-                agent={id}
-                {...(watched.slot ? { slot: watched.slot } : {})}
-                running={entry.status.state === "running"}
-                surfaces={detail.units.flatMap((unit) =>
-                  (unit.status.surfaces ?? []).map((surface) => ({
-                    ...surface,
-                    instance: unit.instance,
-                  })),
-                )}
+              <Computer
+                agent={{ id, name: entry.name, tone: now.tone }}
+                surfaces={surfaces}
+                onStart={start}
               />
-              {load && (
-                <ComputerLoad target={targetOf(id, { ...load, instance: computer.instance })} />
-              )}
+              {load && !stopped && <ComputerLoad target={targetOf(id, load)} />}
             </div>
           )}
           {tab?.id === "chats" && (

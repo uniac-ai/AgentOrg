@@ -583,7 +583,7 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
         changed();
         return {};
       },
-      // Stopping it is the one way to stop its work: whatever it was doing ends.
+      // Stopping the agent ends whatever it was doing.
       stop: ({ agent }) => {
         const stopped = agentOf(agent);
         stopped.status = { state: "stopped" };

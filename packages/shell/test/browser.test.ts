@@ -11,7 +11,7 @@ test.before(async () => {
 test.after(() => browser.close());
 
 type Gateway = Awaited<ReturnType<typeof standIn>>;
-type Surface = { surface: string; protocol: string; operate: boolean; unavailable?: string };
+type Surface = { surface: string; protocol: string; operate: boolean };
 const BROWSER: Surface = { surface: "browser", protocol: "screencast@1", operate: true };
 
 function withSurfaces(gateway: Gateway, surfaces: Surface[]) {
@@ -65,7 +65,7 @@ test(
   withGateway(async (gateway) => {
     withSurfaces(gateway, [BROWSER]);
     const page = await open(gateway);
-    const frame = page.getByRole("region", { name: "Browser" });
+    const frame = page.getByRole("group", { name: "Browser" });
     await frame.waitFor();
     await pictured(page);
     assert.equal(
@@ -155,7 +155,7 @@ test(
     withSurfaces(gateway, [BROWSER]);
     // Short enough that the agent's page scrolls.
     const page = await open(gateway, { width: 1440, height: 500 });
-    const frame = page.getByRole("region", { name: "Browser" });
+    const frame = page.getByRole("group", { name: "Browser" });
     await frame.getByRole("button", { name: "Back" }).and(page.locator(":enabled")).waitFor();
     const scrolled = () =>
       page.evaluate(() =>
@@ -187,7 +187,7 @@ test(
   withGateway(async (gateway) => {
     withSurfaces(gateway, [BROWSER]);
     const page = await open(gateway);
-    const frame = page.getByRole("region", { name: "Browser" });
+    const frame = page.getByRole("group", { name: "Browser" });
     const selected = (name: string) => frame.getByRole("tab", { name, selected: true }).waitFor();
     await selected("Checkout");
     const before = await box(page);
@@ -230,7 +230,7 @@ test(
   withGateway(async (gateway) => {
     withSurfaces(gateway, [BROWSER]);
     const page = await open(gateway);
-    const frame = page.getByRole("region", { name: "Browser" });
+    const frame = page.getByRole("group", { name: "Browser" });
     await frame.getByRole("tab", { name: "Checkout", selected: true }).waitFor();
     const origin = await frame.boundingBox();
     assert.ok(origin);
@@ -240,8 +240,8 @@ test(
       assert.ok(b, `${part} is on the page`);
       const round = (n: number) => Math.round(n * 100) / 100;
       return {
-        x: round(b.x - origin.x - 1),
-        y: round(b.y - origin.y - 1),
+        x: round(b.x - origin.x),
+        y: round(b.y - origin.y),
         w: b.width,
         h: b.height,
       };
@@ -285,7 +285,7 @@ test(
     gateway.tabOpens({ id: 2, url: "https://docs.example/retries", title: "Retries" });
     gateway.tabOpens({ id: 3, url: "https://shop.example/cart", title: "Cart" });
     const page = await open(gateway);
-    const frame = page.getByRole("region", { name: "Browser" });
+    const frame = page.getByRole("group", { name: "Browser" });
     const tab = (name: string) => frame.getByRole("tab", { name });
     const front = (name: string) => frame.getByRole("tab", { name, selected: true }).waitFor();
     const close = (name: string) => frame.getByRole("button", { name: `Close ${name}` }).click();
@@ -360,7 +360,7 @@ test(
   withGateway(async (gateway) => {
     withSurfaces(gateway, [{ ...BROWSER, operate: false }]);
     const page = await open(gateway);
-    const frame = page.getByRole("region", { name: "Browser" });
+    const frame = page.getByRole("group", { name: "Browser" });
     await frame.getByRole("tab", { name: "Checkout" }).waitFor();
     assert.equal(gateway.live.opened.at(-1)?.mode, "watch");
     assert.ok(await frame.getByRole("button", { name: "Back" }).isDisabled());
@@ -383,7 +383,7 @@ test(
   withGateway(async (gateway) => {
     withSurfaces(gateway, [BROWSER]);
     const page = await open(gateway);
-    const frame = page.getByRole("region", { name: "Browser" });
+    const frame = page.getByRole("group", { name: "Browser" });
     await frame.getByRole("tab", { name: "Checkout" }).waitFor();
     const opened = () => gateway.live.opened.filter((o) => o.surface === "browser").length;
     for (const ws of gateway.live.screens.keys()) ws.terminate();
@@ -406,7 +406,7 @@ test(
   withGateway(async (gateway) => {
     withSurfaces(gateway, [BROWSER]);
     const page = await open(gateway);
-    const frame = page.getByRole("region", { name: "Browser" });
+    const frame = page.getByRole("group", { name: "Browser" });
     await frame.getByRole("button", { name: "Back" }).and(page.locator(":enabled")).waitFor();
     const asks = frame.getByRole("dialog", { name: "The page asks" });
     // The text over the page is the shell's, not the page's own dark on white.
@@ -474,17 +474,6 @@ test(
     await asks.getByText("Small").waitFor();
     gateway.tabOpens({ id: 2, url: "https://docs.example/retries", title: "Retries" });
     await asks.waitFor({ state: "detached" });
-    await page.close();
-  }),
-);
-
-test(
-  "a browser that can't open says why, in its frame",
-  withGateway(async (gateway) => {
-    withSurfaces(gateway, [{ ...BROWSER, unavailable: "The browser isn't installed." }]);
-    const page = await open(gateway);
-    await page.getByText("The browser isn't installed.").waitFor();
-    assert.equal(gateway.live.opened.length, 0);
     await page.close();
   }),
 );

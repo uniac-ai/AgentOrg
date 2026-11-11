@@ -118,6 +118,8 @@ test(
     const sheet = await openSetup(await open(gateway, "#/a/a-research"), "Research");
     const mcps = sheet.getByRole("region", { name: "MCPs" });
     await mcps.getByText("notes-server ~/notes").waitFor();
+    // A remote one is its address, without the scheme.
+    await mcps.getByText("api.githubcopilot.com/mcp", { exact: true }).waitFor();
     await mcps.getByRole("img", { name: "Remote" }).waitFor();
     await mcps.getByRole("img", { name: "On this computer" }).waitFor();
 
