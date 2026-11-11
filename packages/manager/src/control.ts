@@ -73,7 +73,7 @@ There is one create tool per template you may use. Read its description and fiel
 
 ## When it is done
 
-\`agent_remove\` it when its work is finished, so your limit is free for the next one. \`agent_stop\` it to keep it for later. You can remove only agents you made, and theirs. The person sees every agent you create on their Agents page, and every change you make through these tools, and can undo any of it.
+\`agent_remove\` it when its work is finished, so your limit is free for the next one. \`agent_stop\` it to keep it for later. You can remove only agents you made, and theirs. The person sees every agent you create: it is listed with the person's own agents, and has a page of its own. The person also sees every change you make through these tools, and can undo any of it.
 `;
 export const skillFile = (path: string) => (path === SKILL_FILE ? SKILL_TEXT : undefined);
 
