@@ -27,7 +27,7 @@ test("a plain message is answered by the main loop itself: its text is the threa
 test("the main loop is told to answer only what needs no work, and never to promise any", () => {
   assert.match(MAIN_INSTRUCTIONS, /only when it needs no tools and nothing you can't see here/);
   assert.match(MAIN_INSTRUCTIONS, /Never say you will do, find, check or look into something/);
-  assert.match(MAIN_INSTRUCTIONS, /when in doubt it is new work/);
+  assert.match(MAIN_INSTRUCTIONS, /when in doubt whose it is, it is new work/);
 });
 
 test("it speaks as whoever hosts it says, after its own words", async () => {

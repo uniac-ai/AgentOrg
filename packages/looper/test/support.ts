@@ -154,8 +154,8 @@ export function looperWith(
   };
 }
 const gone = () => new Refusal("cancelled", "The request was cancelled.");
-/** The main loop's answers: new work with a title, or a piece of work there is by its id. */
-const route = (said: { work?: string; title?: string }): OutputItem[] => [
+/** What the main loop calls `route` with. */
+export const route = (said: { work?: string; title?: string; stop?: string }): OutputItem[] => [
   {
     type: "function_call",
     callId: `route-${crypto.randomUUID()}`,
@@ -163,8 +163,11 @@ const route = (said: { work?: string; title?: string }): OutputItem[] => [
     arguments: JSON.stringify(said),
   },
 ];
+/** The main loop placing what came in: new work with a title, or a piece of work there is by its id. */
 export const newWork = (title = "Work") => route({ title });
 export const routeTo = (work: string) => route({ work });
+/** The main loop stopping a piece of work in a turn, by its id. */
+export const stops = (work: string) => route({ stop: work });
 export const says = (content: string): OutputItem[] => [
   { type: "message", role: "assistant", content },
 ];

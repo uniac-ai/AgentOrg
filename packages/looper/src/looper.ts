@@ -10,6 +10,13 @@
  * main loop makes one decision at a time, and one for a thread on all that waits in it. A piece
  * of work answers in the thread of the newest message it has read.
  *
+ * One piece of work is stopped by saying so. The main loop may answer a message in a thread
+ * nothing follows by stopping the turn of work it was told of; and it is told of each message that
+ * joins a turn of the work its thread follows, beside that work getting it, to stop that turn if
+ * the message asks. The turn is cut and the work is at rest. What the main loop says of it is
+ * said where the message was: in the work's own record when it joined the turn, for the work to
+ * read next, and otherwise in the asking thread alone, which stays no work's.
+ *
  * Turns run side by side, each in a place; the main loop takes none. There are `PLACES` of them,
  * and one more that only work already begun (it has done something) may take, so new work never
  * keeps a message from work that is under way. A turn that finds no place waits for one, in the
@@ -25,7 +32,7 @@
 
 import { z } from "zod";
 import { createLoop, type Place } from "./loop.js";
-import { createMain, type Listed, TOLD, titled } from "./main.js";
+import { createMain, type Listed, stopWord, TOLD, titled } from "./main.js";
 import {
   createRecord,
   createThread,
@@ -412,24 +419,32 @@ export function createLooper(options: {
   const main = createMain({ model: options.model, request: options.request, log });
   /** The work there is, as the main loop is told of it: in a turn first, then the latest at rest. */
   const listed = async (): Promise<Listed[]> => {
-    const inTurn = (id: string) => running(works.get(id)?.loop.state() ?? { state: "idle" });
-    // Work that has a record, and work in a turn that has none yet.
-    const ids = new Set([...kept.keys(), ...[...works.keys()].filter(inTurn)]);
+    const turnOf = (id: string) => works.get(id)?.loop.turn();
+    // Work that has a record, and work in a turn that has none yet; none whose stopped turn is
+    // still to write something, which starts no turn until it has.
+    const ids = new Set(
+      [...kept.keys(), ...[...works.keys()].filter((id) => turnOf(id) !== undefined)].filter(
+        (id) => !works.get(id)?.loop.draining(),
+      ),
+    );
     const all = await Promise.all(
-      [...ids].map(async (id) => ({
-        id,
-        title: await titleOf(id),
-        running: inTurn(id),
-        last: kept.get(id)?.last,
-        failed: kept.get(id)?.failed,
-        at: kept.get(id)?.at ?? "",
-      })),
+      [...ids].map(async (id) => {
+        const title = await titleOf(id);
+        return {
+          id,
+          title,
+          turn: turnOf(id),
+          last: kept.get(id)?.last,
+          failed: kept.get(id)?.failed,
+          at: kept.get(id)?.at ?? "",
+        };
+      }),
     );
     return all
       .filter(({ title }) => title !== "")
       .sort(
         (a, b) =>
-          Number(b.running) - Number(a.running) ||
+          Number(b.turn !== undefined) - Number(a.turn !== undefined) ||
           b.at.localeCompare(a.at) ||
           a.id.localeCompare(b.id),
       )
@@ -462,9 +477,9 @@ export function createLooper(options: {
   /**
    * Have the main loop decide on a thread nothing follows, and keep what it says: an answer of
    * its own, which is the thread's next message, and whose what was said there is, which is new
-   * work of the thread's own or work there is, which then follows the thread too. It gives the
-   * work, or none when the main loop only answered, when nothing waits for an answer, or once
-   * `cut` says the looper stopped or closed.
+   * work of the thread's own or work there is, which then follows the thread too; or cut the turn
+   * it says to stop. It gives the work, or none when the main loop only answered or stopped, when
+   * nothing waits for an answer, or once `cut` says the looper stopped or closed.
    */
   const decide = async (thread: string, cut: () => boolean) => {
     // Read in the thread's line: a message being kept there now is kept first.
@@ -482,7 +497,13 @@ export function createLooper(options: {
     const replyId = crypto.randomUUID();
     const decided = await main.decide(read.said, there, (text) => out.delta(thread, replyId, text));
     if (!decided || cut()) return undefined;
-    const { answer, placed } = decided;
+    const { placed, stop } = decided;
+    // Stopping is cutting the turn it was told of, if that is still the work's turn. This thread
+    // is answered either way, as the work is not its own: with what the main loop wrote, or with
+    // whether a turn was cut.
+    const cutTurn =
+      stop?.turn !== undefined && (await works.get(stop.work)?.loop.cancel(stop.turn)) === true;
+    const answer = decided.answer ?? (stop ? stopWord(cutTurn) : undefined);
     // Whose it is is kept first: an answer beside it is never all that is left of a decision.
     const work =
       placed &&
@@ -509,7 +530,10 @@ export function createLooper(options: {
     }
     return work;
   };
-  /** Decisions are made one at a time, each to its end, so each knows what the last began. */
+  /**
+   * Decisions are made one at a time, each to its end, so each knows what the last began. What
+   * the main loop hears of a message that joined a turn takes its place in the same line.
+   */
   let decided: Promise<unknown> = Promise.resolve();
   /**
    * Give the messages waiting in a thread to a piece of work: the one it has, or the one the main
@@ -582,9 +606,48 @@ export function createLooper(options: {
     if (at === cuts) route(thread);
     return { messageId: entry.id };
   };
+  /**
+   * Tell the main loop of a message said in `thread`, which `work` follows, that joined `turn`
+   * of it: it may only stop that turn, and then what it says is kept in the thread as the work's
+   * to read next. This is beside the message's path, after the decisions asked before it, and
+   * stops nothing once that turn has ended. A message the work takes with a thread, said before
+   * it followed that thread, is not told of. It is not kept: one cut off by a stop, a close or a restart is not
+   * heard, and the worker has the message all the same.
+   */
+  const hear = (thread: string, work: string, text: string, turn: number) => {
+    if (stopped || closed) return;
+    const at = cuts;
+    const cut = () => at !== cuts;
+    decided = decided
+      .then(async () => {
+        const { loop } = of(work);
+        if (cut() || loop.turn() !== turn) return;
+        const title = await titleOf(work);
+        if (cut() || loop.turn() !== turn) return;
+        const say = await main.hear(text, { id: work, title, turn });
+        if (say === undefined || cut()) return;
+        // A line the store refuses is the thread's to be told of: the turn is cut all the same.
+        await loop.cancel(turn, { text: say, thread }).catch((error: unknown) => {
+          log.error("What the main loop said as it stopped a turn couldn't be kept.", {
+            thread,
+            error: String(error),
+          });
+          out.failed(thread, codeOf(error));
+        });
+      })
+      .catch((error: unknown) =>
+        log.warn("A message said to work in a turn wasn't heard.", {
+          thread,
+          error: String(error),
+        }),
+      );
+  };
   /** Give a message to the work its thread is followed by. */
   const give = async (work: string, thread: string, text: string) => {
-    const sent = await using(work, (loop) => loop.send(text, thread));
+    const { turn, ...sent } = await using(work, (loop) => loop.send(text, thread));
+    // One that joined a turn is that turn's; and the main loop hears of it, to stop the turn if
+    // that is what it asks.
+    if (turn !== undefined) hear(thread, work, text, turn);
     leftAtClose(work);
     // What waited there, its work decided but not begun, went with it.
     if (marks.has(thread) && !routes.has(thread)) await settle(thread);
@@ -653,11 +716,12 @@ export function createLooper(options: {
 
   return {
     /**
-     * Say a message in a thread. It is recorded and said at once. In a thread a piece of work
-     * follows it is that work's: with no turn of it running it starts one, which waits for a place
-     * if none is free, and a turn running or waiting takes it at its next model request. In a
-     * thread nothing follows, the main loop answers it or says whose it is first. Refused `busy` while `WAITING`
-     * turns already wait and it would start one more, or while the looper is stopped; and
+     * Say a message in a thread. It is recorded and said at once, but for one that waits for a
+     * stopped turn to have written what it will. In a thread a piece of work follows it is that work's:
+     * with no turn of it running it starts one, which waits for a place if none is free, and a
+     * turn running or waiting takes it at its next model request. In a thread nothing follows,
+     * the main loop answers it or says whose it is first. Refused `busy` while `WAITING` turns
+     * already wait and it would start one more, or while the looper is stopped; and
      * `unavailable` once it has closed.
      */
     send(thread: string, text: string) {
@@ -681,7 +745,7 @@ export function createLooper(options: {
       );
     },
     /** Stop a piece of work's turn now. A call already running finishes, and its result is kept. */
-    cancel: async (work: string) => works.get(work)?.loop.cancel(),
+    cancel: async (work: string) => void (await works.get(work)?.loop.cancel()),
     /** What a piece of work's loop is doing. */
     state: (work: string): Status => works.get(work)?.loop.state() ?? { state: "idle" },
     /** A thread's messages before `before`, oldest first, as many as fit `limit`. */
@@ -700,7 +764,7 @@ export function createLooper(options: {
       await Promise.all([...loops.map((loop) => loop.cancel()), main.cancel()]);
       // A message being recorded as this was asked is recorded first, and a call still running ends.
       await Promise.all(starting);
-      await Promise.all(routes.values());
+      await decided;
       await Promise.all(loops.map((loop) => loop.drained()));
       await Promise.all([...works.values()].map(({ writes }) => writes));
       // What was cut off earlier and hasn't gone on doesn't after a stop either: its marks go.
@@ -731,7 +795,7 @@ export function createLooper(options: {
     },
     /** Settles when every piece of work's latest turn has written all it will. */
     async settled() {
-      await Promise.all(routes.values());
+      await decided;
       await Promise.all([...works.values()].map(({ loop }) => loop.settled()));
       await Promise.all([...works.values()].map(({ writes }) => writes));
     },
