@@ -176,8 +176,26 @@ export function sampleAgents(gateway: Gateway) {
   computer(gateway, [
     { surface: "browser", protocol: "screencast@1", operate: true },
     { surface: "terminal", protocol: "terminal@1", operate: true },
+    { surface: "files", protocol: "files@1", operate: true },
     { surface: "load", protocol: "metrics@1", operate: false },
   ]);
+  // Its workspace, as the design's sample has it.
+  const weeks = 3 * 7 * 24 * 60;
+  gateway.putFile(
+    "storefront/README.md",
+    "# Storefront\n\nThe shop's web app. `npm run dev` serves it on port 4173.",
+    weeks,
+  );
+  gateway.putFile(
+    "storefront/package.json",
+    '{\n  "name": "storefront",\n  "scripts": { "dev": "vite", "test": "vitest run" }\n}',
+    weeks,
+  );
+  gateway.putFile(
+    "storefront/src/checkout/form.ts",
+    'import { session } from "./session";\n\nexport async function submit(cart) {\n  await session.pay(cart);\n}',
+    weeks,
+  );
   // What Research was built from: the template, its two units as they were filled in, and as
   // many connections and skills as the design's has, under the same names.
   const research = gateway.agents.get("a-research") as Agent;
@@ -252,6 +270,22 @@ export async function openWindow(page: Page, beside: boolean) {
       .click();
   } else await main.getByRole("button", { name: "Expand" }).click();
   await page.getByRole("group", { name: "Window" }).getByRole("navigation").waitFor();
+}
+
+/** Research's files in front on its page, in its storefront folder, with a file open if one is named. */
+export async function openFiles(page: Page, file?: string) {
+  const main = page.getByRole("main");
+  await main
+    .getByRole("navigation", { name: "Dock" })
+    .getByRole("button", { name: "Files" })
+    .click();
+  const window = main.getByRole("group", { name: "Files" });
+  await window.getByRole("button", { name: "storefront" }).click();
+  await window.getByRole("button", { name: /README\.md/ }).waitFor();
+  if (file) {
+    await window.getByRole("button", { name: file }).click();
+    await window.locator("pre").getByText("Storefront").waitFor();
+  }
 }
 
 /** An agent stopped from its page, as a person stops it. */

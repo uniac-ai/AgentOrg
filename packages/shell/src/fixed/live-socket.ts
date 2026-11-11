@@ -89,7 +89,7 @@ export function useLive(
   }, [of]);
   return {
     state,
-    send(data: string) {
+    send(data: string | ArrayBuffer) {
       if (socket.current?.readyState === WebSocket.OPEN) socket.current.send(data);
     },
     again: () => setAttempt((n) => n + 1),

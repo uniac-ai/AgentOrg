@@ -21,6 +21,7 @@ import {
   newChatWithFirst,
   noted,
   openDesignAgent,
+  openFiles,
   openSampleChat,
   openSetup,
   openWindow,
@@ -55,7 +56,7 @@ type Parts = Record<string, Measured | string | number | null>;
 /**
  * What a probe measures: the frame, one window's own rows, the chat in its layer, one chat, the
  * way to a chat's older messages, Home, an agent's page, its setup, its computer's frame on its
- * page, or that computer as the layer's window.
+ * page, that computer as the layer's window, or its files window's own rows.
  */
 type Part =
   | "frame"
@@ -68,7 +69,8 @@ type Part =
   | "agent"
   | "setup"
   | "computer"
-  | "window";
+  | "window"
+  | "files";
 type Gateway = Awaited<ReturnType<typeof standIn>>;
 
 /**
@@ -411,6 +413,57 @@ const probe = (what: Part): Parts => {
     return parts;
   }
 
+  if (what === "files") {
+    // The files window's own rows, from the window's top left: which files, where it is with
+    // the way up and what can be brought in or taken out, then a folder's rows or a file's words.
+    const list = [...document.querySelectorAll('[role="tablist"][aria-label="Which files"]')].find(
+      seen,
+    );
+    const bar = list?.parentElement?.parentElement;
+    if (!list || !bar) return parts;
+    origin = bar.getBoundingClientRect();
+    controls("window", bar.parentElement);
+    parts.bar = of(bar);
+    parts["bar.inner"] = of(bar.children[0]);
+    // How many tabs it has is listed with what is seen, each by its name.
+    parts.tablist = of(list, "w");
+    parts["tab.all"] = of(list.children[0]);
+    const tabs = [...list.children].map((tab) => `which: ${tab.childNodes[0]?.textContent}`);
+    parts["window.seen"] = [parts["window.seen"], ...tabs].join(" | ");
+    const expand = bar.querySelector('button[aria-label="Expand"]');
+    parts.expand = of(expand);
+    parts["expand.icon"] = of(expand?.querySelector("svg"));
+    const where = bar.nextElementSibling;
+    parts.where = of(where);
+    const [up, field, act] = where?.children ?? [];
+    parts["where.up"] = of(up);
+    parts["where.up.icon"] = of(up?.querySelector("svg"));
+    parts["where.field"] = of(field);
+    parts["where.act"] = of(act);
+    parts["where.act.icon"] = of(act?.querySelector("svg"));
+    const room = where?.nextElementSibling;
+    parts.room = of(room);
+    // A folder's rows: the first, a folder, and the last, a file with its size and its age. A
+    // name is as wide as what follows it leaves.
+    const rows = [...(room?.querySelectorAll("li button") ?? [])];
+    parts.rows = of(room?.querySelector("ul"), "h");
+    for (const [name, row] of [
+      ["first", rows[0]],
+      ["last", rows.at(-1)],
+    ] as const) {
+      parts[`row.${name}`] = of(row);
+      parts[`row.${name}.icon`] = of(row?.querySelector("svg"));
+      parts[`row.${name}.name`] = of(row?.querySelector("svg + span"), "w");
+      // A file's two facts are its numbers; a folder has neither.
+      const [size, age] = row?.querySelectorAll("span.tabular-nums") ?? [];
+      parts[`row.${name}.size`] = of(size);
+      parts[`row.${name}.age`] = of(age);
+    }
+    // A file's words.
+    parts.words = of(room?.querySelector("pre"), "h");
+    return parts;
+  }
+
   if (what === "computer" || what === "window") {
     // An agent's computer, from the shell's top left: its name, the window in front or what it
     // says while its agent is stopped, and its dock. On its page; or as the layer's window,
@@ -454,7 +507,7 @@ const probe = (what: Part): Parts => {
     parts["dock.off"] =
       around && placed ? round(placed.x + placed.width / 2 - around.x - around.width / 2) : null;
     parts["dock.after"] = placed && last ? round(placed.right - last.right) : null;
-    for (const name of ["Browser", "Terminal"]) {
+    for (const name of ["Browser", "Terminal", "Files"]) {
       const button = dock?.querySelector(`button[aria-label="${name}"]`);
       parts[`dock.${name}`] = inside(dock, button);
       parts[`dock.${name}.icon`] = inside(dock, button?.querySelector("svg"));
@@ -1125,6 +1178,23 @@ for (const [state, size] of [
       if (state === "stopped") await stopAgent(page, "Research");
       await rest(page, size);
       all[`computer.${state}.${size}.${theme}.${side}`] = await measure(page, "computer");
+      await page.close();
+      await gateway?.close();
+    }
+
+// The files window: a folder's rows, and a file open, in Research's storefront folder.
+for (const state of ["folder", "file"] as const)
+  for (const theme of ["dark", "light"] as const)
+    for (const side of ["design", "built"] as const) {
+      const gateway = side === "built" ? await standIn() : undefined;
+      if (gateway) sampleAgents(gateway);
+      const page = gateway
+        ? await builtPage(gateway, "wide", theme, "#/a/a-research")
+        : await designPage("wide", theme);
+      if (!gateway) await openDesignAgent(page, "Research");
+      await openFiles(page, state === "file" ? "README.md" : undefined);
+      await rest(page, "wide");
+      all[`files.${state}.${theme}.${side}`] = await measure(page, "files");
       await page.close();
       await gateway?.close();
     }
