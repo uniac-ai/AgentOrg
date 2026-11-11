@@ -22,6 +22,7 @@ import {
   noted,
   openDesignAgent,
   openSampleChat,
+  openSetup,
   readChat,
   refuseSend,
   sampleAgents,
@@ -51,9 +52,18 @@ interface Measured {
 type Parts = Record<string, Measured | string | number | null>;
 /**
  * What a probe measures: the frame, one window's own rows, the chat in its layer, one chat, the
- * way to a chat's older messages, or Home.
+ * way to a chat's older messages, Home, an agent's page, or its setup.
  */
-type Part = "frame" | "terminal" | "browser" | "chat" | "thread" | "earlier" | "home" | "agent";
+type Part =
+  | "frame"
+  | "terminal"
+  | "browser"
+  | "chat"
+  | "thread"
+  | "earlier"
+  | "home"
+  | "agent"
+  | "setup";
 type Gateway = Awaited<ReturnType<typeof standIn>>;
 
 /**
@@ -66,7 +76,8 @@ type Gateway = Awaited<ReturnType<typeof standIn>>;
  * messages, from the top of what was said. `thread` also measures a chat in the cases the design
  * draws for it: a step with no call, a problem with its fix, and a refused send. `thread` measures one chat, a chat about to be started, and the chats the bar's
  * search finds, from the shell's top left. `agent` measures an agent's page: its head, how it
- * stands, its tabs, its computer's column and its chats, from the shell's top left. Each also lists the controls and marks seen in its regions: the bar, a
+ * stands, its tabs, its computer's column and its chats, from the shell's top left; `setup` its
+ * setup, from the sheet's own top left. Each also lists the controls and marks seen in its regions: the bar, a
  * drawer, the phone's head, a window, the collapsed chat and its panel, and Home. The page
  * area is not listed on a page that isn't the design's yet.
  */
@@ -386,6 +397,55 @@ const probe = (what: Part): Parts => {
     parts["chats.new.button"] = of(chats?.previousElementSibling?.querySelector("button"));
     parts["chats.new.icon"] = of(chats?.previousElementSibling?.querySelector("svg"));
     parts["chats.row"] = of(chats?.querySelector("li button"));
+    return parts;
+  }
+
+  if (what === "setup") {
+    // An agent's setup, measured from its own top left: it lies over the page, as tall as the
+    // window, which the design's own bar makes taller. Where it lies is how far its edges are
+    // from the window's.
+    const sheet = [...document.querySelectorAll('[role="dialog"]')].find((one) =>
+      one.querySelector("h2")?.textContent?.endsWith("'s setup"),
+    );
+    if (!sheet) return parts;
+    origin = sheet.getBoundingClientRect();
+    parts["sheet.top"] = round(origin.top);
+    parts["sheet.right"] = round(innerWidth - origin.right);
+    parts["sheet.bottom"] = round(innerHeight - origin.bottom);
+    controls("sheet", sheet);
+    const head = sheet.children[0];
+    parts.head = of(head);
+    parts["head.title"] = of(head?.querySelector("h2"));
+    const body = sheet.children[1];
+    parts.body = of(body, "h");
+    // Each section with its head, and the first and last thing it holds: the built side is given
+    // as many of each as the design's sample has.
+    for (const section of body?.querySelectorAll(":scope > section") ?? []) {
+      const key = (section.getAttribute("aria-label") ?? "").split(" ")[0]?.toLowerCase() ?? "";
+      parts[key] = of(section);
+      const bar = section.children[0];
+      parts[`${key}.head`] = of(bar);
+      parts[`${key}.title`] = of(bar?.querySelector("h2"));
+      parts[`${key}.add`] = of(bar?.querySelector("button"));
+      const held = [...(section.children[1]?.children ?? [])];
+      for (const [name, one] of [
+        ["first", held[0]],
+        ["last", held.at(-1)],
+      ] as const) {
+        parts[`${key}.${name}`] = of(one);
+        // What it holds: a unit's name and an answer, the model's box, a connection's slot,
+        // where it is and the way to its tools, or a skill's name and words.
+        const row = one?.matches('[data-slot="collapsible"]') ? one.children[0] : one;
+        for (const [i, child] of [...(row?.children ?? [])].slice(0, 3).entries())
+          parts[`${key}.${name}.${i}`] = of(child, "w");
+      }
+    }
+    const foot = sheet.children[2];
+    parts.foot = inside(foot, foot);
+    parts["foot.above"] = foot ? round(origin.bottom - foot.getBoundingClientRect().bottom) : null;
+    parts["foot.delete"] = inside(foot, foot?.querySelector("button"));
+    // The sheet itself last: measuring what slid in plays its slide again.
+    parts.sheet = of(sheet, "h");
     return parts;
   }
 
@@ -963,6 +1023,24 @@ for (const { state, size, id, name } of AGENT_PAGES)
       await gateway?.close();
     }
   }
+
+// An agent's setup, over its page: what Research was built from, its model, its MCPs and its
+// skills, and the way to delete it, wide and on a phone.
+for (const size of ["wide", "phone"] as const)
+  for (const theme of ["dark", "light"] as const)
+    for (const side of ["design", "built"] as const) {
+      const gateway = side === "built" ? await standIn() : undefined;
+      if (gateway) sampleAgents(gateway);
+      const page = gateway
+        ? await builtPage(gateway, size, theme, "#/a/a-research")
+        : await designPage(size, theme);
+      if (!gateway) await openDesignAgent(page, "Research");
+      await openSetup(page, "Research");
+      await rest(page, size);
+      all[`setup.${size}.${theme}.${side}`] = await measure(page, "setup");
+      await page.close();
+      await gateway?.close();
+    }
 
 // One chat, a chat with a problem, a chat about to be started, and chats found from the bar: the
 // design's sample chats, and the same two on the built side.

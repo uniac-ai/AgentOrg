@@ -17,6 +17,7 @@ import {
   noted,
   openDesignAgent,
   openSampleChat,
+  openSetup,
   readChat,
   refuseSend,
   sampleAgents,
@@ -292,6 +293,18 @@ const SCREENS: Screen[] = [
       ...(part ? { part } : {}),
     }),
   ),
+  {
+    name: "agent-setup",
+    sizes: ["wide", "phone"],
+    themes: ["dark", "light"],
+    agents: true,
+    hash: "#/a/a-research",
+    design: async (page) => {
+      await openDesignAgent(page, "Research");
+      await openSetup(page, "Research");
+    },
+    built: (page) => openSetup(page, "Research"),
+  },
   {
     name: "chats-found",
     sizes: ["wide"],

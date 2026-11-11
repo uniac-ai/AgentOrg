@@ -14,6 +14,7 @@ import { useAct, useCreatables } from "./data.ts";
 import { Face, MARK } from "./face.tsx";
 import { Frames } from "./frames.tsx";
 import { targetOf, VIEWERS } from "./live-frames.tsx";
+import { Setup } from "./setup.tsx";
 import { useAgents } from "./watch.tsx";
 
 const big = "h-10 rounded-full px-4 text-[15px]";
@@ -30,6 +31,7 @@ export function AgentPage({
   const { newChat, openChat } = useChats();
   const creatables = useCreatables();
   const [failed, setFailed] = useState<string>();
+  const [setup, setSetup] = useState(false);
   const act = useAct(setFailed);
   const watched = byId.get(id);
   // What it's made of says what the page holds, so nothing is drawn before it is read.
@@ -80,7 +82,7 @@ export function AgentPage({
             <Button
               variant="secondary"
               className={`${big} tight:flex-1`}
-              onClick={() => go({ screen: "agent-settings", agent: id })}
+              onClick={() => setSetup(true)}
             >
               <SlidersHorizontalIcon />
               Setup
@@ -170,6 +172,7 @@ export function AgentPage({
           )}
         </div>
       </div>
+      <Setup agent={entry} open={setup} onClose={() => setSetup(false)} />
     </div>
   );
 }

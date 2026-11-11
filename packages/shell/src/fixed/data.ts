@@ -4,7 +4,6 @@ import { NotConnected, Refused } from "@agentorg/sdk";
 import { useEffect, useMemo, useState } from "react";
 import type { z } from "zod";
 import { api, useConnection, useLoad } from "../data.ts";
-import { lineOfRow, rowsOf } from "./calls.ts";
 
 type Out<M extends { output: z.ZodType }> = z.output<M["output"]>;
 
@@ -187,18 +186,6 @@ export interface Now {
   text: string;
 }
 
-/** One line for a message of the record. */
-export function lineOf(message: ChatMessage): string {
-  if (message.tool) {
-    const [row] = rowsOf([message]);
-    if (row && row.kind !== "other") return lineOfRow(row);
-    return `${message.tool.state === "running" ? "Using" : "Used"} ${message.tool.name}`;
-  }
-  const first = message.text.trim().split("\n")[0] ?? "";
-  const line = first.replace(/^[#>\s-]+/, "").replace(/[*`]/g, "");
-  return message.role === "user" ? `You: ${line}` : line;
-}
-
 /**
  * How an agent stands, of itself: what runs it first, then whether it works, then its
  * connections. What went wrong in one of its chats is that chat's to say.
@@ -221,20 +208,6 @@ export function nowOf(
   if (tone === "trouble" && down)
     return { tone, text: `${down.slot} is down, so its tools are left out` };
   return { tone, text: WORD[tone] };
-}
-
-/** How long ago, in the fewest characters that still say it. */
-export function ago(at: string | undefined, now = Date.now()): string {
-  if (!at) return "";
-  const then = new Date(at);
-  const minutes = Math.floor((now - then.getTime()) / 60_000);
-  if (Number.isNaN(minutes)) return "";
-  if (minutes < 1) return "Now";
-  if (minutes < 60) return `${minutes} min`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours} h`;
-  if (hours < 48) return "Yesterday";
-  return then.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
 /**

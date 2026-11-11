@@ -55,6 +55,8 @@ export interface Agent {
   skills: { name: string; description: string; instance?: string }[];
   mcp: { slot: string; connection: string; instance?: string }[];
   purpose?: string;
+  /** The template it started from. */
+  template?: string;
   units?: z.output<typeof agentsInterface.methods.get.output>["units"];
   /** The model chosen for it; none is its provider's default. */
   model?: string;
@@ -491,13 +493,14 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
     if (!agent) throw new Refusal("unknown", "No such agent.");
     return agent;
   };
-  const entry = ({ agent, name, status, provider, creatable, purpose }: Agent) => ({
+  const entry = ({ agent, name, status, provider, creatable, purpose, template }: Agent) => ({
     agent,
     name,
     status,
     provider,
     creatable,
     ...(purpose ? { purpose } : {}),
+    ...(template ? { template } : {}),
   });
   const chatSlot = (agent: string) => `chat_${agent.replaceAll("-", "_")}`;
 
@@ -542,7 +545,8 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
       check: () => ({ problems }),
       create: (input) => {
         const made = `a-${agents.size + 1}`;
-        const { base, units } = input.stack as unknown as {
+        const { base, units, template } = input.stack as unknown as {
+          template?: string;
           base: { provider: string; creatable: string };
           units: { provider: string; unit: string; values: Record<string, string | boolean> }[];
         };
@@ -559,6 +563,7 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
           mcp:
             units.length > 0 ? [{ slot: "computer", connection: "c-notes", instance: "i-0" }] : [],
           ...(input.purpose ? { purpose: String(input.purpose) } : {}),
+          ...(template ? { template } : {}),
           units: units.map((u, i) => ({
             instance: `i-${i}`,
             provider: u.provider,
@@ -610,8 +615,7 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
       },
       unexpose: (input) => {
         const agent = agentOf(input.agent);
-        if ("skill" in input) agent.skills = agent.skills.filter((s) => s.name !== input.skill);
-        else agent.mcp = agent.mcp.filter((m) => m.slot !== input.slot);
+        agent.mcp = agent.mcp.filter((m) => m.slot !== input.slot);
         return {};
       },
       remove: ({ agent }) => {

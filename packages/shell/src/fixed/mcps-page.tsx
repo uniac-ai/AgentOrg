@@ -12,7 +12,7 @@ import {
   useEvery,
 } from "./data.ts";
 import { DeleteButton } from "./delete-dialog.tsx";
-import { Nothing, rowClass, Scroll, StateDot, UsedBy, WhereIcon } from "./parts.tsx";
+import { Nothing, rowClass, Scroll, TroubleDot, UsedBy, WhereIcon } from "./parts.tsx";
 import { SettingsFrame } from "./settings-page.tsx";
 
 /** Each connection with how many tools it offers; a server's state has no event, so it's reread. */
@@ -73,7 +73,7 @@ export function McpsPage({ focus, adding }: { focus?: string; adding?: boolean }
               <div className="min-w-0">
                 <div className="flex items-center gap-2 font-medium">
                   <span className="truncate">{entry.name}</span>
-                  {entry.state === "down" && <StateDot tone="trouble" />}
+                  {entry.state === "down" && <TroubleDot />}
                 </div>
                 <div className="truncate text-[13px] text-muted-foreground">{originOf(entry)}</div>
               </div>

@@ -111,7 +111,6 @@ export type Route =
   | { screen: "home" }
   | { screen: "settings"; tab: "templates" | "providers" | "account" }
   | { screen: "agent"; agent: string; tab?: AgentTab }
-  | { screen: "agent-settings"; agent: string }
   | { screen: "skills" | "mcps"; focus?: string; adding?: boolean };
 function routeOf(hash: string): Route {
   // Settings opens on its first tab.
@@ -125,8 +124,6 @@ function routeOf(hash: string): Route {
       ...(managed[2] === "add" ? { adding: true } : {}),
       ...(managed[3] ? { focus: decodeURIComponent(managed[3]) } : {}),
     };
-  const settings = /^#\/a\/([^/]+)\/settings$/.exec(hash)?.[1];
-  if (settings) return { screen: "agent-settings", agent: decodeURIComponent(settings) };
   const [, agent, under] = /^#\/a\/([^/]+)(?:\/(computer|chats))?$/.exec(hash) ?? [];
   if (!agent) return { screen: "home" };
   return {
@@ -156,11 +153,9 @@ export function go(route: Route) {
     return;
   }
   location.hash =
-    route.screen === "agent-settings"
-      ? `#/a/${encodeURIComponent(route.agent)}/settings`
-      : route.screen === "agent"
-        ? `#/a/${encodeURIComponent(route.agent)}${route.tab ? `/${route.tab}` : ""}`
-        : "#/";
+    route.screen === "agent"
+      ? `#/a/${encodeURIComponent(route.agent)}${route.tab ? `/${route.tab}` : ""}`
+      : "#/";
 }
 
 export type ThemeName = "dark" | "light";
