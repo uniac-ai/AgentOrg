@@ -142,7 +142,7 @@ function problems(
     const { why } = parseConnection("url", { url: values.address }, given);
     if (why) wrong.push({ field: "address", message: `That address won't do. ${why}` });
   } else if (values.service !== LOCAL)
-    wrong.push({ field: "service", message: "Choose a service." });
+    wrong.push({ field: "service", message: "Choose where it resides." });
   if (values.access === "none") {
     if (values.browser !== true)
       wrong.push({
@@ -150,7 +150,7 @@ function problems(
         message: "With no files, no commands and no browser, there's no computer.",
       });
   } else if (!LEVELS.includes(values.access as string))
-    wrong.push({ field: "access", message: "Choose what it can do." });
+    wrong.push({ field: "access", message: "Choose what it reaches." });
   const workspace = fromHome(values.workspace);
   if (values.service === LOCAL && workspace !== undefined) {
     let folder = false;
@@ -374,7 +374,7 @@ export async function startComputerProvider(
         (info) => info.workspace,
         () => null,
       ));
-    const where = local ? "this machine" : new URL(reached.apiUrl).host;
+    const where = local ? "this computer" : new URL(reached.apiUrl).host;
     const on = isolation === "container" ? `${where}, in a container` : `${where}, no isolation`;
     const servers = [];
     if (access !== "none")
