@@ -1,5 +1,6 @@
-// What can be done about a chat's problem, where there is something: the control an agent's page
-// offers for it.
+// What can be done about a chat's problem, where there is something: the control its agent's page
+// offers for it, and the one a chat's own line ends with when it is the plan's page.
+import { USAGE } from "../app.tsx";
 
 /** The way out of a problem, by its code: the plan's page, or signing in. */
 export function remedyOf(problem: {
@@ -9,3 +10,6 @@ export function remedyOf(problem: {
   if (problem.code === "not_signed_in") return { label: "Continue with ChatGPT", run: "signIn" };
   return undefined;
 }
+
+/** Opens the plan's page, in a tab of its own. */
+export const openUsage = () => void window.open(USAGE, "_blank", "noopener,noreferrer");

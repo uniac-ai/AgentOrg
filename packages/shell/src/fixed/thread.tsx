@@ -44,6 +44,7 @@ import { ChatRow, CloseChats } from "./chat-parts.tsx";
 import { useChats } from "./chats.tsx";
 import { type ChatMessage, type ChatStatus, reasonOf } from "./data.ts";
 import { Face } from "./face.tsx";
+import { openUsage, remedyOf } from "./notice.ts";
 import { useAgents } from "./watch.tsx";
 
 const PAGE = 100;
@@ -156,10 +157,21 @@ function Composer({
   );
 }
 
-/** What went wrong, in the one line a chat says it in. */
-const ProblemLine = ({ children }: { children: string }) => (
+/** What went wrong, in the one line a chat says it in; and what helps, where something does. */
+const ProblemLine = ({
+  children,
+  fix,
+}: {
+  children: string;
+  fix?: { label: string; run(): void } | undefined;
+}) => (
   <div role="alert" className="flex h-8 items-center gap-3 text-[15px] text-[var(--bad)]">
     <span className="min-w-0 truncate">{children}</span>
+    {fix && (
+      <Button variant="secondary" size="sm" className="shrink-0" onClick={fix.run}>
+        {fix.label}
+      </Button>
+    )}
   </div>
 );
 
@@ -438,8 +450,14 @@ export function Thread({ chat }: { chat: ListedChat }) {
   // Until the record has what was sent, "Thinking" never drops out between the two.
   const asked = messages.findLast((m) => m.role !== "tool")?.role === "user";
   const awaiting = unrecorded.length > 0 || (working && asked);
-  // While it awaits a reply its problem is not said: the reply ends it, or it is said again.
-  const wrong = failure?.said ?? (awaiting ? undefined : entry.problem?.message);
+  // While it awaits a reply its problem is not said: the reply ends it, or it is said again. A
+  // call of this thread's that failed is said in its place.
+  const problem = failure || awaiting ? undefined : entry.problem;
+  const wrong = failure?.said ?? problem?.message;
+  // A problem that the plan's page can fix ends its line with the way there. Signing in isn't
+  // offered from the line.
+  const remedy = problem && remedyOf(problem);
+  const fix = remedy?.run === "manage" ? { label: remedy.label, run: openUsage } : undefined;
   const rows = useMemo(() => new Map(rowsOf(messages).map((row) => [row.id, row])), [messages]);
   const turns = useMemo(
     () => turnsOf(messages, unrecorded, streaming, keys.current),
@@ -614,7 +632,7 @@ export function Thread({ chat }: { chat: ListedChat }) {
                   <Thinking />
                 </MessageScrollerItem>
               )}
-              {wrong && <ProblemLine>{wrong}</ProblemLine>}
+              {wrong && <ProblemLine fix={fix}>{wrong}</ProblemLine>}
             </MessageScrollerContent>
           </MessageScrollerViewport>
           <MessageScrollerButton />
@@ -636,13 +654,19 @@ const Thinking = () => (
   </div>
 );
 
-/** A call's row; a poll has none of its own, it's part of the command's. */
+/**
+ * A call's row; a poll has none of its own, it's part of the command's. Something the agent did
+ * that carries no call is its one line, as a call's line without what a call has to open.
+ */
 function Tool({ message, row }: { message: ChatMessage; row?: Row | undefined }) {
   if (!message.tool)
     return (
-      <p className="flex h-7 items-center gap-2 px-1 text-[13px] text-muted-foreground">
-        <WrenchIcon className="size-3.5" />
-        {message.text}
+      <p
+        data-call
+        className="flex h-7 items-center gap-2 px-1 text-[13px] text-muted-foreground [[data-call]+&]:-mt-1.5"
+      >
+        <WrenchIcon className="size-3.5 shrink-0" />
+        <span className="min-w-0 truncate">{message.text}</span>
       </p>
     );
   return row && row.kind !== "say" ? <CallRow row={row} /> : null;

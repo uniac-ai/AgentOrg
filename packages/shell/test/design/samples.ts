@@ -39,14 +39,42 @@ export function readChat(gateway: Gateway) {
   });
 }
 
-/** Two chats as the design's sample has them: one with a call and a reply, one with a problem. */
-export function sampleChats(gateway: Gateway) {
+/** A case the design draws for a chat, which the built side's sample chat can be given. */
+export type ChatCase = "noCall" | "limit" | "long";
+
+/**
+ * Two chats as the design's sample has them: one with a call and a reply, one with a problem. The
+ * first can be given a case the design draws for a chat: a step with no call, the plan's limit
+ * reached, or more said in it than a page holds.
+ */
+export function sampleChats(gateway: Gateway, given?: ChatCase) {
   const at = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
   gateway.addChat("a-reviewer", {
     id: "c-review",
     title: "Review #482",
+    ...(given === "limit"
+      ? { problem: { code: "usage_limit", message: "You've reached your plan's limit." } }
+      : {}),
     said: [
+      ...(given === "long"
+        ? Array.from({ length: 120 }, (_, n) => ({
+            id: `v-old-${n}`,
+            role: "assistant" as const,
+            text: `An earlier note, ${n}.`,
+            at: at(2000 - n),
+          }))
+        : []),
       { id: "v-u1", role: "user", text: "Review #482 before I merge it.", at: at(13) },
+      ...(given === "noCall"
+        ? [
+            {
+              id: "v-n1",
+              role: "tool" as const,
+              text: "Looked at the pull request",
+              at: at(12),
+            },
+          ]
+        : []),
       {
         id: "v-t1",
         role: "tool",
@@ -159,3 +187,46 @@ export const inDesign = (page: Page, name: string | RegExp) =>
     .getByLabel("Draft controls")
     .getByRole("button", { name, exact: typeof name === "string" })
     .click();
+
+const chats = (page: Page) => page.getByRole("complementary", { name: "Chats" });
+
+/** Opens the sample chat that has a call and a reply, from the list. */
+export async function openSampleChat(page: Page) {
+  if (!(await chats(page).count())) await page.getByRole("button", { name: /^Chats/ }).click();
+  await chats(page)
+    .getByRole("button", { name: /Review #482/ })
+    .click();
+  await chats(page).getByRole("heading", { name: "Review #482" }).waitFor();
+}
+
+/** Opens a chat about to be started, with the first agent that can be picked. */
+export async function newChatWithFirst(page: Page) {
+  if (!(await chats(page).count())) await page.getByRole("button", { name: /^Chats/ }).click();
+  await chats(page).getByRole("button", { name: "New chat" }).click();
+  await chats(page)
+    .getByRole("list", { name: "Who with" })
+    .locator("button:enabled")
+    .first()
+    .click();
+}
+
+/** What a refused send says, on both sides. */
+export const REFUSAL = "It isn't connected right now. Try again in a moment.";
+
+/**
+ * A send is refused: the design's from its own control, the built side's by its service. What
+ * was refused is back in the built side's box; emptied and left, the box is as the design's is.
+ */
+export async function refuseSend(page: Page, gateway?: Gateway) {
+  if (!gateway) await inDesign(page, "Refused");
+  else {
+    gateway.refuseNext("chat.send", "unavailable", REFUSAL);
+    const box = chats(page).getByRole("textbox", { name: "Message" });
+    await box.fill("And the tests?");
+    await chats(page).getByRole("button", { name: "Send" }).click();
+    await chats(page).getByRole("alert").waitFor();
+    await box.fill("");
+    await box.blur();
+  }
+  await chats(page).getByRole("alert").getByText(REFUSAL).waitFor();
+}

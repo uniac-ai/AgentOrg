@@ -8,11 +8,15 @@ import { SESSION, standIn } from "../stand-in.ts";
 import {
   ASKED,
   ASKS,
+  type ChatCase,
   closeEveryTab,
   computerWith,
   inDesign,
+  newChatWithFirst,
   noted,
+  openSampleChat,
   readChat,
+  refuseSend,
   sampleChats,
   startTerminals,
   unreadReply,
@@ -40,6 +44,8 @@ interface Screen {
   unread?: boolean;
   /** The built side has the design's sample chats to open. */
   chats?: boolean;
+  /** A case the built side's sample chat is given. */
+  given?: ChatCase;
   /** Terminals the built side is given, as the design's sample has them. */
   terminals?: { cmd: string; running: boolean }[];
   design(page: Page): Promise<unknown>;
@@ -84,6 +90,11 @@ const chatNamed = async (page: Page, title: RegExp) => {
   const panel = page.getByRole("complementary", { name: "Chats" });
   await panel.getByRole("button", { name: title }).click();
   await panel.getByRole("button", { name: "All chats" }).waitFor();
+};
+/** Where a chat has older messages than the page holds, the way to them is brought into view. */
+const earlierInView = async (page: Page) => {
+  const earlier = page.getByRole("button", { name: "Earlier messages" });
+  if (await earlier.count()) await earlier.scrollIntoViewIfNeeded();
 };
 /** The design's own control makes one more chat say something. */
 const twoMoreReplies = async (page: Page) => {
@@ -152,6 +163,52 @@ const SCREENS: Screen[] = [
       chats: true,
       design: reach,
       built: reach,
+    }),
+  ),
+  // The cases the design draws for a chat, each from its own control.
+  ...(
+    [
+      ["no-call", "noCall", "A step with no call"],
+      ["limit", "limit", "Plan limit"],
+      ["earlier", "long", "A long chat"],
+    ] as const
+  ).map(
+    ([name, given, control]): Screen => ({
+      name: `chat-${name}`,
+      sizes: ["wide"],
+      themes: ["dark", "light"],
+      chats: true,
+      given,
+      design: async (page) => {
+        await openSampleChat(page);
+        await inDesign(page, control);
+        await earlierInView(page);
+      },
+      built: async (page) => {
+        await openSampleChat(page);
+        await earlierInView(page);
+      },
+    }),
+  ),
+  ...(
+    [
+      ["refused", openSampleChat],
+      ["refused-first", newChatWithFirst],
+    ] as const
+  ).map(
+    ([name, reach]): Screen => ({
+      name: `chat-${name}`,
+      sizes: ["wide"],
+      themes: ["dark", "light"],
+      chats: true,
+      design: async (page) => {
+        await reach(page);
+        await refuseSend(page);
+      },
+      built: async (page, gateway) => {
+        await reach(page);
+        await refuseSend(page, gateway);
+      },
     }),
   ),
   {
@@ -325,7 +382,7 @@ for (const screen of SCREENS)
             await page.evaluate(() => {
               document.documentElement.dataset.theme = "light";
             });
-          if (screen.chats) sampleChats(gateway);
+          if (screen.chats) sampleChats(gateway, screen.given);
           if (screen.unread) {
             await noted(gateway);
             for (const n of [1, 2, 3]) unreadReply(gateway, n);
