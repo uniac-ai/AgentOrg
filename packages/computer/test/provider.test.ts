@@ -300,7 +300,7 @@ test("on a real service, an agent runs a command, lists it and edits a file, thr
     connections.map((one) => one.slot),
     ["computer"],
   );
-  assert.match(connections[0]?.target ?? "", /this machine, no isolation: files and terminal/);
+  assert.match(connections[0]?.target ?? "", /this computer, no isolation: files and terminal/);
   await connected(instance);
   const computer = await asAgent(connections[0]?.connection as string);
   const ran = await computer.call({

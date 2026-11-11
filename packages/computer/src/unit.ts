@@ -17,7 +17,7 @@ export const LOCAL = "local";
 export const ANOTHER = "another";
 /** What to do when there is no service here: the app never starts or ships one. */
 export const INSTALL_STEPS =
-  "No AgentComputer is running on this machine. Install it with npm install -g @agentorg/computer, start it with agentcomputer serve, and try again.";
+  "No AgentComputer is running on this computer. Install it with npm install -g @agentorg/computer, start it with agentcomputer serve, and try again.";
 
 /** How the service on this machine isolates its computers, if one is running. */
 export type Found = { isolation: "none" | "container" } | undefined;
@@ -25,8 +25,8 @@ const localLine = (found: Found) =>
   !found
     ? INSTALL_STEPS
     : found.isolation === "container"
-      ? "On this machine, started by you. Each computer is a container of its own."
-      : "On this machine, started by you. No isolation: it acts as you, and with a terminal it reaches everything you can.";
+      ? "On this computer, by a service you started. Each agent's computer is a container of its own."
+      : "On this computer, by a service you started. No isolation: it acts as you, and with a terminal it reaches everything you can.";
 
 /** The form as it stands now, with what was found on this machine. */
 export const computerUnit = (found: Found): z.input<typeof Unit> => ({
@@ -38,12 +38,12 @@ export const computerUnit = (found: Found): z.input<typeof Unit> => ({
       id: "service",
       type: "choice",
       value: "string",
-      title: "Service",
+      title: "Where it resides",
       description: "Where its computer runs, and how that's kept apart from everything else.",
       // Not required: with none found, `check` says what to do, which is more than "fill this in".
       ...(found ? { default: LOCAL } : {}),
       options: [
-        { value: LOCAL, title: "This machine", description: localLine(found) },
+        { value: LOCAL, title: "This computer", description: localLine(found) },
         {
           value: ANOTHER,
           title: "Another address",
@@ -56,7 +56,7 @@ export const computerUnit = (found: Found): z.input<typeof Unit> => ({
       type: "text",
       value: "string",
       title: "Address",
-      description: "The service's address, over https unless it's on this machine.",
+      description: "The service's address, over https unless it's on this computer.",
       required: true,
       visible: { field: "service", in: [ANOTHER] },
     },
@@ -71,26 +71,48 @@ export const computerUnit = (found: Found): z.input<typeof Unit> => ({
       visible: { field: "service", in: [ANOTHER] },
     },
     {
+      id: "workspace",
+      type: "directory",
+      value: "string",
+      title: "Workspace directory",
+      description:
+        "The folder it works in. Left empty, it's a folder with the agent's name in ~/Agents, made if it's missing. Its file tools stay inside it by a check, not a sandbox. Removing the agent leaves it.",
+      placeholder: "~/Agents/{name}",
+      visible: { field: "service", in: [LOCAL] },
+    },
+    {
+      id: "path",
+      type: "text",
+      value: "string",
+      title: "Workspace directory",
+      description: "A path on the service's machine. Removing the agent leaves it.",
+      visible: { field: "service", in: [ANOTHER] },
+    },
+    {
       id: "access",
       authority: "setting",
       type: "choice",
       value: "string",
-      title: "What it can do",
+      title: "What it reaches",
       required: true,
       options: [
-        { value: "none", title: "Nothing", description: "It has no files and can't run anything." },
+        {
+          value: "none",
+          title: "No files or terminal",
+          description: "It has no files and can't run anything.",
+        },
         {
           value: "read",
-          title: "Read files",
+          title: "Read-only files",
           description:
-            "It can read files in its working directory, but can't change them or run anything.",
+            "It can read files in its workspace directory, but can't change them or run anything.",
           adds: WITH_FILES,
         },
         {
           value: "files",
-          title: "Read and change files",
+          title: "Files",
           description:
-            "It can read and change files in its working directory, but can't run anything.",
+            "It can read and change files in its workspace directory, but can't run anything.",
           adds: WITH_FILES,
         },
         {
@@ -109,28 +131,10 @@ export const computerUnit = (found: Found): z.input<typeof Unit> => ({
       authority: "setting",
       type: "toggle",
       value: "boolean",
-      title: "Browser",
+      title: "With a browser",
       description: "It can open web pages and act on them, in a browser of its own.",
       default: false,
       adds: { slots: [{ name: BROWSER_SLOT }], skills: [skill("browser")] },
-    },
-    {
-      id: "workspace",
-      type: "directory",
-      value: "string",
-      title: "Working directory",
-      description:
-        "The folder it works in. Left empty, it's a folder with the agent's name in ~/Agents, made if it's missing. Its file tools stay inside it by a check, not a sandbox. Removing the agent leaves it.",
-      placeholder: "~/Agents/{name}",
-      visible: { field: "service", in: [LOCAL] },
-    },
-    {
-      id: "path",
-      type: "text",
-      value: "string",
-      title: "Working directory",
-      description: "A path on the service's machine. Removing the agent leaves it.",
-      visible: { field: "service", in: [ANOTHER] },
     },
   ],
   needs: [],
