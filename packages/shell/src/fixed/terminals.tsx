@@ -69,6 +69,7 @@ export function TerminalsView({ target }: ViewerProps) {
   const drawing = useRef(false);
   /** You pressed the plus, so the next shell a person opens is yours and comes to the front. */
   const opening = useRef(false);
+
   /** The line being typed into a command, which is its own until Enter. */
   const line = useRef("");
   const reopened = useRef(0);
@@ -225,10 +226,18 @@ export function TerminalsView({ target }: ViewerProps) {
               variant="ghost"
               size="icon-sm"
               aria-label="New terminal"
-              disabled={phase !== "open"}
               onClick={() => {
-                opening.current = true;
-                send({ type: "open", ...size.current });
+                if (phase === "open") {
+                  opening.current = true;
+                  send({ type: "open", ...size.current });
+                  return;
+                }
+                // On a view that has closed it does what Open again does, and nothing more.
+                if (phase === "closed") {
+                  setRefused(undefined);
+                  setGaveUp(false);
+                  live.again();
+                }
               }}
             >
               <PlusIcon />

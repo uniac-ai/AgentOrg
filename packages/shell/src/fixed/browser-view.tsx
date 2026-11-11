@@ -98,6 +98,11 @@ export function ScreencastView({ target }: ViewerProps) {
   const send = (input: Record<string, unknown>) => {
     if (operating) live.send(JSON.stringify(input));
   };
+  /** A button's press. On a view that has closed it does what Open again does, and nothing more. */
+  const press = (input: Record<string, unknown>) => {
+    if (canOperate && live.state.phase === "closed") live.again();
+    else send(input);
+  };
   const shown = tabs.tabs.find((tab) => tab.id === tabs.shown);
   const url = shown && shown.url !== BLANK ? shown.url : "";
   // The address shown follows the page, until you start typing one.
@@ -158,20 +163,6 @@ export function ScreencastView({ target }: ViewerProps) {
           >
             {tabs.tabs.map((tab) => {
               const on = tab.id === tabs.shown;
-              // Where you may only watch, a tab is its name alone.
-              if (!canOperate)
-                return (
-                  <button
-                    key={tab.id}
-                    type="button"
-                    role="tab"
-                    aria-selected={on}
-                    disabled
-                    className={`h-8 min-w-0 shrink truncate rounded-lg px-3 text-[13px] ${on ? "bg-[var(--selected)] font-medium text-foreground" : "text-muted-foreground"}`}
-                  >
-                    {nameOf(tab)}
-                  </button>
-                );
               return (
                 <span
                   key={tab.id}
@@ -181,8 +172,8 @@ export function ScreencastView({ target }: ViewerProps) {
                     type="button"
                     role="tab"
                     aria-selected={on}
-                    disabled={!operating}
-                    onClick={() => send({ type: "tab", action: "show", id: tab.id })}
+                    disabled={!canOperate}
+                    onClick={() => press({ type: "tab", action: "show", id: tab.id })}
                     className={`h-8 min-w-0 truncate pr-1 pl-3 text-[13px] ${on ? "font-medium" : "text-muted-foreground"}`}
                   >
                     {nameOf(tab)}
@@ -190,9 +181,9 @@ export function ScreencastView({ target }: ViewerProps) {
                   <button
                     type="button"
                     aria-label={`Close ${nameOf(tab)}`}
-                    disabled={!operating}
-                    onClick={() => send({ type: "tab", action: "close", id: tab.id })}
-                    className="mr-1 grid size-5 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-[var(--hover)]"
+                    disabled={!canOperate}
+                    onClick={() => press({ type: "tab", action: "close", id: tab.id })}
+                    className="mr-1 grid size-5 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-[var(--hover)] disabled:opacity-50"
                   >
                     <XIcon className="size-3" />
                   </button>
@@ -200,17 +191,17 @@ export function ScreencastView({ target }: ViewerProps) {
               );
             })}
           </div>
-          {canOperate && (
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label="New tab"
-              disabled={!operating}
-              onClick={() => send({ type: "tab", action: "open" })}
-            >
-              <PlusIcon />
-            </Button>
-          )}
+          {/* Where you may only watch, the plus, like each Close and the buttons below, is there
+              and off. */}
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="New tab"
+            disabled={!canOperate}
+            onClick={() => press({ type: "tab", action: "open" })}
+          >
+            <PlusIcon />
+          </Button>
         </div>
       </div>
       {/* The second row: where it is. */}
@@ -230,8 +221,8 @@ export function ScreencastView({ target }: ViewerProps) {
               variant="ghost"
               size="icon-sm"
               aria-label={to[0]?.toUpperCase() + to.slice(1)}
-              disabled={!operating || tabs.shown === null}
-              onClick={() => send({ type: "navigate", to })}
+              disabled={!canOperate || tabs.shown === null}
+              onClick={() => press({ type: "navigate", to })}
             >
               <Icon />
             </Button>

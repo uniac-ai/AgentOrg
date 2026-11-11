@@ -356,7 +356,7 @@ test(
 );
 
 test(
-  "a browser you may only watch shows the page and what it asks, with nothing to press",
+  "a browser you may only watch shows the page and what it asks, with its controls there and off",
   withGateway(async (gateway) => {
     withSurfaces(gateway, [{ ...BROWSER, operate: false }]);
     const page = await open(gateway);
@@ -365,13 +365,38 @@ test(
     assert.equal(gateway.live.opened.at(-1)?.mode, "watch");
     assert.ok(await frame.getByRole("button", { name: "Back" }).isDisabled());
     assert.ok(await frame.getByRole("tab", { name: "Checkout" }).isDisabled());
-    assert.equal(await frame.getByRole("button", { name: "New tab", exact: true }).count(), 0);
-    assert.equal(await frame.getByRole("button", { name: /^Close / }).count(), 0);
+    // The plus and a tab's Close are where they are when you may operate, and off.
+    for (const name of ["New tab", "Close Checkout"])
+      assert.ok(await frame.getByRole("button", { name, exact: true }).isDisabled(), name);
+    assert.equal(await frame.getByLabel("Address").getAttribute("readonly"), "");
 
     gateway.screen({ type: "dialog", open: true, kind: "confirm", message: "Leave this page?" });
     const asks = frame.getByRole("dialog", { name: "The page asks" });
     await asks.getByText("Leave this page?").waitFor();
     assert.equal(await asks.getByRole("button").count(), 0, "a watcher can't answer");
+    await page.close();
+  }),
+);
+
+test(
+  "a browser view that closed says so under the window, and a button pressed there opens it again",
+  withGateway(async (gateway) => {
+    withSurfaces(gateway, [BROWSER]);
+    const page = await open(gateway);
+    const frame = page.getByRole("region", { name: "Browser" });
+    await frame.getByRole("tab", { name: "Checkout" }).waitFor();
+    const opened = () => gateway.live.opened.filter((o) => o.surface === "browser").length;
+    for (const ws of gateway.live.screens.keys()) ws.terminate();
+    await frame.getByText("It closed.").waitFor();
+    await frame.getByRole("button", { name: "Open again" }).waitFor();
+    // Its controls are as they were: none is dimmed for the view being closed.
+    for (const name of ["Back", "Reload", "New tab", "Close Checkout"])
+      assert.ok(await frame.getByRole("button", { name, exact: true }).isEnabled(), name);
+    // Pressed, a button opens the view again; what it would have done isn't done.
+    await frame.getByRole("button", { name: "Reload" }).click();
+    await until(() => opened() === 2 && gateway.live.screens.size === 1, "opened again");
+    await frame.getByText("It closed.").waitFor({ state: "detached" });
+    assert.equal(gateway.live.input.filter((i) => i.type === "navigate").length, 0);
     await page.close();
   }),
 );

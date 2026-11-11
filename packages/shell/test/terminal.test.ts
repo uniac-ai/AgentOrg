@@ -377,6 +377,27 @@ test(
 );
 
 test(
+  "the plus isn't dimmed on a view that has closed: pressed there, it opens the view again",
+  withGateway(async (gateway) => {
+    withTerminals(gateway);
+    const page = await open(gateway);
+    await front(page, "npm run dev");
+    for (const ws of gateway.live.terminal.sockets) ws.close(1001, "It stopped.");
+    await pane(page).getByText("It stopped.").waitFor();
+    const plus = pane(page).getByRole("button", { name: "New terminal" });
+    assert.equal(await plus.isEnabled(), true);
+    await plus.click();
+    await pane(page).getByText("It stopped.").waitFor({ state: "detached" });
+    const opened = () => gateway.live.opened.filter((o) => o.surface === "terminal").length;
+    await until(() => opened() === 2 && gateway.live.terminal.sockets.size === 1, "opened again");
+    // And nothing more: no terminal was asked for.
+    await front(page, "npm run dev");
+    assert.equal(gateway.live.terminal.input.filter((i) => i.type === "open").length, 0);
+    await page.close();
+  }),
+);
+
+test(
   "a socket ended on purpose says why and waits to be opened again",
   withGateway(async (gateway) => {
     withTerminals(gateway);

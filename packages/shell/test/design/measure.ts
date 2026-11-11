@@ -9,8 +9,19 @@
 // shell adds its probe and its screens here, and its screens to pairs.ts.
 import { writeFileSync } from "node:fs";
 import { chromium, type Page } from "@playwright/test";
-import { type Agent, SESSION, standIn } from "../stand-in.ts";
-import { noted, readChat, sampleChats, unreadReply } from "./unread.ts";
+import { SESSION, standIn } from "../stand-in.ts";
+import {
+  ASKED,
+  ASKS,
+  closeEveryTab,
+  computerWith,
+  inDesign,
+  noted,
+  readChat,
+  sampleChats,
+  startTerminals,
+  unreadReply,
+} from "./samples.ts";
 
 const [design, out] = process.argv.slice(2);
 if (!design || !out) throw new Error("usage: measure.ts <design.html> <out.json>");
@@ -38,7 +49,8 @@ type Gateway = Awaited<ReturnType<typeof standIn>>;
  * Runs in the page. `frame` measures the left bar, a drawer if one is open, the phone's head and
  * the page area, from the shell's top left. `terminal` and `browser` measure those windows' own
  * rows, from the window's top left. `chat` measures the collapsed chat and its panel, from the
- * shell's top left. `thread` measures one chat, a chat about to be started, and the chats the bar's
+ * shell's top left. A window is also measured in the cases the design draws for it: what was
+ * typed refused, its view closed, only watched, no tab, and the page asking. `thread` measures one chat, a chat about to be started, and the chats the bar's
  * search finds, from the shell's top left. Each also lists the controls and marks seen in its regions: the bar, a
  * drawer, the phone's head, a window, the collapsed chat and its panel. The page area is not
  * listed: its pages are not the design's yet.
@@ -109,9 +121,38 @@ const probe = (what: Part): Parts => {
         const said =
           (label ?? e.textContent ?? "").split(",")[0]?.trim().replace(/\d+/g, "#") ?? "";
         const repeats = e.closest('li, [role="tablist"]');
-        all.add(`${kind}: ${repeats ? (label ? said.split(" ")[0] : "") : said}`.trim());
+        // What speaks up, in any region, says the service's words or the sample's: it is listed
+        // by its kind alone.
+        const spoken = kind === "alert" || kind === "status";
+        all.add(
+          `${kind}: ${spoken ? "" : repeats ? (label ? said.split(" ")[0] : "") : said}`.trim(),
+        );
       }
     parts[`${name}.seen`] = [...all].sort().join(" | ");
+  };
+
+  /** A part measured from the top left of another it is in, where that one's place isn't fixed. */
+  const inside = (box: Element | null | undefined, e: Element | null | undefined, fills = "") => {
+    const m = of(e, fills);
+    const [at, own] = [box?.getBoundingClientRect(), e?.getBoundingClientRect()];
+    if (m && at && own) {
+      m.box[0] = round(own.x - at.x);
+      m.box[1] = round(own.y - at.y);
+    }
+    return m;
+  };
+  /** What a window says under itself when its view has closed. */
+  const closed = (window: Element | null | undefined) => {
+    const again = [...(window?.querySelectorAll("button") ?? [])].find(
+      (b) => b.textContent?.trim() === "Open again",
+    );
+    const line = again?.parentElement;
+    // Under the window, which is as tall as its frame: its place is the frame's, its size its own.
+    const whole = of(line, "w");
+    if (whole) whole.box = ["-", "under the window", "fills", whole.box[3] ?? 0];
+    parts.closed = whole;
+    parts["closed.words"] = inside(line, line?.children[0]);
+    parts["closed.again"] = inside(line, again);
   };
 
   if (what === "terminal") {
@@ -150,6 +191,20 @@ const probe = (what: Part): Parts => {
     const line = of(rows?.children[0], "w");
     if (line) line.box = ["-", "-", "fills", line.box[3] ?? 0];
     parts.line = line;
+    // What was typed and refused: one line over the foot of the terminal, from its foot.
+    const alert = bar.parentElement?.querySelector('[role="alert"]');
+    const refused = of(alert, "w");
+    const foot = alert?.parentElement?.getBoundingClientRect();
+    const said = alert?.getBoundingClientRect();
+    if (refused && foot && said)
+      refused.box = [
+        round(said.x - foot.x),
+        round(foot.bottom - said.bottom),
+        "fills",
+        refused.box[3] ?? 0,
+      ];
+    parts.refused = refused;
+    closed(bar.parentElement);
     return parts;
   }
 
@@ -191,7 +246,26 @@ const probe = (what: Part): Parts => {
     }
     parts.address = of(where?.querySelector('[aria-label="Address"]'), "w");
     // The page under them: as wide and tall as the window leaves it.
-    parts.page = of(where?.nextElementSibling, "wh");
+    const page = where?.nextElementSibling;
+    parts.page = of(page, "wh");
+    // What the page asks, over the page: across its middle, from its top.
+    const asks = page?.querySelector('[role="dialog"]');
+    const asked = inside(page, asks);
+    const [around, box] = [page?.getBoundingClientRect(), asks?.getBoundingClientRect()];
+    // Across the middle of the page, however wide the page is.
+    if (asked && around && box && Math.abs(box.x - around.x - (around.right - box.right)) < 1)
+      asked.box[0] = "in the middle";
+    parts.asks = asked;
+    parts["asks.words"] = inside(asks, asks?.querySelector("p"), "w");
+    const answers = [...(asks?.querySelectorAll("button") ?? [])];
+    const named = (name: string) => answers.find((b) => b.textContent?.trim() === name);
+    parts["asks.ok"] = inside(asks, named("OK"));
+    parts["asks.cancel"] = inside(asks, named("Cancel"));
+    parts["asks.file"] = inside(asks, asks?.querySelector('input[type="file"]'), "w");
+    const options = asks?.querySelector("ul");
+    parts["asks.options"] = inside(asks, options);
+    parts["asks.option"] = inside(asks, options?.querySelector("button"));
+    closed(bar.parentElement);
     return parts;
   }
 
@@ -452,7 +526,8 @@ for (const size of Object.keys(SIZES) as Size[])
     }
 
 // The terminal window: the design's own, and the built one with terminals of the same names in
-// the same states.
+// the same states. Then the cases the design draws from its own controls, which the built side
+// is put in by its service: typing refused, the view closed, and a computer only watched.
 for (const theme of ["dark", "light"] as const) {
   const drawn = await designPage("wide", theme);
   await drawn
@@ -463,59 +538,64 @@ for (const theme of ["dark", "light"] as const) {
   await rest(drawn, "wide");
   const designed = await measure(drawn, "terminal");
   all[`terminal.${theme}.design`] = designed;
-  await drawn.close();
-
-  const gateway = await standIn();
-  (gateway.agents.get("a-research") as Agent).units = [
-    {
-      instance: "i-computer",
-      provider: "units",
-      unit: "computer",
-      title: "Computer",
-      values: {},
-      needs: {},
-      status: {
-        state: "connected",
-        surfaces: [{ surface: "terminal", protocol: "terminal@1", operate: true }],
-      },
-    },
-  ];
   const titles = String(designed.tabs).split(" | ");
-  const at = "2026-01-01T10:00:00Z";
-  titles.forEach((title, i) => {
-    const id = `t${i}`;
-    const cmd = title.replace(" (in front)", "");
-    gateway.terminal({ type: "start", id, by: "agent", cmd, workdir: "/work", tty: false, at });
-    if (!designed[`tab${i}.running`]) gateway.terminal({ type: "exit", id, exitCode: 0, at });
-  });
-  const built = await builtPage(gateway, "wide", theme, "#/a/a-research");
-  const tabs = built.getByRole("tablist", { name: "Terminals" }).getByRole("tab");
-  await tabs.nth(titles.findIndex((title) => title.endsWith(" (in front)"))).click();
-  await rest(built, "wide");
-  all[`terminal.${theme}.built`] = await measure(built, "terminal");
-  await built.close();
+  const terminals = titles.map((title, i) => ({
+    cmd: title.replace(" (in front)", ""),
+    running: !!designed[`tab${i}.running`],
+  }));
+  const front = titles.findIndex((title) => title.endsWith(" (in front)"));
+  /** The built side, with the same terminals and the same one in front. */
+  const built = async (operate: boolean) => {
+    const gateway = await standIn();
+    computerWith(gateway, "terminal", operate);
+    startTerminals(gateway, terminals);
+    const page = await builtPage(gateway, "wide", theme, "#/a/a-research");
+    await page.getByRole("tablist", { name: "Terminals" }).getByRole("tab").nth(front).click();
+    return { gateway, page };
+  };
+  const both = async (state: string, page: Page) => {
+    for (const [side, one] of [
+      ["design", drawn],
+      ["built", page],
+    ] as const) {
+      await rest(one, "wide");
+      all[`terminal.${state}${theme}.${side}`] = await measure(one, "terminal");
+    }
+  };
+  const { gateway, page } = await built(true);
+  await both("", page);
+
+  await inDesign(drawn, "Typing refused");
+  gateway.live.terminal.full = true;
+  await page.getByRole("button", { name: "New terminal" }).click();
+  await page.getByRole("group", { name: "Terminals" }).getByRole("alert").waitFor();
+  await both("refused.", page);
+  await inDesign(drawn, "Typing taken");
+  // Picking a tab takes the built side's refusal away.
+  await page.getByRole("tablist", { name: "Terminals" }).getByRole("tab").nth(front).click();
+
+  await inDesign(drawn, "View closed");
+  for (const ws of gateway.live.terminal.sockets) ws.close(1000);
+  await page.getByRole("button", { name: "Open again" }).waitFor();
+  await both("closed.", page);
+  await inDesign(drawn, "View open");
+  await page.close();
   await gateway.close();
+
+  await inDesign(drawn, "Watch only");
+  const watched = await built(false);
+  await both("watch.", watched.page);
+  await watched.page.close();
+  await watched.gateway.close();
+  await drawn.close();
 }
 
 // The browser window: the design's own, and the built one, each with a tab you opened in front.
+// Then its cases: the view closed, what the page asks, no tab, and a computer only watched.
 for (const theme of ["dark", "light"] as const)
   for (const side of ["design", "built"] as const) {
     const gateway = side === "built" ? await standIn() : undefined;
-    if (gateway)
-      (gateway.agents.get("a-research") as Agent).units = [
-        {
-          instance: "i-computer",
-          provider: "units",
-          unit: "computer",
-          title: "Computer",
-          values: {},
-          needs: {},
-          status: {
-            state: "connected",
-            surfaces: [{ surface: "browser", protocol: "screencast@1", operate: true }],
-          },
-        },
-      ];
+    if (gateway) computerWith(gateway, "browser");
     const page = gateway
       ? await builtPage(gateway, "wide", theme, "#/a/a-research")
       : await designPage("wide", theme);
@@ -528,8 +608,69 @@ for (const theme of ["dark", "light"] as const)
     }
     await page.getByRole("button", { name: "New tab", exact: true }).click();
     await page.getByRole("tab", { name: "New tab", selected: true }).waitFor();
-    await rest(page, "wide");
-    all[`browser.${theme}.${side}`] = await measure(page, "browser");
+    const at = async (state: string, on = page) => {
+      await rest(on, "wide");
+      all[`browser.${state}${theme}.${side}`] = await measure(on, "browser");
+    };
+    await at("");
+
+    const again = page.getByRole("button", { name: "Open again" });
+    if (gateway) for (const ws of gateway.live.screens.keys()) ws.close(1000);
+    else await inDesign(page, "View closed");
+    await again.waitFor();
+    await at("closed.");
+    if (gateway) await again.click();
+    else await inDesign(page, "View open");
+    await again.waitFor({ state: "detached" });
+    // The built side's view is open again once its service has it.
+    while (gateway && gateway.live.screens.size === 0)
+      await new Promise((done) => setTimeout(done, 20));
+
+    // Each thing a page asks, one after another; then answered, it is gone.
+    const asks = page.getByRole("dialog", { name: "The page asks" });
+    for (const [name, event] of Object.entries(ASKS)) {
+      if (gateway) gateway.screen(event);
+      else await inDesign(page, /^Page asks/);
+      await asks.getByText(ASKED[name as keyof typeof ASKS]).waitFor();
+      await at(`asks.${name}.`);
+    }
+    if (gateway) await asks.getByRole("button").first().click();
+    else await inDesign(page, /^Page asks/);
+    await asks.waitFor({ state: "detached" });
+
+    if (gateway) await closeEveryTab(page);
+    else await inDesign(page, "No tab");
+    await page
+      .getByRole("tablist", { name: "Tabs" })
+      .getByRole("tab")
+      .first()
+      .waitFor({ state: "detached" });
+    await at("notab.");
+
+    // Watched only: the design's own page with its control on, and a built one that may not
+    // operate, each with a tab of that name in front, and then with the page asking.
+    let watching = page;
+    let watched: Gateway | undefined;
+    if (gateway) {
+      watched = await standIn();
+      computerWith(watched, "browser", false);
+      // A watcher opens no tab of its own: the one in front is there already.
+      watched.live.tabs.push({ id: 2, url: "about:blank", title: "" });
+      watching = await builtPage(watched, "wide", theme, "#/a/a-research");
+    } else {
+      await inDesign(page, "A tab");
+      await inDesign(page, "Watch only");
+    }
+    await watching.getByRole("tab", { name: "New tab", selected: true }).waitFor();
+    await at("watch.", watching);
+    if (watched) watched.screen(ASKS.confirm);
+    else await inDesign(page, /^Page asks/);
+    await watching.getByRole("dialog", { name: "The page asks" }).waitFor();
+    await at("asks.watch.", watching);
+    if (watched) {
+      await watching.close();
+      await watched.close();
+    }
     await page.close();
     await gateway?.close();
   }

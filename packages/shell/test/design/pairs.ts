@@ -4,8 +4,19 @@
 //
 // Build the shell first. A part added to the shell adds its screens here.
 import { chromium, type Page } from "@playwright/test";
-import { type Agent, SESSION, standIn } from "../stand-in.ts";
-import { noted, readChat, sampleChats, unreadReply } from "./unread.ts";
+import { SESSION, standIn } from "../stand-in.ts";
+import {
+  ASKED,
+  ASKS,
+  closeEveryTab,
+  computerWith,
+  inDesign,
+  noted,
+  readChat,
+  sampleChats,
+  startTerminals,
+  unreadReply,
+} from "./samples.ts";
 
 const [design, out] = process.argv.slice(2);
 if (!design || !out) throw new Error("usage: pairs.ts <design.html> <out dir>");
@@ -23,6 +34,8 @@ interface Screen {
   hash?: string;
   /** The built side's computer has a browser. */
   browser?: boolean;
+  /** The built side's computer may only be watched. */
+  watch?: boolean;
   /** Three of the built side's agents have said something you haven't read. */
   unread?: boolean;
   /** The built side has the design's sample chats to open. */
@@ -30,7 +43,7 @@ interface Screen {
   /** Terminals the built side is given, as the design's sample has them. */
   terminals?: { cmd: string; running: boolean }[];
   design(page: Page): Promise<unknown>;
-  built(page: Page): Promise<unknown>;
+  built(page: Page, gateway: Gateway): Promise<unknown>;
   part?: (page: Page) => ReturnType<Page["locator"]>;
 }
 const railSearch = (page: Page) =>
@@ -44,6 +57,26 @@ const browserWindow = (page: Page) =>
 const ownTab = async (page: Page) => {
   await page.getByRole("button", { name: "New tab", exact: true }).click();
   await page.getByRole("tab", { name: "New tab", selected: true }).waitFor();
+};
+type Gateway = Awaited<ReturnType<typeof standIn>>;
+/** The terminals the design's sample has. */
+const TERMINALS = [
+  { cmd: "zsh", running: false },
+  { cmd: "npm run dev", running: true },
+  { cmd: "npm test -- checkout", running: true },
+];
+/** The design's own windows, on Research's computer. */
+const windowOf = async (page: Page, name: string) => {
+  await page
+    .getByRole("navigation", { name: "Main" })
+    .getByRole("button", { name: "Research", exact: true })
+    .click();
+  await page.getByRole("button", { name, exact: true }).click();
+};
+const terminalOf = (page: Page) => windowOf(page, "Terminal");
+const browserOf = async (page: Page) => {
+  await windowOf(page, "Browser");
+  await ownTab(page);
 };
 /** One chat, opened from the list. */
 const chatNamed = async (page: Page, title: RegExp) => {
@@ -134,18 +167,8 @@ const SCREENS: Screen[] = [
     sizes: ["wide"],
     themes: ["dark", "light"],
     hash: "#/a/a-research",
-    terminals: [
-      { cmd: "zsh", running: false },
-      { cmd: "npm run dev", running: true },
-      { cmd: "npm test -- checkout", running: true },
-    ],
-    design: async (page) => {
-      await page
-        .getByRole("navigation", { name: "Main" })
-        .getByRole("button", { name: "Research", exact: true })
-        .click();
-      await page.getByRole("button", { name: "Terminal", exact: true }).click();
-    },
+    terminals: TERMINALS,
+    design: terminalOf,
     built: async () => {},
     part: terminalWindow,
   },
@@ -155,17 +178,101 @@ const SCREENS: Screen[] = [
     themes: ["dark", "light"],
     hash: "#/a/a-research",
     browser: true,
-    design: async (page) => {
-      await page
-        .getByRole("navigation", { name: "Main" })
-        .getByRole("button", { name: "Research", exact: true })
-        .click();
-      await page.getByRole("button", { name: "Browser", exact: true }).click();
-      await ownTab(page);
-    },
+    design: browserOf,
     built: ownTab,
     part: browserWindow,
   },
+  // The cases the design draws from its own controls, and the built side from its service.
+  ...(
+    [
+      [
+        "refused",
+        "Typing refused",
+        async (page: Page, gateway: Gateway) => {
+          gateway.live.terminal.full = true;
+          await page.getByRole("button", { name: "New terminal" }).click();
+          await page.getByRole("group", { name: "Terminals" }).getByRole("alert").waitFor();
+        },
+      ],
+      [
+        "closed",
+        "View closed",
+        async (page: Page, gateway: Gateway) => {
+          // Once the view is open: its tabs are drawn from what the service sent it.
+          await page.getByRole("tablist", { name: "Terminals" }).getByRole("tab").first().waitFor();
+          for (const ws of gateway.live.terminal.sockets) ws.close(1000);
+        },
+      ],
+      ["watch", "Watch only", async () => {}],
+    ] as const
+  ).map(
+    ([name, control, built]): Screen => ({
+      name: `terminal-${name}`,
+      sizes: ["wide"],
+      themes: ["dark", "light"],
+      hash: "#/a/a-research",
+      watch: name === "watch",
+      terminals: TERMINALS,
+      design: async (page) => {
+        await terminalOf(page);
+        await inDesign(page, control);
+      },
+      built,
+      part: terminalWindow,
+    }),
+  ),
+  ...(
+    [
+      [
+        "closed",
+        ["View closed"],
+        async (page: Page, gateway: Gateway) => {
+          await ownTab(page);
+          for (const ws of gateway.live.screens.keys()) ws.close(1000);
+        },
+      ],
+      ["no-tab", ["No tab"], closeEveryTab],
+      ...(["confirm", "file", "choice"] as const).map(
+        (kind, n) =>
+          [
+            `asks-${kind}`,
+            // The design's control goes through them in this order: one press more for each.
+            Array.from({ length: n + 1 }, () => /^Page asks/),
+            async (page: Page, gateway: Gateway) => {
+              await ownTab(page);
+              gateway.screen(ASKS[kind]);
+              await page.getByRole("dialog").getByText(ASKED[kind]).waitFor();
+            },
+          ] as const,
+      ),
+      ["watch", ["Watch only"], async () => {}],
+      [
+        "asks-watch",
+        ["Watch only", /^Page asks/],
+        async (page: Page, gateway: Gateway) => {
+          // Once the view is open: a page that asks before then is heard by nobody.
+          await page.getByRole("tab", { name: "New tab", selected: true }).waitFor();
+          gateway.screen(ASKS.confirm);
+          await page.getByRole("dialog").getByText(ASKED.confirm).waitFor();
+        },
+      ],
+    ] as const
+  ).map(
+    ([name, controls, built]): Screen => ({
+      name: `browser-${name}`,
+      sizes: ["wide"],
+      themes: ["dark", "light"],
+      hash: "#/a/a-research",
+      browser: true,
+      watch: name.endsWith("watch"),
+      design: async (page) => {
+        await browserOf(page);
+        for (const control of controls) await inDesign(page, control);
+      },
+      built,
+      part: browserWindow,
+    }),
+  ),
 ];
 
 const browser = await chromium.launch();
@@ -180,51 +287,17 @@ for (const screen of SCREENS)
           viewport: { width, height: side === "design" ? height + CONTROLS : height },
         });
         if (gateway) {
-          if (screen.browser)
-            (gateway.agents.get("a-research") as Agent).units = [
-              {
-                instance: "i-computer",
-                provider: "units",
-                unit: "computer",
-                title: "Computer",
-                values: {},
-                needs: {},
-                status: {
-                  state: "connected",
-                  surfaces: [{ surface: "browser", protocol: "screencast@1", operate: true }],
-                },
-              },
-            ];
+          if (screen.browser) computerWith(gateway, "browser", !screen.watch);
+          // A watcher opens no tab of its own: the one in front is there already.
+          if (screen.browser && screen.watch)
+            gateway.live.tabs.push({ id: 2, url: "about:blank", title: "" });
           if (screen.terminals) {
-            (gateway.agents.get("a-research") as Agent).units = [
-              {
-                instance: "i-computer",
-                provider: "units",
-                unit: "computer",
-                title: "Computer",
-                values: {},
-                needs: {},
-                status: {
-                  state: "connected",
-                  surfaces: [{ surface: "terminal", protocol: "terminal@1", operate: true }],
-                },
-              },
-            ];
-            const at = "2026-01-01T10:00:00Z";
-            screen.terminals.forEach(({ cmd, running }, i) => {
-              const id = `t${i}`;
-              gateway.terminal({
-                type: "start",
-                id,
-                by: "agent",
-                cmd,
-                workdir: "/home/sam/Agents/Research",
-                tty: false,
-                at,
-              });
-              gateway.terminal({ type: "output", id, text: "ready\n" });
-              if (!running) gateway.terminal({ type: "exit", id, exitCode: 0, at });
-            });
+            computerWith(gateway, "terminal", !screen.watch);
+            startTerminals(
+              gateway,
+              screen.terminals.map((one) => ({ ...one, said: "ready\n" })),
+              "/home/sam/Agents/Research",
+            );
           }
           await page.addInitScript(
             (session) => localStorage.setItem("agentorg.session", session),
@@ -245,7 +318,7 @@ for (const screen of SCREENS)
             for (const n of [1, 2, 3]) unreadReply(gateway, n);
             readChat(gateway);
           }
-          await screen.built(page);
+          await screen.built(page, gateway);
         } else {
           await page.goto(`file://${design}`);
           if (theme === "light") await page.getByRole("button", { name: "Light" }).click();
