@@ -1,10 +1,11 @@
-import { type LoginStatus, USAGE } from "../app.tsx";
+import { USAGE } from "../app.tsx";
 import { api, go, type Route, setTheme, type ThemeName, useLoad, useTheme } from "../data.ts";
 import { signIn, useSigningIn } from "../sign-in.ts";
 import { Button } from "../ui/button.tsx";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select.tsx";
 import { Tabs, TabsList, TabsTrigger } from "../ui/tabs.tsx";
 import { listAgents, listConnections, listMcpProviders, useAct, useCreatables } from "./data.ts";
+import { type LoginStatus, useLoginStatus } from "./login.tsx";
 import { Jump, rowClass, Scroll, Section, UsedBy } from "./parts.tsx";
 
 const countOf = (n: number) => `${n} ${n === 1 ? "connection" : "connections"}`;
@@ -68,18 +69,12 @@ export function SettingsFrame({
   );
 }
 
-export function SettingsPage({
-  tab,
-  login,
-}: {
-  tab: "providers" | "account";
-  login?: LoginStatus;
-}) {
+export function SettingsPage({ tab }: { tab: "providers" | "account" }) {
   return (
     <SettingsFrame tab={tab}>
       <Scroll>
         <div className="mx-auto flex max-w-5xl flex-col gap-7">
-          {tab === "providers" ? <Providers /> : <AccountTab login={login} />}
+          {tab === "providers" ? <Providers /> : <AccountTab />}
         </div>
       </Scroll>
     </SettingsFrame>
@@ -136,8 +131,9 @@ function Providers() {
   );
 }
 
-function AccountTab({ login }: { login?: LoginStatus }) {
+function AccountTab() {
   const theme = useTheme();
+  const login = useLoginStatus();
   return (
     <>
       {login && (

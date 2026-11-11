@@ -21,6 +21,7 @@
 }
 :root[data-theme="light"] {
   --bad: rgb(220 38 38);
+  --warn: rgb(180 83 9);
   --canvas: rgb(243 243 243);
   --surface: rgb(255 255 255);
   --raised: rgb(240 240 240);
@@ -100,52 +101,14 @@ svg {
   font-weight: 600;
   letter-spacing: -0.01em;
 }
-.primary {
-  border: 0;
-  border-radius: 10px;
-  background: var(--accent);
-  color: var(--accent-fg);
-  height: 40px;
-  padding: 0 18px;
-  font-weight: 600;
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  justify-content: center;
-}
-.primary:disabled {
-  opacity: 0.6;
-  cursor: default;
-}
-.signin-card .primary {
-  width: 100%;
-}
 .quiet {
   color: var(--muted);
   font-size: 12.5px;
   text-align: center;
   margin: 0;
 }
-/* Its line says what's happening; room for two, so a longer or shorter one moves nothing. */
-.signin-card .quiet {
-  line-height: 18px;
-  min-height: 36px;
-}
 a {
   color: inherit;
-}
-.spin {
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  border: 2px solid currentColor;
-  border-right-color: transparent;
-  animation: spin 0.8s linear infinite;
-}
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
 }
 .icon-btn {
   width: 30px;

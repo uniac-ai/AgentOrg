@@ -27,9 +27,13 @@ import {
   openWindow,
   readChat,
   refuseSend,
+  SIGN_INS,
   sampleAgents,
   sampleChats,
   sampleLoad,
+  signInAccount,
+  signInHash,
+  signInState,
   startTerminals,
   stopAgent,
   unreadReply,
@@ -56,7 +60,8 @@ type Parts = Record<string, Measured | string | number | null>;
 /**
  * What a probe measures: the frame, one window's own rows, the chat in its layer, one chat, the
  * way to a chat's older messages, Home, an agent's page, its setup, its computer's frame on its
- * page, that computer as the layer's window, or its files window's own rows.
+ * page, that computer as the layer's window, its files window's own rows, or the model
+ * account's states.
  */
 type Part =
   | "frame"
@@ -70,7 +75,8 @@ type Part =
   | "setup"
   | "computer"
   | "window"
-  | "files";
+  | "files"
+  | "signin";
 type Gateway = Awaited<ReturnType<typeof standIn>>;
 
 /**
@@ -410,6 +416,60 @@ const probe = (what: Part): Parts => {
     parts["chats.new.button"] = of(chats?.previousElementSibling?.querySelector("button"));
     parts["chats.new.icon"] = of(chats?.previousElementSibling?.querySelector("svg"));
     parts["chats.row"] = of(chats?.querySelector("li button"));
+    return parts;
+  }
+
+  if (what === "signin") {
+    // The model account's states, wherever one shows, from the shell's top left: Home's place
+    // for what is left to set up, the bar's mark, an agent's line, a chat's place for the way
+    // in, and a tab that is no longer signed in.
+    const shell = document.querySelector("[data-shell]");
+    if (!shell) return parts;
+    origin = shell.getBoundingClientRect();
+    const place = document.querySelector('main section[aria-label="Set up"]');
+    controls("place", place);
+    parts.place = of(place);
+    // Each state's words lie in the same cell: the one seen is measured, with what it says, since
+    // the words are the product's own.
+    const [title, words] = ["h2", "p"].map((one) =>
+      [...(place?.querySelectorAll(one) ?? [])].find(shows),
+    );
+    const way = place?.querySelector("button");
+    parts["place.title"] = of(title);
+    parts["place.words"] = of(words);
+    parts["place.says"] = place
+      ? [title, words, way].map((one) => one?.textContent?.trim()).join(" | ")
+      : null;
+    parts["place.way"] = of(way);
+    parts["place.way.turning"] = of(way?.querySelector("svg"));
+    parts["bar.mark"] = of(
+      document.querySelector(
+        'nav[aria-label="Main"] button[aria-label="Home"] span.relative > span',
+      ),
+    );
+    const line = document.querySelector('main [role="status"][aria-label="State"]');
+    controls("line", line);
+    parts.line = of(line);
+    parts["line.dot"] = of(line?.children[0]);
+    parts["line.words"] = of(line?.children[1]);
+    parts["line.setup"] = of(line?.querySelector("button"));
+    parts["line.says"] = line?.textContent?.trim() ?? null;
+    const send = document.querySelector('[role="group"][aria-label="Sign in to send"]');
+    controls("send", send);
+    parts.send = of(send);
+    parts["send.words"] = of(send?.children[0]);
+    parts["send.way"] = of(send?.querySelector("button"));
+    parts["send.says"] = send?.textContent?.trim() ?? null;
+    const gone = document.querySelector('main[aria-label="Signed out"]');
+    controls("gone", gone);
+    parts.gone = of(gone);
+    parts["gone.name"] = of(gone?.querySelector("h1"));
+    parts["gone.words"] = of(gone?.querySelector("p"));
+    const command = gone?.querySelector("code")?.parentElement;
+    parts["gone.command"] = of(command);
+    parts["gone.command.words"] = of(command?.querySelector("code"));
+    parts["gone.command.copy"] = of(command?.querySelector("button"));
+    parts["gone.says"] = gone?.textContent?.trim() ?? null;
     return parts;
   }
 
@@ -814,10 +874,11 @@ async function designPage(size: Size, theme: Theme) {
   if (theme === "light") await page.getByRole("button", { name: "Light" }).click();
   return page;
 }
-async function builtPage(gateway: Gateway, size: Size, theme: Theme, hash = "#/") {
+async function builtPage(gateway: Gateway, size: Size, theme: Theme, hash = "#/", session = true) {
   const [width, height] = SIZES[size];
   const page = await browser.newPage({ viewport: { width, height } });
-  await page.addInitScript((session) => localStorage.setItem("agentorg.session", session), SESSION);
+  if (session)
+    await page.addInitScript((s) => localStorage.setItem("agentorg.session", s), SESSION);
   await page.goto(`${gateway.url}/${hash}`);
   await page
     .getByRole("button", { name: "Dismiss" })
@@ -1181,6 +1242,39 @@ for (const [state, size] of [
       await page.close();
       await gateway?.close();
     }
+
+// The model account's states. Home's place for what is left to set up, wide and on a phone, as
+// it is signed out, waiting for ChatGPT, while ChatGPT starts, and with an account that can't be
+// used; an agent's line and a chat's place while signed out; and a tab no longer signed in.
+for (const [state, sizes] of SIGN_INS)
+  for (const size of sizes)
+    for (const theme of ["dark", "light"] as const)
+      for (const side of ["design", "built"] as const) {
+        const gateway = side === "built" ? await standIn() : undefined;
+        if (gateway) {
+          sampleAgents(gateway);
+          signInAccount(gateway, state);
+        }
+        const page = gateway
+          ? await builtPage(gateway, size, theme, signInHash(state), state !== "gone")
+          : await designPage(size, theme);
+        await signInState(page, state, !gateway);
+        await rest(page, size);
+        const measured = await measure(page, "signin");
+        // Each state is measured where it shows: a part that isn't there is a failure, not a match.
+        const shown =
+          state === "gone"
+            ? "gone.command"
+            : state === "chat"
+              ? "send"
+              : state === "line"
+                ? "line.setup"
+                : "place";
+        if (!measured[shown]) throw new Error(`${state} on the ${side} side has no ${shown}`);
+        all[`signin.${state}.${size}.${theme}.${side}`] = measured;
+        await page.close();
+        await gateway?.close();
+      }
 
 // The files window: a folder's rows, and a file open, in Research's storefront folder.
 for (const state of ["folder", "file"] as const)

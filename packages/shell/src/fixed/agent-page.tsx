@@ -13,6 +13,7 @@ import { ComputerLoad, LOAD } from "./computer-load.tsx";
 import { More } from "./controls.tsx";
 import { useAct, useCreatables } from "./data.ts";
 import { Face, MARK } from "./face.tsx";
+import { needsOf, useLogin } from "./login.tsx";
 import { Setup } from "./setup.tsx";
 import { useAgents } from "./watch.tsx";
 
@@ -32,6 +33,7 @@ export function AgentPage({
   const [failed, setFailed] = useState<string>();
   const [setup, setSetup] = useState(false);
   const act = useAct(setFailed);
+  const login = useLogin();
   const watched = byId.get(id);
   // What it's made of says what the page holds, so nothing is drawn before it is read.
   if (!watched?.detail) return null;
@@ -55,6 +57,8 @@ export function AgentPage({
   const mine = chats.filter((chat) => chat.agent.id === id && !chat.entry.archived);
   // How it stands, and no more. What it did, and what went wrong in a chat, is read in its chats.
   const tone = failed ? "trouble" : now.tone;
+  // Signed out of the model account, a running agent can't work: that comes before how it stands.
+  const needs = off || failed ? undefined : needsOf(login);
   return (
     <div className="no-bar h-full overflow-y-auto">
       <div className="mx-auto max-w-[1080px] px-6 pb-28 tight:px-4">
@@ -94,11 +98,23 @@ export function AgentPage({
           className="mt-5 flex h-8 items-center gap-2.5 text-[15px]"
         >
           <span
-            className={`mx-1 inline-block size-2 shrink-0 rounded-full ${MARK[tone] ?? "bg-[var(--faint)]"}`}
+            className={`mx-1 inline-block size-2 shrink-0 rounded-full ${needs ? "bg-[var(--warn)]" : (MARK[tone] ?? "bg-[var(--faint)]")}`}
           />
-          <span className={`min-w-0 truncate ${tone === "trouble" ? "text-[var(--bad)]" : ""}`}>
-            {failed ?? now.text}
+          <span
+            className={`min-w-0 truncate ${!needs && tone === "trouble" ? "text-[var(--bad)]" : ""}`}
+          >
+            {needs ?? failed ?? now.text}
           </span>
+          {/* The way in is on Home, where everything left to set up is. */}
+          {needs && (
+            <Button
+              variant="secondary"
+              className="ml-1 h-8 rounded-full px-4"
+              onClick={() => go({ screen: "home" })}
+            >
+              Set up
+            </Button>
+          )}
           {/* An agent that isn't running is started where it says so. */}
           {off && (
             <Button className="ml-1 h-8 rounded-full px-4" disabled={act.busy} onClick={start}>

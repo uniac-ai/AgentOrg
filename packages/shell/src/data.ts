@@ -79,31 +79,6 @@ export function useLoad<T>(
   return state;
 }
 
-/**
- * A call a control makes: `busy` while it runs, so the control is disabled, and `failed` after
- * one that didn't work, for one quiet line in place. `done` runs after one that did.
- */
-export function useAction() {
-  const [busy, setBusy] = useState(false);
-  const [failed, setFailed] = useState(false);
-  const run = (call: () => Promise<unknown>, done?: () => void) => {
-    if (busy) return;
-    setBusy(true);
-    setFailed(false);
-    call().then(
-      () => {
-        setBusy(false);
-        done?.();
-      },
-      () => {
-        setBusy(false);
-        setFailed(true);
-      },
-    );
-  };
-  return { busy, failed, run };
-}
-
 /** What an agent's page can show under its head. */
 export type AgentTab = "computer" | "chats";
 /** The hash route: home, an agent, or settings. */

@@ -1,6 +1,6 @@
 // The small pieces the fixed pages share.
-import { GlobeIcon, LaptopIcon } from "lucide-react";
-import { Fragment } from "react";
+import { CheckIcon, CopyIcon, GlobeIcon, LaptopIcon } from "lucide-react";
+import { Fragment, useState } from "react";
 import { go, type Route } from "../data.ts";
 import { Button } from "../ui/button.tsx";
 import { WORD } from "./data.ts";
@@ -13,6 +13,28 @@ export const TroubleDot = () => (
     className="mx-0.5 inline-block size-2 shrink-0 rounded-full bg-[var(--bad)]"
   />
 );
+
+/** A command for the person to run, in a form to copy. */
+export function CopyCommand({ command }: { command: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <span className="flex h-9 w-fit items-center gap-1 rounded-full bg-[var(--raised)] pr-1 pl-4">
+      <code className="font-mono text-[13px]">{command}</code>
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        aria-label="Copy the command"
+        onClick={() => {
+          navigator.clipboard?.writeText(command).catch(() => {});
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1200);
+        }}
+      >
+        {copied ? <CheckIcon /> : <CopyIcon />}
+      </Button>
+    </span>
+  );
+}
 
 /** A connection's kind as where it is: a URL is remote, anything else runs on this computer. */
 export function WhereIcon({ kind }: { kind: string }) {

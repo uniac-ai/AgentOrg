@@ -16,8 +16,8 @@ function set(value: boolean) {
   if (value) timer = setTimeout(() => set(false), WAIT_MS);
   for (const listener of [...listeners]) listener();
 }
-// The login's state changed: signed in, or not; either way the wait is over.
-api.subscribe("login", "changed", () => set(false));
+/** The wait is over: the account has said where it stands now, signed in or not. */
+export const endSigningIn = () => set(false);
 
 /**
  * The shell's ChatGPT sign-in, for its own buttons: ChatGPT's page opens

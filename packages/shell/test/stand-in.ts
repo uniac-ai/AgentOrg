@@ -459,6 +459,12 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
     event: string;
   }>();
   const creatables = options.creatables ?? CREATABLES;
+  /**
+   * The model account: how it stands, and whether its own process has connected. Signed in,
+   * unless a test says otherwise; with none, there is nothing to sign in to.
+   */
+  let account: { state: "signed_out" | "signed_in" | "ineligible"; started: boolean } | undefined =
+    { state: "signed_in", started: true };
   let problems: StackProblem[] = [];
   let templates = [...TEMPLATES];
   /** What the live surfaces have heard and said. */
@@ -908,24 +914,41 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
       );
     }
     if (slot === "bindings") {
-      const output = hubBindings.methods.list.output;
-      return output.parse({
-        bindings: [...agents.values()].map(({ agent }) => ({
-          consumer: PERSON,
-          slot: chatSlot(agent),
-          provider: agent,
-          export: "chat",
-          interface: "chat@1",
-          madeBy: "management",
-          at: at(60),
-          exposed: true,
-        })),
+      const bound = (slot: string, provider: string, exported: string, iface: string) => ({
+        consumer: PERSON,
+        slot,
+        provider,
+        export: exported,
+        interface: iface,
+        madeBy: "management",
+        at: at(60),
+        exposed: true,
+      });
+      return hubBindings.methods.list.output.parse({
+        bindings: [
+          // The model account, where there is one to sign in to.
+          ...(account ? [bound("login", "p-chatgpt", "login", "account.login@1")] : []),
+          ...[...agents.values()].map(({ agent }) =>
+            bound(chatSlot(agent), agent, "chat", "chat@1"),
+          ),
+        ],
       });
     }
     if (slot === "login") {
+      // Unbound, or its process not connected, it can't be asked anything.
+      if (!account?.started) {
+        const error = new Refusal("not_connected", "Not running.");
+        error.name = "NotConnected";
+        throw error;
+      }
       if (method === "logout") return { revoked: true };
-      return { state: "signed_in", account: { email: "sam@example.com", plan: "Plus" } };
+      if (method === "start") return { authorizeUrl: "https://auth.example/authorize" };
+      return account.state === "signed_in"
+        ? { state: "signed_in", account: { email: "sam@example.com", plan: "Plus" } }
+        : { state: account.state };
     }
+    // The model account's own process, which the person's `login` slot is bound to.
+    if (slot === "actors") return { connected: account?.started ?? true };
     if (slot === "folders") {
       const path = String(input.path ?? "/home/me");
       const under = FOLDERS[path];
@@ -1230,6 +1253,18 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
     /** A `screencast@1` event, to every browser socket. */
     screen(event: Record<string, unknown>) {
       for (const [ws] of live.screens) ws.send(JSON.stringify(event));
+    },
+    /** The model account comes to stand this way, as its events say it. */
+    setAccount(state: "signed_out" | "signed_in" | "ineligible" | "none", started = true) {
+      const was = account?.state;
+      account = state === "none" ? undefined : { state, started };
+      // Its event says only that where it stands changed.
+      if (was !== account?.state) emit("login", "changed", {});
+      changed();
+    },
+    /** Every tab's AgentOrg sign-in ends, as when its session is revoked. */
+    endSessions() {
+      for (const socket of sockets.clients) socket.close(4401, "Sign in again");
     },
     /** A file in the workspace, last changed so many minutes ago. */
     putFile(path: string, content: string | Buffer, minutesAgo = 0) {

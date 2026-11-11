@@ -48,6 +48,7 @@ import { surfacesOf, windowsOf } from "./computer.tsx";
 import { useComputers } from "./computers.tsx";
 import { type ChatMessage, type ChatStatus, reasonOf } from "./data.ts";
 import { Face } from "./face.tsx";
+import { needsOf, SignInButton, useLogin } from "./login.tsx";
 import { fixOf } from "./notice.ts";
 import { useAgents } from "./watch.tsx";
 
@@ -118,6 +119,7 @@ function Composer({
   onSend(text: string): Promise<boolean>;
 }) {
   const { drafts } = useChats();
+  const needs = needsOf(useLogin());
   const [text, setTextState] = useState(drafts.get(draft) ?? "");
   const setText = (value: string) => {
     drafts.set(draft, value);
@@ -130,6 +132,19 @@ function Composer({
     // Not taken, it is back in the box unless something else was typed meanwhile.
     if (!(await onSend(body)) && !drafts.get(draft)) setText(body);
   };
+  // Signed out of the model account, nothing can be sent: its place says why and holds the way in.
+  if (needs)
+    return (
+      // biome-ignore lint/a11y/useSemanticElements: one place with its name, not a set of fields.
+      <div
+        role="group"
+        aria-label="Sign in to send"
+        className="flex min-h-[108px] flex-col justify-center gap-2.5 rounded-3xl bg-[var(--raised)] px-4 py-3.5"
+      >
+        <span className="px-1 text-[15px] leading-5">{needs}</span>
+        <SignInButton className="w-full" />
+      </div>
+    );
   return (
     <InputGroup className="rounded-3xl border-0 bg-[var(--raised)] shadow-none">
       <InputGroupTextarea
