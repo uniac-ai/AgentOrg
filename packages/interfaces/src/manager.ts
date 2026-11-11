@@ -231,7 +231,7 @@ export const agents = defineInterface({
     start: method({ input: OnAgent, output: z.object({}) }),
     /**
      * Stops the agent: whatever it was doing ends, and it does nothing until started; all else
-     * stays. This is the one way to stop an agent's work.
+     * stays.
      */
     stop: method({ input: OnAgent, output: z.object({}) }),
     /** The models the agent can use, and the one chosen, as its provider says. */

@@ -1,14 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { Json } from "../src/index.ts";
-import { MAIN_INSTRUCTIONS, ROUTE } from "../src/main.ts";
+import { HEARD_INSTRUCTIONS, MAIN_INSTRUCTIONS, ROUTE } from "../src/main.ts";
 import { gate, idle, looperWith, newWork, routeTo, says, until } from "./support.ts";
 
 const texts = async (looper: ReturnType<typeof looperWith>["looper"], thread: string) =>
   (await looper.page(thread, undefined, 50)).messages.map((message) => message.text);
 
 test("a message in a thread nothing follows is kept at once, and the main loop says it is new work", async () => {
-  const { looper, values, said, asked, routed, mains, working, inputs, answer } = looperWith();
+  const { looper, values, said, asked, mains, working, inputs, answer } = looperWith();
   const { messageId } = await looper.send("a", "Write the report.\nAll of it.");
   // Kept and said before the main loop has answered anything.
   assert.deepEqual(said, ["a: user: Write the report.\nAll of it."]);
@@ -21,13 +21,16 @@ test("a message in a thread nothing follows is kept at once, and the main loop s
   assert.deepEqual(inputs[0], ["Write the report.\nAll of it."]);
   // At work from the message on, the main loop's part included, and said once.
   assert.deepEqual(working, [true]);
-  // A further message is the work's, by code: the main loop isn't asked again.
+  // A further message is the work's, by code: the main loop is told of it, not asked whose it is.
   await looper.send("a", "And a summary.");
   answer("Write the report.\nAll of it.", says("Report done."));
   await until(() => asked.length === 2, "the request that reads it");
   answer("And a summary.");
   await looper.settled();
-  assert.equal(routed.length, 1);
+  assert.deepEqual(
+    mains.map(({ instructions }) => instructions),
+    [MAIN_INSTRUCTIONS, HEARD_INSTRUCTIONS],
+  );
   assert.deepEqual(working, [true, false]);
   assert.equal(values.has("unrouted/a"), false);
 });

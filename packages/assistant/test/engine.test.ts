@@ -138,13 +138,15 @@ async function setup(values = new Map<string, unknown>(), rest?: (actor: Actor) 
       // The main loop is answered at once, with new work; `requests` and `script` are the workers'.
       if (request.tools?.some((tool) => tool.name === "route")) {
         routed.push(request as Request);
+        const call = routing.to ? { ...NEW_WORK, arguments: routing.to } : undefined;
         if (routing.says !== undefined)
           return {
-            output: [{ type: "message", role: "assistant", content: routing.says }],
+            output: [
+              { type: "message", role: "assistant", content: routing.says },
+              ...(call ? [call] : []),
+            ],
           } as never;
-        return {
-          output: [routing.to ? { ...NEW_WORK, arguments: routing.to } : NEW_WORK],
-        } as never;
+        return { output: [call ?? NEW_WORK] } as never;
       }
       requests.push(request as Request);
       const next = script.shift() ?? say("ok");
@@ -1456,6 +1458,42 @@ test("a message in a new chat that carries on work under way is answered by that
   const reply = (await shownIn(s, two.chat)).at(-1);
   assert.equal(chats.find((c) => c.id === two.chat)?.latest?.id, reply?.id);
   assert.deepEqual(s.statuses(from), [{ state: "working" }, { state: "idle" }]);
+});
+
+test("saying stop in a chat whose work is in a turn stops that turn, and no other work's", async () => {
+  const s = await setup();
+  const report = gate<Reply>();
+  const chart = gate<Reply>();
+  s.script.push(
+    () => report.shut,
+    () => chart.shut,
+  );
+  const one = (await s.actor.call("chat", "send", { text: "Write the report." })) as Sent;
+  await until(() => s.requests.length === 1, "the first work's request");
+  const two = (await s.actor.call("chat", "send", { text: "Draw the chart." })) as Sent;
+  await until(() => s.requests.length === 2, "the second work's request");
+  // The main loop hears of a message said to work in a turn, in its own words alone, and stops it.
+  s.routing.to = JSON.stringify({ stop: one.chat });
+  s.routing.says = "Stopped the report.";
+  await s.actor.call("chat", "send", { chat: one.chat, text: "Stop." });
+  await until(() => s.cancels.length === 1, "the turn to be cut");
+  assert.deepEqual(s.cancels, [s.requests[0]?.requestId]);
+  assert.match(
+    String(s.routed[2]?.instructions),
+    /^You are the front desk\. You are given one piece/,
+  );
+  assert.doesNotMatch(String(s.routed[2]?.instructions), /you speak as/);
+  report.open(say("Report done."));
+  chart.open(say("Chart done."));
+  await s.host.settled();
+  assert.deepEqual(
+    (await shownIn(s, one.chat)).map((m) => m.text),
+    ["Write the report.", "Stop.", "Stopped the report."],
+  );
+  assert.deepEqual(
+    (await shownIn(s, two.chat)).map((m) => m.text),
+    ["Draw the chart.", "Chart done."],
+  );
 });
 
 test("a chat is renamed and archived, stays readable, and is kept as it was left", async () => {

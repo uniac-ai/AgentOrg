@@ -1,25 +1,37 @@
 /**
  * The main loop: one per looper. It is given a thread no piece of work follows, in which a message
  * has come in, and the work there is. It says whose the message is, new work or work there is, or
- * answers it itself when it needs no work. It does none of the work, and it has one function to
- * call. Each decision is one model request, which holds nothing of the decisions before it but
- * what was said in that thread.
+ * answers it itself when it needs no work, or stops a piece of work the message asks to stop. It
+ * is also told of a message said to work that is in a turn, which that work has: then it is given
+ * that work and that message, and may only stop that work. It does none of the work, and it has
+ * one function to call. Each time is one model request, which holds nothing of those before it
+ * but what it is given.
  */
 import { head } from "./record.js";
 import type { Item, Log, Model, ToolSpec } from "./types.js";
 
 /** What the main loop is told, before who it speaks as. */
-export const MAIN_INSTRUCTIONS = `You are the front desk. You do none of the work: you say whose a message is, or answer it yourself when it needs no work.
+export const MAIN_INSTRUCTIONS = `You are the front desk. You do none of the work: you say whose a message is, answer it yourself when it needs no work, or stop a piece of work it asks to stop.
 
 You are given the latest pieces of work, each by its id and title, whether it is in a turn or at rest, and a line on what it last said; then the conversation where a message has come in that no work owns.
 
 - Give it to a piece of work only when it points at that work explicitly: it names it, quotes it, or refers to what it is doing or just did, and exactly one piece of work fits. Call \`route\` with that work's id. Its worker will read it with everything it already knows, and answer where it came in. From then on everything said there goes to that work.
-- Answer it yourself, in plain text and calling nothing, only when it needs no tools and nothing you can't see here: a greeting, thanks, a question about who you are or about the work listed. Never say you will do, find, check or look into something: you can't, and saying so starts no work.
+- Answer it yourself, in plain text and calling nothing, only when it needs no tools and nothing you can't see here: a greeting, thanks, a question about who you are or about the work listed, or a request to stop that no one piece of work in a turn fits. Never say you will do, find, check or look into something: you can't, and saying so starts no work.
+- Stop a piece of work when the message asks to stop it and exactly one piece of work in a turn fits. Call \`route\` with only \`stop\`, set to its id, and say in a few words that you stopped it. If none fits, or more than one, stop nothing and call nothing: say what is in a turn, so they can say which.
 - Anything else is new work, also when it is on a subject like that of work there is. Call \`route\` with no \`work\`, and a \`title\` of a few words that says what the new work is.
 
-Whatever you write is said to the person as the reply. So when you call \`route\`, write nothing: the worker answers.
+Whatever you write is said to the person as the reply. So when you give a message to work, old or new, write nothing: the worker answers.
 
-A wrong match stays, and a promise starts nothing: when in doubt it is new work.`;
+A wrong match stays, and a promise starts nothing: when in doubt whose it is, it is new work.`;
+/**
+ * What the main loop is told when a message was said to work that is in a turn: the worker has
+ * it, and the main loop may only stop that work.
+ */
+export const HEARD_INSTRUCTIONS = `You are the front desk. You are given one piece of work that is in a turn, by its id and title, and then a message that was just said in a conversation that work follows. Its worker has the message and will read it: you don't answer it, and you give it to nobody.
+
+Act only if the message asks to stop that work. Then call \`route\` with only \`stop\`, set to its id, and say in a few words that you stopped it. Otherwise call nothing and write nothing: what you write is said only when you stop it.`;
+/** What is said where the main loop called to stop work and wrote nothing: whether a turn was cut. */
+export const stopWord = (cut: boolean) => (cut ? "Stopped." : "Nothing was stopped.");
 /** How who it speaks as is told after that. */
 const VOICE =
   "When you answer yourself, you speak as the one described below. What that one is told to do is a worker's to do, not yours:";
@@ -27,7 +39,8 @@ const VOICE =
 /** The one function the main loop calls. */
 export const ROUTE: ToolSpec = {
   name: "route",
-  description: "Says whose what came in is: a piece of work there is, or new work.",
+  description:
+    "Says whose what came in is: a piece of work there is, or new work. Or stops a piece of work.",
   parameters: {
     type: "object",
     properties: {
@@ -39,6 +52,10 @@ export const ROUTE: ToolSpec = {
         type: "string",
         description: "For new work: a few words that say what it is.",
       },
+      stop: {
+        type: "string",
+        description: "The id of the work in a turn to stop. With it, leave the others out.",
+      },
     },
   },
 };
@@ -47,8 +64,8 @@ export const ROUTE: ToolSpec = {
 export interface Listed {
   id: string;
   title: string;
-  /** Whether a turn of it is running or waiting for its place. */
-  running: boolean;
+  /** Which turn of it is running or waiting for its place, when one is. */
+  turn?: number | undefined;
   /** The head of what it last said, if it has said anything. */
   last?: string | undefined;
   /** Whether its last turn failed. */
@@ -60,12 +77,15 @@ export interface Said {
   text: string;
 }
 /**
- * What the main loop decided. `placed` is whose what came in is: work it was told of, or new work
- * by its title. `answer` is what it said itself: alone, when it placed nothing, or beside.
+ * What the main loop decided. `answer` is what it wrote. `placed` is whose what came in is: work
+ * it was told of, or new work by its title. `stop` is there when it called to stop work, and
+ * then nothing is placed: the turn to cut is the one it was told of, and none when that work was
+ * not told of as in a turn.
  */
 export interface Decided {
   answer?: string;
   placed?: { work: string } | { title: string };
+  stop?: { work: string; turn?: number };
 }
 
 /** A work's title: the first line of `text` that says anything, in a few words. */
@@ -84,12 +104,9 @@ const listing = (works: Listed[]) =>
     ? "There is no work."
     : [
         "The work there is:",
-        ...works.map(({ id, title, running, last, failed }) => {
-          const state = running
-            ? "in a turn"
-            : failed
-              ? "at rest; its last turn failed"
-              : "at rest";
+        ...works.map(({ id, title, turn, last, failed }) => {
+          const state =
+            turn !== undefined ? "in a turn" : failed ? "at rest; its last turn failed" : "at rest";
           return `- ${id}: ${title} (${state})${last ? `; it last said: ${last}` : ""}`;
         }),
       ].join("\n");
@@ -106,87 +123,138 @@ const put = (said: Said[], works: Listed[]): Item[] => [
 export function createMain(options: {
   model: Model;
   /**
-   * Read for each decision: which model to ask, none meaning the model's own default, and who
-   * the main loop speaks as when it answers itself.
+   * Read for each request: which model to ask, none meaning the model's own default, and who the
+   * main loop speaks as when it answers itself.
    */
   request(): Promise<{ model?: string | undefined; voice?: string | undefined }>;
   log: Log;
 }) {
-  /** The decision being made now, how to drop it, and where its text goes as it is written. */
-  let deciding: { requestId?: string; drop(): void; written(text: string): void } | undefined;
+  /** The request out now, whether it was dropped, and where its text goes as it is written. */
+  let asking:
+    | { requestId?: string; dropped?: true; drop(): void; written(text: string): void }
+    | undefined;
+
+  /**
+   * Make one request of the model: what it wrote, and what it called `route` with. `voiced` is
+   * whether it is told who it speaks as. None for a request that is dropped, which the model is
+   * then not asked, or told to cancel; one the model refuses rejects, as it refused.
+   */
+  const ask = async (
+    instructions: string,
+    voiced: boolean,
+    input: Item[],
+    written: (text: string) => void,
+  ) => {
+    let drop = () => {};
+    const gone = new Promise<undefined>((resolve) => {
+      drop = () => {
+        mine.dropped = true;
+        resolve(undefined);
+      };
+    });
+    const mine: NonNullable<typeof asking> = { drop: () => drop(), written };
+    asking = mine;
+    try {
+      const given = await Promise.race([options.request().then((to) => ({ to })), gone]);
+      if (!given || mine.dropped) return undefined;
+      const { model, voice } = given.to;
+      mine.requestId = crypto.randomUUID();
+      const asked = options.model.respond({
+        requestId: mine.requestId,
+        ...(model ? { model } : {}),
+        instructions:
+          voiced && voice
+            ? `${instructions}\n\n${VOICE}\n\n${head(voice, TOLD.voice)}`
+            : instructions,
+        input,
+        tools: [ROUTE],
+      });
+      // A model that never answers a request it was told to cancel holds nothing up.
+      asked.catch(() => {});
+      const reply = await Promise.race([asked, gone]);
+      if (!reply || mine.dropped) return undefined;
+      const text = reply.output
+        .flatMap((item) => (item.type === "message" ? [item.content] : []))
+        .join("");
+      const call = reply.output.find(
+        (item) => item.type === "function_call" && item.name === ROUTE.name,
+      );
+      let routed: { work?: unknown; title?: unknown; stop?: unknown } | undefined;
+      if (call?.type === "function_call")
+        try {
+          routed = (JSON.parse(call.arguments) ?? {}) as NonNullable<typeof routed>;
+        } catch {
+          // Arguments that don't read: as a call that says nothing.
+          routed = {};
+        }
+      return { ...(text.trim() ? { text } : {}), routed };
+    } finally {
+      if (asking === mine) asking = undefined;
+    }
+  };
+  /** The turn of the work that `stop` names, if it was told of as in a turn. */
+  const turnOf = (stop: unknown, works: Listed[]) => works.find(({ id }) => id === stop)?.turn;
 
   return {
     /**
-     * Decide on a thread, given what was said in it (`heard`) and the work there is: one decision
-     * at a time. `written` is given its text as the model writes it. Nothing is said for a
-     * decision that is cancelled. A request the model refuses rejects, as it refused.
+     * Decide on a thread, given what was said in it and the work there is. `written` is given its
+     * text as the model writes it. Nothing is said for a decision that is dropped. A request the
+     * model refuses rejects, as it refused.
      */
     async decide(
-      heard: Said[],
+      said: Said[],
       works: Listed[],
       written: (text: string) => void,
     ): Promise<Decided | undefined> {
-      let drop = () => {};
-      const dropped = new Promise<undefined>((resolve) => {
-        drop = () => resolve(undefined);
-      });
-      const mine: NonNullable<typeof deciding> = { drop, written };
-      deciding = mine;
-      try {
-        const given = await Promise.race([options.request().then((to) => ({ to })), dropped]);
-        if (!given) return undefined;
-        const { model, voice } = given.to;
-        mine.requestId = crypto.randomUUID();
-        const asked = options.model.respond({
-          requestId: mine.requestId,
-          ...(model ? { model } : {}),
-          instructions: voice
-            ? `${MAIN_INSTRUCTIONS}\n\n${VOICE}\n\n${head(voice, TOLD.voice)}`
-            : MAIN_INSTRUCTIONS,
-          input: put(heard, works),
-          tools: [ROUTE],
-        });
-        // A model that never answers a request it was told to cancel holds nothing up.
-        asked.catch(() => {});
-        const reply = await Promise.race([asked, dropped]);
-        if (!reply) return undefined;
-        const text = reply.output
-          .flatMap((item) => (item.type === "message" ? [item.content] : []))
-          .join("");
-        const call = reply.output.find(
-          (item) => item.type === "function_call" && item.name === ROUTE.name,
-        );
-        const said: Decided = text.trim() ? { answer: text } : {};
-        // Text and no call: it answered, and nothing is placed.
-        if (call?.type !== "function_call" && said.answer !== undefined) return said;
-        let routed: { work?: unknown; title?: unknown } = {};
-        if (call?.type === "function_call")
-          try {
-            routed = (JSON.parse(call.arguments) ?? {}) as typeof routed;
-          } catch {
-            // Arguments that don't read: new work, as with no call.
-          }
-        if (works.some(({ id }) => id === routed.work))
-          return { ...said, placed: { work: routed.work as string } };
-        // Anything else starts new work, titled by what came in if the model gave no title.
-        if (typeof routed.work === "string" && routed.work !== "")
-          options.log.warn("The main loop named work there isn't; it is new work.", {
-            work: head(routed.work, 128),
-          });
-        const title = titled(typeof routed.title === "string" ? routed.title : "");
-        const newest = heard.findLast(({ role }) => role === "user")?.text ?? "";
-        return { ...said, placed: { title: title || titled(newest) } };
-      } finally {
-        if (deciding === mine) deciding = undefined;
+      const asked = await ask(MAIN_INSTRUCTIONS, true, put(said, works), written);
+      if (!asked) return undefined;
+      const { text, routed } = asked;
+      const answered: Decided = text === undefined ? {} : { answer: text };
+      // Text and no call: it answered, and nothing is placed.
+      if (!routed && text !== undefined) return answered;
+      // A call that names work to stop only stops: nothing is placed.
+      if (typeof routed?.stop === "string" && routed.stop !== "") {
+        const turn = turnOf(routed.stop, works);
+        return {
+          ...answered,
+          stop: { work: routed.stop, ...(turn === undefined ? {} : { turn }) },
+        };
       }
+      if (works.some(({ id }) => id === routed?.work))
+        return { ...answered, placed: { work: routed?.work as string } };
+      // Anything else starts new work, titled by what came in if the model gave no title.
+      if (typeof routed?.work === "string" && routed.work !== "")
+        options.log.warn("The main loop named work there isn't; it is new work.", {
+          work: head(routed.work, 128),
+        });
+      const title = titled(typeof routed?.title === "string" ? routed.title : "");
+      const newest = said.findLast(({ role }) => role === "user")?.text ?? "";
+      return { ...answered, placed: { title: title || titled(newest) } };
     },
-    /** Text the model writes while it answers `requestId`, if that is the decision being made. */
+    /**
+     * Hear a message that joined a turn of `work`, which has it: the main loop may only stop
+     * that turn, and is not told who it speaks as. It gives what to say where the message was
+     * said if it says to stop it, and none if it doesn't or the request is dropped. Nothing it
+     * writes is said otherwise. A request the model refuses rejects, as it refused.
+     */
+    async hear(text: string, work: Listed): Promise<string | undefined> {
+      const asked = await ask(
+        HEARD_INSTRUCTIONS,
+        false,
+        put([{ role: "user", text }], [work]),
+        () => {},
+      );
+      return asked && turnOf(asked.routed?.stop, [work]) !== undefined
+        ? (asked.text ?? stopWord(true))
+        : undefined;
+    },
+    /** Text the model writes while it answers `requestId`, if that is the request out now. */
     delta(requestId: string, text: string) {
-      if (deciding?.requestId === requestId) deciding.written(text);
+      if (asking?.requestId === requestId) asking.written(text);
     },
-    /** Drop the decision being made: its request is cancelled, and it says nothing. */
+    /** Drop the request out now: it is cancelled, and it says nothing. */
     async cancel() {
-      const cut = deciding;
+      const cut = asking;
       if (!cut) return;
       cut.drop();
       if (cut.requestId) await options.model.cancel({ requestId: cut.requestId }).catch(() => {});

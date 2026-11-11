@@ -19,26 +19,29 @@ export const Entry = z.object({
   /** For a tool message whose call ran: how it ended. */
   state: z.enum(["done", "refused"]).optional(),
   /**
-   * For a user message said while a turn was running: it is part of that turn. Also for a reply
-   * the main loop gave in a thread, taken with such messages: it stays in its place among them.
+   * For a user message said while a turn was running: it is part of that turn. Also for what the
+   * main loop said in a thread, taken with such messages or said as it stopped the turn: it stays
+   * in its place among them.
    */
   joined: z.literal(true).optional(),
   /**
    * For what came of a model request that had read its work up to this place, when a user message
-   * was said after that: the model reads it ahead of that message, which it doesn't answer.
+   * was said after that, or the main loop said it stopped the turn: the model reads it ahead of
+   * those, which it doesn't answer.
    */
   ahead: z.number().optional(),
   /** The piece of work it belongs to, when that isn't its thread's own. */
   work: z.string().optional(),
   /**
-   * For a reply the main loop gave itself, which no piece of work said: the number in its thread
-   * it had read up to. It stands after that message, ahead of any said after it.
+   * For what the main loop said itself, which no piece of work said: the number in its thread it
+   * stands after, ahead of any said after that. For a reply that is the number it had read up to;
+   * for what it said as it stopped a piece of work, all the thread held then.
    */
   main: z.number().optional(),
   /**
    * Its place in its work's order, once that work follows more than one thread. Without it, its
-   * place is where it stands in its thread: its number, or for a reply the main loop gave, right
-   * after what that had read.
+   * place is where it stands in its thread: its number, or for what the main loop said, right
+   * after the number that names.
    */
   place: z.number().optional(),
 });
@@ -130,6 +133,13 @@ export const userEntry = (text: string) => ({
   items: [{ type: "message" as const, role: "user" as const, content: text }],
 });
 
+/** What the main loop said, as it is kept: it stands after `after`, a number in its thread. */
+const mainEntry = (text: string, after: number) => ({
+  role: "assistant" as const,
+  main: after,
+  items: [{ type: "message" as const, role: "assistant" as const, content: text }],
+});
+
 /** A message as a thread holds it. */
 interface Kept {
   /** Its number in its thread. */
@@ -147,8 +157,8 @@ interface Held {
 }
 
 /**
- * Where a message stands in its thread: its number, but a reply the main loop gave stands right
- * after what it had read, ahead of a message said while it answered.
+ * Where a message stands in its thread: its number, but what the main loop said stands right
+ * after the number it names, ahead of a message said while it answered.
  */
 const orderOf = ({ seq, entry }: Kept) => (entry.main === undefined ? seq : entry.main + 0.5);
 
@@ -276,12 +286,7 @@ export function createThread(
      */
     async answer(text: string, upTo: number, id: string) {
       const held = await load();
-      const reply = {
-        role: "assistant" as const,
-        main: upTo,
-        items: [{ type: "message" as const, role: "assistant" as const, content: text }],
-      };
-      const { record, stored } = push(held, reply, id);
+      const { record, stored } = push(held, mainEntry(text, upTo), id);
       await stored;
       const late = held.records.some(({ seq, entry }) => seq > upTo && entry.role === "user");
       return { entry: record.entry, late };
@@ -405,48 +410,73 @@ export function createRecord(options: {
     })();
     return { taken: waiting.length, written };
   };
-  /** Whether a user message of its follows the place `read`: one `stored` already, when asked. */
-  const saidAfter = (records: Placed[], read: number, stored = false) =>
+  /** Whether a user message of its, stored already, follows the place `read`. */
+  const saidAfter = (records: Placed[], read: number) =>
+    records.some(
+      ({ record }) => record.entry.role === "user" && placeOf(record) > read && !record.writing,
+    );
+  /**
+   * Whether something the model reads after what a request made stands past the place `read`,
+   * which that request had read up to: a user message, or what the main loop said as it stopped
+   * the turn.
+   */
+  const heldBack = (records: Placed[], read: number) =>
     records.some(
       ({ record }) =>
-        record.entry.role === "user" && placeOf(record) > read && !(stored && record.writing),
+        placeOf(record) > read && (record.entry.role === "user" || record.entry.joined === true),
     );
   /** The thread of its newest user message: where it answers. Its own, with none. */
   const whereOf = (records: Placed[]) =>
     records.findLast(({ record }) => record.entry.role === "user")?.thread ?? id;
+
+  /** Keep an entry of its in `thread`, made once nothing waits there, from what the thread holds. */
+  const keep = async (
+    thread: string,
+    make: (from: Held) => Omit<Entry, "id" | "at" | "work" | "place" | "ahead">,
+    at: { id?: string; read?: number },
+  ): Promise<{ entry: Entry; thread: string }> => {
+    const held = await load();
+    const from = held.get(thread) as Held;
+    // What waits there is taken and stored first, so this is never kept ahead of it: it joins
+    // a turn if this does, or comes of one. If the store won't take it, nothing is kept.
+    const joins = make(from).joined === true || at.read !== undefined;
+    await take(held, thread, joins).written;
+    // From here to the push nothing waits, so its place and what is ahead of it are decided
+    // with the record as it stands.
+    const records = own(held);
+    const { record, stored } = options.thread(thread).push(
+      from,
+      {
+        ...make(from),
+        ...(thread === id ? {} : { work: id }),
+        ...(held.size > 1 ? { place: topOf(records) + 1 } : {}),
+        ...(at.read !== undefined && heldBack(records, at.read) ? { ahead: at.read } : {}),
+      },
+      at.id,
+    );
+    await stored;
+    return { entry: record.entry, thread };
+  };
 
   return {
     id,
     /**
      * Keep a message of its in `thread`, one of those it follows, after any waiting there. `read`
      * is given for what came of a model request that had read it up to that place: when a user
-     * message was said since, it is kept as `ahead` of it.
+     * message was said since, or the turn was stopped by saying so, it is kept as `ahead` of
+     * that.
      */
-    async append(
+    append: (
       entry: Omit<Entry, "id" | "at" | "work" | "place" | "ahead">,
       at: { thread: string; id?: string; read?: number },
-    ): Promise<{ entry: Entry; thread: string }> {
-      const held = await load();
-      const { thread } = at;
-      // What waits there is taken and stored first, so this is never kept ahead of it: it joins
-      // a turn if this does, or comes of one. If the store won't take it, nothing is kept.
-      await take(held, thread, entry.joined === true || at.read !== undefined).written;
-      // From here to the push nothing waits, so its place and what is ahead of it are decided
-      // with the record as it stands.
-      const records = own(held);
-      const { record, stored } = options.thread(thread).push(
-        held.get(thread) as Held,
-        {
-          ...entry,
-          ...(thread === id ? {} : { work: id }),
-          ...(held.size > 1 ? { place: topOf(records) + 1 } : {}),
-          ...(at.read !== undefined && saidAfter(records, at.read) ? { ahead: at.read } : {}),
-        },
-        at.id,
-      );
-      await stored;
-      return { entry: record.entry, thread };
-    },
+    ) => keep(at.thread, () => entry, at),
+    /**
+     * Keep in `thread` what the main loop said as it stopped a turn of this work. It stands after
+     * all the thread holds, and like a message said in that turn, the work reads it after
+     * whatever the turn still writes.
+     */
+    stopLine: (text: string, thread: string) =>
+      keep(thread, (from) => ({ ...mainEntry(text, from.last), joined: true as const }), {}),
     /**
      * Take the messages waiting in `thread`, which it has come to follow, as its own: `joined`,
      * when a turn of its is running. It says how many there were to answer: in its own thread,
@@ -465,7 +495,7 @@ export function createRecord(options: {
     },
     /**
      * Whether it has had a turn that did something: it holds more than what was said to it and
-     * what the main loop answered before it had the thread.
+     * what the main loop said.
      */
     async begun(): Promise<boolean> {
       return own(await load()).some(
@@ -545,7 +575,7 @@ export function createRecord(options: {
     },
     /** Whether a user message of its has been stored after the place `read`, which `input` gave. */
     async saidAfter(read: number): Promise<boolean> {
-      return saidAfter(own(await load()), read, true);
+      return saidAfter(own(await load()), read);
     },
   };
 }

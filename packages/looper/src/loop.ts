@@ -39,6 +39,8 @@ export interface LoopOut {
   failed(thread: string, problem: { code: string; message: string }): void;
 }
 interface Turn {
+  /** Its number among the starts of this loop: what names it to whoever stops it. */
+  id: number;
   cancelled: boolean;
   /** The model request running now. */
   requestId?: string | undefined;
@@ -90,8 +92,8 @@ export function createLoop(options: {
   let lastEnded: Promise<void> | undefined;
   /** The latest status, for a view that asks. */
   let latest: Status = { state: "idle" };
-  /** Set once a turn has started here: nothing that was cut off earlier is left to go on with. */
-  let began = false;
+  /** The starts made here. After the first, nothing cut off earlier is left to go on with. */
+  let turns = 0;
   /** Counts the cancels, so that what was asked before one can tell when it is taken after it. */
   let cancels = 0;
   /** What is being taken now: the next thing asked is taken after it. */
@@ -308,13 +310,11 @@ export function createLoop(options: {
     cancelled: boolean,
     open: (current: Turn) => Promise<{ opened: T } | undefined>,
   ) => {
-    const current: Turn = { cancelled, took: new Set() };
+    const current: Turn = { id: ++turns, cancelled, took: new Set() };
     if (!cancelled) turn = current;
-    began = true;
     try {
-      // A cancelled turn's last call lands in the record before anything new does.
+      // A stopped turn's last call lands in the record before a new turn keeps anything.
       await draining;
-      draining = undefined;
       const begun = await open(current);
       if (begun) begin(current);
       else if (turn === current) turn = undefined;
@@ -328,15 +328,17 @@ export function createLoop(options: {
 
   return {
     /**
-     * Say a message in a thread the work follows. With no turn it starts one, whose progress is
-     * said through `out`. In a turn, running or waiting for its place, it is recorded and said at
-     * once, and the turn takes it at its next model request.
+     * Say a message in a thread the work follows. In a turn, running or waiting for its place,
+     * it is recorded and said at once, and the turn takes it at its next model request: `turn`
+     * is then that turn's number. With no turn it starts one, whose progress is said through
+     * `out`; that waits for a stopped turn to have written what it will, the message included.
      */
     send: (text: string, thread: string) =>
-      inOrder(async (cancelled) => {
-        if (turn) {
-          turn.took.add(thread);
-          return said(text, thread, true);
+      inOrder(async (cancelled): Promise<{ messageId: string; turn?: number }> => {
+        const into = turn;
+        if (into) {
+          into.took.add(thread);
+          return { ...(await said(text, thread, true)), turn: into.id };
         }
         return (await start(cancelled, async (current) => {
           enter(current, await record.begun());
@@ -374,7 +376,7 @@ export function createLoop(options: {
      */
     resume: () =>
       inOrder(async (cancelled) => {
-        if (began || cancelled) return;
+        if (turns > 0 || cancelled) return;
         await start(false, async (current) => {
           if ((await record.empty()) || current.cancelled) return undefined;
           enter(current, true);
@@ -399,16 +401,21 @@ export function createLoop(options: {
     resumed: () => turn?.resumed === true,
     /** The status now. */
     state: () => latest,
+    /** The number of the turn running or waiting for its place, if one is. */
+    turn: () => turn?.id,
     /**
-     * Stop the turn now: its model request is cancelled, no further call starts, and a new turn
-     * may begin at once. A call already running finishes, and its result is kept. A turn waiting
-     * for its place never starts.
+     * Stop the turn now, or with `only`, the turn of that number if it is still the one: its
+     * model request is cancelled, no further call starts, and a new turn may begin once it has
+     * written what it will: a call already running finishes, and its result is kept. A turn
+     * waiting for its place never starts. It says whether it cut a turn. `line` is what the main
+     * loop says as it stops it, kept in that thread at once.
      */
-    async cancel() {
+    async cancel(only?: number, line?: { text: string; thread: string }) {
+      const current = turn;
+      if (only !== undefined && current?.id !== only) return false;
       // Counted with no turn too: a message asked but not yet taken starts none after this.
       cancels++;
-      const current = turn;
-      if (!current) return;
+      if (!current) return false;
       current.cancelled = true;
       turn = undefined;
       // A turn that will write nothing more gives its place back now: one still waiting for it,
@@ -417,14 +424,29 @@ export function createLoop(options: {
       // or the result of its running call.
       const quiet = current.requestId !== undefined || current.ending === true;
       if (current.waiting || quiet) current.place?.leave();
-      if (!quiet) draining = current.ended ?? draining;
+      if (!quiet) {
+        const still = current.ended ?? draining;
+        draining = still;
+        // Once that call has ended nothing is being stopped any more.
+        still?.finally(() => {
+          if (draining === still) draining = undefined;
+        });
+      }
       say({ state: "idle" });
-      if (current.requestId) await model.cancel({ requestId: current.requestId }).catch(() => {});
+      await Promise.all([
+        current.requestId && model.cancel({ requestId: current.requestId }).catch(() => {}),
+        // Kept now, not in order with what was asked: a message asked before this and not yet
+        // taken waits for the turn to have written what it will, and this must not.
+        line && record.stopLine(line.text, line.thread).then(show),
+      ]);
+      return true;
     },
     /** Settles when the latest turn has written all it will. */
     settled: async () => {
       await lastEnded;
     },
+    /** Whether a stopped turn is still to write something, as a running call's result: the next turn waits for it. */
+    draining: () => draining !== undefined,
     /** Settles when a stopped turn's running call has ended: at once, if none is running. */
     drained: async () => {
       await draining;
