@@ -1,35 +1,18 @@
 // The small pieces the fixed pages share.
-import { GlobeIcon, LaptopIcon, LoaderCircleIcon } from "lucide-react";
+import { GlobeIcon, LaptopIcon } from "lucide-react";
 import { Fragment } from "react";
 import { go, type Route } from "../data.ts";
 import { Button } from "../ui/button.tsx";
-import { type Tone, WORD } from "./data.ts";
+import { WORD } from "./data.ts";
 
-const COLOR: Record<Tone, string> = {
-  working: "bg-[var(--ok)] motion-safe:animate-pulse",
-  trouble: "bg-[var(--bad)]",
-  idle: "bg-[var(--faint)]",
-  starting: "",
-  stopped: "border border-[var(--faint)]",
-};
-
-export function StateDot({ tone }: { tone: Tone }) {
-  if (tone === "starting")
-    return (
-      <LoaderCircleIcon
-        role="img"
-        aria-label={WORD.starting}
-        className="size-3 shrink-0 animate-spin text-muted-foreground motion-reduce:animate-none"
-      />
-    );
-  return (
-    <span
-      role="img"
-      aria-label={WORD[tone]}
-      className={`mx-0.5 inline-block size-2 shrink-0 rounded-full ${COLOR[tone]}`}
-    />
-  );
-}
+/** The mark of something that has a problem. */
+export const TroubleDot = () => (
+  <span
+    role="img"
+    aria-label={WORD.trouble}
+    className="mx-0.5 inline-block size-2 shrink-0 rounded-full bg-[var(--bad)]"
+  />
+);
 
 /** A connection's kind as where it is: a URL is remote, anything else runs on this computer. */
 export function WhereIcon({ kind }: { kind: string }) {

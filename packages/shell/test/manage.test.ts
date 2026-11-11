@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { type Browser, chromium, type Page } from "@playwright/test";
+import { openSetup } from "./design/samples.ts";
 import { SESSION, standIn } from "./stand-in.ts";
 
 let browser: Browser;
@@ -165,26 +166,6 @@ test(
 );
 
 test(
-  "the agent page leads to a connection and a skill, and to adding new ones",
-  withGateway(async (gateway) => {
-    const page = await open(gateway, "#/a/a-reviewer/settings");
-    await page.getByRole("button", { name: "Connected by you" }).click();
-    await page.waitForURL(/#\/mcps\/s\/c-github$/);
-    await row(page, "GitHub acme").getByRole("button", { name: "Reviewer" }).click();
-    await page.waitForURL(/#\/a\/a-reviewer$/);
-    await page.goto(`${gateway.url}/#/a/a-reviewer/settings`);
-    await page.getByRole("button", { name: "Add an MCP" }).click();
-    await page.getByRole("menuitem", { name: "Connect a new MCP…" }).click();
-    await page.getByRole("dialog", { name: "Connect an MCP" }).waitFor();
-    await page.goto(`${gateway.url}/#/a/a-reviewer/settings`);
-    await page.getByRole("button", { name: "Add a skill" }).click();
-    await page.getByRole("menuitem", { name: "Add a new skill…" }).click();
-    await page.getByRole("dialog", { name: "Add skill" }).waitFor();
-    await page.close();
-  }),
-);
-
-test(
   "a connection is exposed under a slug of its name, or the Hub's name on a clash",
   withGateway(async (gateway) => {
     gateway.connections.set("c-other", {
@@ -199,7 +180,8 @@ test(
       },
       status: { state: "connected", tools: [] },
     });
-    const page = await open(gateway, "#/a/a-reviewer/settings");
+    const page = await open(gateway, "#/a/a-reviewer");
+    await openSetup(page, "Reviewer");
     await page.getByRole("region", { name: "MCPs" }).getByText("github", { exact: true }).waitFor();
     await page.getByRole("button", { name: "Add an MCP" }).click();
     await page.getByRole("menuitem", { name: "GitHub", exact: true }).click();

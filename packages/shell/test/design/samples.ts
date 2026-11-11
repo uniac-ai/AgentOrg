@@ -149,7 +149,8 @@ export function computerWith(gateway: Gateway, surface: "terminal" | "browser", 
 
 /**
  * The agents as the design's sample has them: what each is for, a chat with the one that is
- * stopped, and Research's computer on this machine with a terminal, a browser and its load to watch.
+ * stopped, and Research built from a template with a computer on this machine (a terminal, a
+ * browser and its load to watch) and the web.
  */
 export function sampleAgents(gateway: Gateway) {
   for (const [agent, purpose] of [
@@ -176,6 +177,40 @@ export function sampleAgents(gateway: Gateway) {
     { surface: "terminal", protocol: "terminal@1", operate: true },
     { surface: "load", protocol: "metrics@1", operate: false },
   ]);
+  // What Research was built from: the template, its two units as they were filled in, and as
+  // many connections and skills as the design's has, under the same names.
+  const research = gateway.agents.get("a-research") as Agent;
+  research.template = "assistant";
+  research.mcp = [
+    { slot: "computer", connection: "c-notes", instance: "i-computer" },
+    { slot: "web", connection: "c-postgres" },
+    { slot: "github_acme", connection: "c-github" },
+  ];
+  research.skills = [
+    { name: "terminal", description: "Runs commands, including long ones" },
+    { name: "files", description: "Reads, searches and edits files" },
+    { name: "computer", description: "Where things are, what persists, installing software" },
+    { name: "browser", description: "Drives a browser, page by page" },
+    { name: "web-research", description: "Searches, then reads the sources" },
+    { name: "survey-a-topic", description: "Reads widely, then narrows to what matters" },
+  ];
+  const [built] = research.units as NonNullable<Agent["units"]>;
+  if (built)
+    built.values = {
+      where: "local",
+      access: "terminal",
+      browser: true,
+      workspace: "~/Agents/Research",
+    };
+  research.units?.push({
+    instance: "i-web",
+    provider: "units",
+    unit: "web",
+    title: "Web",
+    values: { service: "exa" },
+    needs: {},
+    status: { state: "connected" },
+  });
 }
 
 /** An agent's page in the design, reached as a person reaches it: from the bar, then its tab. */
@@ -188,6 +223,15 @@ export async function openDesignAgent(page: Page, name: string, tab?: string) {
     .last()
     .click();
   if (tab) await page.getByRole("main").getByRole("tab", { name: tab }).click();
+}
+
+/** An agent's setup, opened from its page: read, and slid in, so nothing in it still moves. */
+export async function openSetup(page: Page, name: string) {
+  await page.getByRole("main").getByRole("button", { name: "Setup" }).click();
+  const sheet = page.getByRole("dialog", { name: `${name}'s setup` });
+  await sheet.getByRole("region", { name: "Skills" }).waitFor();
+  await sheet.evaluate((e) => Promise.all(e.getAnimations().map((moving) => moving.finished)));
+  return sheet;
 }
 
 /** What a page's CPU meter says, once it says it. */

@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { type Browser, chromium, type Locator, type Page } from "@playwright/test";
+import { openSetup } from "./design/samples.ts";
 import { SESSION, standIn } from "./stand-in.ts";
 
 let browser: Browser;
@@ -112,12 +113,10 @@ test(
 );
 
 test(
-  "the agent page shows each MCP's place and origin, its skills, and its activity",
+  "an agent's setup shows each MCP's slot and where it is, its tools, and its skills",
   withGateway(async (gateway) => {
-    const page = await open(gateway, "#/a/a-research/settings");
-    const mcps = page.getByRole("region", { name: "MCPs" });
-    await mcps.getByText("Created for this agent by Local").waitFor();
-    await mcps.getByText("Connected by you").waitFor();
+    const sheet = await openSetup(await open(gateway, "#/a/a-research"), "Research");
+    const mcps = sheet.getByRole("region", { name: "MCPs" });
     await mcps.getByText("notes-server ~/notes").waitFor();
     await mcps.getByRole("img", { name: "Remote" }).waitFor();
     await mcps.getByRole("img", { name: "On this computer" }).waitFor();
@@ -128,41 +127,69 @@ test(
     await mcps.getByText("search_issues").waitFor();
     assert.deepEqual(await box(name), before, "opening its tools doesn't move the row");
 
-    await page.getByRole("region", { name: "Skills" }).getByText("cite-sources").waitFor();
-    const activity = page.getByRole("region", { name: "Activity" });
-    await activity.getByText("Using github__search_issues").waitFor();
-    await activity.getByText("6 min · github").waitFor();
+    await sheet.getByRole("region", { name: "Skills" }).getByText("cite-sources").waitFor();
+    // With no units it is just its base.
+    await sheet.getByRole("region", { name: "Built from" }).getByText("Just the base").waitFor();
+    await sheet.page().close();
+  }),
+);
+
+test(
+  "an agent's setup opens on what its page already read, before it is read again",
+  withGateway(async (gateway) => {
+    const page = await open(gateway, "#/a/a-reviewer");
+    await state(page).getByText("Idle", { exact: true }).waitFor();
+    const release = gateway.hold("agents.get");
+    const sheet = await openSetup(page, "Reviewer");
+    await sheet
+      .getByRole("region", { name: "MCPs" })
+      .getByText("github", { exact: true })
+      .waitFor();
+    release();
     await page.close();
   }),
 );
 
 test(
-  "skills and connections are exposed and removed from the agent page",
+  "skills and connections are added in an agent's setup, and a connection is removed there",
   withGateway(async (gateway) => {
-    const page = await open(gateway, "#/a/a-reviewer/settings");
-    const mcps = page.getByRole("region", { name: "MCPs" });
+    const sheet = await openSetup(await open(gateway, "#/a/a-reviewer"), "Reviewer");
+    const page = sheet.page();
+    const mcps = sheet.getByRole("region", { name: "MCPs" });
     await mcps.getByText("github", { exact: true }).waitFor();
-    await page.getByRole("button", { name: "Add an MCP" }).click();
+    await sheet.getByRole("button", { name: "Add an MCP" }).click();
     // Neither what it has nor what was created for another agent.
     assert.deepEqual(await page.getByRole("menuitem").allInnerTexts(), [
       "Linear",
       "Postgres analytics",
-      "Connect a new MCP…",
     ]);
     await page.getByRole("menuitem", { name: "Postgres analytics" }).click();
     await mcps.getByText("postgres_analytics", { exact: true }).waitFor();
 
-    await page.getByRole("button", { name: "Add a skill" }).click();
-    await page.getByRole("menuitem", { name: "weekly-numbers" }).click();
-    const skills = page.getByRole("region", { name: "Skills" });
-    await skills.getByText("weekly-numbers").waitFor();
-    await skills.getByText("weekly-numbers").hover();
-    await page.getByRole("button", { name: "Remove weekly-numbers" }).click();
-    await skills.getByText("weekly-numbers").waitFor({ state: "detached" });
+    const skills = sheet.getByRole("region", { name: "Skills" });
+    await skills.getByText("No skills").waitFor();
+    for (const skill of ["cite-sources", "weekly-numbers"]) {
+      await sheet.getByRole("button", { name: "Add a skill" }).click();
+      await page.getByRole("menuitem", { name: skill }).click();
+      await skills.getByText(skill, { exact: true }).waitFor();
+    }
+    // With all of them it has nothing left to add, and no skill is taken off here.
+    await sheet.getByRole("button", { name: "Add a skill" }).click();
+    assert.deepEqual(await page.getByRole("menuitem").allInnerTexts(), ["Nothing else to add"]);
+    assert.equal(await page.getByRole("menuitem").isDisabled(), true);
+    await page.keyboard.press("Escape");
+    await page.getByRole("menu").waitFor({ state: "detached" });
+    assert.equal(await skills.getByRole("button").count(), 1, "only the way to add one");
 
     await mcps.getByRole("button", { name: "postgres_analytics tools" }).click();
     await mcps.getByRole("button", { name: "Remove from Reviewer" }).last().click();
     await mcps.getByText("postgres_analytics", { exact: true }).waitFor({ state: "detached" });
+    // A change that is refused says why, in the sheet.
+    gateway.refuseNext("agents.unexpose", "state", "This came with a unit: remove the unit.");
+    await mcps.getByRole("button", { name: "github tools" }).click();
+    await mcps.getByRole("button", { name: "Remove from Reviewer" }).click();
+    await sheet.getByRole("alert").getByText("This came with a unit: remove the unit.").waitFor();
+    assert.equal(await mcps.getByText("github", { exact: true }).count(), 1);
     await page.close();
   }),
 );
@@ -170,8 +197,9 @@ test(
 test(
   "the model is the agent's, read and chosen through management",
   withGateway(async (gateway) => {
-    const page = await open(gateway, "#/a/a-reviewer/settings");
-    const model = page.getByRole("combobox", { name: "Model" });
+    const sheet = await openSetup(await open(gateway, "#/a/a-reviewer"), "Reviewer");
+    const page = sheet.page();
+    const model = sheet.getByRole("combobox", { name: "Model" });
     await page.waitForFunction(
       () => !document.querySelector('button[aria-label="Model"]')?.hasAttribute("disabled"),
     );
@@ -221,14 +249,23 @@ test(
     await menu.click();
     await stop.click();
     await state(page).getByText("It wouldn't stop.").waitFor();
-    await menu.click();
-    await page.getByRole("menuitem", { name: /Delete/ }).click();
+    // Deleting it is in its setup, after asking.
+    const sheet = await openSetup(page, "Reviewer");
+    await sheet.getByRole("button", { name: "Delete Reviewer…" }).click();
     const dialog = page.getByRole("dialog", { name: "Delete Reviewer?" });
     await dialog.getByRole("button", { name: "Cancel" }).click();
     await dialog.waitFor({ state: "detached" });
     assert.ok(gateway.agents.has("a-reviewer"));
-    await menu.click();
-    await page.getByRole("menuitem", { name: /Delete/ }).click();
+    // A delete that is refused says why where it was asked, and is asked anew the next time.
+    gateway.refuseNext("agents.remove", "failed", "It wouldn't go.");
+    await sheet.getByRole("button", { name: "Delete Reviewer…" }).click();
+    await dialog.getByRole("button", { name: "Delete" }).click();
+    await dialog.getByRole("alert").getByText("It wouldn't go.").waitFor();
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    await dialog.waitFor({ state: "detached" });
+    await sheet.getByRole("button", { name: "Delete Reviewer…" }).click();
+    await dialog.getByRole("button", { name: "Delete" }).waitFor();
+    assert.equal(await dialog.getByRole("alert").count(), 0);
     await dialog.getByRole("button", { name: "Delete" }).click();
     await page.waitForURL(/#\/$/);
     // It is gone from the bar too.
@@ -304,15 +341,11 @@ test(
       await panel.getByPlaceholder("Message Reviewer").waitFor();
       await panel.getByRole("button", { name: "Close chats" }).click();
     }
-    await main.getByRole("button", { name: "Setup" }).click();
-    await page.waitForURL(/\/a\/a-reviewer\/settings$/);
-    // The bar is the way back.
-    const reviewer = page
-      .getByRole("navigation", { name: "Main" })
-      .getByRole("button", { name: "Reviewer" });
-    assert.equal(await reviewer.getAttribute("aria-current"), "page");
-    await reviewer.click();
-    await page.waitForURL(/\/a\/a-reviewer$/);
+    // What it's made of is a sheet over its page, closed again with Escape.
+    const sheet = await openSetup(page, "Reviewer");
+    await page.keyboard.press("Escape");
+    await sheet.waitFor({ state: "detached" });
+    assert.match(page.url(), /#\/a\/a-reviewer$/);
     // An agent that isn't there has an empty page.
     await page.goto(`${gateway.url}/#/a/a-nobody`);
     await inBar(page, "Idle Reviewer").waitFor();
@@ -352,19 +385,25 @@ test(
 );
 
 test(
-  "no page shows a scrollbar or overflows sideways, wide or phone",
+  "no page shows a scrollbar or overflows sideways, wide or phone, nor an agent's setup over its page",
   withGateway(async (gateway) => {
     for (const viewport of [
       { width: 1440, height: 900 },
       { width: 390, height: 844 },
     ])
-      for (const hash of ["#/", "#/a/a-research", "#/a/a-research/settings", "#/a/a-triage"]) {
+      for (const [hash, sheet] of [["#/"], ["#/a/a-research"], ["#/a/a-triage", "Triage"]]) {
         const page = await open(gateway, hash, viewport);
         await page.getByRole("main").getByText(/./).first().waitFor();
+        if (sheet) {
+          const box = await (await openSetup(page, sheet)).boundingBox();
+          assert.ok(box && box.x >= 0 && box.x + box.width <= viewport.width, "inside the window");
+        }
         const bad = await page.evaluate(() => {
           const out: string[] = [];
           if (document.documentElement.scrollWidth > innerWidth) out.push("page overflows");
-          for (const el of document.querySelectorAll<HTMLElement>("main, main *"))
+          for (const el of document.querySelectorAll<HTMLElement>(
+            'main, main *, [role="dialog"], [role="dialog"] *',
+          ))
             if (
               /auto|scroll/.test(getComputedStyle(el).overflowY) &&
               el.offsetWidth - el.clientWidth > 0

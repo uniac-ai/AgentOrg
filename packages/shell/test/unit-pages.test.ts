@@ -14,6 +14,7 @@ import {
   withBrowser,
   withGateway,
 } from "./build-kit.ts";
+import { openSetup } from "./design/samples.ts";
 
 withBrowser();
 
@@ -92,7 +93,7 @@ test(
 );
 
 test(
-  "an agent's settings say which unit gave what",
+  "an agent's setup says what it was built from, each unit with its answers, and names the unit behind what one made",
   withGateway(async (gateway) => {
     const page = await open(gateway);
     await fromTemplate(page, "Assistant");
@@ -102,13 +103,17 @@ test(
       .getByLabel("Working directory", { exact: true })
       .fill("/work/foreman");
     await panel(page).getByRole("button", { name: "Create", exact: true }).click();
-    await page.getByRole("main").getByRole("button", { name: "Setup" }).click();
-    await page
+    const sheet = await openSetup(page, "Foreman");
+    const built = sheet.getByRole("region", { name: "Built from Assistant" });
+    assert.deepEqual((await built.getByRole("listitem").first().innerText()).split("\n"), [
+      "Computer",
+      "This computer",
+      "Files and terminal",
+      "Browser",
+      "/work/foreman",
+    ]);
+    await sheet
       .getByRole("region", { name: "MCPs" })
-      .getByRole("button", { name: "Computer", exact: true })
-      .waitFor();
-    await page
-      .getByRole("region", { name: "Skills" })
       .getByText("Computer", { exact: true })
       .waitFor();
     await page.close();
@@ -116,54 +121,27 @@ test(
 );
 
 test(
-  "what came with a unit says so, and a unit that only exposes what you have doesn't name itself",
+  "a connection you made is told by where it is, not by a unit that only exposes it",
   withGateway(async (gateway) => {
     const triage = gateway.agents.get("a-triage");
     assert.ok(triage);
-    triage.skills = [
-      { name: "cite-sources", description: "Links claims", instance: "i-skill" },
-      { name: "files", description: "Works with files", instance: "i-computer" },
-    ];
     triage.mcp = [{ slot: "linear", connection: "c-linear", instance: "i-link" }];
-    const status = { state: "connected" as const };
-    const common = { provider: "units", needs: {}, status };
     triage.units = [
       {
-        ...common,
-        instance: "i-skill",
-        unit: "skill",
-        title: "Skill",
-        values: { skill: "cite-sources" },
-      },
-      { ...common, instance: "i-computer", unit: "computer", title: "Computer", values: {} },
-      {
-        ...common,
+        provider: "units",
+        needs: {},
+        status: { state: "connected" },
         instance: "i-link",
         unit: "connection",
         title: "Connection",
         values: { connection: "c-linear" },
       },
     ];
-    gateway.refuseNext("agents.unexpose", "state", "This came with a unit: remove the unit.");
-    const page = await browser().newPage({ viewport: { width: 1440, height: 900 } });
-    page.setDefaultTimeout(8000);
-    await page.addInitScript(
-      (session) => localStorage.setItem("agentorg.session", session),
-      SESSION,
-    );
-    await page.goto(`${gateway.url}/#/a/a-triage/settings`);
-    const skills = page.getByRole("region", { name: "Skills" });
-    await skills.getByText("Computer", { exact: true }).waitFor();
-    assert.equal(await skills.getByText("Skill", { exact: true }).count(), 0);
-    await page.getByRole("region", { name: "MCPs" }).getByText("Connected by you").waitFor();
-    await skills.locator(".group\\/skill").last().hover();
-    await skills.getByRole("button", { name: "Remove files" }).click();
-    await page
-      .getByRole("main")
-      .getByRole("alert")
-      .getByText("This came with a unit: remove the unit.")
-      .waitFor();
-    await skills.getByText("files", { exact: true }).waitFor();
+    const page = await open(gateway);
+    await page.goto(`${gateway.url}/#/a/a-triage`);
+    const mcps = (await openSetup(page, "Triage")).getByRole("region", { name: "MCPs" });
+    await mcps.getByText("linear", { exact: true }).waitFor();
+    assert.equal(await mcps.getByText("Connection", { exact: true }).count(), 0);
     await page.close();
   }),
 );

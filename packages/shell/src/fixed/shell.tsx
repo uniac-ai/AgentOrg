@@ -15,7 +15,6 @@ import { go, type Route, useRoute } from "../data.ts";
 import { Button } from "../ui/button.tsx";
 import { TooltipProvider } from "../ui/tooltip.tsx";
 import { AgentPage } from "./agent-page.tsx";
-import { AgentSettingsPage } from "./agent-settings-page.tsx";
 import { AllChatsProvider, useAllChats } from "./all-chats.tsx";
 import { BuildDialog } from "./build.tsx";
 import { BuildingProvider, useBuilding } from "./building.tsx";
@@ -313,9 +312,6 @@ function Frame({ login }: { login?: LoginStatus }) {
           {route.screen === "home" && <HomePage />}
           {route.screen === "agent" && (
             <AgentPage key={route.agent} agent={route.agent} tab={route.tab} />
-          )}
-          {route.screen === "agent-settings" && (
-            <AgentSettingsPage key={route.agent} agent={route.agent} />
           )}
           {route.screen === "skills" && <SkillsPage focus={route.focus} adding={route.adding} />}
           {route.screen === "mcps" && <McpsPage focus={route.focus} adding={route.adding} />}
