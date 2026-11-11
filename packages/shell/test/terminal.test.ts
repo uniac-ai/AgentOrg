@@ -64,13 +64,13 @@ const withGateway = (run: (gateway: Gateway) => Promise<void>) => async () => {
   }
 };
 const round2 = (n: number) => Math.round(n * 100) / 100;
-const pane = (page: Page) => page.getByRole("group", { name: "Terminals" });
+const pane = (page: Page) => page.getByRole("group", { name: "Terminal" });
 /** The terminal in front says this. */
 const says = (page: Page, text: string) =>
   page.waitForFunction(
     (wanted) =>
       document
-        .querySelector('[aria-label="Terminals"] .xterm-rows')
+        .querySelector('[aria-label="Terminal"] .xterm-rows')
         ?.textContent?.replaceAll("\u00a0", " ")
         .includes(wanted),
     text,
@@ -91,9 +91,6 @@ test(
     const page = await open(gateway);
     await front(page, "npm run dev");
     assert.deepEqual(await pane(page).getByRole("tab").allInnerTexts(), ["npm ci", "npm run dev"]);
-    // The live terminals stand where the record's Computer frame would be.
-    assert.equal(await page.getByRole("region", { name: "Terminal" }).count(), 1);
-    assert.equal(await page.getByRole("region", { name: "Computer" }).count(), 0);
     await says(page, "$ npm run dev");
     await says(page, "ready on :4173");
     assert.equal(await pane(page).getByLabel("Folder").innerText(), "/work/app");

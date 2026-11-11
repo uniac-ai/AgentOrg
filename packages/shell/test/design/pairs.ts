@@ -18,12 +18,14 @@ import {
   openDesignAgent,
   openSampleChat,
   openSetup,
+  openWindow,
   readChat,
   refuseSend,
   sampleAgents,
   sampleChats,
   sampleLoad,
   startTerminals,
+  stopAgent,
   unreadReply,
 } from "./samples.ts";
 
@@ -294,6 +296,38 @@ const SCREENS: Screen[] = [
     }),
   ),
   {
+    name: "agent-computer-stopped",
+    sizes: ["wide"],
+    themes: ["dark", "light"],
+    agents: true,
+    hash: "#/a/a-research",
+    design: async (page) => {
+      await openDesignAgent(page, "Research");
+      await stopAgent(page, "Research");
+    },
+    built: (page) => stopAgent(page, "Research"),
+  },
+  ...(
+    [
+      ["window-expanded", ["wide", "phone"], false],
+      ["window-beside-chat", ["wide", "rail"], true],
+    ] as const
+  ).map(
+    ([name, sizes, beside]): Screen => ({
+      name,
+      sizes: [...sizes],
+      themes: ["dark", "light"],
+      agents: true,
+      chats: true,
+      hash: "#/a/a-research",
+      design: async (page) => {
+        await openDesignAgent(page, "Research");
+        await openWindow(page, beside);
+      },
+      built: (page) => openWindow(page, beside),
+    }),
+  ),
+  {
     name: "agent-setup",
     sizes: ["wide", "phone"],
     themes: ["dark", "light"],
@@ -342,7 +376,7 @@ const SCREENS: Screen[] = [
         async (page: Page, gateway: Gateway) => {
           gateway.live.terminal.full = true;
           await page.getByRole("button", { name: "New terminal" }).click();
-          await page.getByRole("group", { name: "Terminals" }).getByRole("alert").waitFor();
+          await page.getByRole("group", { name: "Terminal" }).getByRole("alert").waitFor();
         },
       ],
       [

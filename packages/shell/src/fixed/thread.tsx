@@ -1,12 +1,14 @@
 // One chat, over its agent's `chat@1`: a title, one agent, its messages; and a chat about to be
-// started. The record is the chat's and whether it works is the agent's. A chat stops nothing and
-// chooses no model: those are the agent's, on its page.
+// started. The record is the chat's and whether it works is the agent's. A chat has no Stop and
+// no model to choose: its work is stopped by saying so in it, and the model is the agent's, in
+// its setup.
 import { NotConnected } from "@agentorg/sdk";
 import {
   ArrowUpIcon,
   CheckIcon,
   ChevronLeftIcon,
   CopyIcon,
+  MonitorIcon,
   MoreHorizontalIcon,
   WrenchIcon,
 } from "lucide-react";
@@ -42,6 +44,8 @@ import { CallRow } from "./call-row.tsx";
 import { type Row, rowsOf } from "./calls.ts";
 import { ChatRow, CloseChats } from "./chat-parts.tsx";
 import { useChats } from "./chats.tsx";
+import { surfacesOf, windowsOf } from "./computer.tsx";
+import { useComputers } from "./computers.tsx";
 import { type ChatMessage, type ChatStatus, reasonOf } from "./data.ts";
 import { Face } from "./face.tsx";
 import { fixOf } from "./notice.ts";
@@ -285,6 +289,11 @@ export function Thread({ chat }: { chat: ListedChat }) {
   const id = entry.id;
   const watched = byId.get(agent.id);
   const slot = watched?.slot;
+  // Its agent's computer, as a window beside the chat: pressed again, it closes. The chat stays
+  // as it is.
+  const computers = useComputers();
+  const hasComputer = windowsOf(surfacesOf(watched?.detail)).length > 0;
+  const beside = computers.shown === agent.id;
   // A stopped agent's chat is for reading: it has no composer until the agent starts.
   const state = watched?.entry.status.state;
   const off = state === "stopped";
@@ -544,6 +553,18 @@ export function Thread({ chat }: { chat: ListedChat }) {
             {agent.name}
           </div>
         </div>
+        {hasComputer && (
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label={`${agent.name}'s computer`}
+            aria-pressed={beside}
+            className={beside ? "bg-[var(--selected)]" : ""}
+            onClick={() => (beside ? computers.close() : computers.open(agent.id))}
+          >
+            <MonitorIcon />
+          </Button>
+        )}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="ghost" size="icon-sm" aria-label="Chat options">

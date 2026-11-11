@@ -126,8 +126,9 @@ export const ASKS = {
 export const ASKED = { confirm: "Pay $48.00", file: "Choose a file", choice: "Express, 2 days" };
 
 type Surface = NonNullable<NonNullable<Agent["units"]>[number]["status"]["surfaces"]>[number];
-const computer = (gateway: Gateway, surfaces: Surface[]) => {
-  (gateway.agents.get("a-research") as Agent).units = [
+/** An agent given a computer with these surfaces: Research, unless another is named. */
+export const computer = (gateway: Gateway, surfaces: Surface[], agent = "a-research") => {
+  (gateway.agents.get(agent) as Agent).units = [
     {
       instance: "i-computer",
       provider: "units",
@@ -232,6 +233,33 @@ export async function openSetup(page: Page, name: string) {
   await sheet.getByRole("region", { name: "Skills" }).waitFor();
   await sheet.evaluate((e) => Promise.all(e.getAnimations().map((moving) => moving.finished)));
   return sheet;
+}
+
+/** Research's computer as the layer's window: from Expand, or from a chat of its, beside it. */
+export async function openWindow(page: Page, beside: boolean) {
+  const main = page.getByRole("main");
+  await main.getByRole("navigation", { name: "Dock" }).waitFor();
+  if (beside) {
+    await main.getByRole("tab", { name: "Chats" }).click();
+    await main
+      .getByRole("list", { name: "Chats with Research" })
+      .getByRole("button")
+      .first()
+      .click();
+    await page
+      .getByRole("complementary", { name: "Chats" })
+      .getByRole("button", { name: "Research's computer" })
+      .click();
+  } else await main.getByRole("button", { name: "Expand" }).click();
+  await page.getByRole("group", { name: "Window" }).getByRole("navigation").waitFor();
+}
+
+/** An agent stopped from its page, as a person stops it. */
+export async function stopAgent(page: Page, name: string) {
+  const main = page.getByRole("main");
+  await main.getByRole("button", { name: `More for ${name}` }).click();
+  await page.getByRole("menuitem", { name: "Stop" }).click();
+  await main.getByText(`${name} is stopped`).waitFor();
 }
 
 /** What a page's CPU meter says, once it says it. */

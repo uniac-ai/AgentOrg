@@ -19,6 +19,7 @@ import { AllChatsProvider, useAllChats } from "./all-chats.tsx";
 import { BuildDialog } from "./build.tsx";
 import { BuildingProvider, useBuilding } from "./building.tsx";
 import { ChatsProvider, useChats } from "./chats.tsx";
+import { ComputersProvider } from "./computers.tsx";
 import { WORD } from "./data.ts";
 import { Face } from "./face.tsx";
 import { HomePage } from "./home-page.tsx";
@@ -39,7 +40,9 @@ export function FixedShell({ login }: { login?: LoginStatus }) {
         <ChatsProvider>
           <AllChatsProvider>
             <BuildingProvider>
-              <Frame login={login} />
+              <ComputersProvider>
+                <Frame login={login} />
+              </ComputersProvider>
             </BuildingProvider>
           </AllChatsProvider>
         </ChatsProvider>

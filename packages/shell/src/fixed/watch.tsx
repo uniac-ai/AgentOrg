@@ -10,9 +10,9 @@ import {
   type Now,
   nowOf,
   REFRESH_MS,
-  useChatRecord,
   useChatSlots,
   useEvery,
+  useWorking,
 } from "./data.ts";
 
 export interface Watched {
@@ -45,8 +45,7 @@ function Watch({
   tick: number;
   report(id: string, watched: Watched): void;
 }) {
-  // Only whether it works is wanted here: the least of its record is asked for.
-  const { status } = useChatRecord(slot, entry.status.state === "running", 1);
+  const status = useWorking(slot, entry.status.state === "running");
   // Whether a connection of its is down: nothing tells, so it's read again. A read that fails
   // keeps what the last one said, so what hangs on it stays as it was.
   const read = useLoad(

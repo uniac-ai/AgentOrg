@@ -23,12 +23,14 @@ import {
   openDesignAgent,
   openSampleChat,
   openSetup,
+  openWindow,
   readChat,
   refuseSend,
   sampleAgents,
   sampleChats,
   sampleLoad,
   startTerminals,
+  stopAgent,
   unreadReply,
 } from "./samples.ts";
 
@@ -52,7 +54,8 @@ interface Measured {
 type Parts = Record<string, Measured | string | number | null>;
 /**
  * What a probe measures: the frame, one window's own rows, the chat in its layer, one chat, the
- * way to a chat's older messages, Home, an agent's page, or its setup.
+ * way to a chat's older messages, Home, an agent's page, its setup, its computer's frame on its
+ * page, or that computer as the layer's window.
  */
 type Part =
   | "frame"
@@ -63,7 +66,9 @@ type Part =
   | "earlier"
   | "home"
   | "agent"
-  | "setup";
+  | "setup"
+  | "computer"
+  | "window";
 type Gateway = Awaited<ReturnType<typeof standIn>>;
 
 /**
@@ -204,6 +209,9 @@ const probe = (what: Part): Parts => {
       parts[`tab${i}.running`] = of(tab.querySelector('[aria-label="Running"]'));
       parts[`tab${i}.label`] = of(tab.querySelector("span"));
     });
+    const expand = bar.querySelector('button[aria-label="Expand"]');
+    parts.expand = of(expand);
+    parts["expand.icon"] = of(expand?.querySelector("svg"));
     const plus = bar.querySelector('button[aria-label="New terminal"]');
     parts.plus = of(plus);
     parts["plus.icon"] = of(plus?.querySelector("svg"));
@@ -242,6 +250,9 @@ const probe = (what: Part): Parts => {
     controls("window", bar.parentElement);
     parts.bar = of(bar, "w");
     parts["bar.inner"] = of(bar.children[0], "w");
+    const expand = bar.querySelector('button[aria-label="Expand"]');
+    parts.expand = of(expand);
+    parts["expand.icon"] = of(expand?.querySelector("svg"));
     // The row of tabs is as wide as its tabs, which are the sample's.
     parts.tablist = of(list, "w");
     /** Measured from another left edge than the window's, where what comes before it differs. */
@@ -397,6 +408,76 @@ const probe = (what: Part): Parts => {
     parts["chats.new.button"] = of(chats?.previousElementSibling?.querySelector("button"));
     parts["chats.new.icon"] = of(chats?.previousElementSibling?.querySelector("svg"));
     parts["chats.row"] = of(chats?.querySelector("li button"));
+    return parts;
+  }
+
+  if (what === "computer" || what === "window") {
+    // An agent's computer, from the shell's top left: its name, the window in front or what it
+    // says while its agent is stopped, and its dock. On its page; or as the layer's window,
+    // where it also says whose it is and has its own Close, beside the chat.
+    const shell = document.querySelector("[data-shell]");
+    const layer = document.querySelector('[role="group"][aria-label="Window"]');
+    const frame =
+      what === "window"
+        ? layer?.querySelector("section")
+        : document.querySelector('main section[aria-label$="computer"]');
+    if (!shell || !frame) return parts;
+    origin = shell.getBoundingClientRect();
+    parts.frame = of(frame);
+    // Its wash is the agent's own colour, which is the sample's: how it is laid is measured.
+    parts["frame.wash"] = getComputedStyle(frame).backgroundImage.replace(
+      /(okl(?:ch|ab)\(\S+ \S+ )[\d.-]+/g,
+      "$1the agent's hue",
+    );
+    const [head, room, foot] = frame.children;
+    // What its window in front holds is listed with the windows.
+    controls("frame", frame, '[role="group"]:not([aria-label="Window"])');
+    parts.head = of(head);
+    parts["head.name"] = of(head?.querySelector("h3"));
+    parts.room = of(room);
+    const front = room?.children[0];
+    parts.window = of(front);
+    // Stopped, it has no window: it says so, with the way to start its agent.
+    const stopped = front?.getAttribute("role") === "group" ? undefined : front?.children[0];
+    parts["stopped.words"] = of(stopped?.children[0]);
+    parts["stopped.start"] = of(stopped?.querySelector("button"));
+    parts.foot = of(foot);
+    // The dock is as wide as its windows are many, and centred: its place is told by its
+    // height and its buttons, each from the dock's own top left.
+    const dock = foot?.querySelector("nav");
+    const whole = of(dock, "w");
+    if (whole) whole.box[0] = "centred";
+    parts.dock = whole;
+    const [around, placed] = [foot?.getBoundingClientRect(), dock?.getBoundingClientRect()];
+    const last = dock?.lastElementChild?.getBoundingClientRect();
+    // How far its middle is from its place's, and how far its last button ends from its own end.
+    parts["dock.off"] =
+      around && placed ? round(placed.x + placed.width / 2 - around.x - around.width / 2) : null;
+    parts["dock.after"] = placed && last ? round(placed.right - last.right) : null;
+    for (const name of ["Browser", "Terminal"]) {
+      const button = dock?.querySelector(`button[aria-label="${name}"]`);
+      parts[`dock.${name}`] = inside(dock, button);
+      parts[`dock.${name}.icon`] = inside(dock, button?.querySelector("svg"));
+    }
+    if (what === "window") {
+      // In the layer: the room it takes beside the chat, which of the two is on top, whose it
+      // is, its Close, and the chat's own way to it.
+      const chat = document.querySelector('aside[aria-label="Chats"]');
+      parts.layer = of(layer);
+      parts["layer.over"] = getComputedStyle(layer as Element).zIndex;
+      parts.chat = of(chat);
+      parts["chat.over"] = chat ? getComputedStyle(chat).zIndex : null;
+      const whose = head?.querySelector("h3")?.children[0];
+      parts["head.face"] = of(whose);
+      parts["head.face.disc"] = of(whose?.children[0]);
+      const close = head?.querySelector("button");
+      parts["head.close"] = of(close);
+      parts["head.close.icon"] = of(close?.querySelector("svg"));
+      const way = chat?.querySelector('button[aria-label$="computer"]');
+      parts["chat.computer"] = of(way);
+      parts["chat.computer.icon"] = of(way?.querySelector("svg"));
+      parts["chat.computer.pressed"] = way?.getAttribute("aria-pressed") ?? null;
+    }
     return parts;
   }
 
@@ -769,7 +850,7 @@ for (const theme of ["dark", "light"] as const) {
   await inDesign(drawn, "Typing refused");
   gateway.live.terminal.full = true;
   await page.getByRole("button", { name: "New terminal" }).click();
-  await page.getByRole("group", { name: "Terminals" }).getByRole("alert").waitFor();
+  await page.getByRole("group", { name: "Terminal" }).getByRole("alert").waitFor();
   await both("refused.", page);
   await inDesign(drawn, "Typing taken");
   // Picking a tab takes the built side's refusal away.
@@ -1023,6 +1104,56 @@ for (const { state, size, id, name } of AGENT_PAGES)
       await gateway?.close();
     }
   }
+
+// An agent's computer on its page: Research's, with its browser in front, wide and on a phone,
+// and as it is while Research is stopped. What a window holds is measured with the windows.
+for (const [state, size] of [
+  ["page", "wide"],
+  ["page", "phone"],
+  ["stopped", "wide"],
+] as const)
+  for (const theme of ["dark", "light"] as const)
+    for (const side of ["design", "built"] as const) {
+      const gateway = side === "built" ? await standIn() : undefined;
+      if (gateway) sampleAgents(gateway);
+      const page = gateway
+        ? await builtPage(gateway, size, theme, "#/a/a-research")
+        : await designPage(size, theme);
+      if (!gateway) await openDesignAgent(page, "Research");
+      const main = page.getByRole("main");
+      await main.getByRole("navigation", { name: "Dock" }).waitFor();
+      if (state === "stopped") await stopAgent(page, "Research");
+      await rest(page, size);
+      all[`computer.${state}.${size}.${theme}.${side}`] = await measure(page, "computer");
+      await page.close();
+      await gateway?.close();
+    }
+
+// An agent's computer as the layer's window: opened by Expand beside the collapsed chat, wide
+// and on a phone, and from a chat beside the open panel, wide and where the two overlap.
+for (const [state, size] of [
+  ["expanded", "wide"],
+  ["expanded", "phone"],
+  ["beside", "wide"],
+  ["beside", "rail"],
+] as const)
+  for (const theme of ["dark", "light"] as const)
+    for (const side of ["design", "built"] as const) {
+      const gateway = side === "built" ? await standIn() : undefined;
+      if (gateway) {
+        sampleAgents(gateway);
+        sampleChats(gateway);
+      }
+      const page = gateway
+        ? await builtPage(gateway, size, theme, "#/a/a-research")
+        : await designPage(size, theme);
+      if (!gateway) await openDesignAgent(page, "Research");
+      await openWindow(page, state === "beside");
+      await rest(page, size);
+      all[`window.${state}.${size}.${theme}.${side}`] = await measure(page, "window");
+      await page.close();
+      await gateway?.close();
+    }
 
 // An agent's setup, over its page: what Research was built from, its model, its MCPs and its
 // skills, and the way to delete it, wide and on a phone.

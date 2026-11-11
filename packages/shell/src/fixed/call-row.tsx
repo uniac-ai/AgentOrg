@@ -30,7 +30,7 @@ const PRE =
   "rounded-lg bg-[var(--raised)] px-2.5 py-1.5 font-mono text-xs whitespace-pre-wrap break-words text-muted-foreground";
 
 /** `edit` answers with a plain unified diff; the parser wants a git header above it. */
-export function DiffView({ edit }: { edit: Edit }) {
+function DiffView({ edit }: { edit: Edit }) {
   const body = edit.output
     .split("\n")
     .filter((line) => !line.startsWith("==="))
@@ -55,7 +55,7 @@ export function DiffView({ edit }: { edit: Edit }) {
   );
 }
 
-export function Count({ added, removed }: { added: number; removed: number }) {
+function Count({ added, removed }: { added: number; removed: number }) {
   return (
     <span className="shrink-0 font-mono text-xs tabular-nums">
       {added > 0 && <span className="text-[var(--ok)]">+{added}</span>}
