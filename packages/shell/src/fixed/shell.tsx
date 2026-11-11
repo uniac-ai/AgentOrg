@@ -20,11 +20,11 @@ import { AllChatsProvider, useAllChats } from "./all-chats.tsx";
 import { BuildDialog } from "./build.tsx";
 import { BuildingProvider, useBuilding } from "./building.tsx";
 import { ChatsProvider, useChats } from "./chats.tsx";
+import { WORD } from "./data.ts";
 import { Face } from "./face.tsx";
 import { HomePage } from "./home-page.tsx";
 import { Layer } from "./layer.tsx";
 import { McpsPage } from "./mcps-page.tsx";
-import { WORD } from "./parts.tsx";
 import { SettingsPage } from "./settings-page.tsx";
 import { SkillsPage } from "./skills-page.tsx";
 import { TemplatesPage } from "./templates-page.tsx";
@@ -311,7 +311,9 @@ function Frame({ login }: { login?: LoginStatus }) {
         </header>
         <main className="@container/main relative min-h-0 flex-1">
           {route.screen === "home" && <HomePage />}
-          {route.screen === "agent" && <AgentPage key={route.agent} agent={route.agent} />}
+          {route.screen === "agent" && (
+            <AgentPage key={route.agent} agent={route.agent} tab={route.tab} />
+          )}
           {route.screen === "agent-settings" && (
             <AgentSettingsPage key={route.agent} agent={route.agent} />
           )}

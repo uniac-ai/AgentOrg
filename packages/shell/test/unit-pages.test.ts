@@ -92,7 +92,7 @@ test(
 );
 
 test(
-  "an agent's page names what its units are, and its settings say which unit gave what",
+  "an agent's settings say which unit gave what",
   withGateway(async (gateway) => {
     const page = await open(gateway);
     await fromTemplate(page, "Assistant");
@@ -102,15 +102,7 @@ test(
       .getByLabel("Working directory", { exact: true })
       .fill("/work/foreman");
     await panel(page).getByRole("button", { name: "Create", exact: true }).click();
-    await page
-      .getByRole("main")
-      .getByText("Computer: This computer, Files and terminal, Browser, /work/foreman")
-      .waitFor();
-    await page
-      .getByRole("main")
-      .getByText("It acts as you on this Mac. Runs any command")
-      .waitFor();
-    await page.getByRole("button", { name: "Foreman settings" }).click();
+    await page.getByRole("main").getByRole("button", { name: "Setup" }).click();
     await page
       .getByRole("region", { name: "MCPs" })
       .getByRole("button", { name: "Computer", exact: true })

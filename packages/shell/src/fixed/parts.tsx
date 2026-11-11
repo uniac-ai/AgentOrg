@@ -3,16 +3,8 @@ import { GlobeIcon, LaptopIcon, LoaderCircleIcon } from "lucide-react";
 import { Fragment } from "react";
 import { go, type Route } from "../data.ts";
 import { Button } from "../ui/button.tsx";
-import type { Tone } from "./data.ts";
+import { type Tone, WORD } from "./data.ts";
 
-/** An agent's state, in a word. */
-export const WORD: Record<Tone, string> = {
-  working: "Working",
-  trouble: "Has a problem",
-  idle: "Idle",
-  starting: "Starting",
-  stopped: "Stopped",
-};
 const COLOR: Record<Tone, string> = {
   working: "bg-[var(--ok)] motion-safe:animate-pulse",
   trouble: "bg-[var(--bad)]",

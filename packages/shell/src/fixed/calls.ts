@@ -17,8 +17,6 @@ export interface Command extends Base {
   seconds: number;
   output: string;
   stopped: boolean;
-  /** When the agent last heard from it. */
-  polled?: string;
 }
 /** A poll of a command whose start isn't in what's been read. */
 export interface Poll extends Base {
@@ -206,7 +204,6 @@ export function rowsOf(messages: readonly ChatMessage[]): Row[] {
       if (chars && chars !== "\u0003" && chars !== "\u0004")
         command.output += `${command.output && !command.output.endsWith("\n") ? "\n" : ""}> ${chars}\n`;
       command.output += answer?.output ?? "";
-      command.polled = message.at;
       if (answer?.exit !== undefined) {
         command.exit = answer.exit;
         command.state = "done";
@@ -314,10 +311,3 @@ export function lineOfRow(row: Row): string {
       return row.name;
   }
 }
-
-export const lastLines = (text: string, n: number) =>
-  text
-    .split("\n")
-    .filter((line) => line.trim())
-    .slice(-n)
-    .join("\n");

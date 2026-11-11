@@ -1,11 +1,9 @@
 // One watch on each agent, shared by everything that shows how agents are doing.
-import { createContext, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useLoad } from "../data.ts";
 import {
   type AgentDetail,
   type AgentEntry,
-  type ChatMessage,
-  type ChatProblem,
   type ChatStatus,
   getAgent,
   listAgents,
@@ -20,12 +18,10 @@ import {
 export interface Watched {
   entry: AgentEntry;
   slot?: string;
+  /** What it's made of, as last read. */
   detail?: AgentDetail;
   /** Whether it works, in any chat. */
   status?: ChatStatus;
-  /** Why the chat shown got no answer, until its next reply. */
-  problem?: ChatProblem;
-  messages: readonly ChatMessage[];
   now: Now;
 }
 
@@ -38,9 +34,6 @@ interface Agents {
 const Context = createContext<Agents>({ list: [], loaded: false, byId: new Map() });
 export const useAgents = () => useContext(Context);
 
-/** How many of the latest messages each watch keeps. */
-const LATEST = 5;
-
 function Watch({
   entry,
   slot,
@@ -52,17 +45,18 @@ function Watch({
   tick: number;
   report(id: string, watched: Watched): void;
 }) {
-  const { status, messages, problem } = useChatRecord(
-    slot,
-    entry.status.state === "running",
-    LATEST,
-  );
-  // Whether a connection of its is down: nothing tells, so it's read again.
-  const detail = useLoad(
+  // Only whether it works is wanted here: the least of its record is asked for.
+  const { status } = useChatRecord(slot, entry.status.state === "running", 1);
+  // Whether a connection of its is down: nothing tells, so it's read again. A read that fails
+  // keeps what the last one said, so what hangs on it stays as it was.
+  const read = useLoad(
     () => getAgent(entry.agent),
     ["actors", "bindings"],
     [entry.agent, tick],
   ).value;
+  const last = useRef(read);
+  if (read) last.current = read;
+  const detail = last.current;
   // biome-ignore lint/correctness/useExhaustiveDependencies: `report` is the provider's own setter.
   useEffect(() => {
     report(entry.agent, {
@@ -70,11 +64,9 @@ function Watch({
       ...(slot ? { slot } : {}),
       ...(detail ? { detail } : {}),
       ...(status ? { status } : {}),
-      ...(problem ? { problem } : {}),
-      messages,
-      now: nowOf(entry.status, status, messages, detail?.mcp, problem),
+      now: nowOf(entry.status, status, detail?.mcp),
     });
-  }, [entry, slot, detail, status, messages, problem]);
+  }, [entry, slot, detail, status]);
   return null;
 }
 

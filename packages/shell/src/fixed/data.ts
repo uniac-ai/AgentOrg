@@ -18,7 +18,6 @@ export type Skill = Out<typeof skills.methods.list>["skills"][number];
 export type ChatMessage = Out<typeof chat.methods.history>["messages"][number];
 export type ChatStatus = Out<typeof chat.methods.state>;
 export type ChatEntry = z.output<typeof chat.events.chat.payload>;
-export type ChatProblem = NonNullable<ChatEntry["problem"]>;
 type Binding = Out<typeof hubBindings.methods.list>["bindings"][number];
 
 /** How often what has no event is read again: a server going down, say. */
@@ -122,17 +121,14 @@ function merged(was: ChatMessage[], message: ChatMessage, limit: number): ChatMe
 }
 
 /**
- * Whether an agent works, and the latest messages and the problem of the chat a view shows for it,
- * kept current while it runs.
+ * Whether an agent works, and the latest messages of the chat a view shows for it, kept current
+ * while it runs.
  */
 export function useChatRecord(slot: string | undefined, running: boolean, limit: number) {
   const connection = useConnection();
   const [status, setStatus] = useState<ChatStatus>();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [problem, setProblem] = useState<ChatProblem>();
   const view = useMemo(() => (slot ? chatView(slot) : undefined), [slot]);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: a problem is its view's chat's.
-  useEffect(() => setProblem(undefined), [view]);
   useEffect(() => {
     setStatus(undefined);
     if (!slot || !view || !running || connection !== "open") return;
@@ -141,20 +137,15 @@ export function useChatRecord(slot: string | undefined, running: boolean, limit:
       try {
         const of = await view.find();
         // The status is the agent's; the record is the chat's, and with no chat nothing was said.
-        // A chat's problem is on its entry, which the list gives for the newest chat.
-        const [now, page, newest] = await Promise.all([
+        const [now, page] = await Promise.all([
           api.call<ChatStatus>(slot, "state", {}),
           of
             ? api.call<{ messages: ChatMessage[] }>(slot, "history", { chat: of, limit })
             : { messages: [] },
-          of ? api.call<{ chats: ChatEntry[] }>(slot, "list", { limit: 1 }) : { chats: [] },
         ]);
         if (!live) return;
         setStatus(now);
         setMessages(page.messages);
-        // A chat that is no longer the newest keeps what its events said of it.
-        const entry = newest.chats.find((one) => one.id === of);
-        if (entry) setProblem(entry.problem);
       } catch {
         // Not up yet: read again when its events are made again, or the agent changes.
       }
@@ -162,11 +153,6 @@ export function useChatRecord(slot: string | undefined, running: boolean, limit:
     void read();
     const stops = [
       api.subscribe(slot, "status", (payload) => setStatus(payload as ChatStatus), { again: read }),
-      // A chat's entry says its problem, and that it is over with the chat's next reply.
-      api.subscribe(slot, "chat", (payload) => {
-        const entry = payload as ChatEntry;
-        if (entry.id === view.chat) setProblem(entry.problem);
-      }),
       api.subscribe(
         slot,
         "message",
@@ -181,16 +167,24 @@ export function useChatRecord(slot: string | undefined, running: boolean, limit:
       for (const stop of stops) stop();
     };
   }, [slot, view, running, limit, connection]);
-  return { status, messages, ...(problem ? { problem } : {}) };
+  return { status, messages };
 }
 
 export type Tone = "working" | "idle" | "starting" | "stopped" | "trouble";
 
+/** An agent's state, in a word. */
+export const WORD: Record<Tone, string> = {
+  working: "Working",
+  trouble: "Has a problem",
+  idle: "Idle",
+  starting: "Starting",
+  stopped: "Stopped",
+};
+
+/** How an agent stands: its state, and what to say of it. */
 export interface Now {
   tone: Tone;
   text: string;
-  /** Since when, as the latest entry of the record says. */
-  at?: string;
 }
 
 /** One line for a message of the record. */
@@ -206,31 +200,27 @@ export function lineOf(message: ChatMessage): string {
 }
 
 /**
- * What an agent is doing now: what runs it first, then whether it works, then its chat's problem,
- * then its connections.
+ * How an agent stands, of itself: what runs it first, then whether it works, then its
+ * connections. What went wrong in one of its chats is that chat's to say.
  */
 export function nowOf(
   status: AgentEntry["status"],
   chatStatus: ChatStatus | undefined,
-  messages: readonly ChatMessage[],
   mcp: readonly Mcp[] = [],
-  problem?: ChatProblem,
 ): Now {
-  if (status.state === "starting") return { tone: "starting", text: "Starting" };
-  if (status.state === "stopped") return { tone: "stopped", text: "Stopped" };
   if (status.state === "down") return { tone: "trouble", text: status.detail ?? "Down" };
-  const last = messages.at(-1);
-  const at = last?.at;
-  const when = at ? { at } : {};
-  if (chatStatus?.state === "working") {
-    const running = messages.findLast((m) => m.tool?.state === "running");
-    return { tone: "working", text: running ? lineOf(running) : "Thinking", ...when };
-  }
-  if (problem) return { tone: "trouble", text: problem.message, ...when };
   const down = mcp.find((m) => m.status.state === "down");
-  if (down)
-    return { tone: "trouble", text: `${down.slot} is down, so its tools are left out`, ...when };
-  return { tone: "idle", text: last ? lineOf(last) : "Ready", ...when };
+  const tone: Tone =
+    status.state === "starting" || status.state === "stopped"
+      ? status.state
+      : chatStatus?.state === "working"
+        ? "working"
+        : down
+          ? "trouble"
+          : "idle";
+  if (tone === "trouble" && down)
+    return { tone, text: `${down.slot} is down, so its tools are left out` };
+  return { tone, text: WORD[tone] };
 }
 
 /** How long ago, in the fewest characters that still say it. */

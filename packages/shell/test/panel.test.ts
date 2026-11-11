@@ -408,6 +408,8 @@ test(
     );
     await page.goto(`${gateway.url}/#/`);
     await until(() => Object.keys(gateway.notes.get("ui/read") as object).sort(), ["at", "since"]);
+    // A reply counts as new from the moment after the note is begun, not in that same moment.
+    await noted(gateway);
     gateway.addMessage("a-reviewer", reply("r9", "All clear on #482."));
     await pill(page).getByRole("button", { name: "Chats, 1 new" }).waitFor();
     await page.close();

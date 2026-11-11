@@ -1,8 +1,7 @@
 // An agent's face: a colour from its id and initials from its name. Its state is on it: a mark
 // while it works or has a problem, a spinner while it starts, faded when it's stopped.
 import { LoaderCircleIcon } from "lucide-react";
-import type { Tone } from "./data.ts";
-import { WORD } from "./parts.tsx";
+import { type Tone, WORD } from "./data.ts";
 
 /** FNV-1a over the id, onto one of 24 hues. */
 const hueOf = (id: string) =>
@@ -27,7 +26,8 @@ export const tintOf = (id: string) => {
   };
 };
 
-const MARK: Partial<Record<Tone, string>> = {
+/** How a state that shows on an agent is marked: the others have no mark. */
+export const MARK: Partial<Record<Tone, string>> = {
   working: "bg-[var(--ok)] pulse",
   trouble: "bg-[var(--bad)]",
 };

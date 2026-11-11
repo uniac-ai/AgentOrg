@@ -1,5 +1,5 @@
 // What can be done to an agent, wherever it's shown.
-import { MoreHorizontalIcon, PlayIcon, SquareIcon } from "lucide-react";
+import { MoreHorizontalIcon } from "lucide-react";
 import { useState } from "react";
 import { api, go } from "../data.ts";
 import { Button } from "../ui/button.tsx";
@@ -29,41 +29,31 @@ export function Tip({ label, children }: { label: string; children: React.ReactN
   );
 }
 
-/** Start or Stop, whichever applies: the two share a place, so nothing moves. */
-export function Power({ agent, onFailed }: { agent: AgentEntry; onFailed(why?: string): void }) {
-  const act = useAct((why) => onFailed(why));
-  const off = agent.status.state === "stopped" || agent.status.state === "down";
-  const word = off ? "Start" : "Stop";
-  return (
-    <Tip label={word}>
-      <Button
-        variant="ghost"
-        size="icon-sm"
-        aria-label={`${word} ${agent.name}`}
-        disabled={act.busy || agent.status.state === "starting"}
-        onClick={() =>
-          act.run(() => api.call("agents", off ? "start" : "stop", { agent: agent.agent }))
-        }
-      >
-        {off ? <PlayIcon /> : <SquareIcon />}
-      </Button>
-    </Tip>
-  );
-}
-
-/** Its menu: Delete, after asking. */
-export function More({ agent }: { agent: AgentEntry }) {
+/** What's rarely wanted of an agent, one step away: stopping it, and deleting it after asking. */
+export function More({ agent, onFailed }: { agent: AgentEntry; onFailed(why?: string): void }) {
   const [deleting, setDeleting] = useState(false);
   const act = useAct();
+  const stop = useAct(onFailed);
+  const { state } = agent.status;
   return (
     <>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button variant="ghost" size="icon-sm" aria-label={`${agent.name} options`}>
+          <Button
+            variant="secondary"
+            className="size-10 rounded-full"
+            aria-label={`More for ${agent.name}`}
+          >
             <MoreHorizontalIcon />
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
+          <DropdownMenuItem
+            disabled={state !== "running"}
+            onSelect={() => stop.run(() => api.call("agents", "stop", { agent: agent.agent }))}
+          >
+            Stop
+          </DropdownMenuItem>
           <DropdownMenuItem variant="destructive" onSelect={() => setDeleting(true)}>
             Delete…
           </DropdownMenuItem>

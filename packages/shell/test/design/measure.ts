@@ -16,13 +16,17 @@ import {
   type ChatCase,
   closeEveryTab,
   computerWith,
+  cpuOf,
   inDesign,
   newChatWithFirst,
   noted,
+  openDesignAgent,
   openSampleChat,
   readChat,
   refuseSend,
+  sampleAgents,
   sampleChats,
+  sampleLoad,
   startTerminals,
   unreadReply,
 } from "./samples.ts";
@@ -49,7 +53,7 @@ type Parts = Record<string, Measured | string | number | null>;
  * What a probe measures: the frame, one window's own rows, the chat in its layer, one chat, the
  * way to a chat's older messages, or Home.
  */
-type Part = "frame" | "terminal" | "browser" | "chat" | "thread" | "earlier" | "home";
+type Part = "frame" | "terminal" | "browser" | "chat" | "thread" | "earlier" | "home" | "agent";
 type Gateway = Awaited<ReturnType<typeof standIn>>;
 
 /**
@@ -61,7 +65,8 @@ type Gateway = Awaited<ReturnType<typeof standIn>>;
  * Home's two sections, from the shell's top left. `earlier` measures the way to a chat's older
  * messages, from the top of what was said. `thread` also measures a chat in the cases the design
  * draws for it: a step with no call, a problem with its fix, and a refused send. `thread` measures one chat, a chat about to be started, and the chats the bar's
- * search finds, from the shell's top left. Each also lists the controls and marks seen in its regions: the bar, a
+ * search finds, from the shell's top left. `agent` measures an agent's page: its head, how it
+ * stands, its tabs, its computer's column and its chats, from the shell's top left. Each also lists the controls and marks seen in its regions: the bar, a
  * drawer, the phone's head, a window, the collapsed chat and its panel, and Home. The page
  * area is not listed on a page that isn't the design's yet.
  */
@@ -298,6 +303,89 @@ const probe = (what: Part): Parts => {
       parts[`${key}.all`] = of(head?.querySelector("button"));
       parts[`${key}.row`] = of(section?.querySelector("li button"));
     }
+    return parts;
+  }
+
+  if (what === "agent") {
+    const shell = document.querySelector("[data-shell]");
+    const head = document.querySelector("main header");
+    const page = head?.parentElement;
+    if (!shell || !head || !page) return parts;
+    origin = shell.getBoundingClientRect();
+    parts.page = of(page, "h");
+    // Who it is, and what can be done with it.
+    controls("head", head);
+    parts.head = of(head);
+    parts["head.face"] = of(head.children[0]);
+    parts["head.face.disc"] = of(head.children[0]?.children[0]);
+    parts["head.name"] = of(head.querySelector("h1"));
+    parts["head.purpose"] = of(head.querySelector("p"));
+    const buttons = head.querySelectorAll("button");
+    for (const [i, key] of ["message", "setup", "more"].entries()) {
+      parts[`head.${key}`] = of(buttons[i]);
+      parts[`head.${key}.icon`] = of(buttons[i]?.querySelector("svg"));
+    }
+    // How it stands, and the way to start it where it says it's stopped.
+    const state = page.querySelector('[role="status"][aria-label="State"]');
+    controls("state", state);
+    parts.state = of(state);
+    parts["state.dot"] = of(state?.children[0]);
+    parts["state.words"] = of(state?.children[1]);
+    parts["state.start"] = of(state?.querySelector("button"));
+    // Its tabs, or with one thing to show the rule alone.
+    const rule = state?.nextElementSibling;
+    controls("tabs", rule);
+    parts.tabs = of(rule);
+    const tabs = rule?.querySelectorAll('[role="tab"]') ?? [];
+    parts["tabs.first"] = of(tabs[0]);
+    parts["tabs.second"] = of(tabs[1]);
+    const under = rule?.nextElementSibling;
+    parts.under = of(under, "h");
+    // Its computer's column: how loaded it is, and in the design what it is too. It is as tall
+    // as the computer beside it, or under it where the page is narrow, the page's own gap away.
+    // The meters are measured from the first one's top left: what the design has above them
+    // isn't built yet, and is listed with what is seen.
+    const facts = under?.querySelector('aside[aria-label="About this computer"]');
+    const column = of(facts, "h");
+    const beside = facts?.previousElementSibling?.getBoundingClientRect();
+    const at = facts?.getBoundingClientRect();
+    if (column && at && beside && at.x === beside.x) {
+      column.box[1] = "under the computer";
+      parts["facts.gap"] = round(at.y - beside.bottom);
+    }
+    parts.facts = column;
+    const first = facts?.querySelector('[role="meter"]')?.parentElement;
+    const said: string[] = [];
+    for (const track of facts?.querySelectorAll('[role="meter"]') ?? []) {
+      const name = track.getAttribute("aria-label") ?? "";
+      said.push(`meter: ${name}`);
+      const key = `facts.${name.toLowerCase()}`;
+      parts[key] = inside(first, track.parentElement);
+      parts[`${key}.label`] = inside(first, track.previousElementSibling?.children[0]);
+      parts[`${key}.text`] = inside(first, track.previousElementSibling?.children[1]);
+      parts[`${key}.track`] = inside(first, track);
+      parts[`${key}.fill`] = inside(first, track.children[0]);
+    }
+    if (facts) {
+      // What it is, each fact by its label: plain words, listed here so one the built side
+      // can't say yet is told apart from one it adds.
+      for (const label of facts.querySelectorAll("dt, section > div:first-child > div:first-child"))
+        if (
+          !label.closest('[role="meter"]') &&
+          !label.parentElement?.querySelector('[role="meter"]')
+        )
+          said.push(`fact: ${label.textContent}`);
+      controls("facts", facts);
+      parts["facts.seen"] = [parts["facts.seen"], ...said.sort()].filter(Boolean).join(" | ");
+    }
+    // Its chats: the way to a new one, then a row each.
+    const chats = under?.querySelector('ul[aria-label^="Chats with"]');
+    controls("chats", chats?.parentElement);
+    parts.chats = of(chats?.parentElement, "h");
+    parts["chats.new"] = of(chats?.previousElementSibling);
+    parts["chats.new.button"] = of(chats?.previousElementSibling?.querySelector("button"));
+    parts["chats.new.icon"] = of(chats?.previousElementSibling?.querySelector("svg"));
+    parts["chats.row"] = of(chats?.querySelector("li button"));
     return parts;
   }
 
@@ -834,6 +922,47 @@ for (const size of ["wide", "phone"] as const)
       await page.close();
       await gateway?.close();
     }
+
+// An agent's page: who it is, how it stands, and what is under its tabs. Research has a computer,
+// shown wide and on a phone, and its chats; Reviewer is idle, Triage has a problem and Weekly
+// report is stopped, each with its chats alone. The built side's computer says the load the
+// design's meters show. The computer's own frame is measured with its windows, not here.
+const AGENT_PAGES = [
+  { state: "computer", size: "wide", id: "a-research", name: "Research" },
+  { state: "computer", size: "phone", id: "a-research", name: "Research" },
+  { state: "chats", size: "wide", id: "a-research", name: "Research" },
+  { state: "idle", size: "wide", id: "a-reviewer", name: "Reviewer" },
+  { state: "trouble", size: "wide", id: "a-triage", name: "Triage" },
+  { state: "stopped", size: "wide", id: "a-weekly", name: "Weekly report" },
+] as const;
+for (const { state, size, id, name } of AGENT_PAGES)
+  for (const theme of ["dark", "light"] as const) {
+    /** What the design's CPU meter says, for the built side's computer to say too. */
+    let cpu = 0;
+    for (const side of ["design", "built"] as const) {
+      const gateway = side === "built" ? await standIn() : undefined;
+      if (gateway) {
+        sampleAgents(gateway);
+        sampleChats(gateway);
+      }
+      const hash = `#/a/${id}${state === "chats" ? "/chats" : ""}`;
+      const page = gateway
+        ? await builtPage(gateway, size, theme, hash)
+        : await designPage(size, theme);
+      const main = page.getByRole("main");
+      if (!gateway) await openDesignAgent(page, name, state === "chats" ? "Chats" : undefined);
+      await main.getByRole("heading", { name, level: 1 }).waitFor();
+      if (state === "computer") {
+        if (gateway) gateway.reading(sampleLoad(cpu));
+        cpu = await cpuOf(page);
+      } else
+        await main.getByRole("list", { name: `Chats with ${name}` }).waitFor({ state: "attached" });
+      await rest(page, size);
+      all[`agent.${state}.${size}.${theme}.${side}`] = await measure(page, "agent");
+      await page.close();
+      await gateway?.close();
+    }
+  }
 
 // One chat, a chat with a problem, a chat about to be started, and chats found from the bar: the
 // design's sample chats, and the same two on the built side.
