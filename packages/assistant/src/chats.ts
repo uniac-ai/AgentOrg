@@ -139,9 +139,17 @@ async function keysUnder(store: Store, prefix: string) {
 
 export function createChats(options: {
   store: Store;
-  /** The agent's model, and what a request to it says and offers, as its looper asks for them. */
+  /**
+   * The agent's model, and what a request to it says and offers, as its looper asks for them;
+   * `voice` is the agent's own instructions, which its main loop speaks as.
+   */
   model: Model;
-  request(): Promise<{ instructions: string; tools: Tool[]; model?: string | undefined }>;
+  request(): Promise<{
+    instructions: string;
+    tools: Tool[];
+    model?: string | undefined;
+    voice?: string | undefined;
+  }>;
   /** Whether the agent is stopped when its chats are first held. */
   stopped: boolean;
   emit: {
@@ -319,10 +327,11 @@ export function createChats(options: {
   };
   return {
     /**
-     * Say a message in a chat, or in a new chat it starts. A new chat's first message is put to
-     * the agent's main loop, which gives it to new work or to work in a turn; from then on the
-     * chat's messages are that work's: with no turn of it running one starts a turn, and a turn
-     * running takes it at its next model request.
+     * Say a message in a chat, or in a new chat it starts. A message in a chat no work follows is
+     * put to the agent's main loop. When that answers it itself, the chat stays no work's, and its
+     * next message is put to the main loop too. When it gives it to new work or to work there is,
+     * the chat's messages are that work's from then on: with no turn of it running one starts a
+     * turn, and a turn running takes it at its next model request.
      */
     async send({ chat, text }: Input<"send">) {
       if (chat !== undefined) {

@@ -129,7 +129,7 @@ async function setup(values = new Map<string, unknown>(), rest?: (actor: Actor) 
   const requests: Request[] = [];
   /** What the main loop was asked, and the arguments it answers `route` with when a test says. */
   const routed: Request[] = [];
-  const routing: { to?: string } = {};
+  const routing: { to?: string; says?: string } = {};
   const cancels: string[] = [];
   const script: Step[] = [];
   const model = actor.bind("model", {
@@ -138,6 +138,10 @@ async function setup(values = new Map<string, unknown>(), rest?: (actor: Actor) 
       // The main loop is answered at once, with new work; `requests` and `script` are the workers'.
       if (request.tools?.some((tool) => tool.name === "route")) {
         routed.push(request as Request);
+        if (routing.says !== undefined)
+          return {
+            output: [{ type: "message", role: "assistant", content: routing.says }],
+          } as never;
         return {
           output: [routing.to ? { ...NEW_WORK, arguments: routing.to } : NEW_WORK],
         } as never;
@@ -491,6 +495,12 @@ test("bound to settings, instructions and skills come from it, read at each requ
   assert.ok(told.includes("- review: Review a change."));
   assert.ok(!told.includes(INSTRUCTIONS));
   assert.deepEqual(offeredNames(s.requests[0]), ["settings__skill"]);
+  // Its main loop speaks as the agent: told its own instructions, and nothing of its skills.
+  const front = String(s.routed[0]?.instructions);
+  assert.ok(front.startsWith("You are the front desk."));
+  assert.ok(front.endsWith("\n\nYou keep the docs."));
+  assert.ok(!front.includes("review"));
+  assert.deepEqual(offeredNames(s.routed[0]), ["route"]);
 
   // Removed: gone at the next request, and with no skills there's nothing to read them with.
   skills = [];
@@ -1158,9 +1168,9 @@ test("thousands of calls in one reply cost a handful of writes", async () => {
   assert.equal((await s.turn("Flood."))?.code, "limit");
   // The chat's entry, three times: started, with its message, and with its problem. The message,
   // the mark that its turn hasn't ended, `MAX_CALLS` calls, and one entry answering the other
-  // 1,980. And two for a new chat's first message: the mark that it waits for the main loop, and
-  // the work's record.
-  assert.equal(s.store.writes.count - before, MAX_CALLS + 8);
+  // 1,980. And three for a new chat's first message: the mark that it waits for the main loop,
+  // and the work's record, when it is placed and when its turn ends.
+  assert.equal(s.store.writes.count - before, MAX_CALLS + 9);
   const input = (await s.chat("history", { limit: 200 })) as { messages: unknown[] };
   assert.equal(input.messages.length, 200, "a full page of what was recorded");
 });
@@ -1362,6 +1372,47 @@ test("an agent works in several chats at once, and past its places a chat waits 
   assert.equal((await shownIn(s, waits.chat)).at(-1)?.text, "ok");
 });
 
+test("a plain message is answered by the agent's main loop, in its chat, and the chat is no work's", async () => {
+  const s = await setup();
+  s.routing.says = "Hello. What can I do?";
+  const from = s.actor.emitted.length;
+  const { chat } = (await s.actor.call("chat", "send", { text: "Hi." })) as Sent;
+  await s.host.settled();
+  const emitted = s.actor.emitted.slice(from);
+  assert.deepEqual(
+    emitted.flatMap(({ event, payload }) =>
+      event === "message"
+        ? [`${(payload as { role: string }).role}: ${(payload as { text: string }).text}`]
+        : [],
+    ),
+    ["user: Hi.", "assistant: Hello. What can I do?"],
+  );
+  assert.deepEqual(
+    emitted.flatMap(({ event, payload }) =>
+      event === "status" ? [(payload as { state: string }).state] : [],
+    ),
+    ["working", "idle"],
+  );
+  assert.equal(s.requests.length, 0, "no worker was asked");
+  // With no settings bound it speaks as the agent's standing instructions say.
+  assert.ok(String(s.routed[0]?.instructions).endsWith(`\n\n${INSTRUCTIONS}`));
+  // The next message there is put to the main loop again, with what was said.
+  s.routing.says = "Still here.";
+  await s.actor.call("chat", "send", { chat, text: "Still there?" });
+  await s.host.settled();
+  assert.deepEqual(
+    s.routed[1]?.input.map((item) => item.content),
+    ["There is no work.", "Hi.", "Hello. What can I do?", "Still there?"],
+  );
+  const { messages } = (await s.actor.call("chat", "history", { chat })) as {
+    messages: { text: string }[];
+  };
+  assert.deepEqual(
+    messages.map((message) => message.text),
+    ["Hi.", "Hello. What can I do?", "Still there?", "Still here."],
+  );
+});
+
 test("a message in a new chat that carries on work under way is answered by that work, in the new chat", async () => {
   const s = await setup();
   const late = gate<Reply>();
@@ -1374,12 +1425,11 @@ test("a message in a new chat that carries on work under way is answered by that
   const two = (await s.actor.call("chat", "send", { text: "Add a chart." })) as Sent;
   assert.notEqual(two.chat, one.chat);
   await until(() => s.routed.length === 2, "the main loop to be asked");
-  assert.equal(
-    s.routed[1]?.input.at(-1)?.content,
-    `Work under way:\n- ${one.chat}: Work\n\nWhat came in:\nAdd a chart.`,
+  assert.deepEqual(
+    s.routed[1]?.input.map((item) => item.content),
+    [`The work there is:\n- ${one.chat}: Work (in a turn)`, "Add a chart."],
   );
-  // Its request is the looper's own words and one function: nothing of the agent's.
-  assert.equal(s.routed[1]?.input.length, 1);
+  // Its request is the looper's own words, who the agent is, and one function: none of its tools.
   assert.match(String(s.routed[1]?.instructions), /^You are the front desk\./);
   assert.notEqual(s.routed[1]?.instructions, s.requests[0]?.instructions);
   assert.deepEqual(

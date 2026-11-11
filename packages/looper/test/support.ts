@@ -19,6 +19,8 @@ export function looperWith(
     values?: Map<string, Json>;
     /** Called as each message is said. */
     saying?: (line: string) => void;
+    /** Who the main loop speaks as. */
+    voice?: string;
     /** What the main loop answers when put `text`: by default, new work. */
     routing?: (text: string) => OutputItem[] | Promise<OutputItem[]> | undefined;
   } = {},
@@ -29,6 +31,10 @@ export function looperWith(
   const routed: string[] = [];
   /** Each request the main loop made, as the model got it. */
   const mains: { instructions: string; tools: unknown[]; input: string[] }[] = [];
+  /** The ids of those requests, each message said, and each piece of text streamed. */
+  const mainIds: string[] = [];
+  const messages: { thread: string; id: string; role: string; text: string }[] = [];
+  const deltas: { thread: string; id: string; text: string }[] = [];
   /** Each time it said whether anything is at work, and each message that got no answer. */
   const working: boolean[] = [];
   const failures: string[] = [];
@@ -63,6 +69,7 @@ export function looperWith(
           const text = last?.type === "message" ? last.content : "";
           if (tools.some((tool) => tool.name === "route")) {
             routed.push(text);
+            mainIds.push(requestId);
             mains.push({
               instructions,
               tools,
@@ -100,13 +107,18 @@ export function looperWith(
         for (const request of open.values()) if (request.id === requestId) request.fail();
       },
     },
-    request: async () => ({ instructions: "", tools: options.tools ?? [] }),
+    request: async () => ({
+      instructions: "",
+      tools: options.tools ?? [],
+      ...(options.voice === undefined ? {} : { voice: options.voice }),
+    }),
     out: {
-      message(thread, { role, text }) {
+      message(thread, { id, role, text }) {
+        messages.push({ thread, id, role, text });
         said.push(`${thread}: ${role}: ${text}`);
         options.saying?.(`${thread}: ${role}: ${text}`);
       },
-      delta() {},
+      delta: (thread, id, text) => void deltas.push({ thread, id, text }),
       working: (on) => void working.push(on),
       failed: (thread, { code }) => void failures.push(`${thread}: ${code}`),
     },
@@ -131,6 +143,9 @@ export function looperWith(
     inputs,
     routed,
     mains,
+    mainIds,
+    messages,
+    deltas,
     working,
     failures,
     answer,
@@ -139,7 +154,7 @@ export function looperWith(
   };
 }
 const gone = () => new Refusal("cancelled", "The request was cancelled.");
-/** The main loop's answers: new work with a title, or a piece of work under way by its id. */
+/** The main loop's answers: new work with a title, or a piece of work there is by its id. */
 const route = (said: { work?: string; title?: string }): OutputItem[] => [
   {
     type: "function_call",
