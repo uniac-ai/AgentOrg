@@ -11,13 +11,17 @@ import {
   type ChatCase,
   closeEveryTab,
   computerWith,
+  cpuOf,
   inDesign,
   newChatWithFirst,
   noted,
+  openDesignAgent,
   openSampleChat,
   readChat,
   refuseSend,
+  sampleAgents,
   sampleChats,
+  sampleLoad,
   startTerminals,
   unreadReply,
 } from "./samples.ts";
@@ -44,6 +48,8 @@ interface Screen {
   unread?: boolean;
   /** The built side has the design's sample chats to open. */
   chats?: boolean;
+  /** The built side's agents are the design's sample: what each is for, and Research's computer. */
+  agents?: boolean;
   /** A case the built side's sample chat is given. */
   given?: ChatCase;
   /** Terminals the built side is given, as the design's sample has them. */
@@ -65,6 +71,47 @@ const ownTab = async (page: Page) => {
   await page.getByRole("tab", { name: "New tab", selected: true }).waitFor();
 };
 type Gateway = Awaited<ReturnType<typeof standIn>>;
+/**
+ * An agent's page: Research's with its computer and with its chats, and the agents that are
+ * idle, have a problem, and are stopped. The computer's column is also shot alone: the frame
+ * beside it is the computer's own screen, not this page's.
+ */
+const AGENT_PAGES: {
+  name: string;
+  agent: string;
+  id: string;
+  tab?: "Computer" | "Chats";
+  sizes: Size[];
+  part?: (page: Page) => ReturnType<Page["locator"]>;
+}[] = [
+  {
+    name: "agent-computer",
+    agent: "Research",
+    id: "a-research",
+    tab: "Computer",
+    sizes: ["wide", "phone"],
+  },
+  {
+    name: "agent-computer-column",
+    agent: "Research",
+    id: "a-research",
+    tab: "Computer",
+    sizes: ["wide"],
+    part: (page) => page.getByRole("complementary", { name: "About this computer" }),
+  },
+  {
+    name: "agent-chats",
+    agent: "Research",
+    id: "a-research",
+    tab: "Chats",
+    sizes: ["wide", "phone"],
+  },
+  { name: "agent-idle", agent: "Reviewer", id: "a-reviewer", sizes: ["wide"] },
+  { name: "agent-problem", agent: "Triage", id: "a-triage", sizes: ["wide"] },
+  { name: "agent-stopped", agent: "Weekly report", id: "a-weekly", sizes: ["wide"] },
+];
+/** What the design's CPU meter said, for the built side's computer to say too. */
+let cpuShown = 0;
 /** The terminals the design's sample has. */
 const TERMINALS = [
   { cmd: "zsh", running: false },
@@ -224,6 +271,27 @@ const SCREENS: Screen[] = [
       await page.getByRole("region", { name: "Needs you" }).getByRole("button").nth(1).waitFor();
     },
   },
+  ...AGENT_PAGES.map(
+    ({ name, agent, id, tab, sizes, part }): Screen => ({
+      name,
+      sizes,
+      themes: ["dark", "light"],
+      agents: true,
+      chats: true,
+      hash: `#/a/${id}${tab === "Chats" ? "/chats" : ""}`,
+      design: async (page) => {
+        await openDesignAgent(page, agent, tab === "Chats" ? tab : undefined);
+        if (tab === "Computer") cpuShown = await cpuOf(page);
+      },
+      built: async (page, gateway) => {
+        await page.getByRole("main").getByRole("heading", { name: agent, level: 1 }).waitFor();
+        if (tab !== "Computer") return;
+        gateway.reading(sampleLoad(cpuShown));
+        await cpuOf(page);
+      },
+      ...(part ? { part } : {}),
+    }),
+  ),
   {
     name: "chats-found",
     sizes: ["wide"],
@@ -357,6 +425,7 @@ for (const screen of SCREENS)
           viewport: { width, height: side === "design" ? height + CONTROLS : height },
         });
         if (gateway) {
+          if (screen.agents) sampleAgents(gateway);
           if (screen.browser) computerWith(gateway, "browser", !screen.watch);
           // A watcher opens no tab of its own: the one in front is there already.
           if (screen.browser && screen.watch)

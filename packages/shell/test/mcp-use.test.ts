@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { type Browser, chromium, type Page } from "@playwright/test";
+import { computerWith } from "./design/samples.ts";
 import { type Agent, SESSION, standIn } from "./stand-in.ts";
 
 let browser: Browser;
@@ -114,7 +115,7 @@ const withTask = (run: (gateway: Gateway) => Promise<void>) => async () => {
   }
 };
 const openChat = async (page: Page) => {
-  await page.getByRole("main").getByRole("button", { name: "Chat", exact: true }).click();
+  await page.getByRole("main").getByRole("button", { name: "Message" }).click();
   const panel = page.getByRole("complementary", { name: "Chats" });
   await panel
     .getByRole("list", { name: /^Earlier chats/ })
@@ -169,17 +170,12 @@ test(
 );
 
 test(
-  "the frames show what ran, what's still running, what changed, and the task in lines",
+  "beside its live surfaces, the frames show what the record says of its browser and what it changed",
   withTask(async (gateway) => {
+    computerWith(gateway, "terminal", false);
     const page = await open(gateway, "#/a/a-research");
-    const computer = page.getByRole("region", { name: "Computer" });
-    await computer.getByText("npm test").waitFor();
-    const text = await computer.innerText();
-    assert.match(text, /exit 1/);
-    assert.match(text, /Tests 1 failed/);
-    assert.match(text, /npm run e2e[\s\S]*checked \d+ s ago[\s\S]*still going/);
-    assert.match(text, /npm run dev[\s\S]*checked 6 min ago/);
     const files = page.getByRole("region", { name: "Changed files" });
+    await files.getByText("shop/src/retry.ts").waitFor();
     assert.match(await files.innerText(), /shop\/src\/retry\.ts\s+\+1 −1/);
 
     await files.getByRole("button", { name: /retry\.ts/ }).click();
@@ -187,11 +183,6 @@ test(
     assert.match(await diff.locator(".diff-code-delete").innerText(), /session\.pay/);
     await page.keyboard.press("Escape");
     await diff.waitFor({ state: "detached" });
-    await computer.getByRole("button", { name: /exit 1/ }).click();
-    const output = page.getByRole("dialog", { name: "npm test" });
-    await output.getByText("in shop · Exit 1 · 9.2 s").waitFor();
-    await page.keyboard.press("Escape");
-    await output.waitFor({ state: "detached" });
 
     const browserFrame = page.getByRole("region", { name: "Browser" });
     assert.deepEqual((await browserFrame.innerText()).split("\n").slice(1), [
@@ -201,117 +192,45 @@ test(
       "Typed in e14",
       "Clicked Pay now",
     ]);
-
-    assert.equal(await page.getByRole("region", { name: "Updates" }).count(), 0);
-    assert.equal(await computer.getByRole("list").count(), 0, "changed files are their own list");
     await page.close();
   }),
 );
 
 test(
-  "a frame with nothing to show stays dashed, and frames keep their size as work arrives",
+  "at phone width the agent's page keeps inside its width, and its head wraps",
   withTask(async (gateway) => {
-    const page = await open(gateway, "#/a/a-reviewer");
-    const browserFrame = page.getByRole("region", { name: "Browser" });
-    await browserFrame.waitFor();
-    assert.match((await browserFrame.getAttribute("class")) ?? "", /border-dashed/);
-    await page.close();
-
-    const live = await open(gateway, "#/a/a-research");
-    const frames = ["Computer", "Browser", "Changed files"].map((name) =>
-      live.getByRole("region", { name }),
-    );
-    await frames[0]?.getByText("npm test").waitFor();
-    const before = await Promise.all(frames.map((f) => f.boundingBox()));
-    gateway.addMessage(
-      "a-research",
-      tool("pc__exec_command", { cmd: "npm run lint" }, answer(0, 1.1, "none", "ok"), 0),
-    );
-    await frames[0]?.getByText("npm run lint").waitFor();
-    assert.deepEqual(await Promise.all(frames.map((f) => f.boundingBox())), before);
-    await live.close();
-  }),
-);
-
-test(
-  "'Built from' names the units, and at phone width nothing runs off the side",
-  withTask(async (gateway) => {
-    const research = gateway.agents.get("a-research");
-    assert.ok(research);
-    const common = {
-      provider: "units",
-      needs: {},
-      status: { state: "connected" as const },
-      values: {},
-    };
-    research.units = [
-      { ...common, instance: "i1", unit: "computer", title: "Computer" },
-      { ...common, instance: "i2", unit: "web", title: "Web" },
-    ];
+    computerWith(gateway, "terminal", false);
     const page = await open(gateway, "#/a/a-research", { width: 390, height: 844 });
-    await page
-      .getByRole("main")
-      .getByRole("button", { name: /Built from/ })
-      .getByText("Computer, Web")
-      .waitFor();
-    const computer = page.getByRole("region", { name: "Computer" });
-    await computer.getByText("npm test").waitFor();
+    const main = page.getByRole("main");
+    const terminal = main.getByRole("region", { name: "Terminal" });
+    await terminal.waitFor();
     assert.equal(
       await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
       true,
     );
-    const box = await computer.boundingBox();
-    assert.ok(box && box.x >= 0 && box.x + box.width <= 390);
+    const within = async (name: string, box: { x: number; width: number } | null) =>
+      assert.ok(box && box.x >= 0 && box.x + box.width <= 390, `${name}: ${JSON.stringify(box)}`);
+    const message = await main.getByRole("button", { name: "Message" }).boundingBox();
+    const name = await main.getByRole("heading", { name: "Research", level: 1 }).boundingBox();
+    await within("Message", message);
+    assert.ok(
+      message && name && message.y >= name.y + name.height,
+      "the buttons go under the name",
+    );
+    await within("terminal", await terminal.boundingBox());
     await page.close();
   }),
 );
 
 test(
-  "the Now line says what stopped it and offers what can be done",
+  "the State line says what stopped an agent, and starts it there",
   withTask(async (gateway) => {
     const page = await open(gateway, "#/a/a-broken");
-    const now = page.getByRole("status", { name: "Now" });
-    await now.getByText("Its program exited.").waitFor();
-    await now.getByRole("button", { name: "Start" }).click();
+    const state = page.getByRole("status", { name: "State" });
+    await state.getByText("Its program exited.").waitFor();
+    await state.getByRole("button", { name: "Start" }).click();
     await page.waitForTimeout(300);
     assert.ok(gateway.calls.some((c) => c.method === "start" && c.input.agent === "a-broken"));
     await page.close();
-
-    const research = await open(gateway, "#/a/a-research");
-    const line = research.getByRole("status", { name: "Now" });
-    await line.waitFor();
-    // A problem with nothing to do about it is said, with no control.
-    gateway.failChat("a-research", {
-      code: "unavailable",
-      message: "ChatGPT plan usage is unavailable right now.",
-    });
-    await line.getByText("ChatGPT plan usage is unavailable right now.").waitFor();
-    assert.equal(await line.getByRole("button").count(), 0);
-
-    gateway.failChat("a-research", {
-      code: "usage_limit",
-      message: "You've reached your plan's limit.",
-    });
-    const opened = research.context().waitForEvent("page");
-    await line.getByRole("button", { name: "Manage usage" }).click();
-    assert.match((await opened).url(), /chatgpt\.com\/settings\/usage|about:blank/);
-    // At work again, its line says so and offers nothing; the problem is said again if that fails.
-    gateway.setChatStatus("a-research", { state: "working" });
-    await line.getByRole("button").waitFor({ state: "detached" });
-    gateway.failChat("a-research", {
-      code: "usage_limit",
-      message: "You've reached your plan's limit.",
-    });
-    await line.getByRole("button", { name: "Manage usage" }).waitFor();
-
-    // Its chat's next reply ends the problem.
-    gateway.addMessage("a-research", {
-      id: "after",
-      role: "assistant",
-      text: "Back.",
-      at: new Date().toISOString(),
-    });
-    await line.getByRole("button").waitFor({ state: "detached" });
-    await research.close();
   }),
 );

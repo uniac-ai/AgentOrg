@@ -341,8 +341,13 @@ test(
       said: [reply("w1", "Signups were up 4%.")],
     });
     const page = await visit(gateway, "a-weekly");
-    // Nothing can be started with it either.
-    const chat = page.getByRole("main").getByRole("button", { name: "Chat", exact: true });
+    // Its own page still lists the chat; nothing can be started with it.
+    await page
+      .getByRole("main")
+      .getByRole("list", { name: "Chats with Weekly report" })
+      .getByText("Numbers for last week")
+      .waitFor();
+    const chat = page.getByRole("main").getByRole("button", { name: "Message" });
     assert.equal(await chat.isDisabled(), true);
     await page.getByRole("button", { name: /^Chats/ }).click();
     await panel(page)
@@ -353,7 +358,10 @@ test(
     assert.equal(await input(page).count(), 0);
     // The panel lies over the page's right side: closed, the page's own controls are in reach.
     await panel(page).getByRole("button", { name: "Close chats" }).click();
-    await page.getByRole("button", { name: "Start Weekly report" }).click();
+    await page
+      .getByRole("status", { name: "State" })
+      .getByRole("button", { name: "Start" })
+      .click();
     await page.getByRole("button", { name: /^Chats/ }).click();
     await panel(page).getByRole("heading", { name: "Numbers for last week" }).waitFor();
     await input(page).waitFor();
@@ -387,9 +395,9 @@ test(
   "a first message starts a chat, and the next goes on in it",
   withGateway(async (gateway) => {
     assert.equal(gateway.chatOf("a-triage").id, undefined, "Triage has no chat yet");
-    // A page's Chat is a chat about to be started with its agent.
+    // A page's Message is a chat about to be started with its agent.
     const page = await visit(gateway, "a-triage");
-    await page.getByRole("main").getByRole("button", { name: "Chat", exact: true }).click();
+    await page.getByRole("main").getByRole("button", { name: "Message" }).click();
     await panel(page).getByRole("heading", { name: "New chat" }).waitFor();
     const who = panel(page).getByRole("list", { name: "Who with" });
     assert.equal(await who.getByRole("button", { pressed: true }).innerText(), "T\nTriage");
@@ -425,7 +433,7 @@ test(
 
     // Another chat with the same agent: its earlier chats are offered, and it starts its own.
     await panel(page).getByRole("button", { name: "Close chats" }).click();
-    await page.getByRole("main").getByRole("button", { name: "Chat", exact: true }).click();
+    await page.getByRole("main").getByRole("button", { name: "Message" }).click();
     const earlier = panel(page).getByRole("list", { name: "Earlier chats with Triage" });
     await earlier.getByText("Route today's issues").waitFor();
     await input(page).fill("A second thing");
@@ -445,7 +453,7 @@ test(
   withGateway(async (gateway) => {
     const release = gateway.hold("chat.send");
     const page = await visit(gateway, "a-triage");
-    await page.getByRole("main").getByRole("button", { name: "Chat", exact: true }).click();
+    await page.getByRole("main").getByRole("button", { name: "Message" }).click();
     await input(page).fill("Route today's issues");
     await input(page).press("Enter");
     await input(page).fill("And yesterday's");
@@ -464,7 +472,7 @@ test(
   withGateway(async (gateway) => {
     gateway.refuseNext("chat.send", "busy", "It can't take that now.");
     const page = await visit(gateway, "a-triage");
-    await page.getByRole("main").getByRole("button", { name: "Chat", exact: true }).click();
+    await page.getByRole("main").getByRole("button", { name: "Message" }).click();
     await input(page).fill("Route today's issues");
     await input(page).press("Enter");
     await panel(page).getByRole("alert").getByText("It can't take that now.").waitFor();
@@ -478,20 +486,13 @@ test(
   "what is said in another chat of the agent's stays out of this one",
   withGateway(async (gateway) => {
     const page = await open(gateway);
-    const now = page.getByRole("main").getByRole("status", { name: "Now" });
     gateway.addMessage("a-reviewer", reply("r3", "Said in this one."));
     await panel(page).getByText("Said in this one.").waitFor();
-    await now.getByText("Said in this one.").waitFor();
     // The other chat speaks last, then this one streams: by then both readers have heard it.
     gateway.addElsewhere("a-reviewer", reply("x1", "Said in another chat."));
     gateway.delta("a-reviewer", "r4", "Still writing");
     await panel(page).getByText("Still writing").waitFor();
     assert.equal(await panel(page).getByText("Said in another chat.").count(), 0);
-    assert.match(
-      (await now.textContent()) ?? "",
-      /Said in this one\./,
-      "the agent's page keeps to it too",
-    );
     await page.close();
   }),
 );

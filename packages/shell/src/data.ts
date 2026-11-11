@@ -104,11 +104,13 @@ export function useAction() {
   return { busy, failed, run };
 }
 
+/** What an agent's page can show under its head. */
+export type AgentTab = "computer" | "chats";
 /** The hash route: home, an agent, or settings. */
 export type Route =
   | { screen: "home" }
   | { screen: "settings"; tab: "templates" | "providers" | "account" }
-  | { screen: "agent"; agent: string }
+  | { screen: "agent"; agent: string; tab?: AgentTab }
   | { screen: "agent-settings"; agent: string }
   | { screen: "skills" | "mcps"; focus?: string; adding?: boolean };
 function routeOf(hash: string): Route {
@@ -125,8 +127,13 @@ function routeOf(hash: string): Route {
     };
   const settings = /^#\/a\/([^/]+)\/settings$/.exec(hash)?.[1];
   if (settings) return { screen: "agent-settings", agent: decodeURIComponent(settings) };
-  const agent = /^#\/a\/([^/]+)$/.exec(hash)?.[1];
-  return agent ? { screen: "agent", agent: decodeURIComponent(agent) } : { screen: "home" };
+  const [, agent, under] = /^#\/a\/([^/]+)(?:\/(computer|chats))?$/.exec(hash) ?? [];
+  if (!agent) return { screen: "home" };
+  return {
+    screen: "agent",
+    agent: decodeURIComponent(agent),
+    ...(under ? { tab: under as AgentTab } : {}),
+  };
 }
 export function useRoute(): Route {
   const hash = useSyncExternalStore(
@@ -152,7 +159,7 @@ export function go(route: Route) {
     route.screen === "agent-settings"
       ? `#/a/${encodeURIComponent(route.agent)}/settings`
       : route.screen === "agent"
-        ? `#/a/${encodeURIComponent(route.agent)}`
+        ? `#/a/${encodeURIComponent(route.agent)}${route.tab ? `/${route.tab}` : ""}`
         : "#/";
 }
 

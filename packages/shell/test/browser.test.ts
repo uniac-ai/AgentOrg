@@ -488,38 +488,3 @@ test(
     await page.close();
   }),
 );
-
-test(
-  "the control log lists what agents did about this one, refusals with their reasons",
-  withGateway(async (gateway) => {
-    const page = await open(gateway);
-    await page.getByRole("status", { name: "Now" }).waitFor();
-    assert.equal(
-      await page.getByRole("region", { name: "Control" }).count(),
-      0,
-      "nothing yet, nothing shown",
-    );
-    gateway.controlled({
-      at: new Date(Date.now() - 120_000).toISOString(),
-      caller: "a-triage",
-      tool: "agents_message",
-      target: "a-research",
-      outcome: "done",
-    });
-    gateway.controlled({
-      at: new Date().toISOString(),
-      caller: "a-research",
-      tool: "agents_create",
-      outcome: "refused",
-      reason: "Its control doesn't allow creating agents.",
-    });
-    await page.reload();
-    const log = page.getByRole("region", { name: "Control" });
-    await log.getByText("Its control doesn't allow creating agents.").waitFor({ timeout: 12000 });
-    const lines = await log.getByRole("listitem").allInnerTexts();
-    assert.equal(lines.length, 2);
-    assert.match(lines[0] ?? "", /^agents_create/);
-    assert.match(lines[1] ?? "", /Triage agents_message Research/);
-    await page.close();
-  }),
-);

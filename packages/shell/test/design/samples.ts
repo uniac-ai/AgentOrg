@@ -1,5 +1,5 @@
 // What the built side is given for the measured screens, as the design's sample has it: its
-// computer and terminals, replies not yet read, sample chats to open, and what a page asks; and
+// agents and computer and terminals, replies not yet read, sample chats to open, and what a page asks; and
 // the design page's own controls, which put it in the cases it draws.
 import type { Page } from "@playwright/test";
 import type { Agent, standIn } from "../stand-in.ts";
@@ -125,8 +125,8 @@ export const ASKS = {
 /** Words of each to wait for. */
 export const ASKED = { confirm: "Pay $48.00", file: "Choose a file", choice: "Express, 2 days" };
 
-/** Research's computer with one live surface, which may be operated or only watched. */
-export function computerWith(gateway: Gateway, surface: "terminal" | "browser", operate = true) {
+type Surface = NonNullable<NonNullable<Agent["units"]>[number]["status"]["surfaces"]>[number];
+const computer = (gateway: Gateway, surfaces: Surface[]) => {
   (gateway.agents.get("a-research") as Agent).units = [
     {
       instance: "i-computer",
@@ -135,19 +135,76 @@ export function computerWith(gateway: Gateway, surface: "terminal" | "browser", 
       title: "Computer",
       values: {},
       needs: {},
-      status: {
-        state: "connected",
-        surfaces: [
-          {
-            surface,
-            protocol: surface === "terminal" ? "terminal@1" : "screencast@1",
-            operate,
-          },
-        ],
-      },
+      status: { state: "connected", surfaces },
     },
   ];
+};
+
+/** Research's computer with one live surface, which may be operated or only watched. */
+export function computerWith(gateway: Gateway, surface: "terminal" | "browser", operate = true) {
+  computer(gateway, [
+    { surface, protocol: surface === "terminal" ? "terminal@1" : "screencast@1", operate },
+  ]);
 }
+
+/**
+ * The agents as the design's sample has them: what each is for, a chat with the one that is
+ * stopped, and Research's computer on this machine with a terminal, a browser and its load to watch.
+ */
+export function sampleAgents(gateway: Gateway) {
+  for (const [agent, purpose] of [
+    ["a-research", "Digs through issues and docs, and writes up what it finds"],
+    ["a-reviewer", "Reviews pull requests on acme/storefront"],
+    ["a-triage", "Routes new Linear issues to the right team"],
+    ["a-weekly", "Writes Monday's numbers from the analytics database"],
+  ] as const)
+    (gateway.agents.get(agent) as Agent).purpose = purpose;
+  gateway.addChat("a-weekly", {
+    id: "c-monday",
+    title: "Monday's numbers",
+    said: [
+      {
+        id: "monday-1",
+        role: "assistant",
+        text: "Signups were up 4% on the week before.",
+        at: new Date(Date.now() - 2 * 24 * 3600_000).toISOString(),
+      },
+    ],
+  });
+  computer(gateway, [
+    { surface: "browser", protocol: "screencast@1", operate: true },
+    { surface: "terminal", protocol: "terminal@1", operate: true },
+    { surface: "load", protocol: "metrics@1", operate: false },
+  ]);
+}
+
+/** An agent's page in the design, reached as a person reaches it: from the bar, then its tab. */
+export async function openDesignAgent(page: Page, name: string, tab?: string) {
+  if ((page.viewportSize()?.width ?? 0) < 640)
+    await page.getByRole("button", { name: "Menu" }).click();
+  await page
+    .getByRole("navigation", { name: "Main" })
+    .getByRole("button", { name, exact: true })
+    .last()
+    .click();
+  if (tab) await page.getByRole("main").getByRole("tab", { name: tab }).click();
+}
+
+/** What a page's CPU meter says, once it says it. */
+export async function cpuOf(page: Page) {
+  const meter = page.getByRole("main").getByRole("meter", { name: "CPU" });
+  await meter.waitFor();
+  return Number(await meter.getAttribute("aria-valuenow"));
+}
+
+/** A reading that says what the design's meters say: this much CPU, 9.2 of 16 GB, 212 of 494 GB. */
+export const sampleLoad = (cpu: number) => ({
+  cpuUsedPct: cpu,
+  memUsed: Math.round(9.22 * 2 ** 30),
+  memTotal: 16 * 2 ** 30,
+  diskUsed: 212e9,
+  diskTotal: 494e9,
+});
 
 /** Commands the agent started, in order: each still running, or ended. */
 export function startTerminals(

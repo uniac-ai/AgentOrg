@@ -44,7 +44,7 @@ import { ChatRow, CloseChats } from "./chat-parts.tsx";
 import { useChats } from "./chats.tsx";
 import { type ChatMessage, type ChatStatus, reasonOf } from "./data.ts";
 import { Face } from "./face.tsx";
-import { openUsage, remedyOf } from "./notice.ts";
+import { fixOf } from "./notice.ts";
 import { useAgents } from "./watch.tsx";
 
 const PAGE = 100;
@@ -454,10 +454,8 @@ export function Thread({ chat }: { chat: ListedChat }) {
   // call of this thread's that failed is said in its place.
   const problem = failure || awaiting ? undefined : entry.problem;
   const wrong = failure?.said ?? problem?.message;
-  // A problem that the plan's page can fix ends its line with the way there. Signing in isn't
-  // offered from the line.
-  const remedy = problem && remedyOf(problem);
-  const fix = remedy?.run === "manage" ? { label: remedy.label, run: openUsage } : undefined;
+  // A problem that the plan's page can fix ends its line with the way there.
+  const fix = problem && fixOf(problem);
   const rows = useMemo(() => new Map(rowsOf(messages).map((row) => [row.id, row])), [messages]);
   const turns = useMemo(
     () => turnsOf(messages, unrecorded, streaming, keys.current),

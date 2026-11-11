@@ -27,8 +27,8 @@ async function open(
 const inBar = (page: Page, name: string) =>
   page.getByRole("navigation", { name: "Main" }).getByRole("button", { name, exact: true });
 const box = (locator: Locator) => locator.boundingBox();
-/** What an agent's page says it is doing now. */
-const now = (page: Page) => page.getByRole("main").getByRole("status", { name: "Now" });
+/** How an agent's page says it stands. */
+const state = (page: Page) => page.getByRole("main").getByRole("status", { name: "State" });
 
 const withGateway =
   (run: (gateway: Gateway) => Promise<void>, options?: Parameters<typeof standIn>[0]) =>
@@ -42,10 +42,12 @@ const withGateway =
   };
 
 test(
-  "an agent's state and its line say what it is doing, from its status, its chat and its connections",
+  "an agent's page says how it stands and no more: working or idle, or what is wrong",
   withGateway(async (gateway) => {
     const page = await open(gateway, "#/a/a-research");
-    await now(page).getByText("Using github__search_issues").waitFor();
+    await state(page).getByText("Working", { exact: true }).waitFor();
+    // What it is doing is read in its chats, not on its line.
+    assert.equal((await state(page).innerText()).trim(), "Working");
     for (const name of [
       "Working Research",
       "Idle Reviewer",
@@ -54,32 +56,48 @@ test(
       "Has a problem Broken",
     ])
       await inBar(page, name).waitFor();
+    await inBar(page, "Idle Reviewer").click();
+    await state(page).getByText("Idle", { exact: true }).waitFor();
     await inBar(page, "Has a problem Triage").click();
-    await now(page).getByText("linear is down, so its tools are left out").waitFor();
+    await state(page).getByText("linear is down, so its tools are left out").waitFor();
     await inBar(page, "Has a problem Broken").click();
-    await now(page).getByText("Its program exited.").waitFor();
+    await state(page).getByText("Its program exited.").waitFor();
     await page.close();
   }),
 );
 
 test(
-  "an agent's state and line follow its events",
+  "an agent's state follows its events, and a chat's problem is that chat's to say",
   withGateway(async (gateway) => {
     const page = await open(gateway, "#/a/a-research");
-    await now(page).getByText("Using github__search_issues").waitFor();
+    const row = (on: Page) =>
+      on.getByRole("main").getByRole("list", { name: "Chats with Research" }).getByRole("button");
+    await state(page).getByText("Working", { exact: true }).waitFor();
     // An agent at work says so in the bar, whatever page is open.
     gateway.setChatStatus("a-reviewer", { state: "working" });
     await inBar(page, "Working Reviewer").waitFor();
-    // What it was answering failed: its chat says the problem, and it is idle.
+    // What it was answering failed. The agent is idle, with nothing wrong of its own: the chat's
+    // row says the problem, whichever chat it is, and the chat holds what can be done.
     gateway.failChat("a-research", {
       code: "usage_limit",
       message: "You've reached your plan's limit.",
     });
-    await now(page).getByText("You've reached your plan's limit.").waitFor();
-    await inBar(page, "Has a problem Research").waitFor();
-    // A page opened late reads the problem from the chat's entry.
+    await row(page).getByText("You've reached your plan's limit.").waitFor();
+    await state(page).getByText("Idle", { exact: true }).waitFor();
+    assert.equal(await state(page).getByRole("button").count(), 0);
+    await inBar(page, "Idle Research").waitFor();
+    gateway.addChat("a-research", {
+      id: "c-later",
+      title: "Started later",
+      said: [],
+      problem: { code: "failed", message: "The model refused it." },
+    });
+    await row(page).getByText("The model refused it.").waitFor();
+    assert.equal((await state(page).innerText()).trim(), "Idle");
+    // A page opened late reads the same.
     const late = await open(gateway, "#/a/a-research");
-    await now(late).getByText("You've reached your plan's limit.").waitFor();
+    await row(late).getByText("You've reached your plan's limit.").waitFor();
+    await state(late).getByText("Idle", { exact: true }).waitFor();
     await late.close();
     // Its next reply ends the problem.
     gateway.addMessage("a-research", {
@@ -88,8 +106,7 @@ test(
       text: "Three causes explain it.",
       at: new Date().toISOString(),
     });
-    await now(page).getByText("Three causes explain it.").waitFor();
-    await inBar(page, "Idle Research").waitFor();
+    await row(page).getByText("You've reached your plan's limit.").waitFor({ state: "detached" });
     await page.close();
   }),
 );
@@ -184,15 +201,26 @@ test(
   "an agent is stopped, started and deleted from its page, after asking",
   withGateway(async (gateway) => {
     const page = await open(gateway, "#/a/a-reviewer");
-    await page.getByRole("button", { name: "Stop Reviewer" }).click();
-    await page.getByRole("main").getByText("Stopped", { exact: true }).waitFor();
-    await page.getByRole("button", { name: "Start Reviewer" }).click();
-    await page.getByRole("main").getByText("Reviewed #482 with 3 comments").first().waitFor();
-    // A stop that is refused says why, on the page.
+    const menu = page.getByRole("button", { name: "More for Reviewer" });
+    const stop = page.getByRole("menuitem", { name: "Stop" });
+    await menu.click();
+    await stop.click();
+    // Stopped, it is started where it says so, and there is nothing to stop or to message.
+    await state(page).getByText("Stopped", { exact: true }).waitFor();
+    const message = page.getByRole("main").getByRole("button", { name: "Message" });
+    assert.equal(await message.isDisabled(), true);
+    await menu.click();
+    assert.equal(await stop.getAttribute("aria-disabled"), "true");
+    await page.keyboard.press("Escape");
+    await state(page).getByRole("button", { name: "Start" }).click();
+    await state(page).getByText("Idle", { exact: true }).waitFor();
+    assert.equal(await state(page).getByRole("button").count(), 0);
+    assert.equal(await message.isDisabled(), false);
+    // A stop that is refused says why, on its line.
     gateway.refuseNext("agents.stop", "failed", "It wouldn't stop.");
-    await page.getByRole("button", { name: "Stop Reviewer" }).click();
-    await page.getByRole("main").getByText("It wouldn't stop.").waitFor();
-    const menu = page.getByRole("button", { name: "Reviewer options" });
+    await menu.click();
+    await stop.click();
+    await state(page).getByText("It wouldn't stop.").waitFor();
     await menu.click();
     await page.getByRole("menuitem", { name: /Delete/ }).click();
     const dialog = page.getByRole("dialog", { name: "Delete Reviewer?" });
@@ -249,29 +277,46 @@ test(
 );
 
 test(
-  "an agent's page says what it's for, holds room for what it does, and leads to what it's made of",
+  "an agent's page is who it is, how it stands, and its chats; what it's made of is one press away",
   withGateway(async (gateway) => {
-    const page = await open(gateway, "#/a/a-research");
+    gateway.addChat("a-reviewer", {
+      id: "c-old",
+      title: "An old review",
+      said: [{ id: "o1", role: "assistant", text: "Merged.", at: "2026-01-01T10:00:00Z" }],
+      archived: true,
+    });
+    const page = await open(gateway, "#/a/a-reviewer");
     const main = page.getByRole("main");
-    await main.getByRole("heading", { name: "Research" }).waitFor();
+    await main.getByRole("heading", { name: "Reviewer", level: 1 }).waitFor();
     await main.getByText("Chats and uses what you connect").waitFor();
-    await main
-      .getByRole("button", { name: /^Built from/ })
-      .getByText("Assistant")
-      .waitFor();
-    await main.getByRole("button", { name: /^MCPs/ }).getByText("2").waitFor();
-    for (const held of ["Computer", "Browser"])
-      assert.equal((await main.getByRole("region", { name: held }).innerText()).trim(), held);
-    await main.getByRole("button", { name: "Research settings" }).click();
-    await page.waitForURL(/\/a\/a-research\/settings$/);
-    await main.getByRole("region", { name: "MCPs" }).getByText("github", { exact: true }).waitFor();
+    // With no computer it has one thing to show, so no tabs: its chats, the archived left out.
+    assert.equal(await main.getByRole("tablist").count(), 0);
+    const chats = main.getByRole("list", { name: "Chats with Reviewer" });
+    await chats.getByRole("button").first().waitFor();
+    assert.equal(await chats.getByText("An old review").count(), 0);
+    await chats.getByRole("button").first().click();
+    const panel = page.getByRole("complementary", { name: "Chats" });
+    await panel.getByText("Reviewed #482 with 3 comments").first().waitFor();
+    await panel.getByRole("button", { name: "Close chats" }).click();
+    // Message and New chat both start a chat with it.
+    for (const name of ["Message", "New chat"]) {
+      await main.getByRole("button", { name }).click();
+      await panel.getByPlaceholder("Message Reviewer").waitFor();
+      await panel.getByRole("button", { name: "Close chats" }).click();
+    }
+    await main.getByRole("button", { name: "Setup" }).click();
+    await page.waitForURL(/\/a\/a-reviewer\/settings$/);
     // The bar is the way back.
-    const research = page
+    const reviewer = page
       .getByRole("navigation", { name: "Main" })
-      .getByRole("button", { name: "Research" });
-    assert.equal(await research.getAttribute("aria-current"), "page");
-    await research.click();
-    await page.waitForURL(/\/a\/a-research$/);
+      .getByRole("button", { name: "Reviewer" });
+    assert.equal(await reviewer.getAttribute("aria-current"), "page");
+    await reviewer.click();
+    await page.waitForURL(/\/a\/a-reviewer$/);
+    // An agent that isn't there has an empty page.
+    await page.goto(`${gateway.url}/#/a/a-nobody`);
+    await inBar(page, "Idle Reviewer").waitFor();
+    assert.equal((await main.innerText()).trim(), "");
     await page.close();
   }),
 );
@@ -296,7 +341,7 @@ test(
         await page.goto(`${gateway.url}/#/a/a-reviewer`);
         await page.reload();
       }
-      await page.getByRole("button", { name: "Reviewer options" }).click();
+      await page.getByRole("button", { name: "More for Reviewer" }).click();
       const menu = page.locator('[data-slot="dropdown-menu-content"]');
       await menu.waitFor();
       const value = await luma(menu);

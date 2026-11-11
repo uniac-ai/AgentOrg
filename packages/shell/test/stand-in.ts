@@ -470,14 +470,14 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
       /** As many are running as may. */
       full: false,
     },
+    /** `metrics@1`: the sockets watching, and the latest reading, which one that opens later gets at once. */
+    load: { sockets: new Set<WebSocket>(), reading: undefined as string | undefined },
     /** Browser sockets, each with the tab it is shown, and what the operating ones sent. */
     screens: new Map<WebSocket, { shown: number | null; chose: boolean }>(),
     input: [] as Record<string, unknown>[],
     /** The browser's tabs, shared by everyone. */
     tabs: [{ id: 1, url: "https://shop.example/checkout", title: "Checkout" }],
   };
-  /** Control calls, newest last. */
-  const activity: z.output<typeof agentsInterface.methods.activity.output>["entries"] = [];
   let units = UNITS;
 
   const emit = (slot: string, event: string, payload: unknown) => {
@@ -540,10 +540,6 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
         return {};
       },
       check: () => ({ problems }),
-      activity: ({ agent }) => {
-        const about = activity.filter((e) => !agent || e.caller === agent || e.target === agent);
-        return { entries: about.reverse(), more: false };
-      },
       create: (input) => {
         const made = `a-${agents.size + 1}`;
         const { base, units } = input.stack as unknown as {
@@ -983,6 +979,11 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
       socket.send(JSON.stringify({ op: "live", protocol: surface.protocol }));
       if (surface.protocol === "screencast@1") screencast(socket, target.mode);
       if (surface.protocol === "terminal@1") terminalSocket(socket, target.mode);
+      if (surface.protocol === "metrics@1") {
+        live.load.sockets.add(socket);
+        socket.on("close", () => live.load.sockets.delete(socket));
+        if (live.load.reading) socket.send(live.load.reading);
+      }
     });
   });
   /** A `terminal@1` event, to every socket and to those that come later. */
@@ -1142,12 +1143,13 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
     screen(event: Record<string, unknown>) {
       for (const [ws] of live.screens) ws.send(JSON.stringify(event));
     },
+    /** A `metrics@1` reading, to every socket watching and to those that come later. */
+    reading(reading: Record<string, unknown>) {
+      live.load.reading = JSON.stringify({ type: "reading", scope: "machine", ...reading });
+      for (const ws of live.load.sockets) ws.send(live.load.reading);
+    },
     /** The agent opens a tab. */
     tabOpens: (tab: (typeof live.tabs)[number]) => tabOpened(tab),
-    /** A control call made, for `agents.activity`. */
-    controlled(entry: Omit<(typeof activity)[number], "seq">) {
-      activity.push({ seq: activity.length + 1, ...entry });
-    },
     /** What `agents.check` finds wrong from now on. */
     findProblems: (found: StackProblem[]) => {
       problems = found;
