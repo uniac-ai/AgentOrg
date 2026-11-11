@@ -3,10 +3,15 @@
 # packages inside it (dist/node_modules), installed from its tarball into an empty folder with a
 # cache of its own, and globally with a prefix of its own. Then `agentorg` runs on a fresh home:
 # first run must make ChatGPT, the providers and management, all connected; an agent must be made
-# with `agentorg call agents create`; and the gateway must serve the shell and the sign-in page. Last, this build must start on a home the published 0.0.5
-# made: its old Actors closed, and `agents create` working; on a home the published 0.0.6 made,
-# with a connection that must still answer and an agent whose conversation must be its first chat;
-# and on a home the published 0.0.7 made, with an agent whose two chats must be read and written.
+# with `agentorg call agents create`; and the gateway must serve the shell and the sign-in page.
+# Last, this build must start on a home each published version made:
+# - 0.0.5: its old Actors closed, and `agents create` working;
+# - 0.0.6: a connection that must still answer, and an agent whose conversation must be its first
+#   chat;
+# - 0.0.7: an agent that must still run, whose two chats must be read, the older one added to.
+# Once a version is published, it gets a section here (not in the change that releases it: the
+# registry has it only after its tag). A section makes, with that version's own commands, what
+# the version let a person keep, then starts this build on that home and uses it.
 # Run after `npm run build`.
 set -euo pipefail
 
@@ -66,6 +71,14 @@ stop_app() {
   kill -TERM "$pid"
   wait "$pid" || true
   pid=""
+}
+# The person's slot for a chat, asked of `agentorg` ($1) on a home ($2); empty if there is none.
+chat_slot() {
+  "$1" call bindings list '{"actor":"person"}' --home "$2" 2>/dev/null |
+    node -e '
+      const { bindings } = JSON.parse(require("fs").readFileSync(0, "utf8"));
+      console.log(bindings.find((b) => b.export === "chat")?.slot ?? "");
+    '
 }
 
 step "pack the cli"
@@ -280,14 +293,6 @@ create="$(node -e '
   console.log(JSON.stringify({ provider: one.provider, creatable: one.id, name: "Elder", answers: {} }));
 ' "$work/creatable6.json")"
 "$was" call agents create "$create" --home "$home6" >/dev/null
-# The person's slot for a chat, asked of `agentorg` ($1) on a home ($2); empty if there is none.
-chat_slot() {
-  "$1" call bindings list '{"actor":"person"}' --home "$2" 2>/dev/null |
-    node -e '
-      const { bindings } = JSON.parse(require("fs").readFileSync(0, "utf8"));
-      console.log(bindings.find((b) => b.export === "chat")?.slot ?? "");
-    '
-}
 slot="$(chat_slot "$was" "$home6")"
 [ -n "$slot" ] || { echo "0.0.6 gave the person no chat" >&2; exit 1; }
 "$was" call "$slot" send '{"text":"Said on 0.0.6."}' --home "$home6" >/dev/null
@@ -322,7 +327,7 @@ wait_answers "$agentorg" ||
 echo "0.0.6's connection works here and is removed"
 stop_app
 
-step "a home the published 0.0.7 made: its agent's chats are read and written on this build"
+step "a home the published 0.0.7 made: its agent runs and its chats are read on this build, the older one added to"
 old7="$work/old7"
 mkdir "$old7"
 (cd "$old7" && echo '{"private":true}' >package.json &&
@@ -343,19 +348,32 @@ create="$(node -e '
   console.log(JSON.stringify({ stack: { base: { provider: one.provider, creatable: one.id }, units: [] }, name: "Elder" }));
 ' "$work/creatable7.json")"
 "$was" call agents create "$create" --home "$home7" >/dev/null
-slot=""
+slot="$(chat_slot "$was" "$home7")"
+[ -n "$slot" ] || { echo "0.0.7 gave the person no chat" >&2; exit 1; }
+# The person has the slot as the agent is made; its chats answer once the agent has joined.
+answered=""
 for _ in $(seq 1 60); do
-  slot="$(chat_slot "$was" "$home7")"
-  [ -n "$slot" ] && "$was" call "$slot" list --home "$home7" >/dev/null 2>&1 && break
+  "$was" call "$slot" list --home "$home7" >/dev/null 2>&1 && { answered=1; break; }
+  kill -0 "$pid" 2>/dev/null || break
   sleep 0.5
 done
-[ -n "$slot" ] || { echo "0.0.7 gave the person no chat" >&2; exit 1; }
+[ -n "$answered" ] || { echo "0.0.7's chats never answered" >&2; cat "$work/old7.log" >&2; exit 1; }
 # Two chats, as 0.0.7 kept them: with no sign-in each holds its message and no answer.
-first="$("$was" call "$slot" send '{"text":"Said on 0.0.7."}' --home "$home7" |
-  node -e 'console.log(JSON.parse(require("fs").readFileSync(0, "utf8")).chat)')"
-"$was" call "$slot" send '{"text":"A second chat."}' --home "$home7" >/dev/null
+# The id of the chat a message ($1) starts on 0.0.7.
+started() {
+  "$was" call "$slot" send "{\"text\":\"$1\"}" --home "$home7" |
+    node -e '
+      const { chat } = JSON.parse(require("fs").readFileSync(0, "utf8"));
+      if (!chat) process.exit(1);
+      console.log(chat);
+    '
+}
+first="$(started "Said on 0.0.7.")" || { echo "0.0.7 started no chat" >&2; exit 1; }
+second="$(started "A second chat.")" || { echo "0.0.7 started no second chat" >&2; exit 1; }
 stop_app
 start_on "$agentorg" "$home7" "$work/up7.log"
+# The chat interface is the one 0.0.7 had, so the person keeps the slot: its chats answer once the
+# agent is back.
 for _ in $(seq 1 120); do
   [ "$(chat_slot "$agentorg" "$home7")" = "$slot" ] &&
     "$agentorg" call "$slot" list --home "$home7" >"$work/chats7.json" 2>/dev/null && break
@@ -367,17 +385,30 @@ done
 # A message in the older chat is kept after what 0.0.7 kept there.
 "$agentorg" call "$slot" send "{\"chat\":\"$first\",\"text\":\"And on this build.\"}" --home "$home7" >/dev/null
 "$agentorg" call "$slot" history "{\"chat\":\"$first\"}" --home "$home7" >"$work/history7.json"
+"$agentorg" call "$slot" history "{\"chat\":\"$second\"}" --home "$home7" >"$work/history7b.json"
+"$agentorg" call agents list --home "$home7" >"$work/agents7.json"
 node -e '
   const read = (f) => JSON.parse(require("fs").readFileSync(f, "utf8"));
-  const titles = read(process.argv[1]).chats.map((chat) => chat.title).sort();
-  const said = read(process.argv[2]).messages.filter((m) => m.role === "user").map((m) => m.text);
-  const want = { titles: ["A second chat.", "Said on 0.0.7."], said: ["Said on 0.0.7.", "And on this build."] };
-  if (JSON.stringify({ titles, said }) !== JSON.stringify(want)) {
-    console.error(JSON.stringify({ titles, said }));
+  const said = (f) => read(f).messages.filter((m) => m.role === "user").map((m) => m.text);
+  const got = {
+    agent: read(process.argv[4]).agents.find((a) => a.name === "Elder")?.status.state,
+    titles: read(process.argv[1]).chats.map((chat) => chat.title).sort(),
+    older: said(process.argv[2]),
+    newer: said(process.argv[3]),
+  };
+  const want = {
+    agent: "running",
+    titles: ["A second chat.", "Said on 0.0.7."],
+    older: ["Said on 0.0.7.", "And on this build."],
+    newer: ["A second chat."],
+  };
+  if (JSON.stringify(got) !== JSON.stringify(want)) {
+    console.error(JSON.stringify(got));
     process.exit(1);
   }
-  console.log(`0.0.7'"'"'s ${titles.length} chats are here, and the older one took a message`);
-' "$work/chats7.json" "$work/history7.json"
+  console.log(`0.0.7'"'"'s agent is ${got.agent}, its ${got.titles.length} chats are read, and the older one took a message`);
+' "$work/chats7.json" "$work/history7.json" "$work/history7b.json" "$work/agents7.json" ||
+  { echo "This build lost something of the 0.0.7 home" >&2; cat "$work/up7.log" >&2; exit 1; }
 if grep -E "didn't work|Error" "$work/up7.log"; then
   echo "This build reported a problem on the 0.0.7 home" >&2
   exit 1
