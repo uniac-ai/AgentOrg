@@ -155,6 +155,19 @@ const SCREENS: Screen[] = [
     }),
   ),
   {
+    name: "home",
+    sizes: ["wide", "phone"],
+    themes: ["dark", "light"],
+    chats: true,
+    design: async () => {},
+    // As many need you as in the design's sample: one with a problem, one with a reply not read.
+    built: async (page, gateway) => {
+      await noted(gateway);
+      unreadReply(gateway, 1);
+      await page.getByRole("region", { name: "Needs you" }).getByRole("button").nth(1).waitFor();
+    },
+  },
+  {
     name: "chats-found",
     sizes: ["wide"],
     themes: ["dark", "light"],

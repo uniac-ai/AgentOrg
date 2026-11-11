@@ -109,5 +109,8 @@ export const rowClass = (focused: boolean) =>
   `group/row -mx-2 grid min-h-14 items-center gap-x-4 rounded-xl px-2 py-2 ${focused ? "bg-[var(--selected)]" : ""}`;
 
 export const Scroll = ({ children }: { children: React.ReactNode }) => (
-  <div className="no-bar h-full overflow-y-auto p-5 tight:p-3.5">{children}</div>
+  // The pages not yet redrawn are set in the type they were built in, not the frame's.
+  <div className="no-bar h-full overflow-y-auto p-5 text-[14px] leading-[1.45] tight:p-3.5">
+    {children}
+  </div>
 );

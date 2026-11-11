@@ -279,9 +279,15 @@ test(
   "at phone width nothing runs off the side, and Create and Settings still work",
   withGateway(async (gateway) => {
     const page = await open(gateway, PHONE);
-    await page.getByRole("list", { name: "Your agents" }).waitFor();
+    // Home, with its chats on it.
+    await page
+      .getByRole("main")
+      .getByRole("region", { name: "Recent" })
+      .getByRole("listitem")
+      .first()
+      .waitFor();
     assert.equal(await page.getByRole("navigation", { name: "Main" }).isVisible(), false);
-    assert.equal(await fits(page), true, "agents");
+    assert.equal(await fits(page), true, "Home");
     // The bar is behind the menu button, and the top of the page names the place.
     const head = page.getByRole("banner");
     assert.equal(await head.innerText(), "Home");

@@ -23,9 +23,12 @@ async function open(
   await page.goto(`${gateway.url}/${hash}`);
   return page;
 }
-const row = (page: Page, name: string) =>
-  page.getByRole("list", { name: "Your agents" }).getByRole("listitem").filter({ hasText: name });
+/** An agent in the left bar, by its state and its name. */
+const inBar = (page: Page, name: string) =>
+  page.getByRole("navigation", { name: "Main" }).getByRole("button", { name, exact: true });
 const box = (locator: Locator) => locator.boundingBox();
+/** What an agent's page says it is doing now. */
+const now = (page: Page) => page.getByRole("main").getByRole("status", { name: "Now" });
 
 const withGateway =
   (run: (gateway: Gateway) => Promise<void>, options?: Parameters<typeof standIn>[0]) =>
@@ -39,43 +42,44 @@ const withGateway =
   };
 
 test(
-  "Agents says what each agent is doing, from its status, its chat and its connections",
+  "an agent's state and its line say what it is doing, from its status, its chat and its connections",
   withGateway(async (gateway) => {
-    const page = await open(gateway);
-    await row(page, "Research").getByText("Using github__search_issues").waitFor();
-    assert.match(
-      await row(page, "Research").innerText(),
-      /Using github__search_issues[\s\S]*6 min/,
-    );
-    assert.match(await row(page, "Reviewer").innerText(), /Reviewed #482 with 3 comments\s+12 min/);
-    await row(page, "Triage").getByText("linear is down, so its tools are left out").waitFor();
-    await row(page, "Weekly report").getByRole("img", { name: "Stopped" }).waitFor();
-    await row(page, "Broken").getByText("Its program exited.").waitFor();
+    const page = await open(gateway, "#/a/a-research");
+    await now(page).getByText("Using github__search_issues").waitFor();
+    for (const name of [
+      "Working Research",
+      "Idle Reviewer",
+      "Has a problem Triage",
+      "Stopped Weekly report",
+      "Has a problem Broken",
+    ])
+      await inBar(page, name).waitFor();
+    await inBar(page, "Has a problem Triage").click();
+    await now(page).getByText("linear is down, so its tools are left out").waitFor();
+    await inBar(page, "Has a problem Broken").click();
+    await now(page).getByText("Its program exited.").waitFor();
     await page.close();
   }),
 );
 
 test(
-  "a row follows its agent's events, and keeps its box and place",
+  "an agent's state and line follow its events",
   withGateway(async (gateway) => {
-    const page = await open(gateway);
-    const research = row(page, "Research");
-    await research.getByText("Using github__search_issues").waitFor();
-    const before = await box(research);
-    // An agent at work with no tool running is thinking.
+    const page = await open(gateway, "#/a/a-research");
+    await now(page).getByText("Using github__search_issues").waitFor();
+    // An agent at work says so in the bar, whatever page is open.
     gateway.setChatStatus("a-reviewer", { state: "working" });
-    await row(page, "Reviewer").getByText("Thinking").waitFor();
+    await inBar(page, "Working Reviewer").waitFor();
     // What it was answering failed: its chat says the problem, and it is idle.
     gateway.failChat("a-research", {
       code: "usage_limit",
       message: "You've reached your plan's limit.",
     });
-    await research.getByText("You've reached your plan's limit.").waitFor();
-    await research.getByRole("img", { name: "Has a problem" }).waitFor();
-    assert.deepEqual(await box(research), before);
+    await now(page).getByText("You've reached your plan's limit.").waitFor();
+    await inBar(page, "Has a problem Research").waitFor();
     // A page opened late reads the problem from the chat's entry.
-    const late = await open(gateway);
-    await row(late, "Research").getByText("You've reached your plan's limit.").waitFor();
+    const late = await open(gateway, "#/a/a-research");
+    await now(late).getByText("You've reached your plan's limit.").waitFor();
     await late.close();
     // Its next reply ends the problem.
     gateway.addMessage("a-research", {
@@ -84,8 +88,8 @@ test(
       text: "Three causes explain it.",
       at: new Date().toISOString(),
     });
-    await research.getByText("Three causes explain it.").waitFor();
-    assert.deepEqual(await box(research), before);
+    await now(page).getByText("Three causes explain it.").waitFor();
+    await inBar(page, "Idle Research").waitFor();
     await page.close();
   }),
 );
@@ -184,6 +188,10 @@ test(
     await page.getByRole("main").getByText("Stopped", { exact: true }).waitFor();
     await page.getByRole("button", { name: "Start Reviewer" }).click();
     await page.getByRole("main").getByText("Reviewed #482 with 3 comments").first().waitFor();
+    // A stop that is refused says why, on the page.
+    gateway.refuseNext("agents.stop", "failed", "It wouldn't stop.");
+    await page.getByRole("button", { name: "Stop Reviewer" }).click();
+    await page.getByRole("main").getByText("It wouldn't stop.").waitFor();
     const menu = page.getByRole("button", { name: "Reviewer options" });
     await menu.click();
     await page.getByRole("menuitem", { name: /Delete/ }).click();
@@ -195,14 +203,16 @@ test(
     await page.getByRole("menuitem", { name: /Delete/ }).click();
     await dialog.getByRole("button", { name: "Delete" }).click();
     await page.waitForURL(/#\/$/);
-    await row(page, "Research").waitFor();
+    // It is gone from the bar too.
+    await inBar(page, "Idle Reviewer").waitFor({ state: "detached" });
+    await inBar(page, "Working Research").waitFor();
     assert.equal(gateway.agents.has("a-reviewer"), false);
     await page.close();
   }),
 );
 
 test(
-  "the left bar holds the agents, the plus and Settings; the main page controls each agent",
+  "the left bar holds the agents, the plus and Settings",
   withGateway(async (gateway) => {
     const page = await open(gateway);
     const nav = page.getByRole("navigation", { name: "Main" });
@@ -234,14 +244,6 @@ test(
       .waitFor();
     await page.keyboard.press("Escape");
 
-    const weekly = row(page, "Weekly report");
-    await weekly.getByRole("button", { name: "Start Weekly report" }).click();
-    await weekly.getByRole("button", { name: "Stop Weekly report" }).waitFor();
-    assert.equal(gateway.agents.get("a-weekly")?.status.state, "running");
-    gateway.refuseNext("agents.stop", "failed", "It wouldn't stop.");
-    await weekly.getByRole("button", { name: "Stop Weekly report" }).click();
-    await weekly.getByText("It wouldn't stop.").waitFor();
-    assert.equal(await page.getByRole("main").getByText("github", { exact: true }).count(), 0);
     await page.close();
   }),
 );

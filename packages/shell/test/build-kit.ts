@@ -37,7 +37,7 @@ export const chooser = panel;
 export const card = (page: Page, name: string) =>
   panel(page).getByRole("list", { name: "Units" }).getByRole("listitem", { name });
 export async function fromTemplate(page: Page, name: string) {
-  await page.getByRole("list", { name: "Your agents" }).waitFor();
+  await agentsRead(page);
   await plus(page).click();
   await chooser(page)
     .getByRole("button", { name: new RegExp(`^${name}`) })
@@ -55,3 +55,7 @@ export const unfold = (page: Page, name: string) =>
     .click();
 export const gives = (page: Page, name: string) =>
   card(page, name).locator("[data-gives]").innerText();
+
+/** The shell has read its agents: they are in the left bar, which a phone keeps behind Menu. */
+export const agentsRead = (page: Page) =>
+  page.locator('ul[aria-label="Agents"] li').first().waitFor({ state: "attached" });
