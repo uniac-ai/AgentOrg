@@ -1,6 +1,6 @@
 {
   "name": "@agentorg/cli",
-  "version": "0.0.6",
+  "version": "0.0.7",
   "description": "AgentOrg as one app: the Hub, the person's gateway and the shell, on loopback.",
   "license": "MIT",
   "repository": {
