@@ -13,11 +13,15 @@ import { SESSION, standIn } from "../stand-in.ts";
 import {
   ASKED,
   ASKS,
+  type ChatCase,
   closeEveryTab,
   computerWith,
   inDesign,
+  newChatWithFirst,
   noted,
+  openSampleChat,
   readChat,
+  refuseSend,
   sampleChats,
   startTerminals,
   unreadReply,
@@ -41,8 +45,11 @@ interface Measured {
   gap: string;
 }
 type Parts = Record<string, Measured | string | number | null>;
-/** What a probe measures: the frame, one window's own rows, the chat in its layer, or Home. */
-type Part = "frame" | "terminal" | "browser" | "chat" | "thread" | "home";
+/**
+ * What a probe measures: the frame, one window's own rows, the chat in its layer, one chat, the
+ * way to a chat's older messages, or Home.
+ */
+type Part = "frame" | "terminal" | "browser" | "chat" | "thread" | "earlier" | "home";
 type Gateway = Awaited<ReturnType<typeof standIn>>;
 
 /**
@@ -51,7 +58,9 @@ type Gateway = Awaited<ReturnType<typeof standIn>>;
  * rows, from the window's top left. `chat` measures the collapsed chat and its panel, from the
  * shell's top left. A window is also measured in the cases the design draws for it: what was
  * typed refused, its view closed, only watched, no tab, and the page asking. `home` measures
- * Home's two sections, from the shell's top left. `thread` measures one chat, a chat about to be started, and the chats the bar's
+ * Home's two sections, from the shell's top left. `earlier` measures the way to a chat's older
+ * messages, from the top of what was said. `thread` also measures a chat in the cases the design
+ * draws for it: a step with no call, a problem with its fix, and a refused send. `thread` measures one chat, a chat about to be started, and the chats the bar's
  * search finds, from the shell's top left. Each also lists the controls and marks seen in its regions: the bar, a
  * drawer, the phone's head, a window, the collapsed chat and its panel, and Home. The page
  * area is not listed on a page that isn't the design's yet.
@@ -292,6 +301,20 @@ const probe = (what: Part): Parts => {
     return parts;
   }
 
+  if (what === "earlier") {
+    // The way to what was said before, above the oldest message shown: from the top of what
+    // was said, whatever is under it.
+    const panel = document.querySelector('aside[aria-label="Chats"]');
+    const button = [...(panel?.querySelectorAll("button") ?? [])].find(
+      (b) => b.textContent?.trim() === "Earlier messages",
+    );
+    const mark = button?.closest('[data-slot="marker"]');
+    // What was said: the list the marker's own item is in.
+    parts.earlier = inside(mark?.parentElement?.parentElement, mark);
+    parts["earlier.button"] = inside(mark, button);
+    return parts;
+  }
+
   if (what === "thread") {
     const shell = document.querySelector("[data-shell]");
     const panel = document.querySelector('aside[aria-label="Chats"]');
@@ -314,7 +337,8 @@ const probe = (what: Part): Parts => {
     parts["head.close"] = of(head?.querySelector('button[aria-label="Close chats"]'));
     const said = panel?.querySelector(".whitespace-pre-wrap");
     parts.said = of(said);
-    const call = panel?.querySelector("[data-call]");
+    // A call, which opens; not a step with none, which is measured below.
+    const call = panel?.querySelector("[data-call]:not(p)");
     parts.call = of(call);
     parts["call.line"] = of(call?.querySelector("button"));
     parts["call.words"] = of(call?.querySelector("button > span"));
@@ -324,6 +348,13 @@ const probe = (what: Part): Parts => {
     const wrong = panel?.querySelector('[role="alert"]');
     parts.wrong = of(wrong);
     parts["wrong.words"] = of(wrong?.children[0], "w");
+    // What helps, at the end of the line, after the words: the same words on both sides.
+    parts["wrong.fix"] = inside(wrong, wrong?.querySelector("button"));
+    // Something the agent did that carries no call.
+    const note = panel?.querySelector("p[data-call]");
+    parts.note = of(note);
+    parts["note.icon"] = of(note?.querySelector("svg"));
+    parts["note.words"] = of(note?.querySelector("span"), "w");
     const box = panel?.querySelector('textarea[aria-label="Message"]');
     const group = box?.closest('[data-slot="input-group"]') ?? box?.parentElement;
     parts.composer = of(group);
@@ -727,6 +758,62 @@ for (const theme of ["dark", "light"] as const)
     all[`chat.panel.${theme}.${side}`] = await measure(page, "chat");
     await page.close();
     await gateway?.close();
+  }
+
+// The cases the design draws for a chat, each from its own control, and the built side given the
+// same: a step with no call, a problem with its fix, a send and a first message refused, and more
+// said than a page holds.
+for (const theme of ["dark", "light"] as const)
+  for (const side of ["design", "built"] as const) {
+    /** One page in one case, measured, and closed. */
+    const one = async (
+      state: string,
+      given: ChatCase | undefined,
+      reach: (page: Page, gateway?: Gateway) => Promise<void>,
+      part: Part = "thread",
+    ) => {
+      const gateway = side === "built" ? await standIn() : undefined;
+      if (gateway) sampleChats(gateway, given);
+      const page = gateway
+        ? await builtPage(gateway, "wide", theme)
+        : await designPage("wide", theme);
+      await reach(page, gateway);
+      await rest(page, "wide");
+      all[`thread.${state}.${theme}.${side}`] = await measure(page, part);
+      await page.close();
+      await gateway?.close();
+    };
+    const panel = (page: Page) => page.getByRole("complementary", { name: "Chats" });
+    await one("noCall", "noCall", async (page, gateway) => {
+      await openSampleChat(page);
+      if (!gateway) await inDesign(page, "A step with no call");
+      await panel(page).getByText("Looked at the pull request").waitFor();
+    });
+    await one("limit", "limit", async (page, gateway) => {
+      await openSampleChat(page);
+      if (!gateway) await inDesign(page, "Plan limit");
+      await panel(page).getByRole("alert").getByRole("button", { name: "Manage usage" }).waitFor();
+    });
+    await one("refused", undefined, async (page, gateway) => {
+      await openSampleChat(page);
+      await refuseSend(page, gateway);
+    });
+    await one("refused.first", undefined, async (page, gateway) => {
+      await newChatWithFirst(page);
+      await refuseSend(page, gateway);
+    });
+    await one(
+      "earlier",
+      "long",
+      async (page, gateway) => {
+        await openSampleChat(page);
+        if (!gateway) await inDesign(page, "A long chat");
+        const earlier = panel(page).getByRole("button", { name: "Earlier messages" });
+        await earlier.waitFor({ state: "attached" });
+        await earlier.scrollIntoViewIfNeeded();
+      },
+      "earlier",
+    );
   }
 
 // Home: the chats that need you and the recent ones, wide and on a phone. The built side has as

@@ -225,10 +225,10 @@ test(
   "a message that got no answer says why in one line, until the chat's next reply",
   withGateway(async (gateway) => {
     const page = await open(gateway);
-    gateway.failChat("a-reviewer", { code: "usage_limit", message: "You've reached your limit." });
-    // One line in the problem's colour, with nothing to press.
+    gateway.failChat("a-reviewer", { code: "failed", message: "The model refused it." });
+    // One line in the problem's colour, with nothing to press: nothing here can be done about it.
     const said = panel(page).getByRole("alert");
-    await said.getByText("You've reached your limit.").waitFor();
+    await said.getByText("The model refused it.").waitFor();
     assert.equal(await said.getByRole("button").count(), 0);
     await page.close();
     // The chat's entry says it too: it is there on a page opened late.
@@ -236,21 +236,76 @@ test(
     await late.getByRole("button", { name: /^Chats/ }).click();
     await panel(late)
       .getByRole("list", { name: "Chats" })
-      .getByText("You've reached your limit.")
+      .getByText("The model refused it.")
       .click();
-    await panel(late).getByRole("alert").getByText("You've reached your limit.").waitFor();
+    await panel(late).getByRole("alert").getByText("The model refused it.").waitFor();
     // Asked again, the chat awaits a reply and says no problem; failing again, it says it again.
     await input(late).fill("Try again");
     await input(late).press("Enter");
     await panel(late).getByRole("status").getByText("Thinking").waitFor();
     await panel(late).getByRole("alert").waitFor({ state: "detached" });
-    gateway.failChat("a-reviewer", { code: "usage_limit", message: "You've reached your limit." });
-    await panel(late).getByRole("alert").getByText("You've reached your limit.").waitFor();
+    gateway.failChat("a-reviewer", { code: "failed", message: "The model refused it." });
+    await panel(late).getByRole("alert").getByText("The model refused it.").waitFor();
     // Its next reply ends the problem.
     gateway.addMessage("a-reviewer", reply("r3", "Here it is."));
     await panel(late).getByText("Here it is.").waitFor();
     await panel(late).getByRole("alert").waitFor({ state: "detached" });
     await late.close();
+  }),
+);
+
+test(
+  "the plan's limit ends its line with the way to the plan's page; being signed out, or a refused send, with nothing",
+  withGateway(async (gateway) => {
+    const page = await open(gateway);
+    const line = panel(page).getByRole("alert");
+    gateway.failChat("a-reviewer", {
+      code: "usage_limit",
+      message: "You've reached your plan's limit.",
+    });
+    await line.getByText("You've reached your plan's limit.").waitFor();
+    // The plan's page is ChatGPT's own: it is answered here, so the test goes nowhere else.
+    await page
+      .context()
+      .route("https://chatgpt.com/**", (route) =>
+        route.fulfill({ status: 200, contentType: "text/html", body: "<title>Usage</title>" }),
+      );
+    const opened = page.context().waitForEvent("page");
+    await line.getByRole("button", { name: "Manage usage" }).click();
+    await (await opened).waitForURL(/chatgpt\.com\/settings\/usage/);
+    // Signing in isn't offered from the line.
+    gateway.failChat("a-reviewer", { code: "not_signed_in", message: "Sign in to go on." });
+    await line.getByText("Sign in to go on.").waitFor();
+    assert.equal(await line.getByRole("button").count(), 0);
+    // A send that was refused has no fix either, whatever the chat's problem is.
+    gateway.failChat("a-reviewer", {
+      code: "usage_limit",
+      message: "You've reached your plan's limit.",
+    });
+    await line.getByRole("button", { name: "Manage usage" }).waitFor();
+    gateway.refuseNext("chat.send", "unavailable", "It can't take that now.");
+    await input(page).fill("Try again");
+    await input(page).press("Enter");
+    await line.getByText("It can't take that now.").waitFor();
+    assert.equal(await line.getByRole("button").count(), 0);
+    await page.close();
+  }),
+);
+
+test(
+  "a step that carries no call is its one line, with nothing to open",
+  withGateway(async (gateway) => {
+    const page = await open(gateway);
+    gateway.addMessage("a-reviewer", {
+      id: "n1",
+      role: "tool",
+      text: "Looked at the pull request",
+      at: new Date().toISOString(),
+    });
+    const note = panel(page).locator("p[data-call]", { hasText: "Looked at the pull request" });
+    await note.waitFor();
+    assert.equal(await note.getByRole("button").count(), 0);
+    await page.close();
   }),
 );
 

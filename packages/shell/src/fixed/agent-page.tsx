@@ -1,6 +1,5 @@
 import { MessageCircleIcon, Settings2Icon } from "lucide-react";
 import { useState } from "react";
-import { USAGE } from "../app.tsx";
 import { api, go, useLoad } from "../data.ts";
 import { signIn } from "../sign-in.ts";
 import { Button } from "../ui/button.tsx";
@@ -10,7 +9,7 @@ import { useChats } from "./chats.tsx";
 import { More, Power, Tip } from "./controls.tsx";
 import { ago, useAct, useCreatables } from "./data.ts";
 import { Frames } from "./frames.tsx";
-import { remedyOf } from "./notice.ts";
+import { openUsage, remedyOf } from "./notice.ts";
 import { Nothing, Scroll, StateDot } from "./parts.tsx";
 import { chosenNotes, partsOf } from "./stack.ts";
 import { useAgents } from "./watch.tsx";
@@ -72,11 +71,7 @@ export function AgentPage({ agent: id }: { agent: string }) {
     const working = watched.status?.state === "working";
     const action = !working && watched.problem && remedyOf(watched.problem);
     if (!action) return undefined;
-    if (action.run === "manage")
-      return {
-        label: action.label,
-        run: () => window.open(USAGE, "_blank", "noopener,noreferrer"),
-      };
+    if (action.run === "manage") return { label: action.label, run: openUsage };
     return { label: action.label, run: () => signIn() };
   })();
   const model = models?.models.find((m) => m.id === models.current)?.name ?? "Default";
