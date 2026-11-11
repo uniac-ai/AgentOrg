@@ -10,9 +10,11 @@
 #   chat;
 # - 0.0.7 and 0.0.8: an agent that must still run, whose two chats must be read, the older one
 #   added to.
-# Once a version is published, it gets a section here (not in the change that releases it: the
-# registry has it only after its tag). A section makes, with that version's own commands, what
-# the version let a person keep, then starts this build on that home and uses it.
+# Once a version is published, it gets a section here, or joins the loop of an earlier version
+# when it takes the same commands and the same is asked of this build on its home (not in the
+# change that releases it: the registry has it only after its tag). A section makes, with that
+# version's own commands, what the version let a person keep, then starts this build on that home
+# and uses it.
 # Run after `npm run build`.
 set -euo pipefail
 
@@ -328,19 +330,25 @@ wait_answers "$agentorg" ||
 echo "0.0.6's connection works here and is removed"
 stop_app
 
-# The versions whose homes hold chats as this build keeps them: the same is made on each, with
-# that version's own commands, and asked of this build.
+# 0.0.7 and 0.0.8 take the same commands to make an agent and two chats, and the same is asked of
+# this build on each home, so they share this section. A later version joins the list only while
+# both hold; one whose commands differ gets its own section after the loop. A published version
+# never changes, so one leaves the list only when this build must do something different with its
+# home. The homes differ: with no sign-in a 0.0.7 chat is its own work, whose turn failed; a 0.0.8
+# chat's message waits for the main loop under a mark, and this build puts the next message there
+# to the main loop with it. 0.0.8's work records, and messages that name their work, are written
+# only after a model answers, so no home here has them.
 for v in 0.0.7 0.0.8; do
   step "a home the published $v made: its agent runs and its chats are read on this build, the older one added to"
-  old="$work/old-$v"
-  mkdir "$old"
-  (cd "$old" && echo '{"private":true}' >package.json &&
+  oldv="$work/old-$v"
+  mkdir "$oldv"
+  (cd "$oldv" && echo '{"private":true}' >package.json &&
     npm install --silent --no-audit --no-fund --cache "$work/cache" "@agentorg/cli@$v")
-  was="$old/node_modules/.bin/agentorg"
-  uphome="$work/home-$v"
-  start_on "$was" "$uphome" "$work/old-$v.log"
+  was="$oldv/node_modules/.bin/agentorg"
+  homev="$work/home-$v"
+  start_on "$was" "$homev" "$work/old-$v.log"
   for _ in $(seq 1 120); do
-    "$was" call agents creatable --home "$uphome" >"$work/creatable-$v.json" 2>/dev/null &&
+    "$was" call agents creatable --home "$homev" >"$work/creatable-$v.json" 2>/dev/null &&
       grep -Eq '"id": ?"assistant"' "$work/creatable-$v.json" && break
     kill -0 "$pid" 2>/dev/null || { cat "$work/old-$v.log" >&2; exit 1; }
     sleep 0.5
@@ -351,21 +359,21 @@ for v in 0.0.7 0.0.8; do
     const { creatables: [one] } = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
     console.log(JSON.stringify({ stack: { base: { provider: one.provider, creatable: one.id }, units: [] }, name: "Elder" }));
   ' "$work/creatable-$v.json")"
-  "$was" call agents create "$create" --home "$uphome" >/dev/null
-  slot="$(chat_slot "$was" "$uphome")"
+  "$was" call agents create "$create" --home "$homev" >/dev/null
+  slot="$(chat_slot "$was" "$homev")"
   [ -n "$slot" ] || { echo "$v gave the person no chat" >&2; exit 1; }
   # The person has the slot as the agent is made; its chats answer once the agent has joined.
   answered=""
   for _ in $(seq 1 60); do
-    "$was" call "$slot" list --home "$uphome" >/dev/null 2>&1 && { answered=1; break; }
+    "$was" call "$slot" list --home "$homev" >/dev/null 2>&1 && { answered=1; break; }
     kill -0 "$pid" 2>/dev/null || break
     sleep 0.5
   done
   [ -n "$answered" ] || { echo "$v's chats never answered" >&2; cat "$work/old-$v.log" >&2; exit 1; }
-  # Two chats, as that version kept them: with no sign-in each holds its message and no answer.
-  # The id of the chat a message ($1) starts on that version.
+  # Two chats, as the version kept them: with no sign-in each holds its message and no answer.
+  # The id of the chat a message ($1) starts on the version.
   started() {
-    "$was" call "$slot" send "{\"text\":\"$1\"}" --home "$uphome" |
+    "$was" call "$slot" send "{\"text\":\"$1\"}" --home "$homev" |
       node -e '
         const { chat } = JSON.parse(require("fs").readFileSync(0, "utf8"));
         if (!chat) process.exit(1);
@@ -375,22 +383,22 @@ for v in 0.0.7 0.0.8; do
   first="$(started "Said on $v.")" || { echo "$v started no chat" >&2; exit 1; }
   second="$(started "A second chat.")" || { echo "$v started no second chat" >&2; exit 1; }
   stop_app
-  start_on "$agentorg" "$uphome" "$work/up-$v.log"
-  # The chat interface is the one that version had, so the person keeps the slot: its chats answer once the
-  # agent is back.
+  start_on "$agentorg" "$homev" "$work/up-$v.log"
+  # The chat interface is the one the version had, so the person keeps the slot: its chats
+  # answer once the agent is back.
   for _ in $(seq 1 120); do
-    [ "$(chat_slot "$agentorg" "$uphome")" = "$slot" ] &&
-      "$agentorg" call "$slot" list --home "$uphome" >"$work/chats-$v.json" 2>/dev/null && break
+    [ "$(chat_slot "$agentorg" "$homev")" = "$slot" ] &&
+      "$agentorg" call "$slot" list --home "$homev" >"$work/chats-$v.json" 2>/dev/null && break
     kill -0 "$pid" 2>/dev/null || { cat "$work/up-$v.log" >&2; exit 1; }
     sleep 0.5
   done
   [ -s "$work/chats-$v.json" ] ||
     { echo "The person lost the $v agent's chats on this build" >&2; cat "$work/up-$v.log" >&2; exit 1; }
-  # A message in the older chat is kept after what that version kept there.
-  "$agentorg" call "$slot" send "{\"chat\":\"$first\",\"text\":\"And on this build.\"}" --home "$uphome" >/dev/null
-  "$agentorg" call "$slot" history "{\"chat\":\"$first\"}" --home "$uphome" >"$work/history-$v.json"
-  "$agentorg" call "$slot" history "{\"chat\":\"$second\"}" --home "$uphome" >"$work/history-$v-second.json"
-  "$agentorg" call agents list --home "$uphome" >"$work/agents-$v.json"
+  # A message in the older chat is kept after what the version kept there.
+  "$agentorg" call "$slot" send "{\"chat\":\"$first\",\"text\":\"And on this build.\"}" --home "$homev" >/dev/null
+  "$agentorg" call "$slot" history "{\"chat\":\"$first\"}" --home "$homev" >"$work/history-$v.json"
+  "$agentorg" call "$slot" history "{\"chat\":\"$second\"}" --home "$homev" >"$work/history-$v-second.json"
+  "$agentorg" call agents list --home "$homev" >"$work/agents-$v.json"
   node -e '
     const v = process.argv[5];
     const read = (f) => JSON.parse(require("fs").readFileSync(f, "utf8"));
