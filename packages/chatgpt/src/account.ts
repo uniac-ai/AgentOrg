@@ -61,7 +61,7 @@ const MAX_PENDING = 16;
 const REFRESH_BEFORE = 5 * 60_000;
 
 export const notSignedIn = () =>
-  new Refused("not_signed_in", "Not signed in to ChatGPT. Continue with ChatGPT to sign in.");
+  new Refused("not_signed_in", "Not signed in to ChatGPT. Sign in to it to go on.");
 export const notEligible = () =>
   new Refused(
     "ineligible",
