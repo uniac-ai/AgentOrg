@@ -314,9 +314,22 @@ test("a turn cut off as the app stops goes on when it is started again, with the
   const fake = await fakeOpenAI();
   const asked: { instructions: string; said: unknown }[] = [];
   let held = false;
+  /** How often the agent's main loop was asked whose a message is: it says new work. */
+  let routed = 0;
   const s = await open(t, undefined, async (request) => {
     if (!request.url.endsWith("/responses")) return fake.handle(request);
-    const body = (await request.clone().json()) as { instructions: string; input: unknown[] };
+    const body = (await request.clone().json()) as {
+      instructions: string;
+      input: unknown[];
+      tools?: { name: string }[];
+    };
+    if (body.tools?.some((tool) => tool.name === "route")) {
+      const call = { type: "function_call", call_id: `r${++routed}`, name: "route" };
+      fake.script({
+        events: [completed([{ ...call, arguments: '{"title":"Long"}' }])],
+      });
+      return fake.handle(request);
+    }
     asked.push({ instructions: body.instructions, said: body.input.at(-1) });
     return held ? new Promise<Response>(() => {}) : fake.handle(request);
   });
@@ -354,6 +367,8 @@ test("a turn cut off as the app stops goes on when it is started again, with the
     "Went on.",
   ]);
   assert.equal(asked.length, 2);
+  // The message was given to its work before the stop: nobody is asked whose it is again.
+  assert.equal(routed, 1);
   // Told what its settings say, which only management can answer.
   assert.match(String(asked[1]?.instructions), /What you are for: Scouting ahead\./);
   assert.match(JSON.stringify(asked[1]?.said), /cut off by a restart/);

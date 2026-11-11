@@ -128,7 +128,7 @@ test("a stop or a close that lands as a turn would go on stays one", async () =>
   }
 });
 
-test("a thread with a turn of its own keeps its mark for that turn, and is not gone on with", async () => {
+test("work with a turn of its own keeps its mark for that turn, and is not gone on with", async () => {
   const first = looperWith();
   await first.fill(["a"]);
   const read = gate();
@@ -151,7 +151,7 @@ test("a thread with a turn of its own keeps its mark for that turn, and is not g
   assert.deepEqual(marks(second.values), []);
 });
 
-test("a turn that can't go on now keeps its mark, and a thread with nothing kept has none to go on with", async () => {
+test("a turn that can't go on now keeps its mark, and work with nothing kept has none to go on with", async () => {
   const first = looperWith();
   await first.fill(["a"]);
   first.values.set("unfinished/empty", true);
@@ -177,7 +177,7 @@ test("a turn that can't go on now keeps its mark, and a thread with nothing kept
   await second.looper.stop();
 });
 
-test("a thread that has had a turn since is not gone on with, however late its mark is read", async () => {
+test("work that has had a turn since is not gone on with, however late its mark is read", async () => {
   const first = looperWith();
   await first.fill(["a", "b"]);
   const read = gate();
@@ -202,7 +202,7 @@ test("a thread that has had a turn since is not gone on with, however late its m
   await second.looper.stop();
 });
 
-test("closing as the marks are read starts nothing and leaves them, and a message recorded as it closes is marked", async () => {
+test("closing as the marks are read starts nothing and leaves them, and a message recorded as it closes waits to be placed", async () => {
   const first = looperWith();
   await first.fill(["a", "b"]);
   const listed = gate();
@@ -229,11 +229,15 @@ test("closing as the marks are read starts nothing and leaves them, and a messag
   written.open();
   await sending;
   await third.looper.settled();
-  assert.deepEqual(marks(third.values), ["unfinished/c"]);
+  // Nobody had said whose it is: it waits for the main loop, which the next looper asks.
+  assert.ok(third.values.has("unrouted/c"));
+  assert.deepEqual(third.routed, []);
   const fourth = looperWith({ values: third.values });
   await fourth.looper.resume();
   await until(() => fourth.asked.length === 1, "its turn");
-  assert.deepEqual(fourth.inputs, [["Just before.", TOLD]]);
+  assert.equal(fourth.routed.length, 1);
+  assert.deepEqual(fourth.inputs, [["Just before."]]);
+  assert.equal(fourth.values.has("unrouted/c"), false);
   await fourth.looper.stop();
 });
 

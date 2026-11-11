@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createRecord, fitted, head, INPUT_BUDGET } from "../src/record.ts";
+import { createRecord, createThread, fitted, head, INPUT_BUDGET } from "../src/record.ts";
+import type { Store } from "../src/types.ts";
 
 /** A store in memory, as the record uses it. */
 function store() {
@@ -25,6 +26,25 @@ function store() {
   };
 }
 const log = { info() {}, warn() {}, error() {} };
+/** A piece of work that follows only its own thread, `t`, kept in a store. */
+function single(calls: Store, limits?: { keep: number; keepBytes: number }) {
+  const thread = createThread(calls, log, limits);
+  const record = createRecord({ id: "t", follows: () => ["t"], thread: () => thread });
+  type Said = Parameters<typeof record.append>[0];
+  return {
+    append: async (entry: Said, id?: string, read?: number) =>
+      (
+        await record.append(entry, {
+          thread: "t",
+          ...(id === undefined ? {} : { id }),
+          ...(read === undefined ? {} : { read }),
+        })
+      ).entry,
+    page: thread.page,
+    input: record.input,
+    saidAfter: record.saidAfter,
+  };
+}
 const user = (content: string) => ({
   role: "user" as const,
   items: [{ type: "message" as const, role: "user" as const, content }],
@@ -32,7 +52,7 @@ const user = (content: string) => ({
 
 test("the oldest messages are deleted past the cap, by count and by bytes", async () => {
   const s = store();
-  const record = createRecord(s.calls as never, log, { keep: 5, keepBytes: 1_000_000 });
+  const record = single(s.calls as never, { keep: 5, keepBytes: 1_000_000 });
   for (let i = 1; i <= 12; i++) await record.append(user(`m${i}`));
   assert.equal(s.values.size, 5);
   const page = await record.page(undefined, 100);
@@ -41,7 +61,7 @@ test("the oldest messages are deleted past the cap, by count and by bytes", asyn
     ["m8", "m9", "m10", "m11", "m12"],
   );
   // A restart reads only what is kept, and numbers go on.
-  const again = createRecord(s.calls as never, log, { keep: 5, keepBytes: 1_000_000 });
+  const again = single(s.calls as never, { keep: 5, keepBytes: 1_000_000 });
   await again.append(user("m13"));
   assert.deepEqual(
     (await again.page(undefined, 100)).messages.map((m) => m.text),
@@ -49,7 +69,7 @@ test("the oldest messages are deleted past the cap, by count and by bytes", asyn
   );
 
   const t = store();
-  const bytes = createRecord(t.calls as never, log, { keep: 1000, keepBytes: 2_000 });
+  const bytes = single(t.calls as never, { keep: 1000, keepBytes: 2_000 });
   for (let i = 0; i < 10; i++) await bytes.append(user("x".repeat(500)));
   assert.ok(t.values.size <= 4);
 });
@@ -64,7 +84,7 @@ test("text is cut at a character and says so", () => {
 
 test("the record is first read a few at a time, in order", async () => {
   const s = store();
-  const writer = createRecord(s.calls as never, log);
+  const writer = single(s.calls as never);
   for (let i = 1; i <= 50; i++) await writer.append(user(`m${i}`));
   let reading = 0;
   let most = 0;
@@ -75,7 +95,7 @@ test("the record is first read a few at a time, in order", async () => {
     reading--;
     return get(input);
   };
-  const page = await createRecord(s.calls as never, log).page(undefined, 100);
+  const page = await single(s.calls as never).page(undefined, 100);
   assert.deepEqual(
     page.messages.map((m) => m.text),
     Array.from({ length: 50 }, (_, i) => `m${i + 1}`),
@@ -84,7 +104,7 @@ test("the record is first read a few at a time, in order", async () => {
 });
 
 test("a message said during a turn is read after what was asked for without it, in one exchange", async () => {
-  const record = createRecord(store().calls as never, log);
+  const record = single(store().calls as never);
   const reply = (content: string) => ({
     role: "assistant" as const,
     items: [{ type: "message" as const, role: "assistant" as const, content }],
@@ -118,7 +138,7 @@ test("a message said during a turn is read after what was asked for without it, 
 
 test("a user message is sent to the model only once it is stored", async () => {
   const s = store();
-  const record = createRecord(s.calls as never, log);
+  const record = single(s.calls as never);
   await record.append(user("open"));
   let stored: () => void = () => {};
   const set = s.calls.set;
@@ -137,4 +157,54 @@ test("a user message is sent to the model only once it is stored", async () => {
   // Stored, it is after what that request read.
   assert.equal(await record.saidAfter(before.read), true);
   assert.equal((await record.input()).items.length, 2);
+});
+
+test("a piece of work that follows two threads reads its messages in the order they were kept", async () => {
+  const a = createThread(store().calls as never, log);
+  const c = createThread(store().calls as never, log);
+  const following = ["a"];
+  const record = createRecord({
+    id: "a",
+    follows: () => following,
+    thread: (name) => (name === "a" ? a : c),
+  });
+  const said = (content: string) => user(content);
+  const reply = (content: string) => ({
+    role: "assistant" as const,
+    items: [{ type: "message" as const, role: "assistant" as const, content }],
+  });
+  await record.append(said("in a"), { thread: "a" });
+  await record.append(reply("to a"), { thread: "a" });
+  // A message kept in another thread before the work followed it names no work yet.
+  const held = await c.load();
+  await c.push(held, said("in c")).stored;
+  assert.equal(await record.where(), "a");
+  following.push("c");
+  await record.adopt("c", false);
+  assert.deepEqual(
+    held.records.map(({ entry }) => [entry.work, entry.place]),
+    [["a", 3]],
+  );
+  // It answers where its newest message is, and that reply says whose it is too.
+  assert.equal(await record.where(), "c");
+  const kept = await record.append(reply("to c"), { thread: "c" });
+  assert.deepEqual([kept.entry.work, kept.entry.place], ["a", 4]);
+  // Back in its own thread, a message has its place in the work's order, and names no work.
+  const own = await record.append(said("in a again"), { thread: "a" });
+  assert.deepEqual([own.entry.work, own.entry.place], [undefined, 5]);
+  const { items, thread } = await record.input();
+  assert.deepEqual(
+    items.map((item) => (item.type === "message" ? item.content : "")),
+    ["in a", "to a", "in c", "to c", "in a again"],
+  );
+  assert.equal(thread, "a");
+  // Each thread shows what was said in it, and nothing of the other.
+  assert.deepEqual(
+    (await c.page(undefined, 10)).messages.map((message) => message.text),
+    ["in c", "to c"],
+  );
+  assert.deepEqual(
+    (await a.page(undefined, 10)).messages.map((message) => message.text),
+    ["in a", "to a", "in a again"],
+  );
 });

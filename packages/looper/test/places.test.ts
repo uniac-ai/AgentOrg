@@ -28,7 +28,7 @@ test("turns run side by side up to the places; the next waits its turn, its mess
   assert.ok(said.includes("f: assistant: Done."));
 });
 
-test("a thread already begun takes one more place, so new threads never keep a message from it", async () => {
+test("work already begun takes one more place, so new work never keeps a message from it", async () => {
   const { looper, asked, answer, fill } = looperWith();
   for (const begun of ["x", "y"]) {
     await looper.send(begun, `Start ${begun}.`);
@@ -58,26 +58,33 @@ test("a thread already begun takes one more place, so new threads never keep a m
   await looper.settled();
 });
 
-test("the line for a place holds so many turns; past that a message is refused, and nothing of it is kept", async () => {
-  const { looper, said, asked, answer, fill } = looperWith();
+test("the line for a place holds so many turns; past that a new thread's message is kept and told it got no answer", async () => {
+  const { looper, said, asked, failures, answer, fill } = looperWith();
   await fill(["old"]);
   answer("Work old.");
   await looper.settled();
   await fill(["a", "b", "c", "d"]);
   for (let i = 0; i < WAITING; i++) await looper.send(`waits ${i}`, "Work.");
+  // It is taken like any message: what can't start is its work.
+  await looper.send("one more", "Hello.");
+  await idle();
+  assert.ok(said.includes("one more: user: Hello."));
+  assert.deepEqual(failures, ["one more: busy"]);
+  assert.deepEqual(looper.state("one more"), { state: "idle" });
+  // Its work has done nothing yet, so its next message has no claim on the one more place, and
+  // nothing of it is kept.
   const full = {
     name: "Refusal",
     code: "busy",
     message: "Too many turns are waiting. Wait for one to start.",
   };
-  await assert.rejects(looper.send("one more", "Hello."), full);
-  assert.ok(!said.includes("one more: user: Hello."));
-  assert.deepEqual((await looper.page("one more", undefined, 10)).messages, []);
-  assert.deepEqual(looper.state("one more"), { state: "idle" });
-  // The one more place is still there for a thread already begun.
+  await assert.rejects(looper.send("one more", "Me first?"), full);
+  // That place is still there for work already begun.
   await looper.send("old", "More old.");
   await idle();
   assert.equal(asked.at(-1), "More old.");
+  await assert.rejects(looper.send("one more", "Anyone?"), full);
+  assert.ok(!said.includes("one more: user: Anyone?"));
   // A turn that leaves the line makes room in it.
   await looper.cancel("waits 0");
   await looper.send("one more", "Hello again.");

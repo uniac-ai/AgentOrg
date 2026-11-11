@@ -57,7 +57,8 @@ test("a message said while a tool runs is in the next request, after the call", 
 test("a message being recorded as its turn would end is answered by that turn", async () => {
   const late = gate();
   const { looper, asked, answer } = looperWith({
-    writing: (key) => (key.endsWith("000000000002") ? late.shut : undefined),
+    writing: (key) =>
+      key.startsWith("thread/") && key.endsWith("000000000002") ? late.shut : undefined,
   });
   await looper.send("a", "First.");
   await until(() => asked.length === 1, "the request");
@@ -131,7 +132,8 @@ test("messages are recorded in the order they were said, though the first waits 
 test("a cancel stays a cancel: what was asked before it starts and continues nothing", async () => {
   const late = gate();
   const { looper, said, asked } = looperWith({
-    writing: (key) => (key.endsWith("000000000002") ? late.shut : undefined),
+    writing: (key) =>
+      key.startsWith("thread/") && key.endsWith("000000000002") ? late.shut : undefined,
   });
   await looper.send("a", "First.");
   await until(() => asked.length === 1, "the request");
@@ -150,7 +152,8 @@ test("a cancel stays a cancel: what was asked before it starts and continues not
   // anything else, and both are kept.
   const slow = gate();
   const other = looperWith({
-    writing: (key) => (key.endsWith("000000000002") ? slow.shut : undefined),
+    writing: (key) =>
+      key.startsWith("thread/") && key.endsWith("000000000002") ? slow.shut : undefined,
   });
   await other.looper.send("b", "First.");
   await until(() => other.asked.length === 1, "the request");
@@ -171,7 +174,8 @@ test("a turn cancelled as it ends holds nothing up: the next message starts its 
   for (const joins of [false, true]) {
     const late = gate();
     const { looper, asked, answer } = looperWith({
-      writing: (key) => (key.endsWith("000000000002") ? late.shut : undefined),
+      writing: (key) =>
+        key.startsWith("thread/") && key.endsWith("000000000002") ? late.shut : undefined,
     });
     await looper.send("a", "First.");
     await until(() => asked.length === 1, "the request");
@@ -195,7 +199,8 @@ test("a turn cut as its reply is written writes what it will before anything new
   const late = gate();
   const { looper, asked, answer } = looperWith({
     tools: [tool],
-    writing: (key) => (key.endsWith("000000000002") ? late.shut : undefined),
+    writing: (key) =>
+      key.startsWith("thread/") && key.endsWith("000000000002") ? late.shut : undefined,
   });
   await looper.send("a", "First.");
   await until(() => asked.length === 1, "the request");
@@ -217,7 +222,8 @@ test("a turn cut as its reply is written writes what it will before anything new
 test("a first message the store refuses, with a second behind it, leaves the thread's loop in use", async () => {
   const first = gate();
   const { looper, asked } = looperWith({
-    writing: (key) => (key.endsWith("000000000001") ? first.shut : undefined),
+    writing: (key) =>
+      key.startsWith("thread/") && key.endsWith("000000000001") ? first.shut : undefined,
   });
   const one = looper.send("a", "One.");
   const two = looper.send("a", "Two.");
@@ -236,7 +242,8 @@ test("a message the store refuses while its turn runs is never read by the model
   const late = gate();
   const { looper, asked, inputs, answer } = looperWith({
     tools: [tool],
-    writing: (key) => (key.endsWith("000000000002") ? late.shut : undefined),
+    writing: (key) =>
+      key.startsWith("thread/") && key.endsWith("000000000002") ? late.shut : undefined,
   });
   await looper.send("a", "Hold it.");
   await until(() => asked.length === 1, "the request");
