@@ -94,7 +94,7 @@ test("a message said as its turn ends starts the next turn", async () => {
   await until(() => asked.length === 2, "the next turn's request");
   await again;
   assert.deepEqual(inputs[1], ["First.", "First done.", "Second."]);
-  // It opened a turn of its own: it is not kept as said during the first.
+  // It opened a turn of its own, with no stopped turn still writing: it is not kept as joined.
   assert.equal("joined" in (values.get("thread/a/msg/000000000003") as object), false);
   assert.deepEqual(looper.state("a"), { state: "thinking" });
   answer("Second.");
@@ -102,30 +102,46 @@ test("a message said as its turn ends starts the next turn", async () => {
   assert.deepEqual(looper.state("a"), { state: "idle" });
 });
 
-test("messages are recorded in the order they were said, though the first waits for a cut turn's call", async () => {
+test("messages said while a cut turn's call still runs are recorded at once, and their turn reads them after that call's result", async () => {
   const { tool, called, finish } = held();
-  const { looper, asked, inputs, answer } = looperWith({ tools: [tool] });
+  const { looper, said, asked, inputs, answer } = looperWith({ tools: [tool] });
   await looper.send("a", "Hold it.");
   await until(() => asked.length === 1, "the request");
   answer("Hold it.", called);
+  await until(() => said.includes("a: tool: hold: running"), "the call to start");
+  await looper.cancel("a");
+  // Both are kept and said while the call runs; the turn they start is shown, and asks nothing yet.
+  const sending = [looper.send("a", "First."), looper.send("a", "Second.")];
+  await until(() => said.at(-1) === "a: user: Second.", "both to be said");
+  await Promise.all(sending);
+  assert.deepEqual(await texts(looper, "a"), ["Hold it.", "First.", "Second."]);
+  assert.deepEqual(said.slice(-2), ["a: user: First.", "a: user: Second."]);
+  assert.deepEqual(looper.state("a"), { state: "thinking" });
+  await idle();
+  assert.equal(asked.length, 1);
+  finish();
+  await until(() => asked.length === 2, "the request");
+  assert.deepEqual(inputs[1], ["Hold it.", "call hold", "output held", "First.", "Second."]);
+  await looper.stop();
+});
+
+test("a message said while a cut turn's reply is still being stored is recorded at once, and read after that reply", async () => {
+  const late = gate();
+  const { looper, said, asked, inputs, answer } = looperWith({
+    writing: (key) => (key === "thread/a/msg/000000000002" ? late.shut : undefined),
+  });
+  await looper.send("a", "First.");
+  await until(() => asked.length === 1, "the request");
+  answer("First.", says("First done."));
   await idle();
   await looper.cancel("a");
-  // The first waits for the call's record; the second, said in its turn, comes after it.
-  const first = looper.send("a", "First.");
-  const second = looper.send("a", "Second.");
+  await looper.send("a", "Second.");
+  assert.equal(said.at(-1), "a: user: Second.");
   await idle();
-  finish();
-  await Promise.all([first, second]);
-  assert.deepEqual(await texts(looper, "a"), ["Hold it.", "hold: done", "First.", "Second."]);
-  // Whichever request first reads the second, it reads it after the first.
+  assert.equal(asked.length, 1);
+  late.open();
   await until(() => asked.length === 2, "the request");
-  if (!inputs[1]?.includes("Second.")) {
-    answer("First.", says("First done."));
-    await until(() => asked.length === 3, "the request that reads the second");
-  }
-  const read = inputs.at(-1) ?? [];
-  assert.ok(read.indexOf("First.") < read.indexOf("Second."));
-  assert.ok(read.indexOf("output held") < read.indexOf("First."));
+  assert.deepEqual(inputs[1], ["First.", "First done.", "Second."]);
   await looper.stop();
 });
 
@@ -194,7 +210,7 @@ test("a turn cancelled as it ends holds nothing up: the next message starts its 
   }
 });
 
-test("a turn cut as its reply is written writes what it will before anything new is recorded", async () => {
+test("the looper's stop waits for what a turn cut as its reply is written still writes", async () => {
   const { tool, called } = held();
   const late = gate();
   const { looper, asked, answer } = looperWith({

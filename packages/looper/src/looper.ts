@@ -420,13 +420,11 @@ export function createLooper(options: {
   /** The work there is, as the main loop is told of it: in a turn first, then the latest at rest. */
   const listed = async (): Promise<Listed[]> => {
     const turnOf = (id: string) => works.get(id)?.loop.turn();
-    // Work that has a record, and work in a turn that has none yet; none whose stopped turn is
-    // still to write something, which starts no turn until it has.
-    const ids = new Set(
-      [...kept.keys(), ...[...works.keys()].filter((id) => turnOf(id) !== undefined)].filter(
-        (id) => !works.get(id)?.loop.draining(),
-      ),
-    );
+    // Work that has a record, and work in a turn that has none yet.
+    const ids = new Set([
+      ...kept.keys(),
+      ...[...works.keys()].filter((id) => turnOf(id) !== undefined),
+    ]);
     const all = await Promise.all(
       [...ids].map(async (id) => {
         const title = await titleOf(id);
@@ -716,13 +714,12 @@ export function createLooper(options: {
 
   return {
     /**
-     * Say a message in a thread. It is recorded and said at once, but for one that waits for a
-     * stopped turn to have written what it will. In a thread a piece of work follows it is that work's:
-     * with no turn of it running it starts one, which waits for a place if none is free, and a
-     * turn running or waiting takes it at its next model request. In a thread nothing follows,
-     * the main loop answers it or says whose it is first. Refused `busy` while `WAITING` turns
-     * already wait and it would start one more, or while the looper is stopped; and
-     * `unavailable` once it has closed.
+     * Say a message in a thread. It is recorded and said at once. In a thread a piece of work
+     * follows it is that work's: with no turn of it running it starts one, which waits for a place
+     * if none is free, and a turn running or waiting takes it at its next model request. In a
+     * thread nothing follows, the main loop answers it or says whose it is first. Refused `busy`
+     * while `WAITING` turns already wait and it would start one more, or while the looper is
+     * stopped; and `unavailable` once it has closed.
      */
     send(thread: string, text: string) {
       try {

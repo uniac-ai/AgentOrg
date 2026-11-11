@@ -131,7 +131,8 @@ test("a turn cancelled before it asks for a place takes none", async () => {
   await idle();
   assert.equal(asked.at(-1), "More x.", "five run, and one waits");
 
-  // Cut in its call, the thread is free for a message, which first waits for the call to end.
+  // Cut in its call, the thread is free for a message, kept at once; a cancel before it is taken
+  // leaves it no turn and no place.
   await looper.cancel("a");
   const sending = looper.send("a", "Again.");
   await looper.cancel("a");

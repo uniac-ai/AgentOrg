@@ -19,9 +19,9 @@ export const Entry = z.object({
   /** For a tool message whose call ran: how it ended. */
   state: z.enum(["done", "refused"]).optional(),
   /**
-   * For a user message said while a turn was running: it is part of that turn. Also for what the
-   * main loop said in a thread, taken with such messages or said as it stopped the turn: it stays
-   * in its place among them.
+   * For a user message said while a turn was running, or while a stopped turn was still writing:
+   * it is part of that turn. Also for what the main loop said in a thread, taken with such
+   * messages or said as it stopped the turn: it stays in its place among them.
    */
   joined: z.literal(true).optional(),
   /**
@@ -479,7 +479,7 @@ export function createRecord(options: {
       keep(thread, (from) => ({ ...mainEntry(text, from.last), joined: true as const }), {}),
     /**
      * Take the messages waiting in `thread`, which it has come to follow, as its own: `joined`,
-     * when a turn of its is running. It says how many there were to answer: in its own thread,
+     * when a turn of its is running or a stopped one is still writing. It says how many there were to answer: in its own thread,
      * where nothing needs taking, those said since it last did anything itself.
      */
     async adopt(thread: string, joined: boolean): Promise<number> {
@@ -523,7 +523,7 @@ export function createRecord(options: {
       return first ? textOf(first.record.entry) : "";
     },
     /**
-     * The conversation to send: the newest exchanges (each from the user message that starts a turn
+     * The conversation to send: the newest exchanges (each from a user message that is not `joined`
      * on) that fit the budget, and always the latest two, so "go on" after a long turn still has
      * that turn. When those two are over the budget, their oldest function arguments and outputs
      * are left out, each call still paired with an output. A message said during a turn comes after
