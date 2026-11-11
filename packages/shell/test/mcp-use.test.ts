@@ -116,6 +116,11 @@ const withTask = (run: (gateway: Gateway) => Promise<void>) => async () => {
 const openChat = async (page: Page) => {
   await page.getByRole("main").getByRole("button", { name: "Chat", exact: true }).click();
   const panel = page.getByRole("complementary", { name: "Chats" });
+  await panel
+    .getByRole("list", { name: /^Earlier chats/ })
+    .getByRole("button")
+    .first()
+    .click();
   await panel.getByRole("button", { name: /npm test/ }).waitFor();
   return panel;
 };

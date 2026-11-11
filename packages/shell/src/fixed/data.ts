@@ -70,11 +70,11 @@ export function useChatSlots(): ReadonlyMap<string, string> {
 }
 
 /**
- * Which of an agent's chats a view shows. A view shows one: the agent's newest that isn't archived
- * when the view first reads, or the one its first message starts. Once chosen it stays, so a chat
- * that becomes the newest later doesn't take the view over.
+ * Which of an agent's chats a view of the agent follows. It follows one: the agent's newest that
+ * isn't archived when the view first reads, or the first heard of after that. Once chosen it
+ * stays, so a chat that becomes the newest later doesn't take the view over.
  */
-export function chatView(slot: string) {
+function chatView(slot: string) {
   let shown: string | undefined;
   /** Whether the list has answered. Until it has, no event can say which chat this is. */
   let settled = false;
@@ -100,10 +100,6 @@ export function chatView(slot: string) {
           finding = undefined;
         });
       return finding;
-    },
-    /** A message of this view's started a chat: with none chosen, it is the one shown. */
-    started(started: string) {
-      shown ??= started;
     },
     /**
      * Hears an event, and says whether it is of the chat shown. This also chooses: with no chat

@@ -10,7 +10,7 @@ import { useChats } from "./chats.tsx";
 import { More, Power, Tip } from "./controls.tsx";
 import { ago, useAct, useCreatables } from "./data.ts";
 import { Frames } from "./frames.tsx";
-import { noticeOf } from "./notice.ts";
+import { remedyOf } from "./notice.ts";
 import { Nothing, Scroll, StateDot } from "./parts.tsx";
 import { chosenNotes, partsOf } from "./stack.ts";
 import { useAgents } from "./watch.tsx";
@@ -31,7 +31,7 @@ function Fact({ label, value, onClick }: { label: string; value: string; onClick
 /** One agent: what it's for and how it stands, then room for what it will show. */
 export function AgentPage({ agent: id }: { agent: string }) {
   const { byId, loaded, list } = useAgents();
-  const { chatWith } = useChats();
+  const { newChat } = useChats();
   const watched = byId.get(id);
   const creatables = useCreatables();
   const { catalog } = useBuilding();
@@ -70,7 +70,7 @@ export function AgentPage({ agent: id }: { agent: string }) {
       return { label: "Start", run: () => api.call("agents", "start", { agent: id }) };
     // While it works, its line says so: the problem is said again if the work fails too.
     const working = watched.status?.state === "working";
-    const action = !working && watched.problem && noticeOf(watched.problem).action;
+    const action = !working && watched.problem && remedyOf(watched.problem);
     if (!action) return undefined;
     if (action.run === "manage")
       return {
@@ -91,7 +91,11 @@ export function AgentPage({ agent: id }: { agent: string }) {
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-1">
-            <Button size="sm" onClick={() => chatWith(id)}>
+            <Button
+              size="sm"
+              disabled={entry.status.state === "stopped"}
+              onClick={() => newChat(id)}
+            >
               <MessageCircleIcon />
               Chat
             </Button>
