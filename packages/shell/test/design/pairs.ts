@@ -22,9 +22,14 @@ import {
   openWindow,
   readChat,
   refuseSend,
+  SIGN_INS,
+  type SignIn,
   sampleAgents,
   sampleChats,
   sampleLoad,
+  signInAccount,
+  signInHash,
+  signInState,
   startTerminals,
   stopAgent,
   unreadReply,
@@ -54,6 +59,8 @@ interface Screen {
   chats?: boolean;
   /** The built side's agents are the design's sample: what each is for, and Research's computer. */
   agents?: boolean;
+  /** The state of the two sign-ins the built side is in. */
+  signIn?: SignIn;
   /** A case the built side's sample chat is given. */
   given?: ChatCase;
   /** Terminals the built side is given, as the design's sample has them. */
@@ -343,6 +350,18 @@ const SCREENS: Screen[] = [
       part: (page) => page.getByRole("main").getByRole("group", { name: "Files" }),
     }),
   ),
+  ...SIGN_INS.map(
+    ([state, sizes]): Screen => ({
+      name: `signin-${state}`,
+      sizes: [...sizes],
+      themes: ["dark", "light"],
+      agents: true,
+      signIn: state,
+      hash: signInHash(state),
+      design: (page) => signInState(page, state, true),
+      built: (page) => signInState(page, state, false),
+    }),
+  ),
   {
     name: "agent-setup",
     sizes: ["wide", "phone"],
@@ -489,6 +508,7 @@ for (const screen of SCREENS)
         });
         if (gateway) {
           if (screen.agents) sampleAgents(gateway);
+          if (screen.signIn) signInAccount(gateway, screen.signIn);
           if (screen.browser) computerWith(gateway, "browser", !screen.watch);
           // A watcher opens no tab of its own: the one in front is there already.
           if (screen.browser && screen.watch)
@@ -501,10 +521,11 @@ for (const screen of SCREENS)
               "/home/sam/Agents/Research",
             );
           }
-          await page.addInitScript(
-            (session) => localStorage.setItem("agentorg.session", session),
-            SESSION,
-          );
+          if (screen.signIn !== "gone")
+            await page.addInitScript(
+              (session) => localStorage.setItem("agentorg.session", session),
+              SESSION,
+            );
           await page.goto(`${gateway.url}/${screen.hash ?? "#/"}`);
           await page
             .getByRole("button", { name: "Dismiss" })

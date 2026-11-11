@@ -288,6 +288,57 @@ export async function openFiles(page: Page, file?: string) {
   }
 }
 
+/**
+ * The states of the two sign-ins that are drawn, each with the widths it is shown at: the model
+ * account's on Home, an agent's line and a chat's place while signed out of it, and a tab with
+ * no AgentOrg sign-in of its own (`gone`).
+ */
+export const SIGN_INS = [
+  ["out", ["wide", "rail", "phone"]],
+  ["waiting", ["wide"]],
+  ["starting", ["wide"]],
+  ["ineligible", ["wide"]],
+  ["line", ["wide"]],
+  ["chat", ["wide"]],
+  ["gone", ["wide", "phone"]],
+] as const;
+export type SignIn = (typeof SIGN_INS)[number][0];
+/** The page a state is shown on, on the built side. */
+export const signInHash = (state: SignIn) =>
+  state === "line" || state === "chat" ? "#/a/a-reviewer" : "#/";
+/** The built side's model account, as a state has it. */
+export const signInAccount = (gateway: Gateway, state: SignIn) =>
+  gateway.setAccount(state === "ineligible" ? "ineligible" : "signed_out", state !== "starting");
+
+/**
+ * A page put in one of the model account's states and shown where it bites. The built side's
+ * account already stands that way; the design is put there by its own controls.
+ */
+export async function signInState(page: Page, state: SignIn, design: boolean) {
+  const main = page.getByRole("main");
+  if (design) {
+    if (state === "gone") return inDesign(page, /^AgentOrg:/);
+    // Its control goes from signed in to signed out, to starting, to not eligible.
+    const presses = state === "starting" ? 2 : state === "ineligible" ? 3 : 1;
+    for (let n = 0; n < presses; n++) await inDesign(page, /^ChatGPT:/);
+    if (state === "line" || state === "chat") await openDesignAgent(page, "Reviewer");
+  } else if (state === "gone") return main.getByRole("heading", { name: "AgentOrg" }).waitFor();
+  if (state === "line") return main.getByRole("button", { name: "Set up" }).waitFor();
+  if (state === "chat") {
+    await main.getByRole("button", { name: "Message" }).click();
+    return page.getByRole("group", { name: "Sign in to send" }).waitFor();
+  }
+  const place = main.getByRole("region", { name: "Set up" });
+  await place.waitFor();
+  if (state !== "waiting") return;
+  // ChatGPT's page is answered here: nothing leaves this computer.
+  await page
+    .context()
+    .route("https://auth.example/**", (route) => route.fulfill({ body: "ChatGPT" }));
+  await place.getByRole("button", { name: "Continue with ChatGPT" }).click();
+  await place.getByRole("button", { name: "Waiting for ChatGPT…" }).waitFor();
+}
+
 /** An agent stopped from its page, as a person stops it. */
 export async function stopAgent(page: Page, name: string) {
   const main = page.getByRole("main");

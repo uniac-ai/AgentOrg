@@ -6,6 +6,7 @@ import { type ListedChat, useAllChats } from "./all-chats.tsx";
 import { ChatRow } from "./chat-parts.tsx";
 import { useChats } from "./chats.tsx";
 import { useEvery } from "./data.ts";
+import { LeftToSetUp } from "./login.tsx";
 
 /** How many recent chats Home shows; the rest are a press away, in the list. */
 const RECENT = 6;
@@ -47,6 +48,7 @@ export function HomePage() {
   return (
     <div className="no-bar h-full overflow-y-auto">
       <div className="mx-auto flex max-w-[720px] flex-col gap-10 px-4 pt-6 pb-28">
+        <LeftToSetUp />
         {rows("Needs you", needs)}
         {rows("Recent", recent, true)}
       </div>

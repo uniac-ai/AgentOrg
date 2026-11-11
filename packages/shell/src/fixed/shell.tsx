@@ -10,7 +10,6 @@ import {
 } from "lucide-react";
 import { Dialog } from "radix-ui";
 import { useLayoutEffect, useRef, useState } from "react";
-import type { LoginStatus } from "../app.tsx";
 import { go, type Route, useRoute } from "../data.ts";
 import { Button } from "../ui/button.tsx";
 import { TooltipProvider } from "../ui/tooltip.tsx";
@@ -24,6 +23,7 @@ import { WORD } from "./data.ts";
 import { Face } from "./face.tsx";
 import { HomePage } from "./home-page.tsx";
 import { Layer } from "./layer.tsx";
+import { LoginProvider, type LoginStatus, useLogin } from "./login.tsx";
 import { McpsPage } from "./mcps-page.tsx";
 import { SettingsPage } from "./settings-page.tsx";
 import { SkillsPage } from "./skills-page.tsx";
@@ -41,7 +41,9 @@ export function FixedShell({ login }: { login?: LoginStatus }) {
           <AllChatsProvider>
             <BuildingProvider>
               <ComputersProvider>
-                <Frame login={login} />
+                <LoginProvider status={login}>
+                  <Frame />
+                </LoginProvider>
               </ComputersProvider>
             </BuildingProvider>
           </AllChatsProvider>
@@ -117,6 +119,7 @@ function LeftBar({
   const { list, byId } = useAgents();
   const { chats } = useAllChats();
   const { openChat } = useChats();
+  const login = useLogin();
   const [query, setQuery] = useState("");
   const rail = !drawer;
   const to = (next: Route) => {
@@ -146,6 +149,10 @@ function LeftBar({
       >
         <span className="relative">
           <HomeIcon className="size-[18px]" />
+          {/* Something is left to set up, and Home is where. */}
+          {login !== "in" && (
+            <span className="absolute -top-0.5 -right-1 size-2 rounded-full bg-[var(--warn)] ring-2 ring-[var(--canvas)]" />
+          )}
         </span>
       </BarRow>
       {/* Search, with Create beside it. This row stays put however long the list beneath grows. */}
@@ -234,7 +241,7 @@ function LeftBar({
   );
 }
 
-function Frame({ login }: { login?: LoginStatus }) {
+function Frame() {
   const route = useRoute();
   const { list } = useAgents();
   /** The whole bar as a drawer: from a phone's menu button, or from the rail's search. */
@@ -319,11 +326,7 @@ function Frame({ login }: { login?: LoginStatus }) {
           {route.screen === "skills" && <SkillsPage focus={route.focus} adding={route.adding} />}
           {route.screen === "mcps" && <McpsPage focus={route.focus} adding={route.adding} />}
           {route.screen === "settings" &&
-            (route.tab === "templates" ? (
-              <TemplatesPage />
-            ) : (
-              <SettingsPage tab={route.tab} login={login} />
-            ))}
+            (route.tab === "templates" ? <TemplatesPage /> : <SettingsPage tab={route.tab} />)}
         </main>
       </div>
       {/* Over the page, bar included: the one layer, with the chat. */}

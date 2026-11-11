@@ -25,6 +25,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { useBuilding } from "./building.tsx";
 import { useAct } from "./data.ts";
 import { FormField } from "./form.tsx";
+import { needsOf, useLogin } from "./login.tsx";
 import {
   type CatalogUnit,
   chosenNotes,
@@ -128,6 +129,8 @@ function Stack() {
   // Typing can start at once.
   useEffect(() => nameField.current?.focus(), []);
   const act = useAct();
+  // Made while signed out of the model account, an agent can't work yet: the foot says so.
+  const needs = needsOf(useLogin());
   const [saving, setSaving] = useState(false);
   if (!draft) return null;
   const ready = isReady(draft);
@@ -244,6 +247,11 @@ function Stack() {
             >
               Save as template…
             </Button>
+          )}
+          {!isTemplate && needs && (
+            <span className="min-w-0 flex-1 truncate text-[13px] text-muted-foreground">
+              {needs}
+            </span>
           )}
           {(act.failed || overall.length > 0) && (
             <p role="alert" className="mr-auto min-w-0 text-[13px] text-[var(--bad)]">
