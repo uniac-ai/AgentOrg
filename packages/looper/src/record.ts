@@ -18,7 +18,10 @@ export const Entry = z.object({
   items: z.array(Item),
   /** For a tool message whose call ran: how it ended. */
   state: z.enum(["done", "refused"]).optional(),
-  /** For a user message said while a turn was running: it is part of that turn. */
+  /**
+   * For a user message said while a turn was running: it is part of that turn. Also for a reply
+   * the main loop gave in a thread, taken with such messages: it stays in its place among them.
+   */
   joined: z.literal(true).optional(),
   /**
    * For what came of a model request that had read its work up to this place, when a user message
@@ -28,8 +31,14 @@ export const Entry = z.object({
   /** The piece of work it belongs to, when that isn't its thread's own. */
   work: z.string().optional(),
   /**
+   * For a reply the main loop gave itself, which no piece of work said: the number in its thread
+   * it had read up to. It stands after that message, ahead of any said after it.
+   */
+  main: z.number().optional(),
+  /**
    * Its place in its work's order, once that work follows more than one thread. Without it, its
-   * place is its number in its thread.
+   * place is where it stands in its thread: its number, or for a reply the main loop gave, right
+   * after what that had read.
    */
   place: z.number().optional(),
 });
@@ -137,6 +146,12 @@ interface Held {
   bytes: number;
 }
 
+/**
+ * Where a message stands in its thread: its number, but a reply the main loop gave stands right
+ * after what it had read, ahead of a message said while it answered.
+ */
+const orderOf = ({ seq, entry }: Kept) => (entry.main === undefined ? seq : entry.main + 0.5);
+
 /** A thread's messages in a store, by their numbers. */
 export function createThread(
   store: Store,
@@ -186,78 +201,106 @@ export function createThread(
     return attempt;
   };
 
+  /**
+   * Keep a message in a thread already read, at once, under `id` or its own number; `stored`
+   * settles when it is written and the oldest past the cap are deleted. A tool message the store
+   * refuses is still kept in memory, since its call has run; any other is taken out again.
+   */
+  const push = (held: Held, entry: Omit<Entry, "id" | "at">, id?: string) => {
+    const seq = ++held.last;
+    const key = keyOf(seq);
+    const record: Kept = {
+      seq,
+      key,
+      entry: kept({
+        id: id ?? key.slice(MESSAGES.length),
+        at: new Date().toISOString(),
+        ...entry,
+      }),
+      bytes: 0,
+      writing: entry.role === "user",
+    };
+    record.bytes = size(record.entry);
+    held.records.push(record);
+    held.bytes += record.bytes;
+    const stored = (async () => {
+      try {
+        await store.set({ key, value: record.entry as Json });
+        record.writing = false;
+      } catch (error) {
+        if (entry.role !== "tool") {
+          held.records.splice(held.records.indexOf(record), 1);
+          held.bytes -= record.bytes;
+          throw error;
+        }
+        log.error("A tool message couldn't be stored; it is kept until a restart.", {
+          error: String(error),
+        });
+      }
+      while (
+        held.records.length > 1 &&
+        (held.records.length > limits.keep || held.bytes > limits.keepBytes)
+      ) {
+        const oldest = held.records.shift() as Kept;
+        held.bytes -= oldest.bytes;
+        await store.delete({ key: oldest.key }).catch((error: unknown) =>
+          log.warn("An old message couldn't be deleted.", {
+            key: oldest.key,
+            error: String(error),
+          }),
+        );
+      }
+    })();
+    return { record, stored };
+  };
+
   return {
     /** What it holds, read once. */
     load,
+    push,
     /**
-     * Keep a message in a thread already read, at once, under `id` or its own number; `stored`
-     * settles when it is written and the oldest past the cap are deleted. A tool message the store
-     * refuses is still kept in memory, since its call has run; any other is taken out again.
+     * What was said in it, as a conversation: each message and each reply the main loop gave, in
+     * the order they were answered; and the number it holds up to.
      */
-    push(held: Held, entry: Omit<Entry, "id" | "at">, id?: string) {
-      const seq = ++held.last;
-      const key = keyOf(seq);
-      const record: Kept = {
-        seq,
-        key,
-        entry: kept({
-          id: id ?? key.slice(MESSAGES.length),
-          at: new Date().toISOString(),
-          ...entry,
-        }),
-        bytes: 0,
-        writing: entry.role === "user",
-      };
-      record.bytes = size(record.entry);
-      held.records.push(record);
-      held.bytes += record.bytes;
-      const stored = (async () => {
-        try {
-          await store.set({ key, value: record.entry as Json });
-          record.writing = false;
-        } catch (error) {
-          if (entry.role !== "tool") {
-            held.records.splice(held.records.indexOf(record), 1);
-            held.bytes -= record.bytes;
-            throw error;
-          }
-          log.error("A tool message couldn't be stored; it is kept until a restart.", {
-            error: String(error),
-          });
-        }
-        while (
-          held.records.length > 1 &&
-          (held.records.length > limits.keep || held.bytes > limits.keepBytes)
-        ) {
-          const oldest = held.records.shift() as Kept;
-          held.bytes -= oldest.bytes;
-          await store.delete({ key: oldest.key }).catch((error: unknown) =>
-            log.warn("An old message couldn't be deleted.", {
-              key: oldest.key,
-              error: String(error),
-            }),
-          );
-        }
-      })();
-      return { record, stored };
+    async said() {
+      const held = await load();
+      const said = held.records
+        .filter(({ entry }) => entry.role !== "tool")
+        .sort((a, b) => orderOf(a) - orderOf(b))
+        .map(({ entry }) => ({ role: entry.role as "user" | "assistant", text: textOf(entry) }));
+      return { said, upTo: held.last };
     },
     /**
-     * Keep a message as `entry` from now on: at once in memory, then in the store. A write the
-     * store refuses leaves it as it was.
+     * Keep, under `id`, a reply the main loop gave after it had read up to `upTo`. `late` says
+     * whether a message was said after that, which this reply doesn't answer.
      */
-    async rewrite(held: Held, record: Kept, entry: Entry) {
+    async answer(text: string, upTo: number, id: string) {
+      const held = await load();
+      const reply = {
+        role: "assistant" as const,
+        main: upTo,
+        items: [{ type: "message" as const, role: "assistant" as const, content: text }],
+      };
+      const { record, stored } = push(held, reply, id);
+      await stored;
+      const late = held.records.some(({ seq, entry }) => seq > upTo && entry.role === "user");
+      return { entry: record.entry, late };
+    },
+    /**
+     * Hold a message as `entry` from now on, in memory: `store` writes it as it then is, and
+     * `undo` puts it back as it was.
+     */
+    change(held: Held, record: Kept, entry: Entry) {
       const was = { entry: record.entry, bytes: record.bytes };
       const swap = (to: typeof was) => {
         held.bytes += to.bytes - record.bytes;
         Object.assign(record, to);
       };
       swap({ entry, bytes: size(entry) });
-      try {
-        await store.set({ key: record.key, value: entry as Json });
-      } catch (error) {
-        swap(was);
-        throw error;
-      }
+      return {
+        store: () => store.set({ key: record.key, value: record.entry as Json }),
+        undo: () => swap(was),
+      };
     },
     /** Messages before `before`, oldest first, as many as fit `limit` and `PAGE_BUDGET`. */
     async page(before: string | undefined, limit: number) {
@@ -286,8 +329,8 @@ export type Thread = ReturnType<typeof createThread>;
 /**
  * A piece of work's record: its messages across the threads it follows, in the order it took them.
  * Its id is the name of its own thread, whose messages are its unless they name another work; in
- * any other thread, the messages that name it are. A message's place is its number in its own
- * thread until the work follows a second thread, and a count kept with each message after. A
+ * any other thread, the messages that name it are. A message's place is where it stands in its
+ * own thread until the work follows a second thread, and a count kept with each message after. A
  * message waiting in a thread it follows, said before the work had the thread, names no work yet:
  * the work takes it, in the order it was said, before it keeps anything else there.
  */
@@ -298,7 +341,7 @@ export function createRecord(options: {
   thread(name: string): Thread;
 }) {
   const { id } = options;
-  const placeOf = (record: Kept) => record.entry.place ?? record.seq;
+  const placeOf = (record: Kept) => record.entry.place ?? orderOf(record);
   const mine = (thread: string, record: Kept) =>
     record.entry.work === undefined ? thread === id : record.entry.work === id;
 
@@ -317,9 +360,7 @@ export function createRecord(options: {
     const records = [...held].flatMap(([thread, { records }]) =>
       records.flatMap((record) => (mine(thread, record) ? [{ thread, record }] : [])),
     );
-    // One thread's messages are in order already.
-    if (held.size > 1) records.sort((a, b) => placeOf(a.record) - placeOf(b.record));
-    return records;
+    return records.sort((a, b) => placeOf(a.record) - placeOf(b.record));
   };
   /** The highest place among its messages. */
   const topOf = (records: Placed[]) => {
@@ -328,27 +369,40 @@ export function createRecord(options: {
   };
   /**
    * Take the messages waiting in `thread` as its own, after all it holds: at once in memory, and
-   * `written` settles when each is stored, or rejects with one that isn't and stays waiting. Like
-   * a message being written, the model is sent none of them until all are stored.
+   * `written` settles when each is stored, or rejects with the first that isn't, which stays
+   * waiting with those after it. Like a message being written, the model is sent none of them
+   * until that has settled.
    */
   const take = (held: Map<string, Held>, thread: string, joined: boolean) => {
     const from = held.get(thread) as Held;
-    const waiting = thread === id ? [] : from.records.filter(({ entry }) => !entry.work);
+    const waiting =
+      thread === id
+        ? []
+        : from.records.filter(({ entry }) => !entry.work).sort((a, b) => orderOf(a) - orderOf(b));
     let top = topOf(own(held));
-    const writes = waiting.map((record) =>
-      options.thread(thread).rewrite(from, record, {
+    // Each gets its place in the order it was said and answered: at once in memory.
+    const changes = waiting.map((record) => {
+      record.writing = true;
+      return options.thread(thread).change(from, record, {
         ...record.entry,
         work: id,
         place: ++top,
-        ...(joined && record.entry.role === "user" ? { joined: true as const } : {}),
-      }),
-    );
-    for (const record of waiting) record.writing = true;
-    const written = Promise.allSettled(writes).then((all) => {
-      for (const record of waiting) record.writing = false;
-      const refused = all.find((one) => one.status === "rejected");
-      if (refused) throw refused.reason;
+        ...(joined ? { joined: true as const } : {}),
+      });
     });
+    // Stored one after another in that order, so what a crash or a refusal leaves taken is the
+    // start of them: the rest stay waiting, and are taken after it.
+    const written = (async () => {
+      try {
+        for (const [i, change] of changes.entries())
+          await change.store().catch((error: unknown) => {
+            for (const rest of changes.slice(i)) rest.undo();
+            throw error;
+          });
+      } finally {
+        for (const record of waiting) record.writing = false;
+      }
+    })();
     return { taken: waiting.length, written };
   };
   /** Whether a user message of its follows the place `read`: one `stored` already, when asked. */
@@ -396,7 +450,7 @@ export function createRecord(options: {
     /**
      * Take the messages waiting in `thread`, which it has come to follow, as its own: `joined`,
      * when a turn of its is running. It says how many there were to answer: in its own thread,
-     * where nothing needs taking, those said since it last did anything.
+     * where nothing needs taking, those said since it last did anything itself.
      */
     async adopt(thread: string, joined: boolean): Promise<number> {
       const held = await load();
@@ -404,12 +458,26 @@ export function createRecord(options: {
       await written;
       if (thread !== id) return taken;
       const records = own(held);
-      const done = records.findLastIndex(({ record }) => record.entry.role !== "user");
-      return records.length - 1 - done;
+      const done = records.findLastIndex(
+        ({ record: { entry } }) => entry.role !== "user" && entry.main === undefined,
+      );
+      return records.slice(done + 1).filter(({ record }) => record.entry.role === "user").length;
     },
-    /** Whether it holds anything but what was said to it: it has had a turn that did something. */
+    /**
+     * Whether it has had a turn that did something: it holds more than what was said to it and
+     * what the main loop answered before it had the thread.
+     */
     async begun(): Promise<boolean> {
-      return own(await load()).some(({ record }) => record.entry.role !== "user");
+      return own(await load()).some(
+        ({ record: { entry } }) => entry.role !== "user" && entry.main === undefined,
+      );
+    },
+    /** What it last said, if anything. */
+    async last(): Promise<string | undefined> {
+      const said = own(await load()).findLast(
+        ({ record: { entry } }) => entry.role === "assistant" && entry.main === undefined,
+      );
+      return said ? textOf(said.record.entry) : undefined;
     },
     /** Whether it has no message. */
     async empty(): Promise<boolean> {

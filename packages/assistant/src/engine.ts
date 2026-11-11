@@ -49,9 +49,9 @@ export function startEngine(
    */
   const request = async () => {
     const settings = ctx.slots.settings.bound ? await ctx.slots.settings.call.get({}) : undefined;
-    const told = settings
-      ? instructionsWith(settings.instructions, settings.skills)
-      : { instructions: options.instructions(), leftOut: [] };
+    // The agent's own instructions: who its main loop speaks as, with nothing of its skills.
+    const voice = settings ? settings.instructions : options.instructions();
+    const told = instructionsWith(voice, settings?.skills ?? []);
     const own: Candidate[] = settings?.skills.length ? [skillTool(ctx.slots.settings)] : [];
     // In the order they came, each asked at once so one slow server delays only itself.
     const exposed = await Promise.all(
@@ -63,7 +63,13 @@ export function startEngine(
     const fitted = offered([...own, ...exposed.flatMap((one) => one.candidates)]);
     const leftOut = [...told.leftOut, ...exposed.flatMap((one) => one.leftOut), ...fitted.leftOut];
     report(leftOut);
-    return { instructions: told.instructions, tools: fitted.tools, model: await chosen(), leftOut };
+    return {
+      instructions: told.instructions,
+      tools: fitted.tools,
+      model: await chosen(),
+      voice,
+      leftOut,
+    };
   };
   /** The model slot as the looper asks it: what it refuses is told with its code. */
   const model: Model = {

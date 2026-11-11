@@ -1,23 +1,21 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { Json } from "../src/index.ts";
-import { MAIN_INSTRUCTIONS, put, ROUTE } from "../src/main.ts";
+import { MAIN_INSTRUCTIONS, ROUTE } from "../src/main.ts";
 import { gate, idle, looperWith, newWork, routeTo, says, until } from "./support.ts";
 
 const texts = async (looper: ReturnType<typeof looperWith>["looper"], thread: string) =>
   (await looper.page(thread, undefined, 50)).messages.map((message) => message.text);
 
 test("a message in a thread nothing follows is kept at once, and the main loop says it is new work", async () => {
-  const { looper, values, said, asked, routed, working, inputs, answer } = looperWith();
+  const { looper, values, said, asked, routed, mains, working, inputs, answer } = looperWith();
   const { messageId } = await looper.send("a", "Write the report.\nAll of it.");
   // Kept and said before the main loop has answered anything.
   assert.deepEqual(said, ["a: user: Write the report.\nAll of it."]);
   assert.ok(messageId);
   await until(() => asked.length === 1, "the work's request");
-  // The main loop was put the message, with no work under way to choose from.
-  assert.deepEqual(routed, [
-    "No work is under way.\n\nWhat came in:\nWrite the report.\nAll of it.",
-  ]);
+  // The main loop was put the message, with no work to choose from.
+  assert.deepEqual(mains[0]?.input, ["There is no work.", "Write the report.\nAll of it."]);
   // The work is the thread's own, with the title it was given, and reads the message as it is.
   assert.deepEqual(values.get("work/a"), { title: "Work", follows: ["a"] });
   assert.deepEqual(inputs[0], ["Write the report.\nAll of it."]);
@@ -46,15 +44,15 @@ test("the main loop's request is its own words, one function, and what came in w
     instructions: MAIN_INSTRUCTIONS,
     tools: [ROUTE],
     // Nothing of what it was put before, or decided.
-    input: ["Work under way:\n- a: The report\n\nWhat came in:\nAdd a chart to the report."],
+    input: ["The work there is:\n- a: The report (in a turn)", "Add a chart to the report."],
   });
   assert.match(MAIN_INSTRUCTIONS, /only when it points at that work explicitly/);
   await looper.stop();
 });
 
-test("an answer that calls nothing, or names work that isn't in a turn, starts new work titled by what came in", async () => {
+test("an answer that says and calls nothing, or names work there isn't, starts new work titled by what came in", async () => {
   const { looper, values, asked } = looperWith({
-    routing: (text) => (text.includes("One") ? says("It looks new.") : routeTo("nowhere")),
+    routing: (text) => (text.includes("One") ? [] : routeTo("nowhere")),
   });
   await looper.send("a", "\nOne  thing.\nAnd more.");
   await looper.send("b", "Two things.");
@@ -85,8 +83,8 @@ test("a thread kept before works had records is its own work: the main loop is n
   await looper.stop();
 });
 
-test("a message the main loop gives to work under way is answered by that work, in the thread it came in", async () => {
-  const { looper, values, said, asked, routed, inputs, answer } = looperWith({
+test("a message the main loop gives to work in a turn is answered by that work, in the thread it came in", async () => {
+  const { looper, values, said, asked, routed, mains, inputs, answer } = looperWith({
     // The second thread's message carries on the first one's work.
     routing: (text) => (text.includes("Add a chart.") ? routeTo("a") : newWork("The report")),
   });
@@ -95,7 +93,10 @@ test("a message the main loop gives to work under way is answered by that work, 
   await looper.send("c", "Add a chart.");
   await until(() => routed.length === 2, "the main loop to be asked");
   // It was offered the work at work, by its id and title.
-  assert.equal(routed[1], put(["Add a chart."], [{ id: "a", title: "The report" }]));
+  assert.deepEqual(mains[1]?.input, [
+    "The work there is:\n- a: The report (in a turn)",
+    "Add a chart.",
+  ]);
   answer("Write the report.", says("Report done."));
   // The work's turn takes the message at its next request, after the reply that hadn't read it.
   await until(() => asked.length === 2, "the request that reads it");
@@ -106,7 +107,10 @@ test("a message the main loop gives to work under way is answered by that work, 
   assert.deepEqual(await texts(looper, "a"), ["Write the report.", "Report done."]);
   assert.deepEqual(await texts(looper, "c"), ["Add a chart.", "Chart added."]);
   assert.ok(said.includes("c: assistant: Chart added."));
-  assert.deepEqual(values.get("work/a"), { title: "The report", follows: ["a", "c"] });
+  // Its record holds its title, the threads it follows, and since its turn ended what it last said.
+  const { at, ...kept } = values.get("work/a") as { at: string };
+  assert.deepEqual(kept, { title: "The report", follows: ["a", "c"], last: "Chart added." });
+  assert.ok(Date.parse(at) > 0);
   assert.equal(values.has("work/c"), false);
 
   // From then on a message in either thread is that work's, and it reads all of it.
@@ -197,7 +201,7 @@ test("a message being kept as the main loop's decision is taken goes to that wor
 });
 
 test("threads given to the same work one after another are both followed, and read in the order they came", async () => {
-  const { looper, values, asked, routed, inputs, answer } = looperWith({
+  const { looper, values, asked, routed, mains, inputs, answer } = looperWith({
     routing: (text) => (text.includes("Write") ? newWork("The report") : routeTo("a")),
   });
   await looper.send("a", "Write the report.");
@@ -206,7 +210,7 @@ test("threads given to the same work one after another are both followed, and re
   await looper.send("d", "And a table.");
   await until(() => !values.has("unrouted/d") && routed.length === 3, "both to be given");
   // The second decision was made once the first had been taken.
-  assert.match(String(routed[2]), /^Work under way:\n- a: The report\n/);
+  assert.equal(mains[2]?.input[0], "The work there is:\n- a: The report (in a turn)");
   assert.deepEqual(values.get("work/a"), { title: "The report", follows: ["a", "c", "d"] });
   answer("Write the report.", says("Report done."));
   await until(() => asked.length === 2, "the request that reads them");
@@ -236,7 +240,7 @@ test("a turn that fails tells every thread it had taken a message in", async () 
 
 test("a main loop that can't be asked leaves the message with no answer, and the next is put to it with the first", async () => {
   let refuse = true;
-  const { looper, values, asked, routed, failures, working, inputs } = looperWith({
+  const { looper, values, asked, mains, failures, working, inputs } = looperWith({
     routing: () => (refuse ? Promise.reject(new Error("no")) : undefined),
   });
   await looper.send("a", "First.");
@@ -249,7 +253,7 @@ test("a main loop that can't be asked leaves the message with no answer, and the
   refuse = false;
   await looper.send("a", "Second.");
   await until(() => asked.length === 1, "the work's request");
-  assert.equal(routed[1], "No work is under way.\n\nWhat came in:\nFirst.\n\nSecond.");
+  assert.deepEqual(mains[1]?.input, ["There is no work.", "First.", "Second."]);
   assert.deepEqual(inputs[0], ["First.", "Second."]);
   assert.equal(values.has("unrouted/a"), false);
   await looper.stop();
@@ -588,7 +592,7 @@ test("a message kept as the main loop's failure is recorded is put to it too", a
 
 test("the main loop is put the newest of what waits, and the start of each", async () => {
   let refuse = true;
-  const { looper, routed, failures, asked } = looperWith({
+  const { looper, mains, failures, asked } = looperWith({
     routing: () => (refuse ? Promise.reject(new Error("no")) : undefined),
   });
   for (let i = 0; i < 9; i++) {
@@ -598,8 +602,7 @@ test("the main loop is put the newest of what waits, and the start of each", asy
   refuse = false;
   await looper.send("a", "Last.");
   await until(() => asked.length === 1, "its work's turn");
-  const put = String(routed.at(-1)).split("What came in:\n")[1] ?? "";
-  const parts = put.split("\n\n");
+  const parts = mains.at(-1)?.input.slice(1) ?? [];
   assert.equal(parts.length, 8);
   assert.equal(parts[0], `2${"x".repeat(3999)}…`);
   assert.equal(parts.at(-1), "Last.");
