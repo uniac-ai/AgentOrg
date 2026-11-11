@@ -1,14 +1,15 @@
-// An agent's computer: one frame with a dock, and one window in front. Its browser and its
-// terminals are equal parts of it: each is a surface the computer lists, and each window is
+// An agent's computer: one frame with a dock, and one window in front. Its browser, its
+// terminals and its files are equal parts of it: each is a surface the computer lists, and each window is
 // chosen by its surface's protocol alone, never by which provider or unit offers it. So a
 // computer with no browser has no Browser, and a new kind of surface is one more window here.
-import { GlobeIcon, Maximize2Icon, TerminalIcon, XIcon } from "lucide-react";
+import { FolderIcon, GlobeIcon, Maximize2Icon, TerminalIcon, XIcon } from "lucide-react";
 import type { ComponentType, ReactNode } from "react";
 import { Button } from "../ui/button.tsx";
 import { ScreencastView } from "./browser-view.tsx";
 import { useComputers } from "./computers.tsx";
 import type { AgentDetail, Tone } from "./data.ts";
 import { Face, tintOf } from "./face.tsx";
+import { FilesView } from "./files-view.tsx";
 import type { LiveTarget } from "./live-socket.ts";
 import { TerminalsView } from "./terminals.tsx";
 
@@ -54,6 +55,7 @@ const WINDOWS: {
     protocol: "terminal@1",
     View: TerminalsView,
   },
+  { kind: "files", title: "Files", icon: FolderIcon, protocol: "files@1", View: FilesView },
 ];
 
 /** What an agent's units can show live, each with the unit it is of. */

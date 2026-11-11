@@ -6,7 +6,7 @@ import { useChats } from "./chats.tsx";
 import { Face } from "./face.tsx";
 
 /** How long ago, in the one short form a row has room for. */
-function age(at: string, now = Date.now()): string {
+export function age(at: string, now = Date.now()): string {
   const minutes = Math.floor((now - Date.parse(at)) / 60_000);
   if (Number.isNaN(minutes)) return "";
   if (minutes < 1) return "Now";

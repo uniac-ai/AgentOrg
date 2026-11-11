@@ -16,6 +16,7 @@ import {
   newChatWithFirst,
   noted,
   openDesignAgent,
+  openFiles,
   openSampleChat,
   openSetup,
   openWindow,
@@ -325,6 +326,21 @@ const SCREENS: Screen[] = [
         await openWindow(page, beside);
       },
       built: (page) => openWindow(page, beside),
+    }),
+  ),
+  ...(["folder", "file"] as const).map(
+    (state): Screen => ({
+      name: `files-${state}`,
+      sizes: ["wide"],
+      themes: ["dark", "light"],
+      agents: true,
+      hash: "#/a/a-research",
+      design: async (page) => {
+        await openDesignAgent(page, "Research");
+        await openFiles(page, state === "file" ? "README.md" : undefined);
+      },
+      built: (page) => openFiles(page, state === "file" ? "README.md" : undefined),
+      part: (page) => page.getByRole("main").getByRole("group", { name: "Files" }),
     }),
   ),
   {

@@ -474,6 +474,12 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
     },
     /** `metrics@1`: the sockets watching, and the latest reading, which one that opens later gets at once. */
     load: { sockets: new Set<WebSocket>(), reading: undefined as string | undefined },
+    /** `files@1`: the workspace's files by path, and every request made of it. */
+    files: {
+      held: new Map<string, { bytes: Buffer; modifiedAt: string }>(),
+      asked: [] as Record<string, unknown>[],
+      sockets: new Set<WebSocket>(),
+    },
     /** Browser sockets, each with the tab it is shown, and what the operating ones sent. */
     screens: new Map<WebSocket, { shown: number | null; chose: boolean }>(),
     input: [] as Record<string, unknown>[],
@@ -983,6 +989,7 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
       socket.send(JSON.stringify({ op: "live", protocol: surface.protocol }));
       if (surface.protocol === "screencast@1") screencast(socket, target.mode);
       if (surface.protocol === "terminal@1") terminalSocket(socket, target.mode);
+      if (surface.protocol === "files@1") filesSocket(socket);
       if (surface.protocol === "metrics@1") {
         live.load.sockets.add(socket);
         socket.on("close", () => live.load.sockets.delete(socket));
@@ -990,6 +997,83 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
       }
     });
   });
+  /** A `files@1` socket: each request answered by its id, a file's bytes right after their answer. */
+  const filesSocket = (socket: WebSocket) => {
+    const { held, asked, sockets } = live.files;
+    sockets.add(socket);
+    socket.on("close", () => sockets.delete(socket));
+    /** The write whose bytes are the next binary message, and the parts of the file so far. */
+    let writing: { id: string; path: string; length: number; last: boolean } | undefined;
+    let parts: Buffer[] = [];
+    socket.on("message", (data: Buffer, binary: boolean) => {
+      if (binary) {
+        // A write's bytes are exactly as many as it said, right after it.
+        if (!writing || data.length !== writing.length) return socket.close(1003, "No write.");
+        const { id, path, last } = writing;
+        writing = undefined;
+        parts.push(data);
+        if (!last) return;
+        const bytes = Buffer.concat(parts);
+        held.set(path, { bytes, modifiedAt: new Date().toISOString() });
+        return socket.send(JSON.stringify({ type: "written", id, path, size: bytes.length }));
+      }
+      if (writing) return socket.close(1003, "A write's bytes follow it.");
+      const request = JSON.parse(String(data)) as Record<string, unknown> & { id: string };
+      asked.push(request);
+      const send = (answer: Record<string, unknown>) =>
+        socket.send(JSON.stringify({ id: request.id, ...answer }));
+      const path = String(request.path ?? "");
+      if (request.type === "list") {
+        const within = path ? `${path}/` : "";
+        const entries = new Map<string, Record<string, unknown>>();
+        for (const [at, file] of held) {
+          if (!at.startsWith(within)) continue;
+          const [name, ...deeper] = at.slice(within.length).split("/") as [string, ...string[]];
+          entries.set(
+            name,
+            deeper.length > 0
+              ? { name, kind: "folder", size: 0, modifiedAt: file.modifiedAt }
+              : { name, kind: "file", size: file.bytes.length, modifiedAt: file.modifiedAt },
+          );
+        }
+        const kinds = ["folder", "file"];
+        return send({
+          type: "entries",
+          path: path || ".",
+          entries: [...entries.values()].sort(
+            (a, b) =>
+              kinds.indexOf(String(a.kind)) - kinds.indexOf(String(b.kind)) ||
+              String(a.name).localeCompare(String(b.name)),
+          ),
+          more: false,
+        });
+      }
+      if (request.type === "read") {
+        const file = held.get(path);
+        if (!file) return send({ type: "refused", message: `There's no file at ${path}.` });
+        const offset = Number(request.offset);
+        const bytes = file.bytes.subarray(offset, offset + Number(request.length));
+        send({
+          type: "data",
+          path,
+          offset,
+          length: bytes.length,
+          size: file.bytes.length,
+          modifiedAt: file.modifiedAt,
+        });
+        return socket.send(bytes);
+      }
+      if (request.type === "write") {
+        if (request.offset === 0) parts = [];
+        writing = {
+          id: request.id,
+          path,
+          length: Number(request.length),
+          last: request.last === true,
+        };
+      }
+    });
+  };
   /** A `terminal@1` event, to every socket and to those that come later. */
   const terminal = (event: Record<string, unknown>) => {
     live.terminal.events.push(event);
@@ -1146,6 +1230,13 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
     /** A `screencast@1` event, to every browser socket. */
     screen(event: Record<string, unknown>) {
       for (const [ws] of live.screens) ws.send(JSON.stringify(event));
+    },
+    /** A file in the workspace, last changed so many minutes ago. */
+    putFile(path: string, content: string | Buffer, minutesAgo = 0) {
+      live.files.held.set(path, {
+        bytes: Buffer.from(content),
+        modifiedAt: new Date(Date.now() - minutesAgo * 60_000).toISOString(),
+      });
     },
     /** A `metrics@1` reading, to every socket watching and to those that come later. */
     reading(reading: Record<string, unknown>) {
