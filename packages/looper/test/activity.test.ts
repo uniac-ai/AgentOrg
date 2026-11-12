@@ -135,6 +135,21 @@ test("its pieces of work are listed most recently active first, each working, id
     (await looper.works(1, 3)).map(({ id }) => id),
     ["c"],
   );
+  // From after a piece of work, in the same order.
+  assert.deepEqual(
+    (await looper.works(1, 3, "c")).map(({ id }) => id),
+    ["b"],
+  );
+  assert.deepEqual(await looper.works(6, 3, "a"), []);
+  await assert.rejects(looper.works(6, 3, "z"), /no such piece of work/);
+  // A piece of work that has become active since still marks the same place.
+  await looper.send("b", "Again.");
+  await until(() => asked.length === 5, "b's next request");
+  assert.equal((await looper.works(1, 3))[0]?.state, "working");
+  assert.deepEqual(
+    (await looper.works(6, 3, "b")).map(({ id }) => id),
+    ["a"],
+  );
   finish();
   await looper.stop();
 });

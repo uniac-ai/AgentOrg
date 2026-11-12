@@ -1960,6 +1960,41 @@ test("Work answers what each piece of work did, while the agent runs and once it
   assert.deepEqual(unknown, { output: "There is no such piece of work.", failed: true });
 });
 
+test("Work pages back through its pieces of work: `before` with no `work` gives those last active before that one", async () => {
+  const s = await setup();
+  for (let i = 1; i <= 8; i++) {
+    s.script.push(say("Done."));
+    const from = s.actor.emitted.length;
+    await s.actor.call("chat", "send", { text: `Task ${i}.` });
+    await s.ended(from);
+  }
+  const answer = async (args: Record<string, unknown>) =>
+    (await s.actor.call("tools", "call", { name: "work", arguments: args })) as {
+      output: string;
+      failed?: true;
+    };
+  const read = async (args: Record<string, unknown>) =>
+    JSON.parse((await answer(args)).output) as {
+      works: { id: string; at: string }[];
+      more?: boolean;
+    };
+  const box = await read({});
+  assert.equal(box.works.length, 6);
+  assert.equal(box.more, true);
+  const older = await read({ before: box.works.at(-1)?.id });
+  assert.equal(older.works.length, 2);
+  assert.equal(older.more, false);
+  // The second page goes on from the first, in the same order.
+  const all = [...box.works, ...older.works];
+  assert.equal(new Set(all.map(({ id }) => id)).size, 8);
+  const ats = all.map(({ at }) => at);
+  assert.deepEqual(ats, [...ats].sort().reverse());
+  assert.deepEqual(await answer({ before: "nothing" }), {
+    output: "There is no such piece of work.",
+    failed: true,
+  });
+});
+
 test("Work's answer fits what another agent's loop takes whole: each text cut, then the oldest entries left out", async () => {
   const s = await setup();
   const big = "x".repeat(10_000);

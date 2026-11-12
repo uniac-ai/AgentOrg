@@ -425,8 +425,12 @@ export function createChats(options: {
     delta(requestId: string, text: string, call?: Call) {
       looper.delta(requestId, text, call);
     },
-    /** The agent's pieces of work, most recently active first, each with its latest entries. */
-    works: (limit: number, entries: number) => looper.works(limit, entries),
+    /**
+     * The agent's pieces of work, most recently active first, those last active before `before`
+     * when it is given, each with its latest entries.
+     */
+    works: (limit: number, entries: number, before?: string) =>
+      looper.works(limit, entries, before),
     /** One piece of work's entries, before the entry `before`. */
     entries: (work: string, before: string | undefined, limit: number) =>
       looper.entries(work, before, limit),

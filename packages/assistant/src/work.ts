@@ -10,7 +10,7 @@ import type { z } from "zod";
 
 /** The view a page draws of it. */
 export const ACTIVITY = "activity";
-/** With no arguments: at most this many pieces of work, each with this many of its latest entries. */
+/** With no `work`: at most this many pieces of work, each with this many of its latest entries. */
 const WORKS = 6;
 const LATEST = 3;
 /** At most this many entries of one piece of work in a page of it. */
@@ -23,12 +23,16 @@ const BUDGET = 28_000;
 export const WORK_TOOL = {
   name: "work",
   description:
-    "What this agent's pieces of work are doing and did. With no arguments: each piece of work, most recently active first, with its latest entries. With `work`: that piece of work's entries before `before`, as many as `limit`.",
+    "What this agent's pieces of work are doing and did. With no arguments: its pieces of work, most recently active first, with their latest entries; with `before` and no `work`, those last active before that piece of work. With `work`: that piece of work's entries before `before`, as many as `limit`.",
   inputSchema: {
     type: "object",
     properties: {
       work: { type: "string", description: "A piece of work's id." },
-      before: { type: "string", description: "An entry's id: those before it." },
+      before: {
+        type: "string",
+        description:
+          "With `work`, an entry's id: those before it. Without, a piece of work's id: those last active before it.",
+      },
       limit: { type: "number", description: `How many entries, at most ${PAGE_MAX}.` },
     },
   },
@@ -37,7 +41,7 @@ export const WORK_TOOL = {
 type Works = z.input<typeof Activity>["works"];
 /** What the agent's chats give of its work. */
 interface Source {
-  works(limit: number, entries: number): Promise<Works>;
+  works(limit: number, entries: number, before?: string): Promise<Works>;
   entries(
     work: string,
     before: string | undefined,
@@ -69,19 +73,25 @@ function shown(entry: WorkEntry): WorkEntry {
 }
 const fits = (answer: object) => JSON.stringify(answer).length <= BUDGET;
 
-/** The answer with no arguments: its oldest entries go first, then its oldest pieces of work. */
-function activity(all: Works): z.input<typeof Activity> {
-  const works = all.map((one) => ({ ...one, entries: one.entries.map(shown) }));
-  while (!fits({ works })) {
-    const fullest = works.reduce((most, one) =>
+/**
+ * The answer with no `work`: its oldest entries go first, then its least recently active pieces
+ * of work. `more` says whether pieces of work remain after those it gives.
+ */
+function activity(all: Works, more: boolean): z.input<typeof Activity> {
+  const answer = { works: all.map((one) => ({ ...one, entries: one.entries.map(shown) })), more };
+  while (!fits(answer)) {
+    const fullest = answer.works.reduce((most, one) =>
       one.entries.length > most.entries.length ? one : most,
     );
     if (fullest.entries.length > 0) {
       fullest.entries.shift();
       fullest.more = true;
-    } else works.pop();
+    } else {
+      answer.works.pop();
+      answer.more = true;
+    }
   }
-  return { works };
+  return answer;
 }
 /** A page of one piece of work: its oldest entries go first. */
 function page(
@@ -113,15 +123,23 @@ export function serveWork(
       if (name !== WORK_TOOL.name)
         throw new Refused("unknown", `There is no tool named ${name.slice(0, 64)}.`);
       const { work, before, limit } = args as Record<string, unknown>;
-      if (work === undefined)
-        return { output: JSON.stringify(activity(await source.works(WORKS, LATEST))) };
-      if (typeof work !== "string" || (before !== undefined && typeof before !== "string"))
-        return { output: "Give `work`, and `before` if any, as text.", failed: true as const };
+      if (
+        (work !== undefined && typeof work !== "string") ||
+        (before !== undefined && typeof before !== "string")
+      )
+        return { output: "Give `work` and `before`, if any, as text.", failed: true as const };
       const most =
         typeof limit === "number" && Number.isInteger(limit) && limit > 0
           ? Math.min(limit, PAGE_MAX)
           : PAGE_MAX;
       try {
+        if (work === undefined) {
+          // One more than it gives, to know whether more remain.
+          const found = await source.works(WORKS + 1, LATEST, before);
+          return {
+            output: JSON.stringify(activity(found.slice(0, WORKS), found.length > WORKS)),
+          };
+        }
         return { output: JSON.stringify(page(work, await source.entries(work, before, most))) };
       } catch (error) {
         if (error instanceof Refused && error.code === "unknown")
