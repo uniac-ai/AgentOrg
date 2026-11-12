@@ -405,3 +405,38 @@ test(
     await page.close();
   }),
 );
+
+test(
+  "the window has every piece of work, the older ones read a page of pieces at a time",
+  withGateway(async (gateway) => {
+    const research = gateway.agents.get("a-research");
+    assert.ok(research);
+    research.works = Array.from({ length: 14 }, (_, n) => ({
+      id: `w${n}`,
+      title: `Piece ${n + 1}`,
+      state: "idle" as const,
+      at: ago(n * 10),
+      entries: three(n * 10),
+    }));
+    const page = await open(gateway, "#/a/a-research/overview");
+    // The box has the newest, and asks for no older pieces.
+    await box(page).getByRole("region", { name: "Piece 1" }).waitFor();
+    const pieces = () =>
+      gateway.calls.filter((call) => {
+        const asked = (call.input as { arguments?: Record<string, unknown> }).arguments;
+        return call.method === "call" && asked?.before !== undefined && asked.work === undefined;
+      }).length;
+    assert.equal(pieces(), 0);
+    await box(page).getByRole("button", { name: "Expand" }).click();
+    const window = page.getByRole("region", { name: "Research's activity" });
+    await window.getByRole("region", { name: "Piece 14" }).waitFor();
+    assert.deepEqual(
+      await window
+        .locator("section[aria-label^='Piece']")
+        .evaluateAll((all) => all.map((one) => one.getAttribute("aria-label"))),
+      Array.from({ length: 14 }, (_, n) => `Piece ${n + 1}`),
+    );
+    assert.equal(pieces(), 2, "two pages of pieces after the first");
+    await page.close();
+  }),
+);
