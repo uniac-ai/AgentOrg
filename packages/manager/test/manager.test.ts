@@ -1640,18 +1640,29 @@ test("changes to one agent happen one at a time", async (t) => {
   await s.calls.skills.add({ files: { "SKILL.md": SKILL("handy") } });
   const agent = await s.makeStack([]);
   const skill = s.own("skill", { skill: "handy" });
-  const [one, two] = await Promise.allSettled([
+  // Two calls sent together reach management in either order: the Hub checks each on its own.
+  // One is made; the other finds the skill already given and is refused.
+  const both = await Promise.allSettled([
     s.calls.agents.addUnit({ agent, unit: skill } as never),
     s.calls.agents.addUnit({ agent, unit: skill } as never),
   ]);
-  assert.equal(one.status, "fulfilled");
-  assert.equal(two.status, "rejected");
+  assert.deepEqual(both.map((one) => one.status).sort(), ["fulfilled", "rejected"]);
+  const refusal = both.find((one) => one.status === "rejected")?.reason as Error;
+  assert.equal(refusal.message, "Two units give the skill handy.");
   assert.equal((await s.calls.agents.get({ agent })).skills.length, 1);
 
-  // Removing the agent waits for the unit being added, so the unit goes with it.
-  const added = s.calls.agents.addUnit({ agent, unit: s.unit("machine") });
-  await s.calls.agents.remove({ agent });
-  await added;
+  // Removing the agent waits for a unit being added, so the unit goes with it. The removal is
+  // sent from inside the apply, so the addition is already under way; the apply stays open 50 ms
+  // so the removal reaches management meanwhile. If it arrives later, the test passes without
+  // showing the wait.
+  let removing: Promise<unknown> | undefined;
+  s.script.during = async () => {
+    delete s.script.during;
+    removing = s.calls.agents.remove({ agent });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  };
+  await s.calls.agents.addUnit({ agent, unit: s.unit("machine") });
+  await removing;
   assert.equal(s.given.removed.length, 2);
   assert.equal(s.given.removed[1], agent);
 });
