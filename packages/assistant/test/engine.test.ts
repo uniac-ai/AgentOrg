@@ -7,6 +7,7 @@ import { createTestContext } from "@agentorg/sdk/testing";
 import { z } from "zod";
 import { MAX_INSTRUCTIONS } from "../src/settings.ts";
 import { MAX_TOOLS, TOOLS_BUDGET } from "../src/tools.ts";
+import { asAsked } from "./as-asked.ts";
 import engine, { engines, INSTRUCTIONS } from "./engine-actor.ts";
 
 /** An interface that isn't `tools@1`. */
@@ -127,6 +128,8 @@ async function setup(values = new Map<string, unknown>(), rest?: (actor: Actor) 
   const store = memory(values);
   actor.bind("store", store.handlers);
   const requests: Request[] = [];
+  /** The workers' requests as the model got them, with the looper's part. */
+  const whole: Request[] = [];
   /** What the main loop was asked, and the arguments it answers `route` with when a test says. */
   const routed: Request[] = [];
   const routing: { to?: string; says?: string } = {};
@@ -148,9 +151,10 @@ async function setup(values = new Map<string, unknown>(), rest?: (actor: Actor) 
           } as never;
         return { output: [call ?? NEW_WORK] } as never;
       }
-      requests.push(request as Request);
+      requests.push(asAsked(request) as Request);
+      whole.push(request as Request);
       const next = script.shift() ?? say("ok");
-      return (typeof next === "function" ? await next(request as Request) : next) as never;
+      return (typeof next === "function" ? await next(asAsked(request) as Request) : next) as never;
     },
     cancel: ({ requestId }) => {
       cancels.push(requestId);
@@ -214,6 +218,7 @@ async function setup(values = new Map<string, unknown>(), rest?: (actor: Actor) 
     host,
     store,
     requests,
+    whole,
     routed,
     routing,
     cancels,
@@ -540,6 +545,7 @@ test("skills that won't fit the instructions are left out and reported", async (
   skills.push({ name: "c", description: "y".repeat(1000) });
   s.actor.bind("settings", settingsOf(instructions, skills));
   await s.turn("hello");
+  assert.equal(s.requests.length, 1);
   const told = String(s.requests[0]?.instructions);
   assert.ok(told.length <= MAX_INSTRUCTIONS);
   assert.ok(!told.includes("- c:"));
@@ -1170,9 +1176,10 @@ test("thousands of calls in one reply cost a handful of writes", async () => {
   assert.equal((await s.turn("Flood."))?.code, "limit");
   // The chat's entry, three times: started, with its message, and with its problem. The message,
   // the mark that its turn hasn't ended, `MAX_CALLS` calls, and one entry answering the other
-  // 1,980. And three for a new chat's first message: the mark that it waits for the main loop,
-  // and the work's record, when it is placed and when its turn ends.
-  assert.equal(s.store.writes.count - before, MAX_CALLS + 9);
+  // 1,980. And four for a new chat's first message: the mark that it waits for the main loop,
+  // the work's record, when it is placed and when its turn ends, and its turn's mark once more,
+  // as a turn on a message kept before it.
+  assert.equal(s.store.writes.count - before, MAX_CALLS + 10);
   const input = (await s.chat("history", { limit: 200 })) as { messages: unknown[] };
   assert.equal(input.messages.length, 200, "a full page of what was recorded");
 });
@@ -1480,7 +1487,7 @@ test("saying stop in a chat whose work is in a turn stops that turn, and no othe
   assert.deepEqual(s.cancels, [s.requests[0]?.requestId]);
   assert.match(
     String(s.routed[2]?.instructions),
-    /^You are the front desk\. You are given one piece/,
+    /^You are the front desk\. You are given the pieces of work that are in a turn/,
   );
   assert.doesNotMatch(String(s.routed[2]?.instructions), /you speak as/);
   report.open(say("Report done."));
@@ -1494,6 +1501,55 @@ test("saying stop in a chat whose work is in a turn stops that turn, and no othe
     (await shownIn(s, two.chat)).map((m) => m.text),
     ["Draw the chart.", "Chart done."],
   );
+});
+
+test("a message its chat's work hands back is taken up by new work in the same chat, and both follow the chat", async () => {
+  const s = await setup();
+  /** The number the newest message of the request the model just got starts with. */
+  const newest = () =>
+    Number(
+      /^\[(\d+)\] /.exec(
+        String(s.whole.at(-1)?.input.findLast((item) => item.role === "user")?.content),
+      )?.[1],
+    );
+  s.script.push(
+    say("Report done."),
+    () => ({
+      output: [callTool("hand_back", { message: newest(), why: "It asks about the weather." })],
+    }),
+    say("Sunny."),
+  );
+  const { chat } = (await s.actor.call("chat", "send", { text: "Write the report." })) as Sent;
+  await s.host.settled();
+  // A worker's request is the agent's own, then the looper's part: which work it is, each
+  // message by its number, and the function to hand one back.
+  assert.match(String(s.whole[0]?.instructions), /\n\nThis is one piece of work: Work\. /);
+  assert.equal(s.whole[0]?.tools?.at(-1)?.name, "hand_back");
+  assert.deepEqual(
+    s.whole[0]?.input.map((item) => item.content),
+    ["[1] Write the report."],
+  );
+  await s.actor.call("chat", "send", { chat, text: "What is the weather?" });
+  await s.host.settled();
+  // The main loop is given what came back, with the work that returned it and why.
+  assert.match(
+    String(s.routed[1]?.input.at(-1)?.content),
+    /^That was given to this work, which handed it back:\n- .*: Work; because: It asks about the weather\.$/,
+  );
+  // The new work reads it as its first message, and answers in the same chat; the handing back
+  // is shown to nobody.
+  assert.deepEqual(
+    s.whole[2]?.input.map((item) => item.content),
+    ["[1] What is the weather?"],
+  );
+  assert.deepEqual(
+    (await shownIn(s, chat)).map((m) => m.text),
+    ["Write the report.", "Report done.", "What is the weather?", "Sunny."],
+  );
+  // The chat's next message reaches both.
+  await s.actor.call("chat", "send", { chat, text: "Thanks." });
+  await s.host.settled();
+  assert.equal(s.requests.length, 5);
 });
 
 test("a chat is renamed and archived, stays readable, and is kept as it was left", async () => {

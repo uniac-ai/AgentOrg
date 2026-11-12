@@ -8,6 +8,7 @@ import test from "node:test";
 import { Hub, type HubOptions, listen, PERSON } from "@agentorg/hub";
 import { chat, hubActors, hubGrants, kv, llmSession, tools } from "@agentorg/interfaces";
 import { connect } from "@agentorg/sdk/client";
+import { asAsked } from "./as-asked.ts";
 import engine from "./engine-actor.ts";
 
 type Item = { type: string; callId?: string; output?: string };
@@ -77,7 +78,7 @@ async function cast(t: test.TestContext, options: HubOptions = {}) {
             { type: "function_call", callId: "r", name: "route", arguments: '{"title":"Work"}' },
           ],
         };
-      requests.push(request as Request);
+      requests.push(asAsked(request) as Request);
       await new Promise((resolve) => setTimeout(resolve, delays.shift() ?? 0));
       return {
         output: (script.shift() ?? [

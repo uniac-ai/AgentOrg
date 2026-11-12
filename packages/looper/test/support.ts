@@ -38,9 +38,26 @@ export function looperWith(
   /** Each time it said whether anything is at work, and each message that got no answer. */
   const working: boolean[] = [];
   const failures: string[] = [];
-  /** What each request held, in the order the model reads it. */
+  /**
+   * What each worker's request held, in the order the model reads it, each of the person's
+   * messages without the number it starts with; `numbered` has them as the model got them, and
+   * `told` what each request was told and offered.
+   */
   const inputs: string[][] = [];
-  const open = new Map<string, { id: string; answer(output: OutputItem[]): void; fail(): void }>();
+  const numbered: string[][] = [];
+  const told: { instructions: string; tools: string[] }[] = [];
+  /** The requests still out, each by the last thing said to it and the first. */
+  const open: {
+    text: string;
+    first: string;
+    id: string;
+    answer(output: OutputItem[]): void;
+    fail(): void;
+  }[] = [];
+  const close = (id: string) => {
+    const at = open.findIndex((request) => request.id === id);
+    if (at !== -1) open.splice(at, 1);
+  };
   const looper = createLooper({
     store: {
       async get({ key }) {
@@ -66,7 +83,7 @@ export function looperWith(
       respond: ({ requestId, instructions, input, tools }) =>
         new Promise((answer, fail) => {
           const last = input.findLast((item) => item.type === "message" && item.role === "user");
-          const text = last?.type === "message" ? last.content : "";
+          const text = last?.type === "message" ? unnumbered(last.content) : "";
           if (tools.some((tool) => tool.name === "route")) {
             routed.push(text);
             mainIds.push(requestId);
@@ -75,7 +92,9 @@ export function looperWith(
               tools,
               input: input.map((item) => (item.type === "message" ? item.content : item.type)),
             });
-            open.set("the main loop", {
+            open.push({
+              text: "the main loop",
+              first: "",
               id: requestId,
               answer: () => {},
               fail: () => fail(gone()),
@@ -87,16 +106,23 @@ export function looperWith(
             return;
           }
           asked.push(text);
-          inputs.push(
+          const lines = (plain: boolean) =>
             input.map((item) =>
               item.type === "message"
-                ? item.content
+                ? plain
+                  ? unnumbered(item.content)
+                  : item.content
                 : item.type === "function_call"
                   ? `call ${item.name}`
                   : `output ${item.output}`,
-            ),
-          );
-          open.set(text, {
+            );
+          inputs.push(lines(true));
+          numbered.push(lines(false));
+          told.push({ instructions, tools: tools.map((tool) => tool.name) });
+          const first = input.find((item) => item.type === "message" && item.role === "user");
+          open.push({
+            text,
+            first: first?.type === "message" ? unnumbered(first.content) : "",
             id: requestId,
             answer: (output) => answer({ output }),
             fail: () => fail(gone()),
@@ -104,7 +130,11 @@ export function looperWith(
         }),
       async cancel({ requestId }) {
         if (options.deaf) return;
-        for (const request of open.values()) if (request.id === requestId) request.fail();
+        for (const request of [...open])
+          if (request.id === requestId) {
+            close(request.id);
+            request.fail();
+          }
       },
     },
     request: async () => ({
@@ -125,10 +155,20 @@ export function looperWith(
     ...(options.stopped === undefined ? {} : { stopped: options.stopped }),
     log: { info() {}, warn() {}, error() {} },
   });
-  /** Answer the request that ends with `text`, or fail it. */
-  const answer = (text: string, output: OutputItem[] = says("Done.")) =>
-    open.get(text)?.answer(output);
-  const fail = (text: string) => open.get(text)?.fail();
+  /**
+   * Answer the request that ends with `text`, or fail it: the newest still out, or with `of`,
+   * the one of the work whose first message has that in it.
+   */
+  const found = (text: string, of?: string) => {
+    const request = open.findLast(
+      (one) => one.text === text && (of === undefined || one.first.includes(of)),
+    );
+    if (request) close(request.id);
+    return request;
+  };
+  const answer = (text: string, output: OutputItem[] = says("Done."), of?: string) =>
+    found(text, of)?.answer(output);
+  const fail = (text: string) => found(text)?.fail();
   /** Threads no message was sent in before, each sent one and left in its turn. */
   const fill = async (names: string[]) => {
     const before = asked.length;
@@ -141,6 +181,8 @@ export function looperWith(
     said,
     asked,
     inputs,
+    numbered,
+    told,
     routed,
     mains,
     mainIds,
@@ -154,6 +196,21 @@ export function looperWith(
   };
 }
 const gone = () => new Refusal("cancelled", "The request was cancelled.");
+/** A message as the person said it: without the number a worker's model reads it by. */
+const unnumbered = (content: string) => content.replace(/^\[\d+(\.\d+)?\] /, "");
+/** A worker handing the message of that number back. */
+export const handsBack = (
+  message: number,
+  why = "It isn't this work's.",
+  leave = false,
+): OutputItem[] => [
+  {
+    type: "function_call",
+    callId: `back-${crypto.randomUUID()}`,
+    name: "hand_back",
+    arguments: JSON.stringify({ message, why, ...(leave ? { leave } : {}) }),
+  },
+];
 /** What the main loop calls `route` with. */
 export const route = (said: { work?: string; title?: string; stop?: string }): OutputItem[] => [
   {

@@ -7,8 +7,11 @@ import type { Slot } from "@agentorg/sdk";
 import type { z } from "zod";
 import type { Candidate, LeftOut } from "./tools.js";
 
-/** The longest instructions a request can carry. */
-export const MAX_INSTRUCTIONS = 200_000;
+/**
+ * The longest the agent's own instructions may be: what a request can carry, less room for what
+ * the looper tells a worker after them.
+ */
+export const MAX_INSTRUCTIONS = 198_000;
 const SLOT = "settings";
 
 const HEADING = `## Skills

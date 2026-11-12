@@ -29,7 +29,13 @@ const log = { info() {}, warn() {}, error() {} };
 /** A piece of work that follows only its own thread, `t`, kept in a store. */
 function single(calls: Store, limits?: { keep: number; keepBytes: number }) {
   const thread = createThread(calls, log, limits);
-  const record = createRecord({ id: "t", follows: () => ["t"], thread: () => thread });
+  const record = createRecord({
+    id: "t",
+    follows: () => ["t"],
+    thread: () => thread,
+    waits: () => true,
+    left: () => false,
+  });
   type Said = Parameters<typeof record.append>[0];
   return {
     append: async (entry: Said, id?: string, read?: number) =>
@@ -130,9 +136,20 @@ test("a message said during a turn is read after what was asked for without it, 
   // exchange, not four.
   assert.deepEqual(
     (await record.input()).items.map((item) =>
-      item.type === "message" ? item.content.slice(0, 7) : "",
+      item.type === "message" ? item.content.slice(0, 9) : "",
     ),
-    ["old", "old rep", "open", "to open", "one", "to one ", "two", "three", "to two "],
+    // Each thing the person said starts with its number, which is its place in the record.
+    [
+      "[1] old",
+      "old reply",
+      "[3] open",
+      "to open x",
+      "[4] one",
+      "to one xx",
+      "[6] two",
+      "[8] three",
+      "to two an",
+    ],
   );
 });
 
@@ -167,6 +184,8 @@ test("a piece of work that follows two threads reads its messages in the order t
     id: "a",
     follows: () => following,
     thread: (name) => (name === "a" ? a : c),
+    waits: (thread) => thread === "c",
+    left: () => false,
   });
   const said = (content: string) => user(content);
   const reply = (content: string) => ({
@@ -195,7 +214,7 @@ test("a piece of work that follows two threads reads its messages in the order t
   const { items, thread } = await record.input();
   assert.deepEqual(
     items.map((item) => (item.type === "message" ? item.content : "")),
-    ["in a", "to a", "in c", "to c", "in a again"],
+    ["[1] in a", "to a", "[3] in c", "to c", "[5] in a again"],
   );
   assert.equal(thread, "a");
   // Each thread shows what was said in it, and nothing of the other.
