@@ -107,6 +107,24 @@ test(
     // It fades in.
     await remove.evaluate((e) => Promise.all(e.getAnimations().map((moving) => moving.finished)));
     assert.equal(await seen(), "1");
+    // On a phone the name comes first, whole, then what can be done with it; what it is built
+    // from goes under them.
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.waitForFunction(() => document.documentElement.clientWidth === 390);
+    const [first, after, under] = [
+      await title.boundingBox(),
+      await row.getByRole("button", { name: "Use" }).boundingBox(),
+      await row.getByText("mystery").boundingBox(),
+    ];
+    assert.ok(first && after && under);
+    assert.ok(first.width > 120, `the name has room (${first.width}px)`);
+    assert.ok(after.x >= first.x + first.width, "then Use, beside it");
+    assert.ok(under.y >= first.y + first.height, "what it is built from, under them");
+    assert.equal(
+      await title.evaluate((e) => e.scrollWidth <= e.clientWidth),
+      true,
+      "its name isn't cut",
+    );
     await page.close();
   }),
 );

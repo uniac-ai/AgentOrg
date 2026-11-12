@@ -19,7 +19,8 @@ export function TemplatesPage() {
             key={t.id}
             className={`${rowClass(false)} grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_auto_24px] tight:grid-cols-[minmax(0,1fr)_auto_24px]`}
           >
-            <div className="min-w-0">
+            {/* Where there is little room the name comes first, then what can be done with it. */}
+            <div className="min-w-0 tight:col-start-1 tight:row-start-1">
               <div className="truncate font-medium">{t.title}</div>
               <div className="truncate text-[13px] text-muted-foreground">{t.description}</div>
             </div>

@@ -15,6 +15,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "../ui/dropdown-menu.tsx";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select.tsx";
@@ -138,6 +139,7 @@ function Made({ agent: entry }: { agent: AgentEntry }) {
               );
               change("expose", { connection, ...(as ? { as } : {}) });
             }}
+            more={{ words: "Connect a new MCP…", screen: "mcps" }}
           />
         }
       >
@@ -163,6 +165,7 @@ function Made({ agent: entry }: { agent: AgentEntry }) {
             label="Add a skill"
             items={spare.map((s) => ({ id: s.name, name: s.name }))}
             onPick={(skill) => change("expose", { skill })}
+            more={{ words: "Add a new skill…", screen: "skills" }}
           />
         }
       >
@@ -208,14 +211,17 @@ function BuiltFrom({ units }: { units: AgentDetail["units"] }) {
   );
 }
 
+/** What can be added, and last the way to one that isn't made yet: it is made in Settings. */
 function AddMenu({
   label,
   items,
   onPick,
+  more,
 }: {
   label: string;
   items: { id: string; name: string }[];
   onPick(id: string, name: string): void;
+  more: { words: string; screen: "mcps" | "skills" };
 }) {
   return (
     <DropdownMenu>
@@ -231,6 +237,10 @@ function AddMenu({
           </DropdownMenuItem>
         ))}
         {items.length === 0 && <DropdownMenuItem disabled>Nothing else to add</DropdownMenuItem>}
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onSelect={() => go({ screen: more.screen })}>
+          {more.words}
+        </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -270,6 +280,10 @@ function McpRow({
           </Button>
         </CollapsibleTrigger>
       </div>
+      {/* Down, it says why under its name. */}
+      {status.state === "down" && status.detail && (
+        <div className="-mt-1 pb-2.5 text-[13px] text-[var(--bad)]">{`${status.detail.charAt(0).toUpperCase()}${status.detail.slice(1)}`}</div>
+      )}
       <CollapsibleContent>
         <div className="flex flex-wrap items-center gap-1.5 pb-3">
           {status.tools.map((tool) => (

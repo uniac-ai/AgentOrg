@@ -153,18 +153,20 @@ test(
 );
 
 test(
-  "skills and connections are added in an agent's setup, and a connection is removed there",
+  "skills and connections are added in an agent's setup, a connection is removed there, and each add menu ends with the way to a new one",
   withGateway(async (gateway) => {
     const sheet = await openSetup(await open(gateway, "#/a/a-reviewer"), "Reviewer");
     const page = sheet.page();
     const mcps = sheet.getByRole("region", { name: "MCPs" });
     await mcps.getByText("github", { exact: true }).waitFor();
     await sheet.getByRole("button", { name: "Add an MCP" }).click();
-    // Neither what it has nor what was created for another agent.
+    // Neither what it has nor what was created for another agent; last, the way to a new one.
     assert.deepEqual(await page.getByRole("menuitem").allInnerTexts(), [
       "Linear",
       "Postgres analytics",
+      "Connect a new MCP…",
     ]);
+    await page.getByRole("menu").getByRole("separator").waitFor();
     await page.getByRole("menuitem", { name: "Postgres analytics" }).click();
     await mcps.getByText("postgres_analytics", { exact: true }).waitFor();
 
@@ -175,10 +177,13 @@ test(
       await page.getByRole("menuitem", { name: skill }).click();
       await skills.getByText(skill, { exact: true }).waitFor();
     }
-    // With all of them it has nothing left to add, and no skill is taken off here.
+    // With all of them it has nothing left to add, and still the way to a new one.
     await sheet.getByRole("button", { name: "Add a skill" }).click();
-    assert.deepEqual(await page.getByRole("menuitem").allInnerTexts(), ["Nothing else to add"]);
-    assert.equal(await page.getByRole("menuitem").isDisabled(), true);
+    assert.deepEqual(await page.getByRole("menuitem").allInnerTexts(), [
+      "Nothing else to add",
+      "Add a new skill…",
+    ]);
+    assert.equal(await page.getByRole("menuitem").first().isDisabled(), true);
     await page.keyboard.press("Escape");
     await page.getByRole("menu").waitFor({ state: "detached" });
     assert.equal(await skills.getByRole("button").count(), 1, "only the way to add one");
@@ -192,6 +197,48 @@ test(
     await mcps.getByRole("button", { name: "Remove from Reviewer" }).click();
     await sheet.getByRole("alert").getByText("This came with a unit: remove the unit.").waitFor();
     assert.equal(await mcps.getByText("github", { exact: true }).count(), 1);
+    await page.close();
+  }),
+);
+
+test(
+  "in an agent's setup a connection that is down says why under its name, and the way to a new one opens Settings",
+  withGateway(async (gateway) => {
+    // Why it is down, as its connection says it, set as a sentence of its own.
+    const linear = gateway.connections.get("c-linear");
+    if (linear?.status.state === "down") linear.status.detail = "its server didn't answer";
+    const page = await open(gateway, "#/a/a-triage");
+    let sheet = await openSetup(page, "Triage");
+    const mcps = sheet.getByRole("region", { name: "MCPs" });
+    const why = mcps.getByText("Its server didn't answer", { exact: true });
+    await why.waitFor();
+    const name = await box(mcps.getByText("linear", { exact: true }));
+    const under = await box(why);
+    assert.ok(name && under && under.y >= name.y + name.height && under.x === name.x, "under it");
+    assert.equal(
+      await why.evaluate((e) => getComputedStyle(e).color),
+      await sheet.evaluate((e) => {
+        const probe = document.createElement("span");
+        probe.style.color = "var(--bad)";
+        e.append(probe);
+        const color = getComputedStyle(probe).color;
+        probe.remove();
+        return color;
+      }),
+    );
+    // Its tools closed, it is said all the same.
+    assert.equal(await mcps.getByText("Remove from Triage").count(), 0);
+
+    await sheet.getByRole("button", { name: "Add an MCP" }).click();
+    await page.getByRole("menuitem", { name: "Connect a new MCP…" }).click();
+    await page.getByRole("tab", { name: "MCP connections", selected: true }).waitFor();
+    await page.getByRole("dialog").waitFor({ state: "detached" });
+    await page.goBack();
+    sheet = await openSetup(page, "Triage");
+    await sheet.getByRole("button", { name: "Add a skill" }).click();
+    await page.getByRole("menuitem", { name: "Add a new skill…" }).click();
+    await page.getByRole("tab", { name: "Skills", selected: true }).waitFor();
+    await page.getByRole("dialog").waitFor({ state: "detached" });
     await page.close();
   }),
 );
