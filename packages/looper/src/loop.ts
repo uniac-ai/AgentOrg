@@ -57,6 +57,8 @@ export const SEND: ToolSpec = {
     },
     required: ["message", "text"],
   },
+  // What it says streams into the chat as it is written.
+  streamed: true,
 };
 /** A function of the looper's own: it says a message is not this work's. */
 export const HAND_BACK: ToolSpec = {

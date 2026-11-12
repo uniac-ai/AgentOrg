@@ -446,8 +446,8 @@ export function createSession(options: {
   };
 
   /**
-   * One try, sending `items`. `wrote` is told when text of it, or of a call's arguments, has been
-   * streamed: such a try is not made again.
+   * One try, sending `items`. `wrote` is told when text of it, or a streamed call's arguments,
+   * has been streamed: such a try is not made again.
    */
   async function stream(
     input: RespondInput,
@@ -504,7 +504,11 @@ export function createSession(options: {
       if (refused.code === "ineligible") await account.ineligible();
       return marked(refused, code ? { code } : {});
     };
-    /** Each function call the response is writing, by its item's id. */
+    /** The functions whose calls' arguments are passed on as they come; any other's are only in the output. */
+    const streamed = new Set(
+      (input.tools ?? []).flatMap((tool) => (tool.streamed ? [tool.name] : [])),
+    );
+    /** Each call of those the response is writing, by its item's id. */
     const calls = new Map<string, { id: string; name: string }>();
     try {
       for await (const event of events(response.body, signal)) {
@@ -521,7 +525,8 @@ export function createSession(options: {
               item.type === "function_call" &&
               typeof item.id === "string" &&
               typeof item.call_id === "string" &&
-              typeof item.name === "string"
+              typeof item.name === "string" &&
+              streamed.has(item.name)
             )
               calls.set(item.id, { id: item.call_id, name: item.name });
             break;
@@ -576,9 +581,10 @@ export function createSession(options: {
    * `RETRIES` times at most, each after a wait that doubles from `BACKOFF_MS`, a tenth more or
    * less, or after the wait OpenAI asked for when that is longer. A wait past `WAIT_MAX_MS` isn't
    * taken, nor one that would begin a try more than `RETRY_WITHIN_MS` after the first: the
-   * failure is the answer. Not once text of it, or of a call's arguments, has been streamed,
-   * since those words may be with their reader and a new try would write them again; and not
-   * once it is cancelled, which also ends a wait.
+   * failure is the answer. Not once text of it, or a streamed function's arguments, have been
+   * streamed, since those words may be with their reader and a new try would write them again; a
+   * call of any other function streams nothing and doesn't stop a try. Nor once it is cancelled,
+   * which also ends a wait.
    *
    * A try that had reasoning put back, and that OpenAI wouldn't take as it is (`notTaken`) for
    * good with no words of its own (`failed`), before any text, is made once more without it, at

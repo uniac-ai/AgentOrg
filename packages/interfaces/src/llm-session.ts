@@ -35,17 +35,22 @@ export const OutputItem = z.discriminatedUnion("type", [
   Message.extend({ role: z.literal("assistant") }),
   FunctionCall,
 ]);
-/** A function the model may call; `parameters` is the JSON Schema of its arguments. */
+/**
+ * A function the model may call; `parameters` is the JSON Schema of its arguments. With
+ * `streamed`, a provider may send a call's arguments as `delta` events while the model writes
+ * them; it sends no other function's.
+ */
 export const Tool = z.object({
   name: ToolName,
   description: z.string().max(1024).optional(),
   parameters: z.record(z.string(), z.json()),
+  streamed: z.literal(true).optional(),
 });
 
 /**
  * `llm.session@1`: model inference. Each `respond` is one stateless request: the caller sends the
- * whole conversation every time, and keeps it. Text, and a function call's arguments, stream as
- * `delta` events for the request.
+ * whole conversation every time, and keeps it. Text, and the arguments of a call of a `streamed`
+ * function, stream as `delta` events for the request.
  * The request is one frame on the wire (at most 1 MiB), so a caller trims what it sends. A
  * caller carries nothing of a model's reasoning; a provider may keep it and put it back itself.
  *
@@ -97,9 +102,10 @@ export const llmSession = defineInterface({
   events: {
     /**
      * Text of a response, as it streams, to the consumer whose request it answers only: of its
-     * reply, or, with `call`, of the arguments of the function call whose `callId` that is in the
-     * output `respond` gives. Joined in order, a call's pieces are its arguments, none of them
-     * sent twice. A provider may send none.
+     * reply, or, with `call`, of the arguments of a call of a `streamed` function, whose `callId`
+     * that is in the output `respond` gives. Joined in order, a call's pieces are its arguments,
+     * none of them sent twice. A provider may send none, and doesn't try again a response it has
+     * sent any of: those words may be with their reader.
      */
     delta: event(
       z.object({

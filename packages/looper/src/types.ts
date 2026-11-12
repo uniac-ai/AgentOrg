@@ -26,6 +26,8 @@ export interface ToolSpec {
   description?: string;
   /** The JSON Schema of its arguments. */
   parameters: Record<string, Json>;
+  /** Its arguments stream as the model writes them: a call of it has a reader as it is written. */
+  streamed?: true;
 }
 /** How a function call ended, as the model and the record see it. */
 export interface Outcome {
