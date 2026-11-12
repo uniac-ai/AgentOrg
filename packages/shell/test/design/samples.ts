@@ -493,6 +493,7 @@ const BUILD_UNITS: Units["units"] = [
             value: "local",
             title: "This computer",
             description: "Runs as you, with your files and no approvals.",
+            caution: true,
           },
           { value: "container", title: "A new container" },
         ],

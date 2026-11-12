@@ -168,11 +168,15 @@ export function FormField({
   const value = fieldValue(field, values);
   const text = typeof value === "string" || typeof value === "number" ? String(value) : "";
   const list = Array.isArray(value) ? value : [];
-  // What the chosen answer grants stays under it.
-  const says = field.options?.find((o) => o.value === value)?.description;
+  // What the chosen answer means stays under it: as a caution where its unit marks it as one.
+  const chosen = field.options?.find((o) => o.value === value);
   const notes = (
     <>
-      {says && <p className="text-xs text-[var(--warn)]">{says}</p>}
+      {chosen?.description && (
+        <p className={`text-xs ${chosen.caution ? "text-[var(--warn)]" : "text-muted-foreground"}`}>
+          {chosen.description}
+        </p>
+      )}
       {problem && <FieldError className="text-xs">{problem}</FieldError>}
     </>
   );
