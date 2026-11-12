@@ -21,7 +21,6 @@ import { describeInterface, Refused } from "@agentorg/sdk";
 import { connect } from "@agentorg/sdk/client";
 import { WebSocketServer } from "ws";
 import { type PersonSide, serveSocket } from "./api.js";
-import { callFolders } from "./folders.js";
 import { LIVE_MAX, pipeLive, type Ticket } from "./live.js";
 import { Notes } from "./notes.js";
 import { oauthRoute } from "./oauth.js";
@@ -182,7 +181,6 @@ export async function startApp(options: AppOptions): Promise<App> {
   const personSide: PersonSide = {
     async call(slot, method, input) {
       if (slot === "store") return notes.call(method, input);
-      if (slot === "folders") return callFolders(method, input);
       const exposed = Object.hasOwn(SLOTS, slot) ? undefined : exposedSlot(slot);
       if (!exposed && !Object.hasOwn(SLOTS, slot))
         throw new Refused("invalid", `The person has no slot ${slot}.`);

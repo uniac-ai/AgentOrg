@@ -30,7 +30,6 @@ export {
   ConnectionTarget,
   ConnectionTool,
 } from "./connection.js";
-export { FOLDERS_MAX, folders } from "./folders.js";
 export {
   Actor,
   ActorState,

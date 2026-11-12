@@ -404,6 +404,20 @@ test("a live socket is the tab's own: same origin, then its session, before anyt
     );
 });
 
+test("a call to a slot the person doesn't have is refused `invalid`, and the socket goes on", async (t) => {
+  const { app, token } = await setup(t);
+  const cli = api(app, { Authorization: `Bearer ${token}` });
+  t.after(cli.close);
+  await cli.opened;
+  // Once served, for a window that browsed for a folder; taken out because it listed any folder
+  // on the machine.
+  const { result, error } = await cli.call("folders", "list");
+  assert.equal(result, undefined);
+  assert.equal(error?.code, "invalid");
+  // The socket goes on answering.
+  assert.ok((await cli.call("actors", "list")).result);
+});
+
 test("an upgrade that resets before it's refused doesn't stop the app", async (t) => {
   const { app } = await setup(t);
   const { port } = new URL(app.url);
