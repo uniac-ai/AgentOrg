@@ -170,6 +170,8 @@ interface Placed {
 interface Giver {
   ref: number | string;
   provider: string;
+  /** The provider's id for the unit. */
+  unit: string;
   results: string[];
 }
 /** What the units so far already give. */
@@ -523,6 +525,10 @@ export function createStacks(parts: StackParts) {
         });
     }
 
+    const here = (one: Giver) => one.provider === offer.provider && one.unit === unit.id;
+    if (unit.once && taken.givers.some(here))
+      problems.push({ message: `There is a ${unit.title} already.` });
+
     const worked = workedOut(unit, settled.values);
     for (const slot of worked.slots) {
       if (!SlotName.safeParse(slot).success)
@@ -547,7 +553,12 @@ export function createStacks(parts: StackParts) {
       problems.push(...heldProblems(unit, worked).map((message) => ({ message })));
     }
     if (ref !== undefined)
-      taken.givers.push({ ref, provider: offer.provider, results: unit.gives.results });
+      taken.givers.push({
+        ref,
+        provider: offer.provider,
+        unit: unit.id,
+        results: unit.gives.results,
+      });
 
     if (settled.problems.length === 0)
       problems.push(...(await unitProblems(offer, settled.values, settled.secrets)));
@@ -612,6 +623,7 @@ export function createStacks(parts: StackParts) {
       givers: record.units.map((unit) => ({
         ref: unit.instance,
         provider: unit.provider,
+        unit: unit.unit,
         results: unit.results.map((result) => result.kind),
       })),
     };

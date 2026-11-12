@@ -178,6 +178,15 @@ const UNITS = [
     },
   },
   {
+    id: "badge",
+    title: "Badge",
+    description: "Gives nothing, so only `once` keeps a second out.",
+    once: true,
+    form: [],
+    needs: [],
+    gives: { slots: [], skills: [], results: [] },
+  },
+  {
     id: "terminal",
     title: "Terminal",
     description: "A terminal on the computer.",
@@ -1314,12 +1323,18 @@ test("every unit on offer is listed, management's own among them", async (t) => 
       ["machine", "Units"],
       ["desk", "Units"],
       ["askew", "Units"],
+      ["badge", "Units"],
       ["terminal", "Units"],
       ["computer", "Units"],
       ["runner", "Units"],
       ["closed", "Units"],
       ["vault", "Units"],
     ],
+  );
+  // What a host reads to leave a unit out of a stack that has it.
+  assert.deepEqual(
+    units.filter((one) => one.once).map((one) => one.id),
+    ["badge"],
   );
   await s.calls.skills.add({ files: { "SKILL.md": SKILL("library-one") } });
   const again = (await s.calls.agents.units({})).units[2];
@@ -3055,6 +3070,45 @@ test("an agent holds one of a capability: a second is a problem before anything 
   assert.ok(more.problems.some((one) => one.message === "There is a Desk already."));
   await assert.rejects(s.calls.agents.addUnit({ agent, unit: s.unit("desk") }), refused("invalid"));
   assert.equal(s.given.applied.filter((one) => one.unit === "desk").length, 1, "applied once");
+});
+
+test("a unit a stack holds once is a problem the second time, in a new stack and on a living agent", async (t) => {
+  const s = await setup(t);
+  const said = (problems: { message: string; unit?: number }[]) =>
+    problems.filter((one) => one.message === "There is a Badge already.");
+  const twice = await s.calls.agents.check({
+    stack: { base: s.base, units: [s.unit("badge"), s.unit("machine"), s.unit("badge")] },
+  });
+  assert.deepEqual(
+    said(twice.problems).map((one) => one.unit),
+    [2],
+    "the second is the problem",
+  );
+  // A unit that doesn't say so may be there twice, as before.
+  const plain = await s.calls.agents.check({
+    stack: { base: s.base, units: [s.unit("machine"), s.unit("machine")] },
+  });
+  assert.deepEqual(plain.problems, []);
+  await assert.rejects(
+    s.calls.agents.create({
+      stack: { base: s.base, units: [s.unit("badge"), s.unit("badge")] },
+      name: "Two badges",
+    }),
+    refused("invalid"),
+  );
+  const { agent } = await s.calls.agents.create({
+    stack: { base: s.base, units: [s.unit("badge")] },
+    name: "One badge",
+  });
+  assert.equal(
+    said((await s.calls.agents.check({ agent, unit: s.unit("badge") })).problems).length,
+    1,
+  );
+  await assert.rejects(
+    s.calls.agents.addUnit({ agent, unit: s.unit("badge") }),
+    refused("invalid"),
+  );
+  assert.equal(s.given.applied.filter((one) => one.unit === "badge").length, 1, "applied once");
 });
 
 test("a unit that can't go keeps the person's slots to what it built; one whose provider won't undo it leaves no Actor", async (t) => {

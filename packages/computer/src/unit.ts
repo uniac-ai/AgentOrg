@@ -33,6 +33,7 @@ export const computerUnit = (found: Found): z.input<typeof Unit> => ({
   id: COMPUTER,
   title: "Computer",
   description: "A place for the agent to work: a folder, how far it can act on it, and a browser.",
+  once: true,
   form: [
     {
       id: "service",
@@ -43,7 +44,13 @@ export const computerUnit = (found: Found): z.input<typeof Unit> => ({
       // Not required: with none found, `check` says what to do, which is more than "fill this in".
       ...(found ? { default: LOCAL } : {}),
       options: [
-        { value: LOCAL, title: "This computer", description: localLine(found) },
+        {
+          value: LOCAL,
+          title: "This computer",
+          description: localLine(found),
+          // The line warns of no isolation whenever it says so: not with a container or no service.
+          ...(found && found.isolation !== "container" ? { caution: true as const } : {}),
+        },
         {
           value: ANOTHER,
           title: "Another address",
@@ -145,6 +152,7 @@ export const WEB_UNIT: z.input<typeof Unit> = {
   id: WEB,
   title: "Web search",
   description: "Search the web and read pages.",
+  once: true,
   form: [
     {
       id: "service",
