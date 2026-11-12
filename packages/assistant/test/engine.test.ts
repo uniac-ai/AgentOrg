@@ -1096,7 +1096,7 @@ test("history pages back, survives a restart, and skips what doesn't read back",
   assert.ok(restarted.actor.logs.some((line) => line.level === "warn"));
 });
 
-test("the model gets the newest whole exchanges that fit, and a call keeps its output", async () => {
+test("the model gets the opening message, a line for what was left out, and the newest whole exchanges that fit", async () => {
   const s = await setup();
   s.actor.expose("layout", tools, listing({ get: () => ({ home: [] }) }));
   s.script.push(calls(callTool("layout__get", {}, "first")));
@@ -1106,11 +1106,13 @@ test("the model gets the newest whole exchanges that fit, and a call keeps its o
   await s.turn("Small.");
   const sent = s.requests.at(-1)?.input ?? [];
   const texts = sent.map((item) => item.content as string);
-  assert.equal(texts.includes("Message 1."), false);
+  // What the work was asked stays, and what came between it and what is sent is one line.
+  assert.equal(texts[0], "Message 1.");
+  assert.match(texts[1] ?? "", /^\(Left out: /);
   assert.equal(
     sent.some((item) => item.callId === "first"),
     false,
-    "the call left with its exchange",
+    "the call left with the rest of its exchange",
   );
   assert.equal(texts.includes(bigs[0] as string), false);
   assert.equal(texts.includes(bigs[4] as string), true);

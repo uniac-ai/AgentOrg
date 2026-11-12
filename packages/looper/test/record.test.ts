@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createRecord, createThread, fitted, head, INPUT_BUDGET } from "../src/record.ts";
+import { CUT_STEP, createRecord, createThread, fitted, head, INPUT_BUDGET } from "../src/record.ts";
 import type { Store } from "../src/types.ts";
 
 /** A store in memory, as the record uses it. */
@@ -226,4 +226,202 @@ test("a piece of work that follows two threads reads its messages in the order t
     (await a.page(undefined, 10)).messages.map((message) => message.text),
     ["in a", "to a", "in a again"],
   );
+});
+
+const reply = (content: string) => ({
+  role: "assistant" as const,
+  items: [{ type: "message" as const, role: "assistant" as const, content }],
+});
+/** A call that was given `given` and gave back `output`. */
+const ran = (callId: string, output: string, given = "{}") => ({
+  role: "tool" as const,
+  text: `look: done`,
+  state: "done" as const,
+  items: [
+    { type: "function_call" as const, callId, name: "look", arguments: given },
+    { type: "function_call_output" as const, callId, output },
+  ],
+});
+/** What is sent, each item in a few words: what was said without its number, and for a call's parts whether they were left out. */
+const sent = async (record: ReturnType<typeof single>) =>
+  (await record.input()).items.map((item) =>
+    item.type === "message"
+      ? item.content.replace(/^\[\d+\] /, "").slice(0, 40)
+      : item.type === "function_call"
+        ? `call ${item.callId}${item.arguments.includes("left_out") ? " (left out)" : ""}`
+        : `output ${item.callId}${item.output.startsWith("(Left out") ? " (left out)" : ""}`,
+  );
+/** Text of this share of the budget. */
+const filler = (share: number) => "x".repeat(INPUT_BUDGET * share);
+
+test("over the budget, what was run goes before anything that was said, the oldest first, and the latest exchange's last", async () => {
+  const record = single(store().calls as never);
+  await record.append(user("the task"));
+  await record.append(ran("a1", filler(0.3)));
+  await record.append(ran("a2", filler(0.3)));
+  await record.append(reply("did a"));
+  await record.append(user("and b"));
+  await record.append(ran("b1", filler(0.3)));
+  await record.append(reply("did b"));
+  await record.append(user("now c"));
+  await record.append(ran("c1", filler(0.3)));
+  // A fifth over: one step is cut, which is the oldest output and no more.
+  assert.deepEqual(await sent(record), [
+    "the task",
+    "call a1",
+    "output a1 (left out)",
+    "call a2",
+    "output a2",
+    "did a",
+    "and b",
+    "call b1",
+    "output b1",
+    "did b",
+    "now c",
+    "call c1",
+    "output c1",
+  ]);
+  // Far over: every output of the past goes before anything that was said, and the exchange
+  // under way keeps its own until nothing else is left.
+  await record.append(ran("c2", filler(0.9)));
+  const all = await sent(record);
+  assert.deepEqual(
+    all.filter((one) => one.startsWith("output")),
+    [
+      "output a1 (left out)",
+      "output a2 (left out)",
+      "output b1 (left out)",
+      "output c1",
+      "output c2",
+    ],
+  );
+  assert.deepEqual(
+    all.filter((one) => !one.startsWith("output") && !one.startsWith("call")),
+    ["the task", "did a", "and b", "did b", "now c"],
+  );
+});
+
+test("when what was said is itself too much, whole exchanges go except the opening message and the latest two, and one line says after and before which", async () => {
+  const record = single(store().calls as never);
+  // Each exchange says more than a third of the budget, in two replies.
+  const exchange = async (asked: string, name: string) => {
+    await record.append(user(asked));
+    await record.append(reply(`${name}1 ${filler(0.2)}`));
+    await record.append(reply(`${name}2 ${filler(0.2)}`));
+  };
+  await exchange("the task", "a");
+  await exchange("second", "b");
+  await exchange("third", "c");
+  await record.append(user("go on"));
+  const { items } = await record.input();
+  const said = items.map((item) => (item.type === "message" ? item.content.slice(0, 12) : ""));
+  // The opening message with its number, the line, and what still fits, whole.
+  assert.equal(said[0], "[1] the task");
+  assert.equal(
+    (items[1] as { content?: string }).content,
+    "(Left out: all that was said and done after [1] and before [4]. The conversation was too large to send it.)",
+  );
+  assert.deepEqual(
+    said.slice(2).map((one) => one.replace(/^\[\d+\] /, "").slice(0, 5)),
+    ["secon", "b1 xx", "b2 xx", "third", "c1 xx", "c2 xx", "go on"],
+  );
+  // Whole exchanges go before anything the latest exchange ran: its output is as it was.
+  await record.append(ran("z", filler(0.3)));
+  assert.deepEqual(
+    (await sent(record)).map((one) => one.slice(0, 8)),
+    ["the task", "(Left ou", "third", "c1 xxxxx", "c2 xxxxx", "go on", "call z", "output z"],
+  );
+  // The latest two always stay, and what was said in them is never cut: they are sent though
+  // they alone are over the budget.
+  await record.append(reply(`d1 ${filler(0.4)}`));
+  await record.append(reply(`d2 ${filler(0.4)}`));
+  const over = (await record.input()).items;
+  assert.deepEqual(
+    over.map((item) =>
+      item.type === "message" ? item.content.replace(/^\[\d+\] /, "").slice(0, 5) : "",
+    ),
+    ["the t", "(Left", "third", "c1 xx", "c2 xx", "go on", "", "", "d1 xx", "d2 xx"],
+  );
+  assert.ok(new TextEncoder().encode(JSON.stringify(over)).byteLength > INPUT_BUDGET);
+});
+
+test("a line stands only where something was left out, and with message [1] gone it says only before which", async () => {
+  // Nothing between the opening message and the next: both are sent, with no line between.
+  const close = single(store().calls as never);
+  await close.append(user("the task"));
+  await close.append(user("and this"));
+  await close.append(reply(`a1 ${filler(0.4)}`));
+  await close.append(reply(`a2 ${filler(0.4)}`));
+  await close.append(user("go on"));
+  await close.append(reply(`b1 ${filler(0.4)}`));
+  assert.deepEqual(
+    (await sent(close)).map((one) => one.slice(0, 8)),
+    ["the task", "and this", "a1 xxxxx", "a2 xxxxx", "go on", "b1 xxxxx"],
+  );
+  // A record that keeps eleven messages has lost its first two: there is no opening message
+  // to keep, and the line names only the message it stands before.
+  const short = single(store().calls as never, { keep: 11, keepBytes: 64 * 1024 * 1024 });
+  for (const [asked, name] of [
+    ["the task", "a"],
+    ["second", "b"],
+    ["third", "c"],
+    ["fourth", "d"],
+  ]) {
+    await short.append(user(asked as string));
+    await short.append(reply(`${name}1 ${filler(0.3)}`));
+    await short.append(reply(`${name}2 ${filler(0.3)}`));
+  }
+  await short.append(user("go on"));
+  const { items } = await short.input();
+  assert.deepEqual(
+    items.map((item) => (item.type === "message" ? item.content.slice(0, 12) : "")),
+    ["(Left out: a", "[10] fourth", "d1 xxxxxxxxx", "d2 xxxxxxxxx", "[13] go on"],
+  );
+  assert.equal(
+    (items[0] as { content?: string }).content,
+    "(Left out: all that was said and done before [10]. The conversation was too large to send it.)",
+  );
+});
+
+test("the latest exchange's calls go last, and a call's part is left out only when that makes it smaller", async () => {
+  const record = single(store().calls as never);
+  await record.append(user("the task"));
+  await record.append(ran("small", "ok"));
+  await record.append(ran("a1", filler(0.4)));
+  await record.append(ran("a2", filler(0.4), JSON.stringify({ text: filler(0.3) })));
+  await record.append(ran("a3", filler(0.3)));
+  // One exchange, so nothing of the past to cut: its own oldest go, each call still with an
+  // output, and the short output stays as it is, being shorter than the words for one left out.
+  assert.deepEqual(await sent(record), [
+    "the task",
+    "call small",
+    "output small",
+    "call a1",
+    "output a1 (left out)",
+    "call a2 (left out)",
+    "output a2",
+    "call a3",
+    "output a3",
+  ]);
+});
+
+test("the same is left out while a conversation grows within one step, so the requests begin alike", async () => {
+  const record = single(store().calls as never);
+  await record.append(user("the task"));
+  for (let i = 0; i < 8; i++) await record.append(ran(`a${i}`, filler(0.14)));
+  await record.append(user("go on"));
+  const first = await record.input();
+  const cut = (items: typeof first.items) =>
+    items.filter((item) => item.type === "function_call_output" && item.output.startsWith("(Left"))
+      .length;
+  assert.ok(cut(first.items) > 0);
+  // A little more is done: what is sent begins exactly as before, and nothing more is cut.
+  await record.append(ran("b0", "y".repeat(CUT_STEP / 10)));
+  await record.append(ran("b1", "y".repeat(CUT_STEP / 10)));
+  const second = await record.input();
+  assert.deepEqual(second.items.slice(0, first.items.length), first.items);
+  assert.equal(cut(second.items), cut(first.items));
+  // Past the step, more is cut, and from then the beginning is the new one.
+  await record.append(ran("b2", "y".repeat(CUT_STEP)));
+  assert.ok(cut((await record.input()).items) > cut(first.items));
 });
