@@ -28,6 +28,7 @@ import {
   openFiles,
   openSampleChat,
   openSetup,
+  openTemplates,
   openWindow,
   readChat,
   refuseSend,
@@ -61,6 +62,7 @@ const PARTS = [
   "window",
   "setup",
   "create",
+  "templates",
 ] as const;
 for (const one of only?.split(",") ?? [])
   if (!(PARTS as readonly string[]).includes(one))
@@ -86,7 +88,7 @@ type Parts = Record<string, Measured | string | number | null>;
  * What a probe measures: the frame, one window's own rows, the chat in its layer, one chat, the
  * way to a chat's older messages, Home, an agent's page, its setup, its computer's frame on its
  * page, that computer as the layer's window, its files window's own rows, the model
- * account's states, or the create window.
+ * account's states, the create window, or Settings' frame with its Templates.
  */
 type Part =
   | "frame"
@@ -102,7 +104,8 @@ type Part =
   | "window"
   | "files"
   | "signin"
-  | "create";
+  | "create"
+  | "templates";
 type Gateway = Awaited<ReturnType<typeof standIn>>;
 
 /**
@@ -625,6 +628,57 @@ const probe = (what: Part): Parts => {
       parts["chat.computer.icon"] = of(way?.querySelector("svg"));
       parts["chat.computer.pressed"] = way?.getAttribute("aria-pressed") ?? null;
     }
+    return parts;
+  }
+
+  if (what === "templates") {
+    // Settings' frame and the Templates under it, from the page's own top left: its sections in
+    // a row with what the section offers at their end, then each template's row.
+    const main = document.querySelector("main");
+    const list = main?.querySelector('[role="tablist"]');
+    if (!main || !list) throw new Error("Settings isn't open");
+    origin = main.getBoundingClientRect();
+    controls("page", main);
+    const row = list.parentElement?.parentElement;
+    parts.frame = of(row?.parentElement?.parentElement, "h");
+    parts.row = of(row);
+    parts.sections = of(list);
+    for (const [n, tab] of [...list.children].entries()) parts[`section.${n}`] = of(tab);
+    parts["section.shown"] = [...list.children].findIndex(
+      (tab) => tab.getAttribute("aria-selected") === "true",
+    );
+    const offer = row?.querySelector(":scope > button");
+    parts.offer = of(offer);
+    parts["offer.icon"] = of(offer?.querySelector("svg"));
+    parts["offer.words"] = of(offer?.querySelector("span"));
+    const room = row?.nextElementSibling;
+    parts.room = of(room, "h");
+    const rows = [...(room?.querySelectorAll("li") ?? [])];
+    parts.rows = of(room?.querySelector("ul"), "h");
+    parts["rows.count"] = rows.length;
+    // How many can be deleted: a template that came with the app can't.
+    parts["rows.deletable"] = rows.filter((one) =>
+      one.querySelector('button[aria-label^="Delete"]'),
+    ).length;
+    for (const [name, one] of [
+      ["first", rows[0]],
+      ["last", rows.at(-1)],
+    ] as const) {
+      const [names, units, acts, last] = one?.children ?? [];
+      parts[`row.${name}`] = of(one);
+      parts[`row.${name}.title`] = of(names?.children[0]);
+      parts[`row.${name}.says`] = of(names?.children[1]);
+      parts[`row.${name}.units`] = of(units);
+      parts[`row.${name}.acts`] = of(acts);
+      parts[`row.${name}.use`] = of(acts?.children[0]);
+      parts[`row.${name}.copy`] = of(acts?.children[1]);
+      parts[`row.${name}.copy.icon`] = of(acts?.children[1]?.querySelector("svg"));
+      parts[`row.${name}.end`] = of(last);
+    }
+    // The way to delete the last, which is the person's own: there, and not seen until pointed at.
+    const remove = rows.at(-1)?.querySelector('button[aria-label^="Delete"]');
+    parts["row.last.delete"] = of(remove);
+    parts["row.last.delete.icon"] = of(remove?.querySelector("svg"));
     return parts;
   }
 
@@ -1576,6 +1630,24 @@ if (wants("create"))
           await page.close();
           await gateway?.close();
         }
+
+// Settings' frame with the Templates page: the built side is given the design's sample of what
+// an agent is built from.
+if (wants("templates"))
+  for (const size of Object.keys(SIZES) as Size[])
+    for (const theme of ["dark", "light"] as const)
+      for (const side of ["design", "built"] as const) {
+        const gateway = side === "built" ? await standIn() : undefined;
+        if (gateway) sampleBuild(gateway);
+        const page = gateway
+          ? await builtPage(gateway, size, theme)
+          : await designPage(size, theme);
+        await openTemplates(page);
+        await rest(page, size);
+        all[`templates.${size}.${theme}.${side}`] = await measure(page, "templates");
+        await page.close();
+        await gateway?.close();
+      }
 
 await browser.close();
 writeFileSync(out, JSON.stringify(all, null, 1));

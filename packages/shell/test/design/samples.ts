@@ -765,3 +765,17 @@ export async function createState(page: Page, state: Create, design: boolean) {
     row.scrollLeft = 0;
   });
 }
+
+/** The Templates page, reached from the bar as a person reaches it, with its rows read. */
+export async function openTemplates(page: Page) {
+  if ((page.viewportSize()?.width ?? 0) < 640)
+    await page.getByRole("button", { name: "Menu" }).click();
+  await page
+    .getByRole("navigation", { name: "Main" })
+    .last()
+    .getByRole("button", { name: "Templates" })
+    .click();
+  const main = page.getByRole("main");
+  await main.getByRole("tab", { name: "Templates", selected: true }).waitFor();
+  await main.getByText("Storefront worker").waitFor();
+}

@@ -1,4 +1,3 @@
-import { PlusIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api, useLoad } from "../data.ts";
 import { Button } from "../ui/button.tsx";
@@ -7,7 +6,7 @@ import { Input } from "../ui/input.tsx";
 import { listDetails, listSkills, useAct } from "./data.ts";
 import { DeleteButton } from "./delete-dialog.tsx";
 import { Nothing, rowClass, Scroll, UsedBy } from "./parts.tsx";
-import { SettingsFrame } from "./settings-page.tsx";
+import { useOffer } from "./settings-page.tsx";
 
 export function SkillsPage({ focus, adding }: { focus?: string; adding?: boolean }) {
   const [changed, setChanged] = useState(0);
@@ -17,17 +16,10 @@ export function SkillsPage({ focus, adding }: { focus?: string; adding?: boolean
   useEffect(() => setOpen(!!adding), [adding]);
   const list = skills.value ?? [];
   const using = (name: string) => details.filter((a) => a.skills.some((s) => s.name === name));
+  useOffer("Add skill", () => setOpen(true));
   return (
-    <SettingsFrame
-      tab="skills"
-      action={
-        <Button size="sm" onClick={() => setOpen(true)}>
-          <PlusIcon />
-          Add skill
-        </Button>
-      }
-    >
-      <Scroll>
+    <>
+      <Scroll asBuilt>
         <ul className="mx-auto max-w-5xl">
           {list.map((skill) => (
             <li
@@ -67,7 +59,7 @@ export function SkillsPage({ focus, adding }: { focus?: string; adding?: boolean
         onClose={() => setOpen(false)}
         onAdded={() => setChanged((was) => was + 1)}
       />
-    </SettingsFrame>
+    </>
   );
 }
 

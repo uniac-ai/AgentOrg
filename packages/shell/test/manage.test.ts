@@ -269,6 +269,7 @@ test(
       .getByRole("button", { name: "Settings" })
       .click();
     await page.getByRole("tab", { name: "Skills" }).waitFor();
+    await page.getByRole("button", { name: "Dismiss" }).click();
     assert.deepEqual(await page.getByRole("tab").allInnerTexts(), [
       "Templates",
       "Skills",

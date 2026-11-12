@@ -25,7 +25,7 @@ import { HomePage } from "./home-page.tsx";
 import { Layer } from "./layer.tsx";
 import { LoginProvider, type LoginStatus, useLogin } from "./login.tsx";
 import { McpsPage } from "./mcps-page.tsx";
-import { SettingsPage } from "./settings-page.tsx";
+import { SettingsFrame, SettingsPage, sectionOf } from "./settings-page.tsx";
 import { SkillsPage } from "./skills-page.tsx";
 import { TemplatesPage } from "./templates-page.tsx";
 import { AgentsProvider, useAgents } from "./watch.tsx";
@@ -257,6 +257,7 @@ function Frame() {
     opener.current = event.currentTarget as HTMLElement;
     setDrawer(how);
   };
+  const section = sectionOf(route);
   const place =
     route.screen === "home"
       ? "Home"
@@ -323,10 +324,16 @@ function Frame() {
           {route.screen === "agent" && (
             <AgentPage key={route.agent} agent={route.agent} tab={route.tab} />
           )}
-          {route.screen === "skills" && <SkillsPage focus={route.focus} adding={route.adding} />}
-          {route.screen === "mcps" && <McpsPage focus={route.focus} adding={route.adding} />}
-          {route.screen === "settings" &&
-            (route.tab === "templates" ? <TemplatesPage /> : <SettingsPage tab={route.tab} />)}
+          {section && (
+            <SettingsFrame tab={section}>
+              {route.screen === "skills" && (
+                <SkillsPage focus={route.focus} adding={route.adding} />
+              )}
+              {route.screen === "mcps" && <McpsPage focus={route.focus} adding={route.adding} />}
+              {route.screen === "settings" &&
+                (route.tab === "templates" ? <TemplatesPage /> : <SettingsPage tab={route.tab} />)}
+            </SettingsFrame>
+          )}
         </main>
       </div>
       {/* Over the page, bar included: the one layer, with the chat. */}

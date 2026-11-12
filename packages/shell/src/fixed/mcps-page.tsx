@@ -1,7 +1,6 @@
-import { LoaderCircleIcon, PlusIcon } from "lucide-react";
+import { LoaderCircleIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api, useLoad } from "../data.ts";
-import { Button } from "../ui/button.tsx";
 import { ConnectDialog } from "./connect.tsx";
 import {
   type ConnectionEntry,
@@ -13,7 +12,7 @@ import {
 } from "./data.ts";
 import { DeleteButton } from "./delete-dialog.tsx";
 import { Nothing, rowClass, Scroll, TroubleDot, UsedBy, WhereIcon } from "./parts.tsx";
-import { SettingsFrame } from "./settings-page.tsx";
+import { useOffer } from "./settings-page.tsx";
 
 /** Each connection with how many tools it offers; a server's state has no event, so it's reread. */
 const readConnections = async () => {
@@ -53,17 +52,10 @@ export function McpsPage({ focus, adding }: { focus?: string; adding?: boolean }
     return `Created for ${agent}${provider ? ` by ${provider}` : ""}`;
   };
 
+  useOffer("Connect", () => setOpen(true));
   return (
-    <SettingsFrame
-      tab="mcps"
-      action={
-        <Button size="sm" onClick={() => setOpen(true)}>
-          <PlusIcon />
-          Connect
-        </Button>
-      }
-    >
-      <Scroll>
+    <>
+      <Scroll asBuilt>
         <ul className="mx-auto max-w-5xl">
           {rows.map(({ entry, tools }) => (
             <li
@@ -131,6 +123,6 @@ export function McpsPage({ focus, adding }: { focus?: string; adding?: boolean }
           setChanged((was) => was + 1);
         }}
       />
-    </SettingsFrame>
+    </>
   );
 }

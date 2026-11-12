@@ -484,6 +484,8 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
       held: new Map<string, { bytes: Buffer; modifiedAt: string }>(),
       asked: [] as Record<string, unknown>[],
       sockets: new Set<WebSocket>(),
+      /** The workspace's own name, said with every folder's entries: none from an older service. */
+      workspace: "Research" as string | undefined,
       /** What a walk for what changed comes to: its answer, none yet, or a refusal. */
       walks: "answered" as "answered" | "held" | "refused",
       /** The walks held, each to be answered when it is let go. */
@@ -1056,6 +1058,7 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
         return send({
           type: "entries",
           path: path || ".",
+          ...(live.files.workspace === undefined ? {} : { workspace: live.files.workspace }),
           entries: [...entries.values()].sort(
             (a, b) =>
               kinds.indexOf(String(a.kind)) - kinds.indexOf(String(b.kind)) ||
