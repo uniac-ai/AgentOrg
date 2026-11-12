@@ -2,15 +2,18 @@
 import {
   HomeIcon,
   LayoutTemplateIcon,
+  LoaderCircleIcon,
   MenuIcon,
   MessageCircleIcon,
   PlusIcon,
   SearchIcon,
   SettingsIcon,
+  XIcon,
 } from "lucide-react";
 import { Dialog } from "radix-ui";
 import { useLayoutEffect, useRef, useState } from "react";
-import { go, type Route, useRoute } from "../data.ts";
+import { USAGE, useWaited } from "../app.tsx";
+import { go, type Route, useConnection, useRoute } from "../data.ts";
 import { Button } from "../ui/button.tsx";
 import { TooltipProvider } from "../ui/tooltip.tsx";
 import { AgentPage } from "./agent-page.tsx";
@@ -32,7 +35,17 @@ import { SkillsPage } from "./skills-page.tsx";
 import { TemplatesPage } from "./templates-page.tsx";
 import { AgentsProvider, useAgents } from "./watch.tsx";
 
-export function FixedShell({ login }: { login?: LoginStatus }) {
+/** The plan's notice, while it is to be shown, and what dismisses it. */
+interface Notice {
+  notice?: boolean;
+  dismiss?(): void;
+}
+
+export function FixedShell({
+  login,
+  notice = false,
+  dismiss = () => {},
+}: { login?: LoginStatus } & Notice) {
   useLayoutEffect(() => {
     document.documentElement.dataset.ui = "fixed";
   }, []);
@@ -44,7 +57,7 @@ export function FixedShell({ login }: { login?: LoginStatus }) {
             <BuildingProvider>
               <ComputersProvider>
                 <LoginProvider status={login}>
-                  <Frame />
+                  <Frame notice={notice} dismiss={dismiss} />
                   {/* Each computer's views, which outlive the frame they are shown in. */}
                   <ComputerViews />
                 </LoginProvider>
@@ -251,7 +264,51 @@ function LeftBar({
   );
 }
 
-function Frame() {
+/**
+ * The shell's one bar, at the foot of the page beside the left bar, where it lies over nothing: a
+ * page ends well above it, and the chat is at the other side. While the chat is open the bar ends
+ * one gap short of it, its words cut as on a phone, so its link and its close stay whole. It holds
+ * the plan's notice, once, until it is dismissed; while the shell is reconnecting it says so. On a
+ * phone it sits above the chat's place, as wide as the page.
+ */
+function ShellBar({ notice, dismiss }: Required<Notice>) {
+  const { open } = useChats();
+  const reconnecting = useWaited(useConnection() !== "open");
+  if (!notice && !reconnecting) return null;
+  const room = open
+    ? "max-w-[calc(100%-2*var(--inset)-var(--panel)-var(--gap))] phone:max-w-[calc(100%-2*var(--inset))]"
+    : "max-w-[calc(100%-2*var(--inset))]";
+  return (
+    <div
+      role="status"
+      className={`window absolute bottom-[var(--inset)] left-[var(--inset)] z-20 flex h-10 ${room} items-center gap-3 rounded-full bg-[var(--raised)] pr-1.5 pl-4 text-[13px] shadow-lg phone:right-[var(--inset)] phone:bottom-[calc(var(--inset)+var(--tab)+var(--gap))]`}
+    >
+      {reconnecting ? (
+        <>
+          <LoaderCircleIcon className="size-4 shrink-0 animate-spin text-muted-foreground motion-reduce:animate-none" />
+          <span className="pr-2.5">Reconnecting…</span>
+        </>
+      ) : (
+        <>
+          <span className="min-w-0 flex-1 truncate">You're using your ChatGPT plan</span>
+          <a
+            href={USAGE}
+            target="_blank"
+            rel="noreferrer"
+            className="shrink-0 text-muted-foreground underline underline-offset-2 hover:text-foreground"
+          >
+            Manage usage
+          </a>
+          <Button variant="ghost" size="icon-xs" aria-label="Dismiss" onClick={dismiss}>
+            <XIcon />
+          </Button>
+        </>
+      )}
+    </div>
+  );
+}
+
+function Frame({ notice, dismiss }: Required<Notice>) {
   const route = useRoute();
   const { list } = useAgents();
   /** The whole bar as a drawer: from a phone's menu button, or from the rail's search. */
@@ -329,6 +386,7 @@ function Frame() {
           </Button>
           <span className="min-w-0 truncate text-[17px] font-semibold">{place}</span>
         </header>
+        <ShellBar notice={notice} dismiss={dismiss} />
         <main className="@container/main relative min-h-0 flex-1">
           {route.screen === "home" && <HomePage />}
           {route.screen === "agent" && (

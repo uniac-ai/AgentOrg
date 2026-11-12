@@ -503,6 +503,8 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
       waiting: [] as (() => void)[],
       /** Whether a part of a file is given when it is asked for, or held until it is let go. */
       reads: "answered" as "answered" | "held",
+      /** What a file brought in comes to: put there, or refused with these words. */
+      writes: undefined as string | undefined,
       /** The parts held. */
       parts: [] as (() => void)[],
     },
@@ -957,6 +959,11 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
       });
     }
     if (slot === "login") {
+      const refused = refusals.get(`login.${method}`);
+      if (refused) {
+        refusals.delete(`login.${method}`);
+        throw refused;
+      }
       // Unbound, or its process not connected, it can't be asked anything.
       if (!account?.started) {
         const error = new Refusal("not_connected", "Not running.");
@@ -1048,6 +1055,8 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
         writing = undefined;
         parts.push(data);
         if (!last) return;
+        if (live.files.writes)
+          return socket.send(JSON.stringify({ type: "refused", id, message: live.files.writes }));
         const bytes = Buffer.concat(parts);
         held.set(path, { bytes, modifiedAt: new Date().toISOString() });
         return socket.send(JSON.stringify({ type: "written", id, path, size: bytes.length }));
@@ -1229,7 +1238,10 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
     });
     socket.on("close", () => live.screens.delete(socket));
   };
+  /** While on, a page's connection is closed as it comes, as when the gateway is away. */
+  let away = false;
   sockets.on("connection", (socket) => {
+    if (away) return socket.close(1013, "Away");
     socket.on("message", (data) => {
       const message = JSON.parse(String(data));
       if (message.op === "hello") return socket.send(JSON.stringify({ op: "hello" }));
@@ -1314,6 +1326,11 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
     /** Every tab's AgentOrg sign-in ends, as when its session is revoked. */
     endSessions() {
       for (const socket of sockets.clients) socket.close(4401, "Sign in again");
+    },
+    /** The gateway goes away, and every page's connection with it, until it is back. */
+    goAway(gone = true) {
+      away = gone;
+      if (gone) for (const socket of sockets.clients) socket.close(1013, "Away");
     },
     /** The walks held are answered, and those to come are too. */
     endWalks() {

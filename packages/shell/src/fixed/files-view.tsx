@@ -9,6 +9,8 @@ import { age } from "./chat-parts.tsx";
 import type { ViewerProps } from "./computer.tsx";
 import { REFRESH_MS, useEvery } from "./data.ts";
 import { useLive } from "./live-socket.ts";
+import { Refusal } from "./parts.tsx";
+import { clause } from "./words.ts";
 
 /** The most of a file one request reads or writes, which is the most the surface takes. */
 const PART = 1_048_576;
@@ -87,6 +89,8 @@ export function FilesView({ target, corner, front }: ViewerProps) {
   const gaveUp = useRef(false);
   /** The file that is open, with its words once they are read. */
   const [file, setFile] = useState<{ path: string; text?: string }>();
+  /** Why the last file taken out or brought in was refused, until the next is. */
+  const [refused, setRefused] = useState<string>();
   const [sent, setSent] = useState(0);
   const picker = useRef<HTMLInputElement>(null);
   const asked = useRef(new Map<string, (answer: Answer) => void>());
@@ -198,11 +202,20 @@ export function FilesView({ target, corner, front }: ViewerProps) {
    * whole, or that changes on the way, isn't handed over in part.
    */
   const save = async (path: string) => {
+    setRefused(undefined);
+    const name = path.split("/").at(-1);
     const parts: ArrayBuffer[] = [];
     let stamp: string | undefined;
     for (let offset = 0, size = 1; offset < size; ) {
       const answer = await ask({ type: "read", path, offset, length: PART });
-      if (answer.type !== "data" || (stamp ?? answer.modifiedAt) !== answer.modifiedAt) return;
+      // Refused, or changed between two of its parts: it isn't handed over, and the window says why.
+      if (answer.type === "refused")
+        return setRefused(
+          `${name} wasn't taken out: ${clause(answer.message || "it couldn't be read")}`,
+        );
+      if (answer.type !== "data") return;
+      if ((stamp ?? answer.modifiedAt) !== answer.modifiedAt)
+        return setRefused(`${name} wasn't taken out: it changed on the way.`);
       if (answer.bytes.byteLength === 0) break;
       parts.push(answer.bytes);
       offset += answer.bytes.byteLength;
@@ -221,24 +234,29 @@ export function FilesView({ target, corner, front }: ViewerProps) {
    * answered too, and ends that file.
    */
   const bring = async (chosen: File[]) => {
+    setRefused(undefined);
     for (const one of chosen) {
       const path = under(folder, one.name);
       const sent: string[] = [];
-      let refused = false;
-      for (let offset = 0, last = false; !last && !refused; offset += PART) {
+      let refused: string | undefined;
+      for (let offset = 0, last = false; !last && refused === undefined; offset += PART) {
         const part = await one.slice(offset, offset + PART).arrayBuffer();
         last = offset + PART >= one.size;
         const request = { type: "write", path, offset, length: part.byteLength, last };
-        if (last) await ask(request, part);
-        else {
+        if (last) {
+          const answer = await ask(request, part);
+          if (answer.type === "refused") refused = answer.message;
+        } else {
           const id = post(request, part);
           sent.push(id);
-          asked.current.set(id, () => {
-            refused = true;
+          asked.current.set(id, (answer) => {
+            refused = answer.type === "refused" ? answer.message : "";
           });
         }
       }
       for (const id of sent) asked.current.delete(id);
+      if (refused !== undefined)
+        setRefused(`${one.name} wasn't brought in: ${clause(refused || "it was refused")}`);
     }
     setSent((was) => was + 1);
   };
@@ -378,6 +396,7 @@ export function FilesView({ target, corner, front }: ViewerProps) {
           </ul>
         )}
       </div>
+      {refused && <Refusal>{refused}</Refusal>}
     </div>
   );
 }

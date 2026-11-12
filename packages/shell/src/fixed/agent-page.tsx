@@ -155,7 +155,7 @@ export function AgentPage({
               <Computer
                 agent={{ id, name: entry.name, tone: now.tone }}
                 surfaces={surfaces}
-                onStart={start}
+                onStart={() => api.call("agents", "start", { agent: id })}
               />
               {load && !stopped && <ComputerLoad target={targetOf(id, load)} />}
             </div>

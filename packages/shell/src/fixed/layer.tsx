@@ -230,7 +230,7 @@ export function Layer() {
           <Computer
             agent={{ id: shown, name: owner.entry.name, tone: owner.now.tone }}
             surfaces={surfaces}
-            onStart={() => void api.call("agents", "start", { agent: shown }).catch(() => {})}
+            onStart={() => api.call("agents", "start", { agent: shown })}
             overlay
           />
         </Window>

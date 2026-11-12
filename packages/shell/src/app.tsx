@@ -90,31 +90,11 @@ function SignedIn() {
         </p>
       </Card>
     ) : null;
-  return (
-    <>
-      <FixedShell login={status} />
-      {notice && (
-        <div className="banner" role="status">
-          You're using your ChatGPT plan{" "}
-          <a href={USAGE} target="_blank" rel="noreferrer">
-            Manage usage
-          </a>
-          <button
-            type="button"
-            className="icon-btn"
-            aria-label="Dismiss"
-            onClick={() => setNotice(false)}
-          >
-            ✕
-          </button>
-        </div>
-      )}
-    </>
-  );
+  return <FixedShell login={status} notice={notice} dismiss={() => setNotice(false)} />;
 }
 
 /** Whether `on` has held for a moment: a quick connection shows nothing in between. */
-function useWaited(on: boolean, ms = 400): boolean {
+export function useWaited(on: boolean, ms = 400): boolean {
   const [waited, setWaited] = useState(false);
   useEffect(() => {
     setWaited(false);

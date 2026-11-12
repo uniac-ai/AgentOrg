@@ -70,6 +70,7 @@ const PARTS = [
   "templates",
   "settings",
   "said",
+  "bar",
 ] as const;
 for (const one of only?.split(",") ?? [])
   if (!(PARTS as readonly string[]).includes(one))
@@ -96,7 +97,8 @@ type Parts = Record<string, Measured | string | number | null>;
  * way to a chat's older messages, Home, an agent's page, its setup, its computer's frame on its
  * page, that computer as the layer's window, its files window's own rows, the model
  * account's states, the create window, Settings' frame with its Templates, Settings' other
- * sections and what two of them offer, or what a page says where it has nothing it can show.
+ * sections and what two of them offer, what a page says where it has nothing it can show, or
+ * the shell's bar and what is said when something pressed is refused.
  */
 type Part =
   | "frame"
@@ -115,7 +117,8 @@ type Part =
   | "create"
   | "templates"
   | "settings"
-  | "said";
+  | "said"
+  | "bar";
 type Gateway = Awaited<ReturnType<typeof standIn>>;
 
 /**
@@ -411,6 +414,28 @@ const probe = (what: Part): Parts => {
     parts.words = [recent?.querySelector("p"), bar, first, missing]
       .map((e) => e?.textContent ?? "")
       .join(" | ");
+    return parts;
+  }
+
+  if (what === "bar") {
+    // The shell's one bar, from the frame's top left; and a refusal's red line, from the top left
+    // of the window or the place it is said in.
+    const shell = document.querySelector("[data-shell]");
+    if (!shell) return parts;
+    origin = shell.getBoundingClientRect();
+    const bar = [...document.querySelectorAll('[role="status"]')].find((e) =>
+      /ChatGPT plan|Reconnecting/.test(e.textContent ?? ""),
+    );
+    parts.bar = of(bar);
+    for (const [n, part] of [...(bar?.children ?? [])].entries()) parts[`bar.${n}`] = of(part);
+    parts["bar.words"] = bar?.textContent ?? "";
+    const alert = [...document.querySelectorAll('main [role="alert"]')].find(seen);
+    const within = alert?.closest(".window, section");
+    if (alert && within) {
+      origin = within.getBoundingClientRect();
+      parts.refused = of(alert);
+      parts["refused.words"] = alert.textContent ?? "";
+    }
     return parts;
   }
 
@@ -1944,6 +1969,114 @@ if (wants("said")) {
           await page.close();
           await gateway?.close();
         }
+}
+
+// The shell's one bar: the plan's notice, wide, as a rail and on a phone, and beside an open
+// chat; "Reconnecting…" in the same place. And what is said when something pressed is refused: a
+// Start in a stopped agent's computer, a file taken out of Files that changed on the way, and a
+// sign-in that didn't start, in Home's place.
+if (wants("bar")) {
+  type BarCase = { state: string; size: Size };
+  const BARS: BarCase[] = [
+    { state: "notice", size: "wide" },
+    { state: "notice", size: "rail" },
+    { state: "notice", size: "phone" },
+    { state: "beside", size: "wide" },
+    { state: "beside", size: "rail" },
+    { state: "reconnecting", size: "wide" },
+    { state: "start", size: "wide" },
+    { state: "file", size: "wide" },
+    { state: "signin", size: "wide" },
+  ];
+  for (const { state, size } of BARS)
+    for (const theme of ["dark", "light"] as const)
+      for (const side of ["design", "built"] as const) {
+        const gateway = side === "built" ? await standIn() : undefined;
+        const notice = state === "notice" || state === "beside";
+        let page: Page;
+        if (gateway) {
+          sampleAgents(gateway);
+          if (state === "signin") gateway.setAccount("signed_out");
+          // Taken out a part at a time, it can change between two of them.
+          if (state === "file")
+            gateway.putFile("storefront/package.json", "{}".padEnd(2_600_000, " "), 2);
+          const [width, height] = SIZES[size];
+          page = await browser.newPage({ viewport: { width, height } });
+          await page.addInitScript((one) => localStorage.setItem("agentorg.session", one), SESSION);
+          const hash = state === "start" || state === "file" ? "#/a/a-research" : "#/";
+          await page.goto(`${gateway.url}/${hash}`);
+          if (theme === "light")
+            await page.evaluate(() => {
+              document.documentElement.dataset.theme = "light";
+            });
+          // The notice is shown once, after sign-in: put away where it isn't measured.
+          const dismiss = page.getByRole("button", { name: "Dismiss" });
+          if (!notice) await dismiss.click({ timeout: 3000 }).catch(() => {});
+          else await dismiss.waitFor();
+        } else {
+          page = await designPage(size, theme);
+          if (notice) await inDesign(page, "Plan notice");
+          if (state === "reconnecting") await inDesign(page, "Reconnecting");
+        }
+        const main = page.getByRole("main");
+        if (state === "beside") {
+          await page.getByRole("button", { name: /^Chats/ }).click();
+          await page.getByRole("complementary", { name: "Chats" }).waitFor();
+        }
+        if (state === "reconnecting") gateway?.goAway();
+        if (state === "start") {
+          if (!gateway) await openDesignAgent(page, "Research");
+          await main.getByRole("navigation", { name: "Dock" }).waitFor();
+          await stopAgent(page, "Research");
+          if (gateway) {
+            gateway.refuseNext("agents.start", "unavailable", "Its provider isn't connected.");
+            await main
+              .getByRole("region", { name: "Research's computer" })
+              .getByRole("button", { name: "Start" })
+              .click();
+          } else await inDesign(page, "Action refused");
+        }
+        if (state === "file") {
+          if (!gateway) await openDesignAgent(page, "Research");
+          await openFiles(page);
+          if (gateway) {
+            // Taken out while it changes between two of its parts.
+            const files = main.getByRole("group", { name: "Files" });
+            await files.getByRole("button", { name: /package\.json/ }).click();
+            gateway.live.files.reads = "held";
+            await files.getByRole("button", { name: "Download" }).click();
+            for (let tries = 0; gateway.live.files.parts.length === 0; tries++) {
+              if (tries > 200) throw new Error("the file's first part is never asked for");
+              await page.waitForTimeout(50);
+            }
+            gateway.endReads();
+            gateway.putFile("storefront/package.json", "{}", 0);
+            await files.getByRole("alert").waitFor();
+            await files.getByRole("button", { name: "Up", exact: true }).click();
+          } else await inDesign(page, "Action refused");
+        }
+        if (state === "signin") {
+          const place = main.getByRole("region", { name: "Set up" });
+          if (gateway) {
+            gateway.refuseNext("login.start", "unavailable", "Not answering.");
+            await place.getByRole("button", { name: "Continue with ChatGPT" }).click();
+          } else {
+            await inDesign(page, /^ChatGPT:/);
+            await inDesign(page, "Action refused");
+          }
+          await place.getByRole("alert").waitFor();
+        }
+        if (state === "start" || state === "file") await main.getByRole("alert").waitFor();
+        else if (state !== "signin")
+          await page
+            .getByRole("status")
+            .filter({ hasText: notice ? "ChatGPT plan" : "Reconnecting" })
+            .waitFor();
+        await rest(page, size);
+        all[`bar.${state}.${size}.${theme}.${side}`] = await measure(page, "bar");
+        await page.close();
+        await gateway?.close();
+      }
 }
 
 // Settings' other sections, wide and on a phone, and what Skills and MCP connections offer.
