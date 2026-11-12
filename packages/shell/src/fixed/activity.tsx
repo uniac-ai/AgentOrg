@@ -20,6 +20,7 @@ import { Nothing, Section, UNREAD } from "./parts.tsx";
 type Work = z.output<typeof Activity>["works"][number];
 type Entry = Work["entries"][number];
 type Page = z.output<typeof ActivityPage>;
+type Pieces = z.output<typeof Activity>;
 
 /** How many calls the box holds: the latest of the newest pieces of work, at most so many of each. */
 const LATEST = 6;
@@ -28,6 +29,8 @@ const EACH = 3;
 const PAGE = 20;
 const BOX_PAGES = 5;
 const WINDOW_PAGES = 50;
+/** How many pages of pieces of work the window reads: six pieces each. */
+const PIECE_PAGES = 20;
 /** How often how long ago is said again. */
 const MINUTE = 60_000;
 
@@ -75,11 +78,12 @@ const never: Enough = () => false;
 
 /**
  * An agent's pieces of work, as the view's operation answers them: read when it opens and again
- * each time its capability says the view changed, one read at a time. A piece's older entries are
- * read a page at a time until its rows are `enough`; what was read before is kept, so a change
- * reads its latest entries and no more. Not read, it has none and says so.
+ * each time its capability says the view changed, one read at a time. With `every`, the pieces
+ * last active before those it answers first are read too, a page at a time. A piece's older
+ * entries are read a page at a time until its rows are `enough`; what was read before is kept, so
+ * a change reads its latest entries and no more. Not read, it has none and says so.
  */
-function useWorks(source: Source | undefined, enough: Enough, pages: number) {
+function useWorks(source: Source | undefined, enough: Enough, pages: number, every = false) {
   const connection = useConnection();
   const [read, setRead] = useState<{ works?: Work[]; unread?: true }>({});
   const key = source && JSON.stringify(source);
@@ -135,13 +139,31 @@ function useWorks(source: Source | undefined, enough: Enough, pages: number) {
         do {
           again = false;
           let works: Work[];
+          let more: boolean | undefined;
           try {
-            ({ works } = await ask<{ works: Work[] }>(source, {}));
+            ({ works, more } = await ask<Pieces>(source, {}));
           } catch {
             if (live) setRead({ unread: true });
             continue;
           }
           if (!live) return;
+          // The pieces before the last one listed, page after page.
+          for (let n = 0; every && more && n < PIECE_PAGES; n++) {
+            const last = works.at(-1);
+            if (!last) break;
+            let page: Pieces;
+            try {
+              page = await ask<Pieces>(source, { before: last.id });
+            } catch {
+              // Those read are drawn: the rest is read with the next change.
+              break;
+            }
+            if (!live) return;
+            const known = new Set(works.map((work) => work.id));
+            const older = page.works.filter((work) => !known.has(work.id));
+            works = [...works, ...older];
+            more = page.more && older.length > 0;
+          }
           // What is known is drawn at once; what is read next follows.
           setRead({ works: works.map(joined) });
           const filled = await Promise.all(works.map(fill));
@@ -164,7 +186,7 @@ function useWorks(source: Source | undefined, enough: Enough, pages: number) {
       live = false;
       stop();
     };
-  }, [key, connection, pages]);
+  }, [key, connection, pages, every]);
   return { ...read, ...(source ? {} : { works: [] }) };
 }
 
@@ -290,7 +312,7 @@ export function ActivityWindow({
   detail: AgentDetail | undefined;
 }) {
   const { close } = useComputers();
-  const { works, unread } = useWorks(activityOf(detail), never, WINDOW_PAGES);
+  const { works, unread } = useWorks(activityOf(detail), never, WINDOW_PAGES, true);
   return (
     <section
       aria-label={`${agent.name}'s activity`}

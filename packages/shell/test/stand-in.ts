@@ -564,16 +564,22 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
     if (input.name !== "work") throw new Refusal("unknown", "There is no such tool.");
     const { work, before, limit } = (input.arguments ?? {}) as Record<string, unknown>;
     const works = agent.works ?? [];
-    if (work === undefined)
+    if (work === undefined) {
+      // Six pieces at a time, those last active before `before` when it names one.
+      const from = before === undefined ? 0 : works.findIndex((w) => w.id === before) + 1;
+      if (from === 0 && before !== undefined)
+        return { output: "There is no such piece of work.", failed: true };
       return {
         output: JSON.stringify({
-          works: works.slice(0, 6).map((one) => ({
+          works: works.slice(from, from + 6).map((one) => ({
             ...one,
             entries: one.entries.slice(-3),
             more: one.entries.length > 3,
           })),
+          more: works.length > from + 6,
         }),
       };
+    }
     const one = works.find((w) => w.id === work);
     if (!one) return { output: "There is no such piece of work.", failed: true };
     // Before an entry it doesn't have, it has none.
