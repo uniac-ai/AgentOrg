@@ -83,7 +83,7 @@ const keyOf = (seq: number) => `${MESSAGES}${String(seq).padStart(12, "0")}`;
 const seqOf = (key: string) => Number(key.slice(MESSAGES.length)) || 0;
 // The record's limits are fixed here for now, sized for a host that carries a model request, or a
 // page of messages, in one piece of about a megabyte.
-/** What the model is sent of the past: the newest exchanges up to this many bytes of JSON. */
+/** What the model is sent of a conversation fits this many bytes of JSON where `fit` can make it. */
 export const INPUT_BUDGET = 400_000;
 /** At most this many messages are kept, in at most this many bytes, oldest deleted first. */
 export const KEEP = 2000;
@@ -97,6 +97,71 @@ const encoder = new TextEncoder();
 const size = (value: unknown) => encoder.encode(JSON.stringify(value)).byteLength;
 const LEFT_OUT = "(Left out: the conversation was too large to send it.)";
 const ARGUMENTS_LEFT_OUT = '{"left_out":"too large to keep"}';
+/**
+ * What is over the budget is cut in steps of this many bytes: while a conversation grows within
+ * one step and one exchange the same is left out, so the requests that follow a cut begin as it
+ * did.
+ */
+export const CUT_STEP = INPUT_BUDGET / 4;
+/** The number a user message starts with, as it is sent: `[12]`. */
+const numberOf = (item: Item | undefined) =>
+  item?.type === "message" && item.role === "user" ? /^\[\d+\]/.exec(item.content)?.[0] : undefined;
+
+/**
+ * The exchanges as the items to send, within the budget where they can be. What is over it,
+ * rounded up to a step, goes in this order, each the oldest first:
+ * 1. what the calls of every exchange except the latest were given and gave back, each call
+ *    still paired with an output, so what was said stays longest;
+ * 2. whole exchanges, except the latest two, so "go on" after a long turn still has that turn,
+ *    and except the message the work opened with, `[1]`: one line stands where they were,
+ *    saying after and before which messages;
+ * 3. what the calls of the latest exchange were given and gave back.
+ * What was said is never cut: exchanges that are over the budget without their calls are sent so.
+ */
+function fit(exchanges: Item[][]): Item[] {
+  const total = exchanges.reduce((sum, items) => sum + size(items), 0);
+  if (total <= INPUT_BUDGET) return exchanges.flat();
+  const toCut = Math.ceil((total - INPUT_BUDGET) / CUT_STEP) * CUT_STEP;
+  let cut = 0;
+  const left = exchanges.map((items) => [...items]);
+  /** Leave out what the calls among `items` were given and gave back, until enough is cut. */
+  const leaveOut = (items: Item[] = []) => {
+    for (let i = 0; i < items.length && cut < toCut; i++) {
+      const item = items[i] as Item;
+      // Only what is larger than the words that stand for it: leaving out less would add.
+      if (item.type === "function_call_output" && size(item.output) > size(LEFT_OUT)) {
+        cut += size(item.output) - size(LEFT_OUT);
+        items[i] = { ...item, output: LEFT_OUT };
+      } else if (item.type === "function_call" && size(item.arguments) > size(ARGUMENTS_LEFT_OUT)) {
+        cut += size(item.arguments) - size(ARGUMENTS_LEFT_OUT);
+        items[i] = { ...item, arguments: ARGUMENTS_LEFT_OUT };
+      }
+    }
+  };
+  for (const items of left.slice(0, -1)) leaveOut(items);
+  // The opening message stays: it is what the work was asked, in the person's own words. A
+  // record whose first message is gone, past what it keeps, has none.
+  const opening = numberOf(left[0]?.[0]) === "[1]" ? (left[0] as Item[]).slice(0, 1) : [];
+  let gone = 0;
+  let lost = 0;
+  while (cut < toCut && gone < left.length - 2) {
+    const going = (left[gone] as Item[]).slice(gone === 0 ? opening.length : 0);
+    if (going.length) cut += size(going);
+    lost += going.length;
+    gone++;
+  }
+  const rest = left.slice(gone);
+  leaveOut(rest.at(-1));
+  if (lost === 0) return [...(gone ? opening : []), ...rest.flat()];
+  // Every exchange after the first begins with a numbered message.
+  const [from, to] = [numberOf(opening[0]), numberOf(rest[0]?.[0])];
+  const gap: Item = {
+    type: "message",
+    role: "user",
+    content: `(Left out: all that was said and done ${from ? `after ${from} and ` : ""}before ${to}. The conversation was too large to send it.)`,
+  };
+  return [...opening, gap, ...rest.flat()];
+}
 
 /** The first `length` UTF-16 units of `text`, never ending inside a surrogate pair. */
 export function head(text: string, length: number): string {
@@ -829,10 +894,8 @@ export function createRecord(options: {
       return first ? textOf(first.record.entry) : "";
     },
     /**
-     * The conversation to send: the newest exchanges (each from a user message that is not `joined`
-     * on) that fit the budget, and always the latest two, so "go on" after a long turn still has
-     * that turn. When those two are over the budget, their oldest function arguments and outputs
-     * are left out, each call still paired with an output. A message said during a turn comes after
+     * The conversation to send: its exchanges (each from a user message that is not `joined` on),
+     * as `fit` fits them to the budget. A message said during a turn comes after
      * whatever is `ahead` of it, so the model reads it as not yet answered. `read` is the place up
      * to which every user message was read, for `append` and `saidAfter`: one still being written
      * is not read yet. `thread` is where what comes of it is kept.
@@ -880,20 +943,11 @@ export function createRecord(options: {
         put(record);
       }
       putLate(last);
-      let total = exchanges.reduce((sum, items) => sum + size(items), 0);
-      while (exchanges.length > 2 && total > INPUT_BUDGET) total -= size(exchanges.shift());
-      const items = exchanges.flat();
-      for (let i = 0; i < items.length && total > INPUT_BUDGET; i++) {
-        const item = items[i] as Item;
-        if (item.type === "function_call_output" && item.output !== LEFT_OUT) {
-          total -= size(item.output) - size(LEFT_OUT);
-          items[i] = { ...item, output: LEFT_OUT };
-        } else if (item.type === "function_call" && item.arguments !== ARGUMENTS_LEFT_OUT) {
-          total -= size(item.arguments) - size(ARGUMENTS_LEFT_OUT);
-          items[i] = { ...item, arguments: ARGUMENTS_LEFT_OUT };
-        }
-      }
-      return { items, read, thread: whereOf(records.filter(({ record }) => !unread(record))) };
+      return {
+        items: fit(exchanges),
+        read,
+        thread: whereOf(records.filter(({ record }) => !unread(record))),
+      };
     },
     /** Whether a user message of its has been stored after the place `read`, which `input` gave. */
     async saidAfter(read: number): Promise<boolean> {

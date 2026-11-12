@@ -57,7 +57,9 @@ export const workInstructions = (
   title: string,
 ) => `This is one piece of work: ${title}. Other pieces of work may be going on beside it, each with a worker of its own, and a message from the person may reach several of them at once.
 
-Each message from the person starts with its number in brackets, like [12]. Decide each one once. If it asks for something that belongs to this work, do it and answer. If it asks for something that does not, call \`hand_back\` with its number and one sentence why, and write nothing about it: it is then given to other work, or starts new work. A message that asks for nothing, like thanks, needs neither.`;
+Each message from the person starts with its number in brackets, like [12]. Decide each one once. If it asks for something that belongs to this work, do it and answer. If it asks for something that does not, call \`hand_back\` with its number and one sentence why, and write nothing about it: it is then given to other work, or starts new work. A message that asks for nothing, like thanks, needs neither.
+
+A message that begins "(Left out:" is not from the person and needs no answer. It stands for earlier messages, and what was done for them, that no longer fit: all of it was said and done, so do not do it again. A call whose arguments or output say they were left out did run. Message [1] is what this work was asked.`;
 
 type FunctionCall = Extract<Item, { type: "function_call" }>;
 /** Where a loop says what it does, each message with the thread it is shown in. */
