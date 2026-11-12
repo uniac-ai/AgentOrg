@@ -250,6 +250,7 @@ const UNITS: Units["units"] = [
         type: "choice",
         value: "string",
         title: "Where it resides",
+        description: "Where its computer runs.",
         required: true,
         options: [
           {

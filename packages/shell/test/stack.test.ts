@@ -8,6 +8,7 @@ import {
   givesOf,
   isReady,
   isShown,
+  offeredName,
   placeholderOf,
   toStack,
 } from "../src/fixed/stack.ts";
@@ -121,6 +122,12 @@ test("the stack holds only what's shown and filled in, with secrets apart", () =
 
 test("an agent or a template has to be named", () => {
   assert.equal(isReady({ ...draftOf({ access: "none" }), name: " " }), false);
+  // An agent is ready with the name it is offered; a template isn't.
+  assert.equal(isReady({ ...draftOf({ access: "none" }), name: " " }, "Scout"), true);
+  assert.equal(
+    isReady({ ...draftOf({ access: "none" }), mode: "template", name: " " }, "Scout"),
+    false,
+  );
   assert.equal(isReady({ ...draftOf({ access: "none" }), name: "Mine" }), true);
   assert.equal(isReady({ ...draftOf({ access: "none" }), mode: "template", name: "" }), false);
 });
@@ -130,4 +137,11 @@ test("{name} in greyed text is the agent's name, and stays as written with no ag
   assert.equal(placeholderOf(field, "Wren"), "~/Agents/Wren/Wren");
   assert.equal(placeholderOf(field, undefined), "~/Agents/{name}/{name}");
   assert.equal(placeholderOf(form[2] as Field, "Wren"), undefined);
+});
+
+test("an agent is offered the first of the names that no agent has, and none once all are taken", () => {
+  assert.equal(offeredName([]), "Scout");
+  assert.equal(offeredName(["Scout", "Wren"]), "Juniper");
+  assert.equal(offeredName(["scout"]), "Wren", "a name in another case is the same name");
+  assert.equal(offeredName(["Scout", "Wren", "Juniper", "Cedar", "Maple", "Sage"]), "");
 });

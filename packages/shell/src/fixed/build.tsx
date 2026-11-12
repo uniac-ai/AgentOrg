@@ -10,7 +10,7 @@ import {
   SparklesIcon,
   XIcon,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, go } from "../data.ts";
 import { Button } from "../ui/button.tsx";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../ui/dialog.tsx";
@@ -35,9 +35,24 @@ import {
   isReady,
   isShown,
   missingNeeds,
+  nameOf,
+  offeredName,
   type StackProblem,
   toStack,
 } from "./stack.ts";
+import { useAgents } from "./watch.tsx";
+
+/**
+ * The name an agent is offered: the first of the shell's names that no agent has. None is offered
+ * until the agents are read, and a name read while the window is open stays taken, so a read that
+ * fails, which lists none, doesn't offer one an agent has.
+ */
+function useOffered() {
+  const { list, loaded } = useAgents();
+  const taken = useRef(new Set<string>());
+  for (const agent of list) taken.current.add(agent.name);
+  return loaded ? offeredName([...taken.current]) : "";
+}
 
 /**
  * Create, in one window: what to start from on the left, the stack on the right. A click outside
@@ -110,12 +125,13 @@ function Stack() {
   // Made while signed out of the model account, an agent can't work yet: the foot says so.
   const needs = needsOf(useLogin());
   const [saving, setSaving] = useState(false);
+  const offered = useOffered();
   if (!draft) return null;
-  const ready = isReady(draft);
+  const ready = isReady(draft, offered);
   const isTemplate = draft.mode === "template";
   const finish = () => {
     if (!ready) return;
-    const name = draft.name.trim();
+    const name = nameOf(draft, offered);
     const purpose = draft.purpose.trim();
     if (isTemplate) {
       act.run(async () => {
@@ -145,6 +161,27 @@ function Stack() {
       go({ screen: "agent", agent });
     });
   };
+  /** The window's menu: in its head, or at its foot where the head isn't drawn. */
+  const options = (align: "start" | "end") =>
+    // Not modal: a modal menu dismissed with Escape swallows the next click outside the window.
+    !isTemplate && (
+      <DropdownMenu modal={false}>
+        <DropdownMenuTrigger asChild>
+          <Button type="button" variant="ghost" size="icon-sm" aria-label="Build options">
+            <MoreHorizontalIcon />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align={align}>
+          {/* A stack with no base, or a unit nobody offers, can't be kept. */}
+          <DropdownMenuItem
+            disabled={!draft.base || draft.units.some((u) => !u.unit)}
+            onSelect={() => setSaving(true)}
+          >
+            Save as template…
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    );
   const overall = draft.problems.filter((p) => p.unit === undefined);
   const refused = act.failed ?? overall.map((p) => p.message).join(" ");
   return (
@@ -159,32 +196,18 @@ function Stack() {
       >
         <header className="flex h-12 shrink-0 items-center gap-1 pr-11 pl-5 max-sm:hidden">
           <span className="min-w-0 flex-1" />
-          {/* Not modal, here and below: a modal menu dismissed with Escape swallows the next click outside the window. */}
-          {!isTemplate && (
-            <DropdownMenu modal={false}>
-              <DropdownMenuTrigger asChild>
-                <Button type="button" variant="ghost" size="icon-sm" aria-label="Build options">
-                  <MoreHorizontalIcon />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                {/* A stack with no base, or a unit nobody offers, can't be kept. */}
-                <DropdownMenuItem
-                  disabled={!draft.base || draft.units.some((u) => !u.unit)}
-                  onSelect={() => setSaving(true)}
-                >
-                  Save as template…
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          )}
+          {options("end")}
         </header>
         <div className="no-bar min-h-0 flex-1 overflow-y-auto px-5 pb-3 max-sm:pt-3">
           <FieldGroup className="gap-3">
             <Field>
               <FieldLabel htmlFor="build-name">Name</FieldLabel>
+              {/* The keyboard starts here, and an agent is offered a name: Create works at once. */}
               <Input
                 id="build-name"
+                // biome-ignore lint/a11y/noAutofocus: the window opens to be filled in, name first.
+                autoFocus
+                placeholder={isTemplate ? undefined : offered}
                 value={draft.name}
                 onChange={(e) => setText({ name: e.target.value })}
               />
@@ -238,6 +261,8 @@ function Stack() {
           </DropdownMenu>
         </div>
         <footer className="flex shrink-0 items-center justify-end gap-4 px-5 py-3">
+          {/* Where the window's head isn't drawn, its menu is at the foot. */}
+          <span className="mr-auto sm:hidden">{options("start")}</span>
           {refused ? (
             <p role="alert" className="min-w-0 flex-1 text-[13px] text-[var(--bad)]">
               {refused}
@@ -387,6 +412,7 @@ function UnitCard({
   problems: StackProblem[];
 }) {
   const { catalog, draft, addUnit, removeUnit, setSecret, setValue } = useBuilding();
+  const offered = useOffered();
   const [unfolded, setUnfolded] = useState(true);
   // Something found wrong with it opens it, each time the stack is checked.
   const found = problems.length > 0;
@@ -439,7 +465,7 @@ function UnitCard({
                 <FormField
                   key={field.id}
                   id={`unit-${key}-${field.id}`}
-                  agentName={draft?.mode === "agent" ? draft.name.trim() : undefined}
+                  agentName={draft?.mode === "agent" ? nameOf(draft, offered) : undefined}
                   field={field}
                   values={values}
                   secret={secrets[field.id] ?? ""}

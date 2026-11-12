@@ -100,18 +100,35 @@ test(
 );
 
 test(
-  "an agent has to be named; what it's for is optional",
+  "an agent is offered a name no agent has, used when none is typed; a template has to be named; what it's for is optional",
   withGateway(async (gateway) => {
+    // An agent already has the first name, in another case: the next is offered.
+    const research = gateway.agents.get("a-research");
+    assert.ok(research);
+    research.name = "scout";
+    // Until the agents are read, none is offered and nothing can be made unnamed.
+    const release = gateway.hold("agents.list");
     const page = await open(gateway);
-    await agentsRead(page);
     await plus(page).click();
     const name = panel(page).locator("#build-name");
     await name.waitFor();
-    assert.equal(await name.getAttribute("placeholder"), null, "no name is offered");
+    assert.equal((await name.getAttribute("placeholder")) ?? "", "");
+    assert.equal(await named(page, "Create").isDisabled(), true);
+    release();
+    await agentsRead(page);
+    await page.waitForFunction(
+      () => document.querySelector("#build-name")?.getAttribute("placeholder") === "Wren",
+    );
+    // A read that fails lists none: the name offered is still one no agent has.
+    gateway.refuseNext("agents.list", "unavailable", "Not now.");
+    gateway.setAccount("signed_in");
+    await page.locator('ul[aria-label="Agents"] li').first().waitFor({ state: "detached" });
+    assert.equal(await name.getAttribute("placeholder"), "Wren", "greyed, the name it is offered");
+    assert.equal(await name.evaluate((e) => e === document.activeElement), true, "the keyboard");
     const create = named(page, "Create");
-    assert.equal(await create.isDisabled(), true);
+    assert.equal(await create.isDisabled(), false, "it can be made at once");
     await name.fill("  ");
-    assert.equal(await create.isDisabled(), true, "blanks aren't a name");
+    assert.equal(await create.isDisabled(), false, "blanks are no name: the offered one is used");
     await name.fill(" Solo ");
     assert.equal(await create.isDisabled(), false);
     await create.click();
@@ -122,6 +139,26 @@ test(
     };
     assert.equal(sent.name, "Solo");
     assert.equal(sent.purpose, undefined);
+    // Nothing typed, the offered name is the agent's.
+    await panel(page).waitFor({ state: "detached" });
+    await plus(page).click();
+    await name.waitFor();
+    await named(page, "Create").click();
+    await page.waitForURL(/#\/a\/a-7$/);
+    assert.equal(
+      (gateway.calls.findLast((c) => c.method === "create")?.input as { name?: string } | undefined)
+        ?.name,
+      "Wren",
+    );
+    // A template is offered none, and waits for one.
+    await page
+      .getByRole("navigation", { name: "Main" })
+      .getByRole("button", { name: "Templates" })
+      .click();
+    await page.getByRole("main").getByRole("button", { name: "New template", exact: true }).click();
+    await name.waitFor();
+    assert.equal(await name.getAttribute("placeholder"), null);
+    assert.equal(await named(page, "Save template").isDisabled(), true);
     await page.close();
   }),
 );
@@ -157,20 +194,48 @@ test(
 );
 
 test(
-  "what the chosen answer grants stays under its field, and a field offers nothing else about itself",
+  "each answer says what it means before it is chosen, and under its field once it is; a field with no answer says what it is",
   withGateway(async (gateway) => {
     const page = await open(gateway);
     await fromTemplate(page, "Assistant");
     const computer = card(page, "Computer");
-    assert.doesNotMatch(await computer.innerText(), /It acts as you on this Mac\./);
+    // The caution colour, read while the card can be reached: an open list hides the rest.
+    const caution = await computer.evaluate((e) => {
+      const probe = document.createElement("i");
+      probe.style.color = "var(--warn)";
+      e.append(probe);
+      const color = getComputedStyle(probe).color;
+      probe.remove();
+      return color;
+    });
+    // Nothing chosen, the field says what it is under itself; the list says it of each answer.
+    const what = computer.locator("p", { hasText: "Where its computer runs." });
+    await what.waitFor();
+    assert.notEqual(await what.evaluate((e) => getComputedStyle(e).color), caution);
+    assert.equal(
+      await computer.locator("p", { hasText: "It acts as you on this Mac." }).count(),
+      0,
+    );
     await panel(page).getByRole("combobox", { name: "Where it resides" }).click();
     assert.deepEqual(await page.getByRole("option").allInnerTexts(), [
-      "This computer",
-      "Its own container",
+      "This computer\nIt acts as you on this Mac.",
+      "Its own container\nIsolated from your files.",
     ]);
-    await page.getByRole("option", { name: "This computer" }).click();
-    const note = computer.getByText("It acts as you on this Mac.");
+    // In the open list, only the answer its unit marks as a caution is in the caution colour.
+    const colourOf = (text: string) =>
+      page
+        .getByRole("option")
+        .getByText(text, { exact: true })
+        .evaluate((e) => getComputedStyle(e).color);
+    assert.equal(await colourOf("It acts as you on this Mac."), caution);
+    assert.notEqual(await colourOf("Isolated from your files."), caution);
+    await page.getByRole("option", { name: /^This computer/ }).hover();
+    assert.equal(await colourOf("It acts as you on this Mac."), caution, "pointed at, too");
+    await page.getByRole("option", { name: /^This computer/ }).click();
+    // What is said under the field: a line of its own, apart from the list's hidden copy.
+    const note = computer.locator("p", { hasText: "It acts as you on this Mac." });
     await note.waitFor();
+    assert.equal(await what.count(), 0, "in place of what the field is");
     const where = await boxOf(computer.getByRole("combobox", { name: "Where it resides" }));
     assert.ok((await boxOf(note)).y >= where.y + where.height, "under the answer");
     assert.equal(
@@ -187,7 +252,7 @@ test(
     );
     // An answer its unit doesn't mark says what it means in the muted colour.
     await choose(page, "Where it resides", /^Its own container/);
-    const plain = computer.getByText("Isolated from your files.");
+    const plain = computer.locator("p", { hasText: "Isolated from your files." });
     await plain.waitFor();
     assert.equal(await note.count(), 0);
     assert.equal(
@@ -213,7 +278,10 @@ test(
         return color;
       }),
     );
-    assert.doesNotMatch(await computer.innerText(), /A browser of its own/);
+    // A field with no answer to choose says what it is, muted, under its control.
+    const browser = computer.getByText("A browser of its own. It can open any site.");
+    await browser.waitFor();
+    assert.notEqual(await browser.evaluate((e) => getComputedStyle(e).color), caution);
     assert.equal(await computer.getByRole("button", { name: /^(About|Browse)/ }).count(), 0);
     const folder = computer.getByLabel("Workspace directory", { exact: true });
     await page.close();
@@ -313,8 +381,8 @@ test(
     const folder = card(page, "Computer").getByLabel("Workspace directory", { exact: true });
     assert.equal(
       await folder.getAttribute("placeholder"),
-      "~/Agents/{name}",
-      "as its unit wrote it",
+      "~/Agents/Scout",
+      "with the name the agent is offered",
     );
     assert.equal(await folder.inputValue(), "");
     await name.fill("Foreman");
@@ -388,8 +456,14 @@ test(
   }),
 );
 
+/** Assistant, picked on a phone, where what to start from runs across the top. */
+const fromAssistantOnPhone = async (page: Page) => {
+  await named(page, /^Assistant/).click();
+  await card(page, "Computer").waitFor();
+};
+
 test(
-  "on a phone what to start from runs across the top by name, and the stack fills the rest",
+  "on a phone what to start from runs across the top by name, the stack fills the rest, and the window's menu is at its foot",
   withGateway(async (gateway) => {
     const page = await browser().newPage({ viewport: { width: 390, height: 844 } });
     page.setDefaultTimeout(8000);
@@ -415,7 +489,15 @@ test(
       "Assistant",
       "by name alone",
     );
-    assert.equal(await window_.getByRole("button", { name: "Build options" }).isVisible(), false);
+    // Where the window's head isn't drawn, its menu is at the foot, left of Create.
+    const options = window_.locator("footer").getByRole("button", { name: "Build options" });
+    await fromAssistantOnPhone(page);
+    const [menu, create] = [await boxOf(options), await boxOf(named(page, "Create"))];
+    assert.equal(menu.y + menu.height / 2, create.y + create.height / 2, "on Create's row");
+    assert.ok(menu.x < create.x && menu.x - box.x < 40, "at the foot's left");
+    await options.click();
+    await page.getByRole("menuitem", { name: "Save as template…" }).waitFor();
+    await page.keyboard.press("Escape");
     const form = await boxOf(window_.getByRole("form", { name: "Build" }));
     assert.deepEqual([form.x, form.y, form.width, form.height], [16, box.y + 68, 358, 632]);
     await page.close();
