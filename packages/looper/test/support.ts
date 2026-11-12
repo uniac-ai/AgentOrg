@@ -15,6 +15,7 @@ export function looperWith(
     /** Awaited before each write to the store, and before each read or listing from it. */
     writing?: (key: string) => Promise<void> | undefined;
     reading?: (key: string) => Promise<void> | undefined;
+    deleting?: (key: string) => Promise<void> | undefined;
     /** The store, to make a looper again on what another kept. */
     values?: Map<string, Json>;
     /** Called as each message is said. */
@@ -68,7 +69,10 @@ export function looperWith(
         await options.writing?.(key);
         values.set(key, value);
       },
-      delete: async ({ key }) => void values.delete(key),
+      async delete({ key }) {
+        await options.deleting?.(key);
+        values.delete(key);
+      },
       // Two keys at a time, so anything long is read over several pages.
       async list({ prefix = "", after }) {
         await options.reading?.(prefix);
