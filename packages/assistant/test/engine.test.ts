@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { tools } from "@agentorg/interfaces";
-import { capped, INPUT_BUDGET, MAX_CALLS, MAX_OUTPUT } from "@agentorg/looper";
+import { capped, Entry, INPUT_BUDGET, MAX_CALLS, MAX_OUTPUT, textOf } from "@agentorg/looper";
 import { defineInterface, method, NotConnected, OutcomeUnknown, Refused } from "@agentorg/sdk";
 import { createTestContext } from "@agentorg/sdk/testing";
 import { z } from "zod";
 import { MAX_INSTRUCTIONS } from "../src/settings.ts";
 import { MAX_TOOLS, TOOLS_BUDGET } from "../src/tools.ts";
-import { asAsked } from "./as-asked.ts";
+import { asAsked, followsSend, named, sendOf } from "./as-asked.ts";
 import engine, { engines, INSTRUCTIONS } from "./engine-actor.ts";
 
 /** An interface that isn't `tools@1`. */
@@ -39,7 +39,10 @@ type Request = {
 };
 type Reply = { output: Record<string, unknown>[] };
 type Step = Reply | ((request: Request) => Reply | Promise<Reply>);
-const say = (content: string): Reply => ({
+/** The worker's reply: sent to the newest message it read and hasn't handed back. */
+const say = (content: string): Reply => ({ output: [sendOf(content)] });
+/** What the worker writes without sending. */
+const write = (content: string): Reply => ({
   output: [{ type: "message", role: "assistant", content }],
 });
 const callTool = (name: string, args: unknown, callId: string = crypto.randomUUID()) => ({
@@ -50,6 +53,15 @@ const callTool = (name: string, args: unknown, callId: string = crypto.randomUUI
 });
 const calls = (...items: ReturnType<typeof callTool>[]): Reply => ({ output: items });
 const bytes = (text: string) => new TextEncoder().encode(text).byteLength;
+/**
+ * Everything the test's chat's record keeps, in order, each as its text: what was said in it, a
+ * reply by what it sent, and what its work keeps there, said in no chat.
+ */
+const recorded = (s: { store: { values: Map<string, unknown> }; id(): string }) =>
+  [...s.store.values.keys()]
+    .filter((key) => key.startsWith(`chat/${encodeURIComponent(s.id())}/msg/`))
+    .sort()
+    .map((key) => textOf(Entry.parse(s.store.values.get(key))));
 
 /** Wait for a condition, failing rather than hanging when it never comes. */
 async function until(condition: () => boolean, what = "the condition") {
@@ -151,10 +163,14 @@ async function setup(values = new Map<string, unknown>(), rest?: (actor: Actor) 
           } as never;
         return { output: [call ?? NEW_WORK] } as never;
       }
+      // A request that only follows what was sent is answered with nothing, as by a model that
+      // has said all it had: it is not among `requests`, and takes nothing from `script`.
+      if (followsSend((request as Request).input)) return { output: [] };
       requests.push(asAsked(request) as Request);
       whole.push(request as Request);
       const next = script.shift() ?? say("ok");
-      return (typeof next === "function" ? await next(asAsked(request) as Request) : next) as never;
+      const reply = typeof next === "function" ? await next(asAsked(request) as Request) : next;
+      return { output: named(reply.output as never, (request as Request).input) } as never;
     },
     cancel: ({ requestId }) => {
       cancels.push(requestId);
@@ -234,8 +250,9 @@ async function setup(values = new Map<string, unknown>(), rest?: (actor: Actor) 
   };
 }
 
-test("a tool message says its call running, then how it ended, under one id; the record keeps it", async () => {
-  const s = await setup();
+test("what the agent's tools do is not in its chat, and the model reads how each call ended, after a restart too", async () => {
+  const values = new Map<string, unknown>();
+  const s = await setup(values);
   s.actor.expose(
     "layout",
     tools,
@@ -251,83 +268,32 @@ test("a tool message says its call running, then how it ended, under one id; the
       callTool("layout__place", { actor: "board", module: "panel" }, "c1"),
       callTool("layout__remove", { id: "p9" }, "c2"),
     ),
-    calls(...Array.from({ length: MAX_CALLS + 1 }, (_, i) => callTool("layout__get", {}, `g${i}`))),
   );
   await s.turn("Place it, then remove p9.");
-  type Shown = { id: string; role: string; text: string; tool?: Record<string, unknown> };
-  const shown = s.actor.emitted
-    .filter((e) => e.event === "message")
-    .map((e) => e.payload as Shown)
-    .filter((m) => m.role === "tool");
-  const [placing, placed, removing, removed] = shown;
-  assert.deepEqual(placing?.tool, {
-    name: "layout__place",
-    state: "running",
-    input: JSON.stringify({ actor: "board", module: "panel" }),
-  });
-  assert.equal(placed?.id, placing?.id);
-  assert.deepEqual(placed?.tool, {
-    name: "layout__place",
-    state: "done",
-    input: JSON.stringify({ actor: "board", module: "panel" }),
-    output: JSON.stringify({ id: "p1" }),
-  });
-  assert.equal(removed?.id, removing?.id);
-  assert.notEqual(removed?.id, placed?.id);
-  assert.equal(removed?.tool?.state, "refused");
-  assert.match(String(removed?.tool?.output), /No such placement/);
-  // Calls that never ran (past the turn's limit) are one note, with no tool.
-  const note = shown.at(-1);
-  assert.equal(note?.text, "3 calls: limit");
-  assert.equal(note?.tool, undefined);
-  // The record shows the same as the events' last word on each.
-  type Page = { messages: Shown[]; more: boolean };
-  const page = (before?: string) =>
-    s.chat("history", { limit: 200, ...(before ? { before } : {}) }) as Promise<Page>;
-  let { messages, more } = await page();
-  while (more) {
-    const older = await page(messages[0]?.id);
-    messages = [...older.messages, ...messages];
-    more = older.more;
-  }
-  const recorded = messages.filter((m) => m.role === "tool");
-  // An event names its chat; a page is one chat's already.
-  assert.deepEqual({ ...recorded[0], chat: s.id() }, placed);
-  assert.deepEqual({ ...recorded[1], chat: s.id() }, removed);
-  assert.equal(recorded.at(-1)?.tool, undefined);
-});
-
-test("how each call ended outlives a restart, and a call ends shown even if its record fails", async () => {
-  const values = new Map<string, unknown>();
-  const s = await setup(values);
-  s.actor.expose(
-    "layout",
-    tools,
-    listing({
-      place: () => ({ id: "p1" }),
-      // The store goes while this call runs: its record can't be written.
-      remove: () => {
-        s.actor.unbind("store");
-        return {};
-      },
-    }),
+  assert.deepEqual(s.messages(), ["user: Place it, then remove p9.", "assistant: ok"]);
+  const { messages } = (await s.chat("history", {})) as { messages: { role: string }[] };
+  assert.deepEqual(
+    messages.map((m) => m.role),
+    ["user", "assistant"],
   );
-  s.script.push(calls(callTool("layout__place", { actor: "board", module: "panel" }, "c1")));
-  await s.turn("Place it.");
-  type Shown = { id: string; role: string; tool?: { state: string } };
+  assert.deepEqual(recorded(s), [
+    "Place it, then remove p9.",
+    "layout__place: done",
+    "layout__remove: unknown",
+    "ok",
+  ]);
+  const ends = (request: Request | undefined) =>
+    request?.input
+      .filter((item) => item.type === "function_call_output")
+      .map((item) => item.output);
+  const ended = ends(s.requests[1]);
+  assert.equal(ended?.[0], JSON.stringify({ id: "p1" }));
+  assert.match(String(ended?.[1]), /No such placement/);
+  // An agent that starts again reads them the same.
+  await s.host.close();
   const again = await setup(values);
-  const { messages } = (await again.chat("history", {})) as { messages: Shown[] };
-  assert.equal(messages.find((m) => m.role === "tool")?.tool?.state, "done");
-
-  s.script.push(calls(callTool("layout__remove", { id: "p1" }, "c2")));
-  await s.turn("Remove it.");
-  const last = new Map<string, Shown>();
-  for (const e of s.actor.emitted.filter((e) => e.event === "message")) {
-    const m = e.payload as Shown;
-    last.set(m.id, m);
-  }
-  const states = [...last.values()].filter((m) => m.role === "tool").map((m) => m.tool?.state);
-  assert.deepEqual(states, ["done", "done"]);
+  await again.turn("And now?");
+  assert.deepEqual(ends(again.requests[0]), ended);
 });
 
 test("what is exposed to the agent becomes its tools at the next turn, and goes when removed", async () => {
@@ -413,6 +379,8 @@ test("a request offers at most what it can carry, the first given first", async 
   });
   await s.turn("hello");
   assert.equal(s.requests[0]?.tools?.length, MAX_TOOLS);
+  // With the looper's own two, a request's most.
+  assert.equal(s.whole[0]?.tools?.length, 128);
   assert.equal(offeredNames(s.requests[0])?.at(-1), `big__t${MAX_TOOLS - 1}`);
   assert.deepEqual(warnings(s)[0]?.fields, {
     leftOut: [
@@ -647,16 +615,18 @@ test("a function call runs through its slot, and its result or refusal goes back
     ["c2", "c3", "c4", "c5", "c6"].map((id) => outputs[id].error.code),
     ["invalid", "unknown_tool", "invalid", "outcome_unknown", "not_connected"],
   );
-  assert.deepEqual(s.messages(), [
-    "user: Show me the board.",
-    "assistant: Placing it.",
-    "tool: layout__place: done",
-    "tool: layout__place: invalid",
-    "tool: actors__list: unknown_tool",
-    "tool: layout__get: invalid",
-    "tool: layout__get: outcome_unknown",
-    "tool: layout__remove: not_connected",
-    "assistant: Placed the board.",
+  // What it wrote beside its calls, and the calls, are its work's: the chat has what it sent.
+  assert.deepEqual(s.messages(), ["user: Show me the board.", "assistant: Placed the board."]);
+  assert.deepEqual(recorded(s), [
+    "Show me the board.",
+    "Placing it.",
+    "layout__place: done",
+    "layout__place: invalid",
+    "actors__list: unknown_tool",
+    "layout__get: invalid",
+    "layout__get: outcome_unknown",
+    "layout__remove: not_connected",
+    "Placed the board.",
   ]);
   // Every call in the history has its output, right after it, as the Responses API needs.
   for (const [i, item] of last.entries())
@@ -688,7 +658,7 @@ test("a turn makes at most MAX_CALLS tool calls, and says so as its chat's probl
   runs = 0;
   assert.equal((await s.turn("Many."))?.code, "limit");
   assert.equal(runs, MAX_CALLS);
-  assert.equal(s.messages().filter((m) => m === "tool: 5 calls: limit").length, 1);
+  assert.equal(recorded(s).filter((line) => line === "5 calls: limit").length, 1);
 });
 
 test("stopping the agent stops the model's response, and started again it takes a message at once", async () => {
@@ -769,12 +739,10 @@ test("stopped during a tool call, a turn keeps the call's real result and skips 
   await until(() => s.statuses(from).at(-1)?.state === "idle", "the agent to say it is idle");
   release.open();
   await cutting;
-  await until(() => s.messages().length === 3, "both calls recorded");
+  await until(() => recorded(s).length === 3, "both calls recorded");
   assert.equal(entered, 1);
-  assert.deepEqual(s.messages().slice(1), [
-    "tool: layout__place: done",
-    "tool: layout__place: cancelled",
-  ]);
+  assert.deepEqual(recorded(s).slice(1), ["layout__place: done", "layout__place: cancelled"]);
+  assert.deepEqual(s.messages(), ["user: Place it twice."]);
   assert.equal(s.requests.length, 1, "no model call after the stop");
   // The next turn starts clean, with every call answered.
   await s.turn("Next.");
@@ -845,11 +813,9 @@ test("a turn cut off as the engine closes goes on in the next, and one the perso
       "This turn was cut off by a restart. Check what is already done before you repeat anything, then go on.",
     ],
   );
-  // Its chat shows one line, then the reply.
-  assert.deepEqual(again.messages(), [
-    "tool: Cut off by a restart: going on from where it stopped.",
-    "assistant: ok",
-  ]);
+  // Its chat shows the reply; the line that says it went on is its work's.
+  assert.deepEqual(again.messages(), ["assistant: ok"]);
+  assert.ok(recorded(s).includes("Cut off by a restart: going on from where it stopped."));
   await again.host.settled();
   assert.equal(marked(), false);
   // The next start finds nothing to go on with.
@@ -880,7 +846,7 @@ async function waits(s: Awaited<ReturnType<typeof setup>>) {
   assert.equal(s.requests.length, 0);
   assert.deepEqual(s.messages(), []);
 }
-const WENT_ON = ["tool: Cut off by a restart: going on from where it stopped.", "assistant: ok"];
+const WENT_ON = ["assistant: ok"];
 
 test("a turn that was cut off waits for the agent's settings to answer, and goes on with them", async () => {
   // The agent is back before what holds its settings is running.
@@ -921,27 +887,23 @@ test("a turn that was cut off waits for a tools slot that is away, and goes on w
   }
 });
 
-test("streamed text reaches the chat as the reply it becomes", async () => {
+test("a worker's streamed text reaches no chat: its reply comes whole when it is sent", async () => {
   const s = await setup();
   s.script.push((request) => {
-    s.model.emit("delta", { requestId: "someone-else", text: "not ours" });
-    s.model.emit("delta", { requestId: request.requestId, text: "Hel" });
-    s.model.emit("delta", { requestId: request.requestId, text: "lo." });
-    return say("Hello.");
+    s.model.emit("delta", { requestId: request.requestId, text: "Thinking" });
+    return { output: [...write("Thinking it over.").output, ...say("Hello.").output] };
   });
   await s.turn("Hi.");
-  const deltas = s.actor.emitted.filter((e) => e.event === "delta").map((e) => e.payload);
+  assert.deepEqual(
+    s.actor.emitted.filter((e) => e.event === "delta"),
+    [],
+  );
+  assert.deepEqual(s.messages(), ["user: Hi.", "assistant: Hello."]);
+  // The next user message has a number of its own, never the reply's id.
   const reply = s.actor.emitted
     .filter((e) => e.event === "message")
     .map((e) => e.payload as { id: string; role: string })
     .find((m) => m.role === "assistant");
-  // The reply's chat id is its own, not the model request's.
-  assert.notEqual(reply?.id, s.requests[0]?.requestId);
-  assert.deepEqual(deltas, [
-    { chat: s.id(), id: reply?.id, text: "Hel" },
-    { chat: s.id(), id: reply?.id, text: "lo." },
-  ]);
-  // The next user message has a number of its own, never the reply's id.
   const next = (await s.chat("send", { text: "Again." })) as { messageId: string };
   assert.notEqual(next.messageId, reply?.id);
 });
@@ -1182,8 +1144,7 @@ test("thousands of calls in one reply cost a handful of writes", async () => {
   // the work's record, when it is placed and when its turn ends, and its turn's mark once more,
   // as a turn on a message kept before it.
   assert.equal(s.store.writes.count - before, MAX_CALLS + 10);
-  const input = (await s.chat("history", { limit: 200 })) as { messages: unknown[] };
-  assert.equal(input.messages.length, 200, "a full page of what was recorded");
+  assert.equal(recorded(s).length, MAX_CALLS + 2, "the message, each call, and the note");
 });
 
 test("a long message is stored once, under storage's value limit, and a big call is still kept", async () => {

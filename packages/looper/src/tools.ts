@@ -16,8 +16,12 @@ export function capped(text: string): string {
   return `${head}\n… [${text.length - head.length - tail.length} characters cut] …\n${tail}`;
 }
 
-const failure = ({ code, message }: { code: string; message: string }) =>
-  JSON.stringify({ error: { code, message } });
+/** A refusal as a function's output. */
+export const refused = (code: string, message: string): Outcome => ({
+  output: JSON.stringify({ error: { code, message } }),
+  ok: false,
+  code,
+});
 
 /** Run a function call: the result, or the refusal, as the function's output. */
 export async function runTool(
@@ -26,11 +30,6 @@ export async function runTool(
   args: string,
   group: string,
 ): Promise<Outcome> {
-  const refused = (code: string, message: string) => ({
-    output: failure({ code, message }),
-    ok: false,
-    code,
-  });
   const found = tools.find((tool) => tool.name === name);
   if (!found) return refused("unknown_tool", `No tool is named ${name.slice(0, 64)}.`);
   let input: unknown;

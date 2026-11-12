@@ -9,9 +9,9 @@ export const CHAT_TITLE_MAX = 200;
 const OnChat = z.object({ chat: ChatId });
 
 /**
- * A tool call a `tool` message stands for: its name, whether it is `running` or ended `done` or
- * `refused`, and its input (the call's JSON arguments) and output (its JSON result, or the
- * refusal), each as text, when there are any.
+ * A tool call a `tool` message stood for: its name, whether it was `running` or ended `done` or
+ * `refused`, and its input and output as text. Never sent: kept only for views that still read
+ * it.
  */
 export const ChatTool = z.object({
   name: z.string().min(1).max(128),
@@ -21,9 +21,8 @@ export const ChatTool = z.object({
 });
 
 /**
- * One message of a chat; `tool` messages tell what the agent did with its tools. A `tool` message
- * may carry `tool`, the call it stands for: it is sent as `running` when the call starts, and again
- * with the same id when it ends. Without `tool`, its `text` says it in one line.
+ * One message of a chat: what the person said (`user`), or the agent's reply (`assistant`). The
+ * `tool` role and `tool` member are never sent: kept only for views that still read them.
  */
 export const ChatMessage = z.object({
   id: MessageId,
@@ -57,9 +56,10 @@ export const ChatEntry = z.object({
 });
 
 /**
- * `chat@1`: an agent's chats. A chat is the messages sent in it and nothing more: `send` with no
- * `chat` starts one, and with one, goes on in it. Messages and streaming text arrive as events,
- * each naming its chat. What works is the agent, not a chat: `status` says when it starts and
+ * `chat@1`: an agent's chats. A chat is the messages sent in it and nothing more: the person's,
+ * and the agent's replies. What the agent does to answer is not in it. `send` with no `chat`
+ * starts one, and with one, goes on in it. Messages and streaming text arrive as events, each
+ * naming its chat. What works is the agent, not a chat: `status` says when it starts and
  * when it is done. Events are live only: `history` is a chat's record, `state` the agent's status
  * now, and `list` the chats. A provider that can't take
  * a message now refuses it `busy`. A call naming a chat the agent doesn't have is refused
@@ -120,7 +120,10 @@ export const chat = defineInterface({
   },
   events: {
     message: event(ChatMessage.extend({ chat: ChatId })),
-    /** Text of the assistant message `id`, as it streams; its `message` event follows. */
+    /**
+     * Text of the assistant message `id`, as it streams, for a reply written as it is said; its
+     * `message` event follows. A reply that is sent whole has none.
+     */
     delta: event(z.object({ chat: ChatId, id: MessageId, text: z.string() })),
     /** The agent's status, when it changes. */
     status: event(ChatStatus),

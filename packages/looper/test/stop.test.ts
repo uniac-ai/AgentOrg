@@ -10,6 +10,7 @@ import {
   route,
   routeTo,
   says,
+  sends,
   stops,
   until,
 } from "./support.ts";
@@ -36,10 +37,10 @@ test("a message that joins a turn is that turn's, and the main loop hears of it 
     tools: [ROUTE],
     input: ["The work there is:\n- a: Work (in a turn)", "And a summary."],
   });
-  answer("Write the report.", says("Report done."));
+  answer("Write the report.", sends("Report done."));
   await until(() => asked.length === 2, "the request that reads it");
   assert.deepEqual(inputs[1], ["Write the report.", "Report done.", "And a summary."]);
-  answer("And a summary.", says("Summary done."));
+  answer("And a summary.", sends("Summary done."));
   await looper.settled();
   assert.deepEqual(said, [
     "a: user: Write the report.",
@@ -124,9 +125,9 @@ test("a message the main loop can't hear of is the turn's all the same, and noth
   await until(() => asked.length === 1, "the work's request");
   await looper.send("a", "Stop.");
   await until(() => mains.length === 2, "the main loop to be asked");
-  answer("Write the report.", says("Report done."));
+  answer("Write the report.", sends("Report done."));
   await until(() => asked.length === 2, "the request that reads it");
-  answer("Stop.", says("Stopping here."));
+  answer("Stop.", sends("Stopping here."));
   await looper.settled();
   assert.deepEqual(said.slice(2), ["a: assistant: Report done.", "a: assistant: Stopping here."]);
   assert.deepEqual(failures, []);
@@ -196,9 +197,9 @@ test("a call with an empty stop places what came in as any other", async () => {
   await until(() => asked.length === 1, "the work's request");
   await looper.send("b", "Add a chart to the report.");
   await until(() => said.includes("b: assistant: Passing it on."), "what it said");
-  answer("Write the report.", says("Report done."));
+  answer("Write the report.", sends("Report done."));
   await until(() => asked.length === 2, "the request that reads it");
-  answer("Add a chart to the report.", says("Chart added."));
+  answer("Add a chart to the report.", sends("Chart added."));
   await looper.settled();
   assert.deepEqual((values.get("work/a") as { follows: string[] }).follows, ["a", "b"]);
   assert.equal(said.at(-1), "b: assistant: Chart added.");
@@ -213,7 +214,7 @@ test("a stop of work that is at rest starts no work, and what the main loop wrot
   });
   await looper.send("a", "Write the report.");
   await until(() => asked.length === 1, "the work's request");
-  answer("Write the report.", says("Report done."));
+  answer("Write the report.", sends("Report done."));
   await looper.settled();
   await looper.send("b", "Stop it.");
   await until(
@@ -236,16 +237,16 @@ test("what the main loop says of a message stops the turn that message joined, a
   await looper.send("a", "Stop.");
   await until(() => mains.length === 2, "the main loop to hear of it");
   // The worker reads the message itself and ends the turn; then the next message starts another.
-  answer("Write the report.", says("Report done."));
+  answer("Write the report.", sends("Report done."));
   await until(() => asked.length === 2, "the request that reads it");
-  answer("Stop.", says("It was done already."));
+  answer("Stop.", sends("It was done already."));
   await until(() => looper.state("a").state === "idle", "the turn to end");
   await looper.send("a", "Now translate it.");
   await until(() => asked.length === 3, "the next turn's request");
   hearing.open();
   await idle();
   assert.deepEqual(looper.state("a"), { state: "thinking" });
-  answer("Now translate it.", says("Translated."));
+  answer("Now translate it.", sends("Translated."));
   await looper.settled();
   assert.deepEqual(said.slice(2), [
     "a: assistant: Report done.",
@@ -265,7 +266,7 @@ test("a decision to stop cuts the turn the main loop was told of, and no turn af
   await until(() => asked.length === 1, "the work's request");
   await looper.send("b", "Stop the report.");
   await until(() => mains.length === 2, "the main loop to be asked");
-  answer("Write the report.", says("Report done."));
+  answer("Write the report.", sends("Report done."));
   await until(() => looper.state("a").state === "idle", "the turn to end");
   await looper.send("a", "Now translate it.");
   await until(() => asked.length === 2, "the next turn's request");
@@ -273,7 +274,7 @@ test("a decision to stop cuts the turn the main loop was told of, and no turn af
   // No turn was cut, and the asking thread is told so.
   await until(() => said.includes("b: assistant: Nothing was stopped."), "the answer");
   assert.deepEqual(looper.state("a"), { state: "thinking" });
-  answer("Now translate it.", says("Translated."));
+  answer("Now translate it.", sends("Translated."));
   await looper.settled();
   assert.equal(said.at(-1), "a: assistant: Translated.");
 });
@@ -337,7 +338,7 @@ test("stop said in a second thread the work follows is said there, and the work 
   await looper.send("a", "Write the report.");
   await until(() => asked.length === 1, "the work's request");
   await looper.send("b", "Add a chart to the report.");
-  answer("Write the report.", says("Report done."));
+  answer("Write the report.", sends("Report done."));
   await until(() => asked.length === 2, "the request that reads the second thread's message");
   await looper.send("b", "Stop.");
   await until(() => said.includes("b: assistant: Stopped."), "the second thread to be told");
@@ -357,7 +358,7 @@ test("stop said in a second thread the work follows is said there, and the work 
 });
 
 test("stopped while a call runs, the thread is told at once, and the next message is kept and said at once; its turn reads the call's result first", async () => {
-  const { tool, called, finish } = held();
+  const { tool, called, groups, finish } = held();
   const { looper, values, said, asked, mains, inputs, working, answer } = looperWith({
     tools: [tool],
     routing: (text) => (text === "Stop." ? stops("a") : newWork("The report")),
@@ -365,7 +366,7 @@ test("stopped while a call runs, the thread is told at once, and the next messag
   await looper.send("a", "Write the report.");
   await until(() => asked.length === 1, "the work's request");
   answer("Write the report.", called);
-  await until(() => said.includes("a: tool: hold: running"), "the call to start");
+  await until(() => groups.length === 1, "the call to start");
   await looper.send("a", "Stop.");
   await until(() => said.includes("a: assistant: Stopped."), "the thread to be told");
   // A message said now is kept and said, and its turn shows as running, while the call runs.
@@ -394,7 +395,7 @@ test("stopped while a call runs, the thread is told at once, and the next messag
 });
 
 test("work whose stopped turn's call still runs holds one place, also with a turn that waits for the call, and after that turn is stopped too", async () => {
-  const { tool, called, finish } = held();
+  const { tool, called, groups, finish } = held();
   const { looper, said, asked, answer } = looperWith({
     tools: [tool],
     routing: (text) => (text.startsWith("Stop") ? stops("a") : newWork("The report")),
@@ -402,7 +403,7 @@ test("work whose stopped turn's call still runs holds one place, also with a tur
   await looper.send("a", "Write the report.");
   await until(() => asked.length === 1, "the work's request");
   answer("Write the report.", called);
-  await until(() => said.includes("a: tool: hold: running"), "the call to start");
+  await until(() => groups.length === 1, "the call to start");
   await looper.send("a", "Stop.");
   await until(() => said.includes("a: assistant: Stopped."), "the thread to be told");
   await looper.send("a", "Go on.");
@@ -426,17 +427,17 @@ test("work whose stopped turn's call still runs holds one place, also with a tur
 });
 
 test("a turn that waits for a stopped turn's call, stopped while its message is stored and then refused, leaves no place taken", async () => {
-  const { tool, called, finish } = held();
+  const { tool, called, groups, finish } = held();
   const late = gate();
   let holding = false;
-  const { looper, said, asked, answer } = looperWith({
+  const { looper, asked, answer } = looperWith({
     tools: [tool],
     writing: (key) => (holding && key.startsWith("thread/a/msg/") ? late.shut : undefined),
   });
   await looper.send("a", "Write the report.");
   await until(() => asked.length === 1, "the work's request");
   answer("Write the report.", called);
-  await until(() => said.includes("a: tool: hold: running"), "the call to start");
+  await until(() => groups.length === 1, "the call to start");
   await looper.cancel("a");
   holding = true;
   const sending = looper.send("a", "Go on.").then(
@@ -457,7 +458,7 @@ test("a turn that waits for a stopped turn's call, stopped while its message is 
 });
 
 test("a message asked before a stop and taken after it is kept before what the main loop says", async () => {
-  const { tool, called, finish } = held();
+  const { tool, called, groups, finish } = held();
   const hearing = gate();
   let slow: ReturnType<typeof gate> | undefined;
   const { looper, said, asked, mains, answer } = looperWith({
@@ -473,7 +474,7 @@ test("a message asked before a stop and taken after it is kept before what the m
   await looper.send("a", "Write the report.");
   await until(() => asked.length === 1, "the work's request");
   answer("Write the report.", called);
-  await until(() => said.includes("a: tool: hold: running"), "the call to start");
+  await until(() => groups.length === 1, "the call to start");
   await looper.send("a", "Stop.");
   await until(() => mains.length === 2, "the main loop to hear of it");
   // One message is being stored and another waits behind it when the main loop says stop.
@@ -496,7 +497,7 @@ test("a message asked before a stop and taken after it is kept before what the m
 });
 
 test("a looper that closes while a turn waits for a stopped turn's call leaves it to go on, and its message is read once", async () => {
-  const { tool, called } = held();
+  const { tool, called, groups } = held();
   const first = looperWith({
     tools: [tool],
     routing: (text) => (text === "Stop." ? stops("a") : newWork("The report")),
@@ -504,7 +505,7 @@ test("a looper that closes while a turn waits for a stopped turn's call leaves i
   await first.looper.send("a", "Write the report.");
   await until(() => first.asked.length === 1, "the work's request");
   first.answer("Write the report.", called);
-  await until(() => first.said.includes("a: tool: hold: running"), "the call to start");
+  await until(() => groups.length === 1, "the call to start");
   await first.looper.send("a", "Stop.");
   await until(() => first.said.includes("a: assistant: Stopped."), "the thread to be told");
   const sending = first.looper.send("a", "Do the summary instead.");
@@ -527,14 +528,14 @@ test("a looper that closes while a turn waits for a stopped turn's call leaves i
     "Stopped.",
     "Do the summary instead.",
   ]);
-  second.answer(second.asked[0] as string, says("Summary done."));
+  second.answer(second.asked[0] as string, sends("Summary done."));
   await second.looper.settled();
   assert.equal(second.asked.length, 1);
   assert.equal(second.values.has("unfinished/a"), false);
 });
 
 test("work whose stopped turn's call still runs takes a second thread's message at once, and reads it after that call's result", async () => {
-  const { tool, called, finish } = held();
+  const { tool, called, groups, finish } = held();
   const { looper, said, asked, mains, inputs, answer } = looperWith({
     tools: [tool],
     routing: (text) =>
@@ -547,7 +548,7 @@ test("work whose stopped turn's call still runs takes a second thread's message 
   await looper.send("a", "Write the report.");
   await until(() => asked.length === 1, "the work's request");
   answer("Write the report.", called);
-  await until(() => said.includes("a: tool: hold: running"), "the call to start");
+  await until(() => groups.length === 1, "the call to start");
   await looper.send("a", "Stop.");
   await until(() => said.includes("a: assistant: Stopped."), "the thread to be told");
   // It is told of as at rest while the call runs, and a message that points at it is given to it.

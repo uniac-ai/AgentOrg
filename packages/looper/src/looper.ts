@@ -427,7 +427,6 @@ export function createLooper(options: {
         },
         out: {
           message: out.message,
-          delta: out.delta,
           failed: out.failed,
           status(status) {
             const on = running(status);
@@ -1204,10 +1203,12 @@ export function createLooper(options: {
         await Promise.all([...works.values()].map(({ writes }) => writes));
       }
     },
-    /** Text the model writes while it answers `requestId`, for the reply it becomes. */
+    /**
+     * Text the model writes while it answers `requestId`, for the reply it becomes: the main
+     * loop's. A worker's says nothing until it is sent.
+     */
     delta(requestId: string, text: string) {
       main.delta(requestId, text);
-      for (const { loop } of works.values()) loop.delta(requestId, text);
     },
   };
 }

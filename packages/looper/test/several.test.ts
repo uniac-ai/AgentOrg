@@ -11,6 +11,7 @@ import {
   newWork,
   routeTo,
   says,
+  sends,
   stops,
   until,
 } from "./support.ts";
@@ -43,7 +44,7 @@ async function reported(
   });
   await made.looper.send("a", "Write the report.");
   await until(() => made.asked.length === 1, "the report's request");
-  made.answer("Write the report.", says("Report done."));
+  made.answer("Write the report.", sends("Report done."));
   await made.looper.settled();
   return made;
 }
@@ -57,9 +58,9 @@ test("a worker is told which work it is, reads each message by its number, and i
   assert.deepEqual(numbered[0], ["[1] Write the report."]);
   assert.deepEqual(told[0], {
     instructions: workInstructions("The report"),
-    tools: ["hand_back"],
+    tools: ["send", "hand_back"],
   });
-  answer("Write the report.", says("Report done."));
+  answer("Write the report.", sends("Report done."));
   await looper.settled();
   await looper.send("a", "Shorter.");
   await until(() => asked.length === 2, "the next request");
@@ -87,7 +88,7 @@ test("a message its thread's work hands back is the main loop's: new work starts
   // The report's turn ended there, with no further request and nothing said.
   assert.deepEqual(looper.state("a"), { state: "idle" });
   assert.deepEqual(numbered[2], ["[1] What is the weather?"]);
-  answer("What is the weather?", says("Sunny."));
+  answer("What is the weather?", sends("Sunny."));
   await looper.settled();
   assert.deepEqual(said, [
     "a: user: Write the report.",
@@ -132,7 +133,7 @@ test("a message in a thread two pieces of work follow reaches both: the one it i
   await until(() => asked.length === 2, "the report's worker to read it");
   answer("What is the weather?", handsBack(3));
   await until(() => asked.length === 3, "the new work's request");
-  answer("What is the weather?", says("Sunny."));
+  answer("What is the weather?", sends("Sunny."));
   await looper.settled();
 
   // Kept once, and given to each: both start a turn.
@@ -152,7 +153,7 @@ test("a message in a thread two pieces of work follow reaches both: the one it i
     handsBack(numberIn(numbered, "report"), "It is about the weather."),
     "report",
   );
-  answer("And tomorrow?", says("Rain."), "weather");
+  answer("And tomorrow?", sends("Rain."), "weather");
   await looper.settled();
   assert.equal(mains.length, 2);
   assert.equal(asked.length, 5);
@@ -182,7 +183,7 @@ test("a message every piece of work handed back is put to the main loop with who
   await until(() => asked.length === 2, "the report's worker to read it");
   answer("What is the weather?", handsBack(3));
   await until(() => asked.length === 3, "the new work's request");
-  answer("What is the weather?", says("Sunny."));
+  answer("What is the weather?", sends("Sunny."));
   await looper.settled();
 
   await looper.send("a", "Book a table for two.");
@@ -228,10 +229,10 @@ test("what came back can be given to work there is, which then follows that thre
   });
   await looper.send("a", "Write the report.");
   await until(() => asked.length === 1, "the report's request");
-  answer("Write the report.", says("Report done."));
+  answer("Write the report.", sends("Report done."));
   await looper.send("b", "Draw the chart.");
   await until(() => asked.length === 2, "the chart's request");
-  answer("Draw the chart.", says("Chart done."));
+  answer("Draw the chart.", sends("Chart done."));
   await looper.settled();
   await looper.send("a", "Make the chart blue.");
   await until(() => asked.length === 3, "the report's worker to read it");
@@ -242,7 +243,7 @@ test("what came back can be given to work there is, which then follows that thre
     mains[2]?.input[0],
     "The work there is:\n- b: The chart (at rest); it last said: Chart done.",
   );
-  answer("Make the chart blue.", says("Blue now."));
+  answer("Make the chart blue.", sends("Blue now."));
   await looper.settled();
   assert.equal(said.at(-1), "a: assistant: Blue now.");
   assert.deepEqual(
@@ -252,6 +253,26 @@ test("what came back can be given to work there is, which then follows that thre
       ["b", ["b", "a"]],
     ],
   );
+});
+
+test("a reply one piece of work sends answers the message for every piece it reached", async () => {
+  const { looper, said, asked, failures, answer } = await reported((text) =>
+    text.startsWith(BACK) ? newWork("The weather") : undefined,
+  );
+  await looper.send("a", "What is the weather?");
+  await until(() => asked.length === 2, "the report's worker to read it");
+  answer("What is the weather?", handsBack(3));
+  await until(() => asked.length === 3, "the new work's request");
+  answer("What is the weather?", sends("Sunny."));
+  await looper.settled();
+  // Both read the next; the weather's answers it, and the report's ends saying nothing.
+  await looper.send("a", "And tomorrow?");
+  await until(() => asked.length === 5, "both to read it");
+  answer("And tomorrow?", sends("Rain."), "weather");
+  await until(() => said.at(-1) === "a: assistant: Rain.", "the reply");
+  answer("And tomorrow?", [], "report");
+  await looper.settled();
+  assert.deepEqual(failures, []);
 });
 
 test("a message is handed back once, and only one this work has", async () => {
@@ -295,7 +316,7 @@ test("work given a thread can leave it as it hands a message back, and never the
   });
   await looper.send("a", "Write the report.");
   await until(() => asked.length === 1, "the report's request");
-  answer("Write the report.", says("Report done."));
+  answer("Write the report.", sends("Report done."));
   await looper.settled();
   await looper.send("b", "Add a chart to the report.");
   await until(() => asked.length === 2, "the request that reads it");
@@ -341,7 +362,7 @@ test("with two pieces of work in a turn, the main loop hears of a message once, 
   await until(() => asked.length === 2, "the report's worker to read it");
   answer("What is the weather?", handsBack(3));
   await until(() => asked.length === 3, "the new work's request");
-  answer("What is the weather?", says("Sunny."));
+  answer("What is the weather?", sends("Sunny."));
   await looper.settled();
   await looper.send("a", "Both of you, go on.");
   await until(() => asked.length === 5, "both in a turn");
@@ -363,8 +384,8 @@ test("with two pieces of work in a turn, the main loop hears of a message once, 
   await idle();
   assert.equal(mains.length, 3);
   assert.deepEqual(looper.state("a"), { state: "thinking" });
-  answer("Both of you, go on.", says("Report goes on."), "report");
-  answer("Both of you, go on.", says("Weather goes on."), "weather");
+  answer("Both of you, go on.", sends("Report goes on."), "report");
+  answer("Both of you, go on.", sends("Weather goes on."), "weather");
   await until(() => asked.length === 7, "both to read the stop");
   for (const input of inputs.slice(5))
     assert.equal(
@@ -387,7 +408,7 @@ test("with two pieces of work in a turn, a message that names one to stop stops 
   await until(() => asked.length === 2, "the report's worker to read it");
   answer("What is the weather?", handsBack(3));
   await until(() => asked.length === 3, "the new work's request");
-  answer("What is the weather?", says("Sunny."));
+  answer("What is the weather?", sends("Sunny."));
   await looper.settled();
   weather = works(values).find(({ title }) => title === "The weather")?.id ?? "";
   await looper.send("a", "Both of you, go on.");
@@ -397,10 +418,10 @@ test("with two pieces of work in a turn, a message that names one to stop stops 
   assert.deepEqual(looper.state(weather), { state: "idle" });
   assert.deepEqual(looper.state("a"), { state: "thinking" });
   // What the main loop said is the stopped work's to read next, and not the other's.
-  answer("Both of you, go on.", says("Report goes on."), "report");
+  answer("Both of you, go on.", sends("Report goes on."), "report");
   await until(() => asked.length === 6, "the report to read the stop");
   assert.equal(inputs[5]?.includes("Stopped the weather."), false);
-  answer("Stop the weather.", says("Still on the report."), "report");
+  answer("Stop the weather.", sends("Still on the report."), "report");
   await looper.settled();
   await looper.send("a", "Weather again, please.");
   await until(() => asked.length === 8, "both to read it");
@@ -440,7 +461,7 @@ test("a thread from before work could be handed back keeps its messages its own 
   const first = looperWith();
   await first.looper.send("a", "Write the report.");
   await until(() => first.asked.length === 1, "the request");
-  first.answer("Write the report.", says("Report done."));
+  first.answer("Write the report.", sends("Report done."));
   await first.looper.settled();
   // As kept before: its messages name no work, and it has no record of its own.
   first.values.delete("work/a");
@@ -455,7 +476,7 @@ test("a thread from before work could be handed back keeps its messages its own 
   answer("What is the weather?", handsBack(3, "About the weather."));
   await until(() => asked.length === 2, "the new work's request");
   assert.deepEqual(numbered[1], ["[1] What is the weather?"]);
-  answer("What is the weather?", says("Sunny."));
+  answer("What is the weather?", sends("Sunny."));
   await looper.settled();
   assert.equal(
     JSON.stringify([...values].filter(([key]) => /^thread\/a\/msg\/00000000000[12]$/.test(key))),
@@ -482,7 +503,7 @@ test("a hand-back the store refuses hands nothing back, and the worker is told s
   });
   await looper.send("a", "Write the report.");
   await until(() => asked.length === 1, "the request");
-  answer("Write the report.", says("Report done."));
+  answer("Write the report.", sends("Report done."));
   await looper.settled();
   await looper.send("a", "What is the weather?");
   await until(() => asked.length === 2, "the request");
@@ -491,7 +512,7 @@ test("a hand-back the store refuses hands nothing back, and the worker is told s
   await until(() => asked.length === 3, "the request that reads what came of it");
   assert.match(String(inputs[2]?.at(-1)), /^output \{"error":/);
   assert.equal((values.get("thread/a/msg/000000000003") as { to?: unknown }).to, undefined);
-  answer("What is the weather?", says("I can't say."));
+  answer("What is the weather?", sends("I can't say."));
   await looper.settled();
   assert.equal(mains.length, 1);
 });
@@ -506,13 +527,13 @@ async function two(options: Parameters<typeof looperWith>[0] = {}) {
   });
   await made.looper.send("a", "Write the report.");
   await until(() => made.asked.length === 1, "the report's request");
-  made.answer("Write the report.", says("Report done."));
+  made.answer("Write the report.", sends("Report done."));
   await made.looper.settled();
   await made.looper.send("a", "What is the weather?");
   await until(() => made.asked.length === 2, "the report's worker to read it");
   made.answer("What is the weather?", handsBack(3));
   await until(() => made.asked.length === 3, "the weather's request");
-  made.answer("What is the weather?", says("Sunny."));
+  made.answer("What is the weather?", sends("Sunny."));
   await made.looper.settled();
   return made;
 }
@@ -612,7 +633,7 @@ test("a message one of its works can't take is kept and told to have failed for 
   await idle();
   assert.equal(asked.length, 4);
   assert.equal(failures.length, 1);
-  answer("Both, go on.", says("Went on."));
+  answer("Both, go on.", sends("Went on."));
   await looper.settled();
   await looper.send("a", "And now?");
   await until(() => asked.length === 6, "both to read it");
@@ -634,14 +655,14 @@ test("a turn reads a message it took though another piece of work is still takin
   });
   await looper.send("a", "Shorten the report.");
   await until(() => asked.length === 5, "both to read it");
-  answer("Shorten the report.", says("Not the weather's."), "weather");
+  answer("Shorten the report.", sends("Not the weather's."), "weather");
   await until(() => looper.state("a").state === "thinking", "the report alone in a turn");
   await idle();
   armed = true;
   const sending = looper.send("a", "Also add a summary.");
   await until(() => writes === 3, "the weather to be taking it");
   // The report's request, which had not read it, answers while that write is out.
-  answer("Shorten the report.", says("Shortened."), "report");
+  answer("Shorten the report.", sends("Shortened."), "report");
   await until(() => asked.length === 6, "the report's turn to go on");
   assert.deepEqual(inputs[5]?.slice(-3), [
     "Shorten the report.",
@@ -672,7 +693,7 @@ test("a worker that hands back a message said while it works on another goes on 
     "call hand_back",
     "output Handed back.",
   ]);
-  answer("Book a table.", says("Shorter now."));
+  answer("Book a table.", sends("Shorter now."));
   await until(() => said.includes("a: assistant: Not something I can do."), "the main loop");
   await looper.settled();
   assert.equal(said.includes("a: assistant: Shorter now."), true);
@@ -690,7 +711,7 @@ test("a hand-back with no number or no reason hands nothing back, and the worker
   await until(() => asked.length === 3, "the request that reads what they came to");
   for (const line of inputs[2]?.slice(-3).filter((one) => one.startsWith("output")) ?? [])
     assert.match(line, /Give the message's number and one sentence why\./);
-  answer("What is the weather?", says("I can't say."));
+  answer("What is the weather?", sends("I can't say."));
   await looper.settled();
   assert.equal(mains.length, 1);
 });
@@ -703,7 +724,7 @@ test("a hand-back alone doesn't end a turn that has a message of its own turn st
   await until(() => asked.length === 2, "the request");
   await looper.send("a", "Book a table.");
   await looper.send("a", "And add a summary.");
-  answer("Shorten it.", says("Shortened."));
+  answer("Shorten it.", sends("Shortened."));
   await until(() => asked.length === 3, "the request that reads both");
   const table = Number(
     /^\[(\d+)\] Book a table\.$/.exec(
@@ -712,7 +733,7 @@ test("a hand-back alone doesn't end a turn that has a message of its own turn st
   );
   answer("And add a summary.", handsBack(table, "Not the report."));
   await until(() => asked.length === 4, "the turn to go on with the summary");
-  answer("And add a summary.", says("Summary added."));
+  answer("And add a summary.", sends("Summary added."));
   await looper.settled();
   assert.equal(said.includes("a: assistant: Summary added."), true);
 });
@@ -729,11 +750,11 @@ test("new work for a message that came back where nothing follows reads it befor
   });
   await looper.send("a", "Write the report.");
   await until(() => asked.length === 1, "the report's request");
-  answer("Write the report.", says("Report done."));
+  answer("Write the report.", sends("Report done."));
   await looper.settled();
   await looper.send("b", "Add a chart to the report.");
   await until(() => asked.length === 2, "the request that reads it");
-  answer("Add a chart to the report.", says("Chart added."));
+  answer("Add a chart to the report.", sends("Chart added."));
   await looper.settled();
   await looper.send("b", "What is the weather?");
   await until(() => asked.length === 3, "the request that reads it");
@@ -763,11 +784,11 @@ test("a message said where nothing follows, before the main loop decides on one 
   });
   await looper.send("a", "Write the report.");
   await until(() => asked.length === 1, "the report's request");
-  answer("Write the report.", says("Report done."));
+  answer("Write the report.", sends("Report done."));
   await looper.settled();
   await looper.send("b", "Add a chart to the report.");
   await until(() => asked.length === 2, "the request that reads it");
-  answer("Add a chart to the report.", says("Chart added."));
+  answer("Add a chart to the report.", sends("Chart added."));
   await looper.settled();
   // The main loop is busy with another thread while the work leaves and the next is said.
   await looper.send("z", "Hold on.");
@@ -804,7 +825,7 @@ test("two messages said one after the other reach each piece of work in that ord
   await until(() => asked.length >= 5, "both to read the first");
   for (let round = 0; round < 3; round++) {
     for (const text of ["First.", "Second."])
-      for (const of of ["report", "weather"]) answer(text, says("ok"), of);
+      for (const of of ["report", "weather"]) answer(text, sends("ok"), of);
     await idle();
   }
   await looper.settled();
@@ -823,22 +844,22 @@ const numberOf = (lines: string[] | undefined, text: string) =>
   Number(/^\[(\d+)\] /.exec(lines?.find((line) => line.endsWith(`] ${text}`)) ?? "")?.[1]);
 
 test("a worker at a task, having said it is looking, that hands back a message said meanwhile goes on with the task", async () => {
-  const { tool, called, finish } = held();
+  const { tool, called, groups, finish } = held();
   const { looper, said, asked, mains, numbered, answer } = looperWith({
     tools: [tool],
     routing: (text) => (text.startsWith(BACK) ? says("Nobody does that.") : newWork("The report")),
   });
   await looper.send("a", "Make the report shorter.");
   await until(() => asked.length === 1, "the request");
-  answer("Make the report shorter.", [...says("Let me look."), ...called]);
-  await until(() => said.includes("a: tool: hold: running"), "the call to start");
+  answer("Make the report shorter.", [...sends("Let me look."), ...called]);
+  await until(() => groups.length === 1, "the call to start");
   await looper.send("a", "Book a table.");
   finish();
   await until(() => asked.length === 2, "the request that reads it");
   answer("Book a table.", handsBack(numberOf(numbered[1], "Book a table."), "Not the report."));
   // The task is not done: the turn asks again, and what it then writes is the task's answer.
   await until(() => asked.length === 3, "the turn to go on");
-  answer("Book a table.", says("Shorter now."));
+  answer("Book a table.", sends("Shorter now."));
   await looper.settled();
   assert.equal(said.includes("a: assistant: Shorter now."), true);
   assert.equal(said.includes("a: assistant: Nobody does that."), true);
@@ -847,7 +868,7 @@ test("a worker at a task, having said it is looking, that hands back a message s
 });
 
 test("a worker that hands back a message from another thread answers its task where the task was asked", async () => {
-  const { tool, called, finish } = held();
+  const { tool, called, groups, finish } = held();
   const { looper, said, asked, numbered, answer } = looperWith({
     tools: [tool],
     routing: (text) =>
@@ -859,29 +880,29 @@ test("a worker that hands back a message from another thread answers its task wh
   });
   await looper.send("a", "Write the report.");
   await until(() => asked.length === 1, "the report's request");
-  answer("Write the report.", says("Report done."));
+  answer("Write the report.", sends("Report done."));
   await looper.settled();
   await looper.send("b", "Add a chart to the report.");
   await until(() => asked.length === 2, "the request that reads it");
-  answer("Add a chart to the report.", says("Chart added."));
+  answer("Add a chart to the report.", sends("Chart added."));
   await looper.settled();
   await looper.send("a", "Make it shorter.");
   await until(() => asked.length === 3, "the task's request");
   answer("Make it shorter.", called);
-  await until(() => said.includes("a: tool: hold: running"), "the call to start");
+  await until(() => groups.length === 1, "the call to start");
   await looper.send("b", "Book a table.");
   finish();
   await until(() => asked.length === 4, "the request that reads it");
   answer("Book a table.", handsBack(numberOf(numbered[3], "Book a table."), "Not the report."));
   await until(() => asked.length === 5, "the turn to go on");
-  answer("Book a table.", says("Shorter now."));
+  answer("Book a table.", sends("Shorter now."));
   await looper.settled();
   assert.equal(said.includes("a: assistant: Shorter now."), true);
   assert.equal(said.includes("b: assistant: Shorter now."), false);
 });
 
 test("work that left a thread takes nothing said there after, and writes nothing more there", async () => {
-  const { tool, called, finish } = held();
+  const { tool, called, groups, finish } = held();
   const { looper, said, asked, inputs, numbered, answer } = looperWith({
     tools: [tool],
     routing: (text) =>
@@ -895,17 +916,17 @@ test("work that left a thread takes nothing said there after, and writes nothing
   });
   await looper.send("a", "Write the report.");
   await until(() => asked.length === 1, "the report's request");
-  answer("Write the report.", says("Report done."));
+  answer("Write the report.", sends("Report done."));
   await looper.settled();
   await looper.send("b", "Add a chart to the report.");
   await until(() => asked.length === 2, "the request that reads it");
-  answer("Add a chart to the report.", says("Chart added."));
+  answer("Add a chart to the report.", sends("Chart added."));
   await looper.settled();
   // In the middle of a task from its own thread, it leaves the other with two messages of it.
   await looper.send("a", "Make it shorter.");
   await until(() => asked.length === 3, "the task's request");
   answer("Make it shorter.", called);
-  await until(() => said.includes("a: tool: hold: running"), "the call to start");
+  await until(() => groups.length === 1, "the call to start");
   await looper.send("b", "Book a table.");
   await looper.send("b", "And a taxi.");
   finish();
@@ -923,7 +944,7 @@ test("work that left a thread takes nothing said there after, and writes nothing
   await until(() => said.includes("b: assistant: Nobody does that."), "the main loop's answer");
   await looper.send("b", "Anyone?");
   await until(() => said.includes("b: assistant: Here."), "the main loop's answer");
-  answer("And a taxi.", says("Shorter now."));
+  answer("And a taxi.", sends("Shorter now."));
   await looper.settled();
   assert.equal(said.includes("a: assistant: Shorter now."), true);
   // Each of the two that came back is decided, then the message said after.
@@ -999,7 +1020,7 @@ test("a thread is marked before a message says it was handed back, and a store l
   });
   await made.looper.send("a", "Write the report.");
   await until(() => made.asked.length === 1, "the request");
-  made.answer("Write the report.", says("Report done."));
+  made.answer("Write the report.", sends("Report done."));
   await made.looper.settled();
   await made.looper.send("a", "What is the weather?");
   await until(() => made.asked.length === 2, "the request");
@@ -1034,7 +1055,7 @@ test("the main loop's answer to what came back decides it in the same write: a s
   });
   await made.looper.send("a", "Write the report.");
   await until(() => made.asked.length === 1, "the request");
-  made.answer("Write the report.", says("Report done."));
+  made.answer("Write the report.", sends("Report done."));
   await made.looper.settled();
   await made.looper.send("a", "What is the weather?");
   await until(() => made.asked.length === 2, "the request");
@@ -1066,7 +1087,7 @@ test("a store left after the main loop gave what came back to new work, and befo
   });
   await made.looper.send("a", "Write the report.");
   await until(() => made.asked.length === 1, "the request");
-  made.answer("Write the report.", says("Report done."));
+  made.answer("Write the report.", sends("Report done."));
   await made.looper.settled();
   await made.looper.send("a", "What is the weather?");
   await until(() => made.asked.length === 2, "the request");
@@ -1125,7 +1146,7 @@ test("a placement whose new work the store refuses to keep is finished with the 
   });
   await looper.send("a", "Write the report.");
   await until(() => asked.length === 1, "the report's request");
-  answer("Write the report.", says("Report done."));
+  answer("Write the report.", sends("Report done."));
   await looper.settled();
   await looper.send("a", "What is the weather?");
   await until(() => asked.length === 2, "the request");
@@ -1163,22 +1184,22 @@ test("a message both of its works leave before taking is handed back by their le
   });
   await looper.send("x", "Write the report.");
   await until(() => asked.length === 1, "the report's request");
-  answer("Write the report.", says("Report done."));
+  answer("Write the report.", sends("Report done."));
   await looper.settled();
   await looper.send("y", "Draw the map.");
   await until(() => asked.length === 2, "the map's request");
-  answer("Draw the map.", says("Map done."));
+  answer("Draw the map.", sends("Map done."));
   await looper.settled();
   // A third thread comes to be followed by both.
   await looper.send("t", "Look at this.");
   await until(() => asked.length === 3, "the report to read it");
-  answer("Look at this.", says("Looked."));
+  answer("Look at this.", sends("Looked."));
   await looper.settled();
   await looper.send("t", "And the map legend?");
   await until(() => asked.length === 4, "the report to read it");
   answer("And the map legend?", handsBack(numberIn(numbered, "report")));
   await until(() => asked.length === 5, "the map to read it");
-  answer("And the map legend?", says("Legend done."));
+  answer("And the map legend?", sends("Legend done."));
   await looper.settled();
   await looper.send("t", "Unrelated: taxes?");
   await until(() => asked.length === 7, "both to read it");
@@ -1255,7 +1276,7 @@ test("a thread stays marked while a piece of work in a turn is still taking a me
   });
   await looper.send("a", "How warm is it?");
   await until(() => asked.length === 5, "both to read it");
-  answer("How warm is it?", says("Not the report's."), "report");
+  answer("How warm is it?", sends("Not the report's."), "report");
   await until(() => values.has("unfinished/a") === false, "the report to be at rest");
   await idle();
   armed = true;
@@ -1327,18 +1348,18 @@ test("work that leaves a thread as the main loop gives it another follows that o
   });
   await looper.send("a", "Write the report.");
   await until(() => asked.length === 1, "the report's request");
-  answer("Write the report.", says("Report done."));
+  answer("Write the report.", sends("Report done."));
   await looper.settled();
   await looper.send("b", "Plan the trip.");
   await until(() => asked.length === 2, "the trip's request");
-  answer("Plan the trip.", says("Trip planned."));
+  answer("Plan the trip.", sends("Trip planned."));
   await looper.settled();
   // The trip hands a message back, and it is given to the report, which then follows `b` too.
   await looper.send("b", "And the figures?");
   await until(() => asked.length === 3, "the trip to read it");
   answer("And the figures?", handsBack(3));
   await until(() => asked.length === 4, "the report to read it");
-  answer("And the figures?", says("Figures added."), "report");
+  answer("And the figures?", sends("Figures added."), "report");
   await looper.settled();
   await looper.send("b", "Which hotel?");
   await until(() => asked.length === 6, "both to read it");
@@ -1381,7 +1402,7 @@ test("a looper that closes as work with nothing to take is starting leaves the n
   refusing = true;
   await first.looper.send("a", "Thanks, both.");
   await until(() => first.asked.length === 4, "the report to read it");
-  first.answer("Thanks, both.", says("Welcome."));
+  first.answer("Thanks, both.", sends("Welcome."));
   await first.looper.settled();
   await idle();
   refusing = false;

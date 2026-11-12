@@ -20,7 +20,7 @@ import { NotConnected, Refused } from "@agentorg/sdk";
 import { connect } from "@agentorg/sdk/client";
 import { createLocalStore } from "../src/local-store.ts";
 import { startAgentProvider } from "../src/provider.ts";
-import { asAsked } from "./as-asked.ts";
+import { asAsked, followsSend, named, sendOf } from "./as-asked.ts";
 
 type Request = {
   requestId: string;
@@ -39,7 +39,8 @@ async function until(condition: () => boolean | Promise<boolean>, what: string) 
   }
   assert.fail(`timed out waiting for ${what}`);
 }
-const say = (content: string) => [{ type: "message", role: "assistant", content }];
+/** The worker's reply, sent to the newest message. */
+const say = (content: string) => [sendOf(content)];
 
 async function setup(t: test.TestContext) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "agentorg-agents-")));
@@ -98,9 +99,13 @@ async function setup(t: test.TestContext) {
             { type: "function_call", callId: "r", name: "route", arguments: '{"title":"Work"}' },
           ],
         };
+      // One that only follows what was sent is answered with nothing, and is not among `requests`.
+      if (followsSend(request.input as never)) return { output: [] };
       requests.push(asAsked(request) as Request);
       await gates.shift();
-      return { output: (replies.shift() ?? say("ok")) as never };
+      return {
+        output: named((replies.shift() ?? say("ok")) as never, request.input as never) as never,
+      };
     },
     cancel: async ({ requestId }) => {
       cancelled.push(requestId);
@@ -351,11 +356,8 @@ test("a turn the provider's restart cut off goes on when it is back", async (t) 
   await until(() => s.requests.length === 2, "the turn to go on");
   assert.match(String(s.requests[1]?.input.at(-1)?.content), /cut off by a restart/);
   await until(async () => (await s.texts()).at(-1) === "assistant: ok", "its reply");
-  assert.deepEqual(await s.texts(), [
-    "user: a long one",
-    "tool: Cut off by a restart: going on from where it stopped.",
-    "assistant: ok",
-  ]);
+  // Its chat has the reply; the line that says it went on is its work's.
+  assert.deepEqual(await s.texts(), ["user: a long one", "assistant: ok"]);
 });
 
 test("a stopped agent whose connection ended is down until it is stopped or started again", async (t) => {

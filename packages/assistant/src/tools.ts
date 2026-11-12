@@ -35,11 +35,11 @@ export interface LeftOut {
 }
 
 /**
- * What a request can carry of the agent's tools: one fewer than a request's count, since the
- * looper offers one function of its own beside them; and, with the record and instructions, one
+ * What a request can carry of the agent's tools: two fewer than a request's count, since the
+ * looper offers two functions of its own beside them; and, with the record and instructions, one
  * frame.
  */
-export const MAX_TOOLS = 127;
+export const MAX_TOOLS = 126;
 export const TOOLS_BUDGET = 256 * 1024;
 const MAX_NAME = 64;
 const MAX_DESCRIPTION = 1024;

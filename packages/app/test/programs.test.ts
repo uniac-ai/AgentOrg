@@ -21,7 +21,7 @@ import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { Computer } from "@agentorg/computer";
 import { HubState } from "@agentorg/hub";
-import { completed, fakeOpenAI, text } from "chatgpt/fake-openai";
+import { completed, fakeOpenAI } from "chatgpt/fake-openai";
 import WebSocket from "ws";
 import { type App, startApp } from "../src/index.ts";
 
@@ -353,7 +353,12 @@ test("a turn cut off as the app stops goes on when it is started again, with the
 
   // The agent is back before management, which holds its settings: the turn waits for them.
   held = false;
-  fake.script({ events: [completed([text("Went on.")])] });
+  // It answers by sending, and has nothing more to say after.
+  const sent = { type: "function_call", call_id: "s1", name: "send" };
+  fake.script(
+    { events: [completed([{ ...sent, arguments: '{"message":1,"text":"Went on."}' }])] },
+    { events: [completed([])] },
+  );
   ({ person } = await s.start());
   await until(() => reached(person), "the chat to be back");
   const texts = async () =>
@@ -361,12 +366,8 @@ test("a turn cut off as the app stops goes on when it is started again, with the
       (message) => message.text,
     );
   await until(async () => (await texts()).at(-1) === "Went on.", "the turn to go on");
-  assert.deepEqual(await texts(), [
-    "a long one",
-    "Cut off by a restart: going on from where it stopped.",
-    "Went on.",
-  ]);
-  assert.equal(asked.length, 2);
+  // The chat has the reply; the line that says it went on is its work's.
+  assert.deepEqual(await texts(), ["a long one", "Went on."]);
   // The message was given to its work before the stop: nobody is asked whose it is again.
   assert.equal(routed, 1);
   // Told what its settings say, which only management can answer.
@@ -376,6 +377,8 @@ test("a turn cut off as the app stops goes on when it is started again, with the
     async () => (await person.call<{ state: string }>(slot, "state")).state === "idle",
     "the turn to end",
   );
+  // Asked as it went on, and once more after it had sent, before its turn ended.
+  assert.equal(asked.length, 3);
 });
 
 test("a slot not bound to the person is refused, and an exposure's name reaches nothing once gone", async (t) => {

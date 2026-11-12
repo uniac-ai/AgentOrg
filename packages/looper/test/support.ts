@@ -1,15 +1,27 @@
-import { createLooper, type Json, type OutputItem, Refusal, type Tool } from "../src/index.ts";
+import {
+  createLooper,
+  Entry,
+  type Json,
+  type OutputItem,
+  Refusal,
+  type Tool,
+  textOf,
+} from "../src/index.ts";
 
 /**
  * A looper whose model answers a worker's request only when the test says so, naming the request by
- * the last thing said to it. `asked` is what the model has been asked for workers, in order. The
- * main loop's requests are answered at once, with new work, unless `routing` says otherwise;
- * `routed` is what it was put, and `mains` its requests whole.
+ * the last thing said to it. `asked` is what the model has been asked for workers, in order. A
+ * worker's request that only follows what it sent, with nothing said since, is answered at once
+ * with nothing, as by a model that has said all it had, and is not among `asked`; with
+ * `askAfterSend`, it is asked like any other. The main loop's requests are answered at once, with
+ * new work, unless `routing` says otherwise; `routed` is what it was put, and `mains` its requests
+ * whole.
  */
 export function looperWith(
   options: {
     tools?: Tool[];
     stopped?: boolean;
+    askAfterSend?: boolean;
     /** Asked to end what a stopped turn's calls left running, by their group. */
     stopGroup?: (group: string) => Promise<unknown>;
     /** A model that never hears a cancel: its answer stays out. */
@@ -43,17 +55,24 @@ export function looperWith(
   const failures: string[] = [];
   /**
    * What each worker's request held, in the order the model reads it, each of the person's
-   * messages without the number it starts with; `numbered` has them as the model got them, and
-   * `told` what each request was told and offered.
+   * messages without the number it starts with, and what was sent as its words; `numbered` has
+   * them as the model got them, and `told` what each request was told and offered.
    */
   const inputs: string[][] = [];
   const numbered: string[][] = [];
+  /** Each worker's request's items, as the model got them. */
+  const raw: unknown[][] = [];
   const told: { instructions: string; tools: string[] }[] = [];
   /** The requests still out, each by the last thing said to it and the first. */
   const open: {
     text: string;
     first: string;
     id: string;
+    /**
+     * The number of the newest message it read and hasn't handed back, which `sends` names unless
+     * told another.
+     */
+    newest: number;
     answer(output: OutputItem[]): void;
     fail(): void;
   }[] = [];
@@ -102,6 +121,7 @@ export function looperWith(
               text: "the main loop",
               first: "",
               id: requestId,
+              newest: 0,
               answer: () => {},
               fail: () => fail(gone()),
             });
@@ -111,26 +131,66 @@ export function looperWith(
             );
             return;
           }
+          const tail = input.at(-1);
+          const sent = new Map(
+            input.flatMap((item) =>
+              item.type === "function_call" && item.name === "send"
+                ? [[item.callId, sentText(item.arguments)] as const]
+                : [],
+            ),
+          );
+          if (
+            !options.askAfterSend &&
+            tail?.type === "function_call_output" &&
+            sent.has(tail.callId) &&
+            tail.output === "Sent."
+          ) {
+            answer({ output: [] });
+            return;
+          }
           asked.push(text);
           const lines = (plain: boolean) =>
-            input.map((item) =>
+            input.flatMap((item) =>
               item.type === "message"
-                ? plain
-                  ? unnumbered(item.content)
-                  : item.content
+                ? [plain ? unnumbered(item.content) : item.content]
                 : item.type === "function_call"
-                  ? `call ${item.name}`
-                  : `output ${item.output}`,
+                  ? [sent.get(item.callId) ?? `call ${item.name}`]
+                  : sent.has(item.callId) && item.output === "Sent."
+                    ? []
+                    : [`output ${item.output}`],
             );
           inputs.push(lines(true));
           numbered.push(lines(false));
+          raw.push(structuredClone(input));
           told.push({ instructions, tools: tools.map((tool) => tool.name) });
           const first = input.find((item) => item.type === "message" && item.role === "user");
+          // The newest message it read that it hasn't handed back.
+          const back = new Set(
+            input.flatMap((item) => {
+              if (item.type !== "function_call" || item.name !== "hand_back") return [];
+              const done = input.some(
+                (one) =>
+                  one.type === "function_call_output" &&
+                  one.callId === item.callId &&
+                  one.output.startsWith("Handed back."),
+              );
+              return done ? [(JSON.parse(item.arguments) as { message: number }).message] : [];
+            }),
+          );
+          const newest =
+            input
+              .flatMap((item) =>
+                item.type === "message" && item.role === "user"
+                  ? [Number(/^\[(\d+)\]/.exec(item.content)?.[1] ?? 0)]
+                  : [],
+              )
+              .findLast((number) => number > 0 && !back.has(number)) ?? 0;
           open.push({
             text,
             first: first?.type === "message" ? unnumbered(first.content) : "",
             id: requestId,
-            answer: (output) => answer({ output }),
+            newest,
+            answer: (output) => answer({ output: output.map((item) => naming(item, newest)) }),
             fail: () => fail(gone()),
           });
         }),
@@ -173,7 +233,7 @@ export function looperWith(
     if (request) close(request.id);
     return request;
   };
-  const answer = (text: string, output: OutputItem[] = says("Done."), of?: string) =>
+  const answer = (text: string, output: OutputItem[] = sends("Done."), of?: string) =>
     found(text, of)?.answer(output);
   const fail = (text: string) => found(text)?.fail();
   /** Threads no message was sent in before, each sent one and left in its turn. */
@@ -189,6 +249,7 @@ export function looperWith(
     asked,
     inputs,
     numbered,
+    raw,
     told,
     routed,
     mains,
@@ -203,6 +264,24 @@ export function looperWith(
   };
 }
 const gone = () => new Refusal("cancelled", "The request was cancelled.");
+/** What a call of `send` sent, from its arguments. */
+const sentText = (args: string) => {
+  try {
+    const { text } = JSON.parse(args) as { text?: unknown };
+    return typeof text === "string" ? text : undefined;
+  } catch {
+    return undefined;
+  }
+};
+/** A call of `send` that names no message, as `sends` makes it, made to name `newest`. */
+const naming = (item: OutputItem, newest: number): OutputItem => {
+  if (item.type !== "function_call" || item.name !== "send") return item;
+  const args = JSON.parse(item.arguments) as { message?: unknown };
+  return args.message === NEWEST
+    ? { ...item, arguments: JSON.stringify({ ...args, message: newest }) }
+    : item;
+};
+const NEWEST = "newest";
 /** A message as the person said it: without the number a worker's model reads it by. */
 const unnumbered = (content: string) => content.replace(/^\[\d+(\.\d+)?\] /, "");
 /** A worker handing the message of that number back. */
@@ -235,6 +314,25 @@ export const stops = (work: string) => route({ stop: work });
 export const says = (content: string): OutputItem[] => [
   { type: "message", role: "assistant", content },
 ];
+/** A worker sending `text` to the person, in reply to the message of that number: by default the newest it read. */
+export const sends = (text: string, message?: number): OutputItem[] => [
+  {
+    type: "function_call",
+    callId: `send-${crypto.randomUUID()}`,
+    name: "send",
+    arguments: JSON.stringify({ message: message ?? NEWEST, text }),
+  },
+];
+/**
+ * Everything a thread's record keeps, in order, each as its text: what was said there, a reply
+ * by what it sent, and what work kept there that is said in no thread, its calls and what its
+ * worker didn't send.
+ */
+export const kept = (values: Map<string, Json>, thread: string) =>
+  [...values.keys()]
+    .filter((key) => key.startsWith(`thread/${encodeURIComponent(thread)}/msg/`))
+    .sort()
+    .map((key) => textOf(Entry.parse(values.get(key))));
 /** A promise and the way to settle it. */
 export function gate() {
   let open: () => void = () => {};

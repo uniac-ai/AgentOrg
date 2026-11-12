@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { held, idle, looperWith, newWork, says, stops, until } from "./support.ts";
+import { held, idle, looperWith, newWork, says, sends, stops, until } from "./support.ts";
 
 test("a turn's calls are made under one group and the next turn's under another; a turn that ends by itself stops nothing", async () => {
   const { tool, groups, finish, calls } = held();
@@ -14,13 +14,13 @@ test("a turn's calls are made under one group and the next turn's under another;
   await until(() => asked.length === 1, "the first turn's request");
   answer("First.", calls(2));
   await until(() => asked.length === 2, "the request after its calls");
-  answer("First.", says("Done."));
+  answer("First.", sends("Done."));
   await looper.settled();
   await looper.send("a", "Second.");
   await until(() => asked.length === 3, "the next turn's request");
   answer("Second.", calls(1));
   await until(() => asked.length === 4, "the request after its call");
-  answer("Second.", says("Done again."));
+  answer("Second.", sends("Done again."));
   await looper.settled();
   assert.equal(groups.length, 3);
   assert.equal(groups[0], groups[1]);
