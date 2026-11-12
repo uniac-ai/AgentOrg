@@ -449,6 +449,38 @@ test("a home an earlier release ran starts as a fresh one: its package Actors cl
   assert.equal(sha(), stored);
 });
 
+test("the templates' listing says which came with the app: it can't be removed, and one saved under its id takes its place", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "agentorg-templates-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const s = await open(t, {
+    dataFolder: join(root, "service"),
+    webUrl: "http://127.0.0.1:9/mcp",
+    agentsFolder: join(root, "Agents"),
+  });
+  const { person } = await s.start();
+  type Listed = { id: string; title: string; shipped?: true };
+  const all = async () =>
+    (await person.call<{ templates: Listed[] }>("agents", "templates")).templates;
+  const listed = async () =>
+    (await all()).map(({ id, title, shipped }) => ({ id, title, shipped }));
+  const [assistant] = await all();
+  assert.ok(assistant);
+  assert.deepEqual(await listed(), [{ id: "assistant", title: assistant.title, shipped: true }]);
+  await assert.rejects(
+    person.call("agents", "removeTemplate", { id: "assistant" }),
+    refused("unknown"),
+  );
+  // A template to save takes no member it doesn't name, so what was listed is saved without
+  // `shipped`.
+  await assert.rejects(person.call("agents", "saveTemplate", assistant), refused("invalid"));
+  const { shipped: _, ...mine } = assistant;
+  await person.call("agents", "saveTemplate", { ...mine, title: "Mine" });
+  assert.deepEqual(await listed(), [{ id: "assistant", title: "Mine", shipped: undefined }]);
+  // Removing the saved one brings back the app's own.
+  await person.call("agents", "removeTemplate", { id: "assistant" });
+  assert.deepEqual(await listed(), [{ id: "assistant", title: assistant.title, shipped: true }]);
+});
+
 test("the bundled Assistant is a computer and the web, and its computer goes with it", async (t) => {
   const root = mkdtempSync(join(tmpdir(), "agentorg-assistant-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));

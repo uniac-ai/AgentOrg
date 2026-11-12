@@ -958,7 +958,12 @@ export function createStacks(parts: StackParts) {
           .map(({ unit, provider, providerName }) => ({ ...unit, provider, providerName })),
       };
     },
-    templates: () => ({ templates: templates() }),
+    /** Each template, with `shipped` on one the app ships: one that is not a saved one. */
+    templates: () => ({
+      templates: templates().map((one) =>
+        one === records.templates[one.id] ? one : { ...one, shipped: true as const },
+      ),
+    }),
     /** With `agent`, it's that agent's own: it replaces nothing, and starts no program. */
     async saveTemplate(template: TheTemplate, agent?: string) {
       if (agent && templates().some((one) => one.id === template.id))

@@ -49,6 +49,7 @@ export {
   agents,
   ConnectionOrigin,
   connections,
+  ListedTemplate,
   Stack,
   StackBase,
   StackUnit,
