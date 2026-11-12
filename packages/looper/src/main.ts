@@ -1,11 +1,12 @@
 /**
- * The main loop: one per looper. It is given a thread no piece of work follows, in which a message
- * has come in, and the work there is. It says whose the message is, new work or work there is, or
+ * The main loop: one per looper. It is given a thread in which a message waits that no piece of
+ * work keeps: one said where nothing follows, or one every piece of work it was given to handed
+ * back; and the work there is. It says whose the message is, new work or work there is, or
  * answers it itself when it needs no work, or stops a piece of work the message asks to stop. It
- * is also told of a message said to work that is in a turn, which that work has: then it is given
- * that work and that message, and may only stop that work. It does none of the work, and it has
- * one function to call. Each time is one model request, which holds nothing of those before it
- * but what it is given.
+ * is also told of a message that joined turns of work, which that work has: then it is given
+ * those pieces of work and that message, and may only stop one of them. It does none of the
+ * work, and it has one function to call. Each time is one model request, which holds nothing of
+ * those before it but what it is given.
  */
 import { head } from "./record.js";
 import type { Item, Log, Model, ToolSpec } from "./types.js";
@@ -22,14 +23,16 @@ You are given the latest pieces of work, each by its id and title, whether it is
 
 Whatever you write is said to the person as the reply. So when you give a message to work, old or new, write nothing: the worker answers.
 
+A message may also come to you from a conversation that work follows, when every piece of work it was given to handed it back: you are then told which did, and why. Decide it the same way. The work that handed it back is not listed, and is never given it again.
+
 A wrong match stays, and a promise starts nothing: when in doubt whose it is, it is new work.`;
 /**
- * What the main loop is told when a message was said to work that is in a turn: the worker has
- * it, and the main loop may only stop that work.
+ * What the main loop is told when a message joined turns of work: the workers have it, and the
+ * main loop may only stop one of those turns, or say which they are.
  */
-export const HEARD_INSTRUCTIONS = `You are the front desk. You are given one piece of work that is in a turn, by its id and title, and then a message that was just said in a conversation that work follows. Its worker has the message and will read it: you don't answer it, and you give it to nobody.
+export const HEARD_INSTRUCTIONS = `You are the front desk. You are given the pieces of work that are in a turn, each by its id and title, and then a message that was just said in a conversation those pieces of work follow. Their workers have the message and will read it: you don't answer it, and you give it to nobody.
 
-Act only if the message asks to stop that work. Then call \`route\` with only \`stop\`, set to its id, and say in a few words that you stopped it. Otherwise call nothing and write nothing: what you write is said only when you stop it.`;
+Act only if the message asks to stop work. If exactly one of those pieces of work fits, call \`route\` with only \`stop\`, set to its id, and say in a few words that you stopped it. If it asks to stop and more than one fits, call nothing and say which are in a turn, so the person can say which: that is said to the person. Otherwise call nothing and write nothing.`;
 /** What is said where the main loop called to stop work and wrote nothing: whether a turn was cut. */
 export const stopWord = (cut: boolean) => (cut ? "Stopped." : "Nothing was stopped.");
 /** How who it speaks as is told after that. */
@@ -110,14 +113,37 @@ const listing = (works: Listed[]) =>
           return `- ${id}: ${title} (${state})${last ? `; it last said: ${last}` : ""}`;
         }),
       ].join("\n");
-/** What the main loop's request holds: the work there is, then the thread as a conversation. */
-const put = (said: Said[], works: Listed[]): Item[] => [
+/** A piece of work that handed a message back, and why. */
+export interface Returned {
+  id: string;
+  title: string;
+  why: string;
+}
+/**
+ * What the main loop's request holds: the work there is, then the thread as a conversation, and
+ * for a message that came back, which work handed it back and why.
+ */
+const put = (said: Said[], works: Listed[], back: Returned[] = []): Item[] => [
   { type: "message", role: "user", content: listing(works) },
   ...said.slice(-TOLD.messages).map(({ role, text }) => ({
     type: "message" as const,
     role,
     content: text.length > TOLD.each ? `${head(text, TOLD.each)}…` : text,
   })),
+  ...(back.length > 0
+    ? [
+        {
+          type: "message" as const,
+          role: "user" as const,
+          content: [
+            "That was given to this work, which handed it back:",
+            ...back.map(
+              ({ id, title, why }) => `- ${id}: ${title}; because: ${head(why, TOLD.last)}`,
+            ),
+          ].join("\n"),
+        },
+      ]
+    : []),
 ];
 
 export function createMain(options: {
@@ -205,8 +231,9 @@ export function createMain(options: {
       said: Said[],
       works: Listed[],
       written: (text: string) => void,
+      back: Returned[],
     ): Promise<Decided | undefined> {
-      const asked = await ask(MAIN_INSTRUCTIONS, true, put(said, works), written);
+      const asked = await ask(MAIN_INSTRUCTIONS, true, put(said, works, back), written);
       if (!asked) return undefined;
       const { text, routed } = asked;
       const answered: Decided = text === undefined ? {} : { answer: text };
@@ -232,21 +259,27 @@ export function createMain(options: {
       return { ...answered, placed: { title: title || titled(newest) } };
     },
     /**
-     * Hear a message that joined a turn of `work`, which has it: the main loop may only stop
-     * that turn, and is not told who it speaks as. It gives what to say where the message was
-     * said if it says to stop it, and none if it doesn't or the request is dropped. Nothing it
-     * writes is said otherwise. A request the model refuses rejects, as it refused.
+     * Hear a message that joined a turn of each of `works`, which have it: the main loop may only
+     * stop one of those turns, and is not told who it speaks as. It gives the turn to stop, with
+     * what to say where the message was said; or, when several were listed and it stops none,
+     * what it wrote, which says which are in a turn; or none, when it does neither or the
+     * request is dropped. A request the model refuses rejects, as it refused.
      */
-    async hear(text: string, work: Listed): Promise<string | undefined> {
+    async hear(
+      text: string,
+      works: Listed[],
+    ): Promise<{ say: string; stop?: { work: string; turn: number } } | undefined> {
       const asked = await ask(
         HEARD_INSTRUCTIONS,
         false,
-        put([{ role: "user", text }], [work]),
+        put([{ role: "user", text }], works),
         () => {},
       );
-      return asked && turnOf(asked.routed?.stop, [work]) !== undefined
-        ? (asked.text ?? stopWord(true))
-        : undefined;
+      if (!asked) return undefined;
+      const work = works.find(({ id }) => id === asked.routed?.stop);
+      if (work?.turn !== undefined)
+        return { say: asked.text ?? stopWord(true), stop: { work: work.id, turn: work.turn } };
+      return works.length > 1 && asked.text !== undefined ? { say: asked.text } : undefined;
     },
     /** Text the model writes while it answers `requestId`, if that is the request out now. */
     delta(requestId: string, text: string) {

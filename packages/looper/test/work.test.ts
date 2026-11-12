@@ -645,3 +645,24 @@ test("a close that lands as what waited is looked for leaves it for the next loo
   assert.deepEqual(third.inputs[0], ["Before it went."]);
   await third.looper.stop();
 });
+
+test("new work the store refuses to keep is not there: the thread's next message starts work that reads all of it", async () => {
+  let refusing = true;
+  const { looper, values, asked, numbered, failures } = looperWith({
+    routing: () => newWork("The report"),
+    writing: (key) =>
+      refusing && key === "work/a" ? Promise.reject(new Error("the store refused it")) : undefined,
+  });
+  await looper.send("a", "Write the report.");
+  await until(() => failures.length === 1, "the thread to be told");
+  await looper.settled();
+  refusing = false;
+  await looper.send("a", "Are you there?");
+  await until(() => asked.length === 1, "the work's request");
+  assert.deepEqual(numbered[0], ["[1] Write the report.", "[2] Are you there?"]);
+  assert.deepEqual(
+    [...values.keys()].filter((key) => key.startsWith("work/")),
+    ["work/a"],
+  );
+  await looper.stop();
+});

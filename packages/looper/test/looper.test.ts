@@ -8,6 +8,7 @@ import {
   type Shown,
   type Tool,
 } from "../src/index.ts";
+import { HAND_BACK, workInstructions } from "../src/loop.ts";
 import { newWork } from "./support.ts";
 
 /**
@@ -86,7 +87,11 @@ test("a message is answered in its thread, through the tools it was given, on th
   await looper.settled();
   await looper.send("two", "And you?");
   await looper.settled();
-  assert.deepEqual(requests[0]?.tools, [{ name: "look", parameters: { type: "object" } }]);
+  // Its tools, and the looper's one function beside them.
+  assert.deepEqual(requests[0]?.tools, [
+    { name: "look", parameters: { type: "object" } },
+    HAND_BACK,
+  ]);
 
   assert.deepEqual(ran, [{ at: "it" }]);
   assert.deepEqual(
@@ -109,7 +114,8 @@ test("a message is answered in its thread, through the tools it was given, on th
     requests.map(({ input }) => input.length),
     [1, 3, 1],
   );
-  assert.equal(requests[2]?.instructions, "Be brief.");
+  // What its host tells it, then which work this is and how to hand a message back.
+  assert.equal(requests[2]?.instructions, `Be brief.\n\n${workInstructions("Work")}`);
   assert.deepEqual(
     [...values.keys()]
       .filter((key) => key.startsWith("thread/"))

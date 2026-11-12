@@ -20,6 +20,7 @@ import { NotConnected, Refused } from "@agentorg/sdk";
 import { connect } from "@agentorg/sdk/client";
 import { createLocalStore } from "../src/local-store.ts";
 import { startAgentProvider } from "../src/provider.ts";
+import { asAsked } from "./as-asked.ts";
 
 type Request = {
   requestId: string;
@@ -97,7 +98,7 @@ async function setup(t: test.TestContext) {
             { type: "function_call", callId: "r", name: "route", arguments: '{"title":"Work"}' },
           ],
         };
-      requests.push(request as Request);
+      requests.push(asAsked(request) as Request);
       await gates.shift();
       return { output: (replies.shift() ?? say("ok")) as never };
     },

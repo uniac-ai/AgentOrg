@@ -300,8 +300,11 @@ test("the looper stopping or closing as a message joins a turn asks the main loo
     const { looper, asked, mains } = looperWith();
     await looper.send("a", "Write the report.");
     await until(() => asked.length === 1, "the work's request");
-    await looper.send("a", "Stop.");
-    await looper[end]();
+    // The looper ends in the same breath as the message is said.
+    const sending = looper.send("a", "Stop.");
+    const ending = looper[end]();
+    await sending.catch(() => {});
+    await ending;
     await idle();
     assert.equal(mains.length, 1, end);
   }
@@ -509,7 +512,7 @@ test("a looper that closes while a turn waits for a stopped turn's call leaves i
   await sending;
   // Closed with the call still running: its result is never kept.
   await first.looper.close();
-  assert.equal(first.values.get("unfinished/a"), true);
+  assert.equal(first.values.has("unfinished/a"), true);
 
   const second = looperWith({ values: first.values, tools: [tool] });
   await second.looper.resume();
@@ -675,6 +678,7 @@ test("work stopped from its thread is at rest for the next looper too: nothing g
 test("the main loop is told to stop only what a message asks to stop, and nothing in doubt", () => {
   assert.match(MAIN_INSTRUCTIONS, /when the message asks to stop it and exactly one piece of work/);
   assert.match(MAIN_INSTRUCTIONS, /If none fits, or more than one, stop nothing and call nothing/);
-  assert.match(HEARD_INSTRUCTIONS, /Act only if the message asks to stop that work/);
-  assert.match(HEARD_INSTRUCTIONS, /what you write is said only when you stop it/);
+  assert.match(HEARD_INSTRUCTIONS, /Act only if the message asks to stop work/);
+  assert.match(HEARD_INSTRUCTIONS, /If exactly one of those pieces of work fits/);
+  assert.match(HEARD_INSTRUCTIONS, /more than one fits, call nothing and say which are in a turn/);
 });

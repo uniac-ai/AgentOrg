@@ -330,8 +330,9 @@ export function createChats(options: {
      * Say a message in a chat, or in a new chat it starts. A message in a chat no work follows is
      * put to the agent's main loop. When that answers it itself, the chat stays no work's, and its
      * next message is put to the main loop too. When it gives it to new work or to work there is,
-     * the chat's messages are that work's from then on: with no turn of it running one starts a
-     * turn, and a turn running takes it at its next model request.
+     * that work follows the chat from then on, beside any that already does, and the chat's
+     * messages are given to each: one with no turn running starts a turn, and a turn running
+     * takes it at its next model request.
      */
     async send({ chat, text }: Input<"send">) {
       if (chat !== undefined) {
