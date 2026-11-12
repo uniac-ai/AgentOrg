@@ -21,11 +21,12 @@ export const INSTALL_STEPS =
 
 /** How the service on this machine isolates its computers, if one is running. */
 export type Found = { isolation: "none" | "container" } | undefined;
+/** What a computer here reaches is said in one place, for how the service here isolates. */
 const localLine = (found: Found) =>
   !found
     ? INSTALL_STEPS
     : found.isolation === "container"
-      ? "On this computer, by a service you started. Each agent's computer is a container of its own."
+      ? "On this computer, by a service you started. Each agent's computer is a container of its own, and the only folder of yours in it is its workspace directory."
       : "On this computer, by a service you started. No isolation: it acts as you, and with a terminal it reaches everything you can.";
 
 /** The form as it stands now, with what was found on this machine. */
@@ -83,7 +84,7 @@ export const computerUnit = (found: Found): z.input<typeof Unit> => ({
       value: "string",
       title: "Workspace directory",
       description:
-        "The folder it works in. Left empty, it's a folder with the agent's name in ~/Agents, made if it's missing. Its file tools stay inside it by a check, not a sandbox. Removing the agent leaves it.",
+        "The folder it works in, made if it's missing. Left empty, it's a folder with the agent's name in ~/Agents. Its file tools stay inside it. Removing the agent leaves it.",
       placeholder: "~/Agents/{name}",
       visible: { field: "service", in: [LOCAL] },
     },
@@ -125,7 +126,7 @@ export const computerUnit = (found: Found): z.input<typeof Unit> => ({
         {
           value: "terminal",
           title: "Files and terminal",
-          description: "It can run any command, so it can reach every file and program you can.",
+          description: "It can run any command. What that reaches depends on where it resides.",
           adds: {
             slots: [{ name: COMPUTER }],
             skills: [skill("terminal"), skill("files"), skill("computer")],

@@ -3,10 +3,20 @@
 // with the computer's token. The web unit is one connection to a hosted server. Nothing here starts
 // a service. The control token and each computer's token stay in this provider's private file.
 import { randomBytes } from "node:crypto";
-import { chmodSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import {
+  accessSync,
+  chmodSync,
+  constants,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Computer, ComputerError, type LiveSurface } from "@agentorg/computer";
 import { hubActors, type Problem, unitProvider } from "@agentorg/interfaces";
@@ -153,15 +163,39 @@ function problems(
     wrong.push({ field: "access", message: "Choose what it reaches." });
   const workspace = fromHome(values.workspace);
   if (values.service === LOCAL && workspace !== undefined) {
-    let folder = false;
-    try {
-      folder = isAbsolute(workspace as string) && statSync(workspace as string).isDirectory();
-    } catch {
-      // Reported as not being a folder.
-    }
-    if (!folder) wrong.push({ field: "workspace", message: `There's no folder at ${workspace}.` });
+    if (!isAbsolute(workspace))
+      wrong.push({
+        field: "workspace",
+        message: "Give the folder's full path, or one that starts with ~/.",
+      });
+    else if (!makeable(workspace))
+      wrong.push({ field: "workspace", message: cantBeMade(workspace) });
   }
   return wrong;
+}
+
+const cantBeMade = (folder: string) => `The folder ${folder} can't be made.`;
+
+/**
+ * Whether `folder` is a folder or could be made as one, without making anything: going up from
+ * it, the first thing that is there is a folder, and one a new folder can be put in. So what
+ * `check` lets through, making the computer can make.
+ */
+function makeable(folder: string) {
+  try {
+    for (let at = resolve(folder); ; at = dirname(at)) {
+      const found = statSync(at, { throwIfNoEntry: false });
+      if (found) {
+        if (!found.isDirectory()) return false;
+        if (at !== resolve(folder)) accessSync(at, constants.W_OK | constants.X_OK);
+        return true;
+      }
+      // Something is there that leads nowhere, such as a link to nothing, or nothing at all is.
+      if (lstatSync(at, { throwIfNoEntry: false }) || dirname(at) === at) return false;
+    }
+  } catch {
+    return false;
+  }
 }
 
 /** Run the units' provider as an Actor exporting `unit.provider@1` as `provider`. */
@@ -296,13 +330,7 @@ export async function startComputerProvider(
         .replace(/[/\\\p{Cc}]/gu, "-")
         .replace(/^\.+/, "")
         .trim() || "agent";
-    const folder = join(options.agentsFolder ?? join(homedir(), "Agents"), safe);
-    try {
-      mkdirSync(folder, { recursive: true });
-    } catch {
-      throw new Refused("invalid", `The folder ${folder} can't be made.`);
-    }
-    return folder;
+    return join(options.agentsFolder ?? join(homedir(), "Agents"), safe);
   };
 
   /** What of a computer can be opened live, as its service says; none if it can't say now. */
@@ -359,6 +387,14 @@ export async function startComputerProvider(
         ? (fromHome(values.workspace) ?? (agentName ? agentFolder(agentName) : undefined))
         : values.path
     ) as string | undefined;
+    // On this machine the folder is made if it's missing, typed or default. On another, only
+    // its service can say whether the path will do.
+    if (local && workspace !== undefined)
+      try {
+        mkdirSync(workspace, { recursive: true });
+      } catch {
+        throw new Refused("invalid", cantBeMade(workspace));
+      }
     const computer = await Computer.create({
       ...reached,
       access,
