@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { type Browser, chromium, type Page } from "@playwright/test";
-import { openSetup } from "./design/samples.ts";
+import { openSetup, sampleAgents } from "./design/samples.ts";
 import { SESSION, standIn } from "./stand-in.ts";
 
 let browser: Browser;
@@ -62,12 +62,33 @@ test(
     const page = await open(gateway, "#/mcps");
     const github = row(page, "GitHub acme");
     await github.getByText("Connected by you").waitFor();
-    await github.getByText("https://api.githubcopilot.com/mcp").waitFor();
+    // An address is said without its scheme; a command as it is run.
+    await github.getByText("api.githubcopilot.com/mcp", { exact: true }).waitFor();
+    await row(page, "Notes for Research").getByText("notes-server ~/notes").waitFor();
     await github.getByRole("button", { name: "Reviewer" }).waitFor();
     await github.getByText("2 tools").waitFor();
     await row(page, "Notes for Research").getByText("Created for Research by Local").waitFor();
     await row(page, "Linear").getByText("Down").waitFor();
     await row(page, "Postgres analytics").getByRole("img", { name: "On this computer" }).waitFor();
+    await page.close();
+  }),
+);
+
+test(
+  "a connection a unit made says which unit and for which agent",
+  withGateway(async (gateway) => {
+    sampleAgents(gateway);
+    // A second one, made for the same agent by another of its units.
+    const research = gateway.agents.get("a-research");
+    const made = gateway.connections.get("c-postgres");
+    const web = research?.mcp.find((one) => one.connection === "c-postgres");
+    assert.ok(research && made?.origin && web);
+    made.origin = { ...made.origin, madeFor: "a-research" };
+    web.instance = "i-web";
+    const page = await open(gateway, "#/mcps");
+    await row(page, "Postgres analytics").getByText("Web for Research").waitFor();
+    await row(page, "Notes for Research").getByText("Computer for Research").waitFor();
+    await row(page, "GitHub acme").getByText("Connected by you").waitFor();
     await page.close();
   }),
 );
@@ -94,6 +115,7 @@ test(
     await dialog.getByLabel("Name").waitFor();
     await page.waitForTimeout(250);
     const size = await dialog.boundingBox();
+    assert.equal(size?.height, 460, "as tall as the design has it");
     assert.deepEqual(await labels(page), ["Name", "Address", "Token"]);
     const connect = dialog.getByRole("button", { name: "Connect" });
     assert.equal(await connect.isDisabled(), true);
@@ -333,6 +355,82 @@ test(
       // The bar marks where you are.
       await nav.getByRole("button", { name }).and(page.locator('[aria-current="page"]')).waitFor();
       assert.deepEqual(await first.boundingBox(), before);
+    }
+    await page.close();
+  }),
+);
+
+test(
+  "Settings' pages are set in the shell's own type, and connections with none to list say nothing",
+  withGateway(async (gateway) => {
+    const page = await open(gateway, "#/skills");
+    await page.getByRole("button", { name: "Dismiss" }).click();
+    const title = row(page, "cite-sources").getByText("cite-sources", { exact: true });
+    await title.waitFor();
+    assert.deepEqual(
+      await title.evaluate((e) => [getComputedStyle(e).fontSize, getComputedStyle(e).fontWeight]),
+      ["15px", "500"],
+    );
+    await page.getByRole("tab", { name: "MCP connections" }).click();
+    const name = row(page, "GitHub acme").getByText("GitHub acme", { exact: true });
+    await name.waitFor();
+    assert.equal(await name.evaluate((e) => getComputedStyle(e).fontSize), "15px");
+    for (const [tab, words] of [
+      ["Providers", "AgentOrg"],
+      ["Account", "sam@example.com"],
+    ] as const) {
+      await page.getByRole("tab", { name: tab }).click();
+      const said = page.getByRole("main").getByText(words, { exact: true });
+      await said.waitFor();
+      assert.equal(await said.evaluate((e) => getComputedStyle(e).fontSize), "15px", tab);
+    }
+    // With none, as when the last is removed, the page under the row of sections is empty.
+    for (const agent of gateway.agents.values()) agent.mcp = [];
+    for (const connection of [...gateway.connections.keys()])
+      gateway.connections.delete(connection);
+    const before = gateway.calls.length;
+    await page.getByRole("tab", { name: "MCP connections" }).click();
+    await page.getByRole("button", { name: "Connect", exact: true }).waitFor();
+    for (const end = Date.now() + 8000; ; ) {
+      const read = gateway.calls
+        .slice(before)
+        .some((c) => c.slot === "connections" && c.method === "list");
+      if (read) break;
+      assert.ok(Date.now() < end, "the connections are read again");
+      await page.waitForTimeout(50);
+    }
+    await page.waitForTimeout(100);
+    const list = page.getByRole("main").getByRole("list");
+    assert.equal(await list.getByRole("listitem").count(), 0);
+    assert.equal((await list.innerText()).trim(), "");
+    await page.close();
+  }),
+);
+
+test(
+  "Account says who is signed in to ChatGPT with the way out, and nothing of ChatGPT while signed out",
+  withGateway(async (gateway) => {
+    const page = await open(gateway, "#/settings/account");
+    const main = page.getByRole("main");
+    const chatgpt = main.getByRole("region", { name: "ChatGPT" });
+    await chatgpt.getByText("sam@example.com").waitFor();
+    assert.deepEqual(
+      (await chatgpt.innerText()).split("\n").filter((word) => word.trim()),
+      ["ChatGPT", "sam@example.com", "Plus", "Manage usage", "Sign out"],
+    );
+    for (const state of ["ineligible", "signed_in", "signed_out"] as const) {
+      gateway.setAccount(state);
+      if (state === "signed_in") {
+        await chatgpt.getByText("sam@example.com").waitFor();
+        continue;
+      }
+      await chatgpt.waitFor({ state: "detached" });
+      await main.getByRole("region", { name: "Color" }).waitFor();
+      assert.equal(
+        await main.getByRole("button", { name: /ChatGPT/ }).count(),
+        0,
+        "the way in is Home's",
+      );
     }
     await page.close();
   }),

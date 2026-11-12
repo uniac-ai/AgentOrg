@@ -653,6 +653,7 @@ const BUILD_BASE = { provider: "AgentOrg", creatable: "assistant" };
 const BUILD_TEMPLATES: Template[] = [
   {
     id: "assistant",
+    shipped: true,
     title: "Assistant",
     description: "Works on a computer and on the web",
     base: BUILD_BASE,
@@ -663,6 +664,7 @@ const BUILD_TEMPLATES: Template[] = [
   },
   {
     id: "builder",
+    shipped: true,
     title: "Builder",
     description: "Makes and runs other agents",
     base: BUILD_BASE,
@@ -778,4 +780,65 @@ export async function openTemplates(page: Page) {
   const main = page.getByRole("main");
   await main.getByRole("tab", { name: "Templates", selected: true }).waitFor();
   await main.getByText("Storefront worker").waitFor();
+}
+
+/** The sections of Settings that have a page of their own to measure, by their tab's words. */
+export const SECTIONS = [
+  ["skills", "Skills"],
+  ["mcps", /^MCP/],
+  ["providers", "Providers"],
+  ["account", "Account"],
+] as const;
+export type Section = (typeof SECTIONS)[number][0];
+
+/** One of Settings' sections, reached from the bar and then its tab, with its page read. */
+export async function openSection(page: Page, section: Section) {
+  if ((page.viewportSize()?.width ?? 0) < 640)
+    await page.getByRole("button", { name: "Menu" }).click();
+  await page
+    .getByRole("navigation", { name: "Main" })
+    .last()
+    .getByRole("button", { name: "Settings" })
+    .click();
+  const main = page.getByRole("main");
+  const name = SECTIONS.find(([id]) => id === section)?.[1] ?? "";
+  await main.getByRole("tab", { name }).click();
+  await main.getByRole("tab", { name, selected: true }).waitFor();
+  await main.locator("li, section").first().waitFor();
+}
+
+/** What a section offers, opened from the end of the row: Skills' and MCP connections' dialogs. */
+export async function openOffer(page: Page, section: "skills" | "mcps") {
+  await openSection(page, section);
+  const [offer, title] =
+    section === "skills" ? ["Add skill", "Add skill"] : ["Connect", "Connect an MCP"];
+  await page.getByRole("main").getByRole("button", { name: offer, exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: title });
+  await dialog.getByRole("textbox").first().waitFor();
+  await dialog.evaluate((e) => Promise.all(e.getAnimations().map((moving) => moving.finished)));
+}
+
+/**
+ * What Settings lists, as the design's sample has it where it shows: the agents, the first skill
+ * in use by one of them, and as many tools on the first and last connections as the design's
+ * have, since on a phone a row is as wide as its count's words leave.
+ */
+export function sampleSettings(gateway: Gateway) {
+  sampleAgents(gateway);
+  (gateway.agents.get("a-research") as Agent).skills.unshift({
+    name: "cite-sources",
+    description: "Links every claim to its source",
+  });
+  const listed = [...gateway.connections.values()].sort((a, b) => a.name.localeCompare(b.name));
+  for (const [connection, count] of [
+    [listed[0], 38],
+    [listed.at(-1), 6],
+  ] as const) {
+    const tool = connection?.status.tools[0];
+    if (connection && tool)
+      connection.status.tools = Array.from({ length: count }, (_, n) => ({
+        ...tool,
+        name: `${tool.name}_${n}`,
+      }));
+  }
 }

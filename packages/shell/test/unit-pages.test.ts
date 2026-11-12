@@ -17,6 +17,16 @@ test(
     const list = page.getByRole("list", { name: "Templates" });
     const assistant = list.getByRole("listitem").filter({ hasText: "Assistant" });
     await assistant.getByText("Computer, Web").waitFor();
+    // One that came with the app has no way to delete it; one a person saved has.
+    assert.equal(await assistant.getByRole("button", { name: /^Delete/ }).count(), 0);
+    assert.equal(
+      await list
+        .getByRole("listitem")
+        .filter({ hasText: "From elsewhere" })
+        .getByRole("button", { name: "Delete From elsewhere" })
+        .count(),
+      1,
+    );
     await assistant.getByRole("button", { name: "Use" }).click();
     assert.equal(
       await panel(page)

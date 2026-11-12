@@ -1,6 +1,7 @@
 import { LoaderCircleIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api, useLoad } from "../data.ts";
+import { shortUrl } from "./calls.ts";
 import { ConnectDialog } from "./connect.tsx";
 import {
   type ConnectionEntry,
@@ -11,7 +12,7 @@ import {
   useEvery,
 } from "./data.ts";
 import { DeleteButton } from "./delete-dialog.tsx";
-import { Nothing, rowClass, Scroll, TroubleDot, UsedBy, WhereIcon } from "./parts.tsx";
+import { rowClass, Scroll, TroubleDot, UsedBy, WhereIcon } from "./parts.tsx";
 import { useOffer } from "./settings-page.tsx";
 
 /** Each connection with how many tools it offers; a server's state has no event, so it's reread. */
@@ -44,18 +45,23 @@ export function McpsPage({ focus, adding }: { focus?: string; adding?: boolean }
   const using = (connection: string) =>
     details.filter((a) => a.mcp.some((m) => m.connection === connection));
 
-  const originOf = ({ origin }: ConnectionEntry) => {
+  /** Whose it is: the person's, or made for an agent by one of the units it was built from. */
+  const originOf = ({ connection, origin }: ConnectionEntry) => {
     if (!origin) return "";
     if (!origin.madeFor) return "Connected by you";
-    const agent = details.find((a) => a.agent === origin.madeFor)?.name ?? "an agent";
+    const agent = details.find((a) => a.agent === origin.madeFor);
+    const instance = agent?.mcp.find((m) => m.connection === connection)?.instance;
+    const unit = agent?.units.find((u) => u.instance === instance)?.title;
+    const name = agent?.name ?? "an agent";
+    if (unit) return `${unit} for ${name}`;
     const provider = providers.find((p) => p.provider === origin.provider)?.name;
-    return `Created for ${agent}${provider ? ` by ${provider}` : ""}`;
+    return `Created for ${name}${provider ? ` by ${provider}` : ""}`;
   };
 
   useOffer("Connect", () => setOpen(true));
   return (
     <>
-      <Scroll asBuilt>
+      <Scroll>
         <ul className="mx-auto max-w-5xl">
           {rows.map(({ entry, tools }) => (
             <li
@@ -71,14 +77,13 @@ export function McpsPage({ focus, adding }: { focus?: string; adding?: boolean }
               </div>
               <span className="flex min-w-0 items-center gap-2 tight:col-span-2 tight:row-start-2">
                 {entry.origin && <WhereIcon kind={entry.origin.kind} />}
-                <span
-                  className="truncate font-mono text-xs text-muted-foreground"
-                  title={entry.origin?.target}
-                >
-                  {entry.origin?.target}
+                <span className="truncate font-mono text-xs text-muted-foreground">
+                  {entry.origin?.kind === "url"
+                    ? shortUrl(entry.origin.target)
+                    : entry.origin?.target}
                 </span>
               </span>
-              <span className="flex min-w-0 tight:col-span-2 tight:row-start-3">
+              <span className="flex min-w-0 tight:col-start-1 tight:row-start-3">
                 <UsedBy agents={using(entry.connection)} />
               </span>
               <span className="flex justify-end text-xs tabular-nums text-muted-foreground tight:col-start-2 tight:row-start-1">
@@ -106,13 +111,6 @@ export function McpsPage({ focus, adding }: { focus?: string; adding?: boolean }
               </span>
             </li>
           ))}
-          {list.loaded && rows.length === 0 && (
-            <li>
-              <Nothing>
-                {list.error ? "Connections can't be read right now." : "No connections yet."}
-              </Nothing>
-            </li>
-          )}
         </ul>
       </Scroll>
       <ConnectDialog

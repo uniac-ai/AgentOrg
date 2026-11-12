@@ -39,12 +39,15 @@ export function TemplatesPage() {
               </Button>
             </span>
             <span className="tight:row-start-1">
-              <DeleteButton
-                name={t.title}
-                agents={[]}
-                onDelete={() => removeTemplate(t.id)}
-                onDeleted={() => {}}
-              />
+              {/* One that came with the app can't be removed. */}
+              {!t.shipped && (
+                <DeleteButton
+                  name={t.title}
+                  agents={[]}
+                  onDelete={() => removeTemplate(t.id)}
+                  onDeleted={() => {}}
+                />
+              )}
             </span>
           </li>
         ))}

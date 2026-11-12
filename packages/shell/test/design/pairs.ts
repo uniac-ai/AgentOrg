@@ -21,18 +21,22 @@ import {
   noted,
   openDesignAgent,
   openFiles,
+  openOffer,
   openSampleChat,
+  openSection,
   openSetup,
   openTemplates,
   openWindow,
   readChat,
   refuseSend,
+  SECTIONS,
   SIGN_INS,
   type SignIn,
   sampleAgents,
   sampleBuild,
   sampleChats,
   sampleLoad,
+  sampleSettings,
   signInAccount,
   signInHash,
   signInState,
@@ -66,6 +70,8 @@ interface Screen {
   chats?: boolean;
   /** The built side's agents are the design's sample: what each is for, and Research's computer. */
   agents?: boolean;
+  /** The built side's Settings lists the design's sample where it shows. */
+  settings?: boolean;
   /** The built side builds from the design's sample: its base, units and templates. */
   build?: boolean;
   /** The design's page is this much taller than its own bar makes it. */
@@ -395,6 +401,27 @@ const SCREENS: Screen[] = [
     design: openTemplates,
     built: openTemplates,
   },
+  ...SECTIONS.map(
+    ([section]): Screen => ({
+      name: `settings-${section}`,
+      sizes: ["wide", "phone"],
+      themes: ["dark", "light"],
+      settings: true,
+      design: (page) => openSection(page, section),
+      built: (page) => openSection(page, section),
+    }),
+  ),
+  ...(["skills", "mcps"] as const).map(
+    (section): Screen => ({
+      name: `settings-offer-${section}`,
+      sizes: ["wide"],
+      themes: ["dark", "light"],
+      settings: true,
+      taller: 1,
+      design: (page) => openOffer(page, section),
+      built: (page) => openOffer(page, section),
+    }),
+  ),
   {
     name: "agent-setup",
     sizes: ["wide", "phone"],
@@ -548,6 +575,7 @@ for (const screen of SCREENS.filter((one) => wanted(one.name)))
         if (gateway) {
           if (screen.agents) sampleAgents(gateway);
           if (screen.build) sampleBuild(gateway);
+          if (screen.settings) sampleSettings(gateway);
           if (screen.signIn) signInAccount(gateway, screen.signIn);
           if (screen.browser) computerWith(gateway, "browser", !screen.watch);
           // A watcher opens no tab of its own: the one in front is there already.

@@ -40,7 +40,7 @@ export function ConnectDialog({
 }) {
   return (
     <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
-      <DialogContent className="window flex h-[min(560px,88vh)] flex-col ring-0 sm:max-w-lg">
+      <DialogContent className="window flex h-[min(460px,88vh)] flex-col ring-0 sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Connect an MCP</DialogTitle>
         </DialogHeader>
@@ -153,7 +153,8 @@ function KindForm({
         submit();
       }}
     >
-      <div className="no-bar min-h-0 flex-1 overflow-y-auto">
+      {/* Room around the fields, inside what scrolls, for the ring of the one that has the keyboard. */}
+      <div className="no-bar -m-1 min-h-0 flex-1 overflow-y-auto p-1">
         <FieldGroup className="gap-4">
           {choices.length > 1 && (
             <Select value={picked} onValueChange={onPick}>
@@ -262,7 +263,7 @@ function KindForm({
           )}
         </FieldGroup>
       </div>
-      <DialogFooter className="items-center">
+      <DialogFooter className="sm:items-center">
         {act.failed && (
           <p role="alert" className="mr-auto min-w-0 text-[13px] text-[var(--bad)]">
             {act.failed}
