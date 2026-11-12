@@ -22,7 +22,7 @@ import { describeInterface, type Interface, type Log, Refused, type Slot } from 
 import { connect } from "@agentorg/sdk/client";
 import type { z } from "zod";
 import { createActivity } from "./activity.js";
-import { createControl } from "./control.js";
+import { type Activity, createControl } from "./control.js";
 import { schemaOf, secretsSchemaOf, settle } from "./form.js";
 import { createSkills, readSkillFolder } from "./skills.js";
 import { type AgentRecord, createStacks, Records, slotFieldOf } from "./stack.js";
@@ -65,6 +65,44 @@ export interface Manager {
 
 const quiet: Log = { info() {}, warn() {}, error() {} };
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
+
+/**
+ * The control unit's name for a change the person makes through `agents@1`, so the control log
+ * reads one set of names; none for a call that changes no agent. A creation is named by its
+ * template, as control names one; one from a stack alone is `agent_create`.
+ */
+function changeOf(method: string, input: Record<string, unknown>): string | undefined {
+  const stack = input.stack as { template?: string } | undefined;
+  const template = typeof input.template === "string" ? input.template : stack?.template;
+  switch (method) {
+    case "create":
+      return template ? `create_${template}` : "agent_create";
+    case "start":
+    case "stop":
+    case "remove":
+      return `agent_${method}`;
+    case "addUnit":
+      return "agent_add_unit";
+    case "removeUnit":
+      return "agent_remove_unit";
+    case "expose":
+      return "connection" in input ? "connection_expose" : "skill_expose";
+    case "unexpose":
+      return "slot" in input ? "connection_unexpose" : "skill_unexpose";
+  }
+  return undefined;
+}
+
+/** The secret values a call carries, in any `secrets` within its input. */
+function secretsIn(value: unknown, found: string[] = []): string[] {
+  if (Array.isArray(value)) for (const one of value) secretsIn(one, found);
+  else if (value && typeof value === "object")
+    for (const [key, inner] of Object.entries(value))
+      if (key === "secrets" && inner && typeof inner === "object")
+        found.push(...Object.values(inner).filter((one): one is string => typeof one === "string"));
+      else secretsIn(inner, found);
+  return found;
+}
 /** The slot a connection is made for by the person: no agent has it yet, so it names nothing. */
 const PERSON_SLOT = "tools";
 const alreadyGone = (error: unknown) => error instanceof Refused && error.code === "unknown";
@@ -111,6 +149,14 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
   };
   const library = createSkills(join(dir, "skills"));
   const activity = createActivity(join(dir, ACTIVITY));
+  /** Keep a line of the control log. Its failure is its own: it never fails what it records. */
+  const note = (entry: Activity) => {
+    try {
+      activity.add(entry);
+    } catch {
+      // Nothing else to do.
+    }
+  };
   /** Agents being made: they can read their settings, and nothing else can see them yet. */
   const creating = new Map<string, z.infer<typeof AgentRecord>>();
 
@@ -423,13 +469,39 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
             Object.fromEntries(
               Object.entries(held).map(([method, handler]) => [
                 method,
-                (input: unknown, context: { caller: string }) => {
+                async (input: unknown, context: { caller: string }) => {
                   if (records.agents[context.caller] || creating.has(context.caller))
                     throw new Refused(
                       "forbidden",
                       "An agent reaches this through its control unit.",
                     );
-                  return handler(input, context);
+                  // The person's own change to an agent is kept in the control log, as control's
+                  // are; control's own calls reach these handlers directly, and are logged there.
+                  const asked = input as Record<string, unknown>;
+                  const tool = name === "agents" ? changeOf(method, asked) : undefined;
+                  if (!tool) return handler(input, context);
+                  const about = typeof asked.agent === "string" ? asked.agent : undefined;
+                  const { caller } = context;
+                  try {
+                    const output = (await handler(input, context)) as { agent?: unknown };
+                    const target =
+                      about ?? (typeof output?.agent === "string" ? output.agent : undefined);
+                    note({ caller, tool, outcome: "done", ...(target ? { target } : {}) });
+                    return output;
+                  } catch (error) {
+                    note({
+                      caller,
+                      tool,
+                      outcome: "refused",
+                      ...(about ? { target: about } : {}),
+                      // A provider's refusal may echo what it was given: no secret is kept.
+                      reason: secretsIn(input)
+                        .filter((secret) => secret.length > 0)
+                        .reduce((text, secret) => text.split(secret).join("…"), messageOf(error))
+                        .slice(0, 2000),
+                    });
+                    throw error;
+                  }
                 },
               ]),
             ) as never,
