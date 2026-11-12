@@ -20,7 +20,12 @@ const failure = ({ code, message }: { code: string; message: string }) =>
   JSON.stringify({ error: { code, message } });
 
 /** Run a function call: the result, or the refusal, as the function's output. */
-export async function runTool(tools: Tool[], name: string, args: string): Promise<Outcome> {
+export async function runTool(
+  tools: Tool[],
+  name: string,
+  args: string,
+  group: string,
+): Promise<Outcome> {
   const refused = (code: string, message: string) => ({
     output: failure({ code, message }),
     ok: false,
@@ -35,7 +40,7 @@ export async function runTool(tools: Tool[], name: string, args: string): Promis
     return refused("invalid", "The arguments aren't JSON.");
   }
   try {
-    return await found.run(input);
+    return await found.run(input, group);
   } catch (error) {
     const { code, message } = codeOf(error);
     return refused(code, message);

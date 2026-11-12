@@ -415,6 +415,7 @@ test("settings and an exposed tools@1 reach the agent as they do any engine", as
   management.exports.tools.implement({
     list: async () => ({ tools: [{ name: "search", inputSchema: { type: "object" } }] }),
     call: async () => ({ output: "" }),
+    stop: async () => ({}),
   });
   s.hub.state.bind(PERSON, {
     consumer: agent,

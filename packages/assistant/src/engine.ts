@@ -82,6 +82,25 @@ export function startEngine(
     stopped: options.stopped ?? false,
     model,
     request: () => relayed(request()),
+    // Asked of every tools slot: one that ran nothing of the group ends nothing. A provider
+    // whose tools@1 has no `stop` isn't asked.
+    stopGroup: (group) =>
+      Promise.all(
+        ctx
+          .exposed()
+          .filter((slot) => listsTools(slot.described))
+          .map((slot) => {
+            const stop = (
+              slot.call as Record<string, ((input: object) => Promise<unknown>) | undefined>
+            ).stop;
+            return stop?.({ group }).catch((error: unknown) =>
+              ctx.log.warn("A tools slot's stop failed.", {
+                slot: slot.slot,
+                error: String(error),
+              }),
+            );
+          }),
+      ),
     emit: {
       message: (message) => ctx.exports.chat.emit("message", message),
       delta: (delta) => ctx.exports.chat.emit("delta", delta),

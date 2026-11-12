@@ -9,7 +9,7 @@ import { Hub, type HubOptions, listen, PERSON } from "@agentorg/hub";
 import { chat, hubActors, hubGrants, kv, llmSession, tools } from "@agentorg/interfaces";
 import { connect } from "@agentorg/sdk/client";
 import { asAsked } from "./as-asked.ts";
-import engine from "./engine-actor.ts";
+import engine, { engines } from "./engine-actor.ts";
 
 type Item = { type: string; callId?: string; output?: string };
 type Request = { input: Item[]; tools?: { name: string; parameters: unknown }[] };
@@ -156,6 +156,9 @@ async function cast(t: test.TestContext, options: HubOptions = {}) {
   const standInId = await make("Stand-in");
   const listing = { tools: [SEARCH, BROKEN] };
   const called: unknown[] = [];
+  /** The groups it was asked to stop; a call waits while `hold.until` is set, and a stop lets it end. */
+  const stopped: string[] = [];
+  const hold: { until?: Promise<void>; release?: () => void } = {};
   const startStandIn = async () => {
     const standIn = await connect({ hubUrl, ...standInId, exports: { tools } });
     clients.push(standIn);
@@ -163,9 +166,15 @@ async function cast(t: test.TestContext, options: HubOptions = {}) {
       list: async () => listing,
       call: async (input) => {
         called.push(input);
+        await hold.until;
         return input.name === "broken"
           ? { output: "it broke", failed: true as const }
           : { output: `found ${JSON.stringify(input.arguments)}` };
+      },
+      stop: async ({ group }) => {
+        stopped.push(group);
+        hold.release?.();
+        return {};
       },
     });
     return standIn;
@@ -186,7 +195,20 @@ async function cast(t: test.TestContext, options: HubOptions = {}) {
     await person.slots.grants.call.unexpose({ to: agentId.actorId, slot: "lookup" });
     await until(() => agent.exposed().length === 0, "the exposure to go");
   };
-  return { turn, names, script, delays, listing, called, standIn, startStandIn, expose, unexpose };
+  return {
+    turn,
+    names,
+    script,
+    delays,
+    listing,
+    called,
+    stopped,
+    hold,
+    standIn,
+    startStandIn,
+    expose,
+    unexpose,
+  };
 }
 
 const callOf = (name: string, args: unknown, callId: string) => ({
@@ -210,8 +232,11 @@ test("a tools@1 export exposed to a running agent is offered, called, and change
   // At the next request, with no restart, under `<slot>__<tool>`, with the server's own schema.
   assert.deepEqual(s.names(first), ["lookup__repo_search", "lookup__broken"]);
   assert.deepEqual(first?.tools?.[0]?.parameters, SEARCH.inputSchema);
-  // A call goes through the slot, under the server's own name for the tool.
-  assert.deepEqual(s.called[0], { name: "repo.search", arguments: { q: "hub" } });
+  // A call goes through the slot, under the server's own name for the tool, with its turn's group.
+  const [one, two] = s.called as { group?: string }[];
+  assert.equal(typeof one?.group, "string");
+  assert.deepEqual(one, { name: "repo.search", arguments: { q: "hub" }, group: one?.group });
+  assert.equal(two?.group, one?.group);
   assert.equal(outputOf(second, "c1"), 'found {"q":"hub"}');
   // A tool that ran and failed: its own words reach the model.
   assert.equal(outputOf(third, "c2"), "it broke");
@@ -223,6 +248,23 @@ test("a tools@1 export exposed to a running agent is offered, called, and change
 
   await s.unexpose();
   assert.deepEqual(s.names((await s.turn("after"))[0]), []);
+});
+
+test("the agent's own Stop asks an exposed tools slot to end what the stopped turn's calls left running", async (t) => {
+  const s = await cast(t);
+  await s.expose();
+  s.hold.until = new Promise((resolve) => {
+    s.hold.release = resolve;
+  });
+  s.script.push([callOf("lookup__repo_search", { q: "hub" }, "c1")]);
+  const turning = s.turn("use it");
+  await until(() => s.called.length === 1, "the call");
+  await engines.at(-1)?.stop();
+  await turning;
+  // Asked at the stop, which ends the call, and again once the call is back.
+  await until(() => s.stopped.length === 2, "the stops");
+  const { group } = s.called[0] as { group: string };
+  assert.deepEqual(s.stopped, [group, group]);
 });
 
 test("a connection that goes down has its tools left out until it is back", async (t) => {

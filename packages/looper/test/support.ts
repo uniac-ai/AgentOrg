@@ -10,6 +10,8 @@ export function looperWith(
   options: {
     tools?: Tool[];
     stopped?: boolean;
+    /** Asked to end what a stopped turn's calls left running, by their group. */
+    stopGroup?: (group: string) => Promise<unknown>;
     /** A model that never hears a cancel: its answer stays out. */
     deaf?: boolean;
     /** Awaited before each write to the store, and before each read or listing from it. */
@@ -157,6 +159,7 @@ export function looperWith(
       failed: (thread, { code }) => void failures.push(`${thread}: ${code}`),
     },
     ...(options.stopped === undefined ? {} : { stopped: options.stopped }),
+    ...(options.stopGroup === undefined ? {} : { stopGroup: options.stopGroup }),
     log: { info() {}, warn() {}, error() {} },
   });
   /**
@@ -252,13 +255,15 @@ export async function idle() {
   for (let i = 0; i < 50; i++) await new Promise((soon) => setImmediate(soon));
 }
 
-/** A tool that runs until the test lets it end. */
+/** A tool that runs until the test lets it end. `groups` is the group of each call, in order. */
 export function held() {
   const { shut, open: finish } = gate();
+  const groups: string[] = [];
   const tool: Tool = {
     name: "hold",
     parameters: {},
-    run: async () => {
+    run: async (_input, group) => {
+      groups.push(group);
       await shut;
       return { output: "held", ok: true };
     },
@@ -266,5 +271,13 @@ export function held() {
   const called: OutputItem[] = [
     { type: "function_call", callId: "c1", name: "hold", arguments: "{}" },
   ];
-  return { tool, called, finish };
+  /** A model's answer that calls it `count` times. */
+  const calls = (count: number): OutputItem[] =>
+    Array.from({ length: count }, () => ({
+      type: "function_call",
+      callId: `c-${crypto.randomUUID()}`,
+      name: "hold",
+      arguments: "{}",
+    }));
+  return { tool, called, calls, groups, finish };
 }

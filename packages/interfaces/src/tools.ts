@@ -2,6 +2,8 @@ import { defineInterface, event, method } from "@agentorg/sdk";
 import { z } from "zod";
 
 const ToolName = z.string().min(1).max(128);
+/** A word the caller chooses for a set of calls, unique to it, such as a random id. */
+const Group = z.string().min(1).max(128);
 /** The most a call's output carries: what a model's function output can take. */
 const OUTPUT_MAX = 200_000;
 
@@ -30,14 +32,29 @@ export const tools = defineInterface({
   kind: "rpc",
   methods: {
     list: method({ input: z.object({}), output: z.object({ tools: z.array(ToolEntry) }) }),
-    /** Run one tool. `output` is its result as text. */
+    /**
+     * Run one tool. `output` is its result as text. `group` puts what the call starts in that
+     * group, for `stop`; a provider that can't stop what it starts takes no notice of it.
+     */
     call: method({
-      input: z.object({ name: ToolName, arguments: z.record(z.string(), z.json()) }),
+      input: z.object({
+        name: ToolName,
+        arguments: z.record(z.string(), z.json()),
+        group: Group.optional(),
+      }),
       output: z.object({
         output: z.string().max(OUTPUT_MAX),
         failed: z.literal(true).optional(),
       }),
     }),
+    /**
+     * End what calls made under `group` started and is still running, that of a call still under
+     * way included: that call then answers as its work ended. It answers once the provider has
+     * begun ending them, without waiting for them to end; one that keeps nothing running, or
+     * can't end what it runs, answers at once having ended nothing. The group can be used again
+     * after, and asking again is harmless.
+     */
+    stop: method({ input: z.object({ group: Group }), output: z.object({}) }),
   },
   events: {
     /** The tools changed: `list` again. */

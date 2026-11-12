@@ -27,7 +27,7 @@ import {
   type Problem,
   unitProvider,
 } from "@agentorg/interfaces";
-import { Connection, parseConnection, type Timing } from "@agentorg/mcp";
+import { Connection, type Groups, parseConnection, type Timing } from "@agentorg/mcp";
 import { type Log, Refused } from "@agentorg/sdk";
 import { type Client, connect } from "@agentorg/sdk/client";
 import { z } from "zod";
@@ -88,6 +88,8 @@ type FactRow = z.input<typeof FactRowShape>;
 const ROW_VALUE_MAX = 1024;
 /** The most a connection's target holds, as `ConnectionTarget` has it. */
 const TARGET_MAX = 4096;
+/** How the computer's `computer` endpoint takes a call's group, and stops a group. */
+const AGENTEXEC_GROUPS: Groups = { meta: "agentexec/group", stop: "agentexec/group/stop" };
 const SAYS: Record<Access, string> = {
   read: "reads files",
   files: "reads and changes files",
@@ -285,7 +287,10 @@ export async function startComputerProvider(
 
   const running = new Map<string, Connection[]>();
   /** Connect a link. A service on this machine may have moved to another port since. */
-  const open = async ({ url, actor, credential }: Linked, computer?: Instance["computer"]) => {
+  const open = async (
+    { slot, url, actor, credential }: Linked,
+    computer?: Instance["computer"],
+  ) => {
     const moved = computer && "local" in computer.service ? localService()?.apiUrl : undefined;
     const token = computer?.token;
     const server = new Connection(
@@ -293,6 +298,10 @@ export async function startComputerProvider(
       token ? { token } : {},
       log,
       options.timing,
+      [],
+      // The computer's own commands can be put in a group and stopped together, as AgentExec
+      // names it.
+      slot === COMPUTER ? AGENTEXEC_GROUPS : undefined,
     );
     await server.join({ hubUrl, actorId: actor, credential });
     return server;
