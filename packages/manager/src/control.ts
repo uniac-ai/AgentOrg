@@ -69,7 +69,7 @@ There is one create tool per template you may use. Read its description and fiel
 - \`agent_send\` gives it a message and returns at once. It works on its own after that. Your name is on the message's first line.
 - A message with no chat named starts a new chat with it, and tells you which. Name that chat to go on in it. Start another only for work that is apart from the first.
 - \`agent_chats\` lists its chats and says whether it is working. A chat with a \`problem\` has a message that got no answer: send it another once the problem is dealt with. \`agent_read\` shows what was said in one. Check back when you need the result, rather than after every step.
-- An agent that keeps a record of its work also gives you a tool \`work_<its id>__work\`: what each of its pieces of work is doing and did. Read it to see how its work goes, without messaging it.
+- An agent that keeps a record of its work also gives you a tool \`work_<its id>__work\` while it is connected: what each of its pieces of work is doing and did. Read it to see how its work goes, without messaging it.
 - Say what you want back and in what form. It knows only what you send it and its purpose.
 
 ## When it is done

@@ -436,8 +436,10 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
       };
       const holding = (actor?: string) =>
         void (async () => {
-          // One that has closed, or isn't back yet, has nothing to reach.
-          if (actor && !(await hub.actors.get({ actorId: actor })).connected) return;
+          // One that has closed, or isn't back yet, has nothing to reach, and the agent that
+          // made it reaches its Work no more until it is back.
+          if (actor && !(await hub.actors.get({ actorId: actor })).connected)
+            return void (await stacks.reachMade((made) => made === actor));
           await Promise.all([stacks.holdOwns(actor), stacks.reachHeld(actor)]);
           await stacks.reachMade((made, maker) => !actor || made === actor || maker === actor);
         })().catch((error) => {

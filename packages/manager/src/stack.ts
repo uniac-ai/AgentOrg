@@ -202,7 +202,10 @@ interface Work {
 export interface StackParts {
   self: string;
   hub: {
-    actors: { close(input: { actorId: string }): Promise<unknown> };
+    actors: {
+      close(input: { actorId: string }): Promise<unknown>;
+      get(input: { actorId: string }): Promise<{ connected: boolean }>;
+    };
     grants: {
       bind(input: {
         consumer: string;
@@ -706,23 +709,31 @@ export function createStacks(parts: StackParts) {
   };
   /**
    * Have each agent that manages its own reach the Work of the agents it made, as the person
-   * does: each one's own `tools`, exposed to it under that agent's id. `which` limits it to the
-   * pairs it is true of. Each is done in the maker's queue, so it never races its agents unit.
+   * does: each one's own `tools`, exposed to it under that agent's id, while that agent is
+   * connected. One that is away, or whose maker no longer manages its own, is taken off: a
+   * maker's turns that go on after a restart wait for every tools slot that is away. `which`
+   * limits it to the pairs it is true of. Each is done in the maker's queue, so it never races
+   * its agents unit.
    */
   const reachMade = async (which: (made: string, maker: string) => boolean = () => true) => {
     for (const [id, record] of Object.entries(records.agents)) {
       const parent = record.parent?.agent;
       if (!parent || !which(id, parent) || !givesWork(id)) continue;
       await serial(parent, async () => {
-        if (records.agents[id] && givesWork(id) && managesOwn(self, records.agents[parent]))
-          await hub.grants.expose({
+        if (!records.agents[id] || !givesWork(id)) return;
+        if (
+          managesOwn(self, records.agents[parent]) &&
+          (await hub.actors.get({ actorId: id })).connected
+        )
+          return void (await hub.grants.expose({
             provider: id,
             export: TOOLS_EXPORT,
             to: parent,
             as: workSlot(id),
-          });
+          }));
+        await unreachMade(parent, id);
       }).catch((error) => {
-        // Closed, with its record still here: nothing to reach.
+        // Closed, with its record still here, or already taken off: nothing to do.
         if (!alreadyGone(error) && !(error instanceof Refused && error.code === "state"))
           log.warn(`Reaching an agent's work: ${messageOf(error)}`);
       });
@@ -1030,10 +1041,14 @@ export function createStacks(parts: StackParts) {
       ...records.templates,
     });
 
-  /** Take back from `parent` the Work of the agents it made: it manages them no more. */
-  const unreachMade = async (parent: string) => {
+  /** Take back from `parent` the Work of the agents it made, or of `made` alone. */
+  const unreachMade = async (parent: string, made?: string) => {
     for (const binding of (await hub.bindings.list({ actor: parent })).bindings)
-      if (binding.consumer === parent && madeWork(parent, binding))
+      if (
+        binding.consumer === parent &&
+        madeWork(parent, binding) &&
+        (made === undefined || binding.provider === made)
+      )
         await hub.grants.unexpose({ to: parent, slot: binding.slot }).catch((error) => {
           if (!alreadyGone(error)) throw error;
         });
@@ -1385,7 +1400,7 @@ export function createStacks(parts: StackParts) {
         keepOrigins(work);
         save();
         creating.delete(agent);
-        // Its maker reads its Work from now on, whether or not it has connected yet.
+        // Its maker reads its Work now if it is connected, and otherwise once it connects.
         if (child) await reachMade((made) => made === agent);
         return { agent };
       } catch (error) {
