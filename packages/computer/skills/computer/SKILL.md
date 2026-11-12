@@ -7,6 +7,8 @@ description: How your computer works, where your workspace is, what lasts, and h
 
 You have a computer, and a workspace folder on it. `computer__list` with no path shows it. Your workspace is where your work goes. Your computer may be on another machine than the person's, or in a container of its own.
 
+`computer__about` tells you what the person sees of your computer: where it is, its folder, what it reaches, how it is isolated and how loaded it is. When the person asks where you are or where your work is, answer from it, not from the path you see: in a container your folder has another path on the machine.
+
 ## What it can do
 
 The tools you have say what you can do here. You may be able to read files, change them, or run commands too. Before you promise something, check you have a tool that does it. If you can't do something the task needs, say what's missing.

@@ -11,7 +11,38 @@ const SKILL = "SKILL.md";
 const skill = (name: string) => ({ name, files: [SKILL] });
 
 export type Access = "read" | "files" | "terminal";
-const WITH_FILES = { slots: [{ name: COMPUTER }], skills: [skill("files"), skill("computer")] };
+/** What a computer reaches at each level: the answer's title, and what the person reads of it. */
+export const REACHES: Record<Access, string> = {
+  read: "Read-only files",
+  files: "Files",
+  terminal: "Files and terminal",
+};
+
+// What the computer gives the person's side: its live surfaces, by the service's names, and its
+// views, in the order they are drawn. A computer with files has the `computer` connection, and so
+// the `about` tool, which says how it is isolated; one with a browser alone has neither.
+const LOAD = { surface: "load", protocol: "metrics@1" };
+const FILES = { surface: "files", protocol: "files@1" };
+const TERMINAL = { surface: "terminal", protocol: "terminal@1" };
+const SCREEN = { surface: "browser", protocol: "screencast@1" };
+/** The ids of the views whose rows `apply` gives. */
+export const WHERE = "where";
+export const WORKSPACE = "workspace";
+const ISOLATION = {
+  id: "isolation",
+  place: "column",
+  kind: "facts",
+  when: "reachable" as const,
+  operation: "about",
+  slot: COMPUTER,
+  rows: ["Isolation"],
+};
+const WITH_FILES = {
+  slots: [{ name: COMPUTER }],
+  skills: [skill("files"), skill("computer")],
+  surfaces: [FILES],
+  views: [ISOLATION],
+};
 
 export const LOCAL = "local";
 export const ANOTHER = "another";
@@ -34,6 +65,7 @@ export const computerUnit = (found: Found): z.input<typeof Unit> => ({
   id: COMPUTER,
   title: "Computer",
   description: "A place for the agent to work: a folder, how far it can act on it, and a browser.",
+  capability: { id: COMPUTER, title: "Computer" },
   once: true,
   form: [
     {
@@ -111,25 +143,27 @@ export const computerUnit = (found: Found): z.input<typeof Unit> => ({
         },
         {
           value: "read",
-          title: "Read-only files",
+          title: REACHES.read,
           description:
             "It can read files in its workspace directory, but can't change them or run anything.",
           adds: WITH_FILES,
         },
         {
           value: "files",
-          title: "Files",
+          title: REACHES.files,
           description:
             "It can read and change files in its workspace directory, but can't run anything.",
           adds: WITH_FILES,
         },
         {
           value: "terminal",
-          title: "Files and terminal",
+          title: REACHES.terminal,
           description: "It can run any command. What that reaches depends on where it resides.",
           adds: {
             slots: [{ name: COMPUTER }],
             skills: [skill("terminal"), skill("files"), skill("computer")],
+            surfaces: [TERMINAL, FILES],
+            views: [ISOLATION],
           },
         },
       ],
@@ -142,11 +176,21 @@ export const computerUnit = (found: Found): z.input<typeof Unit> => ({
       title: "With a browser",
       description: "It can open web pages and act on them, in a browser of its own.",
       default: false,
-      adds: { slots: [{ name: BROWSER_SLOT }], skills: [skill("browser")] },
+      adds: { slots: [{ name: BROWSER_SLOT }], skills: [skill("browser")], surfaces: [SCREEN] },
     },
   ],
   needs: [],
-  gives: { slots: [], skills: [], results: [] },
+  gives: {
+    slots: [],
+    skills: [],
+    results: [],
+    surfaces: [LOAD],
+    views: [
+      { id: WHERE, place: "column", kind: "facts" },
+      { id: "load", place: "column", kind: "meters", when: "reachable", surface: "load" },
+      { id: WORKSPACE, place: "column", kind: "facts" },
+    ],
+  },
 });
 
 export const WEB_UNIT: z.input<typeof Unit> = {

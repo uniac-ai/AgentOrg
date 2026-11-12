@@ -1,6 +1,7 @@
 // The units' provider, and the connector to AgentComputer. A computer is one the service runs: this
 // asks the service for it through its SDK, then opens an ordinary `url` connection to each endpoint
-// with the computer's token. The web unit is one connection to a hosted server. Nothing here starts
+// with the computer's token, and joins the computer's capability as an Actor of its own, which the
+// person is connected to. The web unit is one connection to a hosted server. Nothing here starts
 // a service. The control token and each computer's token stay in this provider's private file.
 import { randomBytes } from "node:crypto";
 import {
@@ -19,10 +20,16 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Computer, ComputerError, type LiveSurface } from "@agentorg/computer";
-import { hubActors, type Problem, unitProvider } from "@agentorg/interfaces";
+import {
+  capability,
+  type FactRow as FactRowShape,
+  hubActors,
+  type Problem,
+  unitProvider,
+} from "@agentorg/interfaces";
 import { Connection, parseConnection, type Timing } from "@agentorg/mcp";
 import { type Log, Refused } from "@agentorg/sdk";
-import { connect } from "@agentorg/sdk/client";
+import { type Client, connect } from "@agentorg/sdk/client";
 import { z } from "zod";
 import {
   type Access,
@@ -33,9 +40,12 @@ import {
   type Found,
   INSTALL_STEPS,
   LOCAL,
+  REACHES,
   SKILLS,
   WEB,
   WEB_UNIT,
+  WHERE,
+  WORKSPACE,
 } from "./unit.js";
 
 const Link = z.object({
@@ -47,6 +57,8 @@ const Link = z.object({
 const Stored = z.object({
   agent: z.string(),
   links: z.array(Link),
+  /** The capability's own Actor, which exports `capability@1` for the computer. */
+  capability: z.object({ actor: z.string(), credential: z.string() }).optional(),
   /** The computer behind them. A service at an address is reached with what is kept here. */
   computer: z
     .object({
@@ -71,6 +83,11 @@ const FILE = "instances.json";
 const SKILLS_DIR = fileURLToPath(new URL("../../skills/", import.meta.url));
 const EXA_URL = "https://mcp.exa.ai/mcp?tools=web_search_exa,web_fetch_exa";
 const SERVICE_ANSWERS_MS = 2000;
+type FactRow = z.input<typeof FactRowShape>;
+/** The most a row's value holds, as `FactRow` has it. */
+const ROW_VALUE_MAX = 1024;
+/** The most a connection's target holds, as `ConnectionTarget` has it. */
+const TARGET_MAX = 4096;
 const SAYS: Record<Access, string> = {
   read: "reads files",
   files: "reads and changes files",
@@ -96,7 +113,10 @@ export interface ComputerProviderOptions {
 }
 
 export interface ComputerProvider {
-  /** Leave the Hub and let every connection go. The computers stay, and resume at the next start. */
+  /**
+   * Leave the Hub and let every connection and every capability's Actor go. The computers stay,
+   * and resume at the next start.
+   */
   close(): Promise<void>;
 }
 
@@ -277,7 +297,15 @@ export async function startComputerProvider(
     await server.join({ hubUrl, actorId: actor, credential });
     return server;
   };
-  const endAll = () => Promise.all([...running.values()].flat().map((server) => server.end()));
+  /** Each computer's capability as its own Actor, joined, by instance. */
+  const capabilities = new Map<
+    string,
+    Client<Record<never, never>, { capability: typeof capability }>
+  >();
+  const endAll = async () => {
+    for (const client of capabilities.values()) client.close();
+    await Promise.all([...running.values()].flat().map((server) => server.end()));
+  };
   const held = (instance: string) => {
     const found = stored[instance];
     const servers = running.get(instance);
@@ -303,24 +331,6 @@ export async function startComputerProvider(
         log.error(`A computer may be left on its service: ${messageOf(error)}`);
     }
   };
-
-  for (const [instance, entry] of Object.entries(stored)) {
-    const servers: Connection[] = [];
-    try {
-      for (const link of entry.links) servers.push(await open(link, entry.computer));
-      running.set(instance, servers);
-      for (const server of servers) server.run();
-    } catch (error) {
-      log.error(`${instance} didn't rejoin the Hub: ${String(error)}`);
-      await Promise.all(servers.map((server) => server.end()));
-      // The Hub no longer knows it: its Actors were closed while the provider was away.
-      if (error instanceof Refused && error.code === "forbidden") {
-        if (entry.computer) await killComputer(entry.computer).catch(() => {});
-        delete stored[instance];
-        save();
-      }
-    }
-  }
 
   /** The folder an agent with this name works in when none is named. It stays when the agent goes. */
   const agentFolder = (agentName: string) => {
@@ -367,7 +377,7 @@ export async function startComputerProvider(
     }
   };
 
-  /** Make the computer, and say what each of its endpoints is. */
+  /** Make the computer, and say what each of its endpoints is and the rows fixed for its views. */
   const makeComputer = async (
     values: Record<string, unknown>,
     secrets: Record<string, string>,
@@ -413,12 +423,16 @@ export async function startComputerProvider(
     const where = local ? "this computer" : new URL(reached.apiUrl).host;
     const on = isolation === "container" ? `${where}, in a container` : `${where}, no isolation`;
     const servers = [];
-    if (access !== "none")
+    if (access !== "none") {
+      // A folder too long for a connection's target is left out of it.
+      const says = `${on}: ${SAYS[access]}`;
+      const inFolder = `${says} in ${folder}`;
       servers.push({
         slot: COMPUTER,
         url: at(reached.apiUrl, computer.getMcpUrl("computer")),
-        target: `${on}: ${SAYS[access]}${folder ? ` in ${folder}` : ""}`,
+        target: folder && inFolder.length <= TARGET_MAX ? inFolder : says,
       });
+    }
     if (values.browser === true)
       servers.push({
         slot: BROWSER_SLOT,
@@ -430,8 +444,126 @@ export async function startComputerProvider(
       token: computer.getMcpToken(),
       service: local ? { local: true } : reached,
     };
-    return { servers, computer: held };
+    // What the person reads of it beside its windows, fixed now: where it is, its folder, and
+    // what it reaches. In a container the agent finds the folder elsewhere, so the row says both
+    // and is no path to follow.
+    const reaches = [
+      ...(access === "none" ? [] : [REACHES[access]]),
+      ...(values.browser === true ? ["Browser"] : []),
+    ].join(", ");
+    const folderRow: FactRow | undefined = !folder
+      ? undefined
+      : isolation === "container"
+        ? { label: "Folder", value: `${folder} on the machine, mounted at /workspace in it` }
+        : { label: "Folder", value: folder, path: true };
+    const rows: Record<string, FactRow[]> = {
+      [WHERE]: [{ label: "Where", value: local ? "This computer" : new URL(reached.apiUrl).host }],
+      [WORKSPACE]: [
+        // A folder too long for a row is left out of it, rather than shown cut.
+        ...(folderRow && folderRow.value.length <= ROW_VALUE_MAX ? [folderRow] : []),
+        { label: "Reaches", value: reaches },
+      ],
+    };
+    return { servers, computer: held, rows };
   };
+
+  /** How an instance stands: its connections' states as one, and what of it can be opened. */
+  const stateOf = async (instance: string) => {
+    const { found, servers } = held(instance);
+    const each = servers.map((server, i) => ({
+      connection: (found.links[i] as Linked).actor,
+      ...server.status(),
+    }));
+    const down = each.find((one) => one.state === "down");
+    const waiting = each.some((one) => one.state === "connecting");
+    const surfaces = found.computer ? await surfacesOf(found.computer) : undefined;
+    return {
+      state: down ? ("down" as const) : waiting ? ("connecting" as const) : ("connected" as const),
+      ...(down?.detail ? { detail: down.detail } : {}),
+      connections: each,
+      ...(surfaces ? { surfaces } : {}),
+    };
+  };
+  /** A one-time way to open something of an instance's computer live. */
+  const ticket = async (instance: string, surface: string, mode: "watch" | "operate") => {
+    const { found } = held(instance);
+    const reached = found.computer && reachOf(found.computer.service);
+    if (!found.computer || !reached)
+      throw new Refused("unknown", "Nothing of this can be opened live.");
+    try {
+      const session = await Computer.createLiveSession(
+        found.computer.id,
+        { surface: surface as LiveSurface, mode },
+        reached,
+      );
+      return {
+        url: socketAt(reached.apiUrl, session.url),
+        protocol: session.protocol,
+        expiresAt: session.expiresAt,
+      };
+    } catch (error) {
+      if (!(error instanceof ComputerError)) throw error;
+      throw new Refused(
+        error.code === 404 || error.code === 400
+          ? "unknown"
+          : error.code === 409
+            ? "state"
+            : "failed",
+        error.message,
+      );
+    }
+  };
+  /**
+   * Join the Hub as the capability's own Actor for an instance's computer. It answers
+   * as the instance stands, with no unit asked, and says so when a connection's state changes.
+   */
+  const joinCapability = async (
+    instance: string,
+    { actor, credential }: { actor: string; credential: string },
+    servers: Connection[],
+  ) => {
+    const client = await connect({
+      hubUrl,
+      actorId: actor,
+      credential,
+      exports: { capability },
+      log,
+      start(ctx) {
+        ctx.exports.capability.implement({
+          async state() {
+            const { state, detail, surfaces } = await stateOf(instance);
+            return { state, ...(detail ? { detail } : {}), surfaces: surfaces ?? [] };
+          },
+          live: ({ surface, mode }) => ticket(instance, surface, mode),
+        });
+      },
+    });
+    capabilities.set(instance, client);
+    for (const server of servers)
+      server.onState(() => client.exports.capability.emit("changed", {}));
+  };
+
+  for (const [instance, entry] of Object.entries(stored)) {
+    const servers: Connection[] = [];
+    try {
+      for (const link of entry.links) servers.push(await open(link, entry.computer));
+      running.set(instance, servers);
+      if (entry.capability) await joinCapability(instance, entry.capability, servers);
+      for (const server of servers) server.run();
+    } catch (error) {
+      log.error(`${instance} didn't rejoin the Hub: ${String(error)}`);
+      running.delete(instance);
+      capabilities.get(instance)?.close();
+      capabilities.delete(instance);
+      await Promise.all(servers.map((server) => server.end()));
+      // The Hub no longer knows it: its Actors were closed while the provider was away.
+      if (error instanceof Refused && error.code === "forbidden") {
+        if (entry.computer) await killComputer(entry.computer).catch(() => {});
+        delete stored[instance];
+        save();
+      }
+    }
+  }
 
   let closing = false;
   const provider = await connect({
@@ -464,11 +596,12 @@ export async function startComputerProvider(
             throw new Refused("invalid", wrong.map((problem) => problem.message).join(" "));
           const instance = `${unit}_${randomBytes(9).toString("hex")}`;
           const web = { url: options.webUrl ?? EXA_URL };
-          const { servers, computer } =
+          const { servers, computer, rows } =
             unit === WEB
               ? {
                   servers: [{ slot: WEB, url: web.url, target: new URL(web.url).host }],
                   computer: undefined,
+                  rows: undefined,
                 }
               : await makeComputer(values, secrets, name, agent, agentName);
           const entry: Instance = { agent, links: [], ...(computer ? { computer } : {}) };
@@ -485,6 +618,15 @@ export async function startComputerProvider(
               made.push(await open(link, computer));
               connections.push({ slot, connection: actorId, target });
             }
+            // The capability is an Actor of its own, beside the computer's connections.
+            if (computer) {
+              const { actorId, credential } = await ctx.slots.actors.call.create({
+                name: `${name} (windows)`.slice(0, 128),
+              });
+              entry.capability = { actor: actorId, credential: credential as string };
+            }
+            if (entry.capability) await joinCapability(instance, entry.capability, made);
+            // Checked after the last wait: a stop meanwhile ended only what was running then.
             if (closing) throw new Refused("unavailable", "This provider is stopping.");
             running.set(instance, made);
             stored[instance] = entry;
@@ -493,8 +635,13 @@ export async function startComputerProvider(
           } catch (error) {
             running.delete(instance);
             delete stored[instance];
+            capabilities.get(instance)?.close();
+            capabilities.delete(instance);
             await Promise.all(made.map((server) => server.end()));
-            for (const { actor } of entry.links)
+            for (const { actor } of [
+              ...entry.links,
+              ...(entry.capability ? [entry.capability] : []),
+            ])
               await ctx.slots.actors.call.close({ actorId: actor }).catch(() => {});
             if (computer)
               await killComputer(computer).catch((failed) =>
@@ -502,62 +649,25 @@ export async function startComputerProvider(
               );
             throw error;
           }
-          return { instance, connections, results: [] };
-        },
-        status: async ({ instance }) => {
-          const { found, servers } = held(instance);
-          const each = servers.map((server, i) => ({
-            connection: (found.links[i] as Linked).actor,
-            ...server.status(),
-          }));
-          const down = each.find((one) => one.state === "down");
-          const waiting = each.some((one) => one.state === "connecting");
-          const surfaces = found.computer ? await surfacesOf(found.computer) : undefined;
           return {
-            state: down
-              ? ("down" as const)
-              : waiting
-                ? ("connecting" as const)
-                : ("connected" as const),
-            ...(down?.detail ? { detail: down.detail } : {}),
-            connections: each,
-            ...(surfaces ? { surfaces } : {}),
+            instance,
+            connections,
+            results: [],
+            ...(entry.capability && rows
+              ? { capability: { actor: entry.capability.actor, rows } }
+              : {}),
           };
         },
-        async live({ instance, surface, mode }) {
-          const { found } = held(instance);
-          const reached = found.computer && reachOf(found.computer.service);
-          if (!found.computer || !reached)
-            throw new Refused("unknown", "Nothing of this can be opened live.");
-          try {
-            const session = await Computer.createLiveSession(
-              found.computer.id,
-              { surface: surface as LiveSurface, mode },
-              reached,
-            );
-            return {
-              url: socketAt(reached.apiUrl, session.url),
-              protocol: session.protocol,
-              expiresAt: session.expiresAt,
-            };
-          } catch (error) {
-            if (!(error instanceof ComputerError)) throw error;
-            throw new Refused(
-              error.code === 404 || error.code === 400
-                ? "unknown"
-                : error.code === 409
-                  ? "state"
-                  : "failed",
-              error.message,
-            );
-          }
-        },
+        status: ({ instance }) => stateOf(instance),
+        live: ({ instance, surface, mode }) => ticket(instance, surface, mode),
         async remove({ instance }) {
           const { found, servers } = held(instance);
           // First: if the service refuses, the rest is still here to be tried again.
           if (found.computer) await killComputer(found.computer);
-          for (const { actor } of found.links)
+          for (const { actor } of [...found.links, ...(found.capability ? [found.capability] : [])])
             await ctx.slots.actors.call.close({ actorId: actor });
+          capabilities.get(instance)?.close();
+          capabilities.delete(instance);
           running.delete(instance);
           delete stored[instance];
           try {

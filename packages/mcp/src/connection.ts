@@ -241,11 +241,21 @@ export class Connection {
   }
 
   #set(state: State, detail?: string) {
-    const changed = state !== this.#state && (state === "connected" || this.#state === "connected");
+    const before = this.#state;
     this.#state = state;
     this.#detail = detail === undefined ? undefined : cut(this.#scrub(detail), 2000);
     if (state !== "connected") this.#tools = [];
-    if (changed) this.#changed();
+    if (state !== before && (state === "connected" || before === "connected")) this.#changed();
+    if (state !== before) this.#onState?.();
+  }
+
+  #onState: (() => void) | undefined;
+  /**
+   * Tell `listener` each time its state changes: connected, connecting or down. One listener:
+   * setting it again replaces it.
+   */
+  onState(listener: () => void) {
+    this.#onState = listener;
   }
 
   #changed() {
