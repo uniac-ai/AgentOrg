@@ -8,8 +8,8 @@
 # - 0.0.5: its old Actors closed, and `agents create` working;
 # - 0.0.6: a connection that must still answer, and an agent whose conversation must be its first
 #   chat;
-# - 0.0.7 and 0.0.8: an agent that must still run, whose two chats must be read, the older one
-#   added to.
+# - 0.0.7, 0.0.8 and 0.0.9: an agent that must still run, whose two chats must be read, the older
+#   one added to.
 # Once a version is published, it gets a section here, or joins the loop of an earlier version
 # when it takes the same commands and the same is asked of this build on its home (not in the
 # change that releases it: the registry has it only after its tag). A section makes, with that
@@ -330,15 +330,15 @@ wait_answers "$agentorg" ||
 echo "0.0.6's connection works here and is removed"
 stop_app
 
-# 0.0.7 and 0.0.8 take the same commands to make an agent and two chats, and the same is asked of
-# this build on each home, so they share this section. A later version joins the list only while
-# both hold; one whose commands differ gets its own section after the loop. A published version
+# 0.0.7, 0.0.8 and 0.0.9 take the same commands to make an agent and two chats, and the same is
+# asked of this build on each home, so they share this section. A later version joins the list
+# only while both hold; one whose commands differ gets its own section after the loop. A published version
 # never changes, so one leaves the list only when this build must do something different with its
 # home. The homes differ: with no sign-in a 0.0.7 chat is its own work, whose turn failed; a 0.0.8
-# chat's message waits for the main loop under a mark, and this build puts the next message there
-# to the main loop with it. 0.0.8's work records, and messages that name their work, are written
-# only after a model answers, so no home here has them.
-for v in 0.0.7 0.0.8; do
+# or 0.0.9 chat's message waits for the main loop under a mark, and this build puts the next
+# message there to the main loop with it. Their work records, and messages that name their work,
+# are written only after a model answers, so no home here has them.
+for v in 0.0.7 0.0.8 0.0.9; do
   step "a home the published $v made: its agent runs and its chats are read on this build, the older one added to"
   oldv="$work/old-$v"
   mkdir "$oldv"
