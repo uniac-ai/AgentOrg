@@ -110,32 +110,3 @@ svg {
 a {
   color: inherit;
 }
-.icon-btn {
-  width: 30px;
-  height: 30px;
-  border-radius: 8px;
-  border: 0;
-  background: transparent;
-  color: var(--muted);
-  display: grid;
-  place-items: center;
-}
-.icon-btn:hover {
-  background: var(--hover);
-  color: var(--fg);
-}
-.banner {
-  position: fixed;
-  left: 50%;
-  top: 8px;
-  transform: translateX(-50%);
-  background: var(--raised);
-  border-radius: 12px;
-  padding: 10px 10px 10px 14px;
-  display: flex;
-  gap: 14px;
-  align-items: center;
-  box-shadow: 0 12px 30px rgb(0 0 0 / 0.35);
-  z-index: 15;
-  font-size: 13px;
-}

@@ -9,16 +9,25 @@
 // its own to lose (the folder it was in, where it was scrolled to, a file on its way, the
 // terminal in front) also keeps it while another is in front: it stays under that one, unseen.
 import { FolderIcon, GlobeIcon, Maximize2Icon, TerminalIcon, XIcon } from "lucide-react";
-import { type ComponentType, type ReactNode, useLayoutEffect, useRef, useState } from "react";
+import {
+  type ComponentType,
+  type ReactNode,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import { createPortal } from "react-dom";
 import { Button } from "../ui/button.tsx";
 import { ScreencastView } from "./browser-view.tsx";
 import { useComputers } from "./computers.tsx";
-import type { AgentDetail, Tone } from "./data.ts";
+import { type AgentDetail, reasonOf, type Tone } from "./data.ts";
 import { Face, tintOf } from "./face.tsx";
 import { FilesView } from "./files-view.tsx";
 import type { LiveTarget } from "./live-socket.ts";
+import { Refusal } from "./parts.tsx";
 import { TerminalsView } from "./terminals.tsx";
+import { clause } from "./words.ts";
 
 /** One surface of one of the agent's units, as its status says. */
 export interface OpenSurface {
@@ -109,10 +118,26 @@ export function Computer({
   agent: { id: string; name: string; tone: Tone };
   surfaces: readonly OpenSurface[];
   /** Starts its agent, which is how a stopped one's computer comes back. */
-  onStart(): void;
+  onStart(): Promise<unknown>;
   overlay?: boolean;
 }) {
   const { picked, pick, close, draw, erase } = useComputers();
+  // A Start pressed here and refused says why at this window's foot, until it is pressed again or
+  // the agent is no longer stopped. One press at a time.
+  const [refused, setRefused] = useState<string>();
+  const [starting, setStarting] = useState(false);
+  const stopped = agent.tone === "stopped";
+  useEffect(() => {
+    if (!stopped) setRefused(undefined);
+  }, [stopped]);
+  const start = () => {
+    if (starting) return;
+    setRefused(undefined);
+    setStarting(true);
+    onStart()
+      .catch((error: unknown) => setRefused(reasonOf(error)))
+      .finally(() => setStarting(false));
+  };
   const windows = windowsOf(surfaces);
   // The window in front is the one picked. Nothing follows the agent: it may be in several at once.
   const front = windows.find((w) => w.kind === picked[agent.id]) ?? windows[0];
@@ -129,7 +154,6 @@ export function Computer({
   }, [agent.id, overlay, slot, listed, draw, erase]);
   useLayoutEffect(() => () => erase(agent.id, overlay), [agent.id, overlay, erase]);
   if (!front) return null;
-  const stopped = agent.tone === "stopped";
   return (
     <section
       aria-label={`${agent.name}'s computer`}
@@ -162,10 +186,11 @@ export function Computer({
           >
             <div className="flex flex-col items-center gap-3 text-[15px]">
               <span className="text-muted-foreground">{agent.name} is stopped</span>
-              <Button className="h-9 rounded-full px-4" onClick={onStart}>
+              <Button className="h-9 rounded-full px-4" disabled={starting} onClick={start}>
                 Start
               </Button>
             </div>
+            {refused && <Refusal>{`It couldn't be started: ${clause(refused)}`}</Refusal>}
           </div>
         ) : (
           // biome-ignore lint/a11y/useSemanticElements: a window of the frame, not a form.

@@ -464,6 +464,8 @@ test(
   withGateway(async (gateway) => {
     // Wide enough that there is room at each side of the page, and too short for its list.
     const page = await open(gateway, "#/skills", 1900, 150);
+    // The plan's notice lies at the foot, where the wheel is turned below: put away first.
+    await page.getByRole("button", { name: "Dismiss" }).click();
     const first = row(page, "cite-sources");
     await first.waitFor();
     const top = async (of: ReturnType<Page["locator"]>) => (await of.boundingBox())?.y ?? 0;

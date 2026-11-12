@@ -97,6 +97,18 @@ export function Section({
   );
 }
 
+/** What a window says at its foot when something pressed in it was refused. */
+export const Refusal = ({ children }: { children: React.ReactNode }) => (
+  <p
+    role="alert"
+    // Cut to one line, as drawn: pointed at, it says all of it.
+    title={typeof children === "string" ? children : undefined}
+    className="absolute inset-x-2 bottom-2 z-10 truncate rounded-lg bg-[var(--raised)] px-3 py-1.5 text-[13px] text-[var(--bad)] shadow-lg"
+  >
+    {children}
+  </p>
+);
+
 export const Nothing = ({ children }: { children: React.ReactNode }) => (
   <p className="py-2 text-[13px] text-[var(--faint)]">{children}</p>
 );

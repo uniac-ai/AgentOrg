@@ -2,7 +2,7 @@
 // person out of the app. They see their agents and chats, Home says what is
 // missing and holds the way to fix it, and every place it bites says the same sentence.
 import { LoaderCircleIcon } from "lucide-react";
-import { createContext, useContext, useEffect, useMemo, useRef } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 import { endSigningIn, signIn, useChatGpt, useSigningIn } from "../sign-in.ts";
 import { Button } from "../ui/button.tsx";
 
@@ -34,6 +34,10 @@ export function LoginProvider({
   // The wait for ChatGPT's page is over once the account says where it stands now.
   // biome-ignore lint/correctness/useExhaustiveDependencies: again each time its state changes.
   useEffect(endSigningIn, [status?.state]);
+  // Signed in, by this tab or another, a sign-in that didn't start before is nothing to say.
+  useEffect(() => {
+    if (status?.state === "signed_in") setFailed(false);
+  }, [status?.state]);
   /** Where it stood when the account last said: it holds while the account can't be asked. */
   const said = useRef<Login>(undefined);
   const login = ((): Login => {
@@ -62,6 +66,23 @@ export const needsOf = (login: Login): string | undefined =>
       ? "This ChatGPT account isn't eligible to use its plan in this app."
       : "Agents can't work until you sign in with ChatGPT.";
 
+/** Whether the last press of the way in failed to start a sign-in: ChatGPT's page didn't open. */
+let failed = false;
+const told = new Set<() => void>();
+const setFailed = (next: boolean) => {
+  if (failed === next) return;
+  failed = next;
+  for (const tell of [...told]) tell();
+};
+const useFailed = () =>
+  useSyncExternalStore(
+    (tell) => {
+      told.add(tell);
+      return () => void told.delete(tell);
+    },
+    () => failed,
+  );
+
 /** The way in. It keeps its size through every state, so pressing it moves nothing. */
 export function SignInButton({ className = "" }: { className?: string }) {
   const login = useLogin();
@@ -70,8 +91,12 @@ export function SignInButton({ className = "" }: { className?: string }) {
     <Button
       className={`h-10 w-[232px] shrink-0 rounded-full text-[15px] ${className}`}
       disabled={waiting}
-      // A sign-in that doesn't start leaves the button as it was, to be pressed again.
-      onClick={() => void signIn().catch(() => {})}
+      // A sign-in that doesn't start leaves the button as it was, to be pressed again, and Home's
+      // place says so.
+      onClick={() => {
+        setFailed(false);
+        signIn().catch(() => setFailed(true));
+      }}
     >
       {waiting && <LoaderCircleIcon className="animate-spin motion-reduce:animate-none" />}
       {login === "waiting"
@@ -105,8 +130,11 @@ const cell = (on: boolean) => `col-start-1 row-start-1 ${on ? "" : "invisible"}`
  */
 export function LeftToSetUp() {
   const login = useLogin();
+  const didnt = useFailed();
   if (login === "in") return null;
   const which = login === "ineligible" ? "ineligible" : login === "waiting" ? "waiting" : "out";
+  // ChatGPT's page couldn't be opened: the place says so, and the way in can be pressed again.
+  const refused = didnt && which === "out";
   // While it waits, the title is the one it had signed out.
   const titled = which === "waiting" ? "out" : which;
   return (
@@ -124,10 +152,18 @@ export function LeftToSetUp() {
         </div>
         <div className="mt-1 grid">
           {STATES.map((s) => (
-            <p key={s} className={`text-[15px] text-muted-foreground ${cell(s === which)}`}>
+            <p
+              key={s}
+              className={`text-[15px] text-muted-foreground ${cell(s === which && !refused)}`}
+            >
               {WORDS[s]}
             </p>
           ))}
+          {refused && (
+            <p role="alert" className="col-start-1 row-start-1 text-[15px] text-[var(--bad)]">
+              ChatGPT's page couldn't be opened. Try again.
+            </p>
+          )}
         </div>
       </div>
       <SignInButton className="tight:w-full" />
