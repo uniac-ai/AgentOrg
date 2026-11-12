@@ -512,6 +512,8 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
       ctx.exports.tools.implement({
         list: async (_, { caller }) => ({ tools: await control.list(caller) }),
         call: ({ name, arguments: input }, { caller }) => control.call(caller, name, input),
+        // A control call leaves nothing running.
+        stop: () => ({}),
       });
 
       ctx.exports.settings.implement({

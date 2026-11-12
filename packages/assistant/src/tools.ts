@@ -21,7 +21,7 @@ export interface Candidate {
   name: string;
   description?: string;
   parameters: Record<string, z.core.util.JSONType>;
-  run(input: unknown): Promise<Outcome>;
+  run(input: unknown, group: string): Promise<Outcome>;
 }
 /**
  * Something the model isn't offered, and why: `name` (past 64 characters as a function name),
@@ -98,8 +98,8 @@ export async function listedBy(
       name: entry.name,
       ...(entry.description ? { description: entry.description } : {}),
       parameters: entry.inputSchema as Candidate["parameters"],
-      run: async (args) => {
-        const { output, failed } = (await call({ name: entry.name, arguments: args })) as {
+      run: async (args, group) => {
+        const { output, failed } = (await call({ name: entry.name, arguments: args, group })) as {
           output: string;
           failed?: true;
         };
@@ -140,7 +140,7 @@ export function offered(candidates: Candidate[]): { tools: Tool[]; leftOut: Left
       continue;
     }
     bytes += size;
-    tools.set(toolName, { ...tool, run: (input) => relayed(run(input)) });
+    tools.set(toolName, { ...tool, run: (input, group) => relayed(run(input, group)) });
   }
   return { tools: [...tools.values()], leftOut };
 }

@@ -152,6 +152,11 @@ export function createLooper(options: {
   out: LooperOut;
   /** Whether it starts stopped: no turn starts until `start`. */
   stopped?: boolean;
+  /**
+   * A turn was stopped, not closed: end what its calls left running, by the group they were made
+   * under (see `Tool.run`). Not asked when a turn ends by itself, or when the looper closes.
+   */
+  stopGroup?(group: string): Promise<unknown>;
   log: Log;
 }) {
   const { store, out, log } = options;
@@ -400,6 +405,7 @@ export function createLooper(options: {
         record,
         title: () => titleOf(id),
         back: (handed) => returned(id, handed),
+        ...(options.stopGroup ? { stopGroup: options.stopGroup } : {}),
         // Marked before anything of the turn is kept, so a looper that goes in between leaves
         // it for the next to go on with.
         async starting(after) {

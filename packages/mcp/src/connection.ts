@@ -4,16 +4,22 @@ import { connect, type Client as HubClient } from "@agentorg/sdk/client";
 import {
   Client,
   ProtocolError,
+  ProtocolErrorCode,
   SdkError,
   SdkErrorCode,
   StreamableHTTPClientTransport,
 } from "@modelcontextprotocol/client";
 import { getDefaultEnvironment, StdioClientTransport } from "@modelcontextprotocol/client/stdio";
-import type { z } from "zod";
+import { z } from "zod";
 import type { Secrets, Spec } from "./kinds.js";
 import { publicFetch } from "./public.js";
 
 type Tool = z.infer<typeof ToolEntry>;
+/** A server's own names for a call's group, in its `_meta`, and for the request that stops one. */
+export interface Groups {
+  meta: string;
+  stop: string;
+}
 type State = z.infer<typeof ConnectionState>;
 type Result = Awaited<ReturnType<Client["callTool"]>>;
 
@@ -124,21 +130,29 @@ export class Connection {
   #running: Promise<void> | undefined;
   readonly #spec: Spec;
   readonly #hide: ReadonlySet<string>;
+  readonly #groups: Groups | undefined;
   readonly #secrets: Secrets;
   readonly #log: Log;
   readonly #scrub: (text: string) => string;
   readonly #pingEveryMs: number;
   readonly #firstDelayMs: number;
 
-  /** `hide` names tools of the server that are never offered or run through this connection. */
+  /**
+   * `hide` names tools of the server that are never offered or run through this connection.
+   * `groups` is how its server puts what a call starts in a caller's group and stops a group, an
+   * extension of the server's own, named by whoever makes the connection: with none, a call's
+   * group is not passed on and a stop ends nothing.
+   */
   constructor(
     spec: Spec,
     secrets: Secrets,
     log: Log,
     timing: Timing = {},
     hide: readonly string[] = [],
+    groups?: Groups,
   ) {
     this.#hide = new Set(hide);
+    this.#groups = groups;
     this.#spec = spec;
     this.#secrets = secrets;
     this.#pingEveryMs = timing.pingEveryMs ?? PING_EVERY_MS;
@@ -174,7 +188,8 @@ export class Connection {
             this.#requireUp();
             return { tools: this.#tools };
           },
-          call: ({ name, arguments: args }) => this.#call(name, args),
+          call: ({ name, arguments: args, group }) => this.#call(name, args, group),
+          stop: ({ group }) => this.#stop(group),
         });
       },
     });
@@ -211,13 +226,14 @@ export class Connection {
       throw new Refused("not_connected", this.#detail ?? "The server isn't connected yet.");
   }
 
-  async #call(name: string, args: Record<string, unknown>) {
+  async #call(name: string, args: Record<string, unknown>, group?: string) {
     this.#requireUp();
     if (!this.#tools.some((tool) => tool.name === name))
       throw new Refused("unknown", `This connection has no tool named ${name}.`);
     const mcp = this.#mcp as Client;
+    const meta = group && this.#groups ? { _meta: { [this.#groups.meta]: group } } : {};
     try {
-      const result = await mcp.callTool({ name, arguments: args });
+      const result = await mcp.callTool({ name, arguments: args, ...meta });
       return {
         output: cut(textOf(result), OUTPUT_MAX),
         ...(result.isError ? { failed: true as const } : {}),
@@ -229,6 +245,30 @@ export class Connection {
       }
       return { output: cut(this.#scrub(messageOf(error)), 2000), failed: true as const };
     }
+  }
+
+  /**
+   * Ask the server to end what calls made under `group` left running. While the server is away
+   * it can't be asked, and what it runs is left running.
+   */
+  async #stop(group: string) {
+    if (!this.#groups) return {};
+    if (this.#state !== "connected") {
+      this.#log.warn("A group's stop wasn't sent: the server isn't connected.");
+      return {};
+    }
+    try {
+      await (this.#mcp as Client).request(
+        { method: this.#groups.stop, params: { group } },
+        z.object({}),
+      );
+    } catch (error) {
+      // A server that has no such request keeps nothing in a group.
+      if (error instanceof ProtocolError && error.code === ProtocolErrorCode.MethodNotFound)
+        return {};
+      this.#log.warn(`A group's stop wasn't taken: ${this.#scrub(messageOf(error))}`);
+    }
+    return {};
   }
 
   /** Whether an error says the server can't be reached, rather than that one request failed. */

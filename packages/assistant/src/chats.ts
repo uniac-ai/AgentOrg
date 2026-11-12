@@ -152,6 +152,8 @@ export function createChats(options: {
   }>;
   /** Whether the agent is stopped when its chats are first held. */
   stopped: boolean;
+  /** A stopped turn: end what its calls left running (see the looper's `stopGroup`). */
+  stopGroup?(group: string): Promise<unknown>;
   emit: {
     message(message: Emitted<"message">): void;
     delta(delta: Emitted<"delta">): void;
@@ -198,6 +200,7 @@ export function createChats(options: {
         },
       },
       stopped: options.stopped,
+      ...(options.stopGroup ? { stopGroup: options.stopGroup } : {}),
       log,
     }),
   );

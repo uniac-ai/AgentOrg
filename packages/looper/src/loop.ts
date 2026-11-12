@@ -98,6 +98,8 @@ interface Turn {
   thread?: string;
   /** The threads it has taken a message in: each is told if it fails. */
   took: Set<string>;
+  /** The word its calls are made under, which a stop of it names. */
+  group: string;
 }
 /** A turn's place among the turns running: `entered` settles when it has it, or has left. */
 export interface Place {
@@ -130,6 +132,11 @@ export function createLoop(options: {
    */
   starting(after?: number): Promise<void>;
   unstarted(stopped: boolean): void;
+  /**
+   * A turn was stopped, not closed: end what its calls left running, by the group they were made
+   * under (see `Tool.run`).
+   */
+  stopGroup?(group: string): Promise<unknown>;
   /**
    * The worker hands the message at `message` back, with why; with `leave`, it stops following
    * the thread it was said in too. It gives what the worker is told of it.
@@ -363,7 +370,7 @@ export function createLoop(options: {
         const id = crypto.randomUUID();
         // Handing a message back is the looper's own: kept for the model, shown to nobody.
         if (call.name === HAND_BACK.name) {
-          const result = await runTool(tools, call.name, call.arguments);
+          const result = await runTool(tools, call.name, call.arguments, current.group);
           handedAll &&= result.ok;
           await answered(call, result, id, read, thread, true);
           continue;
@@ -374,7 +381,11 @@ export function createLoop(options: {
         // A call that has started runs to its end, and its real result is kept: it may have
         // taken effect.
         running(call, id, thread);
-        const result = await runTool(tools, call.name, call.arguments);
+        const result = await runTool(tools, call.name, call.arguments, current.group);
+        // A stop asked while this call was on its way may have come before what it started: it is
+        // asked again now that the call is back.
+        if (current.cancelled && !current.closed)
+          void options.stopGroup?.(current.group).catch(() => {});
         await answered(call, result, id, read, thread);
       }
       if (current.cancelled) return;
@@ -433,7 +444,13 @@ export function createLoop(options: {
     fresh = true,
     closed = false,
   ) => {
-    const current: Turn = { id: ++turns, cancelled, closed, took: new Set() };
+    const current: Turn = {
+      id: ++turns,
+      cancelled,
+      closed,
+      took: new Set(),
+      group: crypto.randomUUID(),
+    };
     if (!cancelled) turn = current;
     const told = fresh && (!cancelled || closed);
     try {
@@ -558,8 +575,9 @@ export function createLoop(options: {
      * and its result is kept; a new turn may be started at once, and reads the record after
      * that. A turn waiting for its place never starts. It says whether it cut a turn. `line` is
      * what the main loop says as it stops it, kept in that thread in order with what was asked
-     * before. `closing` is for the loop's host going: what it cuts is not stopped, and a turn
-     * cut while it was starting stays to be gone on with.
+     * before. A stop asks for what the turn's calls left running to end, without waiting for
+     * it. `closing` is for the loop's host going: what it cuts is not stopped, what its calls
+     * left running stays, and a turn cut while it was starting stays to be gone on with.
      */
     async cancel(only?: number, line?: { text: string; thread: string }, closing = false) {
       const current = turn;
@@ -592,6 +610,7 @@ export function createLoop(options: {
         });
       }
       say({ state: "idle" });
+      if (!closing) void options.stopGroup?.(current.group).catch(() => {});
       await Promise.all([
         current.requestId && model.cancel({ requestId: current.requestId }).catch(() => {}),
         line && inOrder(async () => show(await record.stopLine(line.text, line.thread))),

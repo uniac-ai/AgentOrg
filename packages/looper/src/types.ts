@@ -39,7 +39,8 @@ export interface Outcome {
  * what it throws is the call's output, as a refusal: with its code when it is a `Refusal`.
  */
 export interface Tool extends ToolSpec {
-  run(input: unknown): Promise<Outcome>;
+  /** `group` names the turn the call is made in, the same for all of one turn's calls. */
+  run(input: unknown, group: string): Promise<Outcome>;
 }
 
 /**
