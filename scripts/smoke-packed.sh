@@ -318,10 +318,9 @@ slot="$(chat_slot "$was" "$home6")"
 "$was" call "$slot" send '{"text":"Said on 0.0.6."}' --home "$home6" >/dev/null
 stop_app
 start_on "$agentorg" "$home6" "$work/up6.log"
-# Its chats changed shape, so the Hub drops the person's reach to them once the agent is back: it
-# must come back, at the slot it had, with the conversation as the agent's first chat. The slot
-# keeps its name until the agent is back, so the name alone doesn't say the reach came back: its
-# chats must answer.
+# Its chats changed shape since 0.0.6: the person's reach to them must answer, at the slot it had,
+# with the conversation as the agent's first chat. The slot keeps its name while the agent is
+# away, so the name alone doesn't say the reach works: its chats must answer.
 for _ in $(seq 1 120); do
   [ "$(chat_slot "$agentorg" "$home6")" = "$slot" ] &&
     "$agentorg" call "$slot" list --home "$home6" >"$work/chats6.json" 2>/dev/null && break

@@ -344,8 +344,8 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
       };
       /**
        * An agent's chats reach the person, and management too for an agent another agent made. The
-       * Hub drops both when the agent comes back offering its chats in another shape, as after an
-       * upgrade, so they are made again each time it connects: nothing changes when they are there.
+       * Hub keeps both across an update of either end, and drops them when the agent stops offering
+       * its chats, so they are made again each time it connects: nothing changes when they are there.
        */
       const reachChats = async (agent: string) => {
         const record = records.agents[agent];

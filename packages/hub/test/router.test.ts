@@ -1055,6 +1055,86 @@ test("when a provider comes back, its consumers hear their slot is usable again"
   assert.deepEqual(await c.client.call("notes", "write", { text: "again" }), { result: { n: 1 } });
 });
 
+test("a provider back at another version keeps its consumers' bindings, refused until both ends agree", async (t) => {
+  const { url, bind, person } = await setup(t);
+  const made = (await person.call("actors", "create", { name: "updated" })) as {
+    result: { actorId: string; credential: string };
+  };
+  // The same interface, one optional member more: what an update of the program declares.
+  const newer = describeInterface(
+    defineInterface({
+      name: "notes",
+      major: 1,
+      kind: "rpc",
+      methods: {
+        write: method({
+          input: z.object({ text: z.string().min(1), tag: z.string().optional() }),
+          output: z.object({ n: z.number() }),
+        }),
+      },
+      events: { written: event(z.object({ text: z.string() })) },
+    }),
+  );
+  const provider = notesProvider();
+  const first = await connect(
+    url,
+    { ...made.result, declares: { exports: { notes } } },
+    provider.serve,
+  );
+  const consumer = (await person.call("actors", "create", { name: "consumer" })) as {
+    result: { actorId: string; credential: string };
+  };
+  const c = { id: consumer.result.actorId };
+  const old = await connect(url, { ...consumer.result, declares: { slots: { notes } } });
+  await bind(c.id, "notes", made.result.actorId, "notes");
+  assert.ok("result" in (await old.call("notes", "write", { text: "before" })));
+  first.close();
+  await later(50);
+
+  const back = await connect(
+    url,
+    { ...made.result, declares: { exports: { notes: newer } } },
+    provider.serve,
+  );
+  t.after(() => back.close());
+  const binding = () =>
+    (
+      person.call("bindings", "list", { actor: c.id }) as Promise<{
+        result: { bindings: { slot: string; mismatched?: true }[] };
+      }>
+    ).then((r) => r.result.bindings.find((b) => b.slot === "notes"));
+  assert.equal((await binding())?.mismatched, true, "kept, and said to differ");
+  const refusal = await old.call("notes", "write", { text: "between" });
+  assert.equal(refusal.error?.code, "version_mismatch");
+  assert.match(refusal.error?.message ?? "", /different versions of notes@1/);
+  const sub = old.subscribe("notes", "written");
+  assert.equal((await sub.next())?.error?.code, "version_mismatch", "and so is a subscription");
+  assert.equal(provider.calls.length, 1, "nothing refused reached the provider");
+
+  // The consumer updated too: the same binding works again, with nothing made anew.
+  old.close();
+  await later(50);
+  const updated = await connect(url, { ...consumer.result, declares: { slots: { notes: newer } } });
+  t.after(() => updated.close());
+  assert.equal((await binding())?.mismatched, undefined);
+  assert.deepEqual(await updated.call("notes", "write", { text: "after", tag: "x" }), {
+    result: { n: 1 },
+  });
+  // Each end's new declaration is one audit line; nothing was dropped.
+  const kinds = (
+    (await person.call("audit", "list", { limit: 1000 })) as {
+      result: { entries: { kind: string; details: { why?: string } }[] };
+    }
+  ).result.entries.filter((entry) => entry.kind.startsWith("binding."));
+  assert.deepEqual(
+    kinds.map((entry) => `${entry.kind}: ${entry.details.why}`),
+    [
+      "binding.keep: its two ends declare different versions of its interface",
+      "binding.keep: both ends declare the same interface again",
+    ],
+  );
+});
+
 test("a hello over a WebSocket needs its credential, and a serve names the caller's slot", async (t) => {
   const { url, actor, bind } = await setup(t);
   const made = await actor("someone", {});

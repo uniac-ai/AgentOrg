@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
-import { hubActors, hubBindings, hubGrants } from "@agentorg/interfaces";
+import { hubActors, hubAudit, hubBindings, hubGrants, tools } from "@agentorg/interfaces";
 import { defineInterface, describeInterface, method, Refused } from "@agentorg/sdk";
 import { z } from "zod";
 import { HUB, HubState, PERSON, type StateEvents } from "../src/index.ts";
@@ -199,9 +199,10 @@ test("a slot binds only an export of the same interface and schemas, once", (t) 
     () => state.bind(PERSON, { consumer: holder, slot: "notes", provider, export: "notes" }),
     refused("bound"),
   );
-  // A bound slot redeclared as another interface loses its binding: none holds across the change.
+  // A bound slot redeclared at another version of its interface keeps its binding, marked as
+  // differing.
   state.declareExternal(holder, { slots: { notes: notes(9) }, exports: {} });
-  assert.equal(state.binding(holder, "notes"), undefined);
+  assert.equal(state.binding(holder, "notes")?.mismatched, true);
   assert.throws(
     () =>
       state.declareExternal(holder, {
@@ -367,6 +368,141 @@ test("a home from a newer version isn't opened", (t) => {
   db.exec("PRAGMA user_version = 99");
   db.close();
   assert.throws(() => HubState.open(home), /newer version/);
+});
+
+test("an update on either end keeps a binding: it differs until both ends declare the same, and an exposure follows its export", (t) => {
+  const kinds: { kind: string; why?: unknown }[] = [];
+  const { state } = open(t, {
+    audited: (entry) => kinds.push({ kind: entry.kind, why: entry.details.why }),
+  });
+  const { provider, holder } = cast(state);
+  const agent = state.createActor(PERSON, { name: "agent" }).actorId;
+  state.declareExternal(agent, { slots: {}, exports: {} });
+  state.bind(PERSON, { consumer: holder, slot: "notes", provider, export: "notes" });
+  state.expose(PERSON, { provider, export: "notes", to: agent, as: "pad" });
+  const wired = () =>
+    state
+      .bindings(provider)
+      .map(
+        (b) =>
+          `${b.consumer === holder ? "holder" : "agent"} ${b.slot} ${b.interface}${b.mismatched ? " differs" : ""}`,
+      )
+      .sort();
+  assert.deepEqual(wired(), ["agent pad notes@1", "holder notes notes@1"]);
+
+  // The provider is updated first: both bindings are kept. The agent's slot was made by expose,
+  // so it is the export's interface and takes the new one; the holder's declares the old.
+  kinds.length = 0;
+  state.declareExternal(provider, { slots: {}, exports: { notes: notes(2) } });
+  assert.deepEqual(wired(), ["agent pad notes@1", "holder notes notes@1 differs"]);
+  assert.equal(state.declaration(agent, "slot", "pad")?.iface.hash, notes(2).hash);
+  assert.deepEqual(kinds, [
+    { kind: "binding.keep", why: "its two ends declare different versions of its interface" },
+    { kind: "binding.keep", why: "its slot follows its export" },
+  ]);
+  // Then the holder: the binding works again as it was, with nothing made anew.
+  state.declareExternal(holder, { slots: { notes: notes(2) }, exports: {} });
+  assert.deepEqual(wired(), ["agent pad notes@1", "holder notes notes@1"]);
+  // Declared as another interface, the export no longer offers what was exposed: the exposure
+  // goes, and can be made again. The holder's binding is kept, and whole once its slot declares
+  // that interface too, under the slot's interface.
+  kinds.length = 0;
+  state.declareExternal(provider, { slots: {}, exports: { notes: other } });
+  assert.deepEqual(wired(), ["holder notes notes@1 differs"]);
+  assert.equal(state.declaration(agent, "slot", "pad"), undefined);
+  assert.deepEqual(kinds, [
+    { kind: "binding.keep", why: "its two ends declare different versions of its interface" },
+    { kind: "binding.drop", why: "its export is another interface now" },
+  ]);
+  state.expose(PERSON, { provider, export: "notes", to: agent, as: "pad" });
+  state.declareExternal(holder, { slots: { notes: other }, exports: {} });
+  assert.deepEqual(wired(), ["agent pad other@1", "holder notes other@1"]);
+  // A binding still goes when a name is no longer declared.
+  state.declareExternal(holder, { slots: {}, exports: {} });
+  assert.deepEqual(wired(), ["agent pad other@1"]);
+});
+
+test("one optional member added to tools@1 keeps an agent's exposed tools as they were, and its model kept until both ends declare the same", (t) => {
+  const { state } = open(t);
+  const make = (name: string) => state.createActor(PERSON, { name }).actorId;
+  const [connection, model, agent] = [make("Fixture"), make("ChatGPT"), make("Elder")];
+  const session = notes();
+  state.declareExternal(connection, { slots: {}, exports: { tools: describeInterface(tools) } });
+  state.declareExternal(model, { slots: {}, exports: { session } });
+  state.declareExternal(agent, { slots: { model: session }, exports: {} });
+  state.bind(PERSON, { consumer: agent, slot: "model", provider: model, export: "session" });
+  state.expose(PERSON, { provider: connection, export: "tools", to: agent, as: "fixture" });
+  const bound = () =>
+    state
+      .bindings(agent)
+      .filter((b) => b.consumer === agent)
+      .map(
+        (b) =>
+          `${b.slot} ${b.interface} ${b.provider} ${b.export}${b.mismatched ? " differs" : ""}`,
+      )
+      .sort();
+  const before = bound();
+
+  // As the upgrade trial did: a connection comes back declaring tools@1 with one optional member.
+  const call = tools.methods.call;
+  const newer = describeInterface(
+    defineInterface({
+      name: "tools",
+      major: 1,
+      kind: "rpc",
+      methods: {
+        ...tools.methods,
+        call: method({
+          input: (call.input as z.ZodObject).extend({ group: z.string().max(64).optional() }),
+          output: call.output,
+        }),
+      },
+      events: tools.events,
+    }),
+  );
+  assert.notEqual(newer.hash, describeInterface(tools).hash);
+  state.declareExternal(connection, { slots: {}, exports: { tools: newer } });
+  assert.deepEqual(bound(), before, "its tools are kept, its slot taking the new version");
+  assert.equal(state.declaration(agent, "slot", "fixture")?.iface.hash, newer.hash);
+  // A change to its model's interface: kept while the two programs differ, whole once both are.
+  state.declareExternal(model, { slots: {}, exports: { session: notes(3) } });
+  assert.deepEqual(
+    bound().find((line) => line.startsWith("model")),
+    `model notes@1 ${model} session differs`,
+  );
+  state.declareExternal(agent, { slots: { model: notes(3) }, exports: {} });
+  assert.deepEqual(bound(), before);
+});
+
+test("a new version of the Hub keeps a slot exposed from its exports, which follows it", (t) => {
+  const { home, state } = open(t);
+  const agent = state.createActor(PERSON, { name: "agent" }).actorId;
+  state.declareExternal(agent, { slots: {}, exports: {} });
+  const { slot } = state.expose(PERSON, { provider: HUB, export: "audit", to: agent });
+  state.close();
+  // As an earlier Hub declared it: the same interface, one method fewer.
+  const earlier = describeInterface(
+    defineInterface({
+      name: "hub.audit",
+      major: 1,
+      kind: "rpc",
+      methods: { list: hubAudit.methods.list },
+    }),
+  );
+  const db = new DatabaseSync(join(home, "hub.db"));
+  const set = db.prepare(
+    "UPDATE declarations SET iface = ? WHERE actor = ? AND side = ? AND name = ?",
+  );
+  set.run(JSON.stringify(earlier), HUB, "export", "audit");
+  set.run(JSON.stringify(earlier), agent, "slot", slot);
+  db.close();
+  const again = HubState.open(home);
+  t.after(() => again.close());
+  assert.equal(again.binding(agent, slot)?.mismatched, undefined);
+  assert.equal(
+    again.declaration(agent, "slot", slot)?.iface.hash,
+    describeInterface(hubAudit).hash,
+  );
 });
 
 test("the person keeps its hub bindings through redeclaration, and a restart repairs them", (t) => {

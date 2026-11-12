@@ -56,6 +56,11 @@ export interface BindingRecord extends Wiring {
   at: string;
   /** Its slot was made at run time by `expose`, and goes with it. */
   exposed?: true;
+  /**
+   * Its ends declare different versions of its interface; calls and subscriptions through it are
+   * refused `version_mismatch` until they declare the same.
+   */
+  mismatched?: true;
 }
 /** The two ends of a binding: the export side gives the export, the slot side takes it. */
 export type Side = "export" | "slot";
@@ -209,10 +214,18 @@ const bindingOf = (row: Row): BindingRecord => ({
   madeBy: String(row.made_by),
   at: String(row.at),
   ...(row.exposed ? { exposed: true as const } : {}),
+  ...(row.mismatched ? { mismatched: true as const } : {}),
 });
-/** A binding's columns, with whether its slot was made at run time. */
+/**
+ * A binding's columns, with whether its slot was made at run time and whether its ends declare
+ * different versions of its interface: an interface's hash covers its identity and schemas.
+ */
 const BINDING = `b.*, (SELECT d.dynamic FROM declarations d
-  WHERE d.actor = b.consumer AND d.side = 'slot' AND d.name = b.slot) AS exposed`;
+  WHERE d.actor = b.consumer AND d.side = 'slot' AND d.name = b.slot) AS exposed,
+  (SELECT json_extract(s.iface, '$.hash') FROM declarations s
+    WHERE s.actor = b.consumer AND s.side = 'slot' AND s.name = b.slot)
+  IS NOT (SELECT json_extract(e.iface, '$.hash') FROM declarations e
+    WHERE e.actor = b.provider AND e.side = 'export' AND e.name = b.export) AS mismatched`;
 /**
  * The core's state in its home folder: Actors, declarations, bindings
  * and the audit trail, in `node:sqlite`. Every method that changes something takes its caller, and
@@ -312,8 +325,12 @@ export class HubState {
       }
       for (const [name, iface] of Object.entries(HUB_EXPORTS)) {
         const described = describeInterface(iface);
-        this.#declare(HUB, "export", name, described, false);
+        const known = this.declaration(HUB, "export", name);
         this.#declare(PERSON, "slot", name, described, false);
+        // A new version of the Hub keeps the bindings to its exports, as any provider's.
+        if (known && compareInterfaces(known.iface, described) !== "same")
+          this.#keepBindingsOf(HUB, "export", name, described);
+        this.#declare(HUB, "export", name, described, false);
         const bound = this.binding(PERSON, name);
         if (bound && (bound.provider !== HUB || bound.export !== name)) {
           this.#removeBindings("consumer = ? AND slot = ?", PERSON, name);
@@ -438,7 +455,8 @@ export class HubState {
       /**
        * Initial bindings for the new Actor's slots, made with the caller's export-side authority;
        * the creation is the slot side's yes. An external Actor's slot is declared with the
-       * export's interface, and its hello must declare it the same way to keep it.
+       * export's interface; a hello that declares it otherwise keeps the binding, `mismatched`
+       * until both ends declare the same.
        */
       bindings?: Omit<Wiring, "consumer">[];
     },
@@ -512,33 +530,56 @@ export class HubState {
   }
 
   /**
-   * Drop the bindings through one of an Actor's slots or exports, its interface having changed,
-   * but those `keeps` says still match: each is audited as `binding.drop`. Dropping only takes
-   * access away. Returns what was dropped.
+   * Keep the bindings through one of an Actor's slots or exports, declared anew as `iface`: each
+   * is audited as `binding.keep`. A slot made by `expose` takes its export's new version, so
+   * its binding works on; an export declared as another interface drops it, audited as
+   * `binding.drop`, so it can be exposed again. Any other binding works again once its two ends
+   * declare the same; until then it is `mismatched`. A binding's `interface` is its slot's.
    */
-  #dropBindingsOf(
-    actorId: string,
-    side: Side,
-    name: string,
-    by: string,
-    keeps: (binding: Wiring) => boolean = () => false,
-  ): Wiring[] {
-    const dropped = this.bindings(actorId).filter(
-      (b) =>
-        (side === "slot"
-          ? b.consumer === actorId && b.slot === name
-          : b.provider === actorId && b.export === name) && !keeps(b),
+  #keepBindingsOf(actorId: string, side: Side, name: string, iface: DescribedInterface) {
+    const through = this.bindings(actorId).filter((b) =>
+      side === "slot"
+        ? b.consumer === actorId && b.slot === name
+        : b.provider === actorId && b.export === name,
     );
-    for (const b of dropped) this.#removeBindings("consumer = ? AND slot = ?", b.consumer, b.slot);
-    const wirings = dropped.map(({ consumer, slot, provider, export: exported }) => ({
-      consumer,
-      slot,
-      provider,
-      export: exported,
-    }));
-    for (const wiring of wirings)
-      this.#audit(by, "binding.drop", { ...wiring, why: "its interface changed" });
-    return wirings;
+    for (const b of through) {
+      const wiring = { consumer: b.consumer, slot: b.slot, provider: b.provider, export: b.export };
+      // An exposure follows a new version of its interface. An export now of another interface
+      // no longer offers what was exposed: the exposure goes, as with a name no longer declared,
+      // and can be made again.
+      if (side === "export" && b.exposed) {
+        const was = this.declaration(b.consumer, "slot", b.slot)?.iface.id;
+        if (was !== iface.id) {
+          this.#removeBindings("consumer = ? AND slot = ?", b.consumer, b.slot);
+          this.#audit(actorId, "binding.drop", {
+            ...wiring,
+            why: "its export is another interface now",
+          });
+          continue;
+        }
+      }
+      const follows = side === "export" && b.exposed;
+      if (follows) this.#declare(b.consumer, "slot", b.slot, iface, true);
+      if (follows || side === "slot")
+        this.#db
+          .prepare("UPDATE bindings SET interface = ? WHERE consumer = ? AND slot = ?")
+          .run(iface.id, b.consumer, b.slot);
+      if (follows) {
+        this.#audit(actorId, "binding.keep", { ...wiring, why: "its slot follows its export" });
+        continue;
+      }
+      const other =
+        side === "slot"
+          ? this.declaration(b.provider, "export", b.export)?.iface
+          : this.declaration(b.consumer, "slot", b.slot)?.iface;
+      const same = !!other && compareInterfaces(iface, other) === "same";
+      this.#audit(actorId, "binding.keep", {
+        ...wiring,
+        why: same
+          ? "both ends declare the same interface again"
+          : "its two ends declare different versions of its interface",
+      });
+    }
   }
 
   // ── Declarations: what each Actor takes and offers ──────────────────────────
@@ -597,9 +638,9 @@ export class HubState {
 
   /**
    * An external Actor's slots and static exports, as it declares them when it connects; they
-   * replace what it declared before. A name redeclared as another interface loses its bindings
-   * (audited as `binding.drop`), since a binding holds only while both ends declare the same one.
-   * A name it no longer declares is dropped, with its bindings.
+   * replace what it declared before. A name redeclared as another interface keeps its bindings
+   * (see `#keepBindingsOf`), so a program updated before the other end of its bindings, or after
+   * it, finds them as they were. A name it no longer declares is dropped, with its bindings.
    */
   declareExternal(
     actorId: string,
@@ -623,18 +664,9 @@ export class HubState {
             // with its binding.
             if (this.declaration(actorId, side, name)?.dynamic) this.#drop(actorId, side, name);
           }
-          // A binding holds while both ends declare the same interface: redeclared as another,
-          // the name's bindings whose other end doesn't declare it are dropped.
           const known = this.declaration(actorId, side, name);
-          if (known && compareInterfaces(known.iface, iface) !== "same") {
-            this.#dropBindingsOf(actorId, side, name, actorId, (b) => {
-              const other =
-                side === "slot"
-                  ? this.declaration(b.provider, "export", b.export)?.iface
-                  : this.declaration(b.consumer, "slot", b.slot)?.iface;
-              return !!other && compareInterfaces(iface, other) === "same";
-            });
-          }
+          if (known && compareInterfaces(known.iface, iface) !== "same")
+            this.#keepBindingsOf(actorId, side, name, iface);
           this.#declare(actorId, side, name, iface, false);
         }
         const kept = Object.keys(members);

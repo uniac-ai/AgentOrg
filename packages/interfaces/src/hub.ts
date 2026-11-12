@@ -79,6 +79,11 @@ export const Binding = z.object({
   at: z.string(),
   /** A slot made at run time by `hub.grants.expose`: it goes with this binding. */
   exposed: z.literal(true).optional(),
+  /**
+   * Its ends declare different versions of its interface; calls and subscriptions through it are
+   * refused `version_mismatch` until they declare the same.
+   */
+  mismatched: z.literal(true).optional(),
 });
 /**
  * `hub.grants@1`: binding with the caller's own authority, so it is safe to give any Actor. A
