@@ -202,9 +202,10 @@ export function createLoop(options: {
     current.ended = placed(current)
       .catch((error: unknown) => {
         if (current.cancelled) return;
-        log.error("A turn failed.", { error: String(error) });
-        // Every thread it took a message in, and the one it was answering in, is told.
+        // The log has the words the chat is given, so a model's failure has its reason there too.
         const detail = codeOf(error);
+        log.error(`A turn failed: ${detail.message}`, { error: String(error) });
+        // Every thread it took a message in, and the one it was answering in, is told.
         for (const thread of new Set([
           ...current.took,
           ...(current.thread ? [current.thread] : []),

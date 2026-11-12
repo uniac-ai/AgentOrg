@@ -12,8 +12,23 @@ const API = "https://api.openai.com/v1";
 const b64url = (bytes: Uint8Array | string) => Buffer.from(bytes).toString("base64url");
 
 export type Script =
+  /** A stream of these events. With `cut` it gives them and then breaks, as a connection reset. */
   | { events: Record<string, unknown>[]; cut?: boolean }
-  | { status: number; code?: string; param?: string; detail?: string };
+  /**
+   * An error reply: its status, the error's code and `message` (OpenAI's own words for it), and
+   * the `retry-after` and `retry-after-ms` headers as given.
+   */
+  | {
+      status: number;
+      code?: string;
+      param?: string;
+      message?: string;
+      detail?: string;
+      retryAfter?: string;
+      retryAfterMs?: string;
+    }
+  /** The request fails at the network. */
+  | { unreachable: true };
 
 /** A completed response with the given output items, as the API sends it. */
 export const completed = (output: Record<string, unknown>[], usage = { input: 12, output: 3 }) => ({
@@ -86,10 +101,14 @@ export async function fakeOpenAI() {
   };
   let refreshes = 0;
 
-  const json = (body: unknown, status = 200) =>
+  const json = (body: unknown, status = 200, more: Record<string, string> = {}) =>
     new Response(JSON.stringify(body), {
       status,
-      headers: { "content-type": "application/json", "x-request-id": `req_${randomUUID()}` },
+      headers: {
+        "content-type": "application/json",
+        "x-request-id": `req_${randomUUID()}`,
+        ...more,
+      },
     });
 
   async function sign(claims: Record<string, unknown>, tamper: Tamper | undefined) {
@@ -191,12 +210,19 @@ export async function fakeOpenAI() {
     if (options.chunked) text += `data: [DONE]${end}${end}`;
     const bytes = new TextEncoder().encode(text);
     const size = options.chunked ? 3 : Math.max(bytes.length, 1);
+    // A cut stream gives what it had, and then breaks: an error at once would drop it unread.
+    let given = false;
     const body = new ReadableStream<Uint8Array>({
-      start(controller) {
+      pull(controller) {
+        if (given) {
+          controller.error(new Error("connection reset"));
+          return;
+        }
+        given = true;
         for (let at = 0; at < bytes.length; at += size)
           controller.enqueue(bytes.slice(at, at + size));
-        if (next.cut) controller.error(new Error("connection reset"));
-        else controller.close();
+        if (!next.cut) controller.close();
+        else if (bytes.length === 0) controller.error(new Error("connection reset"));
       },
     });
     return new Response(body, {
@@ -207,10 +233,21 @@ export async function fakeOpenAI() {
   function respond(): Response {
     const next: Script = script.shift() ?? { events: [completed([text("ok")])] };
     if ("events" in next) return events(next);
+    if ("unreachable" in next) throw new TypeError("fetch failed");
     if (next.detail) return json({ detail: next.detail }, next.status);
     return json(
-      { error: { code: next.code ?? null, message: "fake", param: next.param ?? null } },
+      {
+        error: {
+          code: next.code ?? null,
+          message: next.message ?? null,
+          param: next.param ?? null,
+        },
+      },
       next.status,
+      {
+        ...(next.retryAfter === undefined ? {} : { "retry-after": next.retryAfter }),
+        ...(next.retryAfterMs === undefined ? {} : { "retry-after-ms": next.retryAfterMs }),
+      },
     );
   }
 
