@@ -8,17 +8,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "../ui/dropdown-menu.tsx";
-import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip.tsx";
 import { type AgentEntry, useAct } from "./data.ts";
-
-export function Tip({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>{children}</TooltipTrigger>
-      <TooltipContent>{label}</TooltipContent>
-    </Tooltip>
-  );
-}
 
 /** What's rarely wanted of an agent, one step away: stopping it. */
 export function More({ agent, onFailed }: { agent: AgentEntry; onFailed(why?: string): void }) {

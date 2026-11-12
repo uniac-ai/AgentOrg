@@ -1,18 +1,13 @@
 // One field of a unit's form, drawn from its description. A type this host doesn't know gets the
 // plain control for the kind of value it holds.
-import { FolderOpenIcon, InfoIcon } from "lucide-react";
-import { useState } from "react";
 import { useLoad } from "../data.ts";
-import { Button } from "../ui/button.tsx";
 import { Checkbox } from "../ui/checkbox.tsx";
 import { Field as FieldBox, FieldDescription, FieldError, FieldLabel } from "../ui/field.tsx";
 import { Input } from "../ui/input.tsx";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select.tsx";
 import { Switch } from "../ui/switch.tsx";
 import { Textarea } from "../ui/textarea.tsx";
-import { Tip } from "./controls.tsx";
 import { type ConnectionEntry, listConnections } from "./data.ts";
-import { FolderPicker } from "./folder-picker.tsx";
 import { Jump } from "./parts.tsx";
 import type { Field, Values } from "./stack.ts";
 import { fieldValue, placeholderOf } from "./stack.ts";
@@ -37,7 +32,6 @@ function controlOf(field: Field): string {
 interface Option {
   value: string;
   title: string;
-  description?: string;
 }
 
 function OneOf({
@@ -64,12 +58,7 @@ function OneOf({
       <SelectContent>
         {options.map((o) => (
           <SelectItem key={o.value} value={o.value}>
-            <span className="flex flex-col">
-              <span>{o.title}</span>
-              {o.description && (
-                <span className="max-w-72 text-xs text-muted-foreground">{o.description}</span>
-              )}
-            </span>
+            {o.title}
           </SelectItem>
         ))}
       </SelectContent>
@@ -176,26 +165,14 @@ export function FormField({
 }) {
   const control = controlOf(field);
   const hint = placeholderOf(field, agentName);
-  const [browsing, setBrowsing] = useState(false);
   const value = fieldValue(field, values);
   const text = typeof value === "string" || typeof value === "number" ? String(value) : "";
   const list = Array.isArray(value) ? value : [];
-  // What the chosen answer means is always there; what the field is, on asking.
+  // What the chosen answer grants stays under it.
   const says = field.options?.find((o) => o.value === value)?.description;
-  const about = field.description && (
-    <Tip label={field.description}>
-      <button
-        type="button"
-        aria-label={`About ${field.title}`}
-        className="text-muted-foreground hover:text-foreground"
-      >
-        <InfoIcon className="size-3" />
-      </button>
-    </Tip>
-  );
   const notes = (
     <>
-      {says && <FieldDescription className="text-xs">{says}</FieldDescription>}
+      {says && <p className="text-xs text-[var(--warn)]">{says}</p>}
       {problem && <FieldError className="text-xs">{problem}</FieldError>}
     </>
   );
@@ -206,21 +183,29 @@ export function FormField({
           <FieldLabel htmlFor={id} className="w-fit text-xs">
             {field.title}
           </FieldLabel>
-          {about}
           <span className="flex-1" />
           <Switch id={id} checked={value === true} onCheckedChange={onChange} />
         </div>
         {notes}
       </FieldBox>
     );
+  const number = (
+    <Input
+      id={id}
+      type="number"
+      placeholder={hint}
+      min={field.min}
+      max={field.max}
+      step={field.step}
+      value={text}
+      onChange={(e) => onChange(e.target.value === "" ? "" : Number(e.target.value))}
+    />
+  );
   return (
     <FieldBox className="gap-1.5">
-      <div className="flex items-center gap-1.5">
-        <FieldLabel htmlFor={id} className="w-fit text-xs">
-          {field.title}
-        </FieldLabel>
-        {about}
-      </div>
+      <FieldLabel htmlFor={id} className="text-xs">
+        {field.title}
+      </FieldLabel>
       {control === "choice" && (
         <OneOf
           id={id}
@@ -251,19 +236,11 @@ export function FormField({
           onChange={(e) => onChange(e.target.value.split("\n"))}
         />
       )}
-      {control === "number" && (
+      {control === "number" && !field.unit && number}
+      {control === "number" && field.unit && (
         <div className="flex items-center gap-2">
-          <Input
-            id={id}
-            type="number"
-            placeholder={hint}
-            min={field.min}
-            max={field.max}
-            step={field.step}
-            value={text}
-            onChange={(e) => onChange(e.target.value === "" ? "" : Number(e.target.value))}
-          />
-          {field.unit && <span className="text-xs text-muted-foreground">{field.unit}</span>}
+          {number}
+          <span className="text-xs text-muted-foreground">{field.unit}</span>
         </div>
       )}
       {control === "secret" && (
@@ -277,37 +254,13 @@ export function FormField({
         />
       )}
       {(control === "text" || control === "directory") && (
-        <div className="flex items-center gap-1">
-          <Input
-            id={id}
-            spellCheck={false}
-            placeholder={hint}
-            className={control === "directory" ? "font-mono text-xs" : ""}
-            value={text}
-            onChange={(e) => onChange(e.target.value)}
-          />
-          {control === "directory" && (
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              aria-label={`Browse for ${field.title}`}
-              onClick={() => setBrowsing(true)}
-            >
-              <FolderOpenIcon />
-            </Button>
-          )}
-        </div>
-      )}
-      {browsing && (
-        <FolderPicker
-          title={field.title}
-          {...(text.startsWith("/") ? { start: text } : {})}
-          onClose={() => setBrowsing(false)}
-          onPick={(path) => {
-            onChange(path);
-            setBrowsing(false);
-          }}
+        <Input
+          id={id}
+          spellCheck={false}
+          placeholder={hint}
+          className={control === "directory" ? "font-mono text-xs" : ""}
+          value={text}
+          onChange={(e) => onChange(e.target.value)}
         />
       )}
       {notes}

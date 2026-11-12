@@ -3,7 +3,9 @@
 // lists the controls and marks seen in each region: the built side may lack one the design has,
 // which is printed and passes, and fails when it shows one the design doesn't.
 //
-//   node --experimental-strip-types test/design/measure.ts <design.html> <out.json>
+//   node --experimental-strip-types test/design/measure.ts <design.html> <out.json> [parts]
+//
+// With `parts`, a list like `frame,create`, only those are measured.
 //
 // Build the shell first: the built side is served by the stand-in gateway. A part added to the
 // shell adds its probe and its screens here, and its screens to pairs.ts.
@@ -14,9 +16,11 @@ import {
   ASKED,
   ASKS,
   type ChatCase,
+  CREATES,
   closeEveryTab,
   computerWith,
   cpuOf,
+  createState,
   inDesign,
   newChatWithFirst,
   noted,
@@ -29,6 +33,7 @@ import {
   refuseSend,
   SIGN_INS,
   sampleAgents,
+  sampleBuild,
   sampleChats,
   sampleLoad,
   signInAccount,
@@ -39,8 +44,28 @@ import {
   unreadReply,
 } from "./samples.ts";
 
-const [design, out] = process.argv.slice(2);
-if (!design || !out) throw new Error("usage: measure.ts <design.html> <out.json>");
+const [design, out, only] = process.argv.slice(2);
+if (!design || !out) throw new Error("usage: measure.ts <design.html> <out.json> [parts]");
+/** The parts that have screens of their own; `earlier` is measured with `thread`. */
+const PARTS = [
+  "frame",
+  "terminal",
+  "browser",
+  "chat",
+  "thread",
+  "home",
+  "agent",
+  "computer",
+  "signin",
+  "files",
+  "window",
+  "setup",
+  "create",
+] as const;
+for (const one of only?.split(",") ?? [])
+  if (!(PARTS as readonly string[]).includes(one))
+    throw new Error(`no part "${one}": one of ${PARTS.join(", ")}`);
+const wants = (part: (typeof PARTS)[number]) => !only || only.split(",").includes(part);
 
 /** What is measured of one element. A width or height that isn't the part's own says "fills". */
 interface Measured {
@@ -60,8 +85,8 @@ type Parts = Record<string, Measured | string | number | null>;
 /**
  * What a probe measures: the frame, one window's own rows, the chat in its layer, one chat, the
  * way to a chat's older messages, Home, an agent's page, its setup, its computer's frame on its
- * page, that computer as the layer's window, its files window's own rows, or the model
- * account's states.
+ * page, that computer as the layer's window, its files window's own rows, the model
+ * account's states, or the create window.
  */
 type Part =
   | "frame"
@@ -76,7 +101,8 @@ type Part =
   | "computer"
   | "window"
   | "files"
-  | "signin";
+  | "signin"
+  | "create";
 type Gateway = Awaited<ReturnType<typeof standIn>>;
 
 /**
@@ -594,6 +620,126 @@ const probe = (what: Part): Parts => {
     return parts;
   }
 
+  if (what === "create") {
+    // The create window, from its own top left: it is centred in a window the design's own bar
+    // makes taller. What to start from, the stack's head, its two names, each unit's card with
+    // its fields, the way to add one, and its foot; then a menu or the dialog it opened.
+    const titled = (title: RegExp) =>
+      [...document.querySelectorAll('[role="dialog"]')].find((one) =>
+        title.test(one.querySelector("h2")?.textContent ?? ""),
+      );
+    const window = titled(/^(Create|New template)$/);
+    if (!window) throw new Error("the create window isn't open");
+    // Measuring what moves starts it moving again: each such part is held still from then on.
+    const still = (e: Element | null | undefined) => {
+      const m = of(e);
+      if (e) (e as HTMLElement).style.animation = "none";
+      return m;
+    };
+    parts["window.motion"] = still(window)?.motion ?? null;
+    origin = window.getBoundingClientRect();
+    parts.window = of(window);
+    parts["window.left"] = round(origin.left);
+    parts["window.right"] = round(innerWidth - origin.right);
+    parts["window.centre"] = round((origin.top + origin.bottom) / 2 - innerHeight / 2);
+    controls("window", window);
+    const from = window.querySelector("nav");
+    parts.from = of(from);
+    parts["from.title"] = of(from?.querySelector("h2"));
+    const rows = [...(from?.querySelectorAll("button") ?? [])];
+    for (const [name, row] of [
+      ["first", rows[0]],
+      ["second", rows[1]],
+      ["last", rows.at(-1)],
+      ["chosen", rows.find((row) => row.getAttribute("aria-current"))],
+    ] as const) {
+      parts[`from.${name}`] = of(row);
+      parts[`from.${name}.name`] = of(row?.children[0]);
+      parts[`from.${name}.says`] = of(row?.children[1]);
+    }
+    parts["from.chosen.is"] = rows.findIndex((row) => row.getAttribute("aria-current"));
+    const close = [...window.querySelectorAll(":scope > button")].at(-1);
+    parts.close = of(close);
+    parts["close.icon"] = of(close?.querySelector("svg"));
+    const form = window.querySelector("form");
+    parts.form = of(form);
+    const [head, room, foot] = form?.children ?? [];
+    parts.head = of(head);
+    const options = head?.querySelector("button");
+    parts["head.options"] = of(options);
+    parts["head.options.icon"] = of(options?.querySelector("svg"));
+    parts.room = of(room);
+    const [names, units, add] = room?.children ?? [];
+    parts.names = of(names);
+    for (const [i, field] of [...(names?.children ?? [])].entries()) {
+      parts[`names.${i}`] = of(field);
+      parts[`names.${i}.label`] = of(field.children[0]);
+      parts[`names.${i}.box`] = of(field.children[1]);
+    }
+    parts.units = of(units);
+    // Each card by its place in the stack: its head, then what it holds, a field at a time, a
+    // field's own parts three deep at most, and a group of boxes by its first and last.
+    for (const [n, card] of [...(units?.children ?? [])].entries()) {
+      const key = `unit.${n}`;
+      parts[key] = of(card);
+      const bar = card.children.length > 0 && card.querySelector("svg")?.parentElement;
+      const row = bar && bar !== card ? bar : card;
+      for (const [i, child] of [...row.children].entries()) {
+        parts[`${key}.head.${i}`] = of(child);
+        parts[`${key}.head.${i}.icon`] = of(child.matches("button") ? child.children[0] : null);
+      }
+      const body = row === card ? null : card.children[1];
+      parts[`${key}.body`] = of(body);
+      for (const [i, held] of [...(body?.children ?? [])].entries()) {
+        parts[`${key}.${i}`] = of(held);
+        for (const [j, part] of [...held.children].slice(0, 4).entries()) {
+          parts[`${key}.${i}.${j}`] = of(part);
+          const boxes = part.matches('[role="group"]') ? [...part.children] : [];
+          for (const [name, box] of [
+            ["first", boxes[0]],
+            ["last", boxes.at(-1)],
+          ] as const) {
+            parts[`${key}.${i}.${j}.${name}`] = of(box);
+            parts[`${key}.${i}.${j}.${name}.box`] = of(box?.children[0]);
+          }
+        }
+      }
+    }
+    parts.add = of(add);
+    parts["add.icon"] = of(add?.querySelector("svg"));
+    parts.foot = of(foot);
+    for (const [i, child] of [...(foot?.children ?? [])].entries())
+      parts[`foot.${foot && foot.children.length - 1 === i ? "finish" : "says"}`] = of(child);
+    // A menu it opened, and the dialog to save the stack as a template, which is centred too.
+    const menu = [...document.querySelectorAll('[role="menu"]')].find(seen);
+    // The menu has no words of its own: its type is its rows'.
+    const list = still(menu);
+    parts.menu = list && { ...list, font: "-" };
+    const items = [...(menu?.querySelectorAll('[role="menuitem"]') ?? [])];
+    parts["menu.items"] = items.length;
+    for (const [name, item] of [
+      ["first", items[0]],
+      ["last", items.at(-1)],
+    ] as const) {
+      parts[`menu.${name}`] = of(item);
+      parts[`menu.${name}.0`] = of(item?.children[0]);
+      parts[`menu.${name}.1`] = of(item?.children[1]);
+    }
+    const save = titled(/^Save as template$/);
+    if (save) {
+      parts["save.motion"] = still(save)?.motion ?? null;
+      origin = save.getBoundingClientRect();
+      parts.save = of(save);
+      controls("save", save);
+      parts["save.left"] = round(origin.left);
+      parts["save.centre"] = round((origin.top + origin.bottom) / 2 - innerHeight / 2);
+      parts["save.title"] = of(save.querySelector("h2"));
+      parts["save.name"] = of(save.querySelector("input"));
+      parts["save.finish"] = of(save.querySelector('button[type="submit"]'));
+    }
+    return parts;
+  }
+
   if (what === "setup") {
     // An agent's setup, measured from its own top left: it lies over the page, as tall as the
     // window, which the design's own bar makes taller. Where it lies is how far its edges are
@@ -867,9 +1013,12 @@ type Size = keyof typeof SIZES;
 type Theme = "dark" | "light";
 
 const browser = await chromium.launch();
-async function designPage(size: Size, theme: Theme) {
+/** The design's page, `taller` by so much than its bar makes it. */
+async function designPage(size: Size, theme: Theme, taller = 0) {
   const [width, height] = SIZES[size];
-  const page = await browser.newPage({ viewport: { width, height: height + CONTROLS } });
+  const page = await browser.newPage({
+    viewport: { width, height: height + CONTROLS + taller },
+  });
   await page.goto(`file://${design}`);
   if (theme === "light") await page.getByRole("button", { name: "Light" }).click();
   return page;
@@ -900,283 +1049,296 @@ const measure = (page: Page, what: Part) => page.evaluate(probe, what);
 const all: Record<string, Parts> = {};
 
 // The frame: each width in each theme, and the drawer from the rail's search and the phone's menu.
-for (const size of Object.keys(SIZES) as Size[])
-  for (const theme of ["dark", "light"] as const)
-    for (const side of ["design", "built"] as const) {
-      const gateway = side === "built" ? await standIn() : undefined;
-      const page = gateway ? await builtPage(gateway, size, theme) : await designPage(size, theme);
-      await rest(page, size);
-      all[`frame.${size}.${theme}.${side}`] = await measure(page, "frame");
-      if (theme === "dark" && size !== "wide") {
-        await (size === "phone"
-          ? page.getByRole("button", { name: "Menu" })
-          : page
-              .getByRole("navigation", { name: "Main" })
-              .getByRole("button", { name: "Search", exact: true })
-        ).click();
+if (wants("frame"))
+  for (const size of Object.keys(SIZES) as Size[])
+    for (const theme of ["dark", "light"] as const)
+      for (const side of ["design", "built"] as const) {
+        const gateway = side === "built" ? await standIn() : undefined;
+        const page = gateway
+          ? await builtPage(gateway, size, theme)
+          : await designPage(size, theme);
         await rest(page, size);
-        all[`frame.${size}.drawer.${side}`] = await measure(page, "frame");
+        all[`frame.${size}.${theme}.${side}`] = await measure(page, "frame");
+        if (theme === "dark" && size !== "wide") {
+          await (size === "phone"
+            ? page.getByRole("button", { name: "Menu" })
+            : page
+                .getByRole("navigation", { name: "Main" })
+                .getByRole("button", { name: "Search", exact: true })
+          ).click();
+          await rest(page, size);
+          all[`frame.${size}.drawer.${side}`] = await measure(page, "frame");
+        }
+        await page.close();
+        await gateway?.close();
       }
-      await page.close();
-      await gateway?.close();
-    }
 
 // The terminal window: the design's own, and the built one with terminals of the same names in
 // the same states. Then the cases the design draws from its own controls, which the built side
 // is put in by its service: typing refused, the view closed, and a computer only watched.
-for (const theme of ["dark", "light"] as const) {
-  const drawn = await designPage("wide", theme);
-  await drawn
-    .getByRole("navigation", { name: "Main" })
-    .getByRole("button", { name: "Research", exact: true })
-    .click();
-  await drawn.getByRole("button", { name: "Terminal", exact: true }).click();
-  await rest(drawn, "wide");
-  const designed = await measure(drawn, "terminal");
-  all[`terminal.${theme}.design`] = designed;
-  const titles = String(designed.tabs).split(" | ");
-  const terminals = titles.map((title, i) => ({
-    cmd: title.replace(" (in front)", ""),
-    running: !!designed[`tab${i}.running`],
-  }));
-  const front = titles.findIndex((title) => title.endsWith(" (in front)"));
-  /** The built side, with the same terminals and the same one in front. */
-  const built = async (operate: boolean) => {
-    const gateway = await standIn();
-    computerWith(gateway, "terminal", operate);
-    startTerminals(gateway, terminals);
-    const page = await builtPage(gateway, "wide", theme, "#/a/a-research");
+if (wants("terminal"))
+  for (const theme of ["dark", "light"] as const) {
+    const drawn = await designPage("wide", theme);
+    await drawn
+      .getByRole("navigation", { name: "Main" })
+      .getByRole("button", { name: "Research", exact: true })
+      .click();
+    await drawn.getByRole("button", { name: "Terminal", exact: true }).click();
+    await rest(drawn, "wide");
+    const designed = await measure(drawn, "terminal");
+    all[`terminal.${theme}.design`] = designed;
+    const titles = String(designed.tabs).split(" | ");
+    const terminals = titles.map((title, i) => ({
+      cmd: title.replace(" (in front)", ""),
+      running: !!designed[`tab${i}.running`],
+    }));
+    const front = titles.findIndex((title) => title.endsWith(" (in front)"));
+    /** The built side, with the same terminals and the same one in front. */
+    const built = async (operate: boolean) => {
+      const gateway = await standIn();
+      computerWith(gateway, "terminal", operate);
+      startTerminals(gateway, terminals);
+      const page = await builtPage(gateway, "wide", theme, "#/a/a-research");
+      await page.getByRole("tablist", { name: "Terminals" }).getByRole("tab").nth(front).click();
+      return { gateway, page };
+    };
+    const both = async (state: string, page: Page) => {
+      for (const [side, one] of [
+        ["design", drawn],
+        ["built", page],
+      ] as const) {
+        await rest(one, "wide");
+        all[`terminal.${state}${theme}.${side}`] = await measure(one, "terminal");
+      }
+    };
+    const { gateway, page } = await built(true);
+    await both("", page);
+
+    await inDesign(drawn, "Typing refused");
+    gateway.live.terminal.full = true;
+    await page.getByRole("button", { name: "New terminal" }).click();
+    await page.getByRole("group", { name: "Terminal" }).getByRole("alert").waitFor();
+    await both("refused.", page);
+    await inDesign(drawn, "Typing taken");
+    // Picking a tab takes the built side's refusal away.
     await page.getByRole("tablist", { name: "Terminals" }).getByRole("tab").nth(front).click();
-    return { gateway, page };
-  };
-  const both = async (state: string, page: Page) => {
-    for (const [side, one] of [
-      ["design", drawn],
-      ["built", page],
-    ] as const) {
-      await rest(one, "wide");
-      all[`terminal.${state}${theme}.${side}`] = await measure(one, "terminal");
-    }
-  };
-  const { gateway, page } = await built(true);
-  await both("", page);
 
-  await inDesign(drawn, "Typing refused");
-  gateway.live.terminal.full = true;
-  await page.getByRole("button", { name: "New terminal" }).click();
-  await page.getByRole("group", { name: "Terminal" }).getByRole("alert").waitFor();
-  await both("refused.", page);
-  await inDesign(drawn, "Typing taken");
-  // Picking a tab takes the built side's refusal away.
-  await page.getByRole("tablist", { name: "Terminals" }).getByRole("tab").nth(front).click();
+    await inDesign(drawn, "View closed");
+    for (const ws of gateway.live.terminal.sockets) ws.close(1000);
+    await page.getByRole("button", { name: "Open again" }).waitFor();
+    await both("closed.", page);
+    await inDesign(drawn, "View open");
+    await page.close();
+    await gateway.close();
 
-  await inDesign(drawn, "View closed");
-  for (const ws of gateway.live.terminal.sockets) ws.close(1000);
-  await page.getByRole("button", { name: "Open again" }).waitFor();
-  await both("closed.", page);
-  await inDesign(drawn, "View open");
-  await page.close();
-  await gateway.close();
-
-  await inDesign(drawn, "Watch only");
-  const watched = await built(false);
-  await both("watch.", watched.page);
-  await watched.page.close();
-  await watched.gateway.close();
-  await drawn.close();
-}
+    await inDesign(drawn, "Watch only");
+    const watched = await built(false);
+    await both("watch.", watched.page);
+    await watched.page.close();
+    await watched.gateway.close();
+    await drawn.close();
+  }
 
 // The browser window: the design's own, and the built one, each with a tab you opened in front.
 // Then its cases: the view closed, what the page asks, no tab, and a computer only watched.
-for (const theme of ["dark", "light"] as const)
-  for (const side of ["design", "built"] as const) {
-    const gateway = side === "built" ? await standIn() : undefined;
-    if (gateway) computerWith(gateway, "browser");
-    const page = gateway
-      ? await builtPage(gateway, "wide", theme, "#/a/a-research")
-      : await designPage("wide", theme);
-    if (!gateway) {
-      await page
-        .getByRole("navigation", { name: "Main" })
-        .getByRole("button", { name: "Research", exact: true })
-        .click();
-      await page.getByRole("button", { name: "Browser", exact: true }).click();
-    }
-    await page.getByRole("button", { name: "New tab", exact: true }).click();
-    await page.getByRole("tab", { name: "New tab", selected: true }).waitFor();
-    const at = async (state: string, on = page) => {
-      await rest(on, "wide");
-      all[`browser.${state}${theme}.${side}`] = await measure(on, "browser");
-    };
-    await at("");
+if (wants("browser"))
+  for (const theme of ["dark", "light"] as const)
+    for (const side of ["design", "built"] as const) {
+      const gateway = side === "built" ? await standIn() : undefined;
+      if (gateway) computerWith(gateway, "browser");
+      const page = gateway
+        ? await builtPage(gateway, "wide", theme, "#/a/a-research")
+        : await designPage("wide", theme);
+      if (!gateway) {
+        await page
+          .getByRole("navigation", { name: "Main" })
+          .getByRole("button", { name: "Research", exact: true })
+          .click();
+        await page.getByRole("button", { name: "Browser", exact: true }).click();
+      }
+      await page.getByRole("button", { name: "New tab", exact: true }).click();
+      await page.getByRole("tab", { name: "New tab", selected: true }).waitFor();
+      const at = async (state: string, on = page) => {
+        await rest(on, "wide");
+        all[`browser.${state}${theme}.${side}`] = await measure(on, "browser");
+      };
+      await at("");
 
-    const again = page.getByRole("button", { name: "Open again" });
-    if (gateway) for (const ws of gateway.live.screens.keys()) ws.close(1000);
-    else await inDesign(page, "View closed");
-    await again.waitFor();
-    await at("closed.");
-    if (gateway) await again.click();
-    else await inDesign(page, "View open");
-    await again.waitFor({ state: "detached" });
-    // The built side's view is open again once its service has it.
-    while (gateway && gateway.live.screens.size === 0)
-      await new Promise((done) => setTimeout(done, 20));
+      const again = page.getByRole("button", { name: "Open again" });
+      if (gateway) for (const ws of gateway.live.screens.keys()) ws.close(1000);
+      else await inDesign(page, "View closed");
+      await again.waitFor();
+      await at("closed.");
+      if (gateway) await again.click();
+      else await inDesign(page, "View open");
+      await again.waitFor({ state: "detached" });
+      // The built side's view is open again once its service has it.
+      while (gateway && gateway.live.screens.size === 0)
+        await new Promise((done) => setTimeout(done, 20));
 
-    // Each thing a page asks, one after another; then answered, it is gone.
-    const asks = page.getByRole("dialog", { name: "The page asks" });
-    for (const [name, event] of Object.entries(ASKS)) {
-      if (gateway) gateway.screen(event);
+      // Each thing a page asks, one after another; then answered, it is gone.
+      const asks = page.getByRole("dialog", { name: "The page asks" });
+      for (const [name, event] of Object.entries(ASKS)) {
+        if (gateway) gateway.screen(event);
+        else await inDesign(page, /^Page asks/);
+        await asks.getByText(ASKED[name as keyof typeof ASKS]).waitFor();
+        await at(`asks.${name}.`);
+      }
+      if (gateway) await asks.getByRole("button").first().click();
       else await inDesign(page, /^Page asks/);
-      await asks.getByText(ASKED[name as keyof typeof ASKS]).waitFor();
-      await at(`asks.${name}.`);
-    }
-    if (gateway) await asks.getByRole("button").first().click();
-    else await inDesign(page, /^Page asks/);
-    await asks.waitFor({ state: "detached" });
+      await asks.waitFor({ state: "detached" });
 
-    if (gateway) await closeEveryTab(page);
-    else await inDesign(page, "No tab");
-    await page
-      .getByRole("tablist", { name: "Tabs" })
-      .getByRole("tab")
-      .first()
-      .waitFor({ state: "detached" });
-    await at("notab.");
+      if (gateway) await closeEveryTab(page);
+      else await inDesign(page, "No tab");
+      await page
+        .getByRole("tablist", { name: "Tabs" })
+        .getByRole("tab")
+        .first()
+        .waitFor({ state: "detached" });
+      await at("notab.");
 
-    // Watched only: the design's own page with its control on, and a built one that may not
-    // operate, each with a tab of that name in front, and then with the page asking.
-    let watching = page;
-    let watched: Gateway | undefined;
-    if (gateway) {
-      watched = await standIn();
-      computerWith(watched, "browser", false);
-      // A watcher opens no tab of its own: the one in front is there already.
-      watched.live.tabs.push({ id: 2, url: "about:blank", title: "" });
-      watching = await builtPage(watched, "wide", theme, "#/a/a-research");
-    } else {
-      await inDesign(page, "A tab");
-      await inDesign(page, "Watch only");
+      // Watched only: the design's own page with its control on, and a built one that may not
+      // operate, each with a tab of that name in front, and then with the page asking.
+      let watching = page;
+      let watched: Gateway | undefined;
+      if (gateway) {
+        watched = await standIn();
+        computerWith(watched, "browser", false);
+        // A watcher opens no tab of its own: the one in front is there already.
+        watched.live.tabs.push({ id: 2, url: "about:blank", title: "" });
+        watching = await builtPage(watched, "wide", theme, "#/a/a-research");
+      } else {
+        await inDesign(page, "A tab");
+        await inDesign(page, "Watch only");
+      }
+      await watching.getByRole("tab", { name: "New tab", selected: true }).waitFor();
+      await at("watch.", watching);
+      if (watched) watched.screen(ASKS.confirm);
+      else await inDesign(page, /^Page asks/);
+      await watching.getByRole("dialog", { name: "The page asks" }).waitFor();
+      await at("asks.watch.", watching);
+      if (watched) {
+        await watching.close();
+        await watched.close();
+      }
+      await page.close();
+      await gateway?.close();
     }
-    await watching.getByRole("tab", { name: "New tab", selected: true }).waitFor();
-    await at("watch.", watching);
-    if (watched) watched.screen(ASKS.confirm);
-    else await inDesign(page, /^Page asks/);
-    await watching.getByRole("dialog", { name: "The page asks" }).waitFor();
-    await at("asks.watch.", watching);
-    if (watched) {
-      await watching.close();
-      await watched.close();
-    }
-    await page.close();
-    await gateway?.close();
-  }
 
 // The chat in the layer: collapsed with one, two and three chats unread, at rest and under the
 // pointer, then open on its list.
-for (const theme of ["dark", "light"] as const)
-  for (const side of ["design", "built"] as const) {
-    const gateway = side === "built" ? await standIn() : undefined;
-    const page = gateway
-      ? await builtPage(gateway, "wide", theme)
-      : await designPage("wide", theme);
-    if (gateway) await noted(gateway);
-    for (const unread of [1, 2, 3]) {
-      // One more chat says something: in the design by its own control, in the build by its agent.
-      if (!gateway) {
-        if (unread > 1) await page.getByRole("button", { name: "A reply arrives" }).click();
-      } else unreadReply(gateway, unread);
-      await page.getByRole("button", { name: `Chats, ${unread} new` }).waitFor();
+if (wants("chat"))
+  for (const theme of ["dark", "light"] as const)
+    for (const side of ["design", "built"] as const) {
+      const gateway = side === "built" ? await standIn() : undefined;
+      const page = gateway
+        ? await builtPage(gateway, "wide", theme)
+        : await designPage("wide", theme);
+      if (gateway) await noted(gateway);
+      for (const unread of [1, 2, 3]) {
+        // One more chat says something: in the design by its own control, in the build by its agent.
+        if (!gateway) {
+          if (unread > 1) await page.getByRole("button", { name: "A reply arrives" }).click();
+        } else unreadReply(gateway, unread);
+        await page.getByRole("button", { name: `Chats, ${unread} new` }).waitFor();
+        await rest(page, "wide");
+        all[`chat.collapsed.${unread}.${theme}.${side}`] = await measure(page, "chat");
+        await page
+          .getByRole("group", { name: "Chats, collapsed" })
+          .hover({ position: { x: 44, y: 24 } });
+        await page.waitForTimeout(500);
+        all[`chat.widened.${unread}.${theme}.${side}`] = await measure(page, "chat");
+      }
+      // And one with nothing unread, to be measured beside them.
+      if (gateway) readChat(gateway);
+      await page.getByRole("button", { name: "Chats, 3 new" }).click();
       await rest(page, "wide");
-      all[`chat.collapsed.${unread}.${theme}.${side}`] = await measure(page, "chat");
-      await page
-        .getByRole("group", { name: "Chats, collapsed" })
-        .hover({ position: { x: 44, y: 24 } });
-      await page.waitForTimeout(500);
-      all[`chat.widened.${unread}.${theme}.${side}`] = await measure(page, "chat");
+      all[`chat.panel.${theme}.${side}`] = await measure(page, "chat");
+      await page.close();
+      await gateway?.close();
     }
-    // And one with nothing unread, to be measured beside them.
-    if (gateway) readChat(gateway);
-    await page.getByRole("button", { name: "Chats, 3 new" }).click();
-    await rest(page, "wide");
-    all[`chat.panel.${theme}.${side}`] = await measure(page, "chat");
-    await page.close();
-    await gateway?.close();
-  }
 
 // The cases the design draws for a chat, each from its own control, and the built side given the
 // same: a step with no call, a problem with its fix, a send and a first message refused, and more
 // said than a page holds.
-for (const theme of ["dark", "light"] as const)
-  for (const side of ["design", "built"] as const) {
-    /** One page in one case, measured, and closed. */
-    const one = async (
-      state: string,
-      given: ChatCase | undefined,
-      reach: (page: Page, gateway?: Gateway) => Promise<void>,
-      part: Part = "thread",
-    ) => {
-      const gateway = side === "built" ? await standIn() : undefined;
-      if (gateway) sampleChats(gateway, given);
-      const page = gateway
-        ? await builtPage(gateway, "wide", theme)
-        : await designPage("wide", theme);
-      await reach(page, gateway);
-      await rest(page, "wide");
-      all[`thread.${state}.${theme}.${side}`] = await measure(page, part);
-      await page.close();
-      await gateway?.close();
-    };
-    const panel = (page: Page) => page.getByRole("complementary", { name: "Chats" });
-    await one("noCall", "noCall", async (page, gateway) => {
-      await openSampleChat(page);
-      if (!gateway) await inDesign(page, "A step with no call");
-      await panel(page).getByText("Looked at the pull request").waitFor();
-    });
-    await one("limit", "limit", async (page, gateway) => {
-      await openSampleChat(page);
-      if (!gateway) await inDesign(page, "Plan limit");
-      await panel(page).getByRole("alert").getByRole("button", { name: "Manage usage" }).waitFor();
-    });
-    await one("refused", undefined, async (page, gateway) => {
-      await openSampleChat(page);
-      await refuseSend(page, gateway);
-    });
-    await one("refused.first", undefined, async (page, gateway) => {
-      await newChatWithFirst(page);
-      await refuseSend(page, gateway);
-    });
-    await one(
-      "earlier",
-      "long",
-      async (page, gateway) => {
+if (wants("thread"))
+  for (const theme of ["dark", "light"] as const)
+    for (const side of ["design", "built"] as const) {
+      /** One page in one case, measured, and closed. */
+      const one = async (
+        state: string,
+        given: ChatCase | undefined,
+        reach: (page: Page, gateway?: Gateway) => Promise<void>,
+        part: Part = "thread",
+      ) => {
+        const gateway = side === "built" ? await standIn() : undefined;
+        if (gateway) sampleChats(gateway, given);
+        const page = gateway
+          ? await builtPage(gateway, "wide", theme)
+          : await designPage("wide", theme);
+        await reach(page, gateway);
+        await rest(page, "wide");
+        all[`thread.${state}.${theme}.${side}`] = await measure(page, part);
+        await page.close();
+        await gateway?.close();
+      };
+      const panel = (page: Page) => page.getByRole("complementary", { name: "Chats" });
+      await one("noCall", "noCall", async (page, gateway) => {
         await openSampleChat(page);
-        if (!gateway) await inDesign(page, "A long chat");
-        const earlier = panel(page).getByRole("button", { name: "Earlier messages" });
-        await earlier.waitFor({ state: "attached" });
-        await earlier.scrollIntoViewIfNeeded();
-      },
-      "earlier",
-    );
-  }
+        if (!gateway) await inDesign(page, "A step with no call");
+        await panel(page).getByText("Looked at the pull request").waitFor();
+      });
+      await one("limit", "limit", async (page, gateway) => {
+        await openSampleChat(page);
+        if (!gateway) await inDesign(page, "Plan limit");
+        await panel(page)
+          .getByRole("alert")
+          .getByRole("button", { name: "Manage usage" })
+          .waitFor();
+      });
+      await one("refused", undefined, async (page, gateway) => {
+        await openSampleChat(page);
+        await refuseSend(page, gateway);
+      });
+      await one("refused.first", undefined, async (page, gateway) => {
+        await newChatWithFirst(page);
+        await refuseSend(page, gateway);
+      });
+      await one(
+        "earlier",
+        "long",
+        async (page, gateway) => {
+          await openSampleChat(page);
+          if (!gateway) await inDesign(page, "A long chat");
+          const earlier = panel(page).getByRole("button", { name: "Earlier messages" });
+          await earlier.waitFor({ state: "attached" });
+          await earlier.scrollIntoViewIfNeeded();
+        },
+        "earlier",
+      );
+    }
 
 // Home: the chats that need you and the recent ones, wide and on a phone. The built side has as
 // many that need you as the design's sample: one with a problem, one with a reply not yet read.
-for (const size of ["wide", "phone"] as const)
-  for (const theme of ["dark", "light"] as const)
-    for (const side of ["design", "built"] as const) {
-      const gateway = side === "built" ? await standIn() : undefined;
-      if (gateway) sampleChats(gateway);
-      const page = gateway ? await builtPage(gateway, size, theme) : await designPage(size, theme);
-      if (gateway) {
-        await noted(gateway);
-        unreadReply(gateway, 1);
+if (wants("home"))
+  for (const size of ["wide", "phone"] as const)
+    for (const theme of ["dark", "light"] as const)
+      for (const side of ["design", "built"] as const) {
+        const gateway = side === "built" ? await standIn() : undefined;
+        if (gateway) sampleChats(gateway);
+        const page = gateway
+          ? await builtPage(gateway, size, theme)
+          : await designPage(size, theme);
+        if (gateway) {
+          await noted(gateway);
+          unreadReply(gateway, 1);
+        }
+        await page.getByRole("region", { name: "Needs you" }).getByRole("button").nth(1).waitFor();
+        await rest(page, size);
+        all[`home.${size}.${theme}.${side}`] = await measure(page, "home");
+        await page.close();
+        await gateway?.close();
       }
-      await page.getByRole("region", { name: "Needs you" }).getByRole("button").nth(1).waitFor();
-      await rest(page, size);
-      all[`home.${size}.${theme}.${side}`] = await measure(page, "home");
-      await page.close();
-      await gateway?.close();
-    }
 
 // An agent's page: who it is, how it stands, and what is under its tabs. Research has a computer,
 // shown wide and on a phone, and its chats; Reviewer is idle, Triage has a problem and Weekly
@@ -1190,189 +1352,222 @@ const AGENT_PAGES = [
   { state: "trouble", size: "wide", id: "a-triage", name: "Triage" },
   { state: "stopped", size: "wide", id: "a-weekly", name: "Weekly report" },
 ] as const;
-for (const { state, size, id, name } of AGENT_PAGES)
-  for (const theme of ["dark", "light"] as const) {
-    /** What the design's CPU meter says, for the built side's computer to say too. */
-    let cpu = 0;
-    for (const side of ["design", "built"] as const) {
-      const gateway = side === "built" ? await standIn() : undefined;
-      if (gateway) {
-        sampleAgents(gateway);
-        sampleChats(gateway);
+if (wants("agent"))
+  for (const { state, size, id, name } of AGENT_PAGES)
+    for (const theme of ["dark", "light"] as const) {
+      /** What the design's CPU meter says, for the built side's computer to say too. */
+      let cpu = 0;
+      for (const side of ["design", "built"] as const) {
+        const gateway = side === "built" ? await standIn() : undefined;
+        if (gateway) {
+          sampleAgents(gateway);
+          sampleChats(gateway);
+        }
+        const hash = `#/a/${id}${state === "chats" ? "/chats" : ""}`;
+        const page = gateway
+          ? await builtPage(gateway, size, theme, hash)
+          : await designPage(size, theme);
+        const main = page.getByRole("main");
+        if (!gateway) await openDesignAgent(page, name, state === "chats" ? "Chats" : undefined);
+        await main.getByRole("heading", { name, level: 1 }).waitFor();
+        if (state === "computer") {
+          if (gateway) gateway.reading(sampleLoad(cpu));
+          cpu = await cpuOf(page);
+        } else
+          await main
+            .getByRole("list", { name: `Chats with ${name}` })
+            .waitFor({ state: "attached" });
+        await rest(page, size);
+        all[`agent.${state}.${size}.${theme}.${side}`] = await measure(page, "agent");
+        await page.close();
+        await gateway?.close();
       }
-      const hash = `#/a/${id}${state === "chats" ? "/chats" : ""}`;
-      const page = gateway
-        ? await builtPage(gateway, size, theme, hash)
-        : await designPage(size, theme);
-      const main = page.getByRole("main");
-      if (!gateway) await openDesignAgent(page, name, state === "chats" ? "Chats" : undefined);
-      await main.getByRole("heading", { name, level: 1 }).waitFor();
-      if (state === "computer") {
-        if (gateway) gateway.reading(sampleLoad(cpu));
-        cpu = await cpuOf(page);
-      } else
-        await main.getByRole("list", { name: `Chats with ${name}` }).waitFor({ state: "attached" });
-      await rest(page, size);
-      all[`agent.${state}.${size}.${theme}.${side}`] = await measure(page, "agent");
-      await page.close();
-      await gateway?.close();
     }
-  }
 
 // An agent's computer on its page: Research's, with its browser in front, wide and on a phone,
 // and as it is while Research is stopped. What a window holds is measured with the windows.
-for (const [state, size] of [
-  ["page", "wide"],
-  ["page", "phone"],
-  ["stopped", "wide"],
-] as const)
-  for (const theme of ["dark", "light"] as const)
-    for (const side of ["design", "built"] as const) {
-      const gateway = side === "built" ? await standIn() : undefined;
-      if (gateway) sampleAgents(gateway);
-      const page = gateway
-        ? await builtPage(gateway, size, theme, "#/a/a-research")
-        : await designPage(size, theme);
-      if (!gateway) await openDesignAgent(page, "Research");
-      const main = page.getByRole("main");
-      await main.getByRole("navigation", { name: "Dock" }).waitFor();
-      if (state === "stopped") await stopAgent(page, "Research");
-      await rest(page, size);
-      all[`computer.${state}.${size}.${theme}.${side}`] = await measure(page, "computer");
-      await page.close();
-      await gateway?.close();
-    }
+if (wants("computer"))
+  for (const [state, size] of [
+    ["page", "wide"],
+    ["page", "phone"],
+    ["stopped", "wide"],
+  ] as const)
+    for (const theme of ["dark", "light"] as const)
+      for (const side of ["design", "built"] as const) {
+        const gateway = side === "built" ? await standIn() : undefined;
+        if (gateway) sampleAgents(gateway);
+        const page = gateway
+          ? await builtPage(gateway, size, theme, "#/a/a-research")
+          : await designPage(size, theme);
+        if (!gateway) await openDesignAgent(page, "Research");
+        const main = page.getByRole("main");
+        await main.getByRole("navigation", { name: "Dock" }).waitFor();
+        if (state === "stopped") await stopAgent(page, "Research");
+        await rest(page, size);
+        all[`computer.${state}.${size}.${theme}.${side}`] = await measure(page, "computer");
+        await page.close();
+        await gateway?.close();
+      }
 
 // The model account's states. Home's place for what is left to set up, wide and on a phone, as
 // it is signed out, waiting for ChatGPT, while ChatGPT starts, and with an account that can't be
 // used; an agent's line and a chat's place while signed out; and a tab no longer signed in.
-for (const [state, sizes] of SIGN_INS)
-  for (const size of sizes)
+if (wants("signin"))
+  for (const [state, sizes] of SIGN_INS)
+    for (const size of sizes)
+      for (const theme of ["dark", "light"] as const)
+        for (const side of ["design", "built"] as const) {
+          const gateway = side === "built" ? await standIn() : undefined;
+          if (gateway) {
+            sampleAgents(gateway);
+            signInAccount(gateway, state);
+          }
+          const page = gateway
+            ? await builtPage(gateway, size, theme, signInHash(state), state !== "gone")
+            : await designPage(size, theme);
+          await signInState(page, state, !gateway);
+          await rest(page, size);
+          const measured = await measure(page, "signin");
+          // Each state is measured where it shows: a part that isn't there is a failure, not a match.
+          const shown =
+            state === "gone"
+              ? "gone.command"
+              : state === "chat"
+                ? "send"
+                : state === "line"
+                  ? "line.setup"
+                  : "place";
+          if (!measured[shown]) throw new Error(`${state} on the ${side} side has no ${shown}`);
+          all[`signin.${state}.${size}.${theme}.${side}`] = measured;
+          await page.close();
+          await gateway?.close();
+        }
+
+// The files window: a folder's rows, and a file open, in Research's storefront folder.
+if (wants("files"))
+  for (const state of ["folder", "file"] as const)
+    for (const theme of ["dark", "light"] as const)
+      for (const side of ["design", "built"] as const) {
+        const gateway = side === "built" ? await standIn() : undefined;
+        if (gateway) sampleAgents(gateway);
+        const page = gateway
+          ? await builtPage(gateway, "wide", theme, "#/a/a-research")
+          : await designPage("wide", theme);
+        if (!gateway) await openDesignAgent(page, "Research");
+        await openFiles(page, state === "file" ? "README.md" : undefined);
+        await rest(page, "wide");
+        all[`files.${state}.${theme}.${side}`] = await measure(page, "files");
+        await page.close();
+        await gateway?.close();
+      }
+
+// An agent's computer as the layer's window: opened by Expand beside the collapsed chat, wide
+// and on a phone, and from a chat beside the open panel, wide and where the two overlap.
+if (wants("window"))
+  for (const [state, size] of [
+    ["expanded", "wide"],
+    ["expanded", "phone"],
+    ["beside", "wide"],
+    ["beside", "rail"],
+  ] as const)
     for (const theme of ["dark", "light"] as const)
       for (const side of ["design", "built"] as const) {
         const gateway = side === "built" ? await standIn() : undefined;
         if (gateway) {
           sampleAgents(gateway);
-          signInAccount(gateway, state);
+          sampleChats(gateway);
         }
         const page = gateway
-          ? await builtPage(gateway, size, theme, signInHash(state), state !== "gone")
+          ? await builtPage(gateway, size, theme, "#/a/a-research")
           : await designPage(size, theme);
-        await signInState(page, state, !gateway);
+        if (!gateway) await openDesignAgent(page, "Research");
+        await openWindow(page, state === "beside");
         await rest(page, size);
-        const measured = await measure(page, "signin");
-        // Each state is measured where it shows: a part that isn't there is a failure, not a match.
-        const shown =
-          state === "gone"
-            ? "gone.command"
-            : state === "chat"
-              ? "send"
-              : state === "line"
-                ? "line.setup"
-                : "place";
-        if (!measured[shown]) throw new Error(`${state} on the ${side} side has no ${shown}`);
-        all[`signin.${state}.${size}.${theme}.${side}`] = measured;
+        all[`window.${state}.${size}.${theme}.${side}`] = await measure(page, "window");
         await page.close();
         await gateway?.close();
       }
 
-// The files window: a folder's rows, and a file open, in Research's storefront folder.
-for (const state of ["folder", "file"] as const)
-  for (const theme of ["dark", "light"] as const)
-    for (const side of ["design", "built"] as const) {
-      const gateway = side === "built" ? await standIn() : undefined;
-      if (gateway) sampleAgents(gateway);
-      const page = gateway
-        ? await builtPage(gateway, "wide", theme, "#/a/a-research")
-        : await designPage("wide", theme);
-      if (!gateway) await openDesignAgent(page, "Research");
-      await openFiles(page, state === "file" ? "README.md" : undefined);
-      await rest(page, "wide");
-      all[`files.${state}.${theme}.${side}`] = await measure(page, "files");
-      await page.close();
-      await gateway?.close();
-    }
-
-// An agent's computer as the layer's window: opened by Expand beside the collapsed chat, wide
-// and on a phone, and from a chat beside the open panel, wide and where the two overlap.
-for (const [state, size] of [
-  ["expanded", "wide"],
-  ["expanded", "phone"],
-  ["beside", "wide"],
-  ["beside", "rail"],
-] as const)
-  for (const theme of ["dark", "light"] as const)
-    for (const side of ["design", "built"] as const) {
-      const gateway = side === "built" ? await standIn() : undefined;
-      if (gateway) {
-        sampleAgents(gateway);
-        sampleChats(gateway);
-      }
-      const page = gateway
-        ? await builtPage(gateway, size, theme, "#/a/a-research")
-        : await designPage(size, theme);
-      if (!gateway) await openDesignAgent(page, "Research");
-      await openWindow(page, state === "beside");
-      await rest(page, size);
-      all[`window.${state}.${size}.${theme}.${side}`] = await measure(page, "window");
-      await page.close();
-      await gateway?.close();
-    }
-
 // An agent's setup, over its page: what Research was built from, its model, its MCPs and its
 // skills, and the way to delete it, wide and on a phone.
-for (const size of ["wide", "phone"] as const)
-  for (const theme of ["dark", "light"] as const)
-    for (const side of ["design", "built"] as const) {
-      const gateway = side === "built" ? await standIn() : undefined;
-      if (gateway) sampleAgents(gateway);
-      const page = gateway
-        ? await builtPage(gateway, size, theme, "#/a/a-research")
-        : await designPage(size, theme);
-      if (!gateway) await openDesignAgent(page, "Research");
-      await openSetup(page, "Research");
-      await rest(page, size);
-      all[`setup.${size}.${theme}.${side}`] = await measure(page, "setup");
-      await page.close();
-      await gateway?.close();
-    }
+if (wants("setup"))
+  for (const size of ["wide", "phone"] as const)
+    for (const theme of ["dark", "light"] as const)
+      for (const side of ["design", "built"] as const) {
+        const gateway = side === "built" ? await standIn() : undefined;
+        if (gateway) sampleAgents(gateway);
+        const page = gateway
+          ? await builtPage(gateway, size, theme, "#/a/a-research")
+          : await designPage(size, theme);
+        if (!gateway) await openDesignAgent(page, "Research");
+        await openSetup(page, "Research");
+        await rest(page, size);
+        all[`setup.${size}.${theme}.${side}`] = await measure(page, "setup");
+        await page.close();
+        await gateway?.close();
+      }
 
 // One chat, a chat with a problem, a chat about to be started, and chats found from the bar: the
 // design's sample chats, and the same two on the built side.
-for (const theme of ["dark", "light"] as const)
-  for (const side of ["design", "built"] as const) {
-    const gateway = side === "built" ? await standIn() : undefined;
-    if (gateway) sampleChats(gateway);
-    const page = gateway
-      ? await builtPage(gateway, "wide", theme)
-      : await designPage("wide", theme);
-    const panel = page.getByRole("complementary", { name: "Chats" });
-    const at = async (state: string) => {
-      await rest(page, "wide");
-      all[`thread.${state}.${theme}.${side}`] = await measure(page, "thread");
-    };
-    await page.getByRole("button", { name: /^Chats/ }).click();
-    await panel.getByRole("button", { name: /Review #482/ }).click();
-    await panel.getByRole("heading", { name: "Review #482" }).waitFor();
-    await at("chat");
-    await panel.getByRole("button", { name: "All chats" }).click();
-    await panel.getByRole("button", { name: /Route today's issues/ }).click();
-    await panel.getByRole("alert").waitFor();
-    await at("problem");
-    await panel.getByRole("button", { name: "All chats" }).click();
-    await panel.getByRole("button", { name: "New chat" }).click();
-    await panel.getByRole("heading", { name: "New chat" }).waitFor();
-    await at("new");
-    await panel.getByRole("list", { name: "Who with" }).locator("button:enabled").first().click();
-    await panel.getByRole("textbox", { name: "Message" }).waitFor();
-    await at("picked");
-    await panel.getByRole("button", { name: "Close chats" }).click();
-    await page.getByRole("searchbox", { name: "Search" }).fill("Route today");
-    await page.getByRole("list", { name: "Chats found" }).waitFor();
-    await at("found");
-    await page.close();
-    await gateway?.close();
-  }
+if (wants("thread"))
+  for (const theme of ["dark", "light"] as const)
+    for (const side of ["design", "built"] as const) {
+      const gateway = side === "built" ? await standIn() : undefined;
+      if (gateway) sampleChats(gateway);
+      const page = gateway
+        ? await builtPage(gateway, "wide", theme)
+        : await designPage("wide", theme);
+      const panel = page.getByRole("complementary", { name: "Chats" });
+      const at = async (state: string) => {
+        await rest(page, "wide");
+        all[`thread.${state}.${theme}.${side}`] = await measure(page, "thread");
+      };
+      await page.getByRole("button", { name: /^Chats/ }).click();
+      await panel.getByRole("button", { name: /Review #482/ }).click();
+      await panel.getByRole("heading", { name: "Review #482" }).waitFor();
+      await at("chat");
+      await panel.getByRole("button", { name: "All chats" }).click();
+      await panel.getByRole("button", { name: /Route today's issues/ }).click();
+      await panel.getByRole("alert").waitFor();
+      await at("problem");
+      await panel.getByRole("button", { name: "All chats" }).click();
+      await panel.getByRole("button", { name: "New chat" }).click();
+      await panel.getByRole("heading", { name: "New chat" }).waitFor();
+      await at("new");
+      await panel.getByRole("list", { name: "Who with" }).locator("button:enabled").first().click();
+      await panel.getByRole("textbox", { name: "Message" }).waitFor();
+      await at("picked");
+      await panel.getByRole("button", { name: "Close chats" }).click();
+      await page.getByRole("searchbox", { name: "Search" }).fill("Route today");
+      await page.getByRole("list", { name: "Chats found" }).waitFor();
+      await at("found");
+      await page.close();
+      await gateway?.close();
+    }
+
+// The create window in each of its states: the built side is given the design's sample of what
+// an agent is built from.
+if (wants("create"))
+  for (const [state, sizes] of CREATES)
+    for (const size of sizes)
+      for (const theme of ["dark", "light"] as const)
+        for (const side of ["design", "built"] as const) {
+          const gateway = side === "built" ? await standIn() : undefined;
+          if (gateway) {
+            sampleBuild(gateway);
+            if (state === "out") signInAccount(gateway, "out");
+          }
+          // A window centred in an odd height sits on a half pixel, and what it opens is placed
+          // on whole ones: the design's page is a pixel taller, so both sit on whole pixels.
+          const page = gateway
+            ? await builtPage(gateway, size, theme)
+            : await designPage(size, theme, 1);
+          await createState(page, state, !gateway);
+          await rest(page, size);
+          all[`create.${state}.${size}.${theme}.${side}`] = await measure(page, "create");
+          await page.close();
+          await gateway?.close();
+        }
 
 await browser.close();
 writeFileSync(out, JSON.stringify(all, null, 1));

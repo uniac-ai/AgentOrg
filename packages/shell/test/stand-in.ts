@@ -9,7 +9,6 @@ import {
   agents as agentsInterface,
   chat as chatInterface,
   connections as connectionsInterface,
-  folders as foldersInterface,
   hubBindings,
   skills as skillsInterface,
 } from "@agentorg/interfaces";
@@ -35,9 +34,13 @@ type Status = z.output<typeof chatInterface.methods.state.output>;
 type ChatEntry = z.output<typeof chatInterface.events.chat.payload>;
 type Problem = NonNullable<ChatEntry["problem"]>;
 type ChatEvent = keyof typeof chatInterface.events;
-type Creatable = z.output<typeof agentsInterface.methods.creatable.output>["creatables"][number];
-type Units = z.output<typeof agentsInterface.methods.units.output>;
-type Template = z.output<typeof agentsInterface.methods.templates.output>["templates"][number];
+export type Creatable = z.output<
+  typeof agentsInterface.methods.creatable.output
+>["creatables"][number];
+export type Units = z.output<typeof agentsInterface.methods.units.output>;
+export type Template = z.output<
+  typeof agentsInterface.methods.templates.output
+>["templates"][number];
 type StackProblem = z.output<typeof agentsInterface.methods.check.output>["problems"][number];
 type AgentStatus = z.output<typeof agentsInterface.methods.list.output>["agents"][number]["status"];
 type Connection = {
@@ -244,7 +247,7 @@ const UNITS: Units["units"] = [
         id: "where",
         type: "choice",
         value: "string",
-        title: "Where it runs",
+        title: "Where it resides",
         required: true,
         options: [
           { value: "local", title: "This computer", description: "It acts as you on this Mac." },
@@ -259,15 +262,19 @@ const UNITS: Units["units"] = [
         id: "access",
         type: "choice",
         value: "string",
-        title: "Files and commands",
+        title: "What it reaches",
         required: true,
         options: [
-          { value: "none", title: "None", description: "No file tools and no terminal." },
+          {
+            value: "none",
+            title: "No files or terminal",
+            description: "No file tools and no terminal.",
+          },
           {
             value: "read",
-            title: "Read files",
+            title: "Read-only files",
             description:
-              "Reads files in the working directory. Cannot change them or run anything.",
+              "Reads files in the workspace directory. Cannot change them or run anything.",
             adds: { slots: [{ name: "computer" }], skills: SKILLS("files", "computer") },
           },
           {
@@ -285,7 +292,7 @@ const UNITS: Units["units"] = [
         id: "browser",
         type: "toggle",
         value: "boolean",
-        title: "Browser",
+        title: "With a browser",
         default: false,
         description: "A browser of its own. It can open any site.",
         adds: { slots: [{ name: "browser" }], skills: SKILLS("browser") },
@@ -294,7 +301,7 @@ const UNITS: Units["units"] = [
         id: "workspace",
         type: "directory",
         value: "string",
-        title: "Working directory",
+        title: "Workspace directory",
         required: true,
         description: "The folder it works in. It is never deleted.",
         placeholder: "~/Agents/{name}",
@@ -411,14 +418,6 @@ const MODELS = [
   { id: "fast", name: "Fast" },
   { id: "deep", name: "Deep" },
 ];
-const FOLDERS: Record<string, string[]> = {
-  "/": ["home"],
-  "/home": ["me"],
-  "/home/me": ["Agents", "Documents"],
-  "/home/me/Agents": ["Foreman"],
-  "/home/me/Agents/Foreman": [],
-};
-
 interface Spec {
   input: z.ZodType;
   output: z.ZodType;
@@ -458,7 +457,7 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
     slot: string;
     event: string;
   }>();
-  const creatables = options.creatables ?? CREATABLES;
+  let creatables = options.creatables ?? CREATABLES;
   /**
    * The model account: how it stands, and whether its own process has connected. Signed in,
    * unless a test says otherwise; with none, there is nothing to sign in to.
@@ -949,16 +948,6 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
     }
     // The model account's own process, which the person's `login` slot is bound to.
     if (slot === "actors") return { connected: account?.started ?? true };
-    if (slot === "folders") {
-      const path = String(input.path ?? "/home/me");
-      const under = FOLDERS[path];
-      if (!under) throw new Refusal("unknown", "There's no such folder.");
-      return foldersInterface.methods.list.output.parse({
-        path,
-        ...(path === "/" ? {} : { parent: path.split("/").slice(0, -1).join("/") || "/" }),
-        folders: under.map((name) => ({ name })),
-      });
-    }
     if (slot === "store") {
       // A refusal of the store is of one key: `store.get.<key>`.
       const refused = refusals.get(`store.${method}.${String(input.key)}`);
@@ -1243,6 +1232,12 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
     agents,
     connections,
     calls,
+    /** What an agent can be built from comes to be this: its bases, units and templates. */
+    setCatalog(next: { bases: Creatable[]; units: Units["units"]; templates: Template[] }) {
+      creatables = next.bases;
+      units = next.units;
+      templates = [...next.templates];
+    },
     /** A unit's form changes, as when what it depends on appears. */
     changeForm(id: string, change: (field: Units["units"][number]["form"][number]) => void) {
       units = structuredClone(units);

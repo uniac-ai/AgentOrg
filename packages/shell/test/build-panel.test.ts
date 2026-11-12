@@ -4,16 +4,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   agentsRead,
-  browser,
   card,
   choose,
-  chooser,
   fromTemplate,
   gives,
   open,
   panel,
   plus,
-  unfold,
   withBrowser,
   withGateway,
 } from "./build-kit.ts";
@@ -26,10 +23,13 @@ test(
     const page = await open(gateway);
     await fromTemplate(page, "Assistant");
     const computer = card(page, "Computer");
-    await computer.getByText("Files and terminal", { exact: true }).waitFor();
-    assert.equal(await computer.getByRole("switch", { name: "Browser" }).isChecked(), true);
-    await choose(page, "Files and commands", /^Read files/);
-    await computer.getByRole("switch", { name: "Browser" }).click();
+    assert.equal(
+      await computer.getByRole("combobox", { name: "What it reaches" }).innerText(),
+      "Files and terminal",
+    );
+    assert.equal(await computer.getByRole("switch", { name: "With a browser" }).isChecked(), true);
+    await choose(page, "What it reaches", /^Read-only files/);
+    await computer.getByRole("switch", { name: "With a browser" }).click();
     await card(page, "Web").getByRole("button", { name: "Remove Web" }).click();
     assert.equal(await card(page, "Web").count(), 0);
     await page.close();
@@ -45,14 +45,14 @@ test(
       await gives(page, "Computer"),
       /computer, browser\s+terminal, files, computer, browser/,
     );
-    await choose(page, "Files and commands", /^Read files/);
+    await choose(page, "What it reaches", /^Read-only files/);
     assert.match(await gives(page, "Computer"), /computer, browser\s+files, computer, browser/);
-    await card(page, "Computer").getByRole("switch", { name: "Browser" }).click();
+    await card(page, "Computer").getByRole("switch", { name: "With a browser" }).click();
     assert.doesNotMatch(await gives(page, "Computer"), /browser/);
-    await choose(page, "Where it runs", /^This computer/);
+    await choose(page, "Where it resides", /^This computer/);
     const text = await card(page, "Computer").innerText();
     assert.match(text, /It acts as you on this Mac\./);
-    assert.match(text, /Reads files in the working directory/);
+    assert.match(text, /Reads files in the workspace directory/);
     await page.close();
   }),
 );
@@ -66,13 +66,13 @@ test(
     const create = panel(page).getByRole("button", { name: "Create", exact: true });
     await panel(page).getByLabel("Name").fill("Foreman");
     assert.equal(await create.isDisabled(), true, "where is still open");
-    const folder = computer.getByLabel("Working directory", { exact: true });
+    const folder = computer.getByLabel("Workspace directory", { exact: true });
     assert.equal(await folder.count(), 0);
-    await choose(page, "Where it runs", /^This computer/);
+    await choose(page, "Where it resides", /^This computer/);
     assert.equal(await create.isDisabled(), true, "the folder is required once it's shown");
     await folder.fill("/work/x");
     assert.equal(await create.isDisabled(), false);
-    await choose(page, "Where it runs", /^Its own container/);
+    await choose(page, "Where it resides", /^Its own container/);
     await computer.getByLabel("Image").waitFor();
     await computer.getByLabel("Path in the container").waitFor();
     assert.equal(await folder.count(), 0);
@@ -89,11 +89,10 @@ test(
     const computer = card(page, "Computer");
     await panel(page).getByLabel("Name").fill("Foreman");
     await panel(page).getByLabel("What it's for").fill("Keeps dependencies current");
-    await choose(page, "Where it runs", /^Its own container/);
+    await choose(page, "Where it resides", /^Its own container/);
     await computer.getByLabel("Image").fill("typed/earlier");
-    await choose(page, "Where it runs", /^This computer/);
-    await computer.getByLabel("Working directory", { exact: true }).fill("/work/foreman");
-    await unfold(page, "Web");
+    await choose(page, "Where it resides", /^This computer/);
+    await computer.getByLabel("Workspace directory", { exact: true }).fill("/work/foreman");
     await choose(page, "Search service", /^Tavily/);
     const key = card(page, "Web").getByLabel("Key");
     assert.equal(await key.getAttribute("type"), "password");
@@ -138,7 +137,7 @@ test(
     const page = await open(gateway);
     await agentsRead(page);
     await plus(page).click();
-    await chooser(page).getByRole("button", { name: "Empty" }).click();
+    await panel(page).locator("#build-name").waitFor();
     await panel(page).getByLabel("Name").fill("Solo");
     const create = panel(page).getByRole("button", { name: "Create", exact: true });
     await panel(page).getByRole("button", { name: "Add a unit" }).click();
@@ -175,7 +174,7 @@ test(
     const page = await open(gateway);
     await agentsRead(page);
     await plus(page).click();
-    await chooser(page).getByRole("button", { name: "Empty" }).click();
+    await panel(page).locator("#build-name").waitFor();
     await panel(page).getByRole("button", { name: "Add a unit" }).click();
     await page.getByRole("menuitem", { name: /^Agent control/ }).click();
     const control = card(page, "Agent control");
@@ -203,6 +202,20 @@ test(
     await page.getByRole("option", { name: "Postgres analytics" }).click();
     assert.equal(await control.getByLabel("Colour").getAttribute("type"), null);
     assert.equal(await control.getByLabel("Ceiling").getAttribute("type"), "number");
+    // A number with a unit word has the word beside it; one without is as wide as its field.
+    const [box, word] = [
+      await limit.boundingBox(),
+      await control.getByText("at once").boundingBox(),
+    ];
+    assert.ok(box && word && word.x >= box.x + box.width, "the word is on its right");
+    assert.ok(word.y < box.y + box.height && word.y + word.height > box.y, "on its row");
+    const ceiling = control.getByLabel("Ceiling");
+    assert.equal(
+      (await ceiling.boundingBox())?.width,
+      (await control.getByLabel("Colour").boundingBox())?.width,
+      "a number with no word is as wide as any box",
+    );
+    assert.ok(box.width < ((await ceiling.boundingBox())?.width ?? 0));
     await page.close();
   }),
 );
@@ -218,55 +231,6 @@ test(
     assert.equal(await create.isDisabled(), true);
     await panel(page).getByRole("button", { name: "Remove mystery" }).click();
     assert.equal(await create.isDisabled(), false);
-    await page.close();
-  }),
-);
-
-test(
-  "a directory field walks this machine's folders, and goes when the unit stops showing it",
-  withGateway(async (gateway) => {
-    const page = await open(gateway);
-    await fromTemplate(page, "Assistant");
-    const computer = card(page, "Computer");
-    await choose(page, "Where it runs", /^This computer/);
-    const browse = computer.getByRole("button", { name: "Browse for Working directory" });
-    await browse.click();
-    const dialog = page.getByRole("dialog", { name: "Working directory" });
-    const folders = dialog.getByRole("list", { name: "Folders" });
-    await folders.getByRole("button", { name: "Documents" }).waitFor();
-    await page.waitForTimeout(250);
-    await dialog.getByText("/home/me", { exact: true }).waitFor();
-    const size = await dialog.boundingBox();
-    await folders.getByRole("button", { name: "Agents" }).click();
-    await folders.getByRole("button", { name: "Foreman" }).click();
-    await dialog.getByText("/home/me/Agents/Foreman", { exact: true }).waitFor();
-    assert.deepEqual(await dialog.boundingBox(), size, "the dialog keeps its box");
-    await dialog.getByRole("button", { name: "Up" }).click();
-    await dialog.getByText("/home/me/Agents", { exact: true }).waitFor();
-    await dialog.getByRole("button", { name: "Choose" }).click();
-    assert.equal(
-      await computer.getByLabel("Working directory", { exact: true }).inputValue(),
-      "/home/me/Agents",
-    );
-
-    await browse.click();
-    await page
-      .getByRole("dialog", { name: "Working directory" })
-      .getByText("/home/me/Agents", { exact: true })
-      .waitFor();
-    await page.keyboard.press("Escape");
-
-    await computer.getByLabel("Working directory", { exact: true }).fill("/not/made/yet");
-    await browse.click();
-    await page
-      .getByRole("dialog", { name: "Working directory" })
-      .getByText("/home/me", { exact: true })
-      .waitFor();
-    await page.keyboard.press("Escape");
-
-    await choose(page, "Where it runs", /^Its own container/);
-    assert.equal(await browse.count(), 0);
-    await computer.getByLabel("Path in the container").fill("/work/typed");
     await page.close();
   }),
 );

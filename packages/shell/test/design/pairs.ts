@@ -1,6 +1,8 @@
 // The design and the built shell side by side at the same size and theme, the design on the left.
 //
-//   node --experimental-strip-types test/design/pairs.ts <design.html> <out dir>
+//   node --experimental-strip-types test/design/pairs.ts <design.html> <out dir> [names]
+//
+// With `names`, a list like `home,create`, only the screens whose names start with one are shot.
 //
 // Build the shell first. A part added to the shell adds its screens here.
 import { chromium, type Page } from "@playwright/test";
@@ -9,9 +11,11 @@ import {
   ASKED,
   ASKS,
   type ChatCase,
+  CREATES,
   closeEveryTab,
   computerWith,
   cpuOf,
+  createState,
   inDesign,
   newChatWithFirst,
   noted,
@@ -25,6 +29,7 @@ import {
   SIGN_INS,
   type SignIn,
   sampleAgents,
+  sampleBuild,
   sampleChats,
   sampleLoad,
   signInAccount,
@@ -35,8 +40,9 @@ import {
   unreadReply,
 } from "./samples.ts";
 
-const [design, out] = process.argv.slice(2);
-if (!design || !out) throw new Error("usage: pairs.ts <design.html> <out dir>");
+const [design, out, only] = process.argv.slice(2);
+if (!design || !out) throw new Error("usage: pairs.ts <design.html> <out dir> [names]");
+const wanted = (name: string) => !only || only.split(",").some((one) => name.startsWith(one));
 
 /** The design's page has a bar of its own controls above its shell. */
 const CONTROLS = 33;
@@ -59,6 +65,10 @@ interface Screen {
   chats?: boolean;
   /** The built side's agents are the design's sample: what each is for, and Research's computer. */
   agents?: boolean;
+  /** The built side builds from the design's sample: its base, units and templates. */
+  build?: boolean;
+  /** The design's page is this much taller than its own bar makes it. */
+  taller?: number;
   /** The state of the two sign-ins the built side is in. */
   signIn?: SignIn;
   /** A case the built side's sample chat is given. */
@@ -362,6 +372,19 @@ const SCREENS: Screen[] = [
       built: (page) => signInState(page, state, false),
     }),
   ),
+  ...CREATES.map(
+    ([state, sizes]): Screen => ({
+      name: `create-${state}`,
+      sizes: [...sizes],
+      themes: ["dark", "light"],
+      build: true,
+      // Centred in an odd height the design's window would sit on a half pixel.
+      taller: 1,
+      ...(state === "out" ? { signIn: "out" as const } : {}),
+      design: (page) => createState(page, state, true),
+      built: (page) => createState(page, state, false),
+    }),
+  ),
   {
     name: "agent-setup",
     sizes: ["wide", "phone"],
@@ -496,7 +519,10 @@ const SCREENS: Screen[] = [
 ];
 
 const browser = await chromium.launch();
-for (const screen of SCREENS)
+for (const one of only?.split(",") ?? [])
+  if (!SCREENS.some((screen) => screen.name.startsWith(one)))
+    throw new Error(`no screen's name starts with "${one}"`);
+for (const screen of SCREENS.filter((one) => wanted(one.name)))
   for (const size of screen.sizes)
     for (const theme of screen.themes) {
       const [width, height] = SIZES[size];
@@ -504,10 +530,14 @@ for (const screen of SCREENS)
       for (const side of ["design", "built"] as const) {
         const gateway = side === "built" ? await standIn() : undefined;
         const page = await browser.newPage({
-          viewport: { width, height: side === "design" ? height + CONTROLS : height },
+          viewport: {
+            width,
+            height: side === "design" ? height + CONTROLS + (screen.taller ?? 0) : height,
+          },
         });
         if (gateway) {
           if (screen.agents) sampleAgents(gateway);
+          if (screen.build) sampleBuild(gateway);
           if (screen.signIn) signInAccount(gateway, screen.signIn);
           if (screen.browser) computerWith(gateway, "browser", !screen.watch);
           // A watcher opens no tab of its own: the one in front is there already.

@@ -3,15 +3,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   type CatalogUnit,
-  chosenNotes,
   type Draft,
   type Field,
   givesOf,
   isReady,
   isShown,
-  nameOf,
-  needsAttention,
-  pickName,
   placeholderOf,
   toStack,
 } from "../src/fixed/stack.ts";
@@ -80,7 +76,6 @@ const base = {
 const draftOf = (values: Draft["units"][number]["values"], secrets = {}): Draft => ({
   mode: "agent",
   name: "N",
-  suggested: "",
   purpose: "",
   base,
   answers: {},
@@ -124,62 +119,10 @@ test("the stack holds only what's shown and filled in, with secrets apart", () =
   ]);
 });
 
-test("what's chosen says what it means, for any unit, in the form's order", () => {
-  const described: Field[] = [
-    {
-      id: "one",
-      type: "choice",
-      value: "string",
-      title: "One",
-      options: [
-        { value: "a", title: "A", description: "First." },
-        { value: "b", title: "B" },
-      ],
-    },
-    {
-      id: "many",
-      type: "choices",
-      value: "strings",
-      title: "Many",
-      options: [
-        { value: "x", title: "X", description: "Second." },
-        { value: "y", title: "Y", description: "Not this." },
-      ],
-    },
-    {
-      id: "gone",
-      type: "choice",
-      value: "string",
-      title: "Gone",
-      default: "z",
-      visible: { field: "one", in: ["b"] },
-      options: [{ value: "z", title: "Z", description: "Hidden." }],
-    },
-  ];
-  assert.deepEqual(chosenNotes({ one: "a", many: ["x"] }, described), ["First.", "Second."]);
-});
-
-test("the name offered is one no agent has, and it's what an untouched field means", () => {
-  const first = pickName([], () => 0);
-  assert.notEqual(
-    pickName([first], () => 0),
-    first,
-  );
-  assert.deepEqual(
-    [nameOf({ name: " ", suggested: "Wren" }), nameOf({ name: "Mine", suggested: "Wren" })],
-    ["Wren", "Mine"],
-  );
-  assert.equal(isReady({ ...draftOf({ access: "none" }), name: "", suggested: "Wren" }), true);
-  assert.equal(isReady({ ...draftOf({ access: "none" }), name: "", suggested: "" }), false);
-});
-
-test("a card asks for attention only when there's something on it to do", () => {
-  const entry = (values: Draft["units"][number]["values"]) =>
-    draftOf(values).units[0] as Draft["units"][number];
-  assert.equal(needsAttention(entry({ access: "none" }), []), false);
-  assert.equal(needsAttention(entry({ access: "read" }), []), true, "a required field is empty");
-  assert.equal(needsAttention(entry({ access: "read", dir: "/x" }), []), false);
-  assert.equal(needsAttention({ key: 1, id: "gone", values: {}, secrets: {} }, []), true);
+test("an agent or a template has to be named", () => {
+  assert.equal(isReady({ ...draftOf({ access: "none" }), name: " " }), false);
+  assert.equal(isReady({ ...draftOf({ access: "none" }), name: "Mine" }), true);
+  assert.equal(isReady({ ...draftOf({ access: "none" }), mode: "template", name: "" }), false);
 });
 
 test("{name} in greyed text is the agent's name, and stays as written with no agent", () => {
