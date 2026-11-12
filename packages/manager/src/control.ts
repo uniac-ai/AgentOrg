@@ -69,6 +69,7 @@ There is one create tool per template you may use. Read its description and fiel
 - \`agent_send\` gives it a message and returns at once. It works on its own after that. Your name is on the message's first line.
 - A message with no chat named starts a new chat with it, and tells you which. Name that chat to go on in it. Start another only for work that is apart from the first.
 - \`agent_chats\` lists its chats and says whether it is working. A chat with a \`problem\` has a message that got no answer: send it another once the problem is dealt with. \`agent_read\` shows what was said in one. Check back when you need the result, rather than after every step.
+- An agent that keeps a record of its work also gives you a tool \`work_<its id>__work\`: what each of its pieces of work is doing and did. Read it to see how its work goes, without messaging it.
 - Say what you want back and in what form. It knows only what you send it and its purpose.
 
 ## When it is done
@@ -298,6 +299,13 @@ const boundOf = (values: Values): Bound => ({
   limit: Number(values.limit ?? LIMIT_DEFAULT),
   depth: Number(values.depth ?? 1),
 });
+/** Whether a bound lets an agent create and manage agents of its own. */
+const own = (bound: Bound) => atLeast(AGENTS, bound.agents, "own");
+/** Whether an agent manages the agents it made: it holds management's agents unit, at "own" or more. */
+export function managesOwn(self: string, record: TheAgent | undefined): boolean {
+  const unit = record?.units.find((one) => one.provider === self && one.unit === AGENTS_UNIT);
+  return unit !== undefined && own(boundOf(unit.values));
+}
 
 /** A template as a parent may use it: the units it applies, and the places it may go. */
 interface Shape {
@@ -908,7 +916,6 @@ export function createControl(parts: ControlParts) {
     run(caller: string, bound: Bound, args: z.infer<T>): Promise<unknown>;
   }
   const verb = <T extends z.ZodType>(one: Verb<T>) => one as unknown as Verb<z.ZodType>;
-  const own = (bound: Bound) => atLeast(AGENTS, bound.agents, "own");
   const sees = (scope: "connections" | "skills", least: string) => (bound: Bound) =>
     atLeast(REACH, bound[scope], least);
   /** Something to give: a connection or a skill, to itself or one of its own, as the person would. */

@@ -398,7 +398,7 @@ async function setup(t: test.TestContext) {
             actorId,
             credential: credential as string,
             slots: { settings: agentSettings },
-            // What a `working` agent holds of itself it serves as these; none is called here.
+            // What a `working` agent holds of itself it serves as these.
             exports: { chat, capability, tools },
             start(own) {
               contexts.set(actorId, own as never);
@@ -464,6 +464,12 @@ async function setup(t: test.TestContext) {
               });
               own.slots.settings.on("changed", () => {
                 heard.set(actorId, (heard.get(actorId) ?? 0) + 1);
+              });
+              // Its Work, as the Assistant serves it: one operation.
+              own.exports.tools.implement({
+                list: () => ({ tools: [{ name: "work", inputSchema: { type: "object" } }] }),
+                call: () => ({ output: `The work of ${name}.` }),
+                stop: () => ({}),
               });
             },
           });
@@ -1965,6 +1971,68 @@ async function delegating(t: test.TestContext) {
   const names = async (tools: ToolCalls) => (await tools.list({})).tools.map((one) => one.name);
   return { ...s, agentsUnit, parent, made, names };
 }
+
+test("an agent that manages its own reads the Work of each it made, while it manages them", async (t) => {
+  const s = await delegating(t);
+  await s.calls.agents.saveTemplate({
+    id: "workhand",
+    title: "workhand",
+    description: "The workhand.",
+    base: { provider: "Agents", creatable: "working" },
+    units: [],
+  });
+  const { agent: parent, tools } = await s.parent({ templates: ["workhand", "helper"] });
+  const kid = await s.made(tools, "create_workhand", { name: "Kid", purpose: "Do a part." });
+  const slot = `work_${kid}`;
+  const reached = async () =>
+    (await s.bindingsOf(parent))
+      .filter((one) => one.consumer === parent && one.provider !== s.management.actorId)
+      .map((one) => [one.slot, one.provider]);
+  // Reached once it is made, under its id.
+  assert.deepEqual(await reached(), [[slot, kid]]);
+  const work = await s.exposedTo<ToolCalls>(parent, slot);
+  assert.deepEqual(
+    (await work.list({})).tools.map((one) => one.name),
+    ["work"],
+  );
+  assert.deepEqual(await work.call({ name: "work", arguments: {} }), {
+    output: "The work of Kid.",
+  });
+  assert.match((await s.calls.skills.get({ name: "delegating" })).text, /`work_<its id>__work`/);
+  // No page shows it as one of the maker's connections.
+  assert.deepEqual(
+    (await s.calls.agents.get({ agent: parent })).mcp.map((one) => one.slot),
+    ["control"],
+  );
+  // One whose creatable gives it no Work isn't reached.
+  await s.made(tools, "create_helper", { name: "Plain", purpose: "Hold none." });
+  assert.deepEqual(await reached(), [[slot, kid]]);
+  // Its agents unit gone, it reaches none; back, at "own", it reaches them again.
+  const control = (await s.calls.agents.get({ agent: parent })).units.find(
+    (one) => one.unit === "control",
+  )?.instance as string;
+  await s.calls.agents.removeUnit({ agent: parent, instance: control });
+  assert.deepEqual(await reached(), []);
+  const { instance } = await s.calls.agents.addUnit({
+    agent: parent,
+    unit: s.agentsUnit({ templates: ["workhand"], agents: "none" }),
+  } as never);
+  assert.deepEqual(await reached(), [], "it manages no agents");
+  await s.calls.agents.removeUnit({ agent: parent, instance });
+  await s.calls.agents.addUnit({
+    agent: parent,
+    unit: s.agentsUnit({ templates: ["workhand"] }),
+  } as never);
+  assert.deepEqual(await reached(), [[slot, kid]]);
+  // Reached again when management starts, as for one made before this.
+  await s.person.slots.grants.call.unexpose({ to: parent, slot });
+  await s.restart(() => {});
+  for (let i = 0; (await reached()).length === 0; i++) {
+    assert.ok(i < 300, "it was never reached again");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  assert.deepEqual(await reached(), [[slot, kid]]);
+});
 
 test("an agent creates, messages, reads, stops and removes an agent of its own", async (t) => {
   const s = await delegating(t);

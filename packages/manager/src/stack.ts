@@ -27,6 +27,7 @@ import {
   AGENTS_SLOT,
   AGENTS_UNIT,
   agentsUnit,
+  managesOwn,
   type Reach,
   reachOf,
   reachProblems,
@@ -209,12 +210,24 @@ export interface StackParts {
         provider: string;
         export: string;
       }): Promise<unknown>;
-      expose(input: { provider: string; export: string; to: string }): Promise<unknown>;
+      expose(input: {
+        provider: string;
+        export: string;
+        to: string;
+        as?: string;
+      }): Promise<unknown>;
       unexpose(input: { to: string; slot: string }): Promise<unknown>;
     };
     bindings: {
       list(input: { actor: string }): Promise<{
-        bindings: { consumer: string; interface: string; slot: string; provider: string }[];
+        bindings: {
+          consumer: string;
+          interface: string;
+          slot: string;
+          provider: string;
+          export: string;
+          exposed?: true | undefined;
+        }[];
       }>;
     };
   };
@@ -247,6 +260,8 @@ export interface StackParts {
 /** What a capability's Actor exports as itself, and what each of its connections exports. */
 const CAPABILITY_EXPORT = "capability";
 const TOOLS_EXPORT = "tools";
+/** The slot an agent's Work is reached at by the agent that made it: named by its id. */
+const workSlot = (agent: string) => `work_${agent}`;
 
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
 const alreadyGone = (error: unknown) => error instanceof Refused && error.code === "unknown";
@@ -617,8 +632,13 @@ export function createStacks(parts: StackParts) {
   /** The connections a living agent has now; what is exposed to it is the Hub's to say. */
   const toolsOf = async (agent: string) =>
     (await hub.bindings.list({ actor: agent })).bindings.filter(
-      (binding) => binding.consumer === agent && binding.interface === TOOLS,
+      (binding) =>
+        binding.consumer === agent && binding.interface === TOOLS && !madeWork(agent, binding),
     );
+  /** Whether a binding of `maker`'s is the Work of an agent it made, which no page shows. */
+  const madeWork = (maker: string, binding: { slot: string; provider: string }) =>
+    records.agents[binding.provider]?.parent?.agent === maker &&
+    binding.slot === workSlot(binding.provider);
 
   const placeOnAgent = async (input: AddInput) => {
     const record = recordOf(input.agent);
@@ -684,6 +704,35 @@ export function createStacks(parts: StackParts) {
       person: { capability, operations },
     });
   };
+  /**
+   * Have each agent that manages its own reach the Work of the agents it made, as the person
+   * does: each one's own `tools`, exposed to it under that agent's id. `which` limits it to the
+   * pairs it is true of. Each is done in the maker's queue, so it never races its agents unit.
+   */
+  const reachMade = async (which: (made: string, maker: string) => boolean = () => true) => {
+    for (const [id, record] of Object.entries(records.agents)) {
+      const parent = record.parent?.agent;
+      if (!parent || !which(id, parent) || !givesWork(id)) continue;
+      await serial(parent, async () => {
+        if (records.agents[id] && givesWork(id) && managesOwn(self, records.agents[parent]))
+          await hub.grants.expose({
+            provider: id,
+            export: TOOLS_EXPORT,
+            to: parent,
+            as: workSlot(id),
+          });
+      }).catch((error) => {
+        // Closed, with its record still here: nothing to reach.
+        if (!alreadyGone(error) && !(error instanceof Refused && error.code === "state"))
+          log.warn(`Reaching an agent's work: ${messageOf(error)}`);
+      });
+    }
+  };
+  /** Whether an agent holds Work of its own with an operation to call. */
+  const givesWork = (agent: string) =>
+    records.agents[agent]?.capabilities.some(
+      (one) => one.from === agent && Object.keys(one.person.operations).length > 0,
+    ) === true;
   /**
    * Have each agent hold what its creatable gives it of itself where it doesn't yet, as an agent
    * made before its creatable gave one: once the agent is there to be reached. `agent` limits it
@@ -981,12 +1030,21 @@ export function createStacks(parts: StackParts) {
       ...records.templates,
     });
 
+  /** Take back from `parent` the Work of the agents it made: it manages them no more. */
+  const unreachMade = async (parent: string) => {
+    for (const binding of (await hub.bindings.list({ actor: parent })).bindings)
+      if (binding.consumer === parent && madeWork(parent, binding))
+        await hub.grants.unexpose({ to: parent, slot: binding.slot }).catch((error) => {
+          if (!alreadyGone(error)) throw error;
+        });
+  };
   /** Remove a unit and what it made; a provider that has lost it leaves only the connections. */
   const dropUnit = async (agent: string, record: TheAgent, unit: TheUnitRecord) => {
     if (unit.provider === self) {
       await hub.grants.unexpose({ to: agent, slot: AGENTS_SLOT }).catch((error) => {
         if (!alreadyGone(error)) throw error;
       });
+      await unreachMade(agent);
       record.skills = record.skills.filter((skill) => !unit.skills.includes(skill));
       record.units = record.units.filter((one) => one.instance !== unit.instance);
       save();
@@ -1102,6 +1160,7 @@ export function createStacks(parts: StackParts) {
     fromUnit,
     reachHeld,
     holdOwns,
+    reachMade,
     unitMaking,
     catalog,
     allTemplates: templates,
@@ -1326,6 +1385,8 @@ export function createStacks(parts: StackParts) {
         keepOrigins(work);
         save();
         creating.delete(agent);
+        // Its maker reads its Work from now on, whether or not it has connected yet.
+        if (child) await reachMade((made) => made === agent);
         return { agent };
       } catch (error) {
         await unwind(undo);

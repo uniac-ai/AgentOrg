@@ -22,7 +22,7 @@ import { describeInterface, type Interface, type Log, Refused, type Slot } from 
 import { connect } from "@agentorg/sdk/client";
 import type { z } from "zod";
 import { createActivity } from "./activity.js";
-import { type Activity, createControl } from "./control.js";
+import { type Activity, AGENTS_UNIT, createControl } from "./control.js";
 import { schemaOf, secretsSchemaOf, settle } from "./form.js";
 import { createSkills, readSkillFolder } from "./skills.js";
 import { type AgentRecord, createStacks, Records, slotFieldOf } from "./stack.js";
@@ -427,6 +427,8 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
               if (!alreadyGone(error))
                 log.warn(`Holding what agents give themselves: ${messageOf(error)}`);
             });
+            // An agent that now holds its own Work is reached by the one that made it.
+            await stacks.reachMade();
           } while (owningAgain);
         })().finally(() => {
           owning = undefined;
@@ -437,6 +439,7 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
           // One that has closed, or isn't back yet, has nothing to reach.
           if (actor && !(await hub.actors.get({ actorId: actor })).connected) return;
           await Promise.all([stacks.holdOwns(actor), stacks.reachHeld(actor)]);
+          await stacks.reachMade((made, maker) => !actor || made === actor || maker === actor);
         })().catch((error) => {
           if (!alreadyGone(error)) log.warn(`Reaching what an agent holds: ${messageOf(error)}`);
         });
@@ -587,8 +590,13 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
         removeTemplate: (input, { caller }) => stacks.removeTemplate(input, agentOf(caller)),
         check: (input) => stacks.check(input),
         create: (input, { caller }) => stacks.create(input, caller),
-        addUnit: (input, { caller }) =>
-          stacks.serial(input.agent, () => stacks.addUnit(input, caller)),
+        async addUnit(input, { caller }) {
+          const added = await stacks.serial(input.agent, () => stacks.addUnit(input, caller));
+          // An agents unit added reaches the Work of the agents it made before.
+          if (input.unit.unit === AGENTS_UNIT)
+            await stacks.reachMade((_, maker) => maker === input.agent);
+          return added;
+        },
         removeUnit: (input) => stacks.serial(input.agent, () => stacks.removeUnit(input)),
         activity: (input) => activity.read(input),
         async live({ agent, instance, surface, mode }) {
