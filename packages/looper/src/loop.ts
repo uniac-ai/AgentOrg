@@ -13,6 +13,7 @@
 import { head, type LoopRecord, messageOf, SEND_NAME, SENT, userEntry } from "./record.js";
 import { capped, refused, runTool } from "./tools.js";
 import {
+  type Call,
   codeOf,
   type Item,
   type Log,
@@ -80,10 +81,25 @@ Each message from the person starts with its number in brackets, like [12]. Deci
 A message that begins "(Left out:" is not from the person and needs no answer. It stands for earlier messages, and what was done for them, that no longer fit: all of it was said and done, so do not do it again. A call whose arguments or output say they were left out did run. Message [1] is what this work was asked.`;
 
 type FunctionCall = Extract<Item, { type: "function_call" }>;
+/**
+ * A `send` the model is writing: its arguments so far, the id its reply will have, where in them
+ * the words not yet said begin, and the thread of the message it names: unknown until that is
+ * read, `null` while it is looked up, and again when it names none this work can answer.
+ */
+interface Stream {
+  reply: string;
+  args: string;
+  at?: number;
+  thread?: string | null;
+}
+/** Whole characters and escapes of a JSON string, as far as they go: the words of a `send` read so far. */
+const WORDS = /(?:[^"\\]|\\(?:["\\/bfnrt]|u[0-9a-fA-F]{4}))*/y;
 /** Where a loop says what it does, each message with the thread it is said in. */
 export interface LoopOut {
   /** A message said in `thread`: what the person said, or a reply sent there. */
   message(thread: string, message: Shown): void;
+  /** A piece of a reply as it is sent: `id` is the reply's, which its message has once it is said. */
+  delta(thread: string, id: string, text: string): void;
   /** What it is doing. */
   status(status: Status): void;
   /**
@@ -110,6 +126,8 @@ interface Turn {
   ending?: boolean;
   /** Set on a turn that goes on from one that was cut off. */
   resumed?: boolean;
+  /** What the `send`s its latest request is writing have said so far, by call. */
+  streams?: Map<string, Stream>;
   /**
    * The place it started after: a message of its work up to there is an earlier turn's, which a
    * stop or a failure left unanswered. One that opens with what its work held starts after the
@@ -282,6 +300,45 @@ export function createLoop(options: {
       );
     show(sent);
   };
+  /**
+   * Say what a `send` being written has said and hasn't been said yet, once the thread of the
+   * message it names is known. Until it names one, what it says waits; when it names one this
+   * work can't answer, nothing of it is said.
+   */
+  const flow = (stream: Stream) => {
+    if (stream.thread === undefined) {
+      const message = /"message"\s*:\s*(\d+)\s*[,}]/.exec(stream.args)?.[1];
+      if (message === undefined) return;
+      stream.thread = null;
+      void record.replyThread(Number(message)).then(
+        (thread) => {
+          stream.thread = thread ?? null;
+          flow(stream);
+        },
+        () => {},
+      );
+      return;
+    }
+    if (!stream.thread) return;
+    if (stream.at === undefined) {
+      const begins = /"text"\s*:\s*"/.exec(stream.args);
+      if (!begins) return;
+      stream.at = begins.index + begins[0].length;
+    }
+    WORDS.lastIndex = stream.at;
+    const read = WORDS.exec(stream.args)?.[0] ?? "";
+    if (read === "") return;
+    stream.at += read.length;
+    let words: string;
+    try {
+      words = JSON.parse(`"${read}"`) as string;
+    } catch {
+      // Not JSON's words, as with a control character in them: nothing more of it is said.
+      stream.thread = null;
+      return;
+    }
+    out.delta(stream.thread, stream.reply, words);
+  };
   /** Record a function call with its output, keeping every call paired, as the API needs. */
   const answered = async (
     call: FunctionCall,
@@ -327,6 +384,7 @@ export function createLoop(options: {
       current.thread = thread;
       const requestId = crypto.randomUUID();
       current.requestId = requestId;
+      current.streams = new Map();
       let output: Awaited<ReturnType<typeof model.respond>>["output"];
       try {
         ({ output } = await model.respond({
@@ -397,7 +455,8 @@ export function createLoop(options: {
         if (call.name === SEND.name) {
           handedAll = false;
           current.acted = true;
-          await sending(call, id, read, thread);
+          // A reply that streamed keeps the id its pieces had.
+          await sending(call, current.streams?.get(call.callId)?.reply ?? id, read, thread);
           continue;
         }
         // Handing a message back is the looper's own: kept for the model, shown to nobody.
@@ -605,6 +664,21 @@ export function createLoop(options: {
     resumed: () => turn?.resumed === true,
     /** The status now. */
     state: () => latest,
+    /**
+     * A piece of a function call's arguments, as the model writes them for `requestId`: what a
+     * `send` of the request running now says streams into the thread of the message it names.
+     */
+    stream(requestId: string, call: Call, text: string) {
+      const streams = turn?.requestId === requestId ? turn.streams : undefined;
+      if (!streams || call.name !== SEND_NAME) return;
+      let stream = streams.get(call.id);
+      if (!stream) {
+        stream = { reply: crypto.randomUUID(), args: "" };
+        streams.set(call.id, stream);
+      }
+      stream.args += text;
+      flow(stream);
+    },
     /** The number of the turn running or waiting for its place, if one is. */
     turn: () => turn?.id,
     /**

@@ -203,12 +203,10 @@ export function fitted(text: string, max: number): string {
 const MAX_SHOWN = 100_000;
 /** What the person sees of a message. */
 export const textOf = (entry: Entry) =>
-  head(
-    entry.text ??
-      sentIn(entry.items) ??
-      entry.items.flatMap((item) => (item.type === "message" ? [item.content] : [])).join(""),
-    MAX_SHOWN,
-  );
+  head(entry.text ?? sentIn(entry.items) ?? wordsOf(entry.items), MAX_SHOWN);
+/** The words of the messages among `items`. */
+const wordsOf = (items: Item[]) =>
+  items.flatMap((item) => (item.type === "message" ? [item.content] : [])).join("");
 /** What a `send` among `items` said, as its arguments carry it. */
 function sentIn(items: Item[]): string | undefined {
   const call = items.find((item) => item.type === "function_call" && item.name === SEND_NAME);
@@ -236,6 +234,33 @@ function sentArguments(args: string): string {
 /** A call's arguments as they are kept and shown: past their cap, a note in their place. */
 export const argumentsOf = (args: string) =>
   size(args) > MAX_ARGUMENTS ? ARGUMENTS_LEFT_OUT : args;
+
+/**
+ * Whether `entry` is a reply an earlier version kept: an assistant entry that isn't the main
+ * loop's, unsent or a sent reply, whose message items were said to the person.
+ */
+const earlierReply = (entry: Entry) =>
+  entry.role === "assistant" &&
+  entry.main === undefined &&
+  !entry.unsent &&
+  entry.closes === undefined;
+/**
+ * Such a reply as the model reads one sent now: a `send` to the message at `place`, and what it
+ * was told of it, so it never takes it for words of its own that were not said.
+ */
+function sentBefore(entry: Entry, place: number): Item[] {
+  const callId = `earlier-${entry.id}`;
+  const text = fitted(wordsOf(entry.items), MAX_TEXT - 1024);
+  return [
+    {
+      type: "function_call",
+      callId,
+      name: SEND_NAME,
+      arguments: JSON.stringify({ message: place, text }),
+    },
+    { type: "function_call_output", callId, output: SENT },
+  ];
+}
 
 /** A message as it is said: what a person said, or a reply. */
 export function messageOf(entry: Entry): Shown {
@@ -736,6 +761,11 @@ export function createRecord(options: {
         ),
       ),
     );
+    // A reply an earlier version kept answered the newest message before it, as the model reads it.
+    let asked: string | undefined;
+    for (const { thread, record } of records)
+      if (record.entry.role === "user") asked = `${thread} ${record.entry.id}`;
+      else if (earlierReply(record.entry) && asked) answered.add(asked);
     return records.filter(
       ({ thread, record }) =>
         record.entry.role === "user" &&
@@ -745,6 +775,14 @@ export function createRecord(options: {
         !options.left(thread) &&
         !answered.has(`${thread} ${record.entry.id}`),
     );
+  };
+  /** Its user message at `place`, if it can answer it: not handed back, in a thread it hasn't left. */
+  const answerable = (records: Placed[], place: number) => {
+    const found = records.find(
+      ({ record }) => record.entry.role === "user" && placeOf(record) === place,
+    );
+    if (!found || holdOf(found.record).back !== undefined || options.left(found.thread)) return;
+    return found;
   };
   /**
    * The thread of the newest user message it has not handed back: where it answers. With none
@@ -897,13 +935,14 @@ export function createRecord(options: {
      * thread it has left.
      */
     async reply(place: number, items: Item[], at: { id?: string; read?: number }) {
-      const found = own(await load()).find(
-        ({ record }) => record.entry.role === "user" && placeOf(record) === place,
-      );
-      if (!found || holdOf(found.record).back !== undefined || options.left(found.thread))
-        return undefined;
+      const found = answerable(own(await load()), place);
+      if (!found) return undefined;
       const message = found.record.entry.id;
       return keep(found.thread, () => ({ role: "assistant" as const, items, closes: message }), at);
+    },
+    /** The thread of its user message at `place`, when it has one to answer there, as `reply` finds it. */
+    async replyThread(place: number): Promise<string | undefined> {
+      return answerable(own(await load()), place)?.thread;
     },
     /**
      * Say of each user message of its still to answer past the place `from`, and up to `read`,
@@ -1016,9 +1055,12 @@ export function createRecord(options: {
       const exchanges: Item[][] = [];
       /** Said during a turn, and not yet put: what is ahead of them goes first. */
       const late: Kept[] = [];
+      /** The place of the newest user message put: what a reply kept by an earlier version answered. */
+      let asked = 0;
       const put = (record: Kept) => {
         const { entry } = record;
         const person = entry.role === "user";
+        if (person) asked = placeOf(record);
         if ((person && !joinedOf(record)) || exchanges.length === 0) exchanges.push([]);
         // What a person said starts with its number, which is how the model names it.
         exchanges
@@ -1030,7 +1072,9 @@ export function createRecord(options: {
                     ? { ...item, content: `[${placeOf(record)}] ${item.content}` }
                     : item,
                 )
-              : entry.items),
+              : earlierReply(entry)
+                ? sentBefore(entry, asked)
+                : entry.items),
           );
       };
       /** Put the late messages placed up to `read`. */

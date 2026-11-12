@@ -323,8 +323,11 @@ export const sleep = (ms: number, signal: AbortSignal) =>
 export function createSession(options: {
   fetch: Fetch;
   account: Account;
-  /** Streamed text, for the one Actor whose request it answers. */
-  delta(caller: string, requestId: string, text: string): void;
+  /**
+   * Streamed text, for the one Actor whose request it answers: of the reply, or with `call`, of
+   * that function call's arguments.
+   */
+  delta(caller: string, requestId: string, text: string, call?: { id: string; name: string }): void;
   /** How a wait between two tries is spent, and the time: a timer and the clock, unless a test gives its own. */
   wait?: (ms: number, signal: AbortSignal) => Promise<void>;
   now?: () => number;
@@ -443,8 +446,8 @@ export function createSession(options: {
   };
 
   /**
-   * One try, sending `items`. `wrote` is told when text of it has been streamed: such a try is
-   * not made again.
+   * One try, sending `items`. `wrote` is told when text of it, or of a call's arguments, has been
+   * streamed: such a try is not made again.
    */
   async function stream(
     input: RespondInput,
@@ -501,6 +504,8 @@ export function createSession(options: {
       if (refused.code === "ineligible") await account.ineligible();
       return marked(refused, code ? { code } : {});
     };
+    /** Each function call the response is writing, by its item's id. */
+    const calls = new Map<string, { id: string; name: string }>();
     try {
       for await (const event of events(response.body, signal)) {
         switch (event.type) {
@@ -510,6 +515,25 @@ export function createSession(options: {
               options.delta(caller, input.requestId, event.delta);
             }
             break;
+          case "response.output_item.added": {
+            const item = (event.item ?? {}) as Record<string, unknown>;
+            if (
+              item.type === "function_call" &&
+              typeof item.id === "string" &&
+              typeof item.call_id === "string" &&
+              typeof item.name === "string"
+            )
+              calls.set(item.id, { id: item.call_id, name: item.name });
+            break;
+          }
+          case "response.function_call_arguments.delta": {
+            const call = typeof event.item_id === "string" ? calls.get(event.item_id) : undefined;
+            if (call && typeof event.delta === "string") {
+              wrote();
+              options.delta(caller, input.requestId, event.delta, call);
+            }
+            break;
+          }
           case "response.completed": {
             const done = (event.response ?? {}) as Record<string, unknown>;
             // Not if the account's state changed while it was answered.
@@ -552,9 +576,9 @@ export function createSession(options: {
    * `RETRIES` times at most, each after a wait that doubles from `BACKOFF_MS`, a tenth more or
    * less, or after the wait OpenAI asked for when that is longer. A wait past `WAIT_MAX_MS` isn't
    * taken, nor one that would begin a try more than `RETRY_WITHIN_MS` after the first: the
-   * failure is the answer. Not once text of it has been streamed, since those words are with
-   * their reader and a new try would write them again; and not once it is cancelled, which also
-   * ends a wait.
+   * failure is the answer. Not once text of it, or of a call's arguments, has been streamed,
+   * since those words may be with their reader and a new try would write them again; and not
+   * once it is cancelled, which also ends a wait.
    *
    * A try that had reasoning put back, and that OpenAI wouldn't take as it is (`notTaken`) for
    * good with no words of its own (`failed`), before any text, is made once more without it, at

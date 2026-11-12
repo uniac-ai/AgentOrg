@@ -887,23 +887,41 @@ test("a turn that was cut off waits for a tools slot that is away, and goes on w
   }
 });
 
-test("a worker's streamed text reaches no chat: its reply comes whole when it is sent", async () => {
+test("what a worker sends streams into the chat as the reply it becomes; what it writes without sending doesn't", async () => {
   const s = await setup();
-  s.script.push((request) => {
+  const call = { id: "s1", name: "send" };
+  s.script.push(async (request) => {
     s.model.emit("delta", { requestId: request.requestId, text: "Thinking" });
-    return { output: [...write("Thinking it over.").output, ...say("Hello.").output] };
+    for (const text of ['{"message":1,"text":"Hel', 'lo."}']) {
+      s.model.emit("delta", { requestId: request.requestId, text, call });
+      for (let i = 0; i < 20; i++) await new Promise((soon) => setImmediate(soon));
+    }
+    return {
+      output: [
+        ...write("Thinking it over.").output,
+        {
+          type: "function_call",
+          callId: "s1",
+          name: "send",
+          arguments: '{"message":1,"text":"Hello."}',
+        },
+      ],
+    };
   });
   await s.turn("Hi.");
-  assert.deepEqual(
-    s.actor.emitted.filter((e) => e.event === "delta"),
-    [],
-  );
   assert.deepEqual(s.messages(), ["user: Hi.", "assistant: Hello."]);
-  // The next user message has a number of its own, never the reply's id.
   const reply = s.actor.emitted
     .filter((e) => e.event === "message")
     .map((e) => e.payload as { id: string; role: string })
     .find((m) => m.role === "assistant");
+  assert.deepEqual(
+    s.actor.emitted.filter((e) => e.event === "delta").map((e) => e.payload),
+    [
+      { chat: s.id(), id: reply?.id, text: "Hel" },
+      { chat: s.id(), id: reply?.id, text: "lo." },
+    ],
+  );
+  // The next user message has a number of its own, never the reply's id.
   const next = (await s.chat("send", { text: "Again." })) as { messageId: string };
   assert.notEqual(next.messageId, reply?.id);
 });

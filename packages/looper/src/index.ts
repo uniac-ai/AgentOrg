@@ -3,6 +3,7 @@ export { createLooper, type Looper, type LooperOut, PLACES, WAITING } from "./lo
 export { Entry, INPUT_BUDGET, textOf } from "./record.js";
 export { capped, MAX_OUTPUT } from "./tools.js";
 export {
+  type Call,
   Item,
   type Json,
   type Log,

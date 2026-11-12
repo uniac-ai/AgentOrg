@@ -44,7 +44,8 @@ export const Tool = z.object({
 
 /**
  * `llm.session@1`: model inference. Each `respond` is one stateless request: the caller sends the
- * whole conversation every time, and keeps it. Text streams as `delta` events for the request.
+ * whole conversation every time, and keeps it. Text, and a function call's arguments, stream as
+ * `delta` events for the request.
  * The request is one frame on the wire (at most 1 MiB), so a caller trims what it sends. A
  * caller carries nothing of a model's reasoning; a provider may keep it and put it back itself.
  *
@@ -94,7 +95,18 @@ export const llmSession = defineInterface({
     cancel: method({ input: z.object({ requestId: RequestId }), output: z.object({}) }),
   },
   events: {
-    /** Text of a response, as it streams, to the consumer whose request it answers only. */
-    delta: event(z.object({ requestId: RequestId, text: z.string() })),
+    /**
+     * Text of a response, as it streams, to the consumer whose request it answers only: of its
+     * reply, or, with `call`, of the arguments of the function call whose `callId` that is in the
+     * output `respond` gives. Joined in order, a call's pieces are its arguments, none of them
+     * sent twice. A provider may send none.
+     */
+    delta: event(
+      z.object({
+        requestId: RequestId,
+        text: z.string(),
+        call: z.object({ id: CallId, name: FunctionCall.shape.name }).optional(),
+      }),
+    ),
   },
 });

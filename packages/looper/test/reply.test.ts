@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import type { Json } from "../src/index.ts";
 import { held, kept, looperWith, newWork, routeTo, says, sends, stops, until } from "./support.ts";
 
 /** The number the message `text` had in the request whose lines are `lines`. */
@@ -180,4 +181,68 @@ test("a page asked for before a message that is not said starts where that messa
     ["Run it."],
   );
   assert.equal(page.more, false);
+});
+
+test("a reply an earlier version kept is read by the model as sent, to the message before it", async () => {
+  const first = looperWith();
+  await first.looper.send("a", "First.");
+  await until(() => first.asked.length === 1, "the request");
+  first.answer("First.", says("Done before."));
+  await first.looper.settled();
+  // As an earlier version kept it: words said to the person, with nothing of it marked.
+  const reply = "thread/a/msg/000000000002";
+  const { unsent: _, ...earlier } = first.values.get(reply) as { unsent: true };
+  first.values.set(reply, earlier as Json);
+  const message = "thread/a/msg/000000000001";
+  const { unanswered: __, ...said } = first.values.get(message) as { unanswered: true };
+  first.values.set(message, said as Json);
+  const second = looperWith({ values: first.values });
+  await second.looper.send("a", "Second.");
+  await until(() => second.asked.length === 1, "the request");
+  const read = (second.raw[0] ?? []).map((item) => {
+    const { callId: ___, ...rest } = item as { callId?: string };
+    return rest;
+  });
+  assert.deepEqual(read, [
+    { type: "message", role: "user", content: "[1] First." },
+    {
+      type: "function_call",
+      name: "send",
+      arguments: '{"message":1,"text":"Done before."}',
+    },
+    { type: "function_call_output", output: "Sent." },
+    { type: "message", role: "user", content: "[3] Second." },
+  ]);
+  second.answer("Second.", sends("Done."));
+  await second.looper.settled();
+});
+
+test("a reply an earlier version kept answers its message for a turn that goes on after the upgrade", async () => {
+  const { tool, called, finish } = held();
+  finish();
+  const first = looperWith({ tools: [tool] });
+  await first.looper.send("a", "First.");
+  await until(() => first.asked.length === 1, "the first request");
+  first.answer("First.", sends("Done."));
+  await first.looper.settled();
+  // A turn the next message starts: it is marked as starting after what the work held.
+  await first.looper.send("a", "Second.");
+  await until(() => first.asked.length === 2, "the second request");
+  first.answer("Second.", [...says("Done before."), ...called]);
+  await until(() => first.asked.length === 3, "the request after the call");
+  // The app goes with the turn still at work.
+  await first.looper.close();
+  // As an earlier version kept the reply: words said to the person, with nothing of it marked.
+  const reply = [...first.values].find(
+    ([key, value]) => key.startsWith("thread/a/") && (value as { unsent?: true }).unsent,
+  );
+  assert.ok(reply);
+  const { unsent: _, ...earlier } = reply[1] as { unsent: true };
+  first.values.set(reply[0], earlier as Json);
+  const second = looperWith({ tools: [tool], values: first.values });
+  await second.looper.resume();
+  await until(() => second.asked.length === 1, "the turn to go on");
+  second.answer(second.asked[0] as string, []);
+  await second.looper.settled();
+  assert.deepEqual(second.failures, []);
 });
