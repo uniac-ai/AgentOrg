@@ -469,6 +469,11 @@ export class Hub {
     const resolved = this.state.resolveCall(caller, slot);
     if (!resolved) throw new NotConnected(slot);
     const { binding, target } = resolved;
+    if (binding.mismatched)
+      throw new Refused(
+        "version_mismatch",
+        `${slot} and ${this.state.named(binding.provider)}'s ${binding.export} are at different versions of ${binding.interface}; calls go through again once both declare the same version.`,
+      );
     // The hub is served in this process; any other provider needs its channel.
     const builtin = binding.provider === HUB;
     const provider = builtin ? undefined : this.#connections.get(binding.provider);

@@ -849,16 +849,21 @@ test("a provider counts once it has exposed its export to management", async (t)
   }
 });
 
-test("an agent that comes back offering its chats in another shape is reached again", async (t) => {
+test("an agent that comes back offering its chats in another shape keeps the person's slot to them", async (t) => {
   const s = await setup(t);
   const agent = await s.makeFull(await s.picked());
   const reached = async () =>
     (await s.bindingsOf(PERSON)).filter((b) => b.provider === agent && b.export === "chat");
-  const dropped = () =>
-    s.hub.state.audit(0, 10_000).entries.filter((entry) => entry.kind === "binding.drop").length;
+  /** The person's exposures of the agent's chats in the audit: made once, never again. */
+  const exposed = () =>
+    s.hub.state
+      .audit(0, 10_000)
+      .entries.filter((entry) => entry.kind === "expose" && entry.details.provider === agent)
+      .length;
   const [before] = await reached();
   assert.ok(before);
-  // The Hub drops a binding whose provider offers another interface under the same name.
+  const made = exposed();
+  // The person's slot was made by expose, so it follows the chats' new shape: nothing is dropped.
   const reshaped = defineInterface({
     name: "chat",
     major: 1,
@@ -867,24 +872,21 @@ test("an agent that comes back offering its chats in another shape is reached ag
     events: chat.events,
   });
   await s.rejoin(agent, reshaped);
-  assert.equal(dropped(), 1);
-  for (let i = 0; (await reached()).length === 0; i++) {
-    assert.ok(i < 300, "its chats never reached the person again");
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  }
-  // Under the name it had, so what the person's pages keep by slot still holds.
+  // The same binding, under the name it had, so what the person's pages keep by slot still holds,
+  // and whole: the person's slot took the chats' new shape.
   assert.deepEqual(
-    (await reached()).map((b) => b.slot),
-    [before.slot],
+    (await reached()).map((b) => [b.slot, b.at, b.mismatched]),
+    [[before.slot, before.at, undefined]],
   );
+  assert.equal(exposed(), made, "nothing made again");
 
   // And when the agent came back while management was away, as it does when the app starts.
   await s.restart(() => s.rejoin(agent, chat));
-  assert.equal(dropped(), 2);
-  for (let i = 0; (await reached()).length === 0; i++) {
-    assert.ok(i < 300, "its chats never reached the person again");
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  }
+  assert.deepEqual(
+    (await reached()).map((b) => [b.slot, b.at, b.mismatched]),
+    [[before.slot, before.at, undefined]],
+  );
+  assert.equal(exposed(), made, "nothing made again");
 });
 
 test("a stack is made, bound, exposed and recorded, with its chat to the person", async (t) => {

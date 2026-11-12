@@ -949,8 +949,9 @@ export function createStacks(parts: StackParts) {
 
   /**
    * Make the person's slots to what agents hold again, where the Hub has dropped one, as it
-   * does when an Actor comes back offering its export in another shape. Nothing changes where
-   * they are there. `actor` is the one that came back; with none, every one is looked at.
+   * does when an Actor stops offering its export or offers it as another interface. Nothing
+   * changes where they are there. `actor` is the one that came back; with none, every one is
+   * looked at.
    */
   const reachHeld = async (actor?: string) => {
     let changed = false;
