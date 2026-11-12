@@ -76,6 +76,7 @@ const PARTS = [
   "said",
   "bar",
   "activity",
+  "overview",
 ] as const;
 for (const one of only?.split(",") ?? [])
   if (!(PARTS as readonly string[]).includes(one))
@@ -103,8 +104,8 @@ type Parts = Record<string, Measured | string | number | null>;
  * page, that computer as the layer's window, its files window's own rows, the model
  * account's states, the create window, Settings' frame with its Templates, Settings' other
  * sections and what two of them offer, what a page says where it has nothing it can show,
- * the shell's bar and what is said when something pressed is refused, or an agent's activity in
- * its box and as the layer's window.
+ * the shell's bar and what is said when something pressed is refused, an agent's activity in its
+ * box and as the layer's window, or the rest of its Overview.
  */
 type Part =
   | "frame"
@@ -125,7 +126,8 @@ type Part =
   | "settings"
   | "said"
   | "bar"
-  | "activity";
+  | "activity"
+  | "overview";
 type Gateway = Awaited<ReturnType<typeof standIn>>;
 
 /**
@@ -421,6 +423,42 @@ const probe = (what: Part): Parts => {
     parts.words = [recent?.querySelector("p"), bar, first, missing]
       .map((e) => e?.textContent ?? "")
       .join(" | ");
+    return parts;
+  }
+
+  if (what === "overview") {
+    // An agent's Overview past its Activity, from the frame's top left: what it was built from in
+    // one line, and who changed it through control, its first and last rows. Who and what come in
+    // the sample's words, so a row's words are measured from where they start.
+    const shell = document.querySelector("[data-shell]");
+    if (!shell) return parts;
+    origin = shell.getBoundingClientRect();
+    for (const [key, name] of [
+      ["built", "Built from"],
+      ["changes", "Changed through control"],
+    ] as const) {
+      const part = document.querySelector(`main section[aria-label="${name}"]`);
+      if (!part) continue;
+      parts[key] = of(part, "h");
+      parts[`${key}.head`] = of(part.children[0]);
+      parts[`${key}.title`] = of(part.querySelector("h2"), "w");
+      const rows = [...(part.children[1]?.children ?? [])];
+      parts[`${key}.rows`] = rows.length;
+      for (const [which, row] of [
+        ["first", rows[0]],
+        ["last", rows.at(-1)],
+      ] as const) {
+        if (!row) continue;
+        const whole = of(row);
+        if (whole) whole.box = ["-", "-", whole.box[2] ?? 0, whole.box[3] ?? 0];
+        parts[`${key}.${which}`] = whole;
+        for (const [i, cell] of [...row.children].entries()) {
+          const m = inside(row, cell, "w");
+          if (m && i > 0) m.box[0] = "after the one before";
+          parts[`${key}.${which}.${i}`] = m;
+        }
+      }
+    }
     return parts;
   }
 
@@ -1697,6 +1735,7 @@ const AGENT_PAGES = [
   { state: "idle", size: "wide", id: "a-reviewer", name: "Reviewer" },
   { state: "trouble", size: "wide", id: "a-triage", name: "Triage" },
   { state: "stopped", size: "wide", id: "a-weekly", name: "Weekly report" },
+  { state: "held", size: "wide", id: "a-research", name: "Research" },
 ] as const;
 if (wants("agent"))
   for (const { state, size, id, name } of AGENT_PAGES)
@@ -1705,17 +1744,36 @@ if (wants("agent"))
       let cpu = 0;
       for (const side of ["design", "built"] as const) {
         const gateway = side === "built" ? await standIn() : undefined;
+        // Research's computer down, as the design's control puts it, is seen on its Chats.
+        const chats = state === "chats" || state === "held";
         if (gateway) {
           sampleAgents(gateway);
           sampleChats(gateway);
+          downTriage(gateway);
+          if (state === "held")
+            gateway.setHeld("a-research", [
+              {
+                title: "Computer",
+                state: "down",
+                detail: "no AgentComputer is running on this machine",
+                surfaces: 2,
+                slots: ["computer"],
+              },
+            ]);
         }
-        const hash = `#/a/${id}${state === "chats" ? "/chats" : ""}`;
+        const hash = `#/a/${id}${chats ? "/chats" : ""}`;
         const page = gateway
           ? await builtPage(gateway, size, theme, hash)
           : await designPage(size, theme);
         const main = page.getByRole("main");
-        if (!gateway) await openDesignAgent(page, name, state === "chats" ? "Chats" : undefined);
+        if (!gateway && state === "held") await inDesign(page, "Computer down");
+        if (!gateway) await openDesignAgent(page, name, chats ? "Chats" : undefined);
         await main.getByRole("heading", { name, level: 1 }).waitFor();
+        if (state === "held")
+          await main
+            .getByRole("status", { name: "State" })
+            .getByText(/^Its computer is down/)
+            .waitFor();
         if (state === "computer") {
           if (gateway) gateway.reading(sampleLoad(cpu));
           cpu = await cpuOf(page);
@@ -2300,6 +2358,49 @@ if (wants("activity")) {
         await gateway?.close();
       }
 }
+
+// The rest of an agent's Overview: Research's, built from the Assistant with a computer and the
+// web, and changed through control by the person who made it and an agent that was refused. The
+// built side's control log has the design's changes.
+if (wants("overview"))
+  for (const size of ["wide", "phone"] as const)
+    for (const theme of ["dark", "light"] as const)
+      for (const side of ["design", "built"] as const) {
+        const gateway = side === "built" ? await standIn() : undefined;
+        if (gateway) {
+          sampleAgents(gateway);
+          sampleWork(gateway);
+          const ago = (days: number) => new Date(Date.now() - days * 86_400_000).toISOString();
+          gateway.logChange({
+            at: ago(3),
+            caller: "person",
+            tool: "create_assistant",
+            target: "a-research",
+            outcome: "done",
+          });
+          gateway.logChange({
+            at: ago(1),
+            caller: "a-builder",
+            tool: "agent_stop",
+            target: "a-research",
+            outcome: "refused",
+            reason: "Builder didn't create Research",
+          });
+        }
+        const page = gateway
+          ? await builtPage(gateway, size, theme, "#/a/a-research/overview")
+          : await designPage(size, theme);
+        if (!gateway) await openDesignAgent(page, "Research", "Overview");
+        await page
+          .getByRole("main")
+          .getByRole("region", { name: "Changed through control" })
+          .getByText(/created it/)
+          .waitFor();
+        await rest(page, size);
+        all[`overview.${size}.${theme}.${side}`] = await measure(page, "overview");
+        await page.close();
+        await gateway?.close();
+      }
 
 await browser.close();
 writeFileSync(out, JSON.stringify(all, null, 1));

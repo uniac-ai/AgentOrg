@@ -5,7 +5,6 @@ import { MessageCircleIcon, SlidersHorizontalIcon, SquarePenIcon } from "lucide-
 import { useState } from "react";
 import { type AgentTab, api, go } from "../data.ts";
 import { Button } from "../ui/button.tsx";
-import { ActivityBox } from "./activity.tsx";
 import { useAllChats } from "./all-chats.tsx";
 import { ChatRow } from "./chat-parts.tsx";
 import { useChats } from "./chats.tsx";
@@ -15,6 +14,7 @@ import { More } from "./controls.tsx";
 import { useAct, useCreatables } from "./data.ts";
 import { Face, MARK } from "./face.tsx";
 import { needsOf, useLogin } from "./login.tsx";
+import { Overview } from "./overview.tsx";
 import { Setup } from "./setup.tsx";
 import { useAgents } from "./watch.tsx";
 
@@ -180,11 +180,7 @@ export function AgentPage({
               </ul>
             </div>
           )}
-          {tab?.id === "overview" && (
-            <div className="mx-auto flex max-w-[720px] flex-col gap-7">
-              <ActivityBox agent={id} detail={detail} />
-            </div>
-          )}
+          {tab?.id === "overview" && <Overview entry={entry} detail={detail} />}
         </div>
       </div>
       <Setup agent={entry} open={setup} onClose={() => setSetup(false)} />

@@ -35,6 +35,17 @@ type Status = z.output<typeof chatInterface.methods.state.output>;
 type ChatEntry = z.output<typeof chatInterface.events.chat.payload>;
 type Problem = NonNullable<ChatEntry["problem"]>;
 type ChatEvent = keyof typeof chatInterface.events;
+/** Something an agent holds besides its Work, and how it stands. */
+export interface Held {
+  title: string;
+  state: "connected" | "connecting" | "down";
+  detail?: string;
+  /** How many surfaces it gives, and the slots its tools come through. */
+  surfaces: number;
+  slots: string[];
+}
+/** One change in the control log, as `agents.activity` says it. */
+export type Change = z.output<typeof agentsInterface.methods.activity.output>["entries"][number];
 /** A piece of an agent's work with every entry it has: `work` answers the latest, and pages. */
 export type Work = Omit<z.input<typeof Activity>["works"][number], "more">;
 export type Creatable = z.output<
@@ -68,6 +79,8 @@ export interface Agent {
   model?: string;
   /** Its pieces of work, newest first, as its Work capability holds them. None by default. */
   works?: Work[];
+  /** What it holds besides its Work, each with how it stands, as `capability@1` says it. */
+  held?: Held[];
   /**
    * The chat a test speaks in through `addMessage`, with the agent's status: whether it works. It
    * has an `id` once something has been said in it; an agent with nothing said has no chat. Its
@@ -535,6 +548,10 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
   /** The person's slots to an agent's Work: its `capability@1`, and its operation's `tools@1`. */
   const workSlot = (agent: string) => `work_${agent.replaceAll("-", "_")}`;
   const workToolsSlot = (agent: string) => `worktools_${agent.replaceAll("-", "_")}`;
+  /** The person's slot to another capability an agent holds, by its place in the agent's list. */
+  const heldSlot = (agent: string, n: number) => `held_${agent.replaceAll("-", "_")}_${n}`;
+  /** The control log, newest first. */
+  let changes: Change[] = [];
   /** What the `work` tool answers, as the assistant does: the latest of each, or a page of one. */
   const workCall = (agent: Agent, input: Record<string, unknown>) => {
     const refused = refusals.get("work.call");
@@ -615,6 +632,17 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
                 operations: { work: workToolsSlot(agent.agent) },
               },
             },
+            ...(agent.held ?? []).map((held, n) => ({
+              id: `held-${n}`,
+              title: held.title,
+              slots: held.slots,
+              surfaces: Array.from({ length: held.surfaces }, (_, i) => ({
+                surface: `s${i}`,
+                protocol: `surface${i}@1`,
+              })),
+              views: [],
+              person: { capability: heldSlot(agent.agent, n), operations: {} },
+            })),
           ],
         };
       },
@@ -632,6 +660,15 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
         return {};
       },
       check: () => ({ problems }),
+      // As management reads its log: newest first, those before `before`, `limit` of them.
+      activity: ({ agent, before, limit = 50 }) => {
+        const matching = changes.filter(
+          (c) =>
+            (!agent || c.target === agent || c.caller === agent) &&
+            (before === undefined || c.seq < Number(before)),
+        );
+        return { entries: matching.slice(0, Number(limit)), more: matching.length > Number(limit) };
+      },
       create: (input) => {
         const made = `a-${agents.size + 1}`;
         const { base, units, template } = input.stack as unknown as {
@@ -998,6 +1035,17 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
       if (method !== "call") throw new Refusal("invalid", `tools has no method ${method} here.`);
       return workCall(agent, input);
     }
+    if (slot.startsWith("held_")) {
+      const [, id, n] = /^held_(.+)_(\d+)$/.exec(slot) ?? [];
+      const held = agentOf(String(id).replaceAll("_", "-")).held?.[Number(n)];
+      if (!held || method !== "state")
+        throw new Refusal("invalid", `capability has no ${method} here.`);
+      return {
+        state: held.state,
+        ...(held.detail ? { detail: held.detail } : {}),
+        surfaces: [],
+      };
+    }
     if (slot.startsWith("work_")) {
       agentOf(slot.slice(5).replaceAll("_", "-"));
       if (method !== "state") throw new Refusal("invalid", `capability has no ${method} here.`);
@@ -1362,6 +1410,16 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
     agents,
     connections,
     calls,
+    /** What an agent holds besides its Work comes to be this, and each says how it stands now. */
+    setHeld(agent: string, held: Held[]) {
+      agentOf(agent).held = held;
+      changed();
+      for (const [n] of held.entries()) emit(heldSlot(agent, n), "changed", {});
+    },
+    /** The control log comes to have this change, newest first. */
+    logChange(change: Omit<Change, "seq">) {
+      changes = [{ ...change, seq: changes.length + 1 }, ...changes];
+    },
     /** An agent's pieces of work come to be these, and its Work says its view changed. */
     setWorks(agent: string, works: Work[]) {
       agentOf(agent).works = works;
