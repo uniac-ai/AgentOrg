@@ -117,6 +117,7 @@ const UNITS = [
     title: "Desk",
     description: "A desk the agent holds, with a side for the person.",
     capability: { id: "desk", title: "Desk" },
+    once: true,
     form: [
       {
         id: "lamp",
@@ -1334,7 +1335,7 @@ test("every unit on offer is listed, management's own among them", async (t) => 
   // What a host reads to leave a unit out of a stack that has it.
   assert.deepEqual(
     units.filter((one) => one.once).map((one) => one.id),
-    ["badge"],
+    ["desk", "badge"],
   );
   await s.calls.skills.add({ files: { "SKILL.md": SKILL("library-one") } });
   const again = (await s.calls.agents.units({})).units[2];
@@ -3072,7 +3073,16 @@ test("an agent holds one of a capability: a second is a problem before anything 
   const twice = await s.calls.agents.check({
     stack: { base: s.base, units: [s.unit("desk"), s.unit("desk")] },
   });
-  assert.ok(twice.problems.some((one) => one.message === "There is a Desk already."));
+  // A capability is held once by itself, without `once`.
+  const doubled = await s.calls.agents.check({
+    stack: { base: s.base, units: [s.unit("askew"), s.unit("askew")] },
+  });
+  assert.ok(doubled.problems.some((one) => one.message === "There is a Askew already."));
+  // Held once by its capability and by `once`: told once.
+  assert.equal(
+    twice.problems.filter((one) => one.message === "There is a Desk already.").length,
+    1,
+  );
   const { agent } = await s.calls.agents.create({
     stack: { base: s.base, units: [s.unit("desk")] },
     name: "Holder",
@@ -3081,6 +3091,21 @@ test("an agent holds one of a capability: a second is a problem before anything 
   assert.ok(more.problems.some((one) => one.message === "There is a Desk already."));
   await assert.rejects(s.calls.agents.addUnit({ agent, unit: s.unit("desk") }), refused("invalid"));
   assert.equal(s.given.applied.filter((one) => one.unit === "desk").length, 1, "applied once");
+  // An agent whose record holds no capability, as one made before its unit built one: `once`
+  // still refuses a second.
+  const { agent: older } = await s.calls.agents.create({
+    stack: { base: s.base, units: [s.unit("desk")] },
+    name: "Older",
+  });
+  await s.restart((kept) => {
+    const agents = kept.agents as unknown as Record<string, { capabilities: unknown[] }>;
+    (agents[older] as { capabilities: unknown[] }).capabilities = [];
+  });
+  const again = await s.calls.agents.check({ agent: older, unit: s.unit("desk") });
+  assert.equal(
+    again.problems.filter((one) => one.message === "There is a Desk already.").length,
+    1,
+  );
 });
 
 test("a unit a stack holds once is a problem the second time, in a new stack and on a living agent", async (t) => {

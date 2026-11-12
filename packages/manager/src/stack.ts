@@ -526,8 +526,10 @@ export function createStacks(parts: StackParts) {
     }
 
     const here = (one: Giver) => one.provider === offer.provider && one.unit === unit.id;
-    if (unit.once && taken.givers.some(here))
-      problems.push({ message: `There is a ${unit.title} already.` });
+    // Held once by `once` and by its capability alike, a second is told so once. An agent made
+    // before its unit built a capability has none on record, so `once` is what refuses it then.
+    const twice = unit.once === true && taken.givers.some(here);
+    if (twice) problems.push({ message: `There is a ${unit.title} already.` });
 
     const worked = workedOut(unit, settled.values);
     for (const slot of worked.slots) {
@@ -548,7 +550,8 @@ export function createStacks(parts: StackParts) {
     if (unit.capability) {
       // An agent holds one of a capability; and a view shows what its capability has.
       const { id, title } = unit.capability;
-      if (taken.capabilities.has(id)) problems.push({ message: `There is a ${title} already.` });
+      if (taken.capabilities.has(id) && !twice)
+        problems.push({ message: `There is a ${title} already.` });
       taken.capabilities.add(id);
       problems.push(...heldProblems(unit, worked).map((message) => ({ message })));
     }

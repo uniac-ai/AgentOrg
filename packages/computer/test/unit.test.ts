@@ -38,6 +38,47 @@ test("what a computer here reaches is said where it resides, and nowhere claims 
   }
 });
 
+test("the computer says what an agent built from it will hold: a capability, its surfaces and its views, by the answers", () => {
+  const unit = computerUnit({ isolation: "none" });
+  assert.deepEqual(unit.capability, { id: "computer", title: "Computer" });
+  // Whatever the answers: the load surface, and the Where, meters and workspace views.
+  assert.deepEqual(unit.gives.surfaces, [{ surface: "load", protocol: "metrics@1" }]);
+  assert.deepEqual(
+    unit.gives.views?.map((view) => [
+      view.id,
+      view.place,
+      view.kind,
+      view.surface ?? view.operation,
+    ]),
+    [
+      ["where", "column", "facts", undefined],
+      ["load", "column", "meters", "load"],
+      ["workspace", "column", "facts", undefined],
+    ],
+  );
+  const adds = (field: string, value?: string) => {
+    const found = unit.form.find((one) => one.id === field);
+    const given = value ? found?.options?.find((one) => one.value === value)?.adds : found?.adds;
+    return {
+      surfaces: given?.surfaces?.map((one) => one.surface) ?? [],
+      views: given?.views?.map((one) => `${one.id}: ${one.operation} at ${one.slot}`) ?? [],
+    };
+  };
+  // With files it has the connection whose `about` says how it is isolated; with none it has
+  // neither, so nothing is said of it.
+  assert.deepEqual(adds("access", "none"), { surfaces: [], views: [] });
+  for (const level of ["read", "files"])
+    assert.deepEqual(adds("access", level), {
+      surfaces: ["files"],
+      views: ["isolation: about at computer"],
+    });
+  assert.deepEqual(adds("access", "terminal"), {
+    surfaces: ["terminal", "files"],
+    views: ["isolation: about at computer"],
+  });
+  assert.deepEqual(adds("browser"), { surfaces: ["browser"], views: [] });
+});
+
 test("the computer's form is titled and ordered: where it resides, its folder, what it reaches, a browser", () => {
   const { form } = computerUnit({ isolation: "none" });
   assert.deepEqual(

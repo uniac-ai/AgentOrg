@@ -23,7 +23,7 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 import { Computer } from "@agentorg/computer";
 import { Hub, listen, PERSON } from "@agentorg/hub";
-import { tools, Unit, unitProvider } from "@agentorg/interfaces";
+import { capability, tools, Unit, unitProvider } from "@agentorg/interfaces";
 import { Refused } from "@agentorg/sdk";
 import { connect } from "@agentorg/sdk/client";
 import { startComputerProvider } from "../src/index.ts";
@@ -178,11 +178,40 @@ async function setup(t: test.TestContext, { service = true, webUrl = "" } = {}) 
   };
   const connected = (instance: string) =>
     until(async () => (await units.status({ instance })).state === "connected");
+  /** What management does for the person: a slot of theirs to the Actor that is the computer. */
+  const asPerson = async (actor: string) => {
+    const person = hub.state.createActor(PERSON, {
+      name: "Person stand-in",
+      bindings: [{ slot: "held", provider: actor, export: "capability" }],
+    });
+    const client = await connect({
+      hubUrl: server.url,
+      actorId: person.actorId,
+      credential: person.credential as string,
+      slots: { held: capability },
+    });
+    leaving.push(() => client.close());
+    await until(() => client.slots.held.bound);
+    return client.slots.held;
+  };
   const restart = async () => {
     await provider.current.close();
     provider.current = await start();
   };
-  return { hub, units, apply, local, asAgent, connected, restart, workspace, dir, running, root };
+  return {
+    hub,
+    units,
+    apply,
+    local,
+    asAgent,
+    asPerson,
+    connected,
+    restart,
+    workspace,
+    dir,
+    running,
+    root,
+  };
 }
 
 const form = (unit: { form: { id: string }[] } | undefined, id: string) =>
@@ -346,6 +375,7 @@ test("access goes to the service: a read-only computer can't change or run anyth
   await connected(instance);
   const computer = await asAgent(connections[0]?.connection as string);
   assert.deepEqual((await computer.list({})).tools.map((one) => one.name).sort(), [
+    "about",
     "list",
     "read",
     "search",
@@ -559,6 +589,20 @@ test("a computer whose Actors are gone is killed, not forgotten", async (t) => {
   await assert.rejects(Computer.getInfo(id, reached), /no computer/);
 });
 
+test("a computer whose capability's Actor is gone is killed and forgotten, with nothing left running", async (t) => {
+  const { apply, local, connected, dir, running, restart, hub, units } = await setup(t);
+  const reached = running as Service;
+  const made = await apply(local("read"));
+  await connected(made.instance);
+  const id = JSON.parse(readFileSync(join(dir, "instances.json"), "utf8"))[made.instance].computer
+    .id;
+  hub.state.closeActor(PERSON, made.capability?.actor as string);
+  await restart();
+  await assert.rejects(Computer.getInfo(id, reached), /no computer/);
+  assert.deepEqual(JSON.parse(readFileSync(join(dir, "instances.json"), "utf8")), {});
+  await assert.rejects(units.status({ instance: made.instance }), refused("unknown"));
+});
+
 test("an agent can go even when its service no longer takes the token", async (t) => {
   const { apply, connected, dir, running, restart, units, workspace } = await setup(t);
   const reached = running as Service;
@@ -616,4 +660,84 @@ test("the web unit gives its slot and skill, at the service's address", async (t
   );
   await until(async () => (await units.status({ instance })).state === "down");
   await units.remove({ instance });
+});
+
+test("a computer's capability is an Actor of its own: its fixed rows, how it stands, its windows, the agent's about, a restart, and its removal", async (t) => {
+  const { hub, apply, local, asAgent, asPerson, connected, restart, workspace, units } =
+    await setup(t);
+  const made = await apply(local("terminal"));
+  // What the person reads beside its windows is fixed as it is made.
+  assert.deepEqual(made.capability?.rows, {
+    where: [{ label: "Where", value: "This computer" }],
+    workspace: [
+      { label: "Folder", value: workspace, path: true },
+      { label: "Reaches", value: "Files and terminal" },
+    ],
+  });
+  const actor = made.capability?.actor as string;
+  assert.ok(
+    !made.connections.some((one) => one.connection === actor),
+    "not one of its connections",
+  );
+  await connected(made.instance);
+
+  // The person asks the Actor, and no unit: its state as the unit's own status has it.
+  const held = await asPerson(actor);
+  const state = await held.call.state({});
+  assert.equal(state.state, "connected");
+  assert.deepEqual(state.surfaces, (await units.status({ instance: made.instance })).surfaces);
+  assert.deepEqual(state.surfaces.map((one) => `${one.surface} ${one.protocol}`).sort(), [
+    "files files@1",
+    "load metrics@1",
+    "terminal terminal@1",
+  ]);
+  const ticket = await held.call.live({ surface: "terminal", mode: "watch" });
+  assert.equal(ticket.protocol, "terminal@1");
+  assert.match(ticket.url, /^ws:\/\/127\.0\.0\.1:/);
+  await assert.rejects(held.call.live({ surface: "nothing", mode: "watch" }), refused("unknown"));
+
+  // How it is isolated is the agent's own tool's to say, which the person's view names.
+  const computer = await asAgent(made.connections[0]?.connection as string);
+  const about = JSON.parse((await computer.call({ name: "about", arguments: {} })).output) as {
+    rows: { label: string; value: string; caution?: true }[];
+  };
+  assert.deepEqual(
+    about.rows.find((row) => row.label === "Isolation"),
+    { label: "Isolation", value: "None: it acts as you", caution: true },
+  );
+
+  // After the provider has been away the Actor is there again, and says its state changed
+  // when its connection came back.
+  let changed = 0;
+  held.on("changed", () => void changed++);
+  await restart();
+  await until(
+    async () => (await held.call.state({}).catch(() => undefined))?.state === "connected",
+  );
+  await until(() => changed > 0);
+
+  // It goes with the instance.
+  await units.remove({ instance: made.instance });
+  assert.equal(
+    hub.state.actors().some((one) => one.actorId === actor && one.state !== "closed"),
+    false,
+  );
+});
+
+test("a computer's rows say a browser beside what it reaches, and a browser alone", async (t) => {
+  const { apply, local, units } = await setup(t);
+  const both = await apply(local("files", { browser: true }));
+  assert.deepEqual(both.capability?.rows?.workspace?.at(-1), {
+    label: "Reaches",
+    value: "Files, Browser",
+  });
+  await units.remove({ instance: both.instance });
+  const alone = await apply({ service: "local", access: "none", browser: true });
+  assert.deepEqual(
+    alone.capability?.rows?.workspace
+      ?.map((row) => row.label === "Reaches" && row.value)
+      .filter(Boolean),
+    ["Browser"],
+  );
+  await units.remove({ instance: alone.instance });
 });
