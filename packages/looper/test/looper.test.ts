@@ -88,10 +88,10 @@ test("a message is answered in its thread, through the tools it was given, on th
   await looper.settled();
   await looper.send("two", "And you?");
   await looper.settled();
-  // Its tools, and the looper's two functions beside them.
+  // Its tools, and the looper's two functions beside them; what is sent streams as it is written.
   assert.deepEqual(requests[0]?.tools, [
     { name: "look", parameters: { type: "object" } },
-    SEND,
+    { ...SEND, streamed: true },
     HAND_BACK,
   ]);
 

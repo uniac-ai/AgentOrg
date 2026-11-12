@@ -269,7 +269,7 @@ test("models lists only those OpenAI marks for listing", async (t) => {
   });
 });
 
-test("respond streams text and a call's arguments, returns the output, and sends only what plan usage supports", async (t) => {
+test("respond streams text and a streamed function's arguments, returns the output, and sends only what plan usage supports", async (t) => {
   const s = await setup(t);
   await signIn(s);
   s.fake.script({
@@ -277,15 +277,20 @@ test("respond streams text and a call's arguments, returns the output, and sends
       { type: "response.created" },
       delta("Placing "),
       delta("the board."),
+      // A streamed function's arguments stream; another's don't.
       callAdded("fc_1", "call_1", "layout__place"),
       argumentsDelta("fc_1", '{"x":'),
       argumentsDelta("fc_1", "1}"),
+      callAdded("fc_2", "call_2", "say"),
+      argumentsDelta("fc_2", '{"text":"Pla'),
+      argumentsDelta("fc_2", 'ced."}'),
       // Of an item it was never told of: nothing.
       argumentsDelta("fc_9", "{}"),
       completed([
         text("Placing the board."),
         { type: "reasoning", summary: [] },
         { type: "function_call", call_id: "call_1", name: "layout__place", arguments: '{"x":1}' },
+        { type: "function_call", call_id: "call_2", name: "say", arguments: '{"text":"Placed."}' },
       ]),
     ],
   });
@@ -297,21 +302,25 @@ test("respond streams text and a call's arguments, returns the output, and sends
       { type: "function_call", callId: "c0", name: "layout__get", arguments: "{}" },
       { type: "function_call_output", callId: "c0", output: '{"home":[]}' },
     ],
-    tools: [{ name: "layout__place", description: "Place a view", parameters: { type: "object" } }],
+    tools: [
+      { name: "layout__place", description: "Place a view", parameters: { type: "object" } },
+      { name: "say", parameters: { type: "object" }, streamed: true },
+    ],
   });
   assert.deepEqual(reply, {
     output: [
       { type: "message", role: "assistant", content: "Placing the board." },
       { type: "function_call", callId: "call_1", name: "layout__place", arguments: '{"x":1}' },
+      { type: "function_call", callId: "call_2", name: "say", arguments: '{"text":"Placed."}' },
     ],
     usage: { inputTokens: 12, outputTokens: 3 },
   });
-  const call = { id: "call_1", name: "layout__place" };
+  const call = { id: "call_2", name: "say" };
   assert.deepEqual(events(s.actor, "delta"), [
     { requestId: "turn-1", text: "Placing " },
     { requestId: "turn-1", text: "the board." },
-    { requestId: "turn-1", text: '{"x":', call },
-    { requestId: "turn-1", text: "1}", call },
+    { requestId: "turn-1", text: '{"text":"Pla', call },
+    { requestId: "turn-1", text: 'ced."}', call },
   ]);
   const sent = s.fake.requests.filter((r) => r.url.endsWith("/v1/responses"));
   assert.equal(sent.length, 1);
@@ -327,6 +336,7 @@ test("respond streams text and a call's arguments, returns the output, and sends
     name: "layout__get",
     arguments: "{}",
   });
+  // Which are streamed is the provider's to know, not OpenAI's.
   assert.deepEqual(body.tools, [
     {
       type: "function",
@@ -335,6 +345,7 @@ test("respond streams text and a call's arguments, returns the output, and sends
       parameters: { type: "object" },
       strict: false,
     },
+    { type: "function", name: "say", parameters: { type: "object" }, strict: false },
   ]);
   // Every request went to OpenAI's two hosts and nowhere else.
   for (const { url } of s.fake.requests) assert.match(url, /^https:\/\/(auth|api)\.openai\.com\//);
@@ -781,7 +792,37 @@ test("what passes is a server's failure by status or code, and a refusal that sa
   assert.equal((await ask()).output.length, 1);
 });
 
-test("a response that has streamed text or a call's arguments, or that OpenAI refuses, is not asked for again", async (t) => {
+test("a break while the model writes a call of a function that isn't streamed is asked for again", async (t) => {
+  const s = await setup(t);
+  await signIn(s);
+  const responses = () => s.fake.requests.filter((r) => r.url.endsWith("/v1/responses")).length;
+  s.fake.script(
+    {
+      events: [
+        callAdded("fc_2", "call_2", "computer__exec_command"),
+        argumentsDelta("fc_2", '{"cmd":"ls'),
+      ],
+      cut: true,
+    },
+    { events: [completed([text("Done.")])] },
+  );
+  const reply = await s.call("session", "respond", {
+    requestId: crypto.randomUUID(),
+    model: "gpt-test",
+    instructions: "",
+    input: [],
+    tools: [
+      { name: "send", parameters: { type: "object" }, streamed: true },
+      { name: "computer__exec_command", parameters: { type: "object" } },
+    ],
+  });
+  assert.deepEqual(reply.output, [{ type: "message", role: "assistant", content: "Done." }]);
+  assert.equal(responses(), 2);
+  // Its arguments had no reader as they were written.
+  assert.deepEqual(events(s.actor, "delta"), []);
+});
+
+test("a response that has streamed text or a streamed function's arguments, or that OpenAI refuses, is not asked for again", async (t) => {
   const s = await setup(t);
   await signIn(s);
   const responses = () => s.fake.requests.filter((r) => r.url.endsWith("/v1/responses")).length;
@@ -791,6 +832,10 @@ test("a response that has streamed text or a call's arguments, or that OpenAI re
       model: "gpt-test",
       instructions: "",
       input: [],
+      tools: [
+        { name: "send", parameters: { type: "object" }, streamed: true },
+        { name: "computer__exec_command", parameters: { type: "object" } },
+      ],
     });
   const once = async (script: Parameters<typeof s.fake.script>[0], code: string) => {
     s.fake.script(script);
@@ -798,7 +843,8 @@ test("a response that has streamed text or a call's arguments, or that OpenAI re
     await assert.rejects(ask(), { code });
     assert.equal(responses() - before, 1, JSON.stringify(script));
   };
-  // Its words, or a call's, may be with their reader: a new try would write them again.
+  // Its words, or a streamed function's call's, may be with their reader: a new try would write
+  // them again.
   await once({ events: [delta("Half")], cut: true }, "failed");
   await once({ events: [delta("Half")] }, "failed");
   await once(
