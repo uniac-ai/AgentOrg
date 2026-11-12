@@ -1,19 +1,7 @@
 // What a stack becomes: templates kept in Settings, and the units an agent's pages name.
 import assert from "node:assert/strict";
 import test from "node:test";
-import {
-  browser,
-  card,
-  choose,
-  chooser,
-  fromTemplate,
-  open,
-  panel,
-  SESSION,
-  unfold,
-  withBrowser,
-  withGateway,
-} from "./build-kit.ts";
+import { card, choose, fromTemplate, open, panel, withBrowser, withGateway } from "./build-kit.ts";
 import { openSetup } from "./design/samples.ts";
 
 withBrowser();
@@ -33,11 +21,11 @@ test(
     assert.equal(
       await panel(page)
         .getByRole("button", { name: /^Assistant/ })
-        .getAttribute("aria-pressed"),
+        .getAttribute("aria-current"),
       "true",
     );
     await page.keyboard.press("Escape");
-    await chooser(page).waitFor({ state: "detached" });
+    await panel(page).waitFor({ state: "detached" });
 
     await assistant.getByRole("button", { name: "New template from Assistant" }).click();
     assert.equal(await panel(page).getByLabel("Name").inputValue(), "Assistant copy");
@@ -70,13 +58,11 @@ test(
   withGateway(async (gateway) => {
     const page = await open(gateway);
     await fromTemplate(page, "Assistant");
-    await unfold(page, "Web");
     await choose(page, "Search service", /^Tavily/);
     await card(page, "Web").getByLabel("Key").fill("the-key");
-    await choose(page, "Files and commands", /^None/);
-    await panel(page)
-      .getByRole("button", { name: /^Save as template/ })
-      .click();
+    await choose(page, "What it reaches", /^No files or terminal/);
+    await panel(page).getByRole("button", { name: "Build options" }).click();
+    await page.getByRole("menuitem", { name: /^Save as template/ }).click();
     const dialog = page.getByRole("dialog", { name: "Save as template" });
     await dialog.getByLabel("Template name").fill("Browse only");
     await dialog.getByRole("button", { name: "Save" }).click();
@@ -98,9 +84,9 @@ test(
     const page = await open(gateway);
     await fromTemplate(page, "Assistant");
     await panel(page).getByLabel("Name").fill("Foreman");
-    await choose(page, "Where it runs", /^This computer/);
+    await choose(page, "Where it resides", /^This computer/);
     await card(page, "Computer")
-      .getByLabel("Working directory", { exact: true })
+      .getByLabel("Workspace directory", { exact: true })
       .fill("/work/foreman");
     await panel(page).getByRole("button", { name: "Create", exact: true }).click();
     const sheet = await openSetup(page, "Foreman");
@@ -109,7 +95,7 @@ test(
       "Computer",
       "This computer",
       "Files and terminal",
-      "Browser",
+      "With a browser",
       "/work/foreman",
     ]);
     await sheet
@@ -154,6 +140,7 @@ test(
     });
     const page = await open(gateway);
     await fromTemplate(page, "Assistant");
+    await panel(page).getByLabel("Name").fill("Foreman");
     const computer = card(page, "Computer");
     const create = panel(page).getByRole("button", { name: "Create", exact: true });
     gateway.findProblems([{ unit: 0, field: "where", message: "No service is running here." }]);
@@ -165,11 +152,9 @@ test(
       if (field.id === "where") field.default = "local";
     });
     await create.click();
-    await computer
-      .locator("[data-slot=field-description]", { hasText: "It acts as you on this Mac." })
-      .waitFor();
+    await computer.getByText("It acts as you on this Mac.").waitFor();
     assert.equal(
-      await computer.getByRole("combobox", { name: "Where it runs" }).innerText(),
+      await computer.getByRole("combobox", { name: "Where it resides" }).innerText(),
       "This computer",
     );
     assert.equal(await computer.getByText("No service is running here.").count(), 0);

@@ -8,15 +8,11 @@ import {
   type Draft,
   type DraftUnit,
   draftFrom,
-  pickName,
   type StackProblem,
   type Template,
   toTemplate,
 } from "./stack.ts";
-import { useAgents } from "./watch.tsx";
 
-/** How long the Create window takes to change size: its `duration-300`. */
-const WINDOW_MS = 300;
 const EMPTY: Catalog = { bases: [], units: [], templates: [] };
 
 function readCatalog(): Promise<Catalog> {
@@ -31,17 +27,11 @@ function useBuildingState() {
   const [version, setVersion] = useState(0);
   const catalog = useLoad(readCatalog, ["actors"], [version]).value ?? EMPTY;
   const reread = () => setVersion((was) => was + 1);
-  const { list } = useAgents();
-  const [draft, setDraft] = useState<Draft>();
+  const [held, setDraft] = useState<Draft>();
   const [open, setOpen] = useState(false);
-  const [mode, setMode] = useState<Draft["mode"]>("agent");
-  /** The panel is closing: the stack stays drawn until the window has shrunk around it. */
-  const [collapsing, setCollapsing] = useState(false);
-  const collapse = useRef<ReturnType<typeof setTimeout>>(undefined);
-  const settle = () => {
-    clearTimeout(collapse.current);
-    setCollapsing(false);
-  };
+  // An empty stack started before the bases were read stands on the first of them once they are.
+  const first = catalog.bases[0];
+  const draft = held && !held.base && !held.from && first ? { ...held, base: first } : held;
   const keys = useRef(0);
   const nextKey = () => ++keys.current;
 
@@ -51,51 +41,27 @@ function useBuildingState() {
   const changeUnit = (key: number, next: (was: DraftUnit) => Partial<DraftUnit>) =>
     change((was) => ({ units: was.units.map((u) => (u.key === key ? { ...u, ...next(u) } : u)) }));
 
+  /**
+   * A template, or nothing, fills the window. Chosen in the open window, it keeps what was typed
+   * for an agent; opening the window starts clean, whatever a closed one was left holding.
+   */
+  const start = (template?: Template, mode: Draft["mode"] = "agent") => {
+    const next = draftFrom(template, catalog, mode, nextKey);
+    setDraft((was) => ({
+      ...next,
+      ...(mode === "agent" && open && was ? { name: was.name, purpose: was.purpose } : {}),
+    }));
+    setOpen(true);
+  };
+
   return {
     catalog,
     draft,
     open,
-    mode,
-    /** A stack is showing, and staying. */
-    expanded: !!draft && !collapsing,
-    show() {
-      settle();
-      setDraft(undefined);
-      setMode("agent");
-      setOpen(true);
-    },
+    /** The window opens on an empty stack. */
+    show: () => start(),
     hide: () => setOpen(false),
-    /** Once the window has gone: whatever was in it goes too. */
-    clear() {
-      settle();
-      setDraft(undefined);
-      setMode("agent");
-    },
-    /** The chosen row, chosen again: the panel closes, at the pace the window moves. */
-    unselect() {
-      setCollapsing(true);
-      const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
-      collapse.current = setTimeout(
-        () => {
-          setDraft(undefined);
-          setCollapsing(false);
-        },
-        still ? 0 : WINDOW_MS,
-      );
-    },
-    /** A template, or nothing, fills the panel. Choosing again keeps what was typed for an agent. */
-    start(template?: Template, mode: Draft["mode"] = "agent") {
-      settle();
-      setMode(mode);
-      const next = draftFrom(template, catalog, mode, nextKey);
-      const offered = pickName(list.map((agent) => agent.name));
-      setDraft((was) => ({
-        ...next,
-        ...(mode === "agent" ? { suggested: was?.suggested || offered } : {}),
-        ...(mode === "agent" && was ? { name: was.name, purpose: was.purpose } : {}),
-      }));
-      setOpen(true);
-    },
+    start,
     setText: (text: Partial<Pick<Draft, "name" | "purpose">>) => change(() => text),
     setBase: (base: CatalogBase) => change(() => ({ base, answers: {} })),
     setAnswer: (id: string, value: string) =>
@@ -108,7 +74,6 @@ function useBuildingState() {
         id: unit.id,
         values: {},
         secrets: {},
-        added: true as const,
       };
       change((was) => {
         const at = before === undefined ? -1 : was.units.findIndex((u) => u.key === before);

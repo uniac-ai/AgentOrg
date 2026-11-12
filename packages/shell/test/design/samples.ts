@@ -2,7 +2,7 @@
 // agents and computer and terminals, replies not yet read, sample chats to open, and what a page asks; and
 // the design page's own controls, which put it in the cases it draws.
 import type { Page } from "@playwright/test";
-import type { Agent, standIn } from "../stand-in.ts";
+import type { Agent, Creatable, standIn, Template, Units } from "../stand-in.ts";
 
 type Gateway = Awaited<ReturnType<typeof standIn>>;
 
@@ -443,4 +443,313 @@ export async function refuseSend(page: Page, gateway?: Gateway) {
     await box.blur();
   }
   await chats(page).getByRole("alert").getByText(REFUSAL).waitFor();
+}
+
+const FROM = { provider: "units", providerName: "AgentOrg" };
+const skillsOf = (...names: string[]) => names.map((name) => ({ name, files: ["SKILL.md"] }));
+const BUILD_BASES: Creatable[] = [
+  {
+    provider: "bundled",
+    id: "assistant",
+    title: "Assistant",
+    description: "Chats and uses what you connect",
+    instructions: "Help.",
+    asks: [],
+  },
+];
+const BUILD_UNITS: Units["units"] = [
+  {
+    ...FROM,
+    id: "computer",
+    title: "Computer",
+    description: "A place to run commands and keep files",
+    needs: [],
+    gives: {
+      slots: [{ name: "computer" }],
+      skills: skillsOf("terminal", "files", "computer", "browser"),
+      results: ["computer"],
+    },
+    form: [
+      {
+        id: "where",
+        type: "choice",
+        value: "string",
+        title: "Where it resides",
+        required: true,
+        options: [
+          {
+            value: "local",
+            title: "This computer",
+            description: "Runs as you, with your files and no approvals.",
+          },
+          { value: "container", title: "A new container" },
+        ],
+      },
+      {
+        id: "workspace",
+        type: "directory",
+        value: "string",
+        title: "Workspace directory",
+        required: true,
+        placeholder: "~/Agents/Scout",
+        visible: { field: "where", in: ["local"] },
+      },
+      {
+        id: "access",
+        type: "choice",
+        value: "string",
+        title: "What it reaches",
+        required: true,
+        default: "terminal",
+        options: [
+          { value: "terminal", title: "Files and terminal" },
+          { value: "files", title: "Files" },
+        ],
+      },
+      {
+        id: "browser",
+        type: "choice",
+        value: "string",
+        title: "Browser",
+        required: true,
+        default: "on",
+        options: [
+          { value: "on", title: "With a browser" },
+          { value: "off", title: "No browser" },
+        ],
+        visible: { field: "access", in: ["terminal"] },
+      },
+    ],
+  },
+  {
+    ...FROM,
+    id: "web",
+    title: "Web",
+    description: "Search the web and read pages",
+    needs: [],
+    gives: { slots: [{ name: "web" }], skills: skillsOf("web-research"), results: [] },
+    form: [
+      {
+        id: "service",
+        type: "choice",
+        value: "string",
+        title: "Service",
+        required: true,
+        default: "exa",
+        options: [{ value: "exa", title: "Exa" }],
+      },
+    ],
+  },
+  {
+    ...FROM,
+    id: "agents",
+    title: "Agent control",
+    description: "Lets it create agents of its own",
+    needs: [],
+    gives: { slots: [{ name: "agents" }], skills: skillsOf("delegating"), results: [] },
+    form: [
+      {
+        id: "templates",
+        type: "choices",
+        value: "strings",
+        title: "Templates it may use",
+        required: true,
+        options: [
+          { value: "assistant", title: "Assistant" },
+          { value: "builder", title: "Builder" },
+          { value: "repo-worker", title: "Storefront worker" },
+        ],
+      },
+      {
+        id: "places",
+        type: "choices",
+        value: "strings",
+        title: "Where new agents go",
+        required: true,
+        options: [
+          { value: "own", title: "In its own directory" },
+          { value: "remote", title: "On an existing remote place" },
+          { value: "new", title: "On a new computer" },
+        ],
+      },
+      {
+        id: "named",
+        type: "text",
+        value: "string",
+        title: "Remote places",
+        required: true,
+        placeholder: "build.acme.dev",
+        visible: { field: "places", in: ["remote"] },
+      },
+      {
+        id: "limit",
+        type: "number",
+        value: "number",
+        title: "How many at once",
+        required: true,
+        default: 3,
+        min: 0,
+      },
+      {
+        id: "depth",
+        type: "number",
+        value: "number",
+        title: "Levels below it",
+        required: true,
+        default: 1,
+        min: 0,
+      },
+    ],
+  },
+  {
+    ...FROM,
+    id: "skill",
+    title: "Skill",
+    description: "One of your skills",
+    needs: [],
+    gives: { slots: [], skills: [], results: [] },
+    form: [
+      {
+        id: "skill",
+        type: "choice",
+        value: "string",
+        title: "Skill",
+        required: true,
+        options: [{ value: "survey-a-topic", title: "survey-a-topic" }],
+      },
+    ],
+  },
+  {
+    ...FROM,
+    id: "connection",
+    title: "Connection",
+    description: "An MCP you've connected",
+    needs: [],
+    gives: { slots: [], skills: [], results: [] },
+    form: [
+      {
+        id: "connection",
+        type: "connection",
+        value: "string",
+        title: "Connection",
+        required: true,
+      },
+    ],
+  },
+];
+const BUILD_BASE = { provider: "AgentOrg", creatable: "assistant" };
+const BUILD_TEMPLATES: Template[] = [
+  {
+    id: "assistant",
+    title: "Assistant",
+    description: "Works on a computer and on the web",
+    base: BUILD_BASE,
+    units: [
+      { provider: "AgentOrg", unit: "computer" },
+      { provider: "AgentOrg", unit: "web", values: { service: "exa" } },
+    ],
+  },
+  {
+    id: "builder",
+    title: "Builder",
+    description: "Makes and runs other agents",
+    base: BUILD_BASE,
+    units: [
+      { provider: "AgentOrg", unit: "computer" },
+      { provider: "AgentOrg", unit: "agents", values: { limit: 3, depth: 1 } },
+    ],
+  },
+  {
+    id: "repo-worker",
+    title: "Storefront worker",
+    description: "Works in the storefront repository",
+    base: BUILD_BASE,
+    units: [
+      {
+        provider: "AgentOrg",
+        unit: "computer",
+        values: {
+          where: "local",
+          workspace: "~/code/storefront",
+          access: "terminal",
+          browser: "off",
+        },
+      },
+      { provider: "AgentOrg", unit: "web", values: { service: "exa" } },
+    ],
+  },
+];
+
+/** What an agent is built from, as the design's sample has it: one base, its units, its templates. */
+export const sampleBuild = (gateway: Gateway) =>
+  gateway.setCatalog({ bases: BUILD_BASES, units: BUILD_UNITS, templates: BUILD_TEMPLATES });
+
+/**
+ * The create window's states, each with the widths it is shown at: an empty stack; a template
+ * with an answer chosen that grants something; one whose unit has boxes to tick and numbers; a
+ * card folded; its two menus; saving the stack as a template; made while signed out of the model
+ * account; and a new template.
+ */
+export const CREATES = [
+  ["empty", ["wide", "phone"]],
+  ["local", ["wide", "phone"]],
+  ["builder", ["wide"]],
+  ["folded", ["wide"]],
+  ["add", ["wide"]],
+  ["options", ["wide"]],
+  ["save", ["wide"]],
+  ["out", ["wide"]],
+  ["template", ["wide"]],
+] as const;
+export type Create = (typeof CREATES)[number][0];
+
+/** The create window in one of its states, reached as a person reaches it, and at rest. */
+export async function createState(page: Page, state: Create, design: boolean) {
+  const bar = async () => {
+    if ((page.viewportSize()?.width ?? 0) < 640)
+      await page.getByRole("button", { name: "Menu" }).click();
+    return page.getByRole("navigation", { name: "Main" }).last();
+  };
+  if (state === "out" && design) await inDesign(page, /^ChatGPT:/);
+  if (state === "template") {
+    await (await bar()).getByRole("button", { name: "Templates" }).click();
+    await page.getByRole("main").getByRole("button", { name: "New template", exact: true }).click();
+  } else await (await bar()).getByRole("button", { name: "Create", exact: true }).click();
+  const window = page.getByRole("dialog", {
+    name: state === "template" ? "New template" : "Create",
+  });
+  await window.getByRole("list", { name: "Units" }).waitFor();
+  const from = (name: string) =>
+    window.getByRole("button", { name: new RegExp(`^${name}`) }).click();
+  const card = (name: string) => window.getByRole("listitem", { name });
+  if (state === "local" || state === "folded" || state === "out") {
+    await from("Assistant");
+    await card("Web").waitFor();
+  }
+  if (state === "local") {
+    await window.getByRole("combobox", { name: "Where it resides" }).click();
+    await page.getByRole("option", { name: "This computer" }).click();
+    await window.getByLabel("Workspace directory").waitFor();
+  }
+  if (state === "folded") await window.getByRole("button", { name: "Fold Computer" }).click();
+  if (state === "builder" || state === "save") {
+    await from("Builder");
+    await card("Agent control").waitFor();
+  }
+  if (state === "add") {
+    await window.getByRole("button", { name: "Add a unit" }).click();
+    await page.getByRole("menu").waitFor();
+  }
+  if (state === "options" || state === "save") {
+    await window.getByRole("button", { name: "Build options" }).click();
+    await page.getByRole("menu").waitFor();
+  }
+  if (state === "save") {
+    await page.getByRole("menuitem", { name: /^Save as template/ }).click();
+    await page.getByRole("dialog", { name: "Save as template" }).waitFor();
+  }
+  // A press scrolls what it presses into view, by more one time than another: back to the start.
+  await page.locator('nav[aria-label="Start from"]').evaluate((row) => {
+    row.scrollLeft = 0;
+  });
 }

@@ -33,26 +33,20 @@ export const withGateway = (run: (gateway: Gateway) => Promise<void>) => async (
 };
 export const plus = (page: Page) => page.getByRole("button", { name: /^Create/ }).first();
 export const panel = (page: Page) => page.getByRole("dialog", { name: /^(Create|New template)$/ });
-export const chooser = panel;
 export const card = (page: Page, name: string) =>
   panel(page).getByRole("list", { name: "Units" }).getByRole("listitem", { name });
 export async function fromTemplate(page: Page, name: string) {
   await agentsRead(page);
   await plus(page).click();
-  await chooser(page)
+  await panel(page)
     .getByRole("button", { name: new RegExp(`^${name}`) })
     .click();
-  await panel(page).waitFor();
+  await card(page, "Base").waitFor();
 }
 export async function choose(page: Page, field: string, option: RegExp) {
   await panel(page).getByRole("combobox", { name: field }).click();
   await page.getByRole("option", { name: option }).click();
 }
-/** Opens a card that started as one row. */
-export const unfold = (page: Page, name: string) =>
-  card(page, name)
-    .getByRole("button", { name: `Open ${name}` })
-    .click();
 export const gives = (page: Page, name: string) =>
   card(page, name).locator("[data-gives]").innerText();
 

@@ -29,57 +29,17 @@ export interface DraftUnit {
   id: string;
   values: Values;
   secrets: Secrets;
-  /** The person added it, rather than a template bringing it. */
-  added?: true;
 }
 
 export interface Draft {
   mode: "agent" | "template";
   from?: Pick<Template, "id" | "title">;
   name: string;
-  /** The name used if none is typed; none for a template, which has to be named. */
-  suggested: string;
   purpose: string;
   base?: CatalogBase;
   answers: Record<string, string>;
   units: DraftUnit[];
   problems: StackProblem[];
-}
-
-const NAMES = [
-  "Birch",
-  "Cedar",
-  "Dash",
-  "Ember",
-  "Fern",
-  "Grove",
-  "Hazel",
-  "Indigo",
-  "Juniper",
-  "Kestrel",
-  "Linden",
-  "Maple",
-  "Nova",
-  "Onyx",
-  "Pine",
-  "Quill",
-  "Robin",
-  "Sage",
-  "Tansy",
-  "Umber",
-  "Vale",
-  "Wren",
-  "Yarrow",
-  "Zephyr",
-];
-
-/** A name to offer, not one an agent already has. */
-export function pickName(taken: readonly string[], random = Math.random): string {
-  const free = NAMES.filter((name) => !taken.includes(name));
-  if (free.length > 0) return free[Math.floor(random() * free.length)] as string;
-  let n = 2;
-  while (taken.includes(`${NAMES[0]} ${n}`)) n++;
-  return `${NAMES[0]} ${n}`;
 }
 
 const blank = (value: Value | undefined) =>
@@ -146,23 +106,13 @@ export const missingNeeds = (unit: DraftUnit, above: readonly DraftUnit[]) =>
     (kind) => !above.some((u) => u.unit?.gives.results.includes(kind)),
   );
 
-/** What it will be called: what was typed, or else what was offered. */
-export const nameOf = (draft: Pick<Draft, "name" | "suggested">) =>
-  draft.name.trim() || draft.suggested;
-
 /** A field's greyed text. An agent's name fills it in; a template has no agent to name yet. */
 export const placeholderOf = (field: Field, name: string | undefined) =>
   name ? field.placeholder?.replaceAll("{name}", name) : field.placeholder;
 
-/** A card opens by itself only when there's something on it to do. */
-export const needsAttention = (unit: DraftUnit, above: readonly DraftUnit[]) =>
-  !unit.unit ||
-  unit.unit.form.some((field) => isUnfilled(field, unit)) ||
-  missingNeeds(unit, above).length > 0;
-
 /** A template or an agent can be finished: a name always, and for an agent everything required. */
 export function isReady(draft: Draft): boolean {
-  if (!nameOf(draft)) return false;
+  if (!draft.name.trim()) return false;
   if (!draft.base || draft.units.some((u) => !u.unit)) return false;
   if (draft.mode === "template") return true;
   const answered = draft.base.asks.every((a) => a.optional || draft.answers[a.id]?.trim());
@@ -236,7 +186,6 @@ export function draftFrom(
     mode,
     ...(template ? { from: { id: template.id, title: template.title } } : {}),
     name: mode === "template" && template ? `${template.title} copy` : "",
-    suggested: "",
     purpose: mode === "template" ? (template?.description ?? "") : "",
     ...(base ? { base } : {}),
     answers: { ...template?.base.answers },
@@ -306,17 +255,5 @@ export function partsOf(values: Values, form: readonly Field[]): string[] {
     if (field.type === "directory" && typeof value === "string" && value) return [value];
     const title = field.options?.find((o) => o.value === value)?.title;
     return title ? [title] : [];
-  });
-}
-
-/** What each chosen option means, in the unit's own words, in the form's order. */
-export function chosenNotes(values: Values, form: readonly Field[]): string[] {
-  return form.flatMap((field) => {
-    if (!isShown(field, form, values)) return [];
-    const value = fieldValue(field, values);
-    const chosen = Array.isArray(value) ? value : [value];
-    return (field.options ?? []).flatMap((o) =>
-      chosen.includes(o.value) && o.description ? [o.description] : [],
-    );
   });
 }
