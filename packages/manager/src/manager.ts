@@ -282,6 +282,15 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
         changed,
         fromEach,
         exposeConnection,
+        reachPerson: async (provider, exported) =>
+          (await hub.grants.expose({ provider, export: exported, to: PERSON_CALLER })).slot,
+        unreachPerson: async (slot, provider) => {
+          const { bindings } = await hub.bindings.list({ actor: PERSON_CALLER });
+          if (!bindings.some((one) => one.slot === slot && one.provider === provider)) return;
+          await hub.grants.unexpose({ to: PERSON_CALLER, slot }).catch((error) => {
+            if (!alreadyGone(error)) throw error;
+          });
+        },
         closing,
         removeAgent,
       });
@@ -351,6 +360,18 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
       ctx.slots.actors.onBind(() => {
         for (const agent of Object.keys(records.agents)) reaching(agent);
       });
+      /** The same for the person's slots to what agents hold: made again when one has gone. */
+      const holding = (actor?: string) =>
+        void (async () => {
+          // One that has closed, or isn't back yet, has nothing to reach.
+          if (actor && !(await hub.actors.get({ actorId: actor })).connected) return;
+          await stacks.reachHeld(actor);
+        })().catch((error) => {
+          if (!alreadyGone(error)) log.warn(`Reaching what an agent holds: ${messageOf(error)}`);
+        });
+      ctx.slots.actors.on("changed", ({ actor }) => holding(actor));
+      // And all of them once management can make a slot: what the Hub dropped while it was away.
+      ctx.slots.grants.onBind(() => holding());
       /** The person's own handlers, which an agent's control tools call after their checks. */
       const personHandlers: Partial<
         Record<"agents" | "connections" | "skills", Record<string, Handler>>
@@ -503,7 +524,7 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
         },
         async get({ agent }) {
           const record = recordOf(agent);
-          const { units, tools, instanceOfSkill, instanceOfSlot } = await stacks.read(
+          const { units, tools, instanceOfSkill, instanceOfSlot, capabilities } = await stacks.read(
             agent,
             record,
             connectionStatus,
@@ -539,6 +560,7 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
             }),
             mcp,
             units,
+            capabilities,
           };
         },
         start: ({ agent }) => startAgent(agent),
@@ -621,6 +643,12 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
           const unit = (await call.units({})).units.find((one) => one.id === kind);
           const slot = unit && slotFieldOf(unit);
           if (!unit || !slot) throw new Refused("invalid", `${provider} offers no ${kind}.`);
+          // A connection made for no agent has no agent to hold what the unit builds.
+          if (unit.capability)
+            throw new Refused(
+              "invalid",
+              `${unit.title} builds a ${unit.capability.title}, which an agent holds: add it to an agent.`,
+            );
           const declared = Object.keys(secrets).filter((id) =>
             unit.form.some((field) => field.id === id && field.value === "secret"),
           );

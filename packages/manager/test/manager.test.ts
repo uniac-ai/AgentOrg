@@ -18,6 +18,7 @@ import {
   agentProvider,
   agentSettings,
   agents,
+  capability,
   chat,
   connections,
   hubActors,
@@ -110,6 +111,71 @@ const UNITS = [
     form: [],
     needs: [],
     gives: { ...NONE, results: ["computer"] },
+  },
+  {
+    id: "desk",
+    title: "Desk",
+    description: "A desk the agent holds, with a side for the person.",
+    capability: { id: "desk", title: "Desk" },
+    form: [
+      {
+        id: "lamp",
+        type: "toggle",
+        value: "boolean",
+        title: "Lamp",
+        authority: "setting",
+        adds: {
+          slots: [],
+          skills: [],
+          surfaces: [{ surface: "lamp", protocol: "stand-in@1" }],
+          views: [{ id: "glow", place: "column", kind: "meters", surface: "lamp" }],
+        },
+      },
+    ],
+    needs: [],
+    gives: {
+      slots: [{ name: "desk" }],
+      skills: [],
+      results: [],
+      surfaces: [{ surface: "top", protocol: "stand-in@1" }],
+      views: [
+        { id: "where", place: "column", kind: "facts" },
+        {
+          id: "about",
+          place: "column",
+          kind: "facts",
+          operation: "about",
+          slot: "desk",
+          rows: ["Wood"],
+        },
+        {
+          id: "status",
+          place: "frame",
+          kind: "status",
+          when: "reachable",
+          operation: "status",
+          slot: "desk",
+        },
+      ],
+    },
+  },
+  {
+    id: "askew",
+    title: "Askew",
+    description: "A unit whose views show what it doesn't give.",
+    capability: { id: "askew", title: "Askew" },
+    form: [],
+    needs: [],
+    gives: {
+      slots: [{ name: "askew" }],
+      skills: [],
+      results: [],
+      surfaces: [{ surface: "top", protocol: "stand-in@1" }],
+      views: [
+        { id: "glow", place: "column", kind: "meters", surface: "lamp" },
+        { id: "about", place: "column", kind: "facts", operation: "about", slot: "elsewhere" },
+      ],
+    },
   },
   {
     id: "terminal",
@@ -249,6 +315,10 @@ async function setup(t: test.TestContext) {
     problems?: { field?: string; message: string }[];
     /** Run while a unit is being applied, in the middle of a creation. */
     during?: () => Promise<void>;
+    /** A unit that builds no capability, though it said it would. */
+    noCapability?: boolean;
+    /** The fixed rows a unit gives, by view, instead of those it declared. */
+    rows?: Record<string, { label: string; value: string }[]>;
   } = {};
   const given: {
     secrets: unknown[];
@@ -429,7 +499,10 @@ async function setup(t: test.TestContext) {
     slots: { actors: hubActors },
     exports: { provider: unitProvider },
     start(ctx) {
-      const held = new Map<string, { connection: string; client: { close(): void } }[]>();
+      const held = new Map<
+        string,
+        { slot: string; connection: string; client: { close(): void } }[]
+      >();
       ctx.exports.provider.implement({
         units: () => ({ units: UNITS as never }),
         skill: ({ path, name }) => {
@@ -456,7 +529,9 @@ async function setup(t: test.TestContext) {
                     ? ["computer", ...(values.browser ? ["browser"] : [])]
                     : unit === "vault"
                       ? ["vault"]
-                      : [];
+                      : unit === "desk"
+                        ? ["desk"]
+                        : [];
           const made = [];
           for (const slot of slots) {
             const { actorId, credential } = await ctx.slots.actors.call.create({ name });
@@ -469,17 +544,54 @@ async function setup(t: test.TestContext) {
             leaving.push(() => client.close());
             made.push({ slot: script.wrongSlot ?? slot, connection: actorId, client });
           }
+          // What a desk is, on its own Actor: the built agent's side of it.
+          let desk: string | undefined;
+          if (unit === "desk" && !script.noCapability) {
+            const { actorId, credential } = await ctx.slots.actors.call.create({ name });
+            const client = await connect({
+              hubUrl: server.url,
+              actorId,
+              credential: credential as string,
+              exports: { capability },
+              start(own) {
+                own.exports.capability.implement({
+                  state: () => ({
+                    state: "connected" as const,
+                    surfaces: [{ surface: "top", protocol: "stand-in@1", operate: true }],
+                  }),
+                  live: ({ surface }) => ({
+                    url: `ws://127.0.0.1:9/${surface}`,
+                    protocol: "stand-in@1",
+                    expiresAt: new Date().toISOString(),
+                  }),
+                });
+              },
+            });
+            leaving.push(() => client.close());
+            made.push({ slot: "", connection: actorId, client });
+            desk = actorId;
+          }
           const instance = `inst-${crypto.randomUUID()}`;
           held.set(instance, made);
           // One made before units is known by its connection.
           for (const { connection } of made) held.set(connection, made);
           return {
             instance,
-            connections: made.map(({ slot, connection }) => ({
-              slot,
-              connection,
-              target: "a stand-in server",
-            })),
+            ...(desk
+              ? {
+                  capability: {
+                    actor: desk,
+                    rows: script.rows ?? { where: [{ label: "Where", value: "By the window" }] },
+                  },
+                }
+              : {}),
+            connections: made
+              .filter(({ connection }) => connection !== desk)
+              .map(({ slot, connection }) => ({
+                slot,
+                connection,
+                target: "a stand-in server",
+              })),
             results:
               unit === "machine" && !script.noResults
                 ? [{ kind: "computer", handle: "computer-handle" }]
@@ -492,11 +604,13 @@ async function setup(t: test.TestContext) {
           return {
             state: "connected" as const,
             surfaces: [{ surface: "screen", protocol: "stand-in@1", operate: true }],
-            connections: made.map(({ connection }) => ({
-              connection,
-              state: "connected" as const,
-              tools: [{ name: "read" }],
-            })),
+            connections: made
+              .filter(({ slot }) => slot !== "")
+              .map(({ connection }) => ({
+                connection,
+                state: "connected" as const,
+                tools: [{ name: "read" }],
+              })),
           };
         },
         live: ({ instance, surface, mode }) => {
@@ -660,10 +774,16 @@ async function setup(t: test.TestContext) {
       ?.exposed()
       .find((one) => one.slot === slot)?.call as T;
   };
+  /** One of the person's own slots made at run time, as a page would call it. */
+  const personSlot = async <T>(slot: string) => {
+    await until(() => person.exposed().some((one) => one.slot === slot));
+    return person.exposed().find((one) => one.slot === slot)?.call as T;
+  };
   return {
     restart,
     rejoin,
     exposedTo,
+    personSlot,
     chats,
     startedIn,
     hub,
@@ -816,6 +936,7 @@ test("a stack is made, bound, exposed and recorded, with its chat to the person"
       instructions: "Be plain.",
       skills: ["notes"],
       units: 1,
+      capabilities: [],
       chat: "chat",
     },
   );
@@ -1191,6 +1312,8 @@ test("every unit on offer is listed, management's own among them", async (t) => 
       ["skill", "Management"],
       ["files", "Units"],
       ["machine", "Units"],
+      ["desk", "Units"],
+      ["askew", "Units"],
       ["terminal", "Units"],
       ["computer", "Units"],
       ["runner", "Units"],
@@ -2808,4 +2931,213 @@ test("an agent that can't be made leaves nothing, and its unit goes alone", asyn
   const after = await s.calls.agents.get({ agent: parent });
   assert.deepEqual([after.units, after.mcp, after.skills], [[], [], []]);
   assert.ok((await s.openActors()).includes(s.management.actorId), "management stays");
+});
+
+test("an agent holds the capability its unit builds, and the person reaches it by slots of their own", async (t) => {
+  const s = await setup(t);
+  const { agent } = await s.calls.agents.create({
+    stack: { base: s.base, units: [s.unit("desk", { lamp: true })] },
+    name: "Holder",
+  });
+  const got = await s.calls.agents.get({ agent });
+  const capabilities = got.capabilities ?? [];
+  assert.equal(capabilities.length, 1);
+  const [{ person, ...held }] = capabilities as [(typeof capabilities)[number]];
+  // What it is, from what the unit says it gives and what was filled in: the views in the
+  // order given, the one with neither an operation nor a surface with the rows fixed then.
+  assert.deepEqual(held, {
+    id: "desk",
+    title: "Desk",
+    from: got.units.find((unit) => unit.unit === "desk")?.instance,
+    slots: ["desk"],
+    surfaces: [
+      { surface: "top", protocol: "stand-in@1" },
+      { surface: "lamp", protocol: "stand-in@1" },
+    ],
+    views: [
+      {
+        id: "where",
+        place: "column",
+        kind: "facts",
+        fixed: [{ label: "Where", value: "By the window" }],
+      },
+      {
+        id: "about",
+        place: "column",
+        kind: "facts",
+        operation: "about",
+        slot: "desk",
+        rows: ["Wood"],
+      },
+      {
+        id: "status",
+        place: "frame",
+        kind: "status",
+        when: "reachable",
+        operation: "status",
+        slot: "desk",
+      },
+      { id: "glow", place: "column", kind: "meters", surface: "lamp" },
+    ],
+  });
+  // The person's own slots: one bound to the capability itself, which answers how it stands,
+  // and one to each of its operations, which the agent has under its own slot.
+  const itself = await s.personSlot<{
+    state(input: object): Promise<{ state: string; surfaces: { surface: string }[] }>;
+  }>(person.capability);
+  assert.deepEqual(await itself.state({}), {
+    state: "connected",
+    surfaces: [{ surface: "top", protocol: "stand-in@1", operate: true }],
+  });
+  const bound = async (to: string) =>
+    (await s.bindingsOf(to)).map((b) => `${b.slot} ${b.provider} ${b.export}`);
+  const [operations] = (await s.bindingsOf(agent)).filter((b) => b.slot === "desk");
+  assert.ok(operations);
+  assert.ok(
+    (await bound(PERSON)).includes(`${person.operations.desk} ${operations.provider} tools`),
+  );
+  assert.deepEqual(Object.keys(person.operations), ["desk"]);
+
+  // An agent built from units that build none holds none.
+  const { agent: plain } = await s.calls.agents.create({
+    stack: { base: s.base, units: [s.unit("files", { folder: "/a" })] },
+    name: "Plain",
+  });
+  assert.deepEqual((await s.calls.agents.get({ agent: plain })).capabilities, []);
+
+  // Removing the unit takes the capability, and the person's slots to it.
+  await s.calls.agents.removeUnit({ agent, instance: held.from });
+  assert.deepEqual((await s.calls.agents.get({ agent })).capabilities, []);
+  const left = (await s.bindingsOf(PERSON)).map((b) => b.slot);
+  assert.equal(left.includes(person.capability), false);
+  assert.equal(left.includes(person.operations.desk as string), false);
+});
+
+test("a unit that doesn't build the capability, or give the rows, it said it would is undone", async (t) => {
+  const s = await setup(t);
+  const before = await s.openActors();
+  const slots = async () => (await s.bindingsOf(PERSON)).map((b) => b.slot).sort();
+  const had = await slots();
+  const create = () =>
+    s.calls.agents.create({ stack: { base: s.base, units: [s.unit("desk")] }, name: "Holder" });
+  const saying = (message: string) => (error: unknown) =>
+    refused("failed")(error) && (error as Error).message === message;
+  s.script.noCapability = true;
+  await assert.rejects(create(), saying("Desk didn't build the Desk it said it would."));
+  s.script.noCapability = false;
+  // No rows for the view whose rows are fixed; then rows for a view that has an operation.
+  s.script.rows = {};
+  await assert.rejects(create(), saying('Desk gave no rows for its view "where".'));
+  s.script.rows = {
+    where: [{ label: "Where", value: "By the window" }],
+    about: [{ label: "Wood", value: "Oak" }],
+  };
+  await assert.rejects(
+    create(),
+    saying('Desk gave rows for "about", which is not a view of its whose rows are fixed.'),
+  );
+  // Each time everything made is gone: the connection, the capability's Actor, the person's slots.
+  assert.deepEqual([...(await s.openActors()).keys()].sort(), [...before.keys()].sort());
+  assert.deepEqual(await slots(), had);
+});
+
+test("an agent holds one of a capability: a second is a problem before anything runs", async (t) => {
+  const s = await setup(t);
+  const twice = await s.calls.agents.check({
+    stack: { base: s.base, units: [s.unit("desk"), s.unit("desk")] },
+  });
+  assert.ok(twice.problems.some((one) => one.message === "There is a Desk already."));
+  const { agent } = await s.calls.agents.create({
+    stack: { base: s.base, units: [s.unit("desk")] },
+    name: "Holder",
+  });
+  const more = await s.calls.agents.check({ agent, unit: s.unit("desk") });
+  assert.ok(more.problems.some((one) => one.message === "There is a Desk already."));
+  assert.equal(s.given.applied.filter((one) => one.unit === "desk").length, 1);
+});
+
+test("a view that shows a surface, or is at a slot, its unit doesn't give is a problem before anything runs", async (t) => {
+  const s = await setup(t);
+  const { problems } = await s.calls.agents.check({
+    stack: { base: s.base, units: [s.unit("askew")] },
+  });
+  assert.deepEqual(
+    problems.map((one) => one.message),
+    [
+      "Askew's view \"glow\" shows a surface it doesn't give: lamp.",
+      "Askew's view \"about\" is at a slot it doesn't give: elsewhere.",
+    ],
+  );
+  await assert.rejects(
+    s.calls.agents.create({ stack: { base: s.base, units: [s.unit("askew")] }, name: "No" }),
+    refused("invalid"),
+  );
+  assert.equal(s.given.applied.length, 0);
+});
+
+test("removing a unit takes off only the person's slots that are still its own", async (t) => {
+  const s = await setup(t);
+  const { agent } = await s.calls.agents.create({
+    stack: { base: s.base, units: [s.unit("desk")] },
+    name: "Holder",
+  });
+  const { agent: other } = await s.calls.agents.create({
+    stack: { base: s.base, units: [s.unit("files", { folder: "/a" })] },
+    name: "Other",
+  });
+  const [held] = (await s.calls.agents.get({ agent })).capabilities ?? [];
+  assert.ok(held);
+  // The Hub dropped the person's slot, and its name has since been given to another export.
+  const [files] = (await s.bindingsOf(other)).filter((b) => b.slot === "files");
+  assert.ok(files);
+  await s.person.slots.grants.call.unexpose({ to: PERSON, slot: held.person.capability });
+  await s.person.slots.grants.call.expose({
+    provider: files.provider,
+    export: "tools",
+    to: PERSON,
+    as: held.person.capability,
+  });
+  await s.calls.agents.removeUnit({ agent, instance: held.from });
+  const left = (await s.bindingsOf(PERSON)).filter((b) => b.slot === held.person.capability);
+  assert.deepEqual(
+    left.map((b) => b.provider),
+    [files.provider],
+    "the other export keeps the name",
+  );
+});
+
+test("the person's slots to what an agent holds are made again when the Hub has dropped one", async (t) => {
+  const s = await setup(t);
+  const { agent } = await s.calls.agents.create({
+    stack: { base: s.base, units: [s.unit("desk")] },
+    name: "Holder",
+  });
+  const [held] = (await s.calls.agents.get({ agent })).capabilities ?? [];
+  assert.ok(held);
+  await s.person.slots.grants.call.unexpose({ to: PERSON, slot: held.person.capability });
+  await s.person.slots.grants.call.unexpose({
+    to: PERSON,
+    slot: held.person.operations.desk as string,
+  });
+  // Management looks at what agents hold when it comes back, as it does for their chats.
+  await s.restart(() => {});
+  const again = async () => {
+    const [now] = (await s.calls.agents.get({ agent })).capabilities ?? [];
+    const there = (await s.bindingsOf(PERSON)).map((b) => b.slot);
+    return now &&
+      there.includes(now.person.capability) &&
+      there.includes(now.person.operations.desk as string)
+      ? now
+      : undefined;
+  };
+  let now = await again();
+  for (let waited = 0; !now && waited < 15_000; waited += 20) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    now = await again();
+  }
+  assert.ok(now, "both slots are the person's again");
+  const itself = await s.personSlot<{ state(input: object): Promise<{ state: string }> }>(
+    now?.person.capability as string,
+  );
+  assert.equal((await itself.state({})).state, "connected");
 });

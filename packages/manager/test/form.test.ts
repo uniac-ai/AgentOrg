@@ -3,7 +3,14 @@ import test from "node:test";
 import type { Field } from "@agentorg/interfaces";
 import { filled } from "@agentorg/sdk";
 import type { z } from "zod";
-import { formProblems, schemaOf, settle, workedOut } from "../src/form.ts";
+import {
+  formProblems,
+  givesProblems,
+  heldProblems,
+  schemaOf,
+  settle,
+  workedOut,
+} from "../src/form.ts";
 
 type Form = z.input<typeof Field>[];
 const form: Form = [
@@ -157,7 +164,12 @@ test("what a unit gives is worked out from its description and the values alone"
     ],
   } as never;
   assert.deepEqual(workedOut(numeric, { size: 1 }).slots, ["always", "one"]);
-  assert.deepEqual(workedOut(unit, { mode: "local" }), { slots: ["always"], skills: [] });
+  assert.deepEqual(workedOut(unit, { mode: "local" }), {
+    slots: ["always"],
+    skills: [],
+    surfaces: [],
+    views: [],
+  });
   assert.deepEqual(workedOut(unit, { mode: "remote", tools: ["x", "y"] }).slots, [
     "always",
     "tunnel",
@@ -217,4 +229,118 @@ test("the reader gives each kind, and a wrong question throws at once", () => {
   assert.throws(() => read.string("nothing"), TypeError);
   assert.throws(() => read.number("mode"), TypeError);
   assert.throws(() => read.string("key"), TypeError);
+});
+
+test("what a unit gives the person's side is worked out the same way, in the order given, each once", () => {
+  const top = { surface: "top", protocol: "stand-in@1" };
+  const lamp = { surface: "lamp", protocol: "stand-in@1" };
+  const where = { id: "where", place: "column", kind: "facts" };
+  const glow = { id: "glow", place: "column", kind: "meters", surface: "lamp" };
+  const desk = {
+    id: "desk",
+    title: "Desk",
+    description: "",
+    capability: { id: "desk", title: "Desk" },
+    needs: [],
+    gives: { slots: [], skills: [], results: [], surfaces: [top], views: [where] },
+    form: [
+      {
+        id: "lamp",
+        type: "toggle",
+        value: "boolean",
+        title: "Lamp",
+        // What is given already stands: a surface or a view is given once.
+        adds: { slots: [], skills: [], surfaces: [lamp, top], views: [glow, where] },
+      },
+    ],
+  } as never;
+  assert.deepEqual(workedOut(desk, {}).surfaces, [top]);
+  assert.deepEqual(workedOut(desk, { lamp: true }).surfaces, [top, lamp]);
+  assert.deepEqual(workedOut(desk, { lamp: true }).views, [where, glow]);
+  assert.deepEqual(givesProblems(desk), []);
+});
+
+test("a unit that gives surfaces or views with no capability, or a view whose data is not one of the three, is not well made", () => {
+  const base = { id: "u", title: "U", description: "", needs: [], form: [] };
+  const gives = (more: object) => ({ slots: [], skills: [], results: [], ...more });
+  assert.deepEqual(
+    givesProblems({
+      ...base,
+      gives: gives({ surfaces: [{ surface: "top", protocol: "x@1" }] }),
+    } as never),
+    ["U gives surfaces or views and builds no capability to hold them."],
+  );
+  const view = (id: string, more: object) => ({ id, place: "column", kind: "facts", ...more });
+  assert.deepEqual(
+    givesProblems({
+      ...base,
+      capability: { id: "u", title: "U" },
+      gives: gives({
+        views: [
+          view("both", { operation: "about", slot: "u", surface: "top" }),
+          view("nowhere", { operation: "about" }),
+          view("picked", { rows: ["Wood"] }),
+          view("fine", { operation: "about", slot: "u", rows: ["Wood"] }),
+          view("fixed", {}),
+        ],
+      }),
+      // And in what an answer adds.
+      form: [
+        {
+          id: "on",
+          type: "toggle",
+          value: "boolean",
+          title: "On",
+          adds: { slots: [], skills: [], views: [view("added", { slot: "u" })] },
+        },
+      ],
+    } as never),
+    [
+      'U\'s view "both" has an operation and a surface: a view shows one or the other.',
+      'U\'s view "nowhere" needs an operation and the slot it is at, both or neither.',
+      'U\'s view "picked" picks rows of an answer and has no operation to answer.',
+      'U\'s view "added" needs an operation and the slot it is at, both or neither.',
+    ],
+  );
+});
+
+test("what a capability holds with these answers is checked: what its views show, and how much", () => {
+  const surface = (name: string) => ({ surface: name, protocol: "stand-in@1" });
+  const many = Array.from({ length: 16 }, (_, i) => surface(`s${i}`));
+  const desk = {
+    id: "desk",
+    title: "Desk",
+    description: "",
+    capability: { id: "desk", title: "Desk" },
+    needs: [],
+    gives: {
+      slots: [{ name: "desk" }],
+      skills: [],
+      results: [],
+      surfaces: many,
+      views: [
+        { id: "glow", place: "column", kind: "meters", surface: "lamp" },
+        { id: "about", place: "column", kind: "facts", operation: "about", slot: "elsewhere" },
+      ],
+    },
+    form: [
+      {
+        id: "lamp",
+        type: "toggle",
+        value: "boolean",
+        title: "Lamp",
+        adds: { slots: [], skills: [], surfaces: [surface("lamp")] },
+      },
+    ],
+  } as never;
+  // The description is within its bounds; an answer's additions take it past what one holds.
+  assert.deepEqual(givesProblems(desk), []);
+  assert.deepEqual(heldProblems(desk, workedOut(desk, {})), [
+    "Desk's view \"glow\" shows a surface it doesn't give: lamp.",
+    "Desk's view \"about\" is at a slot it doesn't give: elsewhere.",
+  ]);
+  assert.deepEqual(heldProblems(desk, workedOut(desk, { lamp: true })), [
+    "Desk gives more than 16 surfaces.",
+    "Desk's view \"about\" is at a slot it doesn't give: elsewhere.",
+  ]);
 });

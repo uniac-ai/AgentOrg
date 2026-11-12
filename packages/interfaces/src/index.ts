@@ -13,6 +13,7 @@ export {
   SkillName,
   SkillPath,
 } from "./agent-settings.js";
+export { capability } from "./capability.js";
 export {
   CHAT_TITLE_MAX,
   ChatEntry,
@@ -46,6 +47,7 @@ export {
 export { kv } from "./kv.js";
 export { Item, llmSession, OutputItem, Tool } from "./llm-session.js";
 export {
+  AgentCapability,
   agents,
   ConnectionOrigin,
   connections,
@@ -59,6 +61,9 @@ export {
 } from "./manager.js";
 export { ToolEntry, tools } from "./tools.js";
 export {
+  CapabilityId,
+  FactRow,
+  Facts,
   Field,
   FieldId,
   FieldValue,
@@ -69,8 +74,10 @@ export {
   LiveTicket,
   Problem,
   ResultKind,
+  Surface,
   Unit,
   UnitId,
   UnitResult,
   unitProvider,
+  View,
 } from "./units.js";

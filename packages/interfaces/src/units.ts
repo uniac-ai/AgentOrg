@@ -30,7 +30,65 @@ export const FieldValue = z.union([
 /** What was filled in, by field id. A field with no value isn't here. */
 export const FieldValues = z.record(FieldId, FieldValue);
 
-/** Slots and skills. A slot's or a skill's name is fixed, or, with `field`, that field's value. */
+/** A capability's id, unique in its agent. */
+export const CapabilityId = Slug;
+/**
+ * Something of a capability that can be watched or operated live, in a protocol the page knows:
+ * what the capability has. Whether it can be opened now is a `LiveSurface`, which the capability
+ * says of itself.
+ */
+export const Surface = z.strictObject({
+  surface: Slug,
+  /** The frames it speaks, such as `terminal@1`, `files@1` or `screencast@1`. */
+  protocol: z.string().min(1).max(64),
+});
+/**
+ * One row of a `facts` view: a label and a value. `path` is on a value that is a path, which a
+ * host may draw as one; `caution` is on a value the person should heed, which a host draws apart.
+ */
+export const FactRow = z.strictObject({
+  label: z.string().min(1).max(64),
+  value: z.string().max(1024),
+  path: z.literal(true).optional(),
+  caution: z.literal(true).optional(),
+});
+/**
+ * What a `facts` view shows. An operation that feeds one answers this, as JSON text in its
+ * `tools@1` output: the page reads it as this, and an agent that calls the operation reads the
+ * same text. Nothing here checks it: the host that draws the view does.
+ */
+export const Facts = z.strictObject({ rows: z.array(FactRow).max(32) });
+/**
+ * A view a capability gives the person's side, as data: the host draws it and the capability
+ * paints nothing. `place` and `kind` name a place and a kind of view in the host's catalogue
+ * (places `column` and `frame`; kinds `facts`, `status` and `meters`) and are open: a host that
+ * doesn't know one doesn't show the view. Views are shown in the order they are given.
+ *
+ * Its data is one of three:
+ * - With `operation`: the answer of that tool of the connection the unit gives at `slot`, called
+ *   with no arguments through the person's own binding to it. It is the tool an agent calls
+ *   under that slot, so both read the same. For a `facts` view the answer is `Facts`; `rows`
+ *   names the rows of it the view shows, by label, and it shows all of them when absent.
+ * - With `surface`: that live surface of the capability.
+ * - With neither: rows fixed when the unit was applied, which `apply` gives.
+ *
+ * `when` shows it only while the agent is running, or only while the capability can be reached.
+ */
+export const View = z.strictObject({
+  id: Slug,
+  place: Slug,
+  kind: Slug,
+  when: z.enum(["running", "reachable"]).optional(),
+  operation: z.string().min(1).max(128).optional(),
+  /** The slot whose connection has `operation`: with it, always. */
+  slot: SlotName.optional(),
+  rows: z.array(z.string().min(1).max(64)).max(32).optional(),
+  surface: Slug.optional(),
+});
+/**
+ * Slots and skills, for the agent's side, and surfaces and views, for the person's. A slot's or
+ * a skill's name is fixed, or, with `field`, that field's value.
+ */
 const Gives = z.object({
   slots: z
     .array(z.union([z.strictObject({ name: SlotName }), z.strictObject({ field: FieldId })]))
@@ -43,6 +101,8 @@ const Gives = z.object({
       ]),
     )
     .max(64),
+  surfaces: z.array(Surface).max(16).optional(),
+  views: z.array(View).max(32).optional(),
 });
 
 /**
@@ -107,6 +167,16 @@ export const Unit = z.object({
   id: UnitId,
   title: Title,
   description: Description,
+  /**
+   * The capability applying it builds into the agent, which the agent then holds: the unit's
+   * connections, surfaces and views are its. `title` names it to a person; `id` is unique in
+   * an agent, so an agent holds one of it. A unit with none gives slots and skills only.
+   *
+   * With `gives` and the form, this is what a host reads to say what an agent built from the
+   * unit will hold, with no call to the unit's logic. Once the unit is applied, the agent is
+   * asked, through what it holds, and the unit is not.
+   */
+  capability: z.strictObject({ id: CapabilityId, title: Title }).optional(),
   form: Form,
   needs: z.array(ResultKind).max(16),
   gives: Gives.extend({ results: z.array(ResultKind).max(16) }),
@@ -189,6 +259,19 @@ export const unitProvider = defineInterface({
           .array(z.object({ slot: SlotName, connection: Id, target: ConnectionTarget }))
           .max(32),
         results: z.array(UnitResult).max(16),
+        /**
+         * For a unit that builds a capability: the Actor made for it, which exports
+         * `capability@1` as `capability`, and, by view id, the rows of each view whose rows
+         * are fixed now: exactly those views, or management undoes the creation. The Actor is
+         * the instance's, like its connections, and not one of them: `remove` closes it with
+         * them. Management connects the person to it and to the connections.
+         */
+        capability: z
+          .strictObject({
+            actor: Id,
+            rows: z.record(Slug, z.array(FactRow).max(32)).optional(),
+          })
+          .optional(),
       }),
     }),
     /** How the instance stands now, with each of its connections' own. */
