@@ -79,19 +79,13 @@ export interface Log {
   error(message: string, fields?: Record<string, unknown>): void;
 }
 
-/**
- * A message as a thread shows it. A `tool` message tells what the loop did: with `tool`, the call
- * it stands for, said as `running` when it starts and again under the same id when it ends;
- * without, its `text` says it in one line, as for calls that never ran or a turn that goes on
- * after it was cut off.
- */
+/** A message as it is said in a thread: what a person said, or a reply. */
 export interface Shown {
   id: string;
-  role: "user" | "assistant" | "tool";
+  role: "user" | "assistant";
   text: string;
   /** An ISO 8601 time. */
   at: string;
-  tool?: { name: string; state: "running" | "done" | "refused"; input?: string; output?: string };
 }
 
 /** What a loop is doing. On `error`, `detail.code` is the refusal's code. */

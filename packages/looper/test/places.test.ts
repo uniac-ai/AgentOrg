@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { PLACES, WAITING } from "../src/index.ts";
-import { gate, held, idle, looperWith } from "./support.ts";
+import { gate, held, idle, kept, looperWith } from "./support.ts";
 
 test("turns run side by side up to the places; the next waits its turn, its message already said", async () => {
   const { looper, said, asked, answer, fill } = looperWith();
@@ -94,7 +94,7 @@ test("the line for a place holds so many turns; past that a new thread's message
 
 test("a turn cancelled while it waits never starts, and one cancelled in a call keeps its place until the call ends", async () => {
   const { tool, called, finish } = held();
-  const { looper, said, asked, answer, fill } = looperWith({ tools: [tool] });
+  const { looper, values, asked, answer, fill } = looperWith({ tools: [tool] });
   await fill(["a", "b", "c", "d"]);
   answer("Work a.", called);
   await looper.send("e", "Work e.");
@@ -110,7 +110,7 @@ test("a turn cancelled while it waits never starts, and one cancelled in a call 
   finish();
   await idle();
   assert.deepEqual(asked.slice(PLACES), ["Work f."]);
-  assert.ok(said.includes("a: tool: hold: done"));
+  assert.ok(kept(values, "a").includes("hold: done"));
   for (const name of ["b", "c", "d", "f"]) answer(`Work ${name}.`);
   await looper.settled();
   assert.ok(!asked.includes("Work e."));
@@ -195,7 +195,7 @@ test("stopped, every turn is cut, running or waiting, and no message is taken un
 test("stopping answers when nothing more will be written: after a call still running, and a message being recorded", async () => {
   const { tool, called, finish } = held();
   const { shut: late, open: recorded } = gate();
-  const { looper, said, asked, answer, fill } = looperWith({
+  const { looper, values, said, asked, answer, fill } = looperWith({
     tools: [tool],
     writing: (key) => (key.startsWith("thread/late/") ? late : undefined),
   });
@@ -217,7 +217,7 @@ test("stopping answers when nothing more will be written: after a call still run
   finish();
   await stopping;
   assert.ok(said.includes("late: user: Just before."));
-  assert.ok(said.includes("a: tool: hold: done"));
+  assert.ok(kept(values, "a").includes("hold: done"));
   await idle();
   assert.deepEqual(asked, ["Work a."]);
 });

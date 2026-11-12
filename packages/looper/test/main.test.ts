@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { Json } from "../src/index.ts";
 import { MAIN_INSTRUCTIONS } from "../src/main.ts";
-import { gate, idle, looperWith, newWork, routeTo, says, until } from "./support.ts";
+import { gate, idle, looperWith, newWork, routeTo, says, sends, until } from "./support.ts";
 
 const texts = async (looper: ReturnType<typeof looperWith>["looper"], thread: string) =>
   (await looper.page(thread, undefined, 50)).messages.map((message) => message.text);
@@ -169,7 +169,7 @@ test("work at rest is told of with what it last said, and a message that points 
   });
   await looper.send("a", "Write the report.");
   await until(() => asked.length === 1, "the work's turn");
-  answer("Write the report.", says("Report  done.\nIt has four parts."));
+  answer("Write the report.", sends("Report  done.\nIt has four parts."));
   await looper.settled();
   await looper.send("c", "Add a chart to the report.");
   await until(() => asked.length === 2, "the work to go on");
@@ -195,7 +195,7 @@ test("the main loop is told of twelve pieces of work at most: those in a turn, t
   for (let i = 0; i < 13; i++) {
     await looper.send(`t${i}`, `Work ${i}.`);
     await until(() => asked.length === i + 1, "its turn");
-    answer(`Work ${i}.`, says(`Done ${i}.`));
+    answer(`Work ${i}.`, sends(`Done ${i}.`));
     await looper.settled();
     t.mock.timers.tick(1000);
   }
@@ -230,7 +230,7 @@ test("a thread kept before works had records gets one when its turn ends, and is
   });
   await looper.send("old", "And now?");
   await until(() => asked.length === 1, "its turn");
-  answer("And now?", says("Now this."));
+  answer("And now?", sends("Now this."));
   await looper.settled();
   await looper.send("b", "What is there?");
   await until(() => said.includes("b: assistant: One thing."), "the answer");
@@ -260,7 +260,7 @@ test("a looper made again on the same store tells of the work there was, with wh
   const first = looperWith({ routing: () => newWork("The report") });
   await first.looper.send("a", "Write the report.");
   await until(() => first.asked.length === 1, "its turn");
-  first.answer("Write the report.", says("Report done."));
+  first.answer("Write the report.", sends("Report done."));
   await first.looper.settled();
 
   const second = looperWith({ values: first.values, routing: () => says("The report.") });
@@ -289,7 +289,7 @@ test("a thread the main loop answered, then given to work there is, is read by t
   await looper.send("c", "Add a chart to the report.");
   await until(() => !values.has("unrouted/c"), "the thread to be taken");
   assert.ok(said.includes("c: assistant: Passing it on."));
-  answer("Write the report.", says("Report done."));
+  answer("Write the report.", sends("Report done."));
   await until(() => asked.length === 2, "the request that reads the thread");
   const read = [
     "Write the report.",
@@ -300,7 +300,7 @@ test("a thread the main loop answered, then given to work there is, is read by t
     "Passing it on.",
   ];
   assert.deepEqual(inputs[1], read);
-  answer("Add a chart to the report.", says("Chart added."));
+  answer("Add a chart to the report.", sends("Chart added."));
   await looper.settled();
   // What the main loop said there isn't what the work last said.
   assert.equal((values.get("work/a") as { last: string }).last, "Chart added.");

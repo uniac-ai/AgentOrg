@@ -233,7 +233,6 @@ export function createChats(options: {
    * its message has its answer.
    */
   const sent = (held: Held, message: Message) => {
-    if (message.role === "tool") return;
     held.stored.order = ++top;
     if (message.role === "assistant") {
       held.stored.latest = { id: message.id, at: message.at };

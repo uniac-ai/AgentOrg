@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { gate, held, idle, looperWith, says, until } from "./support.ts";
+import { gate, held, idle, kept, looperWith, sends, until } from "./support.ts";
 
 const texts = async (looper: ReturnType<typeof looperWith>["looper"], thread: string) =>
   (await looper.page(thread, undefined, 50)).messages.map((message) => message.text);
@@ -14,17 +14,17 @@ test("a message said while the model answers is recorded at once, and the turn a
   await idle();
   assert.deepEqual(asked, ["First."], "the answer on its way is not asked again");
 
-  answer("First.", says("First done."));
+  answer("First.", sends("First done."));
   await until(() => asked.length === 2, "the second request");
   assert.deepEqual(looper.state("a"), { state: "thinking" });
   // The model reads its reply before the message that reply never saw.
   assert.deepEqual(inputs[1], ["First.", "First done.", "Second."]);
   // A third, said while the second is answered, comes after the answer to the second.
   await looper.send("a", "Third.");
-  answer("Second.", says("Second done."));
+  answer("Second.", sends("Second done."));
   await until(() => asked.length === 3, "the third request");
   assert.deepEqual(inputs[2], ["First.", "First done.", "Second.", "Second done.", "Third."]);
-  answer("Third.", says("All done."));
+  answer("Third.", sends("All done."));
   await looper.settled();
   assert.deepEqual(looper.state("a"), { state: "idle" });
   // The thread shows them as they were said.
@@ -64,7 +64,7 @@ test("a message being recorded as its turn would end is answered by that turn", 
   await until(() => asked.length === 1, "the request");
   const sending = looper.send("a", "Second.");
   await idle();
-  answer("First.", says("First done."));
+  answer("First.", sends("First done."));
   await idle();
   // The turn has nothing more to do, and doesn't end over a message on its way into the record.
   assert.deepEqual(looper.state("a"), { state: "thinking" });
@@ -79,23 +79,24 @@ test("a message being recorded as its turn would end is answered by that turn", 
 
 test("a message said as its turn ends starts the next turn", async () => {
   let again: Promise<unknown> | undefined;
+  let writes = 0;
   const { looper, values, asked, inputs, answer } = looperWith({
-    // Asked just after the turn has asked for its end: taken once the turn is over.
-    saying(line) {
-      if (line === "a: assistant: First done.")
-        queueMicrotask(() => {
-          again = looper.send("a", "Second.");
-        });
+    // Asked while the turn's end is being taken, as it keeps on its message that it went
+    // unanswered (that message's second write): taken once the turn is over.
+    writing(key) {
+      if (key === "thread/a/msg/000000000001" && ++writes === 2)
+        again = looper.send("a", "Second.");
+      return undefined;
     },
   });
   await looper.send("a", "First.");
   await until(() => asked.length === 1, "the request");
-  answer("First.", says("First done."));
+  answer("First.", []);
   await until(() => asked.length === 2, "the next turn's request");
   await again;
-  assert.deepEqual(inputs[1], ["First.", "First done.", "Second."]);
+  assert.deepEqual(inputs[1], ["First.", "Second."]);
   // It opened a turn of its own, with no stopped turn still writing: it is not kept as joined.
-  assert.equal("joined" in (values.get("thread/a/msg/000000000003") as object), false);
+  assert.equal("joined" in (values.get("thread/a/msg/000000000002") as object), false);
   assert.deepEqual(looper.state("a"), { state: "thinking" });
   answer("Second.");
   await looper.settled();
@@ -103,12 +104,12 @@ test("a message said as its turn ends starts the next turn", async () => {
 });
 
 test("messages said while a cut turn's call still runs are recorded at once, and their turn reads them after that call's result", async () => {
-  const { tool, called, finish } = held();
+  const { tool, called, groups, finish } = held();
   const { looper, said, asked, inputs, answer } = looperWith({ tools: [tool] });
   await looper.send("a", "Hold it.");
   await until(() => asked.length === 1, "the request");
   answer("Hold it.", called);
-  await until(() => said.includes("a: tool: hold: running"), "the call to start");
+  await until(() => groups.length === 1, "the call to start");
   await looper.cancel("a");
   // Both are kept and said while the call runs; the turn they start is shown, and asks nothing yet.
   const sending = [looper.send("a", "First."), looper.send("a", "Second.")];
@@ -132,7 +133,7 @@ test("a message said while a cut turn's reply is still being stored is recorded 
   });
   await looper.send("a", "First.");
   await until(() => asked.length === 1, "the request");
-  answer("First.", says("First done."));
+  answer("First.", sends("First done."));
   await idle();
   await looper.cancel("a");
   await looper.send("a", "Second.");
@@ -175,7 +176,7 @@ test("a cancel stays a cancel: what was asked before it starts and continues not
   await until(() => other.asked.length === 1, "the request");
   const sent = [other.looper.send("b", "Second."), other.looper.send("b", "Third.")];
   await idle();
-  other.answer("First.", says("First done."));
+  other.answer("First.", sends("First done."));
   await idle();
   await other.looper.cancel("b");
   slow.open();
@@ -197,7 +198,7 @@ test("a turn cancelled as it ends holds nothing up: the next message starts its 
     await until(() => asked.length === 1, "the request");
     const joining = joins ? looper.send("a", "Second.") : undefined;
     await idle();
-    answer("First.", says("First done."));
+    answer("First.", sends("First done."));
     await idle();
     await looper.cancel("a");
     const next = looper.send("a", "Next.");
@@ -213,7 +214,7 @@ test("a turn cancelled as it ends holds nothing up: the next message starts its 
 test("the looper's stop waits for what a turn cut as its reply is written still writes", async () => {
   const { tool, called } = held();
   const late = gate();
-  const { looper, asked, answer } = looperWith({
+  const { looper, values, asked, answer } = looperWith({
     tools: [tool],
     writing: (key) =>
       key.startsWith("thread/") && key.endsWith("000000000002") ? late.shut : undefined,
@@ -232,7 +233,9 @@ test("the looper's stop waits for what a turn cut as its reply is written still 
   assert.equal(stopped, false, "stopping waits for what the turn still writes");
   late.open();
   await stopping;
-  assert.deepEqual(await texts(looper, "a"), ["First.", "Holding.", "hold: cancelled"]);
+  // What it wrote and the call it didn't run are kept for the work; only the message is said.
+  assert.deepEqual(kept(values, "a"), ["First.", "Holding.", "hold: cancelled"]);
+  assert.deepEqual(await texts(looper, "a"), ["First."]);
 });
 
 test("a first message the store refuses, with a second behind it, leaves the thread's loop in use", async () => {

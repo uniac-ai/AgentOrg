@@ -8,8 +8,8 @@ import {
   type Shown,
   type Tool,
 } from "../src/index.ts";
-import { HAND_BACK, workInstructions } from "../src/loop.ts";
-import { newWork } from "./support.ts";
+import { HAND_BACK, SEND, workInstructions } from "../src/loop.ts";
+import { newWork, sends } from "./support.ts";
 
 /**
  * A looper on a store in memory, a model that answers from `replies`, and what it said. The store
@@ -80,42 +80,42 @@ test("a message is answered in its thread, through the tools it was given, on th
     },
   ];
   const { looper, values, said, working, requests } = looperWith(
-    [calls("look", '{"at":"it"}'), says("It is there."), says("Elsewhere.")],
+    [calls("look", '{"at":"it"}'), sends("It is there.", 1), [], sends("Elsewhere.", 1)],
     tools,
   );
   const { messageId } = await looper.send("one", "Look at it.");
   await looper.settled();
   await looper.send("two", "And you?");
   await looper.settled();
-  // Its tools, and the looper's one function beside them.
+  // Its tools, and the looper's two functions beside them.
   assert.deepEqual(requests[0]?.tools, [
     { name: "look", parameters: { type: "object" } },
+    SEND,
     HAND_BACK,
   ]);
 
   assert.deepEqual(ran, [{ at: "it" }]);
+  // What is said in each thread: the message and the reply sent to it. The call is the work's.
   assert.deepEqual(
-    said.map(({ thread, message }) => [thread, message.role, message.text, message.tool?.state]),
+    said.map(({ thread, message }) => [thread, message.role, message.text]),
     [
-      ["one", "user", "Look at it.", undefined],
-      ["one", "tool", "look: running", "running"],
-      ["one", "tool", "look: done", "done"],
-      ["one", "assistant", "It is there.", undefined],
-      ["two", "user", "And you?", undefined],
-      ["two", "assistant", "Elsewhere.", undefined],
+      ["one", "user", "Look at it."],
+      ["one", "assistant", "It is there."],
+      ["two", "user", "And you?"],
+      ["two", "assistant", "Elsewhere."],
     ],
   );
   assert.equal(said[0]?.message.id, messageId);
-  // At work from each message until its answer, said once each way.
+  // At work from each message until its work's turn ends, said once each way.
   assert.deepEqual(working, [true, false, true, false]);
-  // Each thread's record is its own: the second request of the first holds the call and its
-  // output, and the other thread's request holds none of it.
+  // Each thread's record is its own: the first's requests hold the call, then the reply sent, each
+  // with its output, and the other thread's hold none of it.
   assert.deepEqual(
     requests.map(({ input }) => input.length),
-    [1, 3, 1],
+    [1, 3, 5, 1, 3],
   );
-  // What its host tells it, then which work this is and how to hand a message back.
-  assert.equal(requests[2]?.instructions, `Be brief.\n\n${workInstructions("Work")}`);
+  // What its host tells it, then which work this is and how to answer and hand a message back.
+  assert.equal(requests[3]?.instructions, `Be brief.\n\n${workInstructions("Work")}`);
   assert.deepEqual(
     [...values.keys()]
       .filter((key) => key.startsWith("thread/"))
@@ -124,24 +124,24 @@ test("a message is answered in its thread, through the tools it was given, on th
   );
   assert.deepEqual(
     (await looper.page("one", undefined, 10)).messages.map((message) => message.role),
-    ["user", "tool", "assistant"],
+    ["user", "assistant"],
   );
   assert.deepEqual(looper.state("one"), { state: "idle" });
   assert.deepEqual(looper.state("a thread nothing was said in"), { state: "idle" });
 
   // A looper made again on the same store has each thread's record, and goes on from it.
-  const again = looperWith([says("Still there.")], tools, values);
+  const again = looperWith([sends("Still there.", 2)], tools, values);
   assert.deepEqual(
     (await again.looper.page("one", undefined, 10)).messages.map((message) => message.text),
-    ["Look at it.", "look: done", "It is there."],
+    ["Look at it.", "It is there."],
   );
   await again.looper.send("one", "And now?");
   await again.looper.settled();
-  assert.equal(again.requests[0]?.input.length, 5);
+  assert.equal(again.requests[0]?.input.length, 6);
 });
 
 test("a thread's name can be anything: its keys hold it as one part, as its work's do", async () => {
-  const { looper, values } = looperWith([says("Yes.")]);
+  const { looper, values } = looperWith([sends("Yes.", 1)]);
   await looper.send("a/b c", "Hello?");
   await looper.settled();
   assert.deepEqual([...values.keys()].filter((key) => !key.startsWith("main/")).sort(), [
@@ -168,7 +168,7 @@ test("a refusal is shown with its code, and anything else thrown as `failed`", a
       },
     },
   ];
-  const { looper, said, failures } = looperWith(
+  const { looper, requests, failures } = looperWith(
     [
       [...calls("refuses", ""), ...calls("breaks", "")],
       new Refusal("usage_limit", "The limit is reached."),
@@ -178,8 +178,14 @@ test("a refusal is shown with its code, and anything else thrown as `failed`", a
   );
   await looper.send("one", "Go.");
   await looper.settled();
+  // What the model reads of each call.
   assert.deepEqual(
-    said.flatMap(({ message }) => (message.tool?.state === "refused" ? [message.tool.output] : [])),
+    requests[1]?.input.flatMap((item) =>
+      (item as OutputItem | { type: "function_call_output"; output: string }).type ===
+      "function_call_output"
+        ? [(item as { output: string }).output]
+        : [],
+    ),
     [
       '{"error":{"code":"not_connected","message":"It is not connected."}}',
       '{"error":{"code":"failed","message":"The call failed."}}',
@@ -198,7 +204,7 @@ test("a refusal is shown with its code, and anything else thrown as `failed`", a
   });
 });
 
-test("a model's streamed text goes to the reply it becomes", async () => {
+test("a worker's streamed text reaches no thread: what it sends does", async () => {
   let answer: (output: OutputItem[]) => void = () => {};
   const reply = new Promise<OutputItem[]>((resolve) => {
     answer = resolve;
@@ -209,9 +215,11 @@ test("a model's streamed text goes to the reply it becomes", async () => {
   assert.deepEqual(looper.state("one"), { state: "thinking" });
 
   looper.delta(requests[0]?.requestId as string, "Do");
-  looper.delta("a request nobody made", "lost");
-  answer(says("Done."));
+  answer([...says("Doing it."), ...sends("Done.", 1)]);
   await looper.settled();
-  const done = said.find(({ message }) => message.text === "Done.");
-  assert.deepEqual(deltas, [{ thread: "one", id: done?.message.id, text: "Do" }]);
+  assert.deepEqual(deltas, []);
+  assert.deepEqual(
+    said.map(({ message }) => message.text),
+    ["First.", "Done."],
+  );
 });

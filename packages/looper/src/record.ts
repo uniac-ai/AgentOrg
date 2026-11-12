@@ -1,6 +1,6 @@
 /**
  * What a loop runs on, kept in a store. A thread keeps its messages, one key each: the items a
- * model reads for it, and for a tool message the line a person sees. A thread is read once, then
+ * model reads for it, and for a line of a piece of work's own, its text. A thread is read once, then
  * kept in memory, and its oldest messages are deleted past a retention cap. A piece of work reads
  * its context from the threads it follows: each message is kept once, in the thread where it is
  * shown, and says which work it belongs to when that isn't its thread's own, or which pieces of
@@ -28,7 +28,7 @@ type Given = z.output<typeof Given>;
 export const Entry = z.object({
   id: z.string(),
   role: z.enum(["user", "assistant", "tool"]),
-  /** What the person sees, for a tool message; the others show their message items. */
+  /** The text of a line of its work's own, which no model reads; the others have their items'. */
   text: z.string().optional(),
   at: z.string(),
   items: z.array(Item),
@@ -67,8 +67,15 @@ export const Entry = z.object({
    * follows, none: it is no work's.
    */
   to: z.array(Given).optional(),
-  /** For a tool message that is kept and sent to the model, and shown to nobody. */
-  silent: z.literal(true).optional(),
+  /** For what a worker wrote and didn't send: its work's, said in no thread. */
+  unsent: z.literal(true).optional(),
+  /** For a reply a worker sent: the id of the user message it answers, in its thread. */
+  closes: z.string().optional(),
+  /**
+   * For a user message a turn ended without a reply to: nothing more is asked of it. Its thread
+   * is told so, unless a stop came as its turn ended.
+   */
+  unanswered: z.literal(true).optional(),
   /**
    * For what the main loop said in answer to messages that came back from all they were given
    * to: their ids. Such a message is decided, and not put to the main loop again.
@@ -96,6 +103,18 @@ const PAGE_BUDGET = 512 * 1024;
 const encoder = new TextEncoder();
 const size = (value: unknown) => encoder.encode(JSON.stringify(value)).byteLength;
 const LEFT_OUT = "(Left out: the conversation was too large to send it.)";
+/** The looper's function by which a worker says something to the person: its call is what was said. */
+export const SEND_NAME = "send";
+/** What a worker is told of what it sent. */
+export const SENT = "Sent.";
+/** Whether `call`, among `items`, is a `send` that was said: one whose output is `SENT`. */
+const said = (call: Item, items: Item[]) =>
+  call.type === "function_call" &&
+  call.name === SEND_NAME &&
+  items.some(
+    (item) =>
+      item.type === "function_call_output" && item.callId === call.callId && item.output === SENT,
+  );
 const ARGUMENTS_LEFT_OUT = '{"left_out":"too large to keep"}';
 /**
  * What is over the budget is cut in steps of this many bytes: while a conversation grows within
@@ -111,7 +130,8 @@ const numberOf = (item: Item | undefined) =>
  * The exchanges as the items to send, within the budget where they can be. What is over it,
  * rounded up to a step, goes in this order, each the oldest first:
  * 1. what the calls of every exchange except the latest were given and gave back, each call
- *    still paired with an output, so what was said stays longest;
+ *    still paired with an output, so what was said stays longest: a `send`'s words are what was
+ *    said;
  * 2. whole exchanges, except the latest two, so "go on" after a long turn still has that turn,
  *    and except the message the work opened with, `[1]`: one line stands where they were,
  *    saying after and before which messages;
@@ -132,7 +152,11 @@ function fit(exchanges: Item[][]): Item[] {
       if (item.type === "function_call_output" && size(item.output) > size(LEFT_OUT)) {
         cut += size(item.output) - size(LEFT_OUT);
         items[i] = { ...item, output: LEFT_OUT };
-      } else if (item.type === "function_call" && size(item.arguments) > size(ARGUMENTS_LEFT_OUT)) {
+      } else if (
+        item.type === "function_call" &&
+        !said(item, items) &&
+        size(item.arguments) > size(ARGUMENTS_LEFT_OUT)
+      ) {
         cut += size(item.arguments) - size(ARGUMENTS_LEFT_OUT);
         items[i] = { ...item, arguments: ARGUMENTS_LEFT_OUT };
       }
@@ -181,32 +205,48 @@ const MAX_SHOWN = 100_000;
 export const textOf = (entry: Entry) =>
   head(
     entry.text ??
+      sentIn(entry.items) ??
       entry.items.flatMap((item) => (item.type === "message" ? [item.content] : [])).join(""),
     MAX_SHOWN,
   );
+/** What a `send` among `items` said, as its arguments carry it. */
+function sentIn(items: Item[]): string | undefined {
+  const call = items.find((item) => item.type === "function_call" && item.name === SEND_NAME);
+  if (call?.type !== "function_call") return undefined;
+  try {
+    const { text } = JSON.parse(call.arguments) as { text?: unknown };
+    return typeof text === "string" ? text : undefined;
+  } catch {
+    return undefined;
+  }
+}
+/**
+ * A `send`'s arguments as they are kept: past a message's cap, its message and its words, fitted
+ * as a message's text is.
+ */
+function sentArguments(args: string): string {
+  if (size(args) <= MAX_TEXT) return args;
+  try {
+    const { message, text } = JSON.parse(args) as { message?: unknown; text?: unknown };
+    if (typeof text === "string")
+      return JSON.stringify({ message, text: fitted(text, MAX_TEXT - 1024) });
+  } catch {}
+  return argumentsOf(args);
+}
 /** A call's arguments as they are kept and shown: past their cap, a note in their place. */
 export const argumentsOf = (args: string) =>
   size(args) > MAX_ARGUMENTS ? ARGUMENTS_LEFT_OUT : args;
 
-/**
- * A message as it is shown. A tool message whose call ran carries `tool`: the call's name, how it
- * ended, its arguments and its output.
- */
+/** A message as it is said: what a person said, or a reply. */
 export function messageOf(entry: Entry): Shown {
-  const message = { id: entry.id, role: entry.role, text: textOf(entry), at: entry.at };
-  const call = entry.items.find((item) => item.type === "function_call");
-  if (entry.role !== "tool" || !entry.state || !call) return message;
-  const output = entry.items.find((item) => item.type === "function_call_output");
-  return {
-    ...message,
-    tool: {
-      name: head(call.name, 128),
-      state: entry.state,
-      input: head(call.arguments, MAX_SHOWN),
-      ...(output ? { output: head(output.output, MAX_SHOWN) } : {}),
-    },
-  };
+  return { id: entry.id, role: entry.role as Shown["role"], text: textOf(entry), at: entry.at };
 }
+
+/**
+ * Whether a message is said in its thread: what a person said, and what was said to them. What a
+ * piece of work did, and what its worker wrote and didn't send, are its work's.
+ */
+const saidIn = (entry: Entry) => entry.role !== "tool" && !entry.unsent;
 
 /** A message as it is stored: each text once, and nothing past its cap. */
 const kept = (entry: Entry): Entry => ({
@@ -215,6 +255,8 @@ const kept = (entry: Entry): Entry => ({
     if (item.type === "message") return { ...item, content: fitted(item.content, MAX_TEXT) };
     if (item.type === "function_call_output")
       return { ...item, output: fitted(item.output, MAX_TEXT) };
+    // What a `send` that was said carries is kept as a message's text is.
+    if (said(item, entry.items)) return { ...item, arguments: sentArguments(item.arguments) };
     return { ...item, arguments: argumentsOf(item.arguments) };
   }),
 });
@@ -431,7 +473,7 @@ export function createThread(
     async said(to = Number.POSITIVE_INFINITY) {
       const held = await load();
       const said = held.records
-        .filter((record) => record.entry.role !== "tool" && orderOf(record) <= to)
+        .filter((record) => saidIn(record.entry) && orderOf(record) <= to)
         .sort((a, b) => orderOf(a) - orderOf(b))
         .map(({ entry }) => ({ role: entry.role as "user" | "assistant", text: textOf(entry) }));
       return { said, upTo: held.last };
@@ -512,11 +554,16 @@ export function createThread(
     },
     /** Messages before `before`, oldest first, as many as fit `limit` and `PAGE_BUDGET`. */
     async page(before: string | undefined, limit: number) {
-      const records = (await load()).records.filter(({ entry }) => !entry.silent);
+      const all = (await load()).records;
+      // `before` may name one that is not said, as a page made before it was hidden did.
+      const at = before === undefined ? -1 : all.findIndex((record) => record.entry.id === before);
+      const records = all.filter(({ entry }) => saidIn(entry));
       const end =
         before === undefined
           ? records.length
-          : records.findIndex((record) => record.entry.id === before);
+          : at === -1
+            ? -1
+            : all.slice(0, at).filter(({ entry }) => saidIn(entry)).length;
       const messages = [];
       let bytes = 0;
       let start = Math.max(end, 0);
@@ -676,6 +723,30 @@ export function createRecord(options: {
       ({ record }) => placeOf(record) > read && (record.entry.role === "user" || joinedOf(record)),
     );
   /**
+   * Its user messages still to answer past the place `from`: not handed back, in a thread it
+   * hasn't left, not answered by a reply any piece of work sent to it, and not said to have gone
+   * unanswered.
+   */
+  const openOf = (held: Map<string, Held>, from: number) => {
+    const records = own(held);
+    const answered = new Set(
+      [...held].flatMap(([thread, { records }]) =>
+        records.flatMap(({ entry }) =>
+          entry.closes === undefined ? [] : [`${thread} ${entry.closes}`],
+        ),
+      ),
+    );
+    return records.filter(
+      ({ thread, record }) =>
+        record.entry.role === "user" &&
+        placeOf(record) > from &&
+        holdOf(record).back === undefined &&
+        record.entry.unanswered === undefined &&
+        !options.left(thread) &&
+        !answered.has(`${thread} ${record.entry.id}`),
+    );
+  };
+  /**
    * The thread of the newest user message it has not handed back: where it answers. With none
    * such, that of its newest; its own, with no message.
    */
@@ -806,22 +877,55 @@ export function createRecord(options: {
       return { thread, all: (record.entry.to ?? []).every((one) => one.back !== undefined) };
     },
     /**
-     * Whether a user message of its, said since it last replied, is still its to answer: one it
-     * has not handed back.
+     * The place of the last thing it did itself, other than what the main loop said: what was
+     * said to it past there has had nothing of it since.
      */
-    async unanswered(): Promise<boolean> {
-      const records = own(await load());
-      const reply = records.findLast(
-        ({ record: { entry } }) => entry.role === "assistant" && entry.main === undefined,
-      )?.record;
-      // What its last reply had read: a message said during that turn stands past it.
-      const read = reply ? (reply.entry.ahead ?? placeOf(reply)) : 0;
-      return records.some(
-        ({ record }) =>
-          record.entry.role === "user" &&
-          placeOf(record) > read &&
-          holdOf(record).back === undefined,
+    async acted(): Promise<number> {
+      const last = own(await load()).findLast(
+        ({ record: { entry } }) => entry.role !== "user" && entry.main === undefined,
       );
+      return last ? placeOf(last.record) : 0;
+    },
+    /** Whether a user message of its past the place `from` is still its to answer. */
+    async unanswered(from: number): Promise<boolean> {
+      return openOf(await load(), from).length > 0;
+    },
+    /**
+     * Say what `items`, a `send` and its output, sent, in reply to its user message at `place`,
+     * in the thread that message was said in; `id` and `read` as `append` takes them. Nothing,
+     * when it has no such message to answer: none at that place, one it handed back, or one in a
+     * thread it has left.
+     */
+    async reply(place: number, items: Item[], at: { id?: string; read?: number }) {
+      const found = own(await load()).find(
+        ({ record }) => record.entry.role === "user" && placeOf(record) === place,
+      );
+      if (!found || holdOf(found.record).back !== undefined || options.left(found.thread))
+        return undefined;
+      const message = found.record.entry.id;
+      return keep(found.thread, () => ({ role: "assistant" as const, items, closes: message }), at);
+    },
+    /**
+     * Say of each user message of its still to answer past the place `from`, and up to `read`,
+     * that it went unanswered: kept on the message, which then needs nothing more. It gives the
+     * threads they were said in.
+     */
+    async closeUnanswered(from: number, read: number): Promise<string[]> {
+      const held = await load();
+      const left = openOf(held, from).filter(({ record }) => placeOf(record) <= read);
+      for (const { thread, record } of left) {
+        const change = options.thread(thread).change(
+          held.get(thread) as Held,
+          record,
+          (entry) => ({ ...entry, unanswered: true as const }),
+          ({ unanswered: _, ...entry }) => entry,
+        );
+        await change.store().catch((error: unknown) => {
+          change.undo();
+          throw error;
+        });
+      }
+      return [...new Set(left.map(({ thread }) => thread))];
     },
     /**
      * Hand back what waits for it in `thread`, which it is leaving: a message there that names
@@ -875,10 +979,11 @@ export function createRecord(options: {
     },
     /** What it last said, if anything. */
     async last(): Promise<string | undefined> {
-      const said = own(await load()).findLast(
-        ({ record: { entry } }) => entry.role === "assistant" && entry.main === undefined,
+      const reply = own(await load()).findLast(
+        ({ record: { entry } }) =>
+          entry.role === "assistant" && entry.main === undefined && !entry.unsent,
       );
-      return said ? textOf(said.record.entry) : undefined;
+      return reply ? textOf(reply.record.entry) : undefined;
     },
     /** Whether it has no message. */
     async empty(): Promise<boolean> {

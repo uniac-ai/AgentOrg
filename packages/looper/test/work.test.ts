@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { Json } from "../src/index.ts";
 import { HEARD_INSTRUCTIONS, MAIN_INSTRUCTIONS, ROUTE } from "../src/main.ts";
-import { gate, idle, looperWith, newWork, routeTo, says, until } from "./support.ts";
+import { gate, idle, looperWith, newWork, routeTo, sends, until } from "./support.ts";
 
 const texts = async (looper: ReturnType<typeof looperWith>["looper"], thread: string) =>
   (await looper.page(thread, undefined, 50)).messages.map((message) => message.text);
@@ -23,7 +23,7 @@ test("a message in a thread nothing follows is kept at once, and the main loop s
   assert.deepEqual(working, [true]);
   // A further message is the work's, by code: the main loop is told of it, not asked whose it is.
   await looper.send("a", "And a summary.");
-  answer("Write the report.\nAll of it.", says("Report done."));
+  answer("Write the report.\nAll of it.", sends("Report done."));
   await until(() => asked.length === 2, "the request that reads it");
   answer("And a summary.");
   await looper.settled();
@@ -100,11 +100,11 @@ test("a message the main loop gives to work in a turn is answered by that work, 
     "The work there is:\n- a: The report (in a turn)",
     "Add a chart.",
   ]);
-  answer("Write the report.", says("Report done."));
+  answer("Write the report.", sends("Report done."));
   // The work's turn takes the message at its next request, after the reply that hadn't read it.
   await until(() => asked.length === 2, "the request that reads it");
   assert.deepEqual(inputs[1], ["Write the report.", "Report done.", "Add a chart."]);
-  answer("Add a chart.", says("Chart added."));
+  answer("Add a chart.", sends("Chart added."));
   await looper.settled();
   // Each thread shows what was said in it: the answer is where the message came in.
   assert.deepEqual(await texts(looper, "a"), ["Write the report.", "Report done."]);
@@ -127,12 +127,12 @@ test("a message the main loop gives to work in a turn is answered by that work, 
     "Chart added.",
     "Make it a bar chart.",
   ]);
-  answer("Make it a bar chart.", says("Bars."));
+  answer("Make it a bar chart.", sends("Bars."));
   await looper.settled();
   await looper.send("a", "Thanks.");
   await until(() => asked.length === 4, "a turn from the first thread");
   assert.equal(inputs[3]?.at(-1), "Thanks.");
-  answer("Thanks.", says("Any time."));
+  answer("Thanks.", sends("Any time."));
   await looper.settled();
   assert.deepEqual(await texts(looper, "a"), [
     "Write the report.",
@@ -197,7 +197,7 @@ test("a message being kept as the main loop's decision is taken goes to that wor
   await second;
   await idle();
   taking.open();
-  answer("Write the report.", says("Report done."));
+  answer("Write the report.", sends("Report done."));
   await until(() => asked.length === 2, "the request that reads them");
   assert.deepEqual(inputs[1], ["Write the report.", "Report done.", "Add a chart.", "In blue."]);
   await looper.stop();
@@ -215,7 +215,7 @@ test("threads given to the same work one after another are both followed, and re
   // The second decision was made once the first had been taken.
   assert.equal(mains[2]?.input[0], "The work there is:\n- a: The report (in a turn)");
   assert.deepEqual(values.get("work/a"), { title: "The report", follows: ["a", "c", "d"] });
-  answer("Write the report.", says("Report done."));
+  answer("Write the report.", sends("Report done."));
   await until(() => asked.length === 2, "the request that reads them");
   assert.deepEqual(inputs[1], [
     "Write the report.",
@@ -284,7 +284,7 @@ test("a waiting message the store won't give to its work stays waiting, and goes
   refuse = false;
   await looper.send("c", "In blue.");
   assert.equal(values.has("unrouted/c"), false);
-  answer("Write the report.", says("Report done."));
+  answer("Write the report.", sends("Report done."));
   await until(() => asked.length === 2, "the request that reads them");
   assert.deepEqual(inputs[1], ["Write the report.", "Report done.", "Add a chart.", "In blue."]);
   await looper.stop();
