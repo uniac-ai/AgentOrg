@@ -13,14 +13,18 @@ import {
 import { Id, SlotName } from "./hub.js";
 import { ModelId } from "./llm-session.js";
 import {
+  CapabilityId,
+  FactRow,
   FieldValues,
   LiveMode,
   LiveSurface,
   LiveTicket,
   Problem,
   ResultKind,
+  Surface,
   Unit,
   UnitId,
+  View,
 } from "./units.js";
 
 const Time = z.string().max(64);
@@ -92,6 +96,25 @@ const AddUnit = {
   unit: FilledUnit.omit({ needs: true }),
   needs: z.record(ResultKind, Id).optional(),
 };
+/**
+ * Something an agent holds, as it was built: what a page for the agent is put together from,
+ * with no unit asked. `from` is the applied unit it came from, read to show what the agent was
+ * built from and for nothing else. `slots` are the slots its operations are exposed to the agent
+ * under. A view whose rows were fixed when the agent was built carries them as `fixed`.
+ *
+ * `person` holds the person's own slots that reach it: `capability`, bound to its
+ * `capability@1`, and, by the agent's slot name, one for each of its operations' `tools@1`. How
+ * it stands now, and what an operation answers, is asked of those.
+ */
+export const AgentCapability = z.strictObject({
+  id: CapabilityId,
+  title: z.string().min(1).max(128),
+  from: Id,
+  slots: z.array(SlotName).max(32),
+  surfaces: z.array(Surface).max(16),
+  views: z.array(View.extend({ fixed: z.array(FactRow).max(32).optional() })).max(32),
+  person: z.strictObject({ capability: SlotName, operations: z.record(SlotName, SlotName) }),
+});
 /** A problem with a stack: on one unit (its position), or, with neither, on the whole. */
 const StackProblem = Problem.extend({ unit: z.number().int().min(0).optional() });
 /**
@@ -232,6 +255,11 @@ export const agents = defineInterface({
         ),
         /** Its stack, top to bottom. */
         units: z.array(AppliedUnit),
+        /**
+         * What it holds, in the stack's order. Management always gives it; it is optional so
+         * that what stands in for management, and was written before it, still answers.
+         */
+        capabilities: z.array(AgentCapability).optional(),
       }),
     }),
     start: method({ input: OnAgent, output: z.object({}) }),
