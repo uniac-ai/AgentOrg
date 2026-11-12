@@ -1,5 +1,5 @@
 // What an agent is made of, and the way to delete it: a sheet from the side of its page.
-import { ChevronRightIcon, PlusIcon } from "lucide-react";
+import { ChevronRightIcon, PlusIcon, XIcon } from "lucide-react";
 import { useRef, useState } from "react";
 import { api, go, useLoad } from "../data.ts";
 import { Button } from "../ui/button.tsx";
@@ -172,12 +172,25 @@ function Made({ agent: entry }: { agent: AgentEntry }) {
         {agent.skills.map((skill) => (
           <div
             key={skill.name}
-            className="flex h-10 items-center gap-3 border-t text-sm first:border-t-0"
+            className="group/row flex h-10 items-center gap-3 border-t text-sm first:border-t-0"
           >
             <span className="shrink-0 font-medium">{skill.name}</span>
             <span className="min-w-0 flex-1 truncate text-[13px] text-muted-foreground">
               {skill.description}
             </span>
+            {/* One a unit gave goes with that unit; one given to it apart from its units is taken
+                off here, shown when the row is pointed at as Delete is on Settings' rows. */}
+            {!skill.instance && (
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                aria-label={`Remove ${skill.name} from ${agent.name}`}
+                className="opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100"
+                onClick={() => change("unexpose", { skill: skill.name })}
+              >
+                <XIcon />
+              </Button>
+            )}
           </div>
         ))}
         {agent.skills.length === 0 && <Nothing>No skills</Nothing>}
