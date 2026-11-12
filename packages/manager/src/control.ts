@@ -549,7 +549,10 @@ type Person = (
   any
 >;
 
-/** One control call that changed something, or was refused: never a message or a secret. */
+/**
+ * One line of the control log: a control call or a change of the person's that changed something,
+ * or was refused. Never a message or a secret.
+ */
 export interface Activity {
   caller: string;
   tool: string;

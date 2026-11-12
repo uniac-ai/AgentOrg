@@ -1,5 +1,6 @@
 /**
- * The control log: one line for each control call that changed something, and for each refusal.
+ * The control log: one line for each control-unit call that changed something, for each of the
+ * person's changes to an agent, and for each refusal of either.
  * Append-only, and kept to a size: past it, the older half goes. It holds no message an agent
  * sent, and no secret.
  */

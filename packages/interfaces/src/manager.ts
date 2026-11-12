@@ -153,7 +153,7 @@ const ActivityEntry = z.object({
   /** Its place in the log, newest highest. */
   seq: z.number().int().min(0),
   at: Time,
-  /** The agent that called. */
+  /** Who asked: an agent, through its control unit, or the person. */
   caller: Id,
   tool: z.string().min(1).max(128),
   /** What it was about: an agent, a connection, a skill or a unit's instance. */
@@ -300,8 +300,11 @@ export const agents = defineInterface({
     /** Remove a unit from a living agent: what it made goes. Refused `state` while another needs it. */
     removeUnit: method({ input: z.object({ agent: Id, instance: Id }), output: z.object({}) }),
     /**
-     * What agents did through their control units, newest first: each call that changed something,
-     * and each refusal. With `agent`, those it made or that were about it.
+     * The control log, newest first: each control-unit call that changed something; the person's
+     * changes to an agent (made, started, stopped, removed, a unit added or taken off, a skill or
+     * connection exposed or taken off), under the control unit's name for the same change
+     * (`agent_create` for one made from a stack alone); and each refusal of either. With `agent`,
+     * those it made or that were about it. It holds no message an agent sent, and no secret.
      */
     activity: method({
       input: z.object({

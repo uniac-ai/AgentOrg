@@ -2652,24 +2652,47 @@ test("the control log keeps each change and each refusal, never what was said", 
   const { agent: parent, tools } = await s.parent({ templates: ["helper"] });
   const child = await s.made(tools, "create_helper", { name: "Kid", purpose: "P." });
   const words = `words-${crypto.randomUUID()}`;
+  // Control's own changes reach the same handlers as the person's, and are kept once, as the
+  // agent's.
+  const added = await tools.call({
+    name: "agent_add_unit",
+    arguments: { agent: child, provider: s.unitsActor.actorId, unit: "machine", values: {} },
+  });
+  assert.equal(added.failed, undefined);
+  const { instance } = JSON.parse(added.output) as { instance: string };
+  await tools.call({ name: "agent_remove_unit", arguments: { agent: child, instance } });
   await tools.call({ name: "agent_send", arguments: { agent: child, text: words } });
   await tools.call({ name: "agent_list", arguments: {} });
   await tools.call({ name: "agent_remove", arguments: { agent: "act_nobody" } });
   const { entries } = await s.calls.agents.activity({});
   assert.deepEqual(
-    entries.map((one) => [one.caller, one.tool, one.target, one.outcome]),
+    entries.map((one) => [one.tool, one.target, one.outcome]),
     [
-      [parent, "agent_remove", "act_nobody", "refused"],
-      [parent, "agent_send", child, "done"],
-      [parent, "create_helper", child, "done"],
+      ["agent_remove", "act_nobody", "refused"],
+      ["agent_send", child, "done"],
+      ["agent_remove_unit", child, "done"],
+      ["agent_add_unit", child, "done"],
+      ["create_helper", child, "done"],
+      // The person made the parent.
+      ["agent_create", parent, "done"],
     ],
+  );
+  assert.deepEqual(
+    entries.map((one) =>
+      one.caller === parent
+        ? "parent"
+        : one.caller === s.callerActor.actorId
+          ? "person"
+          : one.caller,
+    ),
+    ["parent", "parent", "parent", "parent", "parent", "person"],
   );
   assert.match(entries[0]?.reason ?? "", /no agent/);
   assert.ok(!JSON.stringify(entries).includes(words));
   assert.ok(!readFileSync(join(s.dir, "activity.jsonl"), "utf8").includes(words));
   assert.deepEqual(
     (await s.calls.agents.activity({ agent: child })).entries.map((one) => one.tool),
-    ["agent_send", "create_helper"],
+    ["agent_send", "agent_remove_unit", "agent_add_unit", "create_helper"],
   );
   const page = await s.calls.agents.activity({ limit: 1 });
   assert.equal(page.more, true);
@@ -2677,6 +2700,67 @@ test("the control log keeps each change and each refusal, never what was said", 
     (await s.calls.agents.activity({ before: page.entries[0]?.seq })).entries[0]?.tool,
     "agent_send",
   );
+});
+
+test("the person's own changes to an agent are kept in the control log, under control's names", async (t) => {
+  const s = await setup(t);
+  await s.calls.agents.saveTemplate({
+    id: "reader",
+    title: "Reader",
+    description: "Reads.",
+    base: { provider: "Agents", creatable: "plain" },
+    units: [],
+  });
+  await s.calls.skills.add({ files: { "SKILL.md": SKILL("notes", "The person's own.") } });
+  const { agent } = await s.calls.agents.create({ template: "reader", name: "Logged" });
+  await s.calls.agents.stop({ agent });
+  await s.calls.agents.start({ agent });
+  const { instance } = await s.calls.agents.addUnit({ agent, unit: s.unit("machine") });
+  await s.calls.agents.removeUnit({ agent, instance });
+  await s.calls.agents.expose({ agent, skill: "notes" });
+  await s.calls.agents.unexpose({ agent, skill: "notes" });
+  await assert.rejects(s.calls.agents.expose({ agent, skill: "nothing-here" }));
+  const stack = await s.calls.agents.create({ stack: { base: s.base, units: [] }, name: "Plain" });
+  const said = (entries: { tool: string; target?: string; outcome: string }[]) =>
+    entries.map((one) => [one.tool, one.target === agent ? "it" : one.target, one.outcome]);
+  const { entries } = await s.calls.agents.activity({ agent });
+  assert.deepEqual(said(entries), [
+    ["skill_expose", "it", "refused"],
+    ["skill_unexpose", "it", "done"],
+    ["skill_expose", "it", "done"],
+    ["agent_remove_unit", "it", "done"],
+    ["agent_add_unit", "it", "done"],
+    ["agent_start", "it", "done"],
+    ["agent_stop", "it", "done"],
+    ["create_reader", "it", "done"],
+  ]);
+  assert.ok(entries.every((one) => one.caller === s.callerActor.actorId));
+  assert.match(entries[0]?.reason ?? "", /no skill nothing-here/);
+  assert.deepEqual(said((await s.calls.agents.activity({ agent: stack.agent })).entries), [
+    ["agent_create", stack.agent, "done"],
+  ]);
+  // A refusal that echoes a secret it was given keeps none of it.
+  const secret = `secret-${crypto.randomUUID()}`;
+  s.script.problems = [{ field: "token", message: `The token ${secret} won't do.` }];
+  await assert.rejects(
+    s.calls.agents.addUnit({
+      agent,
+      unit: { ...s.unit("files", { folder: "/a" }), secrets: { token: secret } },
+    } as never),
+  );
+  delete s.script.problems;
+  assert.ok(!readFileSync(join(s.dir, "activity.jsonl"), "utf8").includes(secret));
+  // A creation refused is named by its template too, with why.
+  await assert.rejects(s.calls.agents.create({ template: "reader", name: "" } as never));
+  await assert.rejects(s.calls.agents.create({ template: "nowhere", name: "Lost" }));
+  assert.deepEqual(said((await s.calls.agents.activity({ limit: 1 })).entries), [
+    ["create_nowhere", undefined, "refused"],
+  ]);
+  // Removing is kept too, after the agent has gone.
+  await s.calls.agents.remove({ agent });
+  assert.deepEqual(said((await s.calls.agents.activity({ limit: 1 })).entries), [
+    ["agent_remove", "it", "done"],
+  ]);
 });
 
 test("a child's control unit holds no more than its parent's, scope by scope", async (t) => {
