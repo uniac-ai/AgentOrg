@@ -165,8 +165,10 @@ export function createLoop(options: {
   let lastEnded: Promise<void> | undefined;
   /** The latest status, for a view that asks. */
   let latest: Status = { state: "idle" };
-  /** The starts made here. After the first, nothing cut off earlier is left to go on with. */
+  /** The starts made here: each turn's number. */
   let turns = 0;
+  /** The turns that began here. After the first, nothing cut off earlier is gone on with. */
+  let turnsBegun = 0;
   /** Counts the cancels, so that what was asked before one can tell when it is taken after it. */
   let cancels = 0;
   /** Counts those that were stops, not the loop closing: what a stop cut is not gone on with. */
@@ -196,6 +198,7 @@ export function createLoop(options: {
   };
   /** Run a turn on the record as it stands; its progress is said through `out`. */
   const begin = (current: Turn) => {
+    turnsBegun++;
     current.ended = placed(current)
       .catch((error: unknown) => {
         if (current.cancelled) return;
@@ -506,12 +509,13 @@ export function createLoop(options: {
      * answering in shows one line saying so, and the model is told once to check what is already
      * done. `after` is the place the turn was to start after, where that was kept: nothing goes
      * on in work that holds no message said to it past that place, since nothing of the turn
-     * was kept; without it, in work that has nothing kept. Nor in work that has had a turn since the loop was made, or
-     * when a cancel comes first.
+     * was kept; without it, in work that has nothing kept. Nor in work that has had a turn
+     * since the loop was made, or when a cancel comes first. A message the store refused began
+     * no turn, so it is not one.
      */
     resume: (after?: number) =>
       inOrder(async (cancelled) => {
-        if (turns > 0 || cancelled) return;
+        if (turnsBegun > 0 || cancelled) return;
         await start(
           false,
           async (current) => {

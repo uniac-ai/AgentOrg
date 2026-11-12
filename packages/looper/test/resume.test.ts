@@ -600,3 +600,98 @@ test("a message sent before the turns cut off were looked for leaves the cut tur
   await sending;
   await Promise.all([first.looper.close(), second.looper.close(), third.looper.stop()]);
 });
+
+test("a message the store refuses, sent before the cut-off turns were looked for, leaves the cut-off turn to go on", async () => {
+  const first = looperWith();
+  await first.fill(["a"]);
+  let refusing = true;
+  const second = looperWith({
+    values: new Map(first.values),
+    writing: (key) =>
+      refusing && key.startsWith("thread/a/msg/")
+        ? Promise.reject(new Error("the store refused it"))
+        : undefined,
+  });
+  await assert.rejects(second.looper.send("a", "Still there?"));
+  refusing = false;
+  // No turn began for that message, so the work has had none since: the cut-off one goes on.
+  await second.looper.resume();
+  await until(() => second.asked.length === 1, "the cut-off turn to go on");
+  assert.deepEqual(second.inputs, [["Work a.", TOLD]]);
+  await second.looper.stop();
+  await first.looper.close();
+});
+
+test("a stop drops the mark of a turn that couldn't go on when it was looked for", async () => {
+  const first = looperWith();
+  await first.fill(["a"]);
+  const second = looperWith({
+    values: new Map(first.values),
+    reading: (key) => (key.startsWith("thread/a/") ? Promise.reject(new Error("no")) : undefined),
+  });
+  await second.looper.resume();
+  await idle();
+  assert.deepEqual(second.asked, []);
+  assert.deepEqual(marks(second.values), ["unfinished/a"], "kept for the next time");
+  // The thread still can't be read: a stop needs to read nothing to take the mark off.
+  await second.looper.stop();
+  assert.deepEqual(marks(second.values), [], "a stopped looper leaves none");
+
+  const third = looperWith({ values: new Map(second.values) });
+  await third.looper.resume();
+  await idle();
+  assert.deepEqual(third.asked, []);
+  await first.looper.close();
+});
+
+test("work stopped while a message to it is being refused, before the cut-off turns were looked for, is not gone on with", async () => {
+  const first = looperWith();
+  await first.fill(["a"]);
+  const hold = gate();
+  let writing = false;
+  const second = looperWith({
+    values: new Map(first.values),
+    writing: (key) => {
+      if (writing || !key.startsWith("thread/a/msg/")) return undefined;
+      writing = true;
+      return hold.shut;
+    },
+  });
+  const sending = second.looper.send("a", "Still there?");
+  await until(() => writing, "the message to be written");
+  // The stop takes the work's mark off; the message is then refused, so no turn began.
+  await second.looper.cancel("a");
+  hold.fail();
+  await assert.rejects(sending);
+  assert.deepEqual(marks(second.values), []);
+  await second.looper.resume();
+  await idle();
+  assert.deepEqual(second.asked, []);
+  await first.looper.close();
+});
+
+test("a stop answers once the marks it takes off are off", async () => {
+  const first = looperWith();
+  await first.fill(["a"]);
+  const hold = gate();
+  let deleting = false;
+  const second = looperWith({
+    values: new Map(first.values),
+    deleting: (key) => {
+      if (key !== "unfinished/a") return undefined;
+      deleting = true;
+      return hold.shut;
+    },
+  });
+  let stopped = false;
+  const stopping = second.looper.stop().then(() => {
+    stopped = true;
+  });
+  await until(() => deleting, "the mark to be taken off");
+  await idle();
+  assert.equal(stopped, false);
+  hold.open();
+  await stopping;
+  assert.deepEqual(marks(second.values), []);
+  await first.looper.close();
+});

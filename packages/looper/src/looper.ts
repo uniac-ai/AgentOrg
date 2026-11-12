@@ -1043,7 +1043,7 @@ export function createLooper(options: {
    * that can't go on now keeps its mark for the next time. A stopped looper goes on with none:
    * its turns' marks go, and its waiting messages wait for their thread's next. Whoever hosts the
    * looper calls this when a request can be made; once the marks have been read, a later call
-   * does nothing. `drop` goes on with nothing, as a stopped looper does.
+   * does nothing, but a stop's. `drop` goes on with nothing, as a stopped looper does.
    */
   const goOn = async (drop: boolean) => {
     const at = cuts;
@@ -1059,12 +1059,13 @@ export function createLooper(options: {
       const held = of(id);
       try {
         // Asked at once, so a stop or a close from here on comes after it: `after` is the
-        // place its turn was to start after, where its mark says.
-        if (going())
+        // place its turn was to start after, where its mark says. Not work whose mark has gone
+        // since it was read: a turn of its ended, or it was stopped.
+        if (going() && held.stands !== undefined)
           await using(id, (loop) => loop.resume(typeof after === "number" ? after : undefined));
         // Work in a turn now keeps the mark as that turn's, and a looper that has closed leaves
-        // it. Otherwise nothing goes on, and it goes.
-        if (!held.marked && !closed) held.mark(false);
+        // it. Otherwise nothing goes on, and it goes, where one still stands.
+        if (!held.marked && !closed && held.stands !== undefined) held.mark(false);
       } catch (error) {
         log.warn("A turn that was cut off didn't go on.", { work: id, error: String(error) });
       }
@@ -1090,7 +1091,9 @@ export function createLooper(options: {
   let looked: Promise<void> | undefined;
   const resume = (drop = false) => {
     if (closed) return Promise.resolve();
-    if (!looked) {
+    // A stop looks again, whatever was looked for before: a turn that couldn't go on then kept
+    // its mark, and a stopped looper leaves none.
+    if (!looked || drop) {
       const look = goOn(drop);
       looked = look;
       look.catch(() => {
@@ -1165,6 +1168,8 @@ export function createLooper(options: {
         .catch((error: unknown) =>
           log.warn("What was cut off couldn't be looked for.", { error: String(error) }),
         );
+      // The marks that look took off are off before this answers.
+      await Promise.all([...works.values()].map(({ writes }) => writes));
     },
     /** Take messages again. The turns `stop` cut stay cut. */
     start() {
