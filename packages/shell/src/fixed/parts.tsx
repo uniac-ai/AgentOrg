@@ -101,6 +101,36 @@ export const Nothing = ({ children }: { children: React.ReactNode }) => (
   <p className="py-2 text-[13px] text-[var(--faint)]">{children}</p>
 );
 
+/** What a list says in its rows' place when it has none it can show. */
+export const UNREAD = "Can't be read right now";
+
+/**
+ * A list with no rows says which nothing it is: none yet (`none`), or none that can be read. It is
+ * a row of the list, so it stands where the first row would.
+ */
+export function Empty({
+  read,
+  count,
+  none,
+}: {
+  read: { loaded: boolean; error?: Error };
+  count: number;
+  none: string;
+}) {
+  if (read.error)
+    return (
+      <li>
+        <Nothing>{UNREAD}</Nothing>
+      </li>
+    );
+  if (!read.loaded || count > 0) return null;
+  return (
+    <li>
+      <Nothing>{none}</Nothing>
+    </li>
+  );
+}
+
 /** A list row, lit when something led here. */
 export const rowClass = (focused: boolean) =>
   `group/row -mx-2 grid min-h-14 items-center gap-x-4 rounded-xl px-2 py-2 ${focused ? "bg-[var(--selected)]" : ""}`;

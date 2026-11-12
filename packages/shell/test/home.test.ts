@@ -179,3 +179,56 @@ test(
     await phone.close();
   }),
 );
+
+test(
+  "with nothing to list, Recent says which nothing it is: no chats once every agent's are listed, or no agents with the way to make one",
+  withGateway(async (gateway) => {
+    const recent = (page: Page) => section(page, "Recent");
+    const bar = (page: Page) => page.getByRole("navigation", { name: "Main" });
+
+    // Agents with no chats: once each agent's chats are listed, Home says there are none.
+    gateway.noChats();
+    const holding = gateway.hold("chat.list");
+    let page = await open(gateway);
+    await bar(page)
+      .getByRole("button", { name: /Research/ })
+      .waitFor();
+    await page.waitForTimeout(400);
+    // Let go whatever is found, so a failing check doesn't leave the call held.
+    const before = await recent(page).count();
+    holding();
+    assert.equal(before, 0, "nothing is said before the chats are listed");
+    await recent(page).getByText("No chats", { exact: true }).waitFor();
+    assert.equal(await recent(page).getByRole("button", { name: "Create" }).count(), 0);
+    await page.close();
+
+    // No agents: it says so, with Create beside it, which opens the Create window.
+    gateway.agents.clear();
+    page = await open(gateway);
+    await recent(page).getByText("No agents", { exact: true }).waitFor();
+    await recent(page).getByRole("button", { name: "Create" }).click();
+    await page.getByRole("dialog", { name: "Create" }).waitFor();
+    await page.close();
+  }),
+);
+
+test(
+  "agents that can't be read: Home and the left bar say so where they would be, and stop saying it once they are read",
+  withGateway(async (gateway) => {
+    gateway.refuseEvery("agents.list", "unavailable", "The manager isn't answering.");
+    const page = await open(gateway);
+    const recent = section(page, "Recent");
+    const bar = page.getByRole("navigation", { name: "Main" });
+    await recent.getByText("Can't be read right now", { exact: true }).waitFor();
+    await bar.getByText("Can't be read right now", { exact: true }).waitFor();
+    assert.equal(await bar.getByRole("list", { name: "Agents" }).getByRole("listitem").count(), 0);
+    assert.equal(await recent.getByRole("button", { name: "Create" }).count(), 0);
+    // Answered again, the agents are back, and their chats.
+    gateway.answerAgain("agents.list");
+    await bar.getByRole("button", { name: /Research/ }).waitFor({ timeout: 15_000 });
+    await bar.getByText("Can't be read right now").waitFor({ state: "detached" });
+    await until(async () => (await titles(page, "Recent")).length > 0, true);
+    assert.equal(await recent.getByText("Can't be read right now").count(), 0);
+    await page.close();
+  }),
+);

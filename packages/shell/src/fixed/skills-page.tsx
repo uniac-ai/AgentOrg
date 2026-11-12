@@ -5,7 +5,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { Input } from "../ui/input.tsx";
 import { listDetails, listSkills, useAct } from "./data.ts";
 import { DeleteButton } from "./delete-dialog.tsx";
-import { rowClass, Scroll, UsedBy } from "./parts.tsx";
+import { Empty, rowClass, Scroll, UsedBy } from "./parts.tsx";
 import { useOffer } from "./settings-page.tsx";
 
 export function SkillsPage({ focus, adding }: { focus?: string; adding?: boolean }) {
@@ -21,6 +21,7 @@ export function SkillsPage({ focus, adding }: { focus?: string; adding?: boolean
     <>
       <Scroll>
         <ul className="mx-auto max-w-5xl">
+          <Empty read={skills} count={list.length} none="No skills" />
           {list.map((skill) => (
             <li
               key={skill.name}

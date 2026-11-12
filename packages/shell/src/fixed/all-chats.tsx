@@ -32,11 +32,13 @@ export interface ListedChat {
 interface AllChats {
   /** What was said last comes first. */
   chats: ListedChat[];
+  /** Every agent there is has had its chats listed once, or said it couldn't: all are here. */
+  listed: boolean;
   /** A chat's thread has shown a reply of its, said at `at`. */
   read(agent: string, chat: string, at: string): void;
 }
 
-const Context = createContext<AllChats>({ chats: [], read: () => {} });
+const Context = createContext<AllChats>({ chats: [], listed: false, read: () => {} });
 export const useAllChats = () => useContext(Context);
 
 /** A chat's id is its agent's own: two agents can each have one of the same id. */
@@ -155,12 +157,15 @@ function Follow({
   slot,
   state,
   put,
+  done,
 }: {
   agent: string;
   slot: string;
   /** Whether it runs: its chats are read again when that changes. */
   state: string;
   put: Put;
+  /** Its chats that aren't archived have been listed, or couldn't be. */
+  done(agent: string): void;
 }) {
   const connection = useConnection();
   // biome-ignore lint/correctness/useExhaustiveDependencies: `state` says when to read again.
@@ -214,7 +219,10 @@ function Follow({
     const load = () => {
       asked = new Set();
       // An agent that doesn't answer has no chats to show until it does.
-      for (const archived of [false, true]) list(archived).catch(() => {});
+      list(false)
+        .catch(() => {})
+        .finally(() => !over && done(agent));
+      list(true).catch(() => {});
     };
     // Followed before it is read, so nothing said between the two is missed.
     const stops = [
@@ -231,12 +239,19 @@ function Follow({
       over = true;
       for (const stop of stops) stop();
     };
-  }, [connection, agent, slot, state, put]);
+  }, [connection, agent, slot, state, put, done]);
   return null;
 }
 
 export function AllChatsProvider({ children }: { children: React.ReactNode }) {
-  const { byId } = useAgents();
+  const { list, loaded, byId } = useAgents();
+  const [heard, setHeard] = useState<ReadonlySet<string>>(new Set());
+  const done = useCallback(
+    (agent: string) => setHeard((was) => (was.has(agent) ? was : new Set(was).add(agent))),
+    [],
+  );
+  // Only an agent whose chats were listed counts: one whose chats can't be reached yet isn't.
+  const listed = loaded && list.every((entry) => heard.has(entry.agent));
   const [held, setHeld] = useState<ReadonlyMap<string, Held>>(new Map());
   const { note, mark } = useRead();
   const put = useCallback<Put>(
@@ -274,7 +289,7 @@ export function AllChatsProvider({ children }: { children: React.ReactNode }) {
     [held, byId, note],
   );
   const read = useCallback<AllChats["read"]>((agent, id, at) => mark(keyOf(agent, id), at), [mark]);
-  const value = useMemo(() => ({ chats, read }), [chats, read]);
+  const value = useMemo(() => ({ chats, listed, read }), [chats, listed, read]);
   return (
     <Context.Provider value={value}>
       {[...byId.values()].map(
@@ -286,6 +301,7 @@ export function AllChatsProvider({ children }: { children: React.ReactNode }) {
               slot={slot}
               state={entry.status.state}
               put={put}
+              done={done}
             />
           ),
       )}

@@ -3,16 +3,17 @@ import { CopyPlusIcon } from "lucide-react";
 import { Button } from "../ui/button.tsx";
 import { useBuilding } from "./building.tsx";
 import { DeleteButton } from "./delete-dialog.tsx";
-import { rowClass, Scroll } from "./parts.tsx";
+import { Empty, rowClass, Scroll } from "./parts.tsx";
 import { useOffer } from "./settings-page.tsx";
 
 export function TemplatesPage() {
-  const { catalog, removeTemplate, start } = useBuilding();
+  const { catalog, catalogRead, removeTemplate, start } = useBuilding();
   const titleOf = (id: string) => catalog.units.find((u) => u.id === id)?.title ?? id;
   useOffer("New template", () => start(undefined, "template"));
   return (
     <Scroll>
       <ul aria-label="Templates" className="mx-auto max-w-5xl">
+        <Empty read={catalogRead} count={catalog.templates.length} none="No templates" />
         {catalog.templates.map((t) => (
           <li
             key={t.id}
