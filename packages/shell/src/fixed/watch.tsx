@@ -12,6 +12,7 @@ import {
   REFRESH_MS,
   useChatSlots,
   useEvery,
+  useHeldDown,
   useWorking,
 } from "./data.ts";
 
@@ -66,6 +67,7 @@ function Watch({
   const last = useRef(read);
   if (read) last.current = read;
   const detail = last.current;
+  const held = useHeldDown(detail);
   // biome-ignore lint/correctness/useExhaustiveDependencies: `report` is the provider's own setter.
   useEffect(() => {
     report(entry.agent, {
@@ -73,9 +75,9 @@ function Watch({
       ...(slot ? { slot } : {}),
       ...(detail ? { detail } : {}),
       ...(status ? { status } : {}),
-      now: nowOf(entry.status, status, detail?.mcp),
+      now: nowOf(entry.status, status, detail?.mcp, held),
     });
-  }, [entry, slot, detail, status]);
+  }, [entry, slot, detail, status, held]);
   return null;
 }
 

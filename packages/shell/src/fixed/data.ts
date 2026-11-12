@@ -93,6 +93,73 @@ export function useWorking(slot: string | undefined, running: boolean): ChatStat
   return status;
 }
 
+/**
+ * The first thing an agent holds that says it is down, kept current: each capability is asked how
+ * it stands through the person's own slot to it, and again when it says it changed.
+ */
+export function useHeldDown(detail: AgentDetail | undefined): DownCapability | undefined {
+  const connection = useConnection();
+  const [down, setDown] = useState<DownCapability>();
+  const held = detail?.capabilities ?? [];
+  const key = JSON.stringify(
+    held.map((c) => [c.person.capability, c.title, c.surfaces.length, c.slots.length]),
+  );
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `key` says when what it holds changed.
+  useEffect(() => {
+    setDown(undefined);
+    if (connection !== "open" || held.length === 0) return;
+    let live = true;
+    const states = new Map<string, { state: string; detail?: string }>();
+    const say = () => {
+      const first = held.find((c) => states.get(c.person.capability)?.state === "down");
+      setDown(
+        first && {
+          title: first.title,
+          windows: first.surfaces.length > 0,
+          tools: first.slots.length > 0,
+          detail: states.get(first.person.capability)?.detail,
+        },
+      );
+    };
+    /** Each capability's latest read: an answer to an earlier one comes too late to say. */
+    const asked = new Map<string, number>();
+    const stops = held.map(({ person }) => {
+      const read = () => {
+        const mine = (asked.get(person.capability) ?? 0) + 1;
+        asked.set(person.capability, mine);
+        const told = (now: { state: string; detail?: string }) => {
+          if (!live || asked.get(person.capability) !== mine) return;
+          states.set(person.capability, now);
+          say();
+        };
+        return api.call<{ state: string; detail?: string }>(person.capability, "state", {}).then(
+          told,
+          // One that can't be reached is down, with nothing to say why; one that refused keeps
+          // what it last said.
+          (error: unknown) => {
+            if (error instanceof NotConnected) told({ state: "down" });
+          },
+        );
+      };
+      void read();
+      // A change with no view is its state's.
+      return api.subscribe(
+        person.capability,
+        "changed",
+        (payload) => {
+          if (!(payload as { view?: string }).view) void read();
+        },
+        { again: read },
+      );
+    });
+    return () => {
+      live = false;
+      for (const stop of stops) stop();
+    };
+  }, [key, connection]);
+  return down;
+}
+
 export type Tone = "working" | "idle" | "starting" | "stopped" | "trouble";
 
 /** An agent's state, in a word. */
@@ -110,16 +177,42 @@ export interface Now {
   text: string;
 }
 
+/** Something an agent holds that is down: what it is called, what it gives, and why, if it says. */
+export interface DownCapability {
+  title: string;
+  windows: boolean;
+  tools: boolean;
+  detail?: string | undefined;
+}
+
+/** Why, after what is down and what that leaves out, when it says. */
+const why = (detail: string | undefined) => (detail ? `: ${detail}` : "");
+
+/** A capability's title inside a sentence: lower case at its start, unless it has capitals after. */
+const named = (title: string) =>
+  title.slice(1) === title.slice(1).toLowerCase()
+    ? title.charAt(0).toLowerCase() + title.slice(1)
+    : title;
+
 /**
- * How an agent stands, of itself: what runs it first, then whether it works, then its
- * connections. What went wrong in one of its chats is that chat's to say.
+ * How an agent stands, of itself: what runs it first, then something it holds that is down, then
+ * whether it works, then its connections. Each down thing is one sentence: what is down, what that
+ * leaves out, and why. What went wrong in one of its chats is that chat's to say.
  */
 export function nowOf(
   status: AgentEntry["status"],
   chatStatus: ChatStatus | undefined,
   mcp: readonly Mcp[] = [],
+  held?: DownCapability,
 ): Now {
   if (status.state === "down") return { tone: "trouble", text: status.detail ?? "Down" };
+  if (held && status.state === "running") {
+    const out = [held.windows && "windows", held.tools && "tools"].filter(Boolean).join(" and ");
+    return {
+      tone: "trouble",
+      text: `Its ${named(held.title)} is down${out ? `, so its ${out} are left out` : ""}${why(held.detail)}`,
+    };
+  }
   const down = mcp.find((m) => m.status.state === "down");
   const tone: Tone =
     status.state === "starting" || status.state === "stopped"
@@ -130,7 +223,10 @@ export function nowOf(
           ? "trouble"
           : "idle";
   if (tone === "trouble" && down)
-    return { tone, text: `${down.slot} is down, so its tools are left out` };
+    return {
+      tone,
+      text: `${down.slot} is down, so its tools are left out${why(down.status.detail)}`,
+    };
   return { tone, text: WORD[tone] };
 }
 
