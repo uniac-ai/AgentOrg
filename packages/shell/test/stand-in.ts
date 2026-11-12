@@ -43,6 +43,15 @@ export interface Held {
   /** How many surfaces it gives, and the slots its tools come through. */
   surfaces: number;
   slots: string[];
+  /** Its views, a facts view's fixed rows with it; and what its `about` operation answers. */
+  views?: z.input<typeof agentsInterface.methods.get.output>["capabilities"] extends
+    | (infer C)[]
+    | undefined
+    ? C extends { views: infer V }
+      ? V
+      : never
+    : never;
+  about?: { label: string; value: string; caution?: true }[];
 }
 /** One change in the control log, as `agents.activity` says it. */
 export type Change = z.output<typeof agentsInterface.methods.activity.output>["entries"][number];
@@ -550,6 +559,7 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
   const workToolsSlot = (agent: string) => `worktools_${agent.replaceAll("-", "_")}`;
   /** The person's slot to another capability an agent holds, by its place in the agent's list. */
   const heldSlot = (agent: string, n: number) => `held_${agent.replaceAll("-", "_")}_${n}`;
+  const aboutSlot = (agent: string, n: number) => `about_${agent.replaceAll("-", "_")}_${n}`;
   /** The control log, newest first. */
   let changes: Change[] = [];
   /** What the `work` tool answers, as the assistant does: the latest of each, or a page of one. */
@@ -646,8 +656,11 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
                 surface: `s${i}`,
                 protocol: `surface${i}@1`,
               })),
-              views: [],
-              person: { capability: heldSlot(agent.agent, n), operations: {} },
+              views: held.views ?? [],
+              person: {
+                capability: heldSlot(agent.agent, n),
+                operations: held.about ? { computer: aboutSlot(agent.agent, n) } : {},
+              },
             })),
           ],
         };
@@ -1040,6 +1053,13 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
       const agent = agentOf(slot.slice(10).replaceAll("_", "-"));
       if (method !== "call") throw new Refusal("invalid", `tools has no method ${method} here.`);
       return workCall(agent, input);
+    }
+    if (slot.startsWith("about_")) {
+      const [, id, n] = /^about_(.+)_(\d+)$/.exec(slot) ?? [];
+      const held = agentOf(String(id).replaceAll("_", "-")).held?.[Number(n)];
+      if (!held?.about || method !== "call") throw new Refusal("invalid", "No such tool here.");
+      if (held.state === "down") throw new Refusal("not_connected", "It can't be reached.");
+      return { output: JSON.stringify({ rows: held.about }) };
     }
     if (slot.startsWith("held_")) {
       const [, id, n] = /^held_(.+)_(\d+)$/.exec(slot) ?? [];

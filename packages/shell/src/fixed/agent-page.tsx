@@ -9,6 +9,7 @@ import { useAllChats } from "./all-chats.tsx";
 import { ChatRow } from "./chat-parts.tsx";
 import { useChats } from "./chats.tsx";
 import { Computer, surfacesOf, targetOf, windowsOf } from "./computer.tsx";
+import { ComputerFacts, columnOf } from "./computer-facts.tsx";
 import { ComputerLoad, LOAD } from "./computer-load.tsx";
 import { More } from "./controls.tsx";
 import { useAct, useCreatables } from "./data.ts";
@@ -51,7 +52,8 @@ export function AgentPage({
   const off = stopped || entry.status.state === "down";
   // Its computer is what its units can show live: its windows, and its own word on how busy it is.
   const surfaces = surfacesOf(detail);
-  const computer = windowsOf(surfaces).length > 0;
+  // A computer that is down keeps its place, to say so.
+  const computer = windowsOf(surfaces).length > 0 || !!watched.held?.windows;
   const load = surfaces.find((s) => s.protocol === LOAD && !s.unavailable);
   const start = () => act.run(() => api.call("agents", "start", { agent: id }));
   // Overview comes last, so the page opens as it did.
@@ -159,8 +161,18 @@ export function AgentPage({
                 agent={{ id, name: entry.name, tone: now.tone }}
                 surfaces={surfaces}
                 onStart={() => api.call("agents", "start", { agent: id })}
+                {...(watched.held?.windows ? { down: watched.held.detail ?? "" } : {})}
               />
-              {load && !stopped && <ComputerLoad target={targetOf(id, load)} />}
+              {/* What it is, in its own views, with its load under where it runs while it says. */}
+              {columnOf(detail).length > 0 ? (
+                <ComputerFacts
+                  detail={detail}
+                  reachable={!watched.held?.windows}
+                  load={load && !stopped && !watched.held ? targetOf(id, load) : undefined}
+                />
+              ) : (
+                load && !stopped && <ComputerLoad target={targetOf(id, load)} />
+              )}
             </div>
           )}
           {tab?.id === "chats" && (

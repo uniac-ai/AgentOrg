@@ -96,14 +96,29 @@ function Used({
 export function ComputerLoad({ target }: { target: LiveTarget }) {
   const reading = useReading(target);
   if (!reading) return null;
-  const cpu = Math.round(reading.cpuUsedPct);
   return (
     <aside aria-label="About this computer" className="flex min-w-0 flex-col gap-5">
       <section className="flex flex-col gap-3.5">
-        <Meter label="CPU" value={cpu} text={`${cpu}%`} />
-        <Used label="Memory" part={reading.memUsed} whole={reading.memTotal} gb={MEMORY} />
-        <Used label="Disk" part={reading.diskUsed} whole={reading.diskTotal} gb={DISK} />
+        <Meters reading={reading} />
       </section>
     </aside>
   );
+}
+
+/** Its meters from one reading. */
+function Meters({ reading }: { reading: Reading }) {
+  const cpu = Math.round(reading.cpuUsedPct);
+  return (
+    <>
+      <Meter label="CPU" value={cpu} text={`${cpu}%`} />
+      <Used label="Memory" part={reading.memUsed} whole={reading.memTotal} gb={MEMORY} />
+      <Used label="Disk" part={reading.diskUsed} whole={reading.diskTotal} gb={DISK} />
+    </>
+  );
+}
+
+/** Its meters, watched while they are shown: nothing until the first reading. */
+export function Load({ target }: { target: LiveTarget }) {
+  const reading = useReading(target);
+  return reading ? <Meters reading={reading} /> : null;
 }

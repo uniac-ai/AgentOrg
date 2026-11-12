@@ -2,7 +2,7 @@
 // agents and computer and terminals, replies not yet read, sample chats to open, and what a page asks; and
 // the design page's own controls, which put it in the cases it draws.
 import type { Page } from "@playwright/test";
-import type { Agent, Creatable, standIn, Template, Units } from "../stand-in.ts";
+import type { Agent, Creatable, Held, standIn, Template, Units } from "../stand-in.ts";
 
 type Gateway = Awaited<ReturnType<typeof standIn>>;
 
@@ -206,6 +206,7 @@ export function sampleAgents(gateway: Gateway) {
       browser: true,
       workspace: "~/Agents/Research",
     };
+  research.held = [heldComputer()];
   research.units?.push({
     instance: "i-web",
     provider: "units",
@@ -392,6 +393,46 @@ export function sampleWork(gateway: Gateway, stopped = false) {
     },
   ];
 }
+
+/** A computer as the computer's capability declares one here: its views in its own order. */
+export const heldComputer = (over: Partial<Held> = {}): Held => ({
+  title: "Computer",
+  state: "connected",
+  surfaces: 2,
+  slots: ["computer"],
+  views: [
+    {
+      id: "where",
+      place: "column",
+      kind: "facts",
+      fixed: [{ label: "Where", value: "This computer" }],
+    },
+    { id: "load", place: "column", kind: "meters", when: "reachable", surface: "load" },
+    {
+      id: "workspace",
+      place: "column",
+      kind: "facts",
+      fixed: [
+        { label: "Folder", value: "~/Agents/Research", path: true },
+        { label: "Reaches", value: "Files and terminal, Browser" },
+      ],
+    },
+    {
+      id: "isolation",
+      place: "column",
+      kind: "facts",
+      when: "reachable",
+      operation: "about",
+      slot: "computer",
+      rows: ["Isolation"],
+    },
+  ],
+  about: [
+    { label: "Isolation", value: "None: it acts as you", caution: true },
+    { label: "Not shown", value: "not one the view names" },
+  ],
+  ...over,
+});
 
 /** An agent's page in the design, reached as a person reaches it: from the bar, then its tab. */
 export async function openDesignAgent(page: Page, name: string, tab?: string) {

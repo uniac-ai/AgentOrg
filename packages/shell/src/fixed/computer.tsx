@@ -113,12 +113,15 @@ export function Computer({
   agent,
   surfaces,
   onStart,
+  down,
   overlay = false,
 }: {
   agent: { id: string; name: string; tone: Tone };
   surfaces: readonly OpenSurface[];
   /** Starts its agent, which is how a stopped one's computer comes back. */
   onStart(): Promise<unknown>;
+  /** Down, why, as the computer says it: its windows can't be opened until it is back. */
+  down?: string | undefined;
   overlay?: boolean;
 }) {
   const { picked, pick, close, draw, erase } = useComputers();
@@ -153,7 +156,7 @@ export function Computer({
     else erase(agent.id, overlay);
   }, [agent.id, overlay, slot, listed, draw, erase]);
   useLayoutEffect(() => () => erase(agent.id, overlay), [agent.id, overlay, erase]);
-  if (!front) return null;
+  if (!front && down === undefined) return null;
   return (
     <section
       aria-label={`${agent.name}'s computer`}
@@ -192,20 +195,31 @@ export function Computer({
             </div>
             {refused && <Refusal>{`It couldn't be started: ${clause(refused)}`}</Refusal>}
           </div>
+        ) : down !== undefined ? (
+          <div
+            key="down"
+            className="window relative grid h-full place-items-center rounded-xl bg-background"
+          >
+            <span className="max-w-[440px] px-6 text-center text-[15px] text-muted-foreground">
+              {down
+                ? `${down.charAt(0).toUpperCase()}${down.slice(1)}`
+                : `${agent.name}'s computer is down`}
+            </span>
+          </div>
         ) : (
           // biome-ignore lint/a11y/useSemanticElements: a window of the frame, not a form.
           <div
             key="window"
             ref={setSlot}
             role="group"
-            aria-label={front.title}
+            aria-label={front?.title}
             className="window relative flex h-full min-w-0 flex-col overflow-hidden rounded-xl bg-background shadow-lg"
           />
         )}
       </div>
       {/* A stopped computer has no dock; its place stays. */}
       <div className="flex h-[68px] shrink-0 items-center justify-center">
-        {!stopped && (
+        {!stopped && down === undefined && (
           <nav
             aria-label="Dock"
             className="flex gap-1.5 rounded-2xl bg-background/70 p-1.5 backdrop-blur"
@@ -215,10 +229,10 @@ export function Computer({
                 key={kind}
                 type="button"
                 aria-label={title}
-                aria-current={front.kind === kind ? "true" : undefined}
+                aria-current={front?.kind === kind ? "true" : undefined}
                 title={title}
                 onClick={() => pick(agent.id, kind)}
-                className={`relative grid size-11 place-items-center rounded-xl ${front.kind === kind ? "bg-[var(--selected)] text-foreground" : "text-muted-foreground hover:bg-[var(--hover)]"}`}
+                className={`relative grid size-11 place-items-center rounded-xl ${front?.kind === kind ? "bg-[var(--selected)] text-foreground" : "text-muted-foreground hover:bg-[var(--hover)]"}`}
               >
                 <Icon className="size-5" />
               </button>

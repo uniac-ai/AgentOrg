@@ -7,14 +7,16 @@ const STARTS = new Set(
   ),
 );
 /**
- * A refusal's words as the end of a sentence: "It couldn't be started: " and then this. Its first
- * word is lower case if it is one that only starts a sentence; a name keeps its capital.
+ * Words set after a colon inside a sentence: its first word lower case if it is one that only
+ * starts a sentence, a name keeping its capital, and no full stop of its own.
  */
-export const clause = (words: string) => {
+export const within = (words: string) => {
   const trimmed = words.trim().replace(/[.!]+$/, "");
   const first = /^[A-Za-z]+/.exec(trimmed)?.[0] ?? "";
-  const lower = STARTS.has(first.toLowerCase())
+  return STARTS.has(first.toLowerCase())
     ? first.toLowerCase() + trimmed.slice(first.length)
     : trimmed;
-  return `${lower}.`;
 };
+
+/** A refusal's words as the end of a sentence: "It couldn't be started: " and then this. */
+export const clause = (words: string) => `${within(words)}.`;

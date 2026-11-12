@@ -88,7 +88,7 @@ test(
     await section(page, "Changed through control").getByText("started it").waitFor();
     assert.deepEqual(await lines(page, "Changed through control"), [
       "You started it 30 min",
-      "Reviewer tried to stop it: Reviewer didn't create Research 1 d",
+      "Reviewer tried to stop it: Reviewer didn't create Research Yesterday",
       "You created it from Assistant 2 d",
     ]);
     const refused = section(page, "Changed through control").getByText(/^tried to stop it/);
@@ -128,10 +128,10 @@ test(
 test(
   "the agent's line says what is down, what that leaves out, and why, in one sentence",
   withGateway(async (gateway) => {
-    // A connection, with why its connection says.
+    // A connection, with why its connection says, set inside the sentence.
     const page = await open(gateway, "#/a/a-triage");
     await state(page)
-      .getByText("linear is down, so its tools are left out: The server didn't answer.", {
+      .getByText("linear is down, so its tools are left out: the server didn't answer", {
         exact: true,
       })
       .waitFor();
