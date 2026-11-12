@@ -3,18 +3,22 @@
  * agent's `model` slot, and what a request says and offers is read from what the agent is bound to.
  * Its host says where the records are kept and what the agent is told when no `settings` is bound.
  */
-import type { agentSettings, chat, kv, llmSession } from "@agentorg/interfaces";
+import type { agentSettings, capability, chat, kv, llmSession, tools } from "@agentorg/interfaces";
 import type { Model } from "@agentorg/looper";
 import { type Context, Refused, type Slot } from "@agentorg/sdk";
 import { createChats } from "./chats.js";
 import { instructionsWith, skillTool } from "./settings.js";
 import { type Candidate, type LeftOut, listedBy, listsTools, offered, relayed } from "./tools.js";
+import { ACTIVITY, serveWork } from "./work.js";
 
 /** Where the agent keeps the model chosen for it, beside its chats in the store. */
 const MODEL_KEY = "settings/model";
 
 type Host = Pick<
-  Context<{ model: typeof llmSession; settings: typeof agentSettings }, { chat: typeof chat }>,
+  Context<
+    { model: typeof llmSession; settings: typeof agentSettings },
+    { chat: typeof chat; capability: typeof capability; tools: typeof tools }
+  >,
   "slots" | "exports" | "exposed" | "onExposed" | "log"
 >;
 
@@ -106,6 +110,7 @@ export function startEngine(
       delta: (delta) => ctx.exports.chat.emit("delta", delta),
       status: (status) => ctx.exports.chat.emit("status", status),
       chat: (entry) => ctx.exports.chat.emit("chat", entry),
+      worked: () => ctx.exports.capability.emit("changed", { view: ACTIVITY }),
     },
     log: ctx.log,
   });
@@ -157,6 +162,7 @@ export function startEngine(
   ctx.slots.model.onBind(look);
   ctx.slots.settings.onBind(look);
   ctx.onExposed(look);
+  serveWork(ctx.exports, chats);
   ctx.exports.chat.implement({
     send: (input) => chats.send(input),
     history: (input) => chats.history(input),

@@ -2,6 +2,7 @@ import { defineInterface, method } from "@agentorg/sdk";
 import { z } from "zod";
 import { Id, Name } from "./hub.js";
 import { ModelId } from "./llm-session.js";
+import { CapabilityId, View } from "./units.js";
 
 const Title = z.string().min(1).max(128);
 const Description = z.string().max(2000);
@@ -24,13 +25,35 @@ const Ask = z.object({
   description: Description.optional(),
   optional: z.literal(true).optional(),
 });
-/** What an agent is made on: the execution layer's instructions and what it asks the person. */
+/**
+ * What an agent made from a creatable holds of itself, with no unit to build it: a capability the
+ * agent's own Actor serves, `capability@1` as `capability` and, as `tools`, the `tools@1` that
+ * each of its views' operations is in, which a view names by its `slot`. It is declared, as a
+ * unit's is, so it is known with no call to the agent.
+ */
+export const OwnCapability = z.object({
+  id: CapabilityId,
+  title: Title,
+  views: z
+    .array(
+      View.refine(
+        (view) => view.operation !== undefined && view.slot !== undefined,
+        "Each view reads an operation, by its slot.",
+      ),
+    )
+    .max(32),
+});
+/**
+ * What an agent is made on: the execution layer's instructions, what it asks the person, and what
+ * an agent made from it holds of itself.
+ */
 export const Creatable = z.object({
   id: CreatableId,
   title: Title,
   description: Description,
   instructions: z.string().max(200_000),
   asks: z.array(Ask).max(32),
+  capability: OwnCapability.optional(),
 });
 
 const OnAgent = z.object({ agent: Id });

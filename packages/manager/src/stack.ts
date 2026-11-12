@@ -8,8 +8,10 @@ import {
   type agents,
   ConnectionOrigin,
   type ConnectionStatus,
+  type Creatable,
   FieldValues,
   type LiveSurface,
+  type OwnCapability,
   type Problem,
   ResultKind,
   SkillName,
@@ -61,6 +63,10 @@ const UnitRecord = z.object({
 /**
  * Something an agent holds, as it was built: what `agents.get` gives of it, and the Actor that
  * is it, which the person is connected to.
+ */
+/**
+ * An agent's own capability, the one its creatable gives it, is kept with the agent itself as its
+ * `from`: no unit is, and a manager from before own capabilities still reads the record.
  */
 const CapabilityRecord = AgentCapability.extend({ actor: z.string() });
 /** What only management knows of an agent: where it came from, what it is told, and its skills. */
@@ -581,12 +587,13 @@ export function createStacks(parts: StackParts) {
     };
   };
 
-  const plan = async (units: FilledUnit[], reach?: Reach) => {
+  /** Place `units` on an agent whose creatable gives it the capability `itself`, if one. */
+  const plan = async (units: FilledUnit[], reach?: Reach, itself?: string) => {
     const offers = await catalog();
     const taken: Taken = {
       slots: new Set(),
       skills: new Set(),
-      capabilities: new Set(),
+      capabilities: new Set(itself === undefined ? [] : [itself]),
       givers: [],
     };
     const placed: Placed[] = [];
@@ -645,6 +652,73 @@ export function createStacks(parts: StackParts) {
 
   const closeAll = async (connections: { connection: string }[]) => {
     for (const { connection } of connections) await hub.actors.close({ actorId: connection });
+  };
+
+  /**
+   * Have the agent hold what its creatable gives it of itself: the person is connected to the
+   * agent's own `capability` and `tools`, as to a unit's capability's Actor and connections.
+   */
+  const holdOwn = async (
+    record: TheAgent,
+    agent: string,
+    own: z.infer<typeof OwnCapability>,
+    undo?: Work["undo"],
+  ) => {
+    const reach = async (exported: string) => {
+      const slot = await parts.reachPerson(agent, exported);
+      undo?.push(() => parts.unreachPerson(slot, agent));
+      return slot;
+    };
+    const capability = await reach(CAPABILITY_EXPORT);
+    const operations: Record<string, string> = {};
+    for (const slot of new Set(own.views.flatMap((view) => (view.slot ? [view.slot] : []))))
+      operations[slot] = await reach(TOOLS_EXPORT);
+    record.capabilities.push({
+      id: own.id,
+      title: own.title,
+      from: agent,
+      actor: agent,
+      slots: [],
+      surfaces: [],
+      views: own.views,
+      person: { capability, operations },
+    });
+  };
+  /**
+   * Have each agent hold what its creatable gives it of itself where it doesn't yet, as an agent
+   * made before its creatable gave one: once the agent is there to be reached. `agent` limits it
+   * to that one. Each provider is asked once.
+   */
+  const holdOwns = async (agent?: string) => {
+    const asked = new Map<string, Promise<z.infer<typeof Creatable>[]>>();
+    const creatablesOf = (provider: Provided<Agents>) => {
+      let creatables = asked.get(provider.actor);
+      if (!creatables) {
+        creatables = provider.call.creatable({}).then((one) => one.creatables);
+        asked.set(provider.actor, creatables);
+      }
+      return creatables;
+    };
+    for (const id of Object.keys(records.agents)) {
+      if (agent !== undefined && id !== agent) continue;
+      await serial(id, async () => {
+        const record = records.agents[id];
+        if (!record || record.capabilities.some((one) => one.from === id)) return;
+        const provider = parts.agentProviders().find((one) => one.actor === record.provider);
+        if (!provider) return;
+        try {
+          const own = (await creatablesOf(provider)).find(
+            (one) => one.id === record.creatable,
+          )?.capability;
+          if (!own || record.capabilities.some((one) => one.id === own.id)) return;
+          await holdOwn(record, id, own);
+          save();
+        } catch (error) {
+          // Not there to be reached now: it is held when it comes back.
+          log.warn(`Holding what an agent gives itself: ${messageOf(error)}`);
+        }
+      });
+    }
   };
 
   /**
@@ -958,9 +1032,14 @@ export function createStacks(parts: StackParts) {
    */
   const reachHeld = async (actor?: string) => {
     let changed = false;
-    for (const record of Object.values(records.agents))
+    for (const [agent, record] of Object.entries(records.agents))
       for (const held of record.capabilities) {
         const unit = record.units.find((one) => one.instance === held.from);
+        // One the agent holds of itself has its operations in the agent's own `tools`.
+        const operations =
+          held.from === agent
+            ? Object.keys(held.person.operations).map((slot) => ({ slot, connection: held.actor }))
+            : (unit?.connections ?? []);
         const ends = [
           {
             provider: held.actor,
@@ -970,7 +1049,7 @@ export function createStacks(parts: StackParts) {
               held.person.capability = slot;
             },
           },
-          ...(unit?.connections ?? []).map(({ slot, connection }) => ({
+          ...operations.map(({ slot, connection }) => ({
             provider: connection,
             exported: TOOLS_EXPORT,
             was: held.person.operations[slot],
@@ -1022,6 +1101,7 @@ export function createStacks(parts: StackParts) {
     serial,
     fromUnit,
     reachHeld,
+    holdOwns,
     unitMaking,
     catalog,
     allTemplates: templates,
@@ -1126,7 +1206,10 @@ export function createStacks(parts: StackParts) {
       ];
       // What it holds, from the record alone: no unit is asked, and nothing of how it stands.
       // Without its Actor's id: a page reaches it by the person's slots, which are in it.
-      const capabilities = record.capabilities.map(({ actor: _, ...held }) => held);
+      // Its own has no `from` for a page: no unit made it.
+      const capabilities = record.capabilities.map(({ actor: _, from, ...held }) =>
+        from === agent ? held : { ...held, from },
+      );
       return { units, tools, instanceOfSkill, instanceOfSlot, capabilities };
     },
 
@@ -1203,10 +1286,12 @@ export function createStacks(parts: StackParts) {
     async check(input: CheckInput) {
       const problems: (TheProblem & { unit?: number })[] = [];
       if ("stack" in input) {
-        await baseOf(input.stack.base).catch((error) =>
-          problems.push({ message: messageOf(error).slice(0, MAX_MESSAGE) }),
-        );
-        problems.push(...(await plan(input.stack.units)).problems);
+        const based = await baseOf(input.stack.base).catch((error) => {
+          problems.push({ message: messageOf(error).slice(0, MAX_MESSAGE) });
+          return undefined;
+        });
+        const own = based?.creatable.capability?.id;
+        problems.push(...(await plan(input.stack.units, undefined, own)).problems);
       } else problems.push(...(await placeOnAgent(input)).problems);
       return { problems: problems.slice(0, MAX_PROBLEMS) };
     },
@@ -1215,7 +1300,7 @@ export function createStacks(parts: StackParts) {
     async create(input: CreateInput, caller: string, child?: Child) {
       const stack = await stackOf(input);
       const { provider, creatable } = await baseOf(stack.base);
-      const { placed, problems } = await plan(stack.units, child?.reach);
+      const { placed, problems } = await plan(stack.units, child?.reach, creatable.capability?.id);
       if (problems.length) throw refusal(problems);
 
       const undo: Work["undo"] = [];
@@ -1265,6 +1350,7 @@ export function createStacks(parts: StackParts) {
           await hub.grants.expose({ provider: agent, export: made.chat, to: self });
         }
         await hub.grants.expose({ provider: agent, export: made.chat, to: "person" });
+        if (creatable.capability) await holdOwn(record, agent, creatable.capability, undo);
         records.agents[agent] = record;
         undo.push(() => delete records.agents[agent]);
         keepOrigins(work);

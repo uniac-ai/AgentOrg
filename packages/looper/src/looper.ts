@@ -78,6 +78,7 @@ const Work = z.object({
   at: z.string().optional(),
   last: z.string().optional(),
   failed: z.literal(true).optional(),
+  stopped: z.literal(true).optional(),
 });
 
 /** Where a thread's record is kept in the looper's store. */
@@ -129,6 +130,8 @@ export interface LooperOut {
   working(on: boolean): void;
   /** A message in `thread` got no answer, and why. */
   failed(thread: string, problem: { code: string; message: string }): void;
+  /** What the piece of work `work` did, or whether it is at work, changed: ask `entries` again. */
+  worked(work: string): void;
 }
 
 /**
@@ -378,6 +381,8 @@ export function createLooper(options: {
       record,
       /** Whether a turn of it is running, as its mark was last asked to say. */
       marked: false,
+      /** Whether it was at work when its loop last said what it is doing. */
+      active: false,
       /** What its mark in the store says, as it was read or last asked to say. */
       stands: cutOff.get(id) as number | true | undefined,
       /** Whether the turn now starting wrote that mark, and didn't find one standing. */
@@ -430,15 +435,19 @@ export function createLooper(options: {
           message: out.message,
           delta: out.delta,
           failed: out.failed,
+          worked: () => out.worked(id),
           status(status) {
             const on = running(status);
             // A turn that starts is marked, but one that goes on from a cut-off has that mark
             // taken off: it goes on once. A turn that ends takes its mark off, but one cut by the
             // looper closing keeps it, for whoever opens the store next.
+            // A turn that begins is said at once; one that ends, once its end is kept.
+            if (on && !held.active) out.worked(id);
+            held.active = on;
             if (on && !held.marked) held.mark(!held.loop.resumed());
             else if (!on && held.marked && !closed) {
               held.mark(false);
-              ended(id, status.state === "error");
+              ended(id, status.state === "error", held.loop.stopped());
             }
             held.marked = on;
             tally();
@@ -474,25 +483,41 @@ export function createLooper(options: {
    * A turn of a piece of work has ended: keep when, the head of what it last said, and whether it
    * failed, for the main loop to tell of it.
    */
-  const ended = (id: string, failed: boolean) => {
+  const ended = (id: string, failed: boolean, stopped: boolean) => {
     const work = of(id);
     work.writes = work.writes
       .then(async () => {
         const last = await work.record.last();
         const title = await titleOf(id);
         // Read after the waits above: a decision may have kept that it follows a thread too.
-        const { failed: _, ...was } = kept.get(id) ?? { title, follows: [id] };
+        const { failed: _, stopped: __, ...was } = kept.get(id) ?? { title, follows: [id] };
         kept.set(id, {
           ...was,
           at: new Date().toISOString(),
           ...(last ? { last: head(last.replace(/\s+/g, " ").trim(), TOLD.last) } : {}),
           ...(failed ? { failed: true as const } : {}),
+          ...(stopped ? { stopped: true as const } : {}),
         });
         await store.set({ key: WORKS + encodeURIComponent(id), value: kept.get(id) as Json });
+        out.worked(id);
       })
       .catch((error: unknown) =>
         log.error("A work's record couldn't be written.", { work: id, error: String(error) }),
       );
+  };
+  /** Whether a turn of a piece of work is at work. */
+  const workingNow = (id: string) => running(works.get(id)?.loop.state() ?? { state: "idle" });
+  /**
+   * A piece of work's entries, oldest first, the call it is running now last, until its record
+   * keeps that call; paging back from that call starts where the record ends.
+   */
+  const entriesOf = async (id: string, before: string | undefined, limit: number) => {
+    const now = works.get(id)?.loop.running();
+    const fromRunning = now !== undefined && before === now.id;
+    const kept = await of(id).record.entries(fromRunning ? undefined : before, limit);
+    if (!now || before !== undefined || kept.entries.some((one) => one.id === now.id)) return kept;
+    const entries = [...kept.entries, now];
+    return { entries: entries.slice(-limit), more: kept.more || entries.length > limit };
   };
   /** Ask something of a piece of work's loop. */
   const using = <T>(id: string, ask: (loop: Work["loop"]) => Promise<T>) =>
@@ -1143,6 +1168,43 @@ export function createLooper(options: {
     },
     /** Stop a piece of work's turn now. A call already running finishes, and its result is kept. */
     cancel: async (work: string) => void (await works.get(work)?.loop.cancel()),
+    /**
+     * Its pieces of work, most recently active first, as many as `limit`: each with its title,
+     * whether it is working, idle or stopped, when it was last active, whether its last turn
+     * failed, and its `entries` latest entries, the call it is running now last.
+     */
+    async works(limit: number, entries: number) {
+      await learn();
+      const now = new Date().toISOString();
+      const latest = [...kept]
+        .map(([id, work]) => ({ id, work, at: workingNow(id) ? now : work.at }))
+        .sort((a, b) => (b.at ?? "").localeCompare(a.at ?? ""))
+        .slice(0, limit);
+      return Promise.all(
+        latest.map(async ({ id, work, at }) => ({
+          id,
+          title: work.title,
+          state: workingNow(id)
+            ? ("working" as const)
+            : work.stopped
+              ? ("stopped" as const)
+              : ("idle" as const),
+          ...(at ? { at } : {}),
+          ...(work.failed ? { failed: true as const } : {}),
+          ...(await entriesOf(id, undefined, entries)),
+        })),
+      );
+    },
+    /**
+     * A piece of work's entries, oldest first: those before the entry `before`, as many as
+     * `limit`, the call it is running now last; and whether more came before them. Refused
+     * `unknown` for work there isn't.
+     */
+    async entries(work: string, before: string | undefined, limit: number) {
+      await learn();
+      if (!kept.has(work)) throw new Refusal("unknown", "There is no such piece of work.");
+      return entriesOf(work, before, limit);
+    },
     /** What a piece of work's loop is doing. */
     state: (work: string): Status => works.get(work)?.loop.state() ?? { state: "idle" },
     /** A thread's messages before `before`, oldest first, as many as fit `limit`. */

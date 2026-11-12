@@ -53,6 +53,8 @@ export function looperWith(
   /** Each time it said whether anything is at work, and each message that got no answer. */
   const working: boolean[] = [];
   const failures: string[] = [];
+  /** Each piece of work said to have changed, in order. */
+  const worked: string[] = [];
   /**
    * What each worker's request held, in the order the model reads it, each of the person's
    * messages without the number it starts with, and what was sent as its words; `numbered` has
@@ -217,6 +219,7 @@ export function looperWith(
       delta: (thread, id, text) => void deltas.push({ thread, id, text }),
       working: (on) => void working.push(on),
       failed: (thread, { code }) => void failures.push(`${thread}: ${code}`),
+      worked: (work) => void worked.push(work),
     },
     ...(options.stopped === undefined ? {} : { stopped: options.stopped }),
     ...(options.stopGroup === undefined ? {} : { stopGroup: options.stopGroup }),
@@ -258,6 +261,7 @@ export function looperWith(
     deltas,
     working,
     failures,
+    worked,
     answer,
     fail,
     fill,

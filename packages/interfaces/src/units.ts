@@ -59,16 +59,65 @@ export const FactRow = z.strictObject({
  */
 export const Facts = z.strictObject({ rows: z.array(FactRow).max(32) });
 /**
+ * One thing a piece of an agent's work did, as an `activity` view shows it: a call, with whether
+ * it is running or how it ended, what it was given and what it gave back; words its worker wrote
+ * and didn't send; or a line of its own, as for calls that never ran.
+ */
+export const WorkEntry = z.union([
+  z.strictObject({
+    id: z.string(),
+    at: z.string(),
+    call: z.strictObject({
+      name: z.string(),
+      state: z.enum(["running", "done", "refused"]),
+      input: z.string(),
+      output: z.string().optional(),
+    }),
+  }),
+  z.strictObject({ id: z.string(), at: z.string(), words: z.string() }),
+  z.strictObject({ id: z.string(), at: z.string(), line: z.string() }),
+]);
+/**
+ * What an `activity` view shows, as its operation answers with no arguments: an agent's pieces of
+ * work, most recently active first, each with whether it is working, idle or stopped, when it was
+ * last active, whether its last turn failed, and its latest entries, oldest first, with `more`
+ * when older ones remain.
+ */
+export const Activity = z.strictObject({
+  works: z.array(
+    z.strictObject({
+      id: z.string(),
+      title: z.string(),
+      state: z.enum(["working", "idle", "stopped"]),
+      at: z.string().optional(),
+      failed: z.literal(true).optional(),
+      entries: z.array(WorkEntry),
+      more: z.boolean(),
+    }),
+  ),
+});
+/**
+ * One piece of work's entries, oldest first, as the operation of an `activity` view answers when
+ * called with `{ work, before?, limit? }`: those before the entry `before`, `limit` at most, with
+ * `more` when older ones remain.
+ */
+export const ActivityPage = z.strictObject({
+  work: z.string(),
+  entries: z.array(WorkEntry),
+  more: z.boolean(),
+});
+/**
  * A view a capability gives the person's side, as data: the host draws it and the capability
  * paints nothing. `place` and `kind` name a place and a kind of view in the host's catalogue
- * (places `column` and `frame`; kinds `facts`, `status` and `meters`) and are open: a host that
+ * (places `column` and `frame`; kinds `facts`, `status`, `meters` and `activity`) and are open: a host that
  * doesn't know one doesn't show the view. Views are shown in the order they are given.
  *
  * Its data is one of three:
  * - With `operation`: the answer of that tool of the connection the unit gives at `slot`, called
  *   with no arguments through the person's own binding to it. It is the tool an agent calls
  *   under that slot, so both read the same. For a `facts` view the answer is `Facts`; `rows`
- *   names the rows of it the view shows, by label, and it shows all of them when absent.
+ *   names the rows of it the view shows, by label, and it shows all of them when absent. For an
+ *   `activity` view it is `Activity`, and called again with a piece of work, `ActivityPage`.
  * - With `surface`: that live surface of the capability.
  * - With neither: rows fixed when the unit was applied, which `apply` gives.
  *

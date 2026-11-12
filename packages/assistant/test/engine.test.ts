@@ -1314,7 +1314,7 @@ test("a message with no chat starts one, titled by its first line, with a record
   );
   // Every message names its chat, and a chat's entry is said again as it moves on. The agent's
   // status names none.
-  for (const e of s.actor.emitted) {
+  for (const e of s.actor.emitted.filter((one) => one.export === "chat")) {
     const payload = e.payload as { chat?: string; id: string };
     if (e.event === "status") assert.equal(payload.chat, undefined);
     else
@@ -1871,4 +1871,89 @@ test("a reply being recorded as its turn is stopped is still its chat's newest",
   const reply = (await shownIn(s, s.id())).at(-1);
   assert.equal(reply?.text, "Just in time.");
   assert.equal(chat?.latest?.id, reply?.id);
+});
+
+test("Work answers what each piece of work did, while the agent runs and once it is stopped, and says when that changed", async () => {
+  const s = await setup();
+  s.actor.expose("layout", tools, listing({ place: () => ({ id: "p1" }) }));
+  s.script.push(calls(callTool("layout__place", { at: "home" }, "c1")), say("Placed."));
+  await s.turn("Place it.");
+  const work = async (args: Record<string, unknown> = {}) =>
+    JSON.parse(
+      (
+        (await s.actor.call("tools", "call", { name: "work", arguments: args })) as {
+          output: string;
+        }
+      ).output,
+    );
+  const { works } = await work();
+  assert.equal(works.length, 1);
+  assert.equal(works[0].state, "idle");
+  assert.deepEqual(works[0].entries[0].call, {
+    name: "layout__place",
+    state: "done",
+    input: '{"at":"home"}',
+    output: '{"id":"p1"}',
+  });
+  // Its capability said each change to the view of it.
+  assert.ok(
+    s.actor.emitted.some(
+      (e) =>
+        e.export === "capability" &&
+        e.event === "changed" &&
+        (e.payload as { view?: string }).view === "activity",
+    ),
+  );
+  // Stopped, the agent's work is still there to read, and Work can be reached.
+  await s.host.stop();
+  assert.deepEqual(await s.actor.call("capability", "state", {}), {
+    state: "connected",
+    surfaces: [],
+  });
+  const page = await work({ work: works[0].id, limit: 1 });
+  assert.equal(page.entries.length, 1);
+  assert.equal(page.more, false);
+  const unknown = (await s.actor.call("tools", "call", {
+    name: "work",
+    arguments: { work: "nothing" },
+  })) as { output: string; failed?: true };
+  assert.deepEqual(unknown, { output: "There is no such piece of work.", failed: true });
+});
+
+test("Work's answer fits what another agent's loop takes whole: each text cut, then the oldest entries left out", async () => {
+  const s = await setup();
+  const big = "x".repeat(10_000);
+  s.actor.expose("layout", tools, listing({ place: () => ({ big }) }));
+  s.script.push(
+    calls(...Array.from({ length: 30 }, (_, i) => callTool("layout__place", { big }, `c${i}`))),
+    say("Placed."),
+  );
+  await s.turn("Place them.");
+  // Two more pieces of work, each in a chat of its own, so the answer with no arguments is over too.
+  for (const text of ["Place more.", "Place yet more."]) {
+    s.script.push(
+      calls(...Array.from({ length: 3 }, (_, i) => callTool("layout__place", { big }, `d${i}`))),
+      say("Placed."),
+    );
+    const from = s.actor.emitted.length;
+    await s.actor.call("chat", "send", { text });
+    await s.ended(from);
+  }
+  const answer = async (args: Record<string, unknown>) =>
+    ((await s.actor.call("tools", "call", { name: "work", arguments: args })) as { output: string })
+      .output;
+  const box = await answer({});
+  assert.ok(box.length <= 28_000, `${box.length}`);
+  const { works } = JSON.parse(box);
+  assert.equal(works.length, 3);
+  assert.ok(
+    works.some((one: { more: boolean; entries: unknown[] }) => one.more && one.entries.length < 3),
+  );
+  assert.match(works[0].entries.at(-1).call.input, /… \(\d+ more characters\)$/);
+  // The first piece of work is the least recently active: the last listed.
+  const page = await answer({ work: works.at(-1).id, limit: 20 });
+  assert.ok(page.length <= 28_000, `${page.length}`);
+  const { entries, more } = JSON.parse(page);
+  assert.ok(entries.length > 0 && entries.length < 20);
+  assert.equal(more, true);
 });

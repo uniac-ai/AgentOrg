@@ -99,17 +99,18 @@ const AddUnit = {
 /**
  * Something an agent holds, as it was built: what a page for the agent is put together from,
  * with no unit asked. `from` is the applied unit it came from, read to show what the agent was
- * built from and for nothing else. `slots` are the slots its operations are exposed to the agent
- * under. A view whose rows were fixed when the agent was built carries them as `fixed`.
+ * built from and for nothing else; none for one the agent's creatable gives it of itself. `slots`
+ * are the slots its operations are exposed to the agent under. A view whose rows were fixed when
+ * the agent was built carries them as `fixed`.
  *
  * `person` holds the person's own slots that reach it: `capability`, bound to its
- * `capability@1`, and, by the agent's slot name, one for each of its operations' `tools@1`. How
+ * `capability@1`, and, by the slot a view names, one for each of its operations' `tools@1`. How
  * it stands now, and what an operation answers, is asked of those.
  */
 export const AgentCapability = z.strictObject({
   id: CapabilityId,
   title: z.string().min(1).max(128),
-  from: Id,
+  from: Id.optional(),
   slots: z.array(SlotName).max(32),
   surfaces: z.array(Surface).max(16),
   views: z.array(View.extend({ fixed: z.array(FactRow).max(32).optional() })).max(32),

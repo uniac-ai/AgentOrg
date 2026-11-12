@@ -48,6 +48,12 @@ const MODELS = [
   { id: "small", name: "Small" },
   { id: "large", name: "Large" },
 ];
+/** What an agent of the `working` creatable holds of itself, served by the agent. */
+const WORK = {
+  id: "work",
+  title: "Activity",
+  views: [{ id: "activity", place: "column", kind: "activity", operation: "work", slot: "work" }],
+};
 const CREATABLES = [
   { id: "plain", title: "Plain", description: "No needs.", instructions: "Be plain.", asks: [] },
   {
@@ -56,6 +62,14 @@ const CREATABLES = [
     description: "Asks one thing.",
     instructions: "Be asked.",
     asks: [{ id: "folder", title: "Folder" }],
+  },
+  {
+    id: "working",
+    title: "Working",
+    description: "Holds its own work.",
+    instructions: "Work.",
+    asks: [],
+    capability: WORK,
   },
 ];
 
@@ -384,7 +398,8 @@ async function setup(t: test.TestContext) {
             actorId,
             credential: credential as string,
             slots: { settings: agentSettings },
-            exports: { chat },
+            // What a `working` agent holds of itself it serves as these; none is called here.
+            exports: { chat, capability, tools },
             start(own) {
               contexts.set(actorId, own as never);
               const said: { id: string; role: "user"; text: string; at: string; chat: string }[] =
@@ -833,6 +848,7 @@ test("a provider counts once it has exposed its export to management", async (t)
     [
       ["plain", s.agentActor.actorId],
       ["asking", s.agentActor.actorId],
+      ["working", s.agentActor.actorId],
     ],
   );
   const mcp = await s.calls.connections.providers({});
@@ -1314,6 +1330,7 @@ test("every unit on offer is listed, management's own among them", async (t) => 
     [
       ["plain", "Agents"],
       ["asking", "Agents"],
+      ["working", "Agents"],
     ],
   );
   assert.deepEqual(
@@ -3119,7 +3136,7 @@ test("an agent holds the capability its unit builds, and the person reaches it b
   assert.deepEqual((await s.calls.agents.get({ agent: plain })).capabilities, []);
 
   // Removing the unit takes the capability, and the person's slots to it.
-  await s.calls.agents.removeUnit({ agent, instance: held.from });
+  await s.calls.agents.removeUnit({ agent, instance: held.from as string });
   assert.deepEqual((await s.calls.agents.get({ agent })).capabilities, []);
   const left = (await s.bindingsOf(PERSON)).map((b) => b.slot);
   assert.equal(left.includes(person.capability), false);
@@ -3243,14 +3260,14 @@ test("a unit that can't go keeps the person's slots to what it built; one whose 
   assert.ok(held);
   const slots = async () => (await s.bindingsOf(PERSON)).map((b) => b.slot);
   s.script.fail = "unit.remove";
-  await assert.rejects(s.calls.agents.removeUnit({ agent, instance: held.from }));
+  await assert.rejects(s.calls.agents.removeUnit({ agent, instance: held.from as string }));
   // It stays whole: the agent holds it, and the person still reaches it.
   assert.deepEqual((await s.calls.agents.get({ agent })).capabilities, [held]);
   const there = await slots();
   assert.ok(there.includes(held.person.capability));
   assert.ok(there.includes(held.person.operations.desk as string));
   delete s.script.fail;
-  await s.calls.agents.removeUnit({ agent, instance: held.from });
+  await s.calls.agents.removeUnit({ agent, instance: held.from as string });
   assert.equal((await slots()).includes(held.person.capability), false);
 
   // A creation undone while the provider refuses to remove what it made: management closes the
@@ -3306,7 +3323,7 @@ test("removing a unit takes off only the person's slots that are still its own",
     to: PERSON,
     as: held.person.capability,
   });
-  await s.calls.agents.removeUnit({ agent, instance: held.from });
+  await s.calls.agents.removeUnit({ agent, instance: held.from as string });
   const left = (await s.bindingsOf(PERSON)).filter((b) => b.slot === held.person.capability);
   assert.deepEqual(
     left.map((b) => b.provider),
@@ -3349,4 +3366,42 @@ test("the person's slots to what an agent holds are made again when the Hub has 
     now?.person.capability as string,
   );
   assert.equal((await itself.state({})).state, "connected");
+});
+
+test("an agent whose creatable gives it a capability holds it with no unit, the person reaching the agent's own exports", async (t) => {
+  const s = await setup(t);
+  const { agent } = await s.calls.agents.create({
+    stack: { base: { ...s.base, creatable: "working" }, units: [] },
+    name: "Worker",
+  });
+  const [held] = (await s.calls.agents.get({ agent })).capabilities ?? [];
+  assert.ok(held);
+  assert.deepEqual(
+    { id: held.id, title: held.title, from: held.from, slots: held.slots, views: held.views },
+    { id: "work", title: "Activity", from: undefined, slots: [], views: WORK.views },
+  );
+  const bound = async () =>
+    (await s.bindingsOf(PERSON)).map((b) => `${b.slot} ${b.provider} ${b.export}`);
+  assert.ok((await bound()).includes(`${held.person.capability} ${agent} capability`));
+  assert.ok((await bound()).includes(`${held.person.operations.work} ${agent} tools`));
+  // An agent of it made before its creatable gave one holds it once it is reached again: once.
+  await s.restart((kept) => {
+    const agents = kept.agents as unknown as Record<string, { capabilities: unknown[] }>;
+    (agents[agent] as { capabilities: unknown[] }).capabilities = [];
+  });
+  let again: NonNullable<Awaited<ReturnType<typeof s.calls.agents.get>>["capabilities"]> = [];
+  for (let i = 0; i < 300 && again.length === 0; i++) {
+    again = (await s.calls.agents.get({ agent })).capabilities ?? [];
+    if (again.length === 0) await new Promise((later) => setTimeout(later, 20));
+  }
+  // Every pass a restart makes has had its turn.
+  await new Promise((later) => setTimeout(later, 200));
+  again = (await s.calls.agents.get({ agent })).capabilities ?? [];
+  assert.deepEqual(
+    again.map((one) => [one.id, one.from]),
+    [["work", undefined]],
+  );
+  const [now] = again;
+  assert.ok((await bound()).includes(`${now?.person.capability} ${agent} capability`));
+  assert.ok((await bound()).includes(`${now?.person.operations.work} ${agent} tools`));
 });

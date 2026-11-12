@@ -160,6 +160,8 @@ export function createChats(options: {
     delta(delta: Emitted<"delta">): void;
     status(status: Emitted<"status">): void;
     chat(entry: Listed): void;
+    /** What a piece of the agent's work did changed. */
+    worked(): void;
   };
   log: Log;
 }) {
@@ -199,6 +201,7 @@ export function createChats(options: {
           held.stored.problem = { code: head(code, 128), message: head(message, 2000) };
           told(held);
         },
+        worked: () => emit.worked(),
       },
       stopped: options.stopped,
       ...(options.stopGroup ? { stopGroup: options.stopGroup } : {}),
@@ -422,5 +425,10 @@ export function createChats(options: {
     delta(requestId: string, text: string, call?: Call) {
       looper.delta(requestId, text, call);
     },
+    /** The agent's pieces of work, most recently active first, each with its latest entries. */
+    works: (limit: number, entries: number) => looper.works(limit, entries),
+    /** One piece of work's entries, before the entry `before`. */
+    entries: (work: string, before: string | undefined, limit: number) =>
+      looper.entries(work, before, limit),
   };
 }

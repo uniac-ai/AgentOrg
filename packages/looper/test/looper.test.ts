@@ -57,6 +57,7 @@ function looperWith(
       delta: (thread, id, text) => deltas.push({ thread, id, text }),
       working: (on) => void working.push(on),
       failed: (thread, problem) => void failures.push({ thread, problem }),
+      worked() {},
     },
     log: { info() {}, warn() {}, error() {} },
   });

@@ -5,6 +5,7 @@ export {
   agentProvider,
   Creatable,
   CreatableId,
+  OwnCapability,
 } from "./agent-provider.js";
 export {
   agentSettings,
@@ -61,6 +62,8 @@ export {
 } from "./manager.js";
 export { ToolEntry, tools } from "./tools.js";
 export {
+  Activity,
+  ActivityPage,
   CapabilityId,
   FactRow,
   Facts,
@@ -80,4 +83,5 @@ export {
   UnitResult,
   unitProvider,
   View,
+  WorkEntry,
 } from "./units.js";

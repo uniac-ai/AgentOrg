@@ -407,17 +407,43 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
         for (const agent of Object.keys(records.agents)) reaching(agent);
       });
       /** The same for the person's slots to what agents hold: made again when one has gone. */
+      /**
+       * Have every agent hold what its creatable gives it of itself, where it doesn't yet: one pass
+       * at a time, and asked again while one runs, one more after it.
+       */
+      let owning: Promise<void> | undefined;
+      let owningAgain = false;
+      const owns = () => {
+        if (owning) {
+          owningAgain = true;
+          return;
+        }
+        owning = (async () => {
+          do {
+            owningAgain = false;
+            await stacks.holdOwns().catch((error) => {
+              if (!alreadyGone(error))
+                log.warn(`Holding what agents give themselves: ${messageOf(error)}`);
+            });
+          } while (owningAgain);
+        })().finally(() => {
+          owning = undefined;
+        });
+      };
       const holding = (actor?: string) =>
         void (async () => {
           // One that has closed, or isn't back yet, has nothing to reach.
           if (actor && !(await hub.actors.get({ actorId: actor })).connected) return;
-          await stacks.reachHeld(actor);
+          await Promise.all([stacks.holdOwns(actor), stacks.reachHeld(actor)]);
         })().catch((error) => {
           if (!alreadyGone(error)) log.warn(`Reaching what an agent holds: ${messageOf(error)}`);
         });
       ctx.slots.actors.on("changed", ({ actor }) => holding(actor));
       // And all of them once management can make a slot: what the Hub dropped while it was away.
       ctx.slots.grants.onBind(() => holding());
+      // An agent provider exposed to it says what its agents hold of themselves: an agent made
+      // before its creatable gave one holds it from then on.
+      ctx.onExposed(owns);
       /** The person's own handlers, which an agent's control tools call after their checks. */
       const personHandlers: Partial<
         Record<"agents" | "connections" | "skills", Record<string, Handler>>
