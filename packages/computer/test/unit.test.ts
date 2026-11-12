@@ -14,6 +14,30 @@ test("a stack holds one computer and one web search, and only no isolation is a 
   assert.equal(WEB_UNIT.once, true);
 });
 
+test("what a computer here reaches is said where it resides, and nowhere claims more than is true with a container", () => {
+  const said = (found: Found) => {
+    const { form } = computerUnit(found);
+    const field = (id: string) => form.find((one) => one.id === id);
+    const option = (id: string, value: string) =>
+      field(id)?.options?.find((one) => one.value === value)?.description ?? "";
+    return {
+      local: option("service", "local"),
+      rest: `${option("access", "terminal")} ${field("workspace")?.description}`,
+    };
+  };
+  assert.match(said({ isolation: "none" }).local, /No isolation: it acts as you/);
+  assert.match(
+    said({ isolation: "container" }).local,
+    /a container of its own, and the only folder of yours in it is its workspace directory/,
+  );
+  // The other answers hold however it is isolated, here or at another address.
+  for (const found of [{ isolation: "none" }, { isolation: "container" }, undefined] as Found[]) {
+    assert.doesNotMatch(said(found).rest, /every file and program|not a sandbox/);
+    assert.match(said(found).rest, /depends on where it resides/);
+    assert.match(said(found).rest, /made if it's missing/);
+  }
+});
+
 test("the computer's form is titled and ordered: where it resides, its folder, what it reaches, a browser", () => {
   const { form } = computerUnit({ isolation: "none" });
   assert.deepEqual(

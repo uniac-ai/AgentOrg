@@ -12,6 +12,7 @@ import {
   realpathSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { createServer } from "node:http";
@@ -266,7 +267,7 @@ test("with no service here, it says what to install and start, and nothing is ma
 });
 
 test("check says what's wrong by field, and changes nothing", async (t) => {
-  const { units, running } = await setup(t);
+  const { units, running, root, workspace } = await setup(t);
   const fields = async (values: object, secrets: string[] = []) =>
     (await units.check({ unit: "computer", values: values as never, secrets })).problems.map(
       (one) => one.field,
@@ -274,10 +275,26 @@ test("check says what's wrong by field, and changes nothing", async (t) => {
   assert.deepEqual(await fields({ service: "local", access: "terminal" }), []);
   assert.deepEqual(await fields({ service: "local", access: "none" }), ["access"]);
   assert.deepEqual(await fields({ service: "local", access: "none", browser: true }), []);
-  assert.deepEqual(
-    await fields({ service: "local", access: "terminal", workspace: "/nothing/x" }),
-    ["workspace"],
-  );
+  // A folder that isn't there yet will do: it is made with the computer. A path that isn't a
+  // full one, and one where something that isn't a folder is, won't.
+  const typed = (folder: string) =>
+    fields({ service: "local", access: "terminal", workspace: folder });
+  assert.deepEqual(await typed(join(root, "not", "yet")), []);
+  assert.ok(!existsSync(join(root, "not")), "checking makes nothing");
+  assert.deepEqual(await typed("not/a/full/path"), ["workspace"]);
+  // What making the computer couldn't make is refused here too: a file in its place or above
+  // it, a link to nothing, and a folder that can't be written in.
+  symlinkSync(join(root, "nowhere"), join(root, "link"));
+  mkdirSync(join(root, "closed"), { mode: 0o500 });
+  for (const folder of [
+    join(workspace, "seen.txt"),
+    `${join(workspace, "seen.txt")}/`,
+    join(workspace, "seen.txt", "under"),
+    join(root, "link"),
+    join(root, "closed", "new"),
+  ])
+    assert.deepEqual(await typed(folder), ["workspace"], folder);
+  assert.deepEqual(await typed(join(root, "closed")), [], "a folder that is there will do");
   assert.deepEqual(await fields({ service: "other", access: "read" }), ["service"]);
   const away = { service: "another", access: "read" };
   assert.deepEqual(await fields({ ...away, address: "not an address" }, ["token"]), ["address"]);
@@ -377,6 +394,24 @@ test("on a real service, an agent reads a page with its browser", async (t) => {
   await units.remove({ instance });
   // The service is still there for the next one.
   assert.equal((await Computer.serviceInfo(running as Service)).isolation, "none");
+});
+
+test("a typed workspace folder that is missing is made; one that can't be made is refused and leaves no computer", async (t) => {
+  const { apply, root, workspace, running, dir } = await setup(t);
+  const folder = join(root, "deep", "er", "work");
+  const made = await apply({ service: "local", access: "files", workspace: folder });
+  assert.ok(statSync(folder).isDirectory());
+  const kept = JSON.parse(readFileSync(join(dir, "instances.json"), "utf8"));
+  const info = await Computer.getInfo(kept[made.instance].computer.id, running as Service);
+  assert.equal(info.workspace, folder, "and it is the computer's folder");
+  // Under a file nothing can be made.
+  const before = (await Computer.list(running as Service)).length;
+  await assert.rejects(
+    apply({ service: "local", access: "files", workspace: join(workspace, "seen.txt", "under") }),
+    (error: Error & { code?: string }) =>
+      error.code === "invalid" && /can't be made/.test(error.message),
+  );
+  assert.equal((await Computer.list(running as Service)).length, before);
 });
 
 test("removing kills the computer: a named folder stays, one the service made goes", async (t) => {
