@@ -8,8 +8,8 @@
 # - 0.0.5: its old Actors closed, and `agents create` working;
 # - 0.0.6: a connection that must still answer, and an agent whose conversation must be its first
 #   chat;
-# - 0.0.7, 0.0.8 and 0.0.9: an agent that must still run, whose two chats must be read, the older
-#   one added to.
+# - 0.0.7, 0.0.8 and 0.0.9: an agent that must still run, bound exactly as it was (to its model
+#   and a connection's tools among others), whose two chats must be read, the older one added to.
 # Once a version is published, it gets a section here, or joins the loop of an earlier version
 # when it takes the same commands and the same is asked of this build on its home (not in the
 # change that releases it: the registry has it only after its tag). A section makes, with that
@@ -82,6 +82,37 @@ chat_slot() {
       const { bindings } = JSON.parse(require("fs").readFileSync(0, "utf8"));
       console.log(bindings.find((b) => b.export === "chat")?.slot ?? "");
     '
+}
+
+# What an agent ($3, its id) is bound to, asked of `agentorg` ($1) on a home ($2): a line for each
+# of its slots, with the interface, the Actor and the export it reaches, sorted.
+agent_bindings() {
+  "$1" call bindings list "{\"actor\":\"$3\"}" --home "$2" |
+    node -e '
+      const { bindings } = JSON.parse(require("fs").readFileSync(0, "utf8"));
+      const own = bindings.filter((b) => b.consumer === process.argv[1]);
+      const line = (b) => `${b.slot} ${b.interface} ${b.provider} ${b.export}`;
+      console.log(own.map(line).sort().join("\n"));
+    ' "$3"
+}
+# Make a connection to the MCP test fixture with `agentorg` ($1) on a home ($2), once a way to
+# connect is offered there, and print its id; nothing if none is offered in time.
+fixture_connection() {
+  for _ in $(seq 1 120); do
+    "$1" call connections providers --home "$2" >"$work/mcp.json" 2>/dev/null &&
+      grep -Eq '"kind": ?"command"' "$work/mcp.json" && break
+    kill -0 "$pid" 2>/dev/null || return 0
+    sleep 0.5
+  done
+  grep -Eq '"kind": ?"command"' "$work/mcp.json" || return 0
+  "$1" call connections create "$(node -e '
+    const { providers: [one] } = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+    console.log(JSON.stringify({
+      provider: one.provider, kind: "command", name: "Fixture",
+      params: { command: process.execPath, args: [process.argv[2]] },
+    }));
+  ' "$work/mcp.json" "$root/packages/mcp/dist/test/fixtures/server.js")" --home "$2" |
+    node -e 'console.log(JSON.parse(require("fs").readFileSync(0, "utf8")).connection)'
 }
 
 step "pack the cli"
@@ -249,23 +280,9 @@ mkdir "$old6"
 was="$old6/node_modules/.bin/agentorg"
 home6="$work/home6"
 start_on "$was" "$home6" "$work/old6.log"
-for _ in $(seq 1 120); do
-  "$was" call connections providers --home "$home6" >"$work/mcp.json" 2>/dev/null &&
-    grep -Eq '"kind": ?"command"' "$work/mcp.json" && break
-  kill -0 "$pid" 2>/dev/null || { cat "$work/old6.log" >&2; exit 1; }
-  sleep 0.5
-done
-grep -Eq '"kind": ?"command"' "$work/mcp.json" ||
+connection="$(fixture_connection "$was" "$home6")"
+[ -n "$connection" ] ||
   { echo "0.0.6 offered no way to connect" >&2; cat "$work/old6.log" >&2; exit 1; }
-create="$(node -e '
-  const { providers: [one] } = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
-  console.log(JSON.stringify({
-    provider: one.provider, kind: "command", name: "Fixture",
-    params: { command: process.execPath, args: [process.argv[2]] },
-  }));
-' "$work/mcp.json" "$root/packages/mcp/dist/test/fixtures/server.js")"
-connection="$("$was" call connections create "$create" --home "$home6" |
-  node -e 'console.log(JSON.parse(require("fs").readFileSync(0, "utf8")).connection)')"
 # Whether the connection answers with its tools, asked of `agentorg` ($1) on the 0.0.6 home.
 answers() {
   "$1" call connections get "{\"connection\":\"$connection\"}" --home "$home6" 2>/dev/null |
@@ -330,7 +347,8 @@ wait_answers "$agentorg" ||
 echo "0.0.6's connection works here and is removed"
 stop_app
 
-# 0.0.7, 0.0.8 and 0.0.9 take the same commands to make an agent and two chats, and the same is
+# 0.0.7, 0.0.8 and 0.0.9 take the same commands to make an agent, two chats and a connection
+# exposed to the agent, and the same is
 # asked of this build on each home, so they share this section. A later version joins the list
 # only while both hold; one whose commands differ gets its own section after the loop. A published version
 # never changes, so one leaves the list only when this build must do something different with its
@@ -339,7 +357,7 @@ stop_app
 # message there to the main loop with it. Their work records, and messages that name their work,
 # are written only after a model answers, so no home here has them.
 for v in 0.0.7 0.0.8 0.0.9; do
-  step "a home the published $v made: its agent runs and its chats are read on this build, the older one added to"
+  step "a home the published $v made: its agent runs, bound as it was, and its chats are read on this build, the older one added to"
   oldv="$work/old-$v"
   mkdir "$oldv"
   (cd "$oldv" && echo '{"private":true}' >package.json &&
@@ -382,6 +400,23 @@ for v in 0.0.7 0.0.8 0.0.9; do
   }
   first="$(started "Said on $v.")" || { echo "$v started no chat" >&2; exit 1; }
   second="$(started "A second chat.")" || { echo "$v started no second chat" >&2; exit 1; }
+  # A connection of the person's, exposed to the agent as tools: the agent must keep it on this
+  # build, with what it was bound to as it was made.
+  connection="$(fixture_connection "$was" "$homev")"
+  [ -n "$connection" ] ||
+    { echo "$v offered no way to connect" >&2; cat "$work/old-$v.log" >&2; exit 1; }
+  elder="$("$was" call agents list --home "$homev" | node -e '
+    const { agents } = JSON.parse(require("fs").readFileSync(0, "utf8"));
+    console.log(agents.find((a) => a.name === "Elder")?.agent ?? "");
+  ')"
+  "$was" call agents expose "{\"agent\":\"$elder\",\"connection\":\"$connection\",\"as\":\"fixture\"}" --home "$homev" >/dev/null ||
+    { echo "$v exposed no connection to its agent" >&2; cat "$work/old-$v.log" >&2; exit 1; }
+  agent_bindings "$was" "$homev" "$elder" >"$work/bound-$v.txt" ||
+    { echo "$v didn't say what its agent is bound to" >&2; cat "$work/old-$v.log" >&2; exit 1; }
+  for bound in model fixture; do
+    grep -q "^$bound " "$work/bound-$v.txt" ||
+      { echo "$v bound its agent to no $bound" >&2; cat "$work/bound-$v.txt" >&2; exit 1; }
+  done
   stop_app
   start_on "$agentorg" "$homev" "$work/up-$v.log"
   # The chat interface is the one the version had, so the person keeps the slot: its chats
@@ -422,6 +457,13 @@ for v in 0.0.7 0.0.8 0.0.9; do
     console.log(`${v}'"'"'s agent is ${got.agent}, its ${got.titles.length} chats are read, and the older one took a message`);
   ' "$work/chats-$v.json" "$work/history-$v.json" "$work/history-$v-second.json" "$work/agents-$v.json" "$v" ||
     { echo "This build lost something of the $v home" >&2; cat "$work/up-$v.log" >&2; exit 1; }
+  # The agent is bound exactly as it was: to its model, its tools, and the rest.
+  agent_bindings "$agentorg" "$homev" "$elder" >"$work/bound-$v-now.txt" ||
+    { echo "This build didn't say what the $v agent is bound to" >&2; cat "$work/up-$v.log" >&2; exit 1; }
+  diff "$work/bound-$v.txt" "$work/bound-$v-now.txt" ||
+    { echo "The $v agent is not bound on this build as it was" >&2; cat "$work/up-$v.log" >&2; exit 1; }
+  echo "$v's agent is bound as it was:"
+  cat "$work/bound-$v.txt"
   if grep -E "didn't work|Error" "$work/up-$v.log"; then
     echo "This build reported a problem on the $v home" >&2
     exit 1
