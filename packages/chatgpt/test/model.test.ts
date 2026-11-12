@@ -919,3 +919,246 @@ test("the wait between tries ends when its time is up, and at once when cancelle
   // One cancelled before it began rejects the same way. Neither leaves a timer: the test ends.
   await assert.rejects(sleep(60_000, during.signal), { code: "cancelled" });
 });
+
+const sealedItem = (id: string, content: string) => ({
+  type: "reasoning",
+  id,
+  summary: [],
+  encrypted_content: content,
+});
+const callItem = (id: string) => ({
+  type: "function_call",
+  call_id: id,
+  name: "look",
+  arguments: "{}",
+});
+/** A caller's items for a call and its output, as it keeps them. */
+const called = (id: string) => [
+  { type: "function_call", callId: id, name: "look", arguments: "{}" },
+  { type: "function_call_output", callId: id, output: "seen" },
+];
+const user = (content: string) => ({ type: "message", role: "user", content });
+const assistant = (content: string) => ({ type: "message", role: "assistant", content });
+/** What the latest `/responses` request sent: its body, and its input by kind. */
+const latest = (s: Awaited<ReturnType<typeof setup>>) => {
+  const sent = s.fake.requests.filter((r) => r.url.endsWith("/v1/responses"));
+  const body = JSON.parse(sent.at(-1)?.body ?? "{}");
+  const kinds = (
+    body.input as { type: string; id?: string; call_id?: string; content?: string }[]
+  ).map((item) =>
+    item.type === "reasoning" ? item.id : item.type === "message" ? item.content : item.type,
+  );
+  return { body, kinds, count: sent.length };
+};
+
+test("a model's reasoning is kept here and sent back before its call until a user message follows, and a caller never has it", async (t) => {
+  const s = await setup(t);
+  await signIn(s);
+  const ask = (input: unknown[]) =>
+    s.call("session", "respond", {
+      requestId: crypto.randomUUID(),
+      model: "gpt-test",
+      instructions: "",
+      input,
+    });
+  s.fake.script({
+    events: [
+      completed([
+        { ...sealedItem("rs_1", "sealed-one"), summary: [{ type: "summary_text", text: "Why." }] },
+        text("Looking."),
+        text("Still looking."),
+        callItem("c1"),
+        // Reasoning with nothing sealed can't be sent back, so it isn't kept.
+        { type: "reasoning", id: "rs_2", summary: [] },
+        callItem("c2"),
+        sealedItem("rs_3", "sealed-three"),
+        callItem("c3"),
+      ]),
+    ],
+  });
+  const first = await ask([user("Look.")]);
+  // The caller gets what it always got.
+  assert.deepEqual(
+    first.output.map((item) => (item as { type: string }).type),
+    ["message", "message", "function_call", "function_call", "function_call"],
+  );
+  assert.deepEqual(latest(s).body.include, ["reasoning.encrypted_content"]);
+
+  // Back before its call, and before the words the model wrote with the call, as OpenAI gave
+  // it; a call with something else before it has its reasoning straight before it.
+  const turn = [
+    user("Look."),
+    assistant("Looking."),
+    assistant("Still looking."),
+    ...called("c1"),
+    ...called("c2"),
+    ...called("c3"),
+  ];
+  await ask(turn);
+  assert.deepEqual(latest(s).kinds, [
+    "Look.",
+    "rs_1",
+    "Looking.",
+    "Still looking.",
+    "function_call",
+    "function_call_output",
+    "function_call",
+    "function_call_output",
+    "rs_3",
+    "function_call",
+    "function_call_output",
+  ]);
+  assert.deepEqual(latest(s).body.input[1], {
+    ...sealedItem("rs_1", "sealed-one"),
+    summary: [{ type: "summary_text", text: "Why." }],
+  });
+  // Once a user message follows them, the calls go without their reasoning.
+  await ask([...turn, assistant("It is there."), user("And now?")]);
+  assert.equal(
+    latest(s).kinds.some((kind) => kind?.startsWith("rs_")),
+    false,
+  );
+  // Nothing of it reached the caller, an event or a log.
+  assert.equal(JSON.stringify([first, s.actor.emitted, s.actor.logs]).includes("sealed-"), false);
+});
+
+test("a request that had reasoning put back and fails for good before any text is made once more without it, and that reasoning is not sent again", async (t) => {
+  const s = await setup(t);
+  await signIn(s);
+  const ask = (input: unknown[]) =>
+    s.call("session", "respond", {
+      requestId: crypto.randomUUID(),
+      model: "gpt-test",
+      instructions: "",
+      input,
+    });
+  const kept = async (call: string) => {
+    s.fake.script({
+      events: [completed([sealedItem(`rs_${call}`, "sealed-one"), callItem(call)])],
+    });
+    await ask([user("Look.")]);
+    return [user("Look."), ...called(call)];
+  };
+  const bare = ["Look.", "function_call", "function_call_output"];
+
+  // Refused with the reasoning in it: once more without, at once.
+  let turn = await kept("c1");
+  s.fake.script({ status: 400, code: "invalid_encrypted_content" });
+  let before = latest(s).count;
+  assert.equal((await ask(turn)).output.length, 1);
+  assert.equal(latest(s).count - before, 2);
+  assert.deepEqual(latest(s).kinds, bare);
+  assert.deepEqual(s.waits, [], "not one of the tries a passing failure gets");
+  // And not sent again for the rest of the turn, so the refusal is paid for once.
+  await ask(turn);
+  assert.deepEqual(latest(s).kinds, bare);
+
+  // Refused inside the stream, before any text: the same.
+  turn = await kept("c1b");
+  s.fake.script({
+    events: [
+      { type: "response.failed", response: { error: { code: "invalid_encrypted_content" } } },
+    ],
+  });
+  before = latest(s).count;
+  assert.equal((await ask(turn)).output.length, 1);
+  assert.equal(latest(s).count - before, 2);
+  assert.deepEqual(latest(s).kinds, bare);
+  // Refused without it too: that is the answer, in two requests.
+  turn = await kept("c2");
+  s.fake.script({ status: 400 }, { status: 400, code: "invalid_request_error" });
+  before = latest(s).count;
+  await assert.rejects(ask(turn), { code: "failed", message: /invalid_request_error/ });
+  assert.equal(latest(s).count - before, 2);
+  // A refusal with words of its own is the answer at once, and the reasoning stays.
+  turn = await kept("c2b");
+  s.fake.script({ status: 400, code: "subscription_sharing_unsupported_capability" });
+  before = latest(s).count;
+  await assert.rejects(ask(turn), { code: "unsupported" });
+  assert.equal(latest(s).count - before, 1);
+  await ask(turn);
+  assert.deepEqual(latest(s).kinds, ["Look.", "rs_c2b", "function_call", "function_call_output"]);
+  // A request with no reasoning in it is asked once, as before.
+  s.fake.script({ status: 400 });
+  before = latest(s).count;
+  await assert.rejects(ask([user("Hello.")]), { code: "failed" });
+  assert.equal(latest(s).count - before, 1);
+  // A failure that passes keeps the reasoning in the next try; and the try without it gets
+  // the tries a passing failure gets.
+  turn = await kept("c3");
+  s.fake.script({ status: 500 });
+  await ask(turn);
+  assert.deepEqual(latest(s).kinds, ["Look.", "rs_c3", "function_call", "function_call_output"]);
+  // It counts as none of the tries a passing failure gets: those are all still to come.
+  turn = await kept("c4");
+  s.waits.length = 0;
+  s.fake.script({ status: 400 }, ...Array.from({ length: 1 + RETRIES }, () => ({ status: 500 })));
+  before = latest(s).count;
+  await assert.rejects(ask(turn), { code: "failed" });
+  assert.equal(latest(s).count - before, 2 + RETRIES);
+  assert.equal(s.waits.length, RETRIES);
+  // What isn't OpenAI refusing the request as it is leaves the reasoning and is asked once: a
+  // response that ended incomplete, and one that failed after it had written.
+  turn = await kept("c5");
+  const withIt = ["Look.", "rs_c5", "function_call", "function_call_output"];
+  for (const events of [
+    [{ type: "response.incomplete", response: {} }],
+    [delta("Half"), { type: "response.failed", response: { error: { code: "bad_thing" } } }],
+  ]) {
+    s.fake.script({ events });
+    before = latest(s).count;
+    await assert.rejects(ask(turn), { code: "failed" });
+    assert.equal(latest(s).count - before, 1);
+    assert.deepEqual(latest(s).kinds, withIt);
+  }
+  // The try without it is one of the same run of tries: it gets no window of its own.
+  turn = await kept("c6");
+  s.waits.length = 0;
+  s.fake.script(
+    { status: 503, retryAfter: "50" },
+    { status: 400 },
+    { status: 503, retryAfter: "50" },
+    { status: 503, retryAfter: "50" },
+  );
+  before = latest(s).count;
+  await assert.rejects(ask(turn), { code: "unavailable" });
+  assert.equal(latest(s).count - before, 4);
+  assert.deepEqual(s.waits, [50_000, 50_000]);
+  assert.deepEqual(latest(s).kinds, bare);
+});
+
+test("the reasoning kept is bounded, for one call and for one caller, and goes when the sign-in does", async (t) => {
+  const s = await setup(t);
+  await signIn(s);
+  const ask = (input: unknown[]) =>
+    s.call("session", "respond", {
+      requestId: crypto.randomUUID(),
+      model: "gpt-test",
+      instructions: "",
+      input,
+    });
+  const answer = async (...items: Record<string, unknown>[]) => {
+    s.fake.script({ events: [completed(items)] });
+    await ask([user("Look.")]);
+  };
+  /** Which reasoning goes back with these calls. */
+  const back = async (...calls: string[]) => {
+    await ask([user("Look."), ...calls.flatMap(called)]);
+    return latest(s).kinds.filter((kind) => kind?.startsWith("rs_"));
+  };
+  // One call's reasoning over 200,000 characters is not kept, nor one with nothing sealed; one
+  // under it is.
+  await answer(sealedItem("rs_big", "x".repeat(200_000)), callItem("big"));
+  await answer(sealedItem("rs_none", ""), callItem("none"));
+  await answer(sealedItem("rs_fits", "x".repeat(190_000)), callItem("fits"));
+  assert.deepEqual(await back("big", "none", "fits"), ["rs_fits"]);
+  // Past 400,000 characters for one caller, the oldest goes first.
+  await answer(sealedItem("rs_0", "x".repeat(190_000)), callItem("c0"));
+  assert.deepEqual(await back("fits", "c0"), ["rs_fits", "rs_0"]);
+  await answer(sealedItem("rs_1", "x".repeat(190_000)), callItem("c1"));
+  assert.deepEqual(await back("fits", "c0", "c1"), ["rs_0", "rs_1"]);
+  // A sign-out forgets all of it: the next sign-in may be another account.
+  await s.call("login", "logout");
+  await signIn(s);
+  assert.deepEqual(await back("c0", "c1"), []);
+});

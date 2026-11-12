@@ -1,4 +1,4 @@
-/** Inference on the person's ChatGPT plan: the Responses API, streamed, with nothing stored. */
+/** Inference on the person's ChatGPT plan: the Responses API, streamed, with nothing stored at OpenAI. */
 import type { Item, llmSession, OutputItem } from "@agentorg/interfaces";
 import { Refused } from "@agentorg/sdk";
 import type { z } from "zod";
@@ -137,6 +137,12 @@ export function refusalOf(
   );
 }
 
+/**
+ * The refusals by which OpenAI read a request and wouldn't take it as it is: a 400 or a 422, and
+ * an error inside a response's stream.
+ */
+const notTaken = new WeakSet<Refused>();
+
 /** A reply that isn't a response, as a refusal, marked when it passes, with the wait it asks for. */
 async function errorOf(response: Response) {
   let error: { code?: unknown; param?: unknown; message?: unknown } | undefined;
@@ -153,6 +159,7 @@ async function errorOf(response: Response) {
     said: error?.message,
   });
   const waitMs = waitOf(response.headers);
+  if (response.status === 400 || response.status === 422) notTaken.add(refused);
   return marked(refused, {
     status: response.status,
     ...(code === undefined ? {} : { code }),
@@ -218,13 +225,56 @@ const toApi = (item: z.output<typeof Item>) => {
   }
 };
 
+/** The items of a completed response, as OpenAI gave them. */
+const itemsOf = (response: Record<string, unknown>) =>
+  Array.isArray(response.output) ? (response.output as Record<string, unknown>[]) : [];
+
+/** One call's sealed reasoning is kept up to this many characters of JSON. */
+const REASONING_CALL_MAX_CHARS = 200_000;
+/**
+ * The sealed reasoning kept for one caller is at most this many characters of JSON, the oldest
+ * going first: it is also the most that is put back in one request.
+ */
+const REASONING_KEPT_MAX_CHARS = 400_000;
+
+/** A call's reasoning, sealed by OpenAI, as it is sent back; and its size in characters. */
+interface Sealed {
+  items: Record<string, unknown>[];
+  chars: number;
+}
+
+/**
+ * The sealed reasoning in a response's output, by the id of the first call after each part.
+ * Reasoning with nothing sealed can't be sent back with nothing stored at OpenAI, and reasoning
+ * with no call after it has nothing to go back with: neither is kept.
+ */
+function sealedOf(output: Record<string, unknown>[]) {
+  const found = new Map<string, Sealed>();
+  let items: Record<string, unknown>[] = [];
+  for (const item of output) {
+    if (item.type === "reasoning") {
+      if (typeof item.id !== "string" || typeof item.encrypted_content !== "string") continue;
+      if (item.encrypted_content === "") continue;
+      items.push({
+        type: "reasoning",
+        id: item.id,
+        summary: Array.isArray(item.summary) ? item.summary : [],
+        encrypted_content: item.encrypted_content,
+      });
+    } else if (item.type === "function_call" && typeof item.call_id === "string") {
+      const chars = JSON.stringify(items).length;
+      if (items.length && chars <= REASONING_CALL_MAX_CHARS)
+        found.set(item.call_id, { items, chars });
+      items = [];
+    }
+  }
+  return found;
+}
+
 /** The final output items of a completed response: assistant text and function calls. */
 function outputOf(response: Record<string, unknown>): Output[] {
-  const items = Array.isArray(response.output)
-    ? (response.output as Record<string, unknown>[])
-    : [];
   const output: Output[] = [];
-  for (const item of items) {
+  for (const item of itemsOf(response)) {
     if (item.type === "message" && Array.isArray(item.content)) {
       const text = (item.content as Record<string, unknown>[])
         .map((part) =>
@@ -248,7 +298,7 @@ function outputOf(response: Record<string, unknown>): Output[] {
         name: item.name,
         arguments: item.arguments,
       });
-    // Reasoning items aren't carried: nothing is stored, and the next request sends the history.
+    // Reasoning is not a caller's to carry: it is kept here, by the call it came before.
   }
   return output;
 }
@@ -286,7 +336,59 @@ export function createSession(options: {
    * no other's.
    */
   const running = new Map<string, AbortController>();
-  const keyOf = (caller: string, requestId: string) => `${caller}\0${requestId}`;
+  /** Something of one caller's, by an id it gave: a request, or a call. */
+  const keyOf = (caller: string, id: string) => `${caller}\0${id}`;
+
+  /**
+   * The sealed reasoning kept, by caller and call id, the oldest first. It is put back before
+   * its call in that caller's later requests until a user message follows the call. It is held
+   * in memory until `REASONING_KEPT_MAX_CHARS` pushes it out, the account's state changes, or
+   * this program stops; it is never given to a caller.
+   */
+  const sealed = new Map<string, Sealed>();
+  /** Counts the changes of the account's state: what one account sealed is not kept for the next. */
+  let accounts = 0;
+  const keep = (caller: string, output: Record<string, unknown>[]) => {
+    for (const [callId, one] of sealedOf(output)) {
+      sealed.delete(keyOf(caller, callId));
+      sealed.set(keyOf(caller, callId), one);
+    }
+    const own = [...sealed].filter(([key]) => key.startsWith(keyOf(caller, "")));
+    let total = own.reduce((sum, [, one]) => sum + one.chars, 0);
+    for (const [key, { chars }] of own) {
+      if (total <= REASONING_KEPT_MAX_CHARS) break;
+      sealed.delete(key);
+      total -= chars;
+    }
+  };
+  /**
+   * A request's items as the API takes them, with the reasoning kept for each call after the
+   * last user message put back before it: before the assistant messages directly before the
+   * call, which are the words the model wrote with it. `used` is what was put back.
+   */
+  const inputOf = (input: RespondInput, caller: string) => {
+    const lastUser = input.input.findLastIndex(
+      (item) => item.type === "message" && item.role === "user",
+    );
+    const items: Record<string, unknown>[] = [];
+    const used: string[] = [];
+    for (const [at, item] of input.input.entries()) {
+      const key = item.type === "function_call" ? keyOf(caller, item.callId) : undefined;
+      const kept = key !== undefined && at > lastUser ? sealed.get(key) : undefined;
+      if (kept && key !== undefined) {
+        let before = at;
+        while (before > lastUser + 1) {
+          const one = input.input[before - 1];
+          if (one?.type !== "message" || one.role !== "assistant") break;
+          before--;
+        }
+        items.splice(items.length - (at - before), 0, ...kept.items);
+        used.push(key);
+      }
+      items.push(toApi(item));
+    }
+    return { items, used };
+  };
 
   /** A request with the access token, refreshed and tried once more if OpenAI says 401. */
   const authorized = async (
@@ -333,25 +435,34 @@ export function createSession(options: {
         }));
     })().catch((error: unknown) => {
       listed = undefined;
+      // A refusal of the listing is not one of a request.
+      if (error instanceof Refused) notTaken.delete(error);
       throw error;
     });
     return listed;
   };
 
-  /** One try. `wrote` is told when text of it has been streamed: such a try is not made again. */
+  /**
+   * One try, sending `items`. `wrote` is told when text of it has been streamed: such a try is
+   * not made again.
+   */
   async function stream(
     input: RespondInput,
+    items: Record<string, unknown>[],
     caller: string,
     signal: AbortSignal,
     wrote: () => void,
   ) {
+    const asked = accounts;
     const model = input.model ?? (await models())[0]?.id;
     if (!model) throw new Refused("failed", "No model is offered to this account.");
     if (signal.aborted) throw cancelled();
     const body = JSON.stringify({
       model,
       instructions: input.instructions,
-      input: input.input.map(toApi),
+      input: items,
+      // Nothing is stored at OpenAI, so reasoning comes back sealed, to be sent with its calls.
+      include: ["reasoning.encrypted_content"],
       ...(input.tools?.length
         ? {
             tools: input.tools.map((tool) => ({
@@ -386,6 +497,7 @@ export function createSession(options: {
     const inStream = async (error: Record<string, unknown>) => {
       const code = typeof error.code === "string" ? error.code : undefined;
       const refused = refusalOf(code, { requestId, said: error.message });
+      notTaken.add(refused);
       if (refused.code === "ineligible") await account.ineligible();
       return marked(refused, code ? { code } : {});
     };
@@ -400,6 +512,8 @@ export function createSession(options: {
             break;
           case "response.completed": {
             const done = (event.response ?? {}) as Record<string, unknown>;
+            // Not if the account's state changed while it was answered.
+            if (accounts === asked) keep(caller, itemsOf(done));
             const usage = done.usage as Record<string, unknown> | undefined;
             return {
               output: outputOf(done),
@@ -441,24 +555,46 @@ export function createSession(options: {
    * failure is the answer. Not once text of it has been streamed, since those words are with
    * their reader and a new try would write them again; and not once it is cancelled, which also
    * ends a wait.
+   *
+   * A try that had reasoning put back, and that OpenAI wouldn't take as it is (`notTaken`) for
+   * good with no words of its own (`failed`), before any text, is made once more without it, at
+   * once and apart from those tries, and that reasoning is not sent again. It is the one part of
+   * a request this program adds, and what was sealed for one model or sign-in may not be taken
+   * with another: so a try after the account's state changed goes without it too.
    */
   async function tried(input: RespondInput, caller: string, signal: AbortSignal) {
     const now = options.now ?? Date.now;
     const began = now();
-    for (let failed = 0; ; failed++) {
+    const asked = accounts;
+    let { items, used } = inputOf(input, caller);
+    const bare = () => {
+      used = [];
+      items = input.input.map(toApi);
+    };
+    for (let failed = 0; ; ) {
       let written = false;
+      if (accounts !== asked && used.length) bare();
       try {
-        return await stream(input, caller, signal, () => {
+        return await stream(input, items, caller, signal, () => {
           written = true;
         });
       } catch (error) {
         const again = error instanceof Refused ? passing.get(error) : undefined;
+        const refused =
+          error instanceof Refused && notTaken.has(error) && error.code === "failed" && !again;
+        const inTime = now() - began <= RETRY_WITHIN_MS;
+        if (refused && used.length && !written && inTime && !signal.aborted) {
+          for (const key of used) sealed.delete(key);
+          bare();
+          continue;
+        }
         if (!again || written || failed >= RETRIES || signal.aborted) throw error;
         const doubling = BACKOFF_MS * 2 ** failed * (0.9 + Math.random() * 0.2);
         const wait = Math.max(again.waitMs ?? 0, doubling);
         if (wait > WAIT_MAX_MS || now() - began + wait > RETRY_WITHIN_MS) throw error;
         await (options.wait ?? sleep)(wait, signal);
         if (signal.aborted) throw cancelled();
+        failed++;
       }
     }
   }
@@ -468,9 +604,11 @@ export function createSession(options: {
     stop() {
       for (const controller of running.values()) controller.abort();
     },
-    /** Forget the model list, so it is read again for the next account. */
+    /** Forget the model list and the reasoning kept: both are one account's. */
     reset() {
       listed = undefined;
+      sealed.clear();
+      accounts++;
     },
     async models() {
       return { models: await models() };

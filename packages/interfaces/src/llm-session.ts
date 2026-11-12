@@ -45,8 +45,8 @@ export const Tool = z.object({
 /**
  * `llm.session@1`: model inference. Each `respond` is one stateless request: the caller sends the
  * whole conversation every time, and keeps it. Text streams as `delta` events for the request.
- * The request is one frame on the wire (at most 1 MiB), so a caller trims what it sends; nothing
- * of a model's reasoning is carried from one request to the next.
+ * The request is one frame on the wire (at most 1 MiB), so a caller trims what it sends. A
+ * caller carries nothing of a model's reasoning; a provider may keep it and put it back itself.
  *
  * A provider refuses with these codes, so a caller can show the right thing:
  * - `not_signed_in`: the provider has no usable sign-in;
