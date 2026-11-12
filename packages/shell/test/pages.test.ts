@@ -153,7 +153,7 @@ test(
 );
 
 test(
-  "skills and connections are added in an agent's setup, a connection is removed there, and each add menu ends with the way to a new one",
+  "skills and connections are added in an agent's setup and taken off there, and each add menu ends with the way to a new one",
   withGateway(async (gateway) => {
     const sheet = await openSetup(await open(gateway, "#/a/a-reviewer"), "Reviewer");
     const page = sheet.page();
@@ -186,7 +186,17 @@ test(
     assert.equal(await page.getByRole("menuitem").first().isDisabled(), true);
     await page.keyboard.press("Escape");
     await page.getByRole("menu").waitFor({ state: "detached" });
-    assert.equal(await skills.getByRole("button").count(), 1, "only the way to add one");
+    // A skill the person added is taken off from its row, the way shown when it is pointed at.
+    const off = skills.getByRole("button", { name: "Remove cite-sources from Reviewer" });
+    const seen = () => off.evaluate((e) => getComputedStyle(e).opacity);
+    await page.mouse.move(5, 5);
+    assert.equal(await seen(), "0");
+    await skills.getByText("cite-sources", { exact: true }).hover();
+    await off.evaluate((e) => Promise.all(e.getAnimations().map((moving) => moving.finished)));
+    assert.equal(await seen(), "1");
+    await off.click();
+    await skills.getByText("cite-sources", { exact: true }).waitFor({ state: "detached" });
+    await skills.getByText("weekly-numbers", { exact: true }).waitFor();
 
     await mcps.getByRole("button", { name: "postgres_analytics tools" }).click();
     await mcps.getByRole("button", { name: "Remove from Reviewer" }).last().click();
@@ -202,8 +212,11 @@ test(
 );
 
 test(
-  "in an agent's setup a connection that is down says why under its name, and the way to a new one opens Settings",
+  "in an agent's setup a connection that is down says why under its name, a skill a unit gave stays, and the way to a new one opens Settings",
   withGateway(async (gateway) => {
+    gateway.agents
+      .get("a-triage")
+      ?.skills.push({ name: "files", description: "Works with files", instance: "i-0" });
     // Why it is down, as its connection says it, set as a sentence of its own.
     const linear = gateway.connections.get("c-linear");
     if (linear?.status.state === "down") linear.status.detail = "its server didn't answer";
@@ -228,6 +241,9 @@ test(
     );
     // Its tools closed, it is said all the same.
     assert.equal(await mcps.getByText("Remove from Triage").count(), 0);
+    const skills = sheet.getByRole("region", { name: "Skills" });
+    await skills.getByText("files", { exact: true }).waitFor();
+    assert.equal(await skills.getByRole("button", { name: /^Remove / }).count(), 0);
 
     await sheet.getByRole("button", { name: "Add an MCP" }).click();
     await page.getByRole("menuitem", { name: "Connect a new MCP…" }).click();

@@ -649,7 +649,8 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
       },
       unexpose: (input) => {
         const agent = agentOf(input.agent);
-        agent.mcp = agent.mcp.filter((m) => m.slot !== input.slot);
+        if ("skill" in input) agent.skills = agent.skills.filter((s) => s.name !== input.skill);
+        else agent.mcp = agent.mcp.filter((m) => m.slot !== input.slot);
         return {};
       },
       remove: ({ agent }) => {

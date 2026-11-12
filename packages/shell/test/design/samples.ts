@@ -209,11 +209,15 @@ export function sampleAgents(gateway: Gateway) {
     { slot: "github_acme", connection: "c-github" },
   ];
   research.skills = [
-    { name: "terminal", description: "Runs commands, including long ones" },
-    { name: "files", description: "Reads, searches and edits files" },
-    { name: "computer", description: "Where things are, what persists, installing software" },
-    { name: "browser", description: "Drives a browser, page by page" },
-    { name: "web-research", description: "Searches, then reads the sources" },
+    { name: "terminal", description: "Runs commands, including long ones", instance: "i-computer" },
+    { name: "files", description: "Reads, searches and edits files", instance: "i-computer" },
+    {
+      name: "computer",
+      description: "Where things are, what persists, installing software",
+      instance: "i-computer",
+    },
+    { name: "browser", description: "Drives a browser, page by page", instance: "i-computer" },
+    { name: "web-research", description: "Searches, then reads the sources", instance: "i-web" },
     { name: "survey-a-topic", description: "Reads widely, then narrows to what matters" },
   ];
   const [built] = research.units as NonNullable<Agent["units"]>;
