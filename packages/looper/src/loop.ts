@@ -10,7 +10,16 @@
  * `hand_back`, which says a message is not this work's. What it writes without sending, and what
  * its calls did, are kept for the work and said in no thread.
  */
-import { head, type LoopRecord, messageOf, SEND_NAME, SENT, userEntry } from "./record.js";
+import {
+  HAND_BACK_NAME,
+  head,
+  type LoopRecord,
+  messageOf,
+  SEND_NAME,
+  SENT,
+  userEntry,
+  type WorkEntry,
+} from "./record.js";
 import { capped, refused, runTool } from "./tools.js";
 import {
   type Call,
@@ -51,7 +60,7 @@ export const SEND: ToolSpec = {
 };
 /** A function of the looper's own: it says a message is not this work's. */
 export const HAND_BACK: ToolSpec = {
-  name: "hand_back",
+  name: HAND_BACK_NAME,
   description:
     "Says a message from the person is not for this piece of work, so it can be given to other work or start new work. Once per message.",
   parameters: {
@@ -100,6 +109,8 @@ export interface LoopOut {
   message(thread: string, message: Shown): void;
   /** A piece of a reply as it is sent: `id` is the reply's, which its message has once it is said. */
   delta(thread: string, id: string, text: string): void;
+  /** What its work did changed: a call began, or something was kept for it. */
+  worked(): void;
   /** What it is doing. */
   status(status: Status): void;
   /**
@@ -221,6 +232,13 @@ export function createLoop(options: {
   let latest: Status = { state: "idle" };
   /** The starts made here: each turn's number. */
   let turns = 0;
+  /** Whether the latest turn to end was cut by a stop. */
+  let stoppedLast = false;
+  /**
+   * The call of its tools running now, until what came of it is kept: a turn's, also once a stop
+   * has cut that turn and the call still runs.
+   */
+  let calling: WorkEntry | undefined;
   /** The turns that began here. After the first, nothing cut off earlier is gone on with. */
   let turnsBegun = 0;
   /** Counts the cancels, so that what was asked before one can tell when it is taken after it. */
@@ -253,6 +271,7 @@ export function createLoop(options: {
   /** Run a turn on the record as it stands; its progress is said through `out`. */
   const begin = (current: Turn) => {
     turnsBegun++;
+    stoppedLast = false;
     current.ended = placed(current)
       .catch((error: unknown) => {
         if (current.cancelled) return;
@@ -371,6 +390,7 @@ export function createLoop(options: {
     const text =
       calls.length === 1 ? `${calls[0]?.name}: ${code}` : `${calls.length} calls: ${code}`;
     await record.append({ role: "tool", text, items: [] }, { thread });
+    out.worked();
   };
 
   async function run(current: Turn) {
@@ -411,6 +431,7 @@ export function createLoop(options: {
           },
           { thread, read },
         );
+        out.worked();
       }
       /**
        * The turn's end, taken in order with what was asked, so a message being recorded now is
@@ -471,12 +492,24 @@ export function createLoop(options: {
         status(current, { state: "tool" });
         // A call that has started runs to its end, and its real result is kept: it may have
         // taken effect.
+        calling = {
+          id,
+          at: new Date().toISOString(),
+          call: { name: head(call.name, 128), state: "running", input: call.arguments },
+        };
+        out.worked();
         const result = await runTool(tools, call.name, call.arguments, current.group);
         // A stop asked while this call was on its way may have come before what it started: it is
         // asked again now that the call is back.
         if (current.cancelled && !current.closed)
           void options.stopGroup?.(current.group).catch(() => {});
-        await answered(call, result, id, read, thread);
+        try {
+          await answered(call, result, id, read, thread);
+        } finally {
+          // Said once it is no longer the call running: what was kept of it is there to read.
+          if (calling?.id === id) calling = undefined;
+          out.worked();
+        }
       }
       if (current.cancelled) return;
       if (calls >= MAX_CALLS)
@@ -655,6 +688,7 @@ export function createLoop(options: {
               },
               { thread },
             );
+            out.worked();
             return { opened: undefined };
           },
           false,
@@ -679,6 +713,10 @@ export function createLoop(options: {
       stream.args += text;
       flow(stream);
     },
+    /** The call of its tools running now, a stopped turn's included, until it is kept. */
+    running: () => calling,
+    /** Whether the latest turn to end was cut by a stop, not by the loop closing. */
+    stopped: () => stoppedLast,
     /** The number of the turn running or waiting for its place, if one is. */
     turn: () => turn?.id,
     /**
@@ -721,6 +759,7 @@ export function createLoop(options: {
           lingering = undefined;
         });
       }
+      stoppedLast = !closing;
       say({ state: "idle" });
       if (!closing) void options.stopGroup?.(current.group).catch(() => {});
       await Promise.all([

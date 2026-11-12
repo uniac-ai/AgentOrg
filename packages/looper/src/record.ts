@@ -105,6 +105,8 @@ const size = (value: unknown) => encoder.encode(JSON.stringify(value)).byteLengt
 const LEFT_OUT = "(Left out: the conversation was too large to send it.)";
 /** The looper's function by which a worker says something to the person: its call is what was said. */
 export const SEND_NAME = "send";
+/** The looper's function by which a worker says a message is not its work's. */
+export const HAND_BACK_NAME = "hand_back";
 /** What a worker is told of what it sent. */
 export const SENT = "Sent.";
 /** Whether `call`, among `items`, is a `send` that was said: one whose output is `SENT`. */
@@ -260,6 +262,46 @@ function sentBefore(entry: Entry, place: number): Item[] {
     },
     { type: "function_call_output", callId, output: SENT },
   ];
+}
+
+/**
+ * One thing a piece of work did: a call, with whether it is running or how it ended, what it was
+ * given and what it gave back; what its worker wrote and didn't send; or a line of its own, as for
+ * calls that never ran.
+ */
+export type WorkEntry = { id: string; at: string } & (
+  | {
+      call: {
+        name: string;
+        state: "running" | "done" | "refused";
+        input: string;
+        output?: string;
+      };
+    }
+  | { words: string }
+  | { line: string }
+);
+/** What `entry` is of what its work did: nothing for what was said, or the looper's own calls. */
+function workEntryOf(entry: Entry): WorkEntry | undefined {
+  if (entry.role === "user" || entry.main !== undefined || entry.closes !== undefined) return;
+  const { id, at } = entry;
+  if (entry.unsent) return { id, at, words: textOf(entry) };
+  const call = entry.items.find((item) => item.type === "function_call");
+  if (call?.type === "function_call") {
+    if (call.name === SEND_NAME || call.name === HAND_BACK_NAME) return;
+    const output = entry.items.find((item) => item.type === "function_call_output");
+    return {
+      id,
+      at,
+      call: {
+        name: call.name,
+        state: entry.state ?? "done",
+        input: call.arguments,
+        ...(output?.type === "function_call_output" ? { output: output.output } : {}),
+      },
+    };
+  }
+  return entry.text === undefined ? undefined : { id, at, line: entry.text };
 }
 
 /** A message as it is said: what a person said, or a reply. */
@@ -1015,6 +1057,23 @@ export function createRecord(options: {
       return own(await load()).some(
         ({ record: { entry } }) => entry.role !== "user" && entry.main === undefined,
       );
+    },
+    /**
+     * The entries of what it did, oldest first: those before the entry `before`, as many as
+     * `limit`, and whether more came before them.
+     */
+    async entries(
+      before: string | undefined,
+      limit: number,
+    ): Promise<{ entries: WorkEntry[]; more: boolean }> {
+      const all = own(await load()).flatMap(({ record }) => {
+        const one = workEntryOf(record.entry);
+        return one ? [one] : [];
+      });
+      const end = before === undefined ? all.length : all.findIndex((one) => one.id === before);
+      if (end === -1) return { entries: [], more: false };
+      const start = Math.max(0, end - limit);
+      return { entries: all.slice(start, end), more: start > 0 };
     },
     /** What it last said, if anything. */
     async last(): Promise<string | undefined> {

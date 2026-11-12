@@ -7,12 +7,21 @@
 import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
-import { agentProvider, agentSettings, chat, hubActors, llmSession } from "@agentorg/interfaces";
+import {
+  agentProvider,
+  agentSettings,
+  capability,
+  chat,
+  hubActors,
+  llmSession,
+  tools,
+} from "@agentorg/interfaces";
 import { type Log, NotConnected, Refused } from "@agentorg/sdk";
 import { connect } from "@agentorg/sdk/client";
 import { z } from "zod";
 import { startEngine } from "./engine.js";
 import { createLocalStore } from "./local-store.js";
+import { ACTIVITY, WORK_TOOL } from "./work.js";
 
 const ASSISTANT_INSTRUCTIONS = `You are an assistant in AgentOrg, working for the person who created you.
 You act only through your tools, and your tools are exactly the connections the person gave you. If something needs a connection you don't have, say which.
@@ -25,6 +34,14 @@ const ASSISTANT = {
   description: "An agent that chats, and acts through the connections you give it.",
   instructions: ASSISTANT_INSTRUCTIONS,
   asks: [],
+  // What each of its pieces of work did: its Activity, which the engine serves itself.
+  capability: {
+    id: "work",
+    title: "Activity",
+    views: [
+      { id: ACTIVITY, place: "column", kind: "activity", operation: WORK_TOOL.name, slot: "work" },
+    ],
+  },
 };
 
 /** What is kept of an agent between runs, in the provider's private file. */
@@ -133,7 +150,7 @@ export async function startAgentProvider(options: AgentProviderOptions): Promise
         actorId: agent,
         credential: (stored[agent] as z.infer<typeof Stored>).credential,
         slots: { model: llmSession, settings: agentSettings },
-        exports: { chat },
+        exports: { chat, capability, tools },
         log,
         start(ctx) {
           engine = startEngine(ctx, {
