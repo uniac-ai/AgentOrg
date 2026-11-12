@@ -39,7 +39,8 @@ export function formProblems(form: TheForm): string[] {
 
 /**
  * What is wrong with what a unit says it gives the person's side, as written: surfaces or views
- * with no capability to belong to, or a view of more than one kind of data.
+ * with no capability to belong to, or a view whose data is not one of the three a view has (an
+ * operation at a slot, a surface, or neither).
  */
 export function givesProblems(unit: TheUnit): string[] {
   const problems: string[] = [];
@@ -52,12 +53,40 @@ export function givesProblems(unit: TheUnit): string[] {
   ];
   const views = all.flatMap((gives) => gives.views ?? []);
   if (!unit.capability && (views.length > 0 || all.some((gives) => gives.surfaces?.length)))
-    problems.push("It gives surfaces or views and builds no capability to hold them.");
+    problems.push(`${unit.title} gives surfaces or views and builds no capability to hold them.`);
   for (const view of views) {
+    const named = `${unit.title}'s view "${view.id}"`;
     if (view.operation && view.surface)
-      problems.push(`${view.id} is fed by an operation and by a surface.`);
+      problems.push(`${named} has an operation and a surface: a view shows one or the other.`);
+    if (Boolean(view.operation) !== Boolean(view.slot))
+      problems.push(`${named} needs an operation and the slot it is at, both or neither.`);
     if (view.rows && !view.operation)
-      problems.push(`${view.id} names rows of an answer and no operation.`);
+      problems.push(`${named} picks rows of an answer and has no operation to answer.`);
+  }
+  return problems;
+}
+
+/** The most surfaces and views one capability holds: what an agent's record of it takes. */
+const SURFACES_MAX = 16;
+const VIEWS_MAX = 32;
+
+/**
+ * What is wrong with the capability a unit builds with these answers: a view that shows a
+ * surface, or is at a slot, the unit doesn't give with them, or more than a capability holds.
+ * A description can be within its bounds and an answer's additions take it past them.
+ */
+export function heldProblems(unit: TheUnit, worked: Worked): string[] {
+  const problems: string[] = [];
+  if (worked.surfaces.length > SURFACES_MAX)
+    problems.push(`${unit.title} gives more than ${SURFACES_MAX} surfaces.`);
+  if (worked.views.length > VIEWS_MAX)
+    problems.push(`${unit.title} gives more than ${VIEWS_MAX} views.`);
+  for (const view of worked.views) {
+    const named = `${unit.title}'s view "${view.id}"`;
+    if (view.surface && !worked.surfaces.some((one) => one.surface === view.surface))
+      problems.push(`${named} shows a surface it doesn't give: ${view.surface}.`);
+    if (view.slot && !worked.slots.includes(view.slot))
+      problems.push(`${named} is at a slot it doesn't give: ${view.slot}.`);
   }
   return problems;
 }

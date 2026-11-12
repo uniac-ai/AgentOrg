@@ -256,8 +256,10 @@ export const agents = defineInterface({
         /** Its stack, top to bottom. */
         units: z.array(AppliedUnit),
         /**
-         * What it holds, in the stack's order. Management always gives it; it is optional so
-         * that what stands in for management, and was written before it, still answers.
+         * What it holds, in the stack's order. Management always gives it, empty for an agent
+         * that holds none. Absent means only that what answered doesn't say: something that
+         * stands in for management and was written before this. It becomes required once
+         * nothing such is left.
          */
         capabilities: z.array(AgentCapability).optional(),
       }),

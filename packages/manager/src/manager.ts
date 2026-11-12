@@ -284,7 +284,9 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
         exposeConnection,
         reachPerson: async (provider, exported) =>
           (await hub.grants.expose({ provider, export: exported, to: PERSON_CALLER })).slot,
-        unreachPerson: async (slot) => {
+        unreachPerson: async (slot, provider) => {
+          const { bindings } = await hub.bindings.list({ actor: PERSON_CALLER });
+          if (!bindings.some((one) => one.slot === slot && one.provider === provider)) return;
           await hub.grants.unexpose({ to: PERSON_CALLER, slot }).catch((error) => {
             if (!alreadyGone(error)) throw error;
           });
@@ -358,6 +360,18 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
       ctx.slots.actors.onBind(() => {
         for (const agent of Object.keys(records.agents)) reaching(agent);
       });
+      /** The same for the person's slots to what agents hold: made again when one has gone. */
+      const holding = (actor?: string) =>
+        void (async () => {
+          // One that has closed, or isn't back yet, has nothing to reach.
+          if (actor && !(await hub.actors.get({ actorId: actor })).connected) return;
+          await stacks.reachHeld(actor);
+        })().catch((error) => {
+          if (!alreadyGone(error)) log.warn(`Reaching what an agent holds: ${messageOf(error)}`);
+        });
+      ctx.slots.actors.on("changed", ({ actor }) => holding(actor));
+      // And all of them once management can make a slot: what the Hub dropped while it was away.
+      ctx.slots.grants.onBind(() => holding());
       /** The person's own handlers, which an agent's control tools call after their checks. */
       const personHandlers: Partial<
         Record<"agents" | "connections" | "skills", Record<string, Handler>>
@@ -599,7 +613,8 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
                 await call.units({})
               ).units.flatMap((unit) => {
                 const slot = slotFieldOf(unit);
-                if (!slot) return [];
+                // One that builds a capability is for an agent to hold: not a kind to connect.
+                if (!slot || unit.capability) return [];
                 const fields = unit.form.filter((field) => field.id !== slot);
                 return [
                   {
@@ -629,6 +644,12 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
           const unit = (await call.units({})).units.find((one) => one.id === kind);
           const slot = unit && slotFieldOf(unit);
           if (!unit || !slot) throw new Refused("invalid", `${provider} offers no ${kind}.`);
+          // A connection made for no agent has no agent to hold what the unit builds.
+          if (unit.capability)
+            throw new Refused(
+              "invalid",
+              `${unit.title} builds a ${unit.capability.title}, which an agent holds: add it to an agent.`,
+            );
           const declared = Object.keys(secrets).filter((id) =>
             unit.form.some((field) => field.id === id && field.value === "secret"),
           );
