@@ -50,6 +50,7 @@ import {
   userEntry,
 } from "./record.js";
 import {
+  type Call,
   codeOf,
   type Json,
   type Log,
@@ -427,6 +428,7 @@ export function createLooper(options: {
         },
         out: {
           message: out.message,
+          delta: out.delta,
           failed: out.failed,
           status(status) {
             const on = running(status);
@@ -1204,11 +1206,13 @@ export function createLooper(options: {
       }
     },
     /**
-     * Text the model writes while it answers `requestId`, for the reply it becomes: the main
-     * loop's. A worker's says nothing until it is sent.
+     * Text the model writes while it answers `requestId`: of the main loop's reply, or, with
+     * `call`, of a function call's arguments, where a worker's `send` streams into the thread of
+     * the message it names. What a worker writes without sending says nothing.
      */
-    delta(requestId: string, text: string) {
-      main.delta(requestId, text);
+    delta(requestId: string, text: string, call?: Call) {
+      if (!call) main.delta(requestId, text);
+      else for (const { loop } of works.values()) loop.stream(requestId, call, text);
     },
   };
 }

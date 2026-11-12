@@ -11,6 +11,7 @@ import {
   type kv,
 } from "@agentorg/interfaces";
 import {
+  type Call,
   createLooper,
   Entry,
   type Store as LooperStore,
@@ -418,8 +419,8 @@ export function createChats(options: {
       await writing;
     },
     /** Streamed text of the model request running now. */
-    delta(requestId: string, text: string) {
-      looper.delta(requestId, text);
+    delta(requestId: string, text: string, call?: Call) {
+      looper.delta(requestId, text, call);
     },
   };
 }

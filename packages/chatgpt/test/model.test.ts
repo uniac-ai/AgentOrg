@@ -7,7 +7,15 @@ import type { Store } from "../src/account.ts";
 import type { Fetch } from "../src/oauth.ts";
 import { RETRIES, sleep } from "../src/responses.ts";
 import { serveChatGPT } from "../src/serve.ts";
-import { completed, delta, type FakeOpenAI, fakeOpenAI, text } from "./fake-openai.ts";
+import {
+  argumentsDelta,
+  callAdded,
+  completed,
+  delta,
+  type FakeOpenAI,
+  fakeOpenAI,
+  text,
+} from "./fake-openai.ts";
 
 const REDIRECT = "http://127.0.0.1:4321/oauth/chatgpt";
 /** ChatGPT's own code, on a way out and a store a test can change. */
@@ -261,7 +269,7 @@ test("models lists only those OpenAI marks for listing", async (t) => {
   });
 });
 
-test("respond streams text, returns the output, and sends only what plan usage supports", async (t) => {
+test("respond streams text and a call's arguments, returns the output, and sends only what plan usage supports", async (t) => {
   const s = await setup(t);
   await signIn(s);
   s.fake.script({
@@ -269,6 +277,11 @@ test("respond streams text, returns the output, and sends only what plan usage s
       { type: "response.created" },
       delta("Placing "),
       delta("the board."),
+      callAdded("fc_1", "call_1", "layout__place"),
+      argumentsDelta("fc_1", '{"x":'),
+      argumentsDelta("fc_1", "1}"),
+      // Of an item it was never told of: nothing.
+      argumentsDelta("fc_9", "{}"),
       completed([
         text("Placing the board."),
         { type: "reasoning", summary: [] },
@@ -293,9 +306,12 @@ test("respond streams text, returns the output, and sends only what plan usage s
     ],
     usage: { inputTokens: 12, outputTokens: 3 },
   });
+  const call = { id: "call_1", name: "layout__place" };
   assert.deepEqual(events(s.actor, "delta"), [
     { requestId: "turn-1", text: "Placing " },
     { requestId: "turn-1", text: "the board." },
+    { requestId: "turn-1", text: '{"x":', call },
+    { requestId: "turn-1", text: "1}", call },
   ]);
   const sent = s.fake.requests.filter((r) => r.url.endsWith("/v1/responses"));
   assert.equal(sent.length, 1);
@@ -765,7 +781,7 @@ test("what passes is a server's failure by status or code, and a refusal that sa
   assert.equal((await ask()).output.length, 1);
 });
 
-test("a response that has streamed text, or that OpenAI refuses, is not asked for again", async (t) => {
+test("a response that has streamed text or a call's arguments, or that OpenAI refuses, is not asked for again", async (t) => {
   const s = await setup(t);
   await signIn(s);
   const responses = () => s.fake.requests.filter((r) => r.url.endsWith("/v1/responses")).length;
@@ -782,9 +798,13 @@ test("a response that has streamed text, or that OpenAI refuses, is not asked fo
     await assert.rejects(ask(), { code });
     assert.equal(responses() - before, 1, JSON.stringify(script));
   };
-  // Its words are with their reader: a new try would write them again.
+  // Its words, or a call's, may be with their reader: a new try would write them again.
   await once({ events: [delta("Half")], cut: true }, "failed");
   await once({ events: [delta("Half")] }, "failed");
+  await once(
+    { events: [callAdded("fc_1", "call_1", "send"), argumentsDelta("fc_1", '{"te')], cut: true },
+    "failed",
+  );
   // What isn't passing: the response's own limit, a request OpenAI won't take, a refusal, also
   // when it comes with a server's status.
   await once({ events: [{ type: "response.incomplete", response: {} }] }, "failed");

@@ -121,8 +121,9 @@ export const chat = defineInterface({
   events: {
     message: event(ChatMessage.extend({ chat: ChatId })),
     /**
-     * Text of the assistant message `id`, as it streams, for a reply written as it is said; its
-     * `message` event follows. A reply that is sent whole has none.
+     * Text of the assistant message `id`, as it streams. Its `message` event follows, unless the
+     * reply was given up as it was written: a view lets go of pieces no message has come for
+     * once the agent is `idle`, and of any that come after their message.
      */
     delta: event(z.object({ chat: ChatId, id: MessageId, text: z.string() })),
     /** The agent's status, when it changes. */

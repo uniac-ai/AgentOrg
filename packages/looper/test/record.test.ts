@@ -111,8 +111,10 @@ test("the record is first read a few at a time, in order", async () => {
 
 test("a message said during a turn is read after what was asked for without it, in one exchange", async () => {
   const record = single(store().calls as never);
+  /** What the worker wrote. */
   const reply = (content: string) => ({
     role: "assistant" as const,
+    unsent: true as const,
     items: [{ type: "message" as const, role: "assistant" as const, content }],
   });
   const during = (content: string) => ({ ...user(content), joined: true as const });
@@ -188,15 +190,26 @@ test("a piece of work that follows two threads reads its messages in the order t
     left: () => false,
   });
   const said = (content: string) => user(content);
-  const reply = (content: string) => ({
+  /** A reply sent to the message of that number and id. */
+  const reply = (text: string, message: number, closes: string) => ({
     role: "assistant" as const,
-    items: [{ type: "message" as const, role: "assistant" as const, content }],
+    closes,
+    items: [
+      {
+        type: "function_call" as const,
+        callId: `send-${message}`,
+        name: "send",
+        arguments: JSON.stringify({ message, text }),
+      },
+      { type: "function_call_output" as const, callId: `send-${message}`, output: "Sent." },
+    ],
   });
-  await record.append(said("in a"), { thread: "a" });
-  await record.append(reply("to a"), { thread: "a" });
+  const inA = await record.append(said("in a"), { thread: "a" });
+  await record.append(reply("to a", 1, inA.entry.id), { thread: "a" });
   // A message kept in another thread before the work followed it names no work yet.
   const held = await c.load();
-  await c.push(held, said("in c")).stored;
+  const inC = c.push(held, said("in c"));
+  await inC.stored;
   assert.equal(await record.where(), "a");
   following.push("c");
   await record.adopt("c", false);
@@ -206,14 +219,21 @@ test("a piece of work that follows two threads reads its messages in the order t
   );
   // It answers where its newest message is, and that reply says whose it is too.
   assert.equal(await record.where(), "c");
-  const kept = await record.append(reply("to c"), { thread: "c" });
+  const kept = await record.append(reply("to c", 3, inC.record.entry.id), { thread: "c" });
   assert.deepEqual([kept.entry.work, kept.entry.place], ["a", 4]);
   // Back in its own thread, a message has its place in the work's order, and names no work.
   const own = await record.append(said("in a again"), { thread: "a" });
   assert.deepEqual([own.entry.work, own.entry.place], [undefined, 5]);
   const { items, thread } = await record.input();
+  // What was sent is read as its call.
   assert.deepEqual(
-    items.map((item) => (item.type === "message" ? item.content : "")),
+    items.flatMap((item) =>
+      item.type === "message"
+        ? [item.content]
+        : item.type === "function_call"
+          ? [(JSON.parse(item.arguments) as { text: string }).text]
+          : [],
+    ),
     ["[1] in a", "to a", "[3] in c", "to c", "[5] in a again"],
   );
   assert.equal(thread, "a");
@@ -228,8 +248,10 @@ test("a piece of work that follows two threads reads its messages in the order t
   );
 });
 
+/** What a worker wrote. */
 const reply = (content: string) => ({
   role: "assistant" as const,
+  unsent: true as const,
   items: [{ type: "message" as const, role: "assistant" as const, content }],
 });
 /** A call that was given `given` and gave back `output`. */

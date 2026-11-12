@@ -223,3 +223,93 @@ test("a worker's streamed text reaches no thread: what it sends does", async () 
     ["First.", "Done."],
   );
 });
+
+/** A looper whose first worker request is answered when the test says, and the way to answer it. */
+async function streaming() {
+  let answer: (output: OutputItem[]) => void = () => {};
+  const reply = new Promise<OutputItem[]>((resolve) => {
+    answer = resolve;
+  });
+  const made = looperWith([reply, []]);
+  await made.looper.send("one", "First.");
+  while (made.requests.length === 0) await new Promise((soon) => setImmediate(soon));
+  const requestId = made.requests[0]?.requestId as string;
+  /** Write the pieces as a call's arguments, letting each be taken before the next. */
+  const write = async (call: { id: string; name: string }, pieces: string[]) => {
+    for (const piece of pieces) {
+      made.looper.delta(requestId, piece, call);
+      for (let i = 0; i < 20; i++) await new Promise((soon) => setImmediate(soon));
+    }
+  };
+  return { ...made, answer, write };
+}
+const SEND_CALL = { id: "s1", name: "send" };
+
+test("what a send says streams into the chat of the message it names, under the id its reply has", async () => {
+  const { looper, said, deltas, answer, write } = await streaming();
+  // An escape split across two pieces is read once it is whole, a lone \\ at a piece's end too.
+  await write(SEND_CALL, [
+    '{"message":1,',
+    '"text":"Hel',
+    "lo, \\u00",
+    "e9t\\u00e9 \\",
+    '"quoted\\"."}',
+  ]);
+  answer([
+    {
+      type: "function_call",
+      callId: "s1",
+      name: "send",
+      arguments: '{"message":1,"text":"Hello, \\u00e9t\\u00e9 \\"quoted\\"."}',
+    },
+  ]);
+  await looper.settled();
+  const reply = said.find(({ message }) => message.role === "assistant");
+  assert.equal(reply?.message.text, 'Hello, été "quoted".');
+  assert.deepEqual(
+    deltas.map(({ thread, id, text }) => [thread, id === reply?.message.id, text]),
+    [
+      ["one", true, "Hel"],
+      ["one", true, "lo, "],
+      ["one", true, "été "],
+      ["one", true, '"quoted".'],
+    ],
+  );
+});
+
+test("a send that writes its text before the message it names streams it all once that is known", async () => {
+  const { looper, deltas, answer, write } = await streaming();
+  await write(SEND_CALL, ['{"text":"Hi', ' there.",', '"message":1}']);
+  answer([
+    {
+      type: "function_call",
+      callId: "s1",
+      name: "send",
+      arguments: '{"text":"Hi there.","message":1}',
+    },
+  ]);
+  await looper.settled();
+  assert.deepEqual(
+    deltas.map(({ text }) => text),
+    ["Hi there."],
+  );
+});
+
+test("a send abandoned half-way, or naming no message this work can answer, says nothing more", async () => {
+  const { looper, said, deltas, answer, write } = await streaming();
+  await write(SEND_CALL, ['{"message":1,"text":"Hal']);
+  await write({ id: "s2", name: "send" }, ['{"message":9,"text":"Nobody."}']);
+  // Another call of the host's streams nothing.
+  await write({ id: "c1", name: "look" }, ['{"text":"Not said."}']);
+  answer(says("Changed my mind."));
+  await looper.settled();
+  // What streamed of the first stays a piece no message completes; a view lets it go.
+  assert.deepEqual(
+    deltas.map(({ text }) => text),
+    ["Hal"],
+  );
+  assert.deepEqual(
+    said.map(({ message }) => message.role),
+    ["user"],
+  );
+});

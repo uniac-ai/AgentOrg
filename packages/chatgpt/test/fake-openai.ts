@@ -41,6 +41,17 @@ export const text = (content: string) => ({
   content: [{ type: "output_text", text: content }],
 });
 export const delta = (piece: string) => ({ type: "response.output_text.delta", delta: piece });
+/** A function call the response begins to write, as item `item`. */
+export const callAdded = (item: string, callId: string, name: string) => ({
+  type: "response.output_item.added",
+  item: { type: "function_call", id: item, call_id: callId, name, arguments: "" },
+});
+/** A piece of the arguments of the function call written as item `item`. */
+export const argumentsDelta = (item: string, piece: string) => ({
+  type: "response.function_call_arguments.delta",
+  item_id: item,
+  delta: piece,
+});
 
 const RSA = {
   name: "RSASSA-PKCS1-v1_5",

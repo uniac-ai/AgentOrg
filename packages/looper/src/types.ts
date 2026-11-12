@@ -79,6 +79,12 @@ export interface Log {
   error(message: string, fields?: Record<string, unknown>): void;
 }
 
+/** A function call a model's streamed text belongs to: its call id, and the function's name. */
+export interface Call {
+  id: string;
+  name: string;
+}
+
 /** A message as it is said in a thread: what a person said, or a reply. */
 export interface Shown {
   id: string;
