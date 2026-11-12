@@ -296,6 +296,40 @@ test("what the agent's tools do is not in its chat, and the model reads how each
   assert.deepEqual(ends(again.requests[0]), ended);
 });
 
+test("a person's pictures reach the model with their message and stay in the chat; a tool's reach it with its call's output", async () => {
+  const s = await setup();
+  const png = { mediaType: "image/png" as const, data: "iVBORw0KGgo=" };
+  const jpeg = { mediaType: "image/jpeg" as const, data: "/9j/4AAQ" };
+  s.actor.expose("camera", tools, {
+    list: () => ({ tools: [{ name: "shoot", inputSchema: { type: "object" } }] }),
+    call: async () => ({ output: "A screen.", images: [jpeg] }),
+  });
+  s.script.push(calls(callTool("camera__shoot", {}, "c1")));
+  const from = s.actor.emitted.length;
+  await s.chat("send", { text: "What is this?", images: [png] });
+  await s.ended(from);
+  const pictures = (request: Request | undefined) =>
+    request?.input.flatMap((item) =>
+      ((item.images as { data: string }[] | undefined) ?? []).map(({ data }) => data),
+    );
+  assert.deepEqual(pictures(s.whole[0]), [png.data]);
+  assert.deepEqual(pictures(s.whole[1]), [png.data, jpeg.data]);
+  const shown = s.actor.emitted.find((e) => e.event === "message")?.payload as {
+    images?: unknown;
+  };
+  assert.deepEqual(shown.images, [png]);
+  const { messages } = (await s.chat("history", {})) as { messages: { images?: unknown }[] };
+  assert.deepEqual(
+    messages.map((message) => message.images),
+    [[png], undefined],
+  );
+  // A picture whose bytes aren't base64 is refused with its message.
+  await assert.rejects(
+    s.chat("send", { text: "And this?", images: [{ mediaType: "image/png", data: "not base64" }] }),
+    (error: Error & { code?: string }) => error.code === "invalid",
+  );
+});
+
 test("what is exposed to the agent becomes its tools at the next turn, and goes when removed", async () => {
   const s = await setup();
   const done: unknown[] = [];

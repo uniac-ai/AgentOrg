@@ -1,4 +1,11 @@
-import { type ConnectionState, type ToolEntry, tools } from "@agentorg/interfaces";
+import {
+  type ConnectionState,
+  PICTURE_MAX,
+  PICTURES_MAX,
+  Picture,
+  type ToolEntry,
+  tools,
+} from "@agentorg/interfaces";
 import { type Log, Refused } from "@agentorg/sdk";
 import { connect, type Client as HubClient } from "@agentorg/sdk/client";
 import {
@@ -62,20 +69,52 @@ function fit(listed: Awaited<ReturnType<Client["listTools"]>>["tools"], log: Log
   return kept;
 }
 
+/** A result stays under this many bytes of JSON, a little below the frame that carries it. */
+const RESULT_BUDGET = 1_000_000;
+/**
+ * A result's pictures of kinds a model reads, as many as a message carries and as fit `room`
+ * together, within one picture's cap; each one left out, said in a line.
+ */
+function picturesOf(result: Result, room: number) {
+  const images: z.infer<typeof Picture>[] = [];
+  const leftOut: string[] = [];
+  let left = Math.min(room, PICTURE_MAX);
+  for (const block of result.content ?? []) {
+    if (block.type !== "image" || block.data === "") continue;
+    const mediaType = Picture.shape.mediaType.safeParse(block.mimeType);
+    if (!mediaType.success)
+      leftOut.push(
+        `(A picture, left out: ${block.mimeType.slice(0, 64)} isn't one a model reads.)`,
+      );
+    else if (images.length === PICTURES_MAX) leftOut.push("(A picture, left out: too many.)");
+    else if (block.data.length > left) leftOut.push("(A picture, left out: too large.)");
+    else {
+      left -= block.data.length;
+      images.push({ mediaType: mediaType.data, data: block.data });
+    }
+  }
+  return { images, leftOut };
+}
+
 /** A tool's result as text: its text blocks as they are, and what else it held by name. */
 function textOf(result: Result): string {
-  const parts = (result.content ?? []).map((block) => {
-    switch (block.type) {
-      case "text":
-        return block.text;
-      case "resource":
-        return "text" in block.resource ? block.resource.text : `[resource ${block.resource.uri}]`;
-      case "resource_link":
-        return `[resource ${block.uri}]`;
-      default:
-        return `[${block.type}]`;
-    }
-  });
+  const parts = (result.content ?? [])
+    // Its pictures go apart.
+    .filter((block) => block.type !== "image")
+    .map((block) => {
+      switch (block.type) {
+        case "text":
+          return block.text;
+        case "resource":
+          return "text" in block.resource
+            ? block.resource.text
+            : `[resource ${block.resource.uri}]`;
+        case "resource_link":
+          return `[resource ${block.uri}]`;
+        default:
+          return `[${block.type}]`;
+      }
+    });
   if (parts.length === 0 && result.structuredContent)
     return JSON.stringify(result.structuredContent);
   return parts.join("\n");
@@ -234,9 +273,15 @@ export class Connection {
     const meta = group && this.#groups ? { _meta: { [this.#groups.meta]: group } } : {};
     try {
       const result = await mcp.callTool({ name, arguments: args, ...meta });
+      const text = textOf(result);
+      // Its pictures have what its words leave of the frame; the lines for those left out go
+      // first, so no cut takes them.
+      const words = Buffer.byteLength(JSON.stringify(cut(text, OUTPUT_MAX)));
+      const { images, leftOut } = picturesOf(result, RESULT_BUDGET - words);
       return {
-        output: cut(textOf(result), OUTPUT_MAX),
+        output: cut([...leftOut, text].filter((line) => line !== "").join("\n"), OUTPUT_MAX),
         ...(result.isError ? { failed: true as const } : {}),
+        ...(images.length > 0 ? { images } : {}),
       };
     } catch (error) {
       if (this.#gone(error)) {

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { CUT_STEP, createRecord, createThread, fitted, head, INPUT_BUDGET } from "../src/record.ts";
-import type { Store } from "../src/types.ts";
+import type { Item, Picture, Store } from "../src/types.ts";
 
 /** A store in memory, as the record uses it. */
 function store() {
@@ -446,4 +446,119 @@ test("the same is left out while a conversation grows within one step, so the re
   // Past the step, more is cut, and from then the beginning is the new one.
   await record.append(ran("b2", "y".repeat(CUT_STEP)));
   assert.ok(cut((await record.input()).items) > cut(first.items));
+});
+
+/** A picture named by its first letters, of `size` characters. */
+const picture = (name: string, size: number): Picture => ({
+  mediaType: "image/png",
+  data: name.padEnd(size, "A"),
+});
+const userWith = (content: string, images: Picture[]) => ({
+  role: "user" as const,
+  items: [{ type: "message" as const, role: "user" as const, content, images }],
+});
+const ranWith = (callId: string, output: string, images: Picture[]) => ({
+  ...ran(callId, output),
+  items: [
+    { type: "function_call" as const, callId, name: "look", arguments: "{}" },
+    { type: "function_call_output" as const, callId, output, images },
+  ],
+});
+/** Each item that has words or pictures, as its words' first line and the names of its pictures. */
+const pictured = (items: Item[]) =>
+  items.flatMap((item) => {
+    if (item.type === "function_call") return [];
+    const words = (item.type === "message" ? item.content : item.output).replace(/^\[\d+\] /, "");
+    const names = (item.images ?? []).map((one) => one.data.replace(/A+$/, ""));
+    return [[words.replaceAll("\n", " | "), ...names].join(" ")];
+  });
+
+test("the person's pictures are given across turns, the newest first, then the pictures of the turn under way's calls; each left out is said where it was", async () => {
+  const record = single(store().calls as never);
+  await record.append(userWith("first", [picture("p1", 200_000)]));
+  await record.append(ranWith("a", "a screen", [picture("t1", 100_000)]));
+  await record.append(reply("did it"));
+  await record.append(userWith("second", [picture("p2", 200_000), picture("p3", 200_000)]));
+  await record.append(ranWith("b", "another", [picture("t2", 100_000)]));
+  // The two newest of the person's, then the call's of this turn: the oldest of the person's no
+  // longer fits, and the call's of the turn before is not given.
+  assert.deepEqual(pictured((await record.input()).items), [
+    "first | (A picture, left out.)",
+    "a screen | (A picture, left out.)",
+    "did it",
+    "second p2 p3",
+    "another t2",
+  ]);
+  // With less room beside what else the request carries, the person's come first: the newest
+  // only, and no call's.
+  const besides = (room: number) => "x".repeat(1_000_000 - room);
+  assert.deepEqual(pictured((await record.input(besides(250_000))).items), [
+    "first | (A picture, left out.)",
+    "a screen | (A picture, left out.)",
+    "did it",
+    "second | (A picture, left out.) p3",
+    "another | (A picture, left out.)",
+  ]);
+  assert.deepEqual(
+    pictured((await record.input(besides(0))).items).at(-2),
+    "second | (A picture, left out.) | (A picture, left out.)",
+  );
+});
+
+test("pictures don't count toward the conversation's budget, and kept and paged they stay with their message", async () => {
+  const s = store();
+  const record = single(s.calls as never);
+  await record.append(userWith("the task", [picture("p1", 400_000)]));
+  await record.append(ran("a", filler(0.9)));
+  const { items } = await record.input();
+  assert.deepEqual(
+    pictured(items).map((one) => one.slice(0, 12)),
+    ["the task p1", "xxxxxxxxxxxx"],
+  );
+  // Kept as said, and shown with the message in its thread's page.
+  const again = single(s.calls as never);
+  assert.deepEqual(
+    pictured((await again.input()).items).map((one) => one.slice(0, 12)),
+    ["the task p1", "xxxxxxxxxxxx"],
+  );
+  const { messages } = await again.page(undefined, 10);
+  assert.equal(messages[0]?.images?.[0]?.data.slice(0, 2), "p1");
+});
+
+test("a request's pictures have the room its words, instructions and tools leave, at most their budget", async () => {
+  const record = single(store().calls as never);
+  await record.append(userWith("the task", [picture("p1", 300_000)]));
+  const given = async (besides: unknown) => pictured((await record.input(besides)).items)[0];
+  assert.equal(await given({ instructions: "x".repeat(600_000) }), "the task p1");
+  assert.equal(
+    await given({ instructions: "x".repeat(750_000) }),
+    "the task | (A picture, left out.)",
+  );
+  // The words take their share as they are, not at their budget.
+  await record.append(ran("a", filler(0.45)));
+  await record.append(ran("b", filler(0.45)));
+  assert.equal(await given({ instructions: "x".repeat(300_000) }), "the task p1");
+  assert.equal(
+    await given({ instructions: "x".repeat(400_000) }),
+    "the task | (A picture, left out.)",
+  );
+});
+
+test("pictures are given once the conversation is fitted: what is left out of it takes no room", async () => {
+  const record = single(store().calls as never);
+  await record.append(user("the task"));
+  await record.append(userWith("second", [picture("p2", 300_000)]));
+  await record.append(reply(`b1 ${filler(0.3)}`));
+  await record.append(reply(`b2 ${filler(0.3)}`));
+  await record.append(user("third"));
+  await record.append(reply(`c1 ${filler(0.2)}`));
+  await record.append(reply(`c2 ${filler(0.2)}`));
+  await record.append(user("go on"));
+  await record.append(ranWith("z", "a screen", [picture("t", 300_000)]));
+  const said = pictured((await record.input()).items);
+  assert.match(
+    said[1] ?? "",
+    /^\(Left out: all that was said and done after \[1\] and before \[5\]/,
+  );
+  assert.equal(said.at(-1), "a screen t");
 });

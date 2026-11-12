@@ -1,5 +1,6 @@
 import { defineInterface, event, method } from "@agentorg/sdk";
 import { z } from "zod";
+import { Pictures } from "./picture.js";
 
 const RequestId = z.string().min(1).max(128);
 /** A model's id, as whoever offers the model names it. */
@@ -9,10 +10,12 @@ const CallId = z.string().min(1).max(256);
 const ToolName = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/);
 const Text = z.string().max(200_000);
 
+/** What was said; a person's words may have pictures with them. */
 const Message = z.object({
   type: z.literal("message"),
   role: z.enum(["user", "assistant"]),
   content: Text,
+  images: Pictures.optional(),
 });
 const FunctionCall = z.object({
   type: z.literal("function_call"),
@@ -22,10 +25,12 @@ const FunctionCall = z.object({
   /** The arguments as the model wrote them: JSON text, meant to fit the tool's parameters. */
   arguments: Text,
 });
+/** What a call gave back: its text, and the pictures it gave with it. */
 const FunctionCallOutput = z.object({
   type: z.literal("function_call_output"),
   callId: CallId,
   output: Text,
+  images: Pictures.optional(),
 });
 
 /** One item of a conversation: what was said, a function the model called, and its output. */

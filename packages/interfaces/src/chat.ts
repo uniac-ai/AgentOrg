@@ -1,5 +1,6 @@
 import { defineInterface, event, method } from "@agentorg/sdk";
 import { z } from "zod";
+import { Pictures } from "./picture.js";
 
 const MessageId = z.string().min(1).max(128);
 const ChatId = z.string().min(1).max(128);
@@ -31,6 +32,8 @@ export const ChatMessage = z.object({
   /** An ISO 8601 time. */
   at: z.string().max(64),
   tool: ChatTool.optional(),
+  /** The pictures the person sent with it. */
+  images: Pictures.optional(),
 });
 /** What the agent is doing: `working` while it answers anything, in any chat. */
 export const ChatStatus = z.object({ state: z.enum(["idle", "working"]) });
@@ -79,6 +82,7 @@ export const chat = defineInterface({
       input: z.object({
         chat: ChatId.optional(),
         text: z.string().min(1).max(100_000).regex(/\S/),
+        images: Pictures.optional(),
       }),
       output: z.object({ chat: ChatId, messageId: MessageId }),
     }),
