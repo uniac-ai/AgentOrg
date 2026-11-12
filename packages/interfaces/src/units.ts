@@ -78,10 +78,11 @@ export const WorkEntry = z.union([
   z.strictObject({ id: z.string(), at: z.string(), line: z.string() }),
 ]);
 /**
- * What an `activity` view shows, as its operation answers with no arguments: an agent's pieces of
- * work, most recently active first, each with whether it is working, idle or stopped, when it was
- * last active, whether its last turn failed, and its latest entries, oldest first, with `more`
- * when older ones remain.
+ * What an `activity` view shows, as its operation answers with no `work`, given `{ before? }`: an
+ * agent's pieces of work, most recently active first, those last active before the piece of work
+ * `before` when it is given, each with whether it is working, idle or stopped, when it was last
+ * active, whether its last turn failed, and its latest entries, oldest first, with `more` when
+ * older ones remain. Its own `more` says whether pieces of work last active before those remain.
  */
 export const Activity = z.strictObject({
   works: z.array(
@@ -95,6 +96,7 @@ export const Activity = z.strictObject({
       more: z.boolean(),
     }),
   ),
+  more: z.boolean().optional(),
 });
 /**
  * One piece of work's entries, oldest first, as the operation of an `activity` view answers when

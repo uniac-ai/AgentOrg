@@ -1179,17 +1179,27 @@ export function createLooper(options: {
     /** Stop a piece of work's turn now. A call already running finishes, and its result is kept. */
     cancel: async (work: string) => void (await works.get(work)?.loop.cancel()),
     /**
-     * Its pieces of work, most recently active first, as many as `limit`: each with its title,
-     * whether it is working, idle or stopped, when it was last active, whether its last turn
-     * failed, and its `entries` latest entries, the call it is running now last.
+     * Its pieces of work, most recently active first, as many as `limit`, those last active before
+     * the piece of work `before` if one is given: each with its title, whether it is working, idle or stopped,
+     * when it was last active, whether its last turn failed, and its `entries` latest entries,
+     * the call it is running now last. Refused `unknown` for a `before` there isn't.
      */
-    async works(limit: number, entries: number) {
+    async works(limit: number, entries: number, before?: string) {
       await learn();
       const now = new Date().toISOString();
-      const latest = [...kept]
+      /** Most recently active first, and by id where two were last active at once. */
+      const order = (a: { id: string; at?: string | undefined }, b: typeof a) =>
+        (b.at ?? "").localeCompare(a.at ?? "") || b.id.localeCompare(a.id);
+      const all = [...kept]
         .map(([id, work]) => ({ id, work, at: workingNow(id) ? now : work.at }))
-        .sort((a, b) => (b.at ?? "").localeCompare(a.at ?? ""))
-        .slice(0, limit);
+        .sort(order);
+      const cursor = before === undefined ? undefined : kept.get(before);
+      if (before !== undefined && !cursor)
+        throw new Refusal("unknown", "There is no such piece of work.");
+      // Those last active before it, by the time it was kept with: a piece of work that has
+      // become active since doesn't make a page repeat what came before.
+      const mark = cursor && { id: before as string, at: cursor.at ?? now };
+      const latest = all.filter((one) => !mark || order(mark, one) < 0).slice(0, limit);
       return Promise.all(
         latest.map(async ({ id, work, at }) => ({
           id,

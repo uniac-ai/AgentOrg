@@ -129,20 +129,29 @@ export function leaveOut(item: Item, keep: (picture: Picture) => boolean): Item 
     : { ...rest, output: said(rest.output), ...pictures };
 }
 /**
- * The exchanges with the pictures a request gives, within `room`: the person's, newest first and
- * across turns, then a call's of the latest exchange, newest first.
+ * The exchanges with the pictures a request gives, within `room`, each kind newest first: those
+ * the person sent with the messages its turn is answering, the latest exchange's and those of the
+ * exchanges before it that nothing has answered yet; then those its calls gave; then the
+ * person's older ones, as they fit.
  */
 export function withPictures(exchanges: Item[][], room: number): Item[][] {
-  const persons = exchanges
-    .flat()
-    .flatMap((item) => (item.type === "message" && item.role === "user" ? (item.images ?? []) : []))
-    .reverse();
-  const calls = (exchanges.at(-1) ?? [])
-    .flatMap((item) => (item.type === "function_call_output" ? (item.images ?? []) : []))
-    .reverse();
+  const newestFirst = (items: Item[], of: (item: Item) => boolean) =>
+    items
+      .flatMap((item) => (of(item) && item.type !== "function_call" ? (item.images ?? []) : []))
+      .reverse();
+  const persons = (item: Item) => item.type === "message" && item.role === "user";
+  const calls = (item: Item) => item.type === "function_call_output";
+  // A turn that opens on several messages has an exchange for each, each of them alone.
+  let from = exchanges.length - 1;
+  while (from > 0 && (exchanges[from - 1] as Item[]).every(persons)) from--;
+  const order = [
+    ...newestFirst(exchanges.slice(from).flat(), persons),
+    ...newestFirst(exchanges.at(-1) ?? [], calls),
+    ...newestFirst(exchanges.slice(0, from).flat(), persons),
+  ];
   const given = new Set<Picture>();
   let left = room;
-  for (const picture of [...persons, ...calls])
+  for (const picture of order)
     if (picture.data.length <= left) {
       given.add(picture);
       left -= picture.data.length;
