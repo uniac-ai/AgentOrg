@@ -2,7 +2,6 @@ import { PlusIcon } from "lucide-react";
 import { createContext, useContext, useLayoutEffect, useRef, useState } from "react";
 import { USAGE } from "../app.tsx";
 import { api, go, type Route, setTheme, type ThemeName, useLoad, useTheme } from "../data.ts";
-import { signIn, useSigningIn } from "../sign-in.ts";
 import { Button } from "../ui/button.tsx";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select.tsx";
 import { Tabs, TabsList, TabsTrigger } from "../ui/tabs.tsx";
@@ -88,7 +87,7 @@ export function SettingsFrame({ tab, children }: { tab: Tab; children: React.Rea
 
 export function SettingsPage({ tab }: { tab: "providers" | "account" }) {
   return (
-    <Scroll asBuilt>
+    <Scroll>
       <div className="mx-auto flex max-w-5xl flex-col gap-7">
         {tab === "providers" ? <Providers /> : <AccountTab />}
       </div>
@@ -151,7 +150,8 @@ function AccountTab() {
   const login = useLoginStatus();
   return (
     <>
-      {login && (
+      {/* Signed out, the way in is where Home says what is left to set up. */}
+      {login?.state === "signed_in" && (
         <Section title="ChatGPT">
           <Account login={login} />
         </Section>
@@ -171,53 +171,37 @@ function AccountTab() {
   );
 }
 
-/** Who's signed in to ChatGPT, and the way out or in. */
+/** Who's signed in to ChatGPT, and the way out. */
 function Account({ login }: { login: LoginStatus }) {
   const act = useAct();
-  const signingIn = useSigningIn();
-  const signedIn = login.state === "signed_in";
   return (
     <div className={`${rowClass(false)} grid-cols-[minmax(0,1fr)_auto]`}>
       <div className="min-w-0">
-        <div className="truncate font-medium">
-          {signedIn ? (login.account?.email ?? "Signed in") : "Signed out"}
-        </div>
+        <div className="truncate font-medium">{login.account?.email ?? "Signed in"}</div>
         <div
           className={`truncate text-[13px] ${act.failed ? "text-[var(--bad)]" : "text-muted-foreground"}`}
           role={act.failed ? "alert" : undefined}
         >
-          {act.failed ??
-            (login.state === "ineligible"
-              ? "This ChatGPT plan isn't eligible."
-              : login.account?.plan)}
+          {act.failed ?? login.account?.plan}
         </div>
       </div>
       <div className="flex items-center gap-3">
-        {signedIn && (
-          <>
-            <a
-              href={USAGE}
-              target="_blank"
-              rel="noreferrer"
-              className="text-[13px] text-muted-foreground underline underline-offset-2 hover:text-foreground"
-            >
-              Manage usage
-            </a>
-            <Button
-              variant="ghost"
-              size="sm"
-              disabled={act.busy}
-              onClick={() => act.run(() => api.call("login", "logout"))}
-            >
-              Sign out
-            </Button>
-          </>
-        )}
-        {login.state === "signed_out" && (
-          <Button size="sm" disabled={signingIn || act.busy} onClick={() => act.run(signIn)}>
-            {signingIn ? "Waiting for ChatGPT…" : "Continue with ChatGPT"}
-          </Button>
-        )}
+        <a
+          href={USAGE}
+          target="_blank"
+          rel="noreferrer"
+          className="text-[13px] text-muted-foreground underline underline-offset-2 hover:text-foreground"
+        >
+          Manage usage
+        </a>
+        <Button
+          variant="ghost"
+          size="sm"
+          disabled={act.busy}
+          onClick={() => act.run(() => api.call("login", "logout"))}
+        >
+          Sign out
+        </Button>
       </div>
     </div>
   );

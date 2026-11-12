@@ -5,7 +5,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { Input } from "../ui/input.tsx";
 import { listDetails, listSkills, useAct } from "./data.ts";
 import { DeleteButton } from "./delete-dialog.tsx";
-import { Nothing, rowClass, Scroll, UsedBy } from "./parts.tsx";
+import { rowClass, Scroll, UsedBy } from "./parts.tsx";
 import { useOffer } from "./settings-page.tsx";
 
 export function SkillsPage({ focus, adding }: { focus?: string; adding?: boolean }) {
@@ -19,7 +19,7 @@ export function SkillsPage({ focus, adding }: { focus?: string; adding?: boolean
   useOffer("Add skill", () => setOpen(true));
   return (
     <>
-      <Scroll asBuilt>
+      <Scroll>
         <ul className="mx-auto max-w-5xl">
           {list.map((skill) => (
             <li
@@ -45,13 +45,6 @@ export function SkillsPage({ focus, adding }: { focus?: string; adding?: boolean
               </span>
             </li>
           ))}
-          {skills.loaded && list.length === 0 && (
-            <li>
-              <Nothing>
-                {skills.error ? "Skills can't be read right now." : "No skills yet."}
-              </Nothing>
-            </li>
-          )}
         </ul>
       </Scroll>
       <AddSkill
@@ -64,49 +57,55 @@ export function SkillsPage({ focus, adding }: { focus?: string; adding?: boolean
 }
 
 function AddSkill({ open, onClose, onAdded }: { open: boolean; onClose(): void; onAdded(): void }) {
+  return (
+    <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
+      <DialogContent className="window ring-0 sm:max-w-md">
+        <AddForm onClose={onClose} onAdded={onAdded} />
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/** Inside the dialog, so what was typed and what was refused go when it closes. */
+function AddForm({ onClose, onAdded }: { onClose(): void; onAdded(): void }) {
   const [path, setPath] = useState("");
   const act = useAct();
   const ready = path.trim() !== "";
   return (
-    <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
-      <DialogContent className="window ring-0 sm:max-w-md">
-        <form
-          className="flex flex-col gap-4"
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (!ready) return;
-            act.run(
-              () => api.call("skills", "add", { path: path.trim() }),
-              () => {
-                setPath("");
-                onAdded();
-                onClose();
-              },
-            );
-          }}
-        >
-          <DialogHeader>
-            <DialogTitle>Add skill</DialogTitle>
-          </DialogHeader>
-          <Input
-            aria-label="Folder with a SKILL.md"
-            placeholder="~/skills/changelog"
-            className="font-mono text-xs"
-            value={path}
-            onChange={(event) => setPath(event.target.value)}
-          />
-          <DialogFooter className="items-center">
-            {act.failed && (
-              <p role="alert" className="mr-auto min-w-0 text-[13px] text-[var(--bad)]">
-                {act.failed}
-              </p>
-            )}
-            <Button type="submit" disabled={!ready || act.busy}>
-              Add
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
+    <form
+      className="flex flex-col gap-4"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (!ready) return;
+        act.run(
+          () => api.call("skills", "add", { path: path.trim() }),
+          () => {
+            onAdded();
+            onClose();
+          },
+        );
+      }}
+    >
+      <DialogHeader>
+        <DialogTitle>Add skill</DialogTitle>
+      </DialogHeader>
+      <Input
+        aria-label="Folder with a SKILL.md"
+        placeholder="~/skills/changelog"
+        className="font-mono text-xs"
+        value={path}
+        onChange={(event) => setPath(event.target.value)}
+      />
+      <DialogFooter className="sm:items-center">
+        {act.failed && (
+          <p role="alert" className="mr-auto min-w-0 text-[13px] text-[var(--bad)]">
+            {act.failed}
+          </p>
+        )}
+        <Button type="submit" disabled={!ready || act.busy}>
+          Add
+        </Button>
+      </DialogFooter>
+    </form>
   );
 }

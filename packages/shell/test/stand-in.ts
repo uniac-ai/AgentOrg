@@ -396,6 +396,7 @@ const UNITS: Units["units"] = [
 const TEMPLATES: Template[] = [
   {
     id: "assistant",
+    shipped: true,
     title: "Assistant",
     description: "Does what you ask on a computer",
     base: { provider: "AgentOrg", creatable: "assistant" },

@@ -1,6 +1,6 @@
 // The small pieces the fixed pages share.
 import { CheckIcon, CopyIcon, GlobeIcon, LaptopIcon } from "lucide-react";
-import { Fragment, useState } from "react";
+import { useState } from "react";
 import { go, type Route } from "../data.ts";
 import { Button } from "../ui/button.tsx";
 import { WORD } from "./data.ts";
@@ -68,10 +68,10 @@ export function UsedBy({ agents }: { agents: { agent: string; name: string }[] }
   return (
     <span className="min-w-0 truncate text-[13px] text-muted-foreground">
       {agents.map((agent, i) => (
-        <Fragment key={agent.agent}>
+        <span key={agent.agent}>
           {i > 0 && ", "}
           <Jump to={{ screen: "agent", agent: agent.agent }}>{agent.name}</Jump>
-        </Fragment>
+        </span>
       ))}
     </span>
   );
@@ -105,11 +105,7 @@ export const Nothing = ({ children }: { children: React.ReactNode }) => (
 export const rowClass = (focused: boolean) =>
   `group/row -mx-2 grid min-h-14 items-center gap-x-4 rounded-xl px-2 py-2 ${focused ? "bg-[var(--selected)]" : ""}`;
 
-/** A page's own scroll. A page not yet redrawn is set in the type it was built in (`asBuilt`). */
-export const Scroll = ({ children, asBuilt }: { children: React.ReactNode; asBuilt?: boolean }) => (
-  <div
-    className={`no-bar h-full overflow-y-auto p-5 tight:p-3.5 ${asBuilt ? "text-[14px] leading-[1.45]" : ""}`}
-  >
-    {children}
-  </div>
+/** A page's own scroll. */
+export const Scroll = ({ children }: { children: React.ReactNode }) => (
+  <div className="no-bar h-full overflow-y-auto p-5 tight:p-3.5">{children}</div>
 );

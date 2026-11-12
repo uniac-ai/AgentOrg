@@ -26,17 +26,21 @@ import {
   noted,
   openDesignAgent,
   openFiles,
+  openOffer,
   openSampleChat,
+  openSection,
   openSetup,
   openTemplates,
   openWindow,
   readChat,
   refuseSend,
+  SECTIONS,
   SIGN_INS,
   sampleAgents,
   sampleBuild,
   sampleChats,
   sampleLoad,
+  sampleSettings,
   signInAccount,
   signInHash,
   signInState,
@@ -63,6 +67,7 @@ const PARTS = [
   "setup",
   "create",
   "templates",
+  "settings",
 ] as const;
 for (const one of only?.split(",") ?? [])
   if (!(PARTS as readonly string[]).includes(one))
@@ -88,7 +93,8 @@ type Parts = Record<string, Measured | string | number | null>;
  * What a probe measures: the frame, one window's own rows, the chat in its layer, one chat, the
  * way to a chat's older messages, Home, an agent's page, its setup, its computer's frame on its
  * page, that computer as the layer's window, its files window's own rows, the model
- * account's states, the create window, or Settings' frame with its Templates.
+ * account's states, the create window, Settings' frame with its Templates, or Settings' other
+ * sections and what two of them offer.
  */
 type Part =
   | "frame"
@@ -105,7 +111,8 @@ type Part =
   | "files"
   | "signin"
   | "create"
-  | "templates";
+  | "templates"
+  | "settings";
 type Gateway = Awaited<ReturnType<typeof standIn>>;
 
 /**
@@ -631,6 +638,87 @@ const probe = (what: Part): Parts => {
     return parts;
   }
 
+  if (what === "settings") {
+    // One of Settings' sections under the row, from the page's own top left: a list's first and
+    // last rows cell by cell, or a page's titled parts with their rows; then the dialog it
+    // opened, from the dialog's own top left.
+    const main = document.querySelector("main");
+    const list = main?.querySelector('[role="tablist"]');
+    if (!main || !list) throw new Error("Settings isn't open");
+    origin = main.getBoundingClientRect();
+    // The agents that use a provider are the sample's: they are named in a row that isn't a
+    // list's, so they are left out of what is seen, and their cell is measured below.
+    const shown = [...list.children].findIndex(
+      (tab) => tab.getAttribute("aria-selected") === "true",
+    );
+    parts["section.shown"] = shown;
+    controls(
+      "page",
+      main,
+      shown === 3 ? "section:first-of-type > :nth-child(2) > * > :nth-child(3)" : "",
+    );
+    const offer = list.parentElement?.parentElement?.querySelector(":scope > button");
+    parts.offer = of(offer);
+    const room = list.parentElement?.parentElement?.nextElementSibling;
+    // A cell with what it holds, two deep: words are as wide as they are, so a width "fills".
+    // A row is measured from its own top left, however many rows the sample has above it.
+    const cells = (key: string, row: Element | null | undefined) => {
+      const whole = of(row);
+      if (whole) whole.box = ["-", "-", whole.box[2] ?? 0, whole.box[3] ?? 0];
+      parts[key] = whole;
+      for (const [i, cell] of [...(row?.children ?? [])].entries()) {
+        parts[`${key}.${i}`] = inside(row, cell);
+        // A mark, or a button that is a mark alone, is its own size, and words are as wide as
+        // they are; what follows words on their line starts where the sample's words end.
+        const held = [...cell.children].slice(0, 3);
+        const sized = (one: Element | undefined) =>
+          !!one &&
+          (one.matches('svg, [role="img"]') || (one.matches("button") && !one.textContent?.trim()));
+        for (const [j, one] of held.entries()) {
+          const m = inside(row, one, sized(one) ? "" : "w");
+          const before = held[j - 1];
+          const beside =
+            before && before.getBoundingClientRect().top === one.getBoundingClientRect().top;
+          if (m && beside && !sized(before)) m.box[0] = "-";
+          parts[`${key}.${i}.${j}`] = m;
+        }
+      }
+    };
+    const rows = [...(room?.querySelectorAll("ul > li") ?? [])];
+    parts.rows = of(room?.querySelector("ul"), "h");
+    parts["rows.first"] = of(rows[0], "h");
+    // How far one row's top is from the next's.
+    parts["rows.pitch"] =
+      rows[0] && rows[1]
+        ? round(rows[1].getBoundingClientRect().top - rows[0].getBoundingClientRect().top)
+        : null;
+    if (rows.length > 0) {
+      cells("row.first", rows[0]);
+      cells("row.last", rows.at(-1));
+    }
+    for (const [n, part] of [...(room?.querySelectorAll("section") ?? [])].entries()) {
+      parts[`part.${n}`] = of(part);
+      parts[`part.${n}.title`] = of(part.querySelector("h2"), "w");
+      cells(`part.${n}.row`, part.children[1]?.children[0]);
+    }
+    const dialog = [...document.querySelectorAll('[role="dialog"]')].find(seen);
+    if (dialog) {
+      (dialog as HTMLElement).style.animation = "none";
+      origin = dialog.getBoundingClientRect();
+      controls("dialog", dialog);
+      parts.dialog = of(dialog);
+      parts["dialog.centre"] = round((origin.top + origin.bottom) / 2 - innerHeight / 2);
+      parts["dialog.title"] = of(dialog.querySelector("h2"));
+      const fields = [...dialog.querySelectorAll('input, [role="combobox"], textarea')];
+      parts["dialog.fields"] = fields.length;
+      for (const [i, field] of fields.entries()) parts[`dialog.field.${i}`] = of(field);
+      for (const [i, label] of [...dialog.querySelectorAll("label")].entries())
+        parts[`dialog.label.${i}`] = of(label, "w");
+      parts["dialog.finish"] = of(dialog.querySelector('button[type="submit"]'));
+    }
+    return parts;
+  }
+
   if (what === "templates") {
     // Settings' frame and the Templates under it, from the page's own top left: its sections in
     // a row with what the section offers at their end, then each template's row.
@@ -656,7 +744,7 @@ const probe = (what: Part): Parts => {
     const rows = [...(room?.querySelectorAll("li") ?? [])];
     parts.rows = of(room?.querySelector("ul"), "h");
     parts["rows.count"] = rows.length;
-    // How many can be deleted: a template that came with the app can't.
+    // How many can be deleted: a template that came with the app can't be.
     parts["rows.deletable"] = rows.filter((one) =>
       one.querySelector('button[aria-label^="Delete"]'),
     ).length;
@@ -1648,6 +1736,40 @@ if (wants("templates"))
         await page.close();
         await gateway?.close();
       }
+
+// Settings' other sections, wide and on a phone, and what Skills and MCP connections offer.
+if (wants("settings")) {
+  for (const [section] of SECTIONS)
+    for (const size of ["wide", "phone"] as const)
+      for (const theme of ["dark", "light"] as const)
+        for (const side of ["design", "built"] as const) {
+          const gateway = side === "built" ? await standIn() : undefined;
+          if (gateway) sampleSettings(gateway);
+          const page = gateway
+            ? await builtPage(gateway, size, theme)
+            : await designPage(size, theme);
+          await openSection(page, section);
+          await rest(page, size);
+          all[`settings.${section}.${size}.${theme}.${side}`] = await measure(page, "settings");
+          await page.close();
+          await gateway?.close();
+        }
+  for (const section of ["skills", "mcps"] as const)
+    for (const theme of ["dark", "light"] as const)
+      for (const side of ["design", "built"] as const) {
+        const gateway = side === "built" ? await standIn() : undefined;
+        if (gateway) sampleSettings(gateway);
+        // A dialog centred in an odd height would sit on a half pixel.
+        const page = gateway
+          ? await builtPage(gateway, "wide", theme)
+          : await designPage("wide", theme, 1);
+        await openOffer(page, section);
+        await rest(page, "wide");
+        all[`settings.${section}.offer.${theme}.${side}`] = await measure(page, "settings");
+        await page.close();
+        await gateway?.close();
+      }
+}
 
 await browser.close();
 writeFileSync(out, JSON.stringify(all, null, 1));
