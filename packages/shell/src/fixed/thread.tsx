@@ -38,6 +38,8 @@ import {
   MessageScrollerItem,
   MessageScrollerProvider,
   MessageScrollerViewport,
+  useMessageScroller,
+  useMessageScrollerScrollable,
 } from "../ui/message-scroller.tsx";
 import { type ListedChat, useAllChats } from "./all-chats.tsx";
 import { CallRow } from "./call-row.tsx";
@@ -617,9 +619,10 @@ export function Thread({ chat }: { chat: ListedChat }) {
         </DropdownMenu>
         <CloseChats />
       </header>
-      <MessageScrollerProvider defaultScrollPosition="end">
+      {/* What is said is followed to its end as it comes, until the person scrolls away. */}
+      <MessageScrollerProvider autoScroll defaultScrollPosition="end">
         <MessageScroller className="min-h-0 flex-1">
-          <MessageScrollerViewport className="no-bar">
+          <Room>
             <MessageScrollerContent className="mx-auto w-full max-w-[720px] gap-6 px-4 pt-3 pb-4">
               {hasEarlier && (
                 <MessageScrollerItem>
@@ -668,7 +671,7 @@ export function Thread({ chat }: { chat: ListedChat }) {
               )}
               {wrong && <ProblemLine fix={fix}>{wrong}</ProblemLine>}
             </MessageScrollerContent>
-          </MessageScrollerViewport>
+          </Room>
           <MessageScrollerButton />
         </MessageScroller>
       </MessageScrollerProvider>
@@ -706,6 +709,37 @@ function Tool({ message, row }: { message: ChatMessage; row?: Row | undefined })
   return row && row.kind !== "say" ? <CallRow row={row} /> : null;
 }
 
+/** How soon after a person moves the room its having moved is theirs, and not what came. */
+const THEIRS_MS = 400;
+
+/**
+ * The room a chat is read in. The scroller follows a reply to its end once the reply has filled
+ * the room under the message it answers. Where that never happens, as under a chat's first
+ * message, which is at the top already, the end is gone to here when what came passes the foot.
+ * A person who has scrolled away is past the foot already, so nothing moves them.
+ */
+function Room({ children }: { children: React.ReactNode }) {
+  const { scrollToEnd } = useMessageScroller();
+  const { end: more } = useMessageScrollerScrollable();
+  const moved = useRef(0);
+  const theirs = () => {
+    moved.current = Date.now();
+  };
+  useEffect(() => {
+    if (more && Date.now() - moved.current > THEIRS_MS) scrollToEnd({ behavior: "auto" });
+  }, [more, scrollToEnd]);
+  return (
+    <MessageScrollerViewport
+      className="no-bar"
+      onWheel={theirs}
+      onTouchMove={theirs}
+      onKeyDown={theirs}
+    >
+      {children}
+    </MessageScrollerViewport>
+  );
+}
+
 function Reply({
   parts,
   rows,
@@ -726,6 +760,8 @@ function Reply({
   const [copied, setCopied] = useState(false);
   const texts = parts.flatMap((part) => (part.kind === "text" ? [part.text] : []));
   const settled = !(isLast && (awaiting || parts.some((p) => p.kind === "text" && p.streaming)));
+  /** Nothing was said in it, only done: there is nothing to copy. */
+  const wordless = texts.every((text) => !text.trim());
   return (
     <Message className="group/reply">
       <MessageContent className="gap-2">
@@ -756,7 +792,7 @@ function Reply({
         {thinking && <Thinking />}
         {/* Its room is always kept, so nothing moves when it appears. */}
         <MessageFooter
-          className={`h-6 gap-0.5 px-0 ${!settled ? "invisible" : isLast ? "" : "invisible group-hover/reply:visible"}`}
+          className={`h-6 gap-0.5 px-0 ${!settled || wordless ? "invisible" : isLast ? "" : "invisible group-hover/reply:visible"}`}
         >
           <Button
             variant="ghost"

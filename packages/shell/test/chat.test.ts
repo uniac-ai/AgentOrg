@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { type Browser, chromium, type Page } from "@playwright/test";
+import { newChatWithFirst } from "./design/samples.ts";
 import { SESSION, standIn } from "./stand-in.ts";
 
 let browser: Browser;
@@ -617,6 +618,135 @@ test(
     await who.getByRole("button", { name: /Research/ }).click();
     await input(page).waitFor();
     assert.equal(await input(page).getAttribute("placeholder"), "Message Research");
+    await page.close();
+  }),
+);
+
+test(
+  "a reply longer than the chat's room is followed to its end, unless the person has scrolled away",
+  withGateway(async (gateway) => {
+    const page = await open(gateway);
+    const room = panel(page).locator('[data-slot="message-scroller-viewport"]');
+    /** How far what is shown is from the end of what was said. */
+    const short = () =>
+      room.evaluate((view) => Math.round(view.scrollHeight - view.scrollTop - view.clientHeight));
+    const lines = (from: number, to: number) =>
+      Array.from({ length: to - from }, (_, n) => `Finding ${from + n} is on a line of its own.`);
+    const write = async (id: string, said: string[]) => {
+      for (const line of said) {
+        gateway.delta("a-reviewer", id, `${line}\n\n`);
+        await page.waitForTimeout(15);
+      }
+    };
+    await input(page).fill("List every finding.");
+    await input(page).press("Enter");
+    await mine(page, "List every finding.").waitFor();
+
+    // Its words pass the foot of the room as they come: what is shown stays at the last of them.
+    await write("long", lines(0, 60));
+    await panel(page).getByText("Finding 59 is").waitFor();
+    assert.ok(
+      (await short()) <= 8,
+      `the end is in view while it is written (${await short()} short)`,
+    );
+    gateway.addMessage("a-reviewer", reply("long", lines(0, 60).join("\n\n")));
+    gateway.setChatStatus("a-reviewer", { state: "idle" });
+    await panel(page).locator("[data-sd-animate]").first().waitFor({ state: "detached" });
+    await page.waitForTimeout(400);
+    assert.ok((await short()) <= 8, `and when it is done (${await short()} short)`);
+    assert.ok(await panel(page).getByText("Finding 59 is").isVisible());
+
+    // A person who has scrolled away is left where they are.
+    await room.hover();
+    await page.mouse.wheel(0, -600);
+    await page.waitForFunction(
+      (view) => !!view && view.scrollHeight - view.scrollTop - view.clientHeight > 300,
+      await room.elementHandle(),
+    );
+    const left = await short();
+    await write("more", lines(60, 80));
+    await panel(page).getByText("Finding 79 is").waitFor({ state: "attached" });
+    await page.waitForTimeout(400);
+    assert.ok((await short()) >= left, "nothing pulled it back to the end");
+    // The way back is theirs to press, and from the end it is followed again.
+    await panel(page).getByRole("button", { name: "Scroll to end" }).click();
+    await page.waitForFunction(
+      (view) => !!view && view.scrollHeight - view.scrollTop - view.clientHeight <= 8,
+      await room.elementHandle(),
+    );
+    await write("more", lines(80, 100));
+    await panel(page).getByText("Finding 99 is").waitFor();
+    await page.waitForTimeout(400);
+    assert.ok((await short()) <= 8, `followed again from the end (${await short()} short)`);
+    await page.close();
+  }),
+);
+
+test(
+  "a chat's first reply is followed to its end too, though it came whole under a message that was at the top already",
+  withGateway(async (gateway) => {
+    const page = await visit(gateway, "a-reviewer");
+    await newChatWithFirst(page);
+    await input(page).fill("List every finding.");
+    await input(page).press("Enter");
+    await mine(page, "List every finding.").waitFor();
+    const whose = await panel(page)
+      .getByRole("button", { name: /'s page$/ })
+      .getAttribute("aria-label");
+    const agent = `a-${whose?.split("'")[0]?.toLowerCase()}`;
+    const room = panel(page).locator('[data-slot="message-scroller-viewport"]');
+    const short = () =>
+      room.evaluate((view) => Math.round(view.scrollHeight - view.scrollTop - view.clientHeight));
+    assert.equal(await short(), 0, "nothing is past the foot yet");
+    const said = Array.from({ length: 70 }, (_, n) => `Finding ${n} is on a line of its own.`);
+    gateway.addMessage(agent, reply("whole", said.join("\n\n")));
+    gateway.setChatStatus(agent, { state: "idle" });
+    await panel(page).getByText("Finding 69 is").waitFor();
+    await page.waitForFunction(
+      (view) => !!view && view.scrollHeight - view.scrollTop - view.clientHeight <= 8,
+      await room.elementHandle(),
+    );
+    await page.waitForTimeout(300);
+    assert.ok((await short()) <= 8, `it stays there (${await short()} short)`);
+    await page.close();
+  }),
+);
+
+test(
+  "a reply in which nothing was said has nothing to copy",
+  withGateway(async (gateway) => {
+    const page = await open(gateway);
+    await input(page).fill("Read the issue.");
+    await input(page).press("Enter");
+    await mine(page, "Read the issue.").waitFor();
+    // The turn ends with a call and no words, as one that is stopped does.
+    gateway.addMessage("a-reviewer", {
+      id: "t-only",
+      role: "tool",
+      text: "github__get_issue",
+      at: new Date().toISOString(),
+      tool: { name: "github__get_issue", state: "done", input: '{"n":7}', output: "the issue" },
+    });
+    gateway.setChatStatus("a-reviewer", { state: "idle" });
+    const call = panel(page).getByRole("button", { name: /github__get_issue/ });
+    await call.waitFor();
+    await panel(page)
+      .getByRole("status")
+      .filter({ hasText: "Thinking" })
+      .waitFor({ state: "detached" });
+    // It is the last reply, whose Copy is seen without pointing at it: this one has none.
+    const turn = panel(page).locator('[data-slot="message-scroller-item"]').filter({ has: call });
+    const copy = turn.getByRole("button", { name: "Copy" });
+    assert.equal(await copy.count(), 0);
+    await call.hover();
+    assert.equal(await copy.count(), 0, "nor when it is pointed at");
+    // A reply with words has one, as before.
+    gateway.addMessage("a-reviewer", reply("r-said", "It is a duplicate of #3."));
+    await panel(page)
+      .locator('[data-slot="message-scroller-item"]')
+      .filter({ hasText: "It is a duplicate of #3." })
+      .getByRole("button", { name: "Copy" })
+      .waitFor();
     await page.close();
   }),
 );
