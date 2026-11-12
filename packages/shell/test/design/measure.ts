@@ -68,6 +68,7 @@ const PARTS = [
   "create",
   "templates",
   "settings",
+  "said",
 ] as const;
 for (const one of only?.split(",") ?? [])
   if (!(PARTS as readonly string[]).includes(one))
@@ -93,8 +94,8 @@ type Parts = Record<string, Measured | string | number | null>;
  * What a probe measures: the frame, one window's own rows, the chat in its layer, one chat, the
  * way to a chat's older messages, Home, an agent's page, its setup, its computer's frame on its
  * page, that computer as the layer's window, its files window's own rows, the model
- * account's states, the create window, Settings' frame with its Templates, or Settings' other
- * sections and what two of them offer.
+ * account's states, the create window, Settings' frame with its Templates, Settings' other
+ * sections and what two of them offer, or what a page says where it has nothing it can show.
  */
 type Part =
   | "frame"
@@ -112,7 +113,8 @@ type Part =
   | "signin"
   | "create"
   | "templates"
-  | "settings";
+  | "settings"
+  | "said";
 type Gateway = Awaited<ReturnType<typeof standIn>>;
 
 /**
@@ -376,6 +378,38 @@ const probe = (what: Part): Parts => {
       parts[`${key}.all`] = of(head?.querySelector("button"));
       parts[`${key}.row`] = of(section?.querySelector("li button"));
     }
+    return parts;
+  }
+
+  if (what === "said") {
+    // What a page says where it has nothing it can show: Home's Recent with what is beside it, the
+    // left bar, the first row of a Settings list, or an agent that isn't here.
+    const shell = document.querySelector("[data-shell]");
+    const main = document.querySelector("main");
+    if (!shell || !main) return parts;
+    origin = shell.getBoundingClientRect();
+    const recent = main.querySelector('section[aria-label="Recent"]');
+    parts.recent = of(recent);
+    parts["recent.head"] = of(recent?.children[0]);
+    parts["recent.title"] = of(recent?.querySelector("h2"));
+    parts["recent.line"] = of(recent?.children[1]);
+    parts["recent.said"] = of(recent?.querySelector("p"));
+    parts["recent.create"] = of(recent?.querySelector("button"));
+    const bar = [...document.querySelectorAll('nav[aria-label="Main"] p')].find(seen);
+    parts.bar = of(bar);
+    const first = main.querySelector("ul > li > p");
+    parts["list.row"] = of(first?.parentElement);
+    parts["list.said"] = of(first);
+    const missing = [...main.querySelectorAll("span")].find(
+      (e) => e.textContent === "This agent isn't here",
+    );
+    parts["missing.said"] = of(missing);
+    parts["missing.home"] = of(missing?.nextElementSibling);
+    parts["missing.column"] = of(missing?.parentElement);
+    // What each says, word for word.
+    parts.words = [recent?.querySelector("p"), bar, first, missing]
+      .map((e) => e?.textContent ?? "")
+      .join(" | ");
     return parts;
   }
 
@@ -1747,6 +1781,108 @@ if (wants("templates"))
         await page.close();
         await gateway?.close();
       }
+
+// What a page says where it has nothing it can show: Home and the left bar with no chats, no
+// agents, or agents that can't be read; each Settings list with none or none that can be read; an
+// agent that isn't here. The design reaches each from its own bar; the built side from what the
+// stand-in has, or a call it refuses every time.
+if (wants("said")) {
+  type Said = {
+    state: string;
+    presses: number;
+    open?: (page: Page) => Promise<unknown>;
+    hash?: string;
+    control?: string;
+    set(gateway: Gateway): void;
+    says: string;
+  };
+  const listOf = (
+    open: (page: Page) => Promise<unknown>,
+    hash: string,
+    call: string,
+    none: string,
+  ): Said[] => [
+    // As the design's control does, every list is so: the agents in the left bar too.
+    {
+      state: `${none}`,
+      presses: 2,
+      open,
+      hash,
+      set: (g) => {
+        g.emptyLists();
+        g.agents.clear();
+      },
+      says: none,
+    },
+    {
+      state: `${none} unread`,
+      presses: 3,
+      open,
+      hash,
+      set: (g) => {
+        g.refuseEvery(call, "unavailable", "Not answering.");
+        g.refuseEvery("agents.list", "unavailable", "Not answering.");
+      },
+      says: "Can't be read right now",
+    },
+  ];
+  const SAID: Said[] = [
+    { state: "no chats", presses: 1, set: (g) => g.noChats(), says: "No chats" },
+    { state: "no agents", presses: 2, set: (g) => g.agents.clear(), says: "No agents" },
+    {
+      state: "agents unread",
+      presses: 3,
+      set: (g) => g.refuseEvery("agents.list", "unavailable", "Not answering."),
+      says: "Can't be read right now",
+    },
+    ...listOf((page) => openSection(page, "skills"), "#/skills", "skills.list", "No skills"),
+    ...listOf((page) => openSection(page, "mcps"), "#/mcps", "connections.list", "No connections"),
+    // Templates, without waiting for a template the sample would have.
+    ...listOf(
+      async (page) => {
+        if ((page.viewportSize()?.width ?? 0) < 640)
+          await page.getByRole("button", { name: "Menu" }).click();
+        await page
+          .getByRole("navigation", { name: "Main" })
+          .last()
+          .getByRole("button", { name: "Templates" })
+          .click();
+      },
+      "#/settings/templates",
+      "agents.templates",
+      "No templates",
+    ),
+    {
+      state: "missing",
+      presses: 0,
+      control: "A missing agent",
+      hash: "#/a/a-nobody",
+      set: () => {},
+      says: "This agent isn't here",
+    },
+  ];
+  for (const one of SAID)
+    for (const size of ["wide", "phone"] as const)
+      for (const theme of ["dark", "light"] as const)
+        for (const side of ["design", "built"] as const) {
+          const gateway = side === "built" ? await standIn() : undefined;
+          if (gateway) one.set(gateway);
+          const page = gateway
+            ? await builtPage(gateway, size, theme, one.hash ?? "#/")
+            : await designPage(size, theme);
+          if (!gateway) {
+            for (let n = 0; n < one.presses; n++) await inDesign(page, /^Lists:/);
+            if (one.control) await inDesign(page, one.control);
+            await one.open?.(page);
+          }
+          await page.getByRole("main").getByText(one.says, { exact: true }).first().waitFor();
+          // A phone's drawer opened to reach a section is closed again by going there.
+          await rest(page, size);
+          all[`said.${one.state}.${size}.${theme}.${side}`] = await measure(page, "said");
+          await page.close();
+          await gateway?.close();
+        }
+}
 
 // Settings' other sections, wide and on a phone, and what Skills and MCP connections offer.
 if (wants("settings")) {

@@ -457,6 +457,8 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
   const calls: Call[] = [];
   const notes = new Map<string, unknown>();
   const refusals = new Map<string, Refusal>();
+  /** Calls refused every time, by `slot.method`, until a test answers them again. */
+  const refusing = new Map<string, Refusal>();
   /** Calls that wait to be answered, by `slot.method`, until a test lets them go. */
   const holds = new Map<string, Promise<void>>();
   const subscribers = new Set<{
@@ -913,6 +915,8 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
         refusals.delete(`${slot}.${method}`);
         throw refused;
       }
+      const always = refusing.get(`${slot}.${method}`);
+      if (always) throw always;
       return spec.output.parse(run(parsed));
     }
     if (slot.startsWith("chat_")) {
@@ -1281,6 +1285,12 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
       units = next.units;
       templates = [...next.templates];
     },
+    /** Nothing is listed: no templates, no skills, no connections. */
+    emptyLists() {
+      templates = [];
+      skills.splice(0);
+      connections.clear();
+    },
     /** A unit's form changes, as when what it depends on appears. */
     changeForm(id: string, change: (field: Units["units"][number]["form"][number]) => void) {
       units = structuredClone(units);
@@ -1344,6 +1354,17 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
     /** The next call of `slot.method` is refused. */
     refuseNext: (name: string, code: string, reason: string) =>
       refusals.set(name, new Refusal(code, reason)),
+    /** Every call of `slot.method` is refused, as by a service that is down, until answered again. */
+    refuseEvery: (name: string, code: string, reason: string) =>
+      refusing.set(name, new Refusal(code, reason)),
+    answerAgain: (name: string) => refusing.delete(name),
+    /** No agent has a chat. */
+    noChats() {
+      for (const agent of agents.values()) {
+        agent.chat = { status: agent.chat.status, messages: [] };
+        agent.others = [];
+      }
+    },
     /** Whether an agent works, as its event says it and `state` will. */
     setChatStatus(agent: string, status: Status) {
       agentOf(agent).chat.status = chatInterface.methods.state.output.parse(status);

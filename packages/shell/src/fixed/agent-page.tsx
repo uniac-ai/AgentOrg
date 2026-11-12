@@ -26,7 +26,9 @@ export function AgentPage({
   agent: string;
   tab?: AgentTab | undefined;
 }) {
-  const { byId } = useAgents();
+  const { byId, list, unread, reads } = useAgents();
+  // The list as it was when the page opened may not have an agent just made: only a read since says.
+  const [opened] = useState(reads);
   const { chats } = useAllChats();
   const { newChat, openChat } = useChats();
   const creatables = useCreatables();
@@ -35,6 +37,9 @@ export function AgentPage({
   const act = useAct(setFailed);
   const login = useLogin();
   const watched = byId.get(id);
+  // An agent the list read since doesn't have: one deleted elsewhere, or a wrong address. A list
+  // that couldn't be read says nothing of it.
+  if (reads > opened && !unread && !list.some((entry) => entry.agent === id)) return <Missing />;
   // What it's made of says what the page holds, so nothing is drawn before it is read.
   if (!watched?.detail) return null;
   const { entry, now, detail } = watched;
@@ -175,6 +180,24 @@ export function AgentPage({
         </div>
       </div>
       <Setup agent={entry} open={setup} onClose={() => setSetup(false)} />
+    </div>
+  );
+}
+
+/** An agent that isn't here says so, with the way back. */
+function Missing() {
+  return (
+    <div className="grid h-full place-items-center">
+      <div className="flex flex-col items-center gap-3 text-[15px]">
+        <span className="text-muted-foreground">This agent isn't here</span>
+        <Button
+          variant="secondary"
+          className="h-9 rounded-full px-4"
+          onClick={() => go({ screen: "home" })}
+        >
+          Home
+        </Button>
+      </div>
     </div>
   );
 }

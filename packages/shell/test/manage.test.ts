@@ -361,7 +361,7 @@ test(
 );
 
 test(
-  "Settings' pages are set in the shell's own type, and connections with none to list say nothing",
+  "Settings' pages are set in the shell's own type, and connections with none to list say so in the first row's place",
   withGateway(async (gateway) => {
     const page = await open(gateway, "#/skills");
     await page.getByRole("button", { name: "Dismiss" }).click();
@@ -384,7 +384,7 @@ test(
       await said.waitFor();
       assert.equal(await said.evaluate((e) => getComputedStyle(e).fontSize), "15px", tab);
     }
-    // With none, as when the last is removed, the page under the row of sections is empty.
+    // With none, as when the last is removed, the list says so in its first row's place.
     for (const agent of gateway.agents.values()) agent.mcp = [];
     for (const connection of [...gateway.connections.keys()])
       gateway.connections.delete(connection);
@@ -401,8 +401,9 @@ test(
     }
     await page.waitForTimeout(100);
     const list = page.getByRole("main").getByRole("list");
-    assert.equal(await list.getByRole("listitem").count(), 0);
-    assert.equal((await list.innerText()).trim(), "");
+    await list.getByText("No connections", { exact: true }).waitFor();
+    assert.equal(await list.getByRole("listitem").count(), 1);
+    assert.equal((await list.innerText()).trim(), "No connections");
     await page.close();
   }),
 );
@@ -478,5 +479,32 @@ test(
       );
     }
     await page.close();
+  }),
+);
+
+test(
+  "a list with no rows says which nothing it is, in the first row's place: none yet, or none that can be read",
+  withGateway(async (gateway) => {
+    const first = (page: Page) =>
+      page.getByRole("main").locator("ul").first().getByRole("listitem").first();
+    const lists = [
+      ["#/settings/templates", "No templates", "agents.templates"],
+      ["#/skills", "No skills", "skills.list"],
+      ["#/mcps", "No connections", "connections.list"],
+    ] as const;
+    gateway.emptyLists();
+    for (const [hash, none] of lists) {
+      const page = await open(gateway, hash);
+      await first(page).getByText(none, { exact: true }).waitFor();
+      assert.equal(await page.getByRole("main").getByText("Can't be read right now").count(), 0);
+      await page.close();
+    }
+    for (const [hash, none, call] of lists) {
+      gateway.refuseEvery(call, "unavailable", "Not answering.");
+      const page = await open(gateway, hash);
+      await first(page).getByText("Can't be read right now", { exact: true }).waitFor();
+      assert.equal(await page.getByRole("main").getByText(none).count(), 0, "not that it has none");
+      await page.close();
+    }
   }),
 );

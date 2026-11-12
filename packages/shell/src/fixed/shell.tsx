@@ -26,6 +26,7 @@ import { HomePage } from "./home-page.tsx";
 import { Layer } from "./layer.tsx";
 import { LoginProvider, type LoginStatus, useLogin } from "./login.tsx";
 import { McpsPage } from "./mcps-page.tsx";
+import { UNREAD } from "./parts.tsx";
 import { SettingsFrame, SettingsPage, sectionOf } from "./settings-page.tsx";
 import { SkillsPage } from "./skills-page.tsx";
 import { TemplatesPage } from "./templates-page.tsx";
@@ -119,7 +120,7 @@ function LeftBar({
   onCreate(): void;
 }) {
   const route = useRoute();
-  const { list, byId } = useAgents();
+  const { list, byId, unread } = useAgents();
   const { chats } = useAllChats();
   const { openChat } = useChats();
   const login = useLogin();
@@ -207,6 +208,12 @@ function LeftBar({
             );
           })}
         </ul>
+        {/* Agents that can't be read: the bar says so where they would be. */}
+        {unread && (
+          <p className={`px-2 py-2 text-[13px] text-[var(--faint)] ${rail ? "rail:hidden" : ""}`}>
+            {UNREAD}
+          </p>
+        )}
         {foundChats.length > 0 && (
           <ul aria-label="Chats found" className="mt-3 flex flex-col gap-0.5">
             {foundChats.map((chat) => (

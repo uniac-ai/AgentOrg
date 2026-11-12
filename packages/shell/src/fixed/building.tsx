@@ -25,7 +25,8 @@ function readCatalog(): Promise<Catalog> {
 function useBuildingState() {
   // Saving a template raises no event: `version` reads them again.
   const [version, setVersion] = useState(0);
-  const catalog = useLoad(readCatalog, ["actors"], [version]).value ?? EMPTY;
+  const read = useLoad(readCatalog, ["actors"], [version]);
+  const catalog = read.value ?? EMPTY;
   const reread = () => setVersion((was) => was + 1);
   const [held, setDraft] = useState<Draft>();
   const [open, setOpen] = useState(false);
@@ -56,6 +57,8 @@ function useBuildingState() {
 
   return {
     catalog,
+    /** Whether the catalog has been read, or couldn't be. */
+    catalogRead: { loaded: read.loaded, ...(read.error ? { error: read.error } : {}) },
     draft,
     open,
     /** The window opens on an empty stack. */

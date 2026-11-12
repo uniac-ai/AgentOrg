@@ -12,7 +12,7 @@ import {
   useEvery,
 } from "./data.ts";
 import { DeleteButton } from "./delete-dialog.tsx";
-import { rowClass, Scroll, TroubleDot, UsedBy, WhereIcon } from "./parts.tsx";
+import { Empty, rowClass, Scroll, TroubleDot, UsedBy, WhereIcon } from "./parts.tsx";
 import { useOffer } from "./settings-page.tsx";
 
 /** Each connection with how many tools it offers; a server's state has no event, so it's reread. */
@@ -63,6 +63,7 @@ export function McpsPage({ focus, adding }: { focus?: string; adding?: boolean }
     <>
       <Scroll>
         <ul className="mx-auto max-w-5xl">
+          <Empty read={list} count={rows.length} none="No connections" />
           {rows.map(({ entry, tools }) => (
             <li
               key={entry.connection}

@@ -28,10 +28,20 @@ export interface Watched {
 interface Agents {
   list: AgentEntry[];
   loaded: boolean;
+  /** The last read of the list was refused, or didn't answer: none can be shown. */
+  unread: boolean;
+  /** How many times the list has been read: a page knows whether it has been read since it opened. */
+  reads: number;
   byId: ReadonlyMap<string, Watched>;
 }
 
-const Context = createContext<Agents>({ list: [], loaded: false, byId: new Map() });
+const Context = createContext<Agents>({
+  list: [],
+  loaded: false,
+  unread: false,
+  reads: 0,
+  byId: new Map(),
+});
 export const useAgents = () => useContext(Context);
 
 function Watch({
@@ -75,18 +85,24 @@ export function AgentsProvider({ children }: { children: React.ReactNode }) {
   const slots = useChatSlots();
   const [watched, setWatched] = useState<ReadonlyMap<string, Watched>>(new Map());
   const list = useMemo(() => agents.value ?? [], [agents.value]);
+  const [reads, setReads] = useState(0);
+  useEffect(() => {
+    if (agents.value) setReads((was) => was + 1);
+  }, [agents.value]);
   const report = (id: string, next: Watched) => setWatched((was) => new Map(was).set(id, next));
   const value = useMemo(
     () => ({
       list,
       loaded: agents.loaded,
+      unread: !!agents.error,
+      reads,
       byId: new Map(
         list.flatMap((a) =>
           watched.has(a.agent) ? [[a.agent, watched.get(a.agent) as Watched]] : [],
         ),
       ),
     }),
-    [list, agents.loaded, watched],
+    [list, agents.loaded, agents.error, reads, watched],
   );
   return (
     <Context.Provider value={value}>
