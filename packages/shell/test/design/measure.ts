@@ -135,6 +135,13 @@ const probe = (what: Part): Parts => {
     !!e && (e as HTMLElement).getClientRects().length > 0;
   const round = (n: number) => Math.round(n * 100) / 100;
   let origin = new DOMRect();
+  /** What is under a row of Settings: the page area, beside the row or beside its column. */
+  const under = (row: Element | null | undefined) => {
+    let from = row;
+    while (from && !from.nextElementSibling && from.parentElement?.tagName !== "MAIN")
+      from = from.parentElement;
+    return from?.nextElementSibling;
+  };
   const of = (e: Element | null | undefined, fills = "") => {
     if (!seen(e)) return null;
     const s = getComputedStyle(e);
@@ -659,7 +666,7 @@ const probe = (what: Part): Parts => {
     );
     const offer = list.parentElement?.parentElement?.querySelector(":scope > button");
     parts.offer = of(offer);
-    const room = list.parentElement?.parentElement?.nextElementSibling;
+    const room = under(list.parentElement?.parentElement);
     // A cell with what it holds, two deep: words are as wide as they are, so a width "fills".
     // A row is measured from its own top left, however many rows the sample has above it.
     const cells = (key: string, row: Element | null | undefined) => {
@@ -728,7 +735,9 @@ const probe = (what: Part): Parts => {
     origin = main.getBoundingClientRect();
     controls("page", main);
     const row = list.parentElement?.parentElement;
-    parts.frame = of(row?.parentElement?.parentElement, "h");
+    // What the row is in, which is as wide as the page and starts where it does; and under it
+    // the page with its own space around it: what holds the page scrolls, and may be wider.
+    parts.frame = of(row?.parentElement, "h");
     parts.row = of(row);
     parts.sections = of(list);
     for (const [n, tab] of [...list.children].entries()) parts[`section.${n}`] = of(tab);
@@ -739,7 +748,9 @@ const probe = (what: Part): Parts => {
     parts.offer = of(offer);
     parts["offer.icon"] = of(offer?.querySelector("svg"));
     parts["offer.words"] = of(offer?.querySelector("span"));
-    const room = row?.nextElementSibling;
+    let room = under(row);
+    while (room?.children[0] && getComputedStyle(room).paddingTop === "0px")
+      room = room.children[0];
     parts.room = of(room, "h");
     const rows = [...(room?.querySelectorAll("li") ?? [])];
     parts.rows = of(room?.querySelector("ul"), "h");

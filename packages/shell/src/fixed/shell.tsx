@@ -18,6 +18,7 @@ import { AllChatsProvider, useAllChats } from "./all-chats.tsx";
 import { BuildDialog } from "./build.tsx";
 import { BuildingProvider, useBuilding } from "./building.tsx";
 import { ChatsProvider, useChats } from "./chats.tsx";
+import { ComputerViews } from "./computer.tsx";
 import { ComputersProvider } from "./computers.tsx";
 import { WORD } from "./data.ts";
 import { Face } from "./face.tsx";
@@ -43,6 +44,8 @@ export function FixedShell({ login }: { login?: LoginStatus }) {
               <ComputersProvider>
                 <LoginProvider status={login}>
                   <Frame />
+                  {/* Each computer's views, which outlive the frame they are shown in. */}
+                  <ComputerViews />
                 </LoginProvider>
               </ComputersProvider>
             </BuildingProvider>

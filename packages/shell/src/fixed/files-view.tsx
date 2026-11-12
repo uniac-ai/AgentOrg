@@ -66,7 +66,7 @@ const Facts = ({ size, modifiedAt }: { size: number; modifiedAt: string }) => (
   </>
 );
 
-export function FilesView({ target, corner }: ViewerProps) {
+export function FilesView({ target, corner, front }: ViewerProps) {
   const operate = target.mode === "operate";
   const tick = useEvery(REFRESH_MS);
   /** The folder shown, from the workspace: empty for the workspace itself. */
@@ -132,10 +132,11 @@ export function FilesView({ target, corner }: ViewerProps) {
     );
 
   // The folder is read when it is shown, after something is brought in, and again as often as
-  // what has no event is read again.
+  // what has no event is read again. Behind another window nothing is read again: it is when the
+  // window is next in front.
   // biome-ignore lint/correctness/useExhaustiveDependencies: `ask` is this socket's own.
   useEffect(() => {
-    if (!open) return;
+    if (!open || !front) return;
     let current = true;
     void ask({ type: "list", ...(folder ? { path: folder } : {}) }).then((answer) => {
       if (!current) return;
@@ -145,11 +146,11 @@ export function FilesView({ target, corner }: ViewerProps) {
     return () => {
       current = false;
     };
-  }, [open, folder, tick, sent]);
+  }, [open, folder, tick, sent, front]);
 
   // What changed lately is asked for when the window opens and after something is brought in,
-  // and again as often as the folder is read, one walk at a time. A walk the surface refuses, as
-  // one that takes too long, isn't asked for again until one of the first two.
+  // and again as often as the folder is read while it is in front, one walk at a time. A walk the
+  // surface refuses, as one that takes too long, isn't asked for again until one of the first two.
   const walk = () => {
     if (!open) {
       walking.current = false;
@@ -169,8 +170,8 @@ export function FilesView({ target, corner }: ViewerProps) {
   useEffect(walk, [open, sent]);
   // biome-ignore lint/correctness/useExhaustiveDependencies: `walk` is this socket's own.
   useEffect(() => {
-    if (!gaveUp.current) walk();
-  }, [tick]);
+    if (front && !gaveUp.current) walk();
+  }, [tick, front]);
   /** A file that changed lately, or a folder that holds one. */
   const changed = (path: string) =>
     !!changes?.some((one) => one.path === path || one.path.startsWith(`${path}/`));
