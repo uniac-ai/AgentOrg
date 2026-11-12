@@ -30,7 +30,14 @@ import {
   reachProblems,
   skillFile,
 } from "./control.js";
-import { formProblems, givesProblems, settle, type Worked, workedOut } from "./form.js";
+import {
+  formProblems,
+  givesProblems,
+  heldProblems,
+  settle,
+  type Worked,
+  workedOut,
+} from "./form.js";
 import type { SkillFiles, Skills } from "./skills.js";
 
 /** A unit an agent has: what its provider made, and what was filled in. Never a secret. */
@@ -103,11 +110,11 @@ type TheUnitRecord = z.infer<typeof UnitRecord>;
 type TheTemplate = z.infer<typeof Template>;
 type Origin = z.infer<typeof ConnectionOrigin>;
 type TheUnit = z.infer<typeof Unit>;
-type TheCapability = z.infer<typeof CapabilityRecord>;
 type TheProblem = z.infer<typeof Problem>;
 type Values = z.infer<typeof FieldValues>;
 type Agents = Slot<typeof agentProvider>["call"];
 type Units = Slot<typeof unitProvider>["call"];
+type Applied = Awaited<ReturnType<Units["apply"]>>;
 type AgentCalls = Slot<typeof agents>["call"];
 type CreateInput = Parameters<AgentCalls["create"]>[0];
 type CheckInput = Parameters<AgentCalls["check"]>[0];
@@ -169,6 +176,8 @@ interface Giver {
 interface Taken {
   slots: Set<string>;
   skills: Set<string>;
+  /** The capabilities held, by id. */
+  capabilities: Set<string>;
   givers: Giver[];
 }
 /** One application under way: what it made goes in `undo`, and origins are kept at the end. */
@@ -218,8 +227,11 @@ export interface StackParts {
   exposeConnection(agent: string, connection: string, as?: string): Promise<string>;
   /** Connect the person to an export of an Actor made for an agent; it gives the person's slot. */
   reachPerson(provider: string, exported: string): Promise<string>;
-  /** Take one of those slots off the person. One already gone is no error. */
-  unreachPerson(slot: string): Promise<void>;
+  /**
+   * Take one of those slots off the person, if it is still bound to `provider`. One that has
+   * gone, or whose name another Actor's export has since been given, is left alone.
+   */
+  unreachPerson(slot: string, provider: string): Promise<void>;
   closing(what: string, remove: () => Promise<void>): Promise<void>;
   removeAgent(agent: string, provider: string): Promise<void>;
 }
@@ -527,6 +539,13 @@ export function createStacks(parts: StackParts) {
         problems.push({ message: `Two units give the skill ${skill.name}.` });
       taken.skills.add(skill.name);
     }
+    if (unit.capability) {
+      // An agent holds one of a capability; and a view shows what its capability has.
+      const { id, title } = unit.capability;
+      if (taken.capabilities.has(id)) problems.push({ message: `There is a ${title} already.` });
+      taken.capabilities.add(id);
+      problems.push(...heldProblems(unit, worked).map((message) => ({ message })));
+    }
     if (ref !== undefined)
       taken.givers.push({ ref, provider: offer.provider, results: unit.gives.results });
 
@@ -550,7 +569,12 @@ export function createStacks(parts: StackParts) {
 
   const plan = async (units: FilledUnit[], reach?: Reach) => {
     const offers = await catalog();
-    const taken: Taken = { slots: new Set(), skills: new Set(), givers: [] };
+    const taken: Taken = {
+      slots: new Set(),
+      skills: new Set(),
+      capabilities: new Set(),
+      givers: [],
+    };
     const placed: Placed[] = [];
     const problems: (TheProblem & { unit: number })[] = [];
     for (const [position, unit] of units.entries()) {
@@ -584,6 +608,7 @@ export function createStacks(parts: StackParts) {
           .map((binding) => binding.slot),
       ),
       skills: new Set(record.skills),
+      capabilities: new Set(record.capabilities.map((one) => one.id)),
       givers: record.units.map((unit) => ({
         ref: unit.instance,
         provider: unit.provider,
@@ -608,43 +633,39 @@ export function createStacks(parts: StackParts) {
   };
 
   /**
-   * Have the agent hold the capability an applied unit built: the person is connected to its
-   * Actor and to each of its connections, as to the agent's chats, and what it is is kept on
-   * the agent. From then on a page asks the capability through the person's own slots, and
-   * nothing asks the unit.
+   * Have the agent hold the capability an applied unit built. What `apply` gave is checked
+   * against what the unit said it gives; then the person is connected to the capability's Actor
+   * and to each of its connections, as to the agent's chats, and what it is is kept on the
+   * agent. From then on a page asks the capability through the person's own slots, and nothing
+   * asks the unit.
    */
   const hold = async (
     work: Work,
     unit: TheUnit,
+    { id, title }: NonNullable<TheUnit["capability"]>,
     worked: Worked,
     instance: string,
     connections: { slot: string; connection: string }[],
-    built:
-      | { actor: string; rows?: Record<string, TheCapability["views"][number]["fixed"]> }
-      | undefined,
+    built: Applied["capability"],
   ) => {
     const { record, undo } = work;
-    const { id, title } = unit.capability as NonNullable<TheUnit["capability"]>;
     if (!built)
-      throw new Refused("failed", `${unit.title} didn't give the ${title} it said it would.`);
-    if (record.capabilities.some((one) => one.id === id))
-      throw new Refused("state", `It has a ${title} already.`);
-    // A view shows a surface the capability has.
-    const lost = worked.views.find(
-      (view) => view.surface && !worked.surfaces.some((one) => one.surface === view.surface),
-    );
-    if (lost) throw new Refused("failed", `${unit.title}'s ${lost.id} shows a surface it hasn't.`);
+      throw new Refused("failed", `${unit.title} didn't build the ${title} it said it would.`);
     // A view with neither an operation nor a surface has its rows fixed now, and only such a one.
     const fixed = worked.views.filter((view) => !view.operation && !view.surface);
     const rows = built.rows ?? {};
-    if (
-      fixed.some((view) => !rows[view.id]) ||
-      Object.keys(rows).some((view) => !fixed.some((one) => one.id === view))
-    )
-      throw new Refused("failed", `${unit.title} didn't give the views it said it would.`);
+    const missing = fixed.find((view) => !rows[view.id]);
+    if (missing)
+      throw new Refused("failed", `${unit.title} gave no rows for its view "${missing.id}".`);
+    const extra = Object.keys(rows).find((view) => !fixed.some((one) => one.id === view));
+    if (extra)
+      throw new Refused(
+        "failed",
+        `${unit.title} gave rows for "${extra}", which is not a view of its whose rows are fixed.`,
+      );
     const reach = async (provider: string, exported: string) => {
       const slot = await parts.reachPerson(provider, exported);
-      undo.push(() => parts.unreachPerson(slot));
+      undo.push(() => parts.unreachPerson(slot, provider));
       return slot;
     };
     const person = {
@@ -707,7 +728,10 @@ export function createStacks(parts: StackParts) {
           await call.remove({ instance: applied.instance });
         } catch (error) {
           log.warn(`Removing a unit: ${messageOf(error)}`);
-          await closeAll(applied.connections);
+          await closeAll([
+            ...applied.connections,
+            ...(applied.capability ? [{ connection: applied.capability.actor }] : []),
+          ]);
         }
       });
       const slots = applied.connections.map((one) => one.slot).sort();
@@ -735,7 +759,15 @@ export function createStacks(parts: StackParts) {
       }
       const instance = `uni_${crypto.randomUUID().replaceAll("-", "")}`;
       if (offer.unit.capability)
-        await hold(work, offer.unit, worked, instance, applied.connections, applied.capability);
+        await hold(
+          work,
+          offer.unit,
+          offer.unit.capability,
+          worked,
+          instance,
+          applied.connections,
+          applied.capability,
+        );
       made = {
         instance,
         provider: offer.provider,
@@ -871,6 +903,7 @@ export function createStacks(parts: StackParts) {
       save();
       return;
     }
+    const built = record.capabilities.filter((one) => one.from === unit.instance);
     const provider = parts.unitProviders().find((one) => one.actor === unit.provider);
     let removed = false;
     try {
@@ -879,18 +912,71 @@ export function createStacks(parts: StackParts) {
         removed = true;
       }
     } catch (error) {
+      // A unit that can't go stays whole, the person's slots to it with it.
       if (!alreadyGone(error)) throw error;
     }
-    if (!removed) await closeAll(unit.connections);
-    // The person's slots to what it built go with it.
-    for (const { person } of record.capabilities.filter((one) => one.from === unit.instance))
-      for (const slot of [person.capability, ...Object.values(person.operations)])
-        await parts.unreachPerson(slot);
+    // A provider that has lost it leaves the Actors: its connections, and what it built.
+    if (!removed)
+      await closeAll([...unit.connections, ...built.map(({ actor }) => ({ connection: actor }))]);
+    // The person's slots to what it built went with the Actors. One that is left is taken off,
+    // and only while it is still bound to what the unit made: a name the Hub has freed can be
+    // another export's by now.
+    for (const { actor, person } of built) {
+      await parts.unreachPerson(person.capability, actor);
+      for (const { slot, connection } of unit.connections) {
+        const reached = person.operations[slot];
+        if (reached) await parts.unreachPerson(reached, connection);
+      }
+    }
     for (const { connection } of unit.connections) delete records.connections[connection];
     record.skills = record.skills.filter((skill) => !unit.skills.includes(skill));
     record.units = record.units.filter((one) => one.instance !== unit.instance);
     record.capabilities = record.capabilities.filter((one) => one.from !== unit.instance);
     save();
+  };
+
+  /**
+   * Make the person's slots to what agents hold again, where the Hub has dropped one, as it
+   * does when an Actor comes back offering its export in another shape. Nothing changes where
+   * they are there. `actor` is the one that came back; with none, every one is looked at.
+   */
+  const reachHeld = async (actor?: string) => {
+    let changed = false;
+    for (const record of Object.values(records.agents))
+      for (const held of record.capabilities) {
+        const unit = record.units.find((one) => one.instance === held.from);
+        const ends = [
+          {
+            provider: held.actor,
+            exported: CAPABILITY_EXPORT,
+            was: held.person.capability,
+            set(slot: string) {
+              held.person.capability = slot;
+            },
+          },
+          ...(unit?.connections ?? []).map(({ slot, connection }) => ({
+            provider: connection,
+            exported: TOOLS_EXPORT,
+            was: held.person.operations[slot],
+            set(to: string) {
+              held.person.operations[slot] = to;
+            },
+          })),
+        ];
+        for (const end of ends) {
+          if (actor !== undefined && end.provider !== actor) continue;
+          try {
+            const slot = await parts.reachPerson(end.provider, end.exported);
+            if (slot === end.was) continue;
+            end.set(slot);
+            changed = true;
+          } catch (error) {
+            // Not there to be reached now: it is made when it comes back.
+            log.warn(`Reaching what an agent holds: ${messageOf(error)}`);
+          }
+        }
+      }
+    if (changed) save();
   };
 
   /** Which unit made a connection, if one did. */
@@ -919,6 +1005,7 @@ export function createStacks(parts: StackParts) {
   return {
     serial,
     fromUnit,
+    reachHeld,
     unitMaking,
     catalog,
     allTemplates: templates,
@@ -1022,6 +1109,7 @@ export function createStacks(parts: StackParts) {
         )),
       ];
       // What it holds, from the record alone: no unit is asked, and nothing of how it stands.
+      // Without its Actor's id: a page reaches it by the person's slots, which are in it.
       const capabilities = record.capabilities.map(({ actor: _, ...held }) => held);
       return { units, tools, instanceOfSkill, instanceOfSlot, capabilities };
     },
