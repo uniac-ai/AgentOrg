@@ -211,14 +211,6 @@ test(
     await panel(page).getByRole("button", { name: "All chats" }).click();
     await panel(page).getByRole("heading", { name: "Chats" }).waitFor();
 
-    // What an agent does is not a chat's words: a row never says a tool is running.
-    gateway.sayIn("a-research", "c-oldest", {
-      id: "tool-1",
-      role: "tool",
-      text: "npm test",
-      at: new Date().toISOString(),
-      tool: { name: "shell__run", state: "running", input: '{"command":"npm test"}' },
-    });
     // What is said in a chat takes it to the top, with its words.
     await closeChats(page);
     await openNewest(page, "Reviewer");
@@ -226,7 +218,7 @@ test(
     await panel(page).getByRole("button", { name: "Send" }).click();
     await panel(page).getByRole("button", { name: "All chats" }).click();
     await rows(page).nth(0).getByText("You: Look at #490 too").waitFor();
-    // A tool's call moved nothing.
+    // The others stay as they were.
     assert.deepEqual((await lines())[3], [
       "Which issues are oldest?",
       "Research",

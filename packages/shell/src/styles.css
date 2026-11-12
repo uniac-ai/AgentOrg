@@ -258,14 +258,6 @@
     filter: blur(0);
   }
 }
-@keyframes thinking {
-  from {
-    background-position: 200% 0;
-  }
-  to {
-    background-position: -200% 0;
-  }
-}
 @layer components {
   /* Agent text: the width and rhythm of a page, not a bubble. */
   .prose-chat :where(p, ul, ol) {
@@ -274,23 +266,10 @@
   .prose-chat :where(:last-child) {
     margin-bottom: 0;
   }
-  .thinking {
-    background: linear-gradient(90deg, var(--faint) 0%, var(--fg) 50%, var(--faint) 100%);
-    background-size: 200% 100%;
-    -webkit-background-clip: text;
-    background-clip: text;
-    color: transparent;
-    animation: thinking 1.6s linear infinite;
-  }
   @media (prefers-reduced-motion: reduce) {
     [data-sd-animate] {
       /* biome-ignore lint/complexity/noImportantStyles: Streamdown sets it inline. */
       animation: none !important;
-    }
-    .thinking {
-      animation: none;
-      color: var(--muted);
-      background: none;
     }
   }
 }

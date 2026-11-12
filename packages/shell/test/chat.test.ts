@@ -33,13 +33,30 @@ async function open(gateway: Gateway, width = 1440): Promise<Page> {
     .filter({ hasText: "Reviewer" })
     .click();
   await panel(page).getByRole("textbox", { name: "Message" }).waitFor();
-  await panel(page).getByRole("status").or(panel(page).locator(".prose-chat")).first().waitFor();
+  await panel(page).locator(".prose-chat, .whitespace-pre-wrap").first().waitFor();
   return page;
 }
 const input = (page: Page) => panel(page).getByRole("textbox", { name: "Message" });
 /** What the person said, in the thread: a chat's title may say the same words. */
 const mine = (page: Page, text: string | RegExp) =>
   panel(page).locator(".whitespace-pre-wrap", { hasText: text });
+
+/**
+ * Nothing is shown under what the person said last while its work runs: no row, no word that it is
+ * being worked on, and no problem. The agent's line says it works.
+ */
+async function nothingUnder(page: Page, text: string) {
+  const items = panel(page).locator('[data-slot="message-scroller-item"]');
+  await page
+    .getByRole("main")
+    .getByRole("status", { name: "State" })
+    .getByText("Working")
+    .waitFor();
+  await page.waitForTimeout(300);
+  assert.equal((await items.last().innerText()).trim(), text);
+  assert.equal(await panel(page).getByRole("status").count(), 0);
+  assert.equal(await panel(page).getByRole("alert").count(), 0);
+}
 
 const withGateway = (run: (gateway: Gateway) => Promise<void>) => async () => {
   const gateway = await standIn();
@@ -121,25 +138,10 @@ test(
       at: new Date().toISOString(),
     });
     await mine(page, "Why did it fail?").waitFor();
-    const thinks = panel(page).getByRole("status").getByText("Thinking");
-    await thinks.waitFor();
-    // Once the agent has done something, it thinks under that, in the same reply.
-    gateway.addMessage("a-reviewer", {
-      id: "t-first",
-      role: "tool",
-      text: "github__get_issue",
-      at: new Date().toISOString(),
-      tool: { name: "github__get_issue", state: "done", input: '{"n":1}', output: "the issue" },
-    });
-    const call = panel(page).getByRole("button", { name: /github__get_issue/ });
-    await call.waitFor();
-    const [above, under] = [await call.boundingBox(), await thinks.boundingBox()];
-    assert.ok(above && under);
-    assert.equal(Math.round(under.y - (above.y + above.height)), 8);
+    // While it works on it, the chat shows the message and nothing under it.
+    await nothingUnder(page, "Why did it fail?");
     gateway.delta("a-reviewer", "r1", "Three causes ");
     await panel(page).locator("[data-sd-animate]").first().waitFor();
-    const thinking = panel(page).getByRole("status").filter({ hasText: "Thinking" });
-    assert.equal(await thinking.count(), 0, "the first words take its place");
     gateway.delta("a-reviewer", "r1", "explain it.");
     await panel(page).getByText("explain it.").waitFor();
     gateway.addMessage("a-reviewer", reply("r1", "Three causes explain it."));
@@ -147,36 +149,6 @@ test(
     await panel(page).getByText("Three causes explain it.").waitFor();
     assert.equal(await panel(page).getByText("Three causes explain it.").count(), 1);
     assert.equal(await panel(page).locator("[data-sd-animate]").count(), 0);
-    await page.close();
-  }),
-);
-
-test(
-  "a tool call is one row that ends in place, and opens for what went in and came back",
-  withGateway(async (gateway) => {
-    const page = await open(gateway);
-    const at = new Date().toISOString();
-    const running = {
-      id: "t1",
-      role: "tool" as const,
-      text: "github__get_issue",
-      at,
-      tool: { name: "github__get_issue", state: "running" as const, input: '{"n":1}' },
-    };
-    gateway.setChatStatus("a-reviewer", { state: "working" });
-    gateway.addMessage("a-reviewer", running);
-    const row = panel(page).getByRole("button", { name: /github__get_issue/ });
-    await row.waitFor();
-    const before = await row.boundingBox();
-    gateway.addMessage("a-reviewer", {
-      ...running,
-      tool: { ...running.tool, state: "done", output: "the issue" },
-    });
-    await row.getByRole("img", { name: "done" }).or(page.getByLabel("done")).first().waitFor();
-    assert.equal(await row.count(), 1);
-    assert.deepEqual(await row.boundingBox(), before);
-    await row.click();
-    await panel(page).getByText("→ the issue").waitFor();
     await page.close();
   }),
 );
@@ -193,24 +165,12 @@ test(
     gateway.addMessage("a-reviewer", reply("r2", "The old answer."));
     const page = await open(gateway);
     await panel(page).getByText("The old answer.").waitFor();
-    // The agent works, but the newest thing said here is its reply: nothing here awaits one, even
-    // once a tool's call of its shows.
+    // The agent works elsewhere: the newest thing said here is its reply, and nothing awaits one.
     gateway.setChatStatus("a-reviewer", { state: "working" });
-    gateway.addMessage("a-reviewer", {
-      id: "t-elsewhere",
-      role: "tool",
-      text: "github__get_issue",
-      at: new Date().toISOString(),
-      tool: { name: "github__get_issue", state: "done", input: '{"n":1}', output: "the issue" },
-    });
-    await panel(page)
-      .getByRole("button", { name: /github__get_issue/ })
-      .waitFor();
-    assert.equal(await panel(page).getByRole("status").filter({ hasText: "Thinking" }).count(), 0);
     await input(page).fill("One more thing");
     await panel(page).getByRole("button", { name: "Send", exact: true }).click();
     await mine(page, "One more thing").waitFor();
-    await panel(page).getByRole("status").getByText("Thinking").waitFor();
+    await nothingUnder(page, "One more thing");
     await until(() =>
       gateway.calls.some((c) => c.method === "send" && c.input.text === "One more thing"),
     );
@@ -243,8 +203,14 @@ test(
     // Asked again, the chat awaits a reply and says no problem; failing again, it says it again.
     await input(late).fill("Try again");
     await input(late).press("Enter");
-    await panel(late).getByRole("status").getByText("Thinking").waitFor();
     await panel(late).getByRole("alert").waitFor({ state: "detached" });
+    // Recorded, it still awaits its reply while the agent works: the problem stays away.
+    await until(() =>
+      gateway.calls.some((c) => c.method === "send" && c.input.text === "Try again"),
+    );
+    await panel(late).locator(".whitespace-pre-wrap", { hasText: "Try again" }).waitFor();
+    await late.waitForTimeout(400);
+    assert.equal(await panel(late).getByRole("alert").count(), 0);
     gateway.failChat("a-reviewer", { code: "failed", message: "The model refused it." });
     await panel(late).getByRole("alert").getByText("The model refused it.").waitFor();
     // Its next reply ends the problem.
@@ -252,6 +218,30 @@ test(
     await panel(late).getByText("Here it is.").waitFor();
     await panel(late).getByRole("alert").waitFor({ state: "detached" });
     await late.close();
+  }),
+);
+
+test(
+  "a message its work didn't answer says so, whatever the agent then does in its other chats",
+  withGateway(async (gateway) => {
+    const page = await open(gateway);
+    await input(page).fill("Is the branch pushed?");
+    await input(page).press("Enter");
+    await mine(page, "Is the branch pushed?").waitFor();
+    // Its turn ends without a reply.
+    gateway.failChat("a-reviewer", { code: "not_answered", message: "Not answered" });
+    const line = panel(page).getByRole("alert");
+    await line.getByText("Not answered").waitFor();
+    // The agent works again, on another chat: this one still says its message wasn't answered.
+    gateway.setChatStatus("a-reviewer", { state: "working" });
+    await page
+      .getByRole("main")
+      .getByRole("status", { name: "State" })
+      .getByText("Working")
+      .waitFor();
+    await page.waitForTimeout(300);
+    await line.getByText("Not answered").waitFor();
+    await page.close();
   }),
 );
 
@@ -289,23 +279,6 @@ test(
     await input(page).press("Enter");
     await line.getByText("It can't take that now.").waitFor();
     assert.equal(await line.getByRole("button").count(), 0);
-    await page.close();
-  }),
-);
-
-test(
-  "a step that carries no call is its one line, with nothing to open",
-  withGateway(async (gateway) => {
-    const page = await open(gateway);
-    gateway.addMessage("a-reviewer", {
-      id: "n1",
-      role: "tool",
-      text: "Looked at the pull request",
-      at: new Date().toISOString(),
-    });
-    const note = panel(page).locator("p[data-call]", { hasText: "Looked at the pull request" });
-    await note.waitFor();
-    assert.equal(await note.getByRole("button").count(), 0);
     await page.close();
   }),
 );
@@ -719,26 +692,20 @@ test(
     await input(page).fill("Read the issue.");
     await input(page).press("Enter");
     await mine(page, "Read the issue.").waitFor();
-    // The turn ends with a call and no words, as one that is stopped does.
-    gateway.addMessage("a-reviewer", {
-      id: "t-only",
-      role: "tool",
-      text: "github__get_issue",
-      at: new Date().toISOString(),
-      tool: { name: "github__get_issue", state: "done", input: '{"n":7}', output: "the issue" },
-    });
+    // A reply with no words, as an earlier reply read as sent can be.
+    const items = panel(page).locator('[data-slot="message-scroller-item"]');
+    const before = await items.count();
+    gateway.addMessage("a-reviewer", reply("r-none", ""));
     gateway.setChatStatus("a-reviewer", { state: "idle" });
-    const call = panel(page).getByRole("button", { name: /github__get_issue/ });
-    await call.waitFor();
-    await panel(page)
-      .getByRole("status")
-      .filter({ hasText: "Thinking" })
-      .waitFor({ state: "detached" });
+    await page.waitForFunction(
+      (n) => document.querySelectorAll('[data-slot="message-scroller-item"]').length === n,
+      before + 1,
+    );
     // It is the last reply, whose Copy is seen without pointing at it: this one has none.
-    const turn = panel(page).locator('[data-slot="message-scroller-item"]').filter({ has: call });
+    const turn = items.last();
     const copy = turn.getByRole("button", { name: "Copy" });
     assert.equal(await copy.count(), 0);
-    await call.hover();
+    await turn.hover();
     assert.equal(await copy.count(), 0, "nor when it is pointed at");
     // A reply with words has one, as before.
     gateway.addMessage("a-reviewer", reply("r-said", "It is a duplicate of #3."));

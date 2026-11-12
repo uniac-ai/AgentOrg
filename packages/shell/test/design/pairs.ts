@@ -243,7 +243,6 @@ const SCREENS: Screen[] = [
   // The cases the design draws for a chat, each from its own control.
   ...(
     [
-      ["no-call", "noCall", "A step with no call"],
       ["limit", "limit", "Plan limit"],
       ["earlier", "long", "A long chat"],
     ] as const

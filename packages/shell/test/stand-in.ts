@@ -92,13 +92,6 @@ const text = (id: string, role: "user" | "assistant", body: string, ago: number)
   text: body,
   at: at(ago),
 });
-const tool = (id: string, name: string, state: "running" | "done", ago: number): Message => ({
-  id,
-  role: "tool",
-  text: name,
-  at: at(ago),
-  tool: { name, state },
-});
 
 const GITHUB = [{ name: "search_issues" }, { name: "get_issue", description: "Reads one issue" }];
 const ORIGIN = { provider: "local", madeBy: PERSON, at: at(600) };
@@ -159,10 +152,7 @@ function seed() {
           ],
           chat: {
             status: { state: "working" },
-            messages: [
-              text("m1", "user", "Why are checkouts failing?", 8),
-              tool("m2", "github__search_issues", "running", 6),
-            ],
+            messages: [text("m1", "user", "Why are checkouts failing?", 8)],
           },
         },
         {
@@ -829,7 +819,7 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
       // The chat the stand-in plays in full comes first whatever was said elsewhere. The others
       // follow, newest first by their last message, a page at a time.
       const lastOf = (one: { entry: ChatEntry; messages: Message[] }) =>
-        Date.parse(one.messages.findLast((m) => m.role !== "tool")?.at ?? one.entry.at);
+        Date.parse(one.messages.at(-1)?.at ?? one.entry.at);
       const own =
         chatId(agent) && !!agent.chat.archived === !!input.archived ? [entryOf(agent)] : [];
       const others = (agent.others ?? [])
@@ -1433,7 +1423,7 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
       other.messages.push(message);
       if (message.role === "assistant")
         other.entry = { ...other.entry, latest: { id: message.id, at: message.at } };
-      if (message.role !== "tool") emit(chatSlot(agent), "chat", other.entry);
+      emit(chatSlot(agent), "chat", other.entry);
       emit(
         chatSlot(agent),
         "message",
@@ -1447,7 +1437,7 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
       else messages[known] = message;
       if (message.role === "assistant") delete agentOf(agent).chat.problem;
       // What a person or the agent said tells the chat's entry too, as the service does.
-      if (message.role !== "tool") say(agentOf(agent), "chat");
+      say(agentOf(agent), "chat");
       say(agentOf(agent), "message", message);
     },
     /** A message in another chat of the agent's: one this stand-in doesn't keep, and no view shows. */
