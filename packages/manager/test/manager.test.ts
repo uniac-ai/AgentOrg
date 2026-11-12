@@ -933,16 +933,17 @@ test("a stack is made, bound, exposed and recorded, with its chat to the person"
   const bySlot = Object.fromEntries(read.mcp.map((m) => [m.slot, m]));
   assert.equal(bySlot.search?.connection, search);
   assert.equal(bySlot.search?.origin?.madeFor, undefined, "picked, so it isn't the agent's");
-  assert.equal(bySlot.search?.instance, "slot:search");
+  assert.equal(bySlot.search?.instance, undefined, "the person's own: no unit gave it");
   assert.equal(bySlot.files?.origin?.madeFor, agent);
   assert.equal(bySlot.files?.origin?.madeBy, s.callerActor.actorId);
   assert.equal(bySlot.files?.origin?.kind, "files");
   assert.equal(bySlot.files?.origin?.target, "a stand-in server");
   assert.equal(bySlot.files?.instance, files?.instance);
   assert.deepEqual(bySlot.files?.status, { state: "connected", tools: [{ name: "read" }] });
+  // The connection picked is the person's own, no unit of the stack.
   assert.deepEqual(
     read.units.map((one) => one.unit),
-    ["mcp", "files"],
+    ["files"],
   );
   // What a unit made goes with the unit.
   await assert.rejects(
@@ -1281,12 +1282,10 @@ test("one MCP unit stands for a connection there is or any kind on offer", async
   assert.deepEqual(s.given.applied.at(-1)?.secrets, { token: secret });
   const read = await s.calls.agents.get({ agent });
   assert.deepEqual(read.mcp.map((one) => one.slot).sort(), ["search", "served"]);
+  // The connection there is is an exposure, and no unit; the one made is.
   assert.deepEqual(
     read.units.map((one) => [one.unit, one.title, one.provider, one.values]),
-    [
-      ["mcp", "MCP", s.management.actorId, { how: "connection", connection, slot: "search" }],
-      ["mcp", "MCP", s.management.actorId, { how: "stand-in", url: "x", slot: "served" }],
-    ],
+    [["mcp", "MCP", s.management.actorId, { how: "stand-in", url: "x", slot: "served" }]],
   );
   assert.ok(!JSON.stringify(read).includes(secret));
   // A way not on offer can't be saved: nothing could tell which of its fields are secret.
@@ -1317,6 +1316,7 @@ test("one MCP unit stands for a connection there is or any kind on offer", async
     ["The name served is already taken."],
   );
   for (const one of read.units) await s.calls.agents.removeUnit({ agent, instance: one.instance });
+  await s.calls.agents.unexpose({ agent, slot: "search" });
   assert.deepEqual((await s.calls.agents.get({ agent })).mcp, []);
   // And the person's own connection is still there, as the Connect page made it.
   assert.ok((await s.openActors()).includes(connection));
@@ -1456,7 +1456,7 @@ test("a unit that doesn't give the result it declared undoes the creation", asyn
   assert.deepEqual(await s.openActors(), actors);
 });
 
-test("the Skill and Connection units are exposures, and read back as units", async (t) => {
+test("the Skill and Connection units are exposures: no unit of the stack gave them, and they read back as the person's own", async (t) => {
   const s = await setup(t);
   await s.calls.skills.add({ files: { "SKILL.md": SKILL("handy") } });
   const connection = await s.picked();
@@ -1465,21 +1465,34 @@ test("the Skill and Connection units are exposures, and read back as units", asy
     s.own("connection", { connection, slot: "search" }),
   ]);
   const read = await s.calls.agents.get({ agent });
+  assert.deepEqual(read.units, []);
   assert.deepEqual(
-    read.units.map((one) => [one.instance, one.unit, one.values]),
-    [
-      ["skill:handy", "skill", { skill: "handy" }],
-      ["slot:search", "mcp", { how: "connection", connection, slot: "search" }],
-    ],
+    read.skills.map((one) => [one.name, one.instance]),
+    [["handy", undefined]],
+  );
+  assert.deepEqual(
+    read.mcp.map((one) => [one.slot, one.connection, one.instance]),
+    [["search", connection, undefined]],
   );
   // No record of a unit: it is what is exposed. An exposure made by hand reads the same way.
   const kept = JSON.parse(readFileSync(join(s.dir, "manager.json"), "utf8"));
   assert.deepEqual(kept.agents[agent].units, []);
 
-  await s.calls.agents.removeUnit({ agent, instance: "skill:handy" });
-  await s.calls.agents.removeUnit({ agent, instance: "slot:search" });
+  await s.calls.agents.unexpose({ agent, skill: "handy" });
+  await s.calls.agents.unexpose({ agent, slot: "search" });
   const after = await s.calls.agents.get({ agent });
   assert.deepEqual([after.units, after.skills, after.mcp], [[], [], []]);
+  // Added to a living agent, the instance it is given takes it off again.
+  const { instance } = await s.calls.agents.addUnit({
+    agent,
+    unit: s.own("skill", { skill: "handy" }),
+  } as never);
+  assert.deepEqual(
+    (await s.calls.agents.get({ agent })).skills.map((one) => [one.name, one.instance]),
+    [["handy", undefined]],
+  );
+  await s.calls.agents.removeUnit({ agent, instance });
+  assert.deepEqual((await s.calls.agents.get({ agent })).skills, []);
   await assert.rejects(
     s.calls.agents.removeUnit({ agent, instance: "slot:settings" }),
     refused("unknown"),
@@ -1727,15 +1740,16 @@ test("what came with a unit goes with the unit", async (t) => {
   assert.deepEqual(kept.agents[agent].units[0].skills, []);
 });
 
-test("a Connection unit stands as its connection does", async (t) => {
+test("a connection the Connection unit gives stands as the connection does", async (t) => {
   const s = await setup(t);
   const connection = await s.picked();
   const agent = await s.makeStack([s.own("connection", { connection, slot: "search" })]);
-  assert.equal((await s.calls.agents.get({ agent })).units[0]?.status.state, "connected");
+  const state = async () => (await s.calls.agents.get({ agent })).mcp[0]?.status.state;
+  assert.equal(await state(), "connected");
   const { bindings } = await s.person.slots.bindings.call.list({ actor: s.management.actorId });
   const slot = bindings.find((b) => b.provider === s.unitsActor.actorId)?.slot as string;
   await s.person.slots.grants.call.unexpose({ to: s.management.actorId, slot });
-  for (let i = 0; (await s.calls.agents.get({ agent })).units[0]?.status.state !== "down"; i++) {
+  for (let i = 0; (await state()) !== "down"; i++) {
     assert.ok(i < 300, "it never read as down");
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
@@ -1755,11 +1769,11 @@ test("an agent from before units reads and goes as it did", async (t) => {
     delete (kept.agents as unknown as Record<string, { units?: unknown }>)[agent]?.units;
   });
   const read = await s.calls.agents.get({ agent });
+  assert.deepEqual(read.units, []);
   assert.deepEqual(
-    read.units.map((one) => one.instance),
-    ["slot:search"],
+    read.mcp.map((one) => [one.slot, one.instance, one.status.state]),
+    [["search", undefined, "connected"]],
   );
-  assert.deepEqual(read.units[0]?.status, { state: "connected" });
   assert.deepEqual((await s.calls.agents.templates({})).templates, []);
   await s.calls.agents.remove({ agent });
   assert.deepEqual((await s.calls.agents.list({})).agents, []);
@@ -2520,7 +2534,7 @@ test("what an agent can see of connections is what its scope says", async (t) =>
   const got = JSON.parse(
     (await tools.call({ name: "agent_get", arguments: { agent: other } })).output,
   );
-  assert.deepEqual(Object.keys(got.mcp[0]).sort(), ["instance", "slot", "status"]);
+  assert.deepEqual(Object.keys(got.mcp[0]).sort(), ["slot", "status"]);
   const units = JSON.parse((await tools.call({ name: "unit_list", arguments: {} })).output).units;
   const places = units
     .find((one: { id: string }) => one.id === "control")

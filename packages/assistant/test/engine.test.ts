@@ -967,6 +967,12 @@ test("a refusal from the model is its chat's problem, with its code, until the c
   );
 });
 
+test("a turn that ends without sending leaves its chat's problem: Not answered", async () => {
+  const s = await setup();
+  s.script.push(write("Thinking about it."));
+  assert.deepEqual(await s.turn("First."), { code: "not_answered", message: "Not answered" });
+});
+
 test("a model that is not connected is the chat's problem too", async () => {
   const s = await setup();
   s.actor.unbind("model");

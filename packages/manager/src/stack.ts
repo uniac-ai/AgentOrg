@@ -130,7 +130,7 @@ type FilledUnit = StackInput["units"][number];
 type StackBase = StackInput["base"];
 type Provided<T> = { actor: string; call: T };
 
-/** Management's own units. They ask no provider: each is an exposure and is read back as one. */
+/** Management's own units. They ask no provider: each is an exposure, and is read back as one, no unit. */
 const SKILL_UNIT = "skill";
 const CONNECTION_UNIT = "connection";
 /** One exposure, however it's reached: it stands for the Connection unit or a kind of connection. */
@@ -1126,84 +1126,54 @@ export function createStacks(parts: StackParts) {
       return { ...DOWN, tools: [] };
     },
 
-    /** The agent's stack, top to bottom: its exposures as units, then what providers made. */
-    async read(
-      agent: string,
-      record: TheAgent,
-      connectionStatus: (connection: string) => Promise<z.infer<typeof ConnectionStatus>>,
-    ) {
+    /**
+     * The agent's stack, top to bottom, as providers made it, and which unit gave each skill and
+     * slot: none for one the person exposed.
+     */
+    async read(agent: string, record: TheAgent) {
       const tools = await toolsOf(agent);
       const instanceOfSkill = (name: string) =>
-        record.units.find((unit) => unit.skills.includes(name))?.instance ?? skillInstance(name);
+        record.units.find((unit) => unit.skills.includes(name))?.instance;
       const instanceOfSlot = (slot: string) =>
-        record.units.find((unit) => unit.connections.some((one) => one.slot === slot))?.instance ??
-        slotInstance(slot);
-      const own = (
-        unit: string,
-        title: string,
-        instance: string,
-        values: Values,
-        status: Pick<z.infer<typeof ConnectionStatus>, "state" | "detail">,
-      ) => ({ instance, provider: self, unit, title, values, needs: {}, status });
-      const units = [
-        ...record.skills
-          .filter((name) => instanceOfSkill(name) === skillInstance(name))
-          .map((name) =>
-            own(SKILL_UNIT, "Skill", skillInstance(name), { skill: name }, { state: "connected" }),
-          ),
-        ...(await Promise.all(
-          tools
-            .filter(({ slot }) => instanceOfSlot(slot) === slotInstance(slot))
-            .map(async ({ slot, provider }) => {
-              const { state, detail } = await connectionStatus(provider);
-              return own(
-                MCP_UNIT,
-                "MCP",
-                slotInstance(slot),
-                { [MCP_HOW]: CONNECTION_UNIT, connection: provider, slot },
-                { state, ...(detail ? { detail } : {}) },
-              );
-            }),
-        )),
-        ...(await Promise.all(
-          record.units.map(async (unit) => {
-            let status: {
-              state: "connecting" | "connected" | "down";
-              detail?: string;
-              surfaces?: z.infer<typeof LiveSurface>[];
-            } = DOWN;
-            try {
-              const answer = await statusOf(unit);
-              if (answer)
-                status = {
-                  state: answer.state,
-                  ...(answer.detail ? { detail: answer.detail } : {}),
-                  ...("surfaces" in answer && answer.surfaces ? { surfaces: answer.surfaces } : {}),
-                };
-            } catch (error) {
-              log.warn(`A unit's status: ${messageOf(error)}`);
-            }
-            return {
-              instance: unit.instance,
-              ...(unit.viaMcp
-                ? {
-                    provider: self,
-                    unit: MCP_UNIT,
-                    title: "MCP",
-                    values: { [MCP_HOW]: unit.unit, ...unit.values },
-                  }
-                : {
-                    provider: unit.provider,
-                    unit: unit.unit,
-                    title: unit.title,
-                    values: unit.values,
-                  }),
-              needs: unit.needs,
-              status,
-            };
-          }),
-        )),
-      ];
+        record.units.find((unit) => unit.connections.some((one) => one.slot === slot))?.instance;
+      const units = await Promise.all(
+        record.units.map(async (unit) => {
+          let status: {
+            state: "connecting" | "connected" | "down";
+            detail?: string;
+            surfaces?: z.infer<typeof LiveSurface>[];
+          } = DOWN;
+          try {
+            const answer = await statusOf(unit);
+            if (answer)
+              status = {
+                state: answer.state,
+                ...(answer.detail ? { detail: answer.detail } : {}),
+                ...("surfaces" in answer && answer.surfaces ? { surfaces: answer.surfaces } : {}),
+              };
+          } catch (error) {
+            log.warn(`A unit's status: ${messageOf(error)}`);
+          }
+          return {
+            instance: unit.instance,
+            ...(unit.viaMcp
+              ? {
+                  provider: self,
+                  unit: MCP_UNIT,
+                  title: "MCP",
+                  values: { [MCP_HOW]: unit.unit, ...unit.values },
+                }
+              : {
+                  provider: unit.provider,
+                  unit: unit.unit,
+                  title: unit.title,
+                  values: unit.values,
+                }),
+            needs: unit.needs,
+            status,
+          };
+        }),
+      );
       // What it holds, from the record alone: no unit is asked, and nothing of how it stands.
       // Without its Actor's id: a page reaches it by the person's slots, which are in it.
       // Its own has no `from` for a page: no unit made it.

@@ -35,7 +35,7 @@ import {
 } from "./types.js";
 
 /** What a message's thread is told when its work's turn ended without a reply to it. */
-const NOT_ANSWERED = { code: "not_answered", message: "No answer was sent to this message." };
+const NOT_ANSWERED = { code: "not_answered", message: "Not answered" };
 /** A brake on a turn, not a budget: nothing approves a call, and the person can stop it. */
 export const MAX_CALLS = 200;
 /** What its work keeps, and its model is told, when a turn that was cut off goes on. */

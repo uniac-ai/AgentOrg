@@ -106,6 +106,8 @@ function secretsIn(value: unknown, found: string[] = []): string[] {
 /** The slot a connection is made for by the person: no agent has it yet, so it names nothing. */
 const PERSON_SLOT = "tools";
 const alreadyGone = (error: unknown) => error instanceof Refused && error.code === "unknown";
+/** A skill's or connection's `instance`: the unit of its stack that gave it, if one did. */
+const withInstance = (instance: string | undefined) => (instance ? { instance } : {});
 
 /**
  * Run management as an Actor exporting `agents@1`, `connections@1`, `skills@1` and, as `settings`,
@@ -627,7 +629,6 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
           const { units, tools, instanceOfSkill, instanceOfSlot, capabilities } = await stacks.read(
             agent,
             record,
-            connectionStatus,
           );
           const [name, status, mcp] = await Promise.all([
             nameOf(agent),
@@ -640,7 +641,7 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
                   ? { origin: records.connections[b.provider] as Origin }
                   : {}),
                 status: await connectionStatus(b.provider),
-                instance: instanceOfSlot(b.slot),
+                ...withInstance(instanceOfSlot(b.slot)),
               })),
             ),
           ]);
@@ -656,7 +657,7 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
             instructions: record.instructions,
             skills: record.skills.flatMap((skill) => {
               const entry = library.entry(skill);
-              return entry ? [{ ...entry, instance: instanceOfSkill(skill) }] : [];
+              return entry ? [{ ...entry, ...withInstance(instanceOfSkill(skill)) }] : [];
             }),
             mcp,
             units,
