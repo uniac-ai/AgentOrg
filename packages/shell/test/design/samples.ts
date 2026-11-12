@@ -235,6 +235,15 @@ export function sampleAgents(gateway: Gateway) {
   });
 }
 
+/** Triage as the design has it: its one skill, and its connection down with the design's why. */
+export function downTriage(gateway: Gateway) {
+  (gateway.agents.get("a-triage") as Agent).skills = [
+    { name: "triage-issues", description: "Labels, de-duplicates and routes new issues" },
+  ];
+  const linear = gateway.connections.get("c-linear");
+  if (linear?.status.state === "down") linear.status.detail = "its server didn't answer";
+}
+
 /** An agent's page in the design, reached as a person reaches it: from the bar, then its tab. */
 export async function openDesignAgent(page: Page, name: string, tab?: string) {
   if ((page.viewportSize()?.width ?? 0) < 640)

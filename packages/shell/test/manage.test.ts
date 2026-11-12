@@ -408,7 +408,7 @@ test(
 );
 
 test(
-  "Account says who is signed in to ChatGPT with the way out, and nothing of ChatGPT while signed out",
+  "Account says who is signed in to ChatGPT with the way out; signed out, it says so with the way in Home has",
   withGateway(async (gateway) => {
     const page = await open(gateway, "#/settings/account");
     const main = page.getByRole("main");
@@ -424,14 +424,36 @@ test(
         await chatgpt.getByText("sam@example.com").waitFor();
         continue;
       }
-      await chatgpt.waitFor({ state: "detached" });
-      await main.getByRole("region", { name: "Color" }).waitFor();
-      assert.equal(
-        await main.getByRole("button", { name: /ChatGPT/ }).count(),
-        0,
-        "the way in is Home's",
+      await chatgpt.getByText("Signed out", { exact: true }).waitFor();
+      assert.deepEqual(
+        (await chatgpt.innerText()).split("\n").filter((word) => word.trim()),
+        state === "signed_out"
+          ? [
+              "ChatGPT",
+              "Signed out",
+              "Agents can't work until you sign in with ChatGPT.",
+              "Continue with ChatGPT",
+            ]
+          : [
+              "ChatGPT",
+              "Signed out",
+              "This ChatGPT account isn't eligible to use its plan in this app.",
+              "Use another account",
+            ],
       );
+      // The same way in as Home's, its size included.
+      const way = await chatgpt.getByRole("button").boundingBox();
+      assert.ok(way && Math.round(way.width) === 232 && Math.round(way.height) === 40);
     }
+    // Pressed, it opens ChatGPT's page as Home's does, and waits for it.
+    // ChatGPT's page is answered here: nothing leaves this computer.
+    await page
+      .context()
+      .route("https://auth.example/**", (route) => route.fulfill({ status: 200, body: "ChatGPT" }));
+    const popup = page.context().waitForEvent("page");
+    await chatgpt.getByRole("button", { name: "Continue with ChatGPT" }).click();
+    await (await popup).close();
+    await chatgpt.getByRole("button", { name: "Waiting for ChatGPT…" }).waitFor();
     await page.close();
   }),
 );

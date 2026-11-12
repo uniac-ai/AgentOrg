@@ -6,7 +6,7 @@ import { Button } from "../ui/button.tsx";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select.tsx";
 import { Tabs, TabsList, TabsTrigger } from "../ui/tabs.tsx";
 import { listAgents, listConnections, listMcpProviders, useAct, useCreatables } from "./data.ts";
-import { type LoginStatus, useLoginStatus } from "./login.tsx";
+import { type LoginStatus, needsOf, SignInButton, useLogin, useLoginStatus } from "./login.tsx";
 import { Jump, rowClass, Scroll, Section, UsedBy } from "./parts.tsx";
 
 const countOf = (n: number) => `${n} ${n === 1 ? "connection" : "connections"}`;
@@ -150,13 +150,28 @@ function Providers() {
 function AccountTab() {
   const theme = useTheme();
   const login = useLoginStatus();
+  const needs = needsOf(useLogin());
   return (
     <>
-      {/* Signed out, the way in is where Home says what is left to set up. */}
-      {login?.state === "signed_in" && (
+      {login?.state === "signed_in" ? (
         <Section title="ChatGPT">
           <Account login={login} />
         </Section>
+      ) : (
+        // Signed out, it says so, with the same way in Home has.
+        needs && (
+          <Section title="ChatGPT">
+            <div
+              className={`${rowClass(false)} grid-cols-[minmax(0,1fr)_auto] tight:grid-cols-1 tight:gap-y-3`}
+            >
+              <div className="min-w-0">
+                <div className="truncate font-medium">Signed out</div>
+                <div className="truncate text-[13px] text-muted-foreground">{needs}</div>
+              </div>
+              <SignInButton className="tight:w-full" />
+            </div>
+          </Section>
+        )
       )}
       <Section title="Color">
         <Select value={theme} onValueChange={(next) => setTheme(next as ThemeName)}>

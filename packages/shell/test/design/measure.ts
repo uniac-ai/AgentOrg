@@ -21,6 +21,7 @@ import {
   computerWith,
   cpuOf,
   createState,
+  downTriage,
   inDesign,
   newChatWithFirst,
   noted,
@@ -945,6 +946,32 @@ const probe = (what: Part): Parts => {
     parts.foot = inside(foot, foot);
     parts["foot.above"] = foot ? round(origin.bottom - foot.getBoundingClientRect().bottom) : null;
     parts["foot.delete"] = inside(foot, foot?.querySelector("button"));
+    // An add menu, open: where it lies and its first item, and at its foot the way to a new one
+    // under a line. What it offers between them is the sample's, so its height isn't measured.
+    const menu = document.querySelector('[role="menu"]');
+    if (menu) {
+      parts.menu = of(menu, "h");
+      const items = menu.querySelectorAll('[role="menuitem"]');
+      parts["menu.first"] = inside(menu, items[0]);
+      const [line, last] = [menu.querySelector('[role="separator"]'), items[items.length - 1]];
+      const [below, end] = [menu.getBoundingClientRect(), last?.getBoundingClientRect()];
+      for (const [key, one] of [
+        ["menu.line", line],
+        ["menu.last", last],
+      ] as const) {
+        const m = of(one);
+        const at = one?.getBoundingClientRect();
+        // From the menu's left and its foot, or the line from the item under it.
+        if (m && at && end)
+          m.box = [
+            round(at.x - below.x),
+            round(one === last ? below.bottom - at.bottom : end.top - at.bottom),
+            m.box[2] ?? 0,
+            m.box[3] ?? 0,
+          ];
+        parts[key] = m;
+      }
+    }
     // The sheet itself last: measuring what slid in plays its slide again.
     parts.sheet = of(sheet, "h");
     return parts;
@@ -1667,6 +1694,41 @@ if (wants("setup"))
         await page.close();
         await gateway?.close();
       }
+// Then, wide: Triage's, with a connection that is down and why, and Research's with the add menu
+// for MCPs open.
+if (wants("setup"))
+  for (const which of ["down", "menu"] as const)
+    for (const theme of ["dark", "light"] as const)
+      for (const side of ["design", "built"] as const) {
+        const gateway = side === "built" ? await standIn() : undefined;
+        const name = which === "down" ? "Triage" : "Research";
+        if (gateway) {
+          sampleAgents(gateway);
+          downTriage(gateway);
+        }
+        const page = gateway
+          ? await builtPage(
+              gateway,
+              "wide",
+              theme,
+              which === "down" ? "#/a/a-triage" : "#/a/a-research",
+            )
+          : await designPage("wide", theme);
+        if (!gateway) await openDesignAgent(page, name);
+        const sheet = await openSetup(page, name);
+        if (which === "menu") {
+          await sheet.getByRole("button", { name: "Add an MCP" }).click();
+          const menu = page.getByRole("menu");
+          await menu.waitFor();
+          await menu.evaluate((e) =>
+            Promise.all(e.getAnimations().map((moving) => moving.finished)),
+          );
+        }
+        await rest(page, "wide");
+        all[`setup.${which}.wide.${theme}.${side}`] = await measure(page, "setup");
+        await page.close();
+        await gateway?.close();
+      }
 
 // One chat, a chat with a problem, a chat about to be started, and chats found from the bar: the
 // design's sample chats, and the same two on the built side.
@@ -1765,6 +1827,26 @@ if (wants("settings")) {
           await page.close();
           await gateway?.close();
         }
+  // Account signed out, with the way in.
+  for (const size of ["wide", "phone"] as const)
+    for (const theme of ["dark", "light"] as const)
+      for (const side of ["design", "built"] as const) {
+        const gateway = side === "built" ? await standIn() : undefined;
+        if (gateway) {
+          sampleSettings(gateway);
+          signInAccount(gateway, "out");
+        }
+        const page = gateway
+          ? await builtPage(gateway, size, theme)
+          : await designPage(size, theme);
+        await signInState(page, "out", !gateway);
+        await openSection(page, "account");
+        await page.getByRole("main").getByText("Signed out", { exact: true }).waitFor();
+        await rest(page, size);
+        all[`settings.account.out.${size}.${theme}.${side}`] = await measure(page, "settings");
+        await page.close();
+        await gateway?.close();
+      }
   for (const section of ["skills", "mcps"] as const)
     for (const theme of ["dark", "light"] as const)
       for (const side of ["design", "built"] as const) {
