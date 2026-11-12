@@ -282,6 +282,13 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
         changed,
         fromEach,
         exposeConnection,
+        reachPerson: async (provider, exported) =>
+          (await hub.grants.expose({ provider, export: exported, to: PERSON_CALLER })).slot,
+        unreachPerson: async (slot) => {
+          await hub.grants.unexpose({ to: PERSON_CALLER, slot }).catch((error) => {
+            if (!alreadyGone(error)) throw error;
+          });
+        },
         closing,
         removeAgent,
       });
@@ -503,7 +510,7 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
         },
         async get({ agent }) {
           const record = recordOf(agent);
-          const { units, tools, instanceOfSkill, instanceOfSlot } = await stacks.read(
+          const { units, tools, instanceOfSkill, instanceOfSlot, capabilities } = await stacks.read(
             agent,
             record,
             connectionStatus,
@@ -539,6 +546,7 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
             }),
             mcp,
             units,
+            capabilities,
           };
         },
         start: ({ agent }) => startAgent(agent),

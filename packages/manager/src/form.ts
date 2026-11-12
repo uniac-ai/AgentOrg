@@ -37,6 +37,31 @@ export function formProblems(form: TheForm): string[] {
   return problems;
 }
 
+/**
+ * What is wrong with what a unit says it gives the person's side, as written: surfaces or views
+ * with no capability to belong to, or a view of more than one kind of data.
+ */
+export function givesProblems(unit: TheUnit): string[] {
+  const problems: string[] = [];
+  const all = [
+    unit.gives,
+    ...unit.form.flatMap((field) => [
+      ...(field.adds ? [field.adds] : []),
+      ...(field.options ?? []).flatMap((option) => (option.adds ? [option.adds] : [])),
+    ]),
+  ];
+  const views = all.flatMap((gives) => gives.views ?? []);
+  if (!unit.capability && (views.length > 0 || all.some((gives) => gives.surfaces?.length)))
+    problems.push("It gives surfaces or views and builds no capability to hold them.");
+  for (const view of views) {
+    if (view.operation && view.surface)
+      problems.push(`${view.id} is fed by an operation and by a surface.`);
+    if (view.rows && !view.operation)
+      problems.push(`${view.id} names rows of an answer and no operation.`);
+  }
+  return problems;
+}
+
 /** Which fields are shown, given what was filled in and the defaults. */
 function shownFields(form: TheForm, values: Values): Set<string> {
   const byId = new Map(form.map((field) => [field.id, field]));
@@ -129,11 +154,14 @@ export interface Worked {
   slots: string[];
   /** Each with its files, or none for a skill the unit names by a field. */
   skills: { name: string; files?: string[] }[];
+  /** For the person's side, in the order given: what it always gives, then what answers add. */
+  surfaces: NonNullable<Gives["surfaces"]>;
+  views: NonNullable<Gives["views"]>;
 }
 
 /** What a unit gives for these settled values: what it always gives, and what its answers add. */
 export function workedOut(unit: TheUnit, values: Values): Worked {
-  const adds: Pick<Gives, "slots" | "skills">[] = [unit.gives];
+  const adds: Pick<Gives, "slots" | "skills" | "surfaces" | "views">[] = [unit.gives];
   for (const field of unit.form) {
     const value = values[field.id];
     if (value === undefined) continue;
@@ -160,7 +188,21 @@ export function workedOut(unit: TheUnit, values: Values): Worked {
       }
     }
   }
-  return { slots: [...slots], skills: [...skills.values()] };
+  // One of each id: what is given first stands, as for a slot.
+  const once = <T>(all: T[], id: (one: T) => string) =>
+    all.filter((one, at) => all.findIndex((other) => id(other) === id(one)) === at);
+  return {
+    slots: [...slots],
+    skills: [...skills.values()],
+    surfaces: once(
+      adds.flatMap((add) => add.surfaces ?? []),
+      (one) => one.surface,
+    ),
+    views: once(
+      adds.flatMap((add) => add.views ?? []),
+      (one) => one.id,
+    ),
+  };
 }
 
 /**
