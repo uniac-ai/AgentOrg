@@ -340,10 +340,10 @@ export function createChats(options: {
      * messages are given to each: one with no turn running starts a turn, and a turn running
      * takes it at its next model request.
      */
-    async send({ chat, text }: Input<"send">) {
+    async send({ chat, text, images }: Input<"send">) {
       if (chat !== undefined) {
         await heldOf(chat);
-        const { messageId } = await looper.send(chat, text);
+        const { messageId } = await looper.send(chat, text, images);
         return { chat, messageId };
       }
       const found = await load();
@@ -360,7 +360,7 @@ export function createChats(options: {
         // Its entry first: a record with no entry would be a chat nobody can find.
         await store.set({ key: ENTRIES + held.id, value: held.stored });
         found.set(held.id, held);
-        const { messageId } = await looper.send(held.id, text);
+        const { messageId } = await looper.send(held.id, text, images);
         return { chat: held.id, messageId };
       } catch (error) {
         found.delete(held.id);

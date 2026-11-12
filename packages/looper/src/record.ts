@@ -7,7 +7,7 @@
  * work when it was given to several.
  */
 import { z } from "zod";
-import { Item, type Json, type Log, type Shown, type Store } from "./types.js";
+import { Item, type Json, type Log, type Picture, type Shown, type Store } from "./types.js";
 
 /**
  * One piece of work's hold on a user message that names the work it was given to: where it stands
@@ -102,6 +102,53 @@ const MAX_ARGUMENTS = 16 * 1024;
 const PAGE_BUDGET = 512 * 1024;
 const encoder = new TextEncoder();
 const size = (value: unknown) => encoder.encode(JSON.stringify(value)).byteLength;
+/** The size of `value` without its pictures, which have a budget of their own. */
+const wordsSize = (value: unknown) =>
+  encoder.encode(JSON.stringify(value, (key, kept) => (key === "images" ? undefined : kept)))
+    .byteLength;
+/**
+ * What a request's pictures carry together at most, in characters of base64: room for one picture
+ * at its cap or a few smaller.
+ */
+export const PICTURES_BUDGET = 500_000;
+/** A whole request stays under this, a little below the piece of a megabyte that carries it. */
+const REQUEST_BUDGET = 1_000_000;
+/** What stands where a picture was left out. */
+const PICTURE_LEFT_OUT = "(A picture, left out.)";
+/** `item` with only the pictures `keep` keeps: a line for each other one says it was left out. */
+export function leaveOut(item: Item, keep: (picture: Picture) => boolean): Item {
+  if (item.type === "function_call" || !item.images?.length) return item;
+  const kept = item.images.filter(keep);
+  const gone = item.images.length - kept.length;
+  if (gone === 0) return item;
+  const said = (text: string) => [text, ...Array<string>(gone).fill(PICTURE_LEFT_OUT)].join("\n");
+  const { images: _, ...rest } = item;
+  const pictures = kept.length > 0 ? { images: kept } : {};
+  return rest.type === "message"
+    ? { ...rest, content: said(rest.content), ...pictures }
+    : { ...rest, output: said(rest.output), ...pictures };
+}
+/**
+ * The exchanges with the pictures a request gives, within `room`: the person's, newest first and
+ * across turns, then a call's of the latest exchange, newest first.
+ */
+export function withPictures(exchanges: Item[][], room: number): Item[][] {
+  const persons = exchanges
+    .flat()
+    .flatMap((item) => (item.type === "message" && item.role === "user" ? (item.images ?? []) : []))
+    .reverse();
+  const calls = (exchanges.at(-1) ?? [])
+    .flatMap((item) => (item.type === "function_call_output" ? (item.images ?? []) : []))
+    .reverse();
+  const given = new Set<Picture>();
+  let left = room;
+  for (const picture of [...persons, ...calls])
+    if (picture.data.length <= left) {
+      given.add(picture);
+      left -= picture.data.length;
+    }
+  return exchanges.map((items) => items.map((item) => leaveOut(item, (one) => given.has(one))));
+}
 const LEFT_OUT = "(Left out: the conversation was too large to send it.)";
 /** The looper's function by which a worker says something to the person: its call is what was said. */
 export const SEND_NAME = "send";
@@ -129,7 +176,7 @@ const numberOf = (item: Item | undefined) =>
   item?.type === "message" && item.role === "user" ? /^\[\d+\]/.exec(item.content)?.[0] : undefined;
 
 /**
- * The exchanges as the items to send, within the budget where they can be. What is over it,
+ * The exchanges to send, within the budget where they can be. What is over it,
  * rounded up to a step, goes in this order, each the oldest first:
  * 1. what the calls of every exchange except the latest were given and gave back, each call
  *    still paired with an output, so what was said stays longest: a `send`'s words are what was
@@ -140,9 +187,9 @@ const numberOf = (item: Item | undefined) =>
  * 3. what the calls of the latest exchange were given and gave back.
  * What was said is never cut: exchanges that are over the budget without their calls are sent so.
  */
-function fit(exchanges: Item[][]): Item[] {
-  const total = exchanges.reduce((sum, items) => sum + size(items), 0);
-  if (total <= INPUT_BUDGET) return exchanges.flat();
+function fit(exchanges: Item[][]): Item[][] {
+  const total = exchanges.reduce((sum, items) => sum + wordsSize(items), 0);
+  if (total <= INPUT_BUDGET) return exchanges;
   const toCut = Math.ceil((total - INPUT_BUDGET) / CUT_STEP) * CUT_STEP;
   let cut = 0;
   const left = exchanges.map((items) => [...items]);
@@ -172,13 +219,13 @@ function fit(exchanges: Item[][]): Item[] {
   let lost = 0;
   while (cut < toCut && gone < left.length - 2) {
     const going = (left[gone] as Item[]).slice(gone === 0 ? opening.length : 0);
-    if (going.length) cut += size(going);
+    if (going.length) cut += wordsSize(going);
     lost += going.length;
     gone++;
   }
   const rest = left.slice(gone);
   leaveOut(rest.at(-1));
-  if (lost === 0) return [...(gone ? opening : []), ...rest.flat()];
+  if (lost === 0) return [...(gone ? [opening] : []), ...rest];
   // Every exchange after the first begins with a numbered message.
   const [from, to] = [numberOf(opening[0]), numberOf(rest[0]?.[0])];
   const gap: Item = {
@@ -186,7 +233,7 @@ function fit(exchanges: Item[][]): Item[] {
     role: "user",
     content: `(Left out: all that was said and done ${from ? `after ${from} and ` : ""}before ${to}. The conversation was too large to send it.)`,
   };
-  return [...opening, gap, ...rest.flat()];
+  return [[...opening, gap], ...rest];
 }
 
 /** The first `length` UTF-16 units of `text`, never ending inside a surrogate pair. */
@@ -304,9 +351,22 @@ function workEntryOf(entry: Entry): WorkEntry | undefined {
   return entry.text === undefined ? undefined : { id, at, line: entry.text };
 }
 
+/** The pictures a person sent with a message. */
+const picturesOf = (entry: Entry) =>
+  entry.items.flatMap((item) =>
+    item.type === "message" && item.role === "user" ? (item.images ?? []) : [],
+  );
+
 /** A message as it is said: what a person said, or a reply. */
 export function messageOf(entry: Entry): Shown {
-  return { id: entry.id, role: entry.role as Shown["role"], text: textOf(entry), at: entry.at };
+  const images = picturesOf(entry);
+  return {
+    id: entry.id,
+    role: entry.role as Shown["role"],
+    text: textOf(entry),
+    at: entry.at,
+    ...(images.length > 0 ? { images } : {}),
+  };
 }
 
 /**
@@ -332,9 +392,16 @@ const kept = (entry: Entry): Entry => ({
 export const READS = 16;
 
 /** A user message as it is kept when said. */
-export const userEntry = (text: string) => ({
+export const userEntry = (text: string, images?: Picture[]) => ({
   role: "user" as const,
-  items: [{ type: "message" as const, role: "user" as const, content: text }],
+  items: [
+    {
+      type: "message" as const,
+      role: "user" as const,
+      content: text,
+      ...(images?.length ? { images } : {}),
+    },
+  ],
 });
 
 /** What the main loop said, as it is kept: it stands after `after`, a number in its thread. */
@@ -542,7 +609,14 @@ export function createThread(
       const said = held.records
         .filter((record) => saidIn(record.entry) && orderOf(record) <= to)
         .sort((a, b) => orderOf(a) - orderOf(b))
-        .map(({ entry }) => ({ role: entry.role as "user" | "assistant", text: textOf(entry) }));
+        .map(({ entry }) => {
+          const images = picturesOf(entry);
+          return {
+            role: entry.role as "user" | "assistant",
+            text: textOf(entry),
+            ...(images.length > 0 ? { images } : {}),
+          };
+        });
       return { said, upTo: held.last };
     },
     /**
@@ -1035,6 +1109,40 @@ export function createRecord(options: {
         all: dropped.some(({ entry }) => (entry.to ?? []).every((one) => one.back !== undefined)),
       };
     },
+    /**
+     * Leave out the pictures the calls kept as `ids` gave: a call's pictures are given for the
+     * turn under way only, and while newer ones leave them room. Each is said where it was.
+     */
+    async unpicture(ids: string[]): Promise<void> {
+      const held = await load();
+      for (const { thread, record } of own(held)) {
+        if (!ids.includes(record.entry.id)) continue;
+        const was = record.entry;
+        const change = options.thread(thread).change(
+          held.get(thread) as Held,
+          record,
+          (entry) => ({ ...entry, items: entry.items.map((item) => leaveOut(item, () => false)) }),
+          (entry) => ({ ...entry, items: was.items }),
+        );
+        await change.store().catch((error: unknown) => {
+          change.undo();
+          throw error;
+        });
+      }
+    },
+    /** Its calls that keep pictures, oldest first, each with what its pictures carry. */
+    async pictured(): Promise<{ id: string; size: number }[]> {
+      return own(await load()).flatMap(({ record }) => {
+        const size = record.entry.items.reduce(
+          (sum, item) =>
+            item.type === "function_call_output"
+              ? (item.images ?? []).reduce((all, one) => all + one.data.length, sum)
+              : sum,
+          0,
+        );
+        return size > 0 ? [{ id: record.entry.id, size }] : [];
+      });
+    },
     /** The highest place it holds, as a whole number: what it keeps or takes next stands after. */
     async top(): Promise<number> {
       return Math.floor(topOf(own(await load())));
@@ -1101,9 +1209,10 @@ export function createRecord(options: {
      * as `fit` fits them to the budget. A message said during a turn comes after
      * whatever is `ahead` of it, so the model reads it as not yet answered. `read` is the place up
      * to which every user message was read, for `append` and `saidAfter`: one still being written
-     * is not read yet. `thread` is where what comes of it is kept.
+     * is not read yet. `thread` is where what comes of it is kept. Its pictures fit what a
+     * request leaves beside its words and `besides`, the request's instructions and tools.
      */
-    async input(): Promise<{ items: Item[]; read: number; thread: string }> {
+    async input(besides: unknown = {}): Promise<{ items: Item[]; read: number; thread: string }> {
       const records = own(await load());
       const last = topOf(records);
       // Read up to the first user message that isn't its to send yet: one said after that waits
@@ -1151,8 +1260,10 @@ export function createRecord(options: {
         put(record);
       }
       putLate(last);
+      const fitted = fit(exchanges);
+      const room = REQUEST_BUDGET - wordsSize(fitted) - size(besides);
       return {
-        items: fit(exchanges),
+        items: withPictures(fitted, Math.max(0, Math.min(PICTURES_BUDGET, room))).flat(),
         read,
         thread: whereOf(records.filter(({ record }) => !unread(record))),
       };

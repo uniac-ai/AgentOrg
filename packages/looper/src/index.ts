@@ -10,6 +10,7 @@ export {
   type Model,
   type Outcome,
   type OutputItem,
+  type Picture,
   Refusal,
   type Shown,
   type Status,

@@ -8,8 +8,8 @@
  * work, and it has one function to call. Each time is one model request, which holds nothing of
  * those before it but what it is given.
  */
-import { head } from "./record.js";
-import type { Item, Log, Model, ToolSpec } from "./types.js";
+import { head, PICTURES_BUDGET, withPictures } from "./record.js";
+import type { Item, Log, Model, Picture, ToolSpec } from "./types.js";
 
 /** What the main loop is told, before who it speaks as. */
 export const MAIN_INSTRUCTIONS = `You are the front desk. You do none of the work: you say whose a message is, answer it yourself when it needs no work, or stop a piece of work it asks to stop.
@@ -78,6 +78,8 @@ export interface Listed {
 export interface Said {
   role: "user" | "assistant";
   text: string;
+  /** The pictures the person sent with it. */
+  images?: Picture[];
 }
 /**
  * What the main loop decided. `answer` is what it wrote. `placed` is whose what came in is: work
@@ -125,11 +127,17 @@ export interface Returned {
  */
 const put = (said: Said[], works: Listed[], back: Returned[] = []): Item[] => [
   { type: "message", role: "user", content: listing(works) },
-  ...said.slice(-TOLD.messages).map(({ role, text }) => ({
-    type: "message" as const,
-    role,
-    content: text.length > TOLD.each ? `${head(text, TOLD.each)}…` : text,
-  })),
+  ...(withPictures(
+    [
+      said.slice(-TOLD.messages).map(({ role, text, images }) => ({
+        type: "message" as const,
+        role,
+        content: text.length > TOLD.each ? `${head(text, TOLD.each)}…` : text,
+        ...(images ? { images } : {}),
+      })),
+    ],
+    PICTURES_BUDGET,
+  )[0] ?? []),
   ...(back.length > 0
     ? [
         {

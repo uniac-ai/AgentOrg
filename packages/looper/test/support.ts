@@ -3,6 +3,7 @@ import {
   Entry,
   type Json,
   type OutputItem,
+  type Picture,
   Refusal,
   type Tool,
   textOf,
@@ -46,9 +47,17 @@ export function looperWith(
   const routed: string[] = [];
   /** Each request the main loop made, as the model got it. */
   const mains: { instructions: string; tools: unknown[]; input: string[] }[] = [];
+  /** Those requests' items, as the model got them. */
+  const mainRaw: unknown[][] = [];
   /** The ids of those requests, each message said, and each piece of text streamed. */
   const mainIds: string[] = [];
-  const messages: { thread: string; id: string; role: string; text: string }[] = [];
+  const messages: {
+    thread: string;
+    id: string;
+    role: string;
+    text: string;
+    images?: Picture[];
+  }[] = [];
   const deltas: { thread: string; id: string; text: string }[] = [];
   /** Each time it said whether anything is at work, and each message that got no answer. */
   const working: boolean[] = [];
@@ -114,6 +123,7 @@ export function looperWith(
           if (tools.some((tool) => tool.name === "route")) {
             routed.push(text);
             mainIds.push(requestId);
+            mainRaw.push(structuredClone(input));
             mains.push({
               instructions,
               tools,
@@ -211,8 +221,8 @@ export function looperWith(
       ...(options.voice === undefined ? {} : { voice: options.voice }),
     }),
     out: {
-      message(thread, { id, role, text }) {
-        messages.push({ thread, id, role, text });
+      message(thread, { id, role, text, images }) {
+        messages.push({ thread, id, role, text, ...(images ? { images } : {}) });
         said.push(`${thread}: ${role}: ${text}`);
         options.saying?.(`${thread}: ${role}: ${text}`);
       },
@@ -256,6 +266,7 @@ export function looperWith(
     told,
     routed,
     mains,
+    mainRaw,
     mainIds,
     messages,
     deltas,

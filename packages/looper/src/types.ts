@@ -10,11 +10,28 @@ export type Json = string | number | boolean | null | Json[] | { [key: string]: 
 /** What one text of a model request can hold, and one name in it. */
 const Text = z.string().max(200_000);
 const Name = z.string().min(1).max(256);
+/** A picture, of a kind a model reads: its media type, and its bytes in base64. */
+const Picture = z.object({
+  mediaType: z.enum(["image/png", "image/jpeg", "image/gif", "image/webp"]),
+  data: z.string().min(1),
+});
+export type Picture = z.output<typeof Picture>;
+const Pictures = z.array(Picture).optional();
 /** One item of a conversation as a model reads it: something said, a function call, or its output. */
 export const Item = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("message"), role: z.enum(["user", "assistant"]), content: Text }),
+  z.object({
+    type: z.literal("message"),
+    role: z.enum(["user", "assistant"]),
+    content: Text,
+    images: Pictures,
+  }),
   z.object({ type: z.literal("function_call"), callId: Name, name: Name, arguments: Text }),
-  z.object({ type: z.literal("function_call_output"), callId: Name, output: Text }),
+  z.object({
+    type: z.literal("function_call_output"),
+    callId: Name,
+    output: Text,
+    images: Pictures,
+  }),
 ]);
 export type Item = z.output<typeof Item>;
 /** What a model gives back: something it says, or a function it calls. */
@@ -32,6 +49,8 @@ export interface ToolSpec {
 /** How a function call ended, as the model and the record see it. */
 export interface Outcome {
   output: string;
+  /** The pictures it gave with its output. */
+  images?: Picture[];
   ok: boolean;
   /** Why it didn't, when `ok` is false. */
   code?: string;
@@ -94,6 +113,8 @@ export interface Shown {
   text: string;
   /** An ISO 8601 time. */
   at: string;
+  /** The pictures the person sent with it. */
+  images?: Picture[];
 }
 
 /** What a loop is doing. On `error`, `detail.code` is the refusal's code. */

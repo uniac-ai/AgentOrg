@@ -99,11 +99,15 @@ export async function listedBy(
       ...(entry.description ? { description: entry.description } : {}),
       parameters: entry.inputSchema as Candidate["parameters"],
       run: async (args, group) => {
-        const { output, failed } = (await call({ name: entry.name, arguments: args, group })) as {
-          output: string;
-          failed?: true;
-        };
-        return failed ? { output, ok: false, code: "failed" } : { output, ok: true };
+        const { output, failed, images } = (await call({
+          name: entry.name,
+          arguments: args,
+          group,
+        })) as z.output<(typeof toolsInterface)["methods"]["call"]["output"]>;
+        const pictures = images ? { images } : {};
+        return failed
+          ? { output, ok: false, code: "failed", ...pictures }
+          : { output, ok: true, ...pictures };
       },
     }),
   );

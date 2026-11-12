@@ -1,5 +1,5 @@
 /** Inference on the person's ChatGPT plan: the Responses API, streamed, with nothing stored at OpenAI. */
-import type { Item, llmSession, OutputItem } from "@agentorg/interfaces";
+import type { Item, llmSession, OutputItem, Pictures } from "@agentorg/interfaces";
 import { Refused } from "@agentorg/sdk";
 import type { z } from "zod";
 import { type Account, notEligible } from "./account.js";
@@ -209,10 +209,26 @@ async function* events(
   }
 }
 
+/** Words and the pictures with them, as OpenAI reads them: parts, or the words alone. */
+const partsOf = (text: string, images: z.output<typeof Pictures> | undefined) =>
+  images?.length
+    ? [
+        ...(text ? [{ type: "input_text", text }] : []),
+        ...images.map(({ mediaType, data }) => ({
+          type: "input_image",
+          image_url: `data:${mediaType};base64,${data}`,
+        })),
+      ]
+    : text;
+
 const toApi = (item: z.output<typeof Item>) => {
   switch (item.type) {
     case "message":
-      return { type: "message", role: item.role, content: item.content };
+      return {
+        type: "message",
+        role: item.role,
+        content: item.role === "user" ? partsOf(item.content, item.images) : item.content,
+      };
     case "function_call":
       return {
         type: "function_call",
@@ -221,7 +237,11 @@ const toApi = (item: z.output<typeof Item>) => {
         arguments: item.arguments,
       };
     case "function_call_output":
-      return { type: "function_call_output", call_id: item.callId, output: item.output };
+      return {
+        type: "function_call_output",
+        call_id: item.callId,
+        output: partsOf(item.output, item.images),
+      };
   }
 };
 

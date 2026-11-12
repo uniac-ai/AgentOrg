@@ -55,6 +55,7 @@ import {
   type Json,
   type Log,
   type Model,
+  type Picture,
   Refusal,
   type Shown,
   type Status,
@@ -809,12 +810,12 @@ export function createLooper(options: {
     tally();
   };
   /** Keep a message in a thread nothing follows, and have it routed, unless a stop came since `at`. */
-  const intake = async (thread: string, text: string, at: number) => {
+  const intake = async (thread: string, text: string, at: number, images?: Picture[]) => {
     const was = marks.get(thread);
     const entry = await (async () => {
       await wait(thread, true);
       const into = threadOf(thread);
-      const { record, stored } = into.push(await into.load(), userEntry(text));
+      const { record, stored } = into.push(await into.load(), userEntry(text, images));
       await stored;
       unread.add(thread);
       return record.entry;
@@ -911,14 +912,20 @@ export function createLooper(options: {
    * work's to keep. With several it is kept once, naming each, and each takes it in its own
    * order: the work at rest starts a turn, and a turn running takes it at its next request.
    */
-  const give = async (to: string[], thread: string, text: string, at: number) => {
+  const give = async (
+    to: string[],
+    thread: string,
+    text: string,
+    at: number,
+    images?: Picture[],
+  ) => {
     const joined: { work: string; turn: number }[] = [];
     /** Whether one of its works couldn't take it: it waits for that work, marked. */
     let missed = false;
     let sent: { messageId: string };
     const [only] = to;
     if (to.length === 1 && only !== undefined) {
-      const { turn, ...kept } = await using(only, (loop) => loop.send(text, thread));
+      const { turn, ...kept } = await using(only, (loop) => loop.send(text, thread, images));
       if (turn !== undefined) joined.push({ work: only, turn });
       sent = kept;
     } else {
@@ -931,7 +938,7 @@ export function createLooper(options: {
         const entry = await started(
           (async () => {
             const { record, stored } = into.push(await into.load(), {
-              ...userEntry(text),
+              ...userEntry(text, images),
               to: to.map((work) => ({ work })),
             });
             await stored;
@@ -1144,7 +1151,7 @@ export function createLooper(options: {
      * while `WAITING` turns already wait and it would start one more, or while the looper is
      * stopped; and `unavailable` once it has closed.
      */
-    send(thread: string, text: string) {
+    send(thread: string, text: string, images?: Picture[]) {
       try {
         mayStart();
       } catch (error) {
@@ -1156,13 +1163,16 @@ export function createLooper(options: {
       // after another in the order they were said.
       const known =
         followed.get(thread) ?? (!marks.has(thread) && works.has(thread) ? [thread] : undefined);
-      if (known?.length === 1 && !lines.get(thread)?.waiting) return give(known, thread, text, at);
+      if (known?.length === 1 && !lines.get(thread)?.waiting)
+        return give(known, thread, text, at, images);
       return started(
         inLine(thread, async () => {
           const to = await followersOf(thread);
           // Stopped or closed while its work was found: nothing of it is kept.
           mayStart(at);
-          return to.length === 0 ? intake(thread, text, at) : give(to, thread, text, at);
+          return to.length === 0
+            ? intake(thread, text, at, images)
+            : give(to, thread, text, at, images);
         }),
       );
     },

@@ -351,6 +351,52 @@ test("respond streams text and a streamed function's arguments, returns the outp
   for (const { url } of s.fake.requests) assert.match(url, /^https:\/\/(auth|api)\.openai\.com\//);
 });
 
+test("a person's pictures go as image parts of their message, and a call's with its output", async (t) => {
+  const s = await setup(t);
+  await signIn(s);
+  s.fake.script({ events: [{ type: "response.created" }, completed([text("A cat.")])] });
+  const png = { mediaType: "image/png", data: "iVBORw0KGgo=" };
+  const jpeg = { mediaType: "image/jpeg", data: "/9j/4AAQ" };
+  await s.call("session", "respond", {
+    requestId: "turn-1",
+    instructions: "You are an assistant.",
+    input: [
+      { type: "message", role: "user", content: "What is this?", images: [png] },
+      { type: "function_call", callId: "c0", name: "look", arguments: "{}" },
+      { type: "function_call_output", callId: "c0", output: "A screen.", images: [jpeg] },
+      { type: "message", role: "assistant", content: "A cat." },
+      { type: "function_call_output", callId: "c1", output: "Nothing." },
+      { type: "function_call_output", callId: "c2", output: "", images: [png] },
+    ],
+  });
+  const { input } = JSON.parse(
+    s.fake.requests.filter((r) => r.url.endsWith("/v1/responses")).at(-1)?.body ?? "{}",
+  );
+  assert.deepEqual(input[0], {
+    type: "message",
+    role: "user",
+    content: [
+      { type: "input_text", text: "What is this?" },
+      { type: "input_image", image_url: "data:image/png;base64,iVBORw0KGgo=" },
+    ],
+  });
+  assert.deepEqual(input[2], {
+    type: "function_call_output",
+    call_id: "c0",
+    output: [
+      { type: "input_text", text: "A screen." },
+      { type: "input_image", image_url: "data:image/jpeg;base64,/9j/4AAQ" },
+    ],
+  });
+  // Words with no picture go as they are.
+  assert.equal(input[3].content, "A cat.");
+  assert.equal(input[4].output, "Nothing.");
+  // A picture with no words goes alone.
+  assert.deepEqual(input[5].output, [
+    { type: "input_image", image_url: "data:image/png;base64,iVBORw0KGgo=" },
+  ]);
+});
+
 test("only response.completed counts as success", async (t) => {
   const s = await setup(t);
   await signIn(s);

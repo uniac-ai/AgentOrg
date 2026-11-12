@@ -15,6 +15,7 @@ import {
   head,
   type LoopRecord,
   messageOf,
+  PICTURES_BUDGET,
   SEND_NAME,
   SENT,
   userEntry,
@@ -27,6 +28,8 @@ import {
   type Item,
   type Log,
   type Model,
+  type Outcome,
+  type Picture,
   Refusal,
   type Shown,
   type Status,
@@ -158,6 +161,8 @@ interface Turn {
   took: Set<string>;
   /** The word its calls are made under, which a stop of it names. */
   group: string;
+  /** Its calls whose pictures are kept, oldest first, each with what its pictures carry. */
+  pictured: { id: string; size: number }[];
 }
 /** A turn's place among the turns running: `entered` settles when it has it, or has left. */
 export interface Place {
@@ -288,12 +293,37 @@ export function createLoop(options: {
           out.failed(thread, detail);
         status(current, { state: "error", detail });
       })
+      // However it ended, what its calls gave goes before its place does; a turn the loop's
+      // closing cut is gone on with, and keeps them. A message said meanwhile starts another turn.
+      .then(() => {
+        if (turn === current) turn = undefined;
+        return current.closed ? undefined : unpicture(current, 0);
+      })
       .finally(() => {
         current.place?.leave();
         if (turn === current) turn = undefined;
       })
       .catch((error: unknown) => log.error("A turn's status failed.", { error: String(error) }));
     lastEnded = current.ended;
+  };
+  /**
+   * Keep the pictures of a turn's newest calls that fit `room` together, and leave out the rest:
+   * a request gives no more, and none once the turn is over.
+   */
+  const unpicture = async (current: Turn, room: number) => {
+    let left = room;
+    const gone = new Set<string>();
+    for (const { id, size } of [...current.pictured].reverse())
+      if (size <= left) left -= size;
+      else gone.add(id);
+    if (gone.size === 0) return;
+    try {
+      await record.unpicture([...gone]);
+      current.pictured = current.pictured.filter(({ id }) => !gone.has(id));
+    } catch (error) {
+      // Tried again at its next call or its end.
+      log.warn("A call's pictures couldn't be left out.", { error: String(error) });
+    }
   };
   const show = ({ entry, thread }: Awaited<ReturnType<LoopRecord["append"]>>) =>
     out.message(thread, messageOf(entry));
@@ -363,7 +393,7 @@ export function createLoop(options: {
   /** Record a function call with its output, keeping every call paired, as the API needs. */
   const answered = async (
     call: FunctionCall,
-    result: { output: string; ok: boolean; code?: string },
+    result: Outcome,
     id: string,
     read: number,
     thread: string,
@@ -378,6 +408,7 @@ export function createLoop(options: {
           type: "function_call_output" as const,
           callId: call.callId,
           output: capped(result.output),
+          ...(result.images?.length ? { images: result.images } : {}),
         },
       ],
     };
@@ -401,7 +432,11 @@ export function createLoop(options: {
       const { instructions, tools: theirs, model: chosen } = await options.request();
       const tools = [...theirs, handBack];
       const told = workInstructions(await options.title());
-      const { items: input, read, thread } = await record.input();
+      const offered = {
+        instructions: instructions ? `${instructions}\n\n${told}` : told,
+        tools: [...theirs.map(({ run: _, ...tool }) => tool), SEND, HAND_BACK],
+      };
+      const { items: input, read, thread } = await record.input(offered);
       if (current.cancelled) return;
       current.thread = thread;
       const requestId = crypto.randomUUID();
@@ -412,9 +447,8 @@ export function createLoop(options: {
         ({ output } = await model.respond({
           requestId,
           ...(chosen ? { model: chosen } : {}),
-          instructions: instructions ? `${instructions}\n\n${told}` : told,
+          ...offered,
           input,
-          tools: [...theirs.map(({ run: _, ...tool }) => tool), SEND, HAND_BACK],
         }));
       } finally {
         current.requestId = undefined;
@@ -451,6 +485,7 @@ export function createLoop(options: {
           const unanswered = await record.closeUnanswered(current.from ?? 0, read);
           if (current.cancelled) return true;
           for (const where of unanswered) out.failed(where, NOT_ANSWERED);
+          await unpicture(current, 0);
           current.place?.leave();
           status(current, { state: "idle" });
           turn = undefined;
@@ -507,6 +542,11 @@ export function createLoop(options: {
           void options.stopGroup?.(current.group).catch(() => {});
         try {
           await answered(call, result, id, read, thread);
+          const size = (result.images ?? []).reduce((sum, one) => sum + one.data.length, 0);
+          if (size > 0) {
+            current.pictured.push({ id, size });
+            await unpicture(current, PICTURES_BUDGET);
+          }
         } finally {
           // Said once it is no longer the call running: what was kept of it is there to read.
           if (calling?.id === id) calling = undefined;
@@ -554,9 +594,9 @@ export function createLoop(options: {
     current.waiting = true;
   };
 
-  const said = async (text: string, thread: string, joined: boolean) => {
+  const said = async (text: string, thread: string, joined: boolean, images?: Picture[]) => {
     const kept = await record.append(
-      { ...userEntry(text), ...(joined ? { joined: true as const } : {}) },
+      { ...userEntry(text, images), ...(joined ? { joined: true as const } : {}) },
       { thread },
     );
     show(kept);
@@ -581,6 +621,7 @@ export function createLoop(options: {
       closed,
       took: new Set(),
       group: crypto.randomUUID(),
+      pictured: [],
     };
     if (!cancelled) turn = current;
     const told = fresh && (!cancelled || closed);
@@ -617,19 +658,19 @@ export function createLoop(options: {
      * running or waiting for its place, the turn takes it at its next model request: `turn` is
      * then that turn's number. With no turn it starts one, whose progress is said through `out`.
      */
-    send: (text: string, thread: string) =>
+    send: (text: string, thread: string, images?: Picture[]) =>
       inOrder(async (cancelled, closed): Promise<{ messageId: string; turn?: number }> => {
         const into = turn;
         if (into) {
           into.took.add(thread);
-          return { ...(await said(text, thread, true)), turn: into.id };
+          return { ...(await said(text, thread, true, images)), turn: into.id };
         }
         return (await start(
           cancelled,
           async (current) => {
             enter(current, await record.begun());
             current.took.add(thread);
-            return { opened: await said(text, thread, draining !== undefined) };
+            return { opened: await said(text, thread, draining !== undefined, images) };
           },
           true,
           closed,
@@ -678,6 +719,9 @@ export function createLoop(options: {
             enter(current, true);
             current.resumed = true;
             current.from = after ?? (await record.acted());
+            // What the turn cut off kept of its calls' pictures is this turn's to leave out, and
+            // what any turn a restart cut before it kept.
+            current.pictured = await record.pictured();
             current.acted = true;
             // Kept for the work in the thread of the message it was answering, and said in none.
             const thread = await record.where();
@@ -767,6 +811,9 @@ export function createLoop(options: {
       await Promise.all([
         current.requestId && model.cancel({ requestId: current.requestId }).catch(() => {}),
         line && inOrder(async () => show(await record.stopLine(line.text, line.thread))),
+        // One that writes nothing more has what its calls gave left out now, before the stop is
+        // done; any other, once it has written what it will.
+        quiet && !closing && unpicture(current, 0),
       ]);
       return true;
     },

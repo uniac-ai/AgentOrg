@@ -60,6 +60,7 @@ export {
   Template,
   TemplateId,
 } from "./manager.js";
+export { PICTURE_MAX, PICTURES_MAX, Picture, Pictures } from "./picture.js";
 export { ToolEntry, tools } from "./tools.js";
 export {
   Activity,

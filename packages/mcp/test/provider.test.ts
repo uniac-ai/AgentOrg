@@ -311,7 +311,7 @@ test("a server connected by hand shows in hub.exports as tools@1, and its tools 
   const status = await mcp.status({ connection });
   assert.deepEqual(
     status.tools.map((tool) => tool.name),
-    ["echo", "refuse", "env", "grow", "pid", "die"],
+    ["echo", "refuse", "env", "grow", "pid", "look", "pair", "wide", "die"],
   );
   const { call } = await consumerOf(connection);
   const listed = await call.list({});
@@ -331,6 +331,28 @@ test("a server connected by hand shows in hub.exports as tools@1, and its tools 
   const variable = (name: string) => call.call({ name: "env", arguments: { name } });
   assert.equal((await variable("AGENTORG_TEST_GIVEN")).output, "given");
   assert.equal((await variable("AGENTORG_TEST_KEPT")).output, "(unset)");
+  // A picture comes as one, as many as a message carries; one over the cap, past that many, or
+  // of a kind a model can't read, as a line before the text; an empty one, not at all.
+  assert.deepEqual(await call.call({ name: "look", arguments: {} }), {
+    output: [
+      "(A picture, left out: too large.)",
+      "(A picture, left out: too many.)",
+      "(A picture, left out: image/tiff isn't one a model reads.)",
+      "A screen.",
+    ].join("\n"),
+    images: Array.from({ length: 8 }, () => ({ mediaType: "image/png", data: "iVBORw0KGgo=" })),
+  });
+  // Together they stay within one picture's cap, and within what the words leave of the frame.
+  const pair = await call.call({ name: "pair", arguments: {} });
+  assert.deepEqual(
+    [pair.output, pair.images?.map(({ data }) => data[0])],
+    ["(A picture, left out: too large.)", ["B"]],
+  );
+  const wide = await call.call({ name: "wide", arguments: {} });
+  assert.deepEqual(
+    [wide.output.slice(0, 33), wide.images],
+    ["(A picture, left out: too large.)", undefined],
+  );
 });
 
 test("changed fires when the server's tools change, and when it goes and comes back", async (t) => {

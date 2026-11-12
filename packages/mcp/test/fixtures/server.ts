@@ -30,6 +30,31 @@ server.registerTool("grow", { description: "Adds a tool." }, () => {
 server.registerTool("pid", { description: "Tells its process id." }, () => ({
   content: [{ type: "text", text: String(process.pid) }],
 }));
+server.registerTool("look", { description: "Gives pictures." }, () => ({
+  content: [
+    { type: "text", text: "A screen." },
+    { type: "image", mimeType: "image/png", data: "A".repeat(500_004) },
+    ...Array.from({ length: 9 }, () => ({
+      type: "image" as const,
+      mimeType: "image/png",
+      data: "iVBORw0KGgo=",
+    })),
+    { type: "image", mimeType: "image/tiff", data: "SUkqAA==" },
+    { type: "image", mimeType: "image/png", data: "" },
+  ],
+}));
+server.registerTool("pair", { description: "Gives two large pictures." }, () => ({
+  content: [
+    { type: "image", mimeType: "image/png", data: "B".repeat(300_000) },
+    { type: "image", mimeType: "image/png", data: "C".repeat(300_000) },
+  ],
+}));
+server.registerTool("wide", { description: "Gives wide text and a picture." }, () => ({
+  content: [
+    { type: "text", text: "字".repeat(300_000) },
+    { type: "image", mimeType: "image/png", data: "D".repeat(450_000) },
+  ],
+}));
 server.registerTool("die", { description: "Ends the server." }, () => {
   setTimeout(() => process.exit(1), 10);
   return { content: [{ type: "text", text: "bye" }] };

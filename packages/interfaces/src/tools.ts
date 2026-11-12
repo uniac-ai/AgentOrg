@@ -1,5 +1,6 @@
 import { defineInterface, event, method } from "@agentorg/sdk";
 import { z } from "zod";
+import { Pictures } from "./picture.js";
 
 const ToolName = z.string().min(1).max(128);
 /** A word the caller chooses for a set of calls, unique to it, such as a random id. */
@@ -45,6 +46,8 @@ export const tools = defineInterface({
       output: z.object({
         output: z.string().max(OUTPUT_MAX),
         failed: z.literal(true).optional(),
+        /** The pictures the tool gave with its result. */
+        images: Pictures.optional(),
       }),
     }),
     /**
