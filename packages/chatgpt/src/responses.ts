@@ -11,13 +11,90 @@ export const USAGE_SETTINGS = "https://chatgpt.com/settings/usage";
 type RespondInput = z.output<typeof llmSession.methods.respond.input>;
 type Output = z.output<typeof OutputItem>;
 
+/** How often a request that failed for a passing reason is made again. */
+export const RETRIES = 3;
+/** The wait before the first of those; each next one is twice as long, a tenth more or less. */
+const BACKOFF_MS = 1000;
+/** The longest wait OpenAI can ask for that is taken: past it the failure is the answer. */
+const WAIT_MAX_MS = 60_000;
+/**
+ * A try begins within this long of the first, or not at all: its caller has a limit of its own
+ * on one call, and a person is waiting.
+ */
+const RETRY_WITHIN_MS = 120_000;
+/** OpenAI's codes for a server that failed or is overloaded, in a reply or inside a stream. */
+const SERVER_CODES = new Set(["server_error", "server_is_overloaded"]);
+
+/**
+ * The failures marked as passing, each with the wait OpenAI asked for, if it did. `tried` makes
+ * a marked one again; any other failure is the answer at once.
+ */
+const passing = new WeakMap<Refused, { waitMs?: number }>();
+const pass = (refused: Refused, waitMs?: number) => {
+  passing.set(refused, waitMs === undefined ? {} : { waitMs });
+  return refused;
+};
+
+/**
+ * `refused`, marked as passing when it is: one that says to try again later (`unavailable`), or
+ * a failure with no words of its own (`failed`) whose code or HTTP status is a server's: 408 or
+ * any 5xx. A usage limit, an account that isn't eligible and a request plan usage doesn't support
+ * are final whatever the status.
+ */
+function marked(refused: Refused, at: { code?: string; status?: number; waitMs?: number } = {}) {
+  const server =
+    (at.code !== undefined && SERVER_CODES.has(at.code)) ||
+    at.status === 408 ||
+    (at.status !== undefined && at.status >= 500);
+  return refused.code === "unavailable" || (refused.code === "failed" && server)
+    ? pass(refused, at.waitMs)
+    : refused;
+}
+
+const NUMBER = /^\d+(\.\d+)?$/;
+
+/**
+ * The wait a reply asks for, in milliseconds: the longer of `retry-after-ms` and `retry-after`
+ * in seconds. The date form of `retry-after` isn't read, so such a reply waits as one that
+ * asked for nothing.
+ */
+function waitOf(headers: Headers): number | undefined {
+  const ms = headers.get("retry-after-ms")?.trim() ?? "";
+  const seconds = headers.get("retry-after")?.trim() ?? "";
+  const asked = [
+    ...(NUMBER.test(ms) ? [Number(ms)] : []),
+    ...(NUMBER.test(seconds) ? [Number(seconds) * 1000] : []),
+  ];
+  return asked.length ? Math.max(...asked) : undefined;
+}
+
+/** Words that say a message is about a credential: such a message can quote part of one. */
+const OF_A_CREDENTIAL = /\b(keys?|token|bearer|authorization|credentials?|secret|password)\b/i;
+
+/**
+ * OpenAI's own words for an error, fit to show and to log: printable characters on one line, cut
+ * at 200. Nothing of a message about a credential, since it can quote one in part; and in any
+ * other, a run of 32 or more letters, digits, `_` and `-` is left out, which is every token this
+ * program holds and no model's name.
+ */
+const saidOf = (value: unknown) =>
+  typeof value !== "string" || OF_A_CREDENTIAL.test(value)
+    ? ""
+    : value
+        .replace(/[^\x20-\x7E]+/g, " ")
+        .replace(/[A-Za-z0-9_-]{32,}/g, "…")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 200);
+
 /**
  * OpenAI's error, as a refusal: by its code first, then its HTTP status when there is one (an error
- * inside the stream has none). Only sanitized words of OpenAI's reply are shown.
+ * inside the stream has none). Only sanitized words of OpenAI's reply are shown: an error with no
+ * words of its own here ends with what OpenAI `said` of it, when it said something.
  */
 export function refusalOf(
   code: string | undefined,
-  at: { status?: number; requestId?: string | null; param?: string } = {},
+  at: { status?: number; requestId?: string | null; param?: string; said?: unknown } = {},
 ): Refused {
   const ref = at.requestId ? ` (request ${word(at.requestId)})` : "";
   switch (code) {
@@ -32,6 +109,12 @@ export function refusalOf(
         "unavailable",
         "ChatGPT plan usage is unavailable right now. Try again later.",
       );
+    case "rate_limit_exceeded":
+    case "slow_down":
+      return new Refused(
+        "unavailable",
+        "OpenAI is limiting how often requests are made right now. Try again later.",
+      );
     case "subscription_sharing_user_not_eligible":
       return notEligible();
     case "subscription_sharing_unsupported_capability":
@@ -43,25 +126,37 @@ export function refusalOf(
   if (at.status === 429) return refusalOf("subscription_sharing_usage_limit_exceeded", at);
   if (at.status === 503) return refusalOf("subscription_sharing_usage_unavailable", at);
   const what = code ? ` ${word(code)}` : "";
+  // A reply that refuses the sign-in is about the token it was sent: none of it is shown.
+  const said = at.status === 401 || at.status === 403 ? "" : saidOf(at.said);
+  const reason = said ? ` OpenAI said: ${said}` : "";
   return new Refused(
     "failed",
     at.status === undefined
-      ? `OpenAI ended the response with an error${what}${ref}.`
-      : `OpenAI answered ${at.status}${what}${ref}.`,
+      ? `OpenAI ended the response with an error${what}${ref}.${reason}`
+      : `OpenAI answered ${at.status}${what}${ref}.${reason}`,
   );
 }
 
+/** A reply that isn't a response, as a refusal, marked when it passes, with the wait it asks for. */
 async function errorOf(response: Response) {
-  let error: { code?: unknown; param?: unknown } | undefined;
+  let error: { code?: unknown; param?: unknown; message?: unknown } | undefined;
   try {
     error = ((await response.json()) as { error?: typeof error }).error;
   } catch {
     // Admission errors may carry only `detail`, which is diagnostic and isn't echoed.
   }
-  return refusalOf(typeof error?.code === "string" ? error.code : undefined, {
+  const code = typeof error?.code === "string" ? error.code : undefined;
+  const refused = refusalOf(code, {
     status: response.status,
     requestId: response.headers.get("x-request-id"),
     ...(typeof error?.param === "string" ? { param: error.param } : {}),
+    said: error?.message,
+  });
+  const waitMs = waitOf(response.headers);
+  return marked(refused, {
+    status: response.status,
+    ...(code === undefined ? {} : { code }),
+    ...(waitMs === undefined ? {} : { waitMs }),
   });
 }
 
@@ -160,11 +255,29 @@ function outputOf(response: Record<string, unknown>): Output[] {
 
 const cancelled = () => new Refused("cancelled", "The response was cancelled.");
 
+/** Wait `ms`, or until `signal` aborts, which rejects as cancelled and leaves no timer. */
+export const sleep = (ms: number, signal: AbortSignal) =>
+  new Promise<void>((resolve, reject) => {
+    const done = () => {
+      clearTimeout(timer);
+      reject(cancelled());
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", done);
+      resolve();
+    }, ms);
+    if (signal.aborted) done();
+    else signal.addEventListener("abort", done, { once: true });
+  });
+
 export function createSession(options: {
   fetch: Fetch;
   account: Account;
   /** Streamed text, for the one Actor whose request it answers. */
   delta(caller: string, requestId: string, text: string): void;
+  /** How a wait between two tries is spent, and the time: a timer and the clock, unless a test gives its own. */
+  wait?: (ms: number, signal: AbortSignal) => Promise<void>;
+  now?: () => number;
 }) {
   const { fetch, account } = options;
   let listed: Promise<{ id: string; name: string }[]> | undefined;
@@ -189,8 +302,9 @@ export function createSession(options: {
       }
     } catch (error) {
       if (signal?.aborted) throw cancelled();
-      if (error instanceof Refused) throw error;
-      throw new Refused("unavailable", "OpenAI couldn't be reached. Try again later.");
+      // The account's own refusal: a refresh that couldn't reach OpenAI passes as a request does.
+      if (error instanceof Refused) throw marked(error);
+      throw pass(new Refused("unavailable", "OpenAI couldn't be reached. Try again later."));
     }
     if (!response.ok) {
       const refused = await errorOf(response);
@@ -224,7 +338,13 @@ export function createSession(options: {
     return listed;
   };
 
-  async function stream(input: RespondInput, caller: string, signal: AbortSignal) {
+  /** One try. `wrote` is told when text of it has been streamed: such a try is not made again. */
+  async function stream(
+    input: RespondInput,
+    caller: string,
+    signal: AbortSignal,
+    wrote: () => void,
+  ) {
     const model = input.model ?? (await models())[0]?.id;
     if (!model) throw new Refused("failed", "No model is offered to this account.");
     if (signal.aborted) throw cancelled();
@@ -262,12 +382,21 @@ export function createSession(options: {
     );
     const requestId = response.headers.get("x-request-id");
     if (!response.body) throw refusalOf("empty_stream", { status: response.status, requestId });
+    /** An error OpenAI sent inside the stream, marked when it passes. */
+    const inStream = async (error: Record<string, unknown>) => {
+      const code = typeof error.code === "string" ? error.code : undefined;
+      const refused = refusalOf(code, { requestId, said: error.message });
+      if (refused.code === "ineligible") await account.ineligible();
+      return marked(refused, code ? { code } : {});
+    };
     try {
       for await (const event of events(response.body, signal)) {
         switch (event.type) {
           case "response.output_text.delta":
-            if (typeof event.delta === "string")
+            if (typeof event.delta === "string") {
+              wrote();
               options.delta(caller, input.requestId, event.delta);
+            }
             break;
           case "response.completed": {
             const done = (event.response ?? {}) as Record<string, unknown>;
@@ -282,25 +411,56 @@ export function createSession(options: {
           case "response.failed": {
             const error = ((event.response as Record<string, unknown> | undefined)?.error ??
               {}) as Record<string, unknown>;
-            const refused = refusalOf(typeof error.code === "string" ? error.code : undefined, {
-              requestId,
-            });
-            if (refused.code === "ineligible") await account.ineligible();
-            throw refused;
+            throw await inStream(error);
           }
-          case "response.incomplete":
-            throw new Refused("failed", "The response ended incomplete.");
+          case "response.incomplete": {
+            const details = (event.response as Record<string, unknown> | undefined)
+              ?.incomplete_details as Record<string, unknown> | undefined;
+            const why = word(details?.reason);
+            throw new Refused("failed", `The response ended incomplete${why ? ` (${why})` : ""}.`);
+          }
           case "error":
-            throw refusalOf(typeof event.code === "string" ? event.code : undefined, { requestId });
+            throw await inStream(event);
         }
       }
     } catch (error) {
       if (error instanceof Refused) throw error;
       if (signal.aborted) throw cancelled();
-      throw new Refused("failed", "The response stream broke off.");
+      throw pass(new Refused("failed", "The response stream broke off."));
     }
     if (signal.aborted) throw cancelled();
-    throw new Refused("failed", "The response ended before it completed.");
+    throw pass(new Refused("failed", "The response ended before it completed."));
+  }
+
+  /**
+   * A response, tried again when its failure is marked as passing: OpenAI couldn't be reached,
+   * said to try again later, its server failed or was overloaded, or the stream broke off.
+   * `RETRIES` times at most, each after a wait that doubles from `BACKOFF_MS`, a tenth more or
+   * less, or after the wait OpenAI asked for when that is longer. A wait past `WAIT_MAX_MS` isn't
+   * taken, nor one that would begin a try more than `RETRY_WITHIN_MS` after the first: the
+   * failure is the answer. Not once text of it has been streamed, since those words are with
+   * their reader and a new try would write them again; and not once it is cancelled, which also
+   * ends a wait.
+   */
+  async function tried(input: RespondInput, caller: string, signal: AbortSignal) {
+    const now = options.now ?? Date.now;
+    const began = now();
+    for (let failed = 0; ; failed++) {
+      let written = false;
+      try {
+        return await stream(input, caller, signal, () => {
+          written = true;
+        });
+      } catch (error) {
+        const again = error instanceof Refused ? passing.get(error) : undefined;
+        if (!again || written || failed >= RETRIES || signal.aborted) throw error;
+        const doubling = BACKOFF_MS * 2 ** failed * (0.9 + Math.random() * 0.2);
+        const wait = Math.max(again.waitMs ?? 0, doubling);
+        if (wait > WAIT_MAX_MS || now() - began + wait > RETRY_WITHIN_MS) throw error;
+        await (options.wait ?? sleep)(wait, signal);
+        if (signal.aborted) throw cancelled();
+      }
+    }
   }
 
   return {
@@ -326,7 +486,7 @@ export function createSession(options: {
       const controller = new AbortController();
       running.set(key, controller);
       try {
-        return await stream(input, caller, controller.signal);
+        return await tried(input, caller, controller.signal);
       } finally {
         running.delete(key);
       }

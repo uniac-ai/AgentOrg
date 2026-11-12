@@ -9,7 +9,14 @@ type Exports = { login: typeof accountLogin; session: typeof llmSession };
 
 export function serveChatGPT(
   exports: Context<Record<never, Interface>, Exports>["exports"],
-  options: { fetch: Fetch; store: Store; log: Log },
+  options: {
+    fetch: Fetch;
+    store: Store;
+    log: Log;
+    /** How a wait between two tries of a response is spent, and the time. For tests. */
+    wait?: (ms: number, signal: AbortSignal) => Promise<void>;
+    now?: () => number;
+  },
 ) {
   const { store, log } = options;
   /** Every request's method, host, status and request id are logged; never its content. */
@@ -37,6 +44,8 @@ export function serveChatGPT(
   const started = createSession({
     fetch,
     account,
+    ...(options.wait ? { wait: options.wait } : {}),
+    ...(options.now ? { now: options.now } : {}),
     // Each consumer's text goes to that consumer alone.
     delta: (caller, requestId, text) =>
       exports.session.emit("delta", { requestId, text }, { to: caller }),

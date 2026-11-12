@@ -712,7 +712,7 @@ test("stopping the agent stops the model's response, and started again it takes 
   await s.host.settled();
   assert.deepEqual(s.messages(), ["user: Think long.", "user: Next.", "assistant: ok"]);
   // Being stopped isn't a failure.
-  assert.equal(s.actor.logs.filter((line) => line.message === "A turn failed.").length, 0);
+  assert.equal(s.actor.logs.filter((line) => line.message.startsWith("A turn failed")).length, 0);
 });
 
 test("stopped before the model is asked, a turn never asks it", async () => {
@@ -962,7 +962,7 @@ test("a refusal from the model is its chat's problem, with its code, until the c
     assert.ok(told !== -1 && told < idle, "a view never hears idle without the reason");
     assert.deepEqual((await listed(s)).chats[0]?.problem, { code, message: `refused: ${code}` });
   }
-  assert.ok(s.actor.logs.some((line) => line.message === "A turn failed."));
+  assert.ok(s.actor.logs.some((line) => line.message.startsWith("A turn failed")));
   // It is kept with the chat: an agent that starts again still tells it.
   await s.host.close();
   const again = await setup(values);

@@ -5,16 +5,28 @@ import { defineActor } from "@agentorg/sdk";
 import { createTestContext } from "@agentorg/sdk/testing";
 import type { Store } from "../src/account.ts";
 import type { Fetch } from "../src/oauth.ts";
+import { RETRIES, sleep } from "../src/responses.ts";
 import { serveChatGPT } from "../src/serve.ts";
 import { completed, delta, type FakeOpenAI, fakeOpenAI, text } from "./fake-openai.ts";
 
 const REDIRECT = "http://127.0.0.1:4321/oauth/chatgpt";
 /** ChatGPT's own code, on a way out and a store a test can change. */
-const modelOf = (web: { fetch: Fetch }, store: Store) =>
+const modelOf = (
+  web: { fetch: Fetch },
+  store: Store,
+  wait: (ms: number, signal: AbortSignal) => Promise<void>,
+  now: () => number,
+) =>
   defineActor({
     exports: { login: accountLogin, session: llmSession },
     start(ctx) {
-      serveChatGPT(ctx.exports, { fetch: (request) => web.fetch(request), store, log: ctx.log });
+      serveChatGPT(ctx.exports, {
+        fetch: (request) => web.fetch(request),
+        store,
+        log: ctx.log,
+        wait,
+        now,
+      });
     },
   });
 type Definition = ReturnType<typeof modelOf>;
@@ -39,7 +51,26 @@ async function setup(t: test.TestContext, openai?: FakeOpenAI) {
     },
     delete: async ({ key }) => ({ deleted: values.delete(key) }),
   };
-  const actor = createTestContext(modelOf(web, store), { actorId: "chatgpt", module: "model" });
+  /**
+   * The waits between tries of a response. None takes any time here unless a test holds one: the
+   * clock the tries are timed by is this one, and a wait moves it on.
+   */
+  const waits: number[] = [];
+  const held: { wait?: (signal: AbortSignal) => Promise<void> } = {};
+  const clock = { now: 0 };
+  const actor = createTestContext(
+    modelOf(
+      web,
+      store,
+      async (ms, signal) => {
+        waits.push(ms);
+        clock.now += ms;
+        await held.wait?.(signal);
+      },
+      () => clock.now,
+    ),
+    { actorId: "chatgpt", module: "model" },
+  );
   await actor.start();
   // Every test ends by checking no token the fake issued reached anything outside the Actor.
   const seen: unknown[] = [];
@@ -54,7 +85,7 @@ async function setup(t: test.TestContext, openai?: FakeOpenAI) {
       throw error;
     }
   };
-  return { actor, fake, values, call, web };
+  return { actor, fake, values, call, web, waits, held };
 }
 
 function assertNoSecrets(fake: FakeOpenAI, outside: unknown[]) {
@@ -311,7 +342,10 @@ test("only response.completed counts as success", async (t) => {
         },
       ],
     },
-    { events: [{ type: "error", code: "subscription_sharing_usage_unavailable" }] },
+    // Unavailable passes, so it is tried again: each try gets the same answer.
+    ...Array.from({ length: 1 + RETRIES }, () => ({
+      events: [{ type: "error", code: "subscription_sharing_usage_unavailable" }],
+    })),
   );
   await assert.rejects(ask("a"), { code: "failed" });
   await assert.rejects(ask("b"), { code: "failed" });
@@ -341,9 +375,11 @@ test("each plan-usage error is refused as itself, and a usage limit is never ret
   });
   assert.equal(responses() - before, 1, "one request, never retried");
 
-  s.fake.script({ status: 503, code: "subscription_sharing_usage_unavailable" });
+  const each = (script: Parameters<typeof s.fake.script>[0]) =>
+    Array.from({ length: 1 + RETRIES }, () => script);
+  s.fake.script(...each({ status: 503, code: "subscription_sharing_usage_unavailable" }));
   await assert.rejects(ask(), { code: "unavailable" });
-  s.fake.script({ status: 503, detail: "direct routing unavailable" });
+  s.fake.script(...each({ status: 503, detail: "direct routing unavailable" }));
   await assert.rejects(ask(), { code: "unavailable" });
   assert.equal((await s.call("login", "status")).state, "signed_in");
 
@@ -357,7 +393,7 @@ test("each plan-usage error is refused as itself, and a usage limit is never ret
     assert.match(error.message, /tools\[0\]\.type/);
     return true;
   });
-  s.fake.script({ status: 500, code: "server_error" });
+  s.fake.script(...each({ status: 500, code: "server_error" }));
   await assert.rejects(ask(), (error: Error & { code?: string }) => {
     assert.equal(error.code, "failed");
     assert.match(error.message, /500 server_error \(request req_/);
@@ -583,4 +619,303 @@ test("events split across chunks, CRLF line ends and multi-line data parse", asy
     events(s.actor, "delta").map((d) => (d as { text: string }).text),
     ["é—", "ok"],
   );
+});
+
+test("a response that fails for a passing reason is asked for again, after a wait that doubles", async (t) => {
+  const s = await setup(t);
+  await signIn(s);
+  const responses = () => s.fake.requests.filter((r) => r.url.endsWith("/v1/responses")).length;
+  const ask = () =>
+    s.call("session", "respond", {
+      requestId: crypto.randomUUID(),
+      model: "gpt-test",
+      instructions: "",
+      input: [],
+    });
+  const emitted = () => events(s.actor, "delta").length;
+
+  // OpenAI can't be reached, then fails, then breaks off before it has written: the fourth try
+  // answers, and what it streams is streamed once.
+  s.fake.script(
+    { unreachable: true },
+    { status: 502 },
+    { events: [], cut: true },
+    { events: [delta("Hello"), completed([text("Hello")])] },
+  );
+  const before = responses();
+  const heard = emitted();
+  const reply = await ask();
+  assert.deepEqual(reply.output, [{ type: "message", role: "assistant", content: "Hello" }]);
+  assert.equal(responses() - before, 4);
+  assert.equal(emitted() - heard, 1);
+  assert.equal(s.waits.length, 3);
+  for (const [i, wait] of s.waits.entries()) {
+    const about = 1000 * 2 ** i;
+    assert.ok(
+      wait >= about * 0.9 && wait <= about * 1.1,
+      `the ${i + 1}. wait is about ${about} ms`,
+    );
+  }
+
+  // Past the last try the failure is the answer, as it would have been at once.
+  s.waits.length = 0;
+  s.fake.script(...Array.from({ length: 1 + RETRIES }, () => ({ unreachable: true as const })));
+  const again = responses();
+  await assert.rejects(ask(), { code: "unavailable" });
+  assert.equal(responses() - again, 1 + RETRIES);
+  assert.equal(s.waits.length, RETRIES);
+});
+
+test("the wait OpenAI asks for is taken when it is the longer; one past a minute is the answer", async (t) => {
+  const s = await setup(t);
+  await signIn(s);
+  const responses = () => s.fake.requests.filter((r) => r.url.endsWith("/v1/responses")).length;
+  const ask = () =>
+    s.call("session", "respond", {
+      requestId: crypto.randomUUID(),
+      model: "gpt-test",
+      instructions: "",
+      input: [],
+    });
+  /** One failure, then an answer: the one wait between them. */
+  const waited = async (script: Parameters<typeof s.fake.script>[0]) => {
+    s.waits.length = 0;
+    s.fake.script(script);
+    const before = responses();
+    assert.equal((await ask()).output.length, 1, JSON.stringify(script));
+    assert.equal(responses() - before, 2, JSON.stringify(script));
+    assert.equal(s.waits.length, 1, JSON.stringify(script));
+    return s.waits[0] as number;
+  };
+  const doubling = (wait: number) => wait >= 900 && wait <= 1100;
+
+  assert.equal(await waited({ status: 429, code: "rate_limit_exceeded", retryAfter: "2" }), 2000);
+  assert.equal(await waited({ status: 500, retryAfter: "3" }), 3000);
+  // The longer of the two headers, whichever it is, and a minute is still taken.
+  assert.equal(await waited({ status: 503, retryAfterMs: "7500", retryAfter: "3" }), 7500);
+  assert.equal(await waited({ status: 503, retryAfterMs: "0", retryAfter: "30" }), 30_000);
+  assert.equal(await waited({ status: 503, retryAfter: "60" }), 60_000);
+  // A rate limit that doesn't say when, a wait of nothing, and a wait that isn't a number of
+  // seconds wait as the first try does: OpenAI is never asked again at once.
+  assert.ok(doubling(await waited({ status: 429, code: "rate_limit_exceeded" })));
+  assert.ok(doubling(await waited({ status: 503, retryAfter: "0" })));
+  assert.ok(doubling(await waited({ status: 503, retryAfterMs: "", retryAfter: "-1" })));
+  assert.ok(doubling(await waited({ status: 503, retryAfter: "Wed, 21 Oct 2037 07:28:00 GMT" })));
+
+  // Longer than a minute is not waited for: the failure is the answer, in its own words.
+  s.waits.length = 0;
+  s.fake.script({ status: 429, code: "rate_limit_exceeded", retryAfterMs: "60001" });
+  const before = responses();
+  await assert.rejects(ask(), { code: "unavailable", message: /limiting how often/ });
+  assert.equal(responses() - before, 1);
+  // Nor is a wait that would begin a try more than two minutes after the first: the third
+  // failure is the answer, though a fourth try was left.
+  s.fake.script(...Array.from({ length: 3 }, () => ({ status: 503, retryAfter: "50" })));
+  await assert.rejects(ask(), { code: "unavailable" });
+  assert.equal(responses() - before, 1 + 3);
+  assert.deepEqual(s.waits, [50_000, 50_000]);
+  s.waits.length = 0;
+  // A 429 with no code of its own is the plan's limit, as before: never asked again.
+  const then = responses();
+  s.fake.script({ status: 429, retryAfter: "2" });
+  await assert.rejects(ask(), { code: "usage_limit" });
+  assert.equal(responses() - then, 1);
+  assert.deepEqual(s.waits, []);
+});
+
+test("what passes is a server's failure by status or code, and a refusal that says to try later", async (t) => {
+  const s = await setup(t);
+  await signIn(s);
+  const responses = () => s.fake.requests.filter((r) => r.url.endsWith("/v1/responses")).length;
+  const ask = () =>
+    s.call("session", "respond", {
+      requestId: crypto.randomUUID(),
+      model: "gpt-test",
+      instructions: "",
+      input: [],
+    });
+  const failed = (code: string) => ({ type: "response.failed", response: { error: { code } } });
+  for (const script of [
+    { status: 408 },
+    { status: 500 },
+    { status: 529 },
+    { status: 403, code: "subscription_sharing_usage_unavailable" },
+    { events: [{ type: "error", code: "server_error" }] },
+    { events: [failed("server_is_overloaded")] },
+    { events: [failed("rate_limit_exceeded")] },
+    { events: [{ type: "error", code: "slow_down" }] },
+    { events: [failed("subscription_sharing_user_unavailable")] },
+  ]) {
+    s.fake.script(script);
+    const before = responses();
+    assert.equal((await ask()).output.length, 1, JSON.stringify(script));
+    assert.equal(responses() - before, 2, JSON.stringify(script));
+  }
+
+  // The sign-in is refreshed for a request, and that can't reach OpenAI: the same failure.
+  const held = s.values.get("credential") as object;
+  s.values.set("credential", { ...held, expiresAt: 0 });
+  s.fake.options.offline = true;
+  s.waits.length = 0;
+  const before = responses();
+  await assert.rejects(ask(), { code: "unavailable" });
+  assert.equal(s.waits.length, RETRIES);
+  assert.equal(responses() - before, 0);
+  s.fake.options.offline = false;
+  assert.equal((await ask()).output.length, 1);
+});
+
+test("a response that has streamed text, or that OpenAI refuses, is not asked for again", async (t) => {
+  const s = await setup(t);
+  await signIn(s);
+  const responses = () => s.fake.requests.filter((r) => r.url.endsWith("/v1/responses")).length;
+  const ask = () =>
+    s.call("session", "respond", {
+      requestId: crypto.randomUUID(),
+      model: "gpt-test",
+      instructions: "",
+      input: [],
+    });
+  const once = async (script: Parameters<typeof s.fake.script>[0], code: string) => {
+    s.fake.script(script);
+    const before = responses();
+    await assert.rejects(ask(), { code });
+    assert.equal(responses() - before, 1, JSON.stringify(script));
+  };
+  // Its words are with their reader: a new try would write them again.
+  await once({ events: [delta("Half")], cut: true }, "failed");
+  await once({ events: [delta("Half")] }, "failed");
+  // What isn't passing: the response's own limit, a request OpenAI won't take, a refusal, also
+  // when it comes with a server's status.
+  await once({ events: [{ type: "response.incomplete", response: {} }] }, "failed");
+  await once({ events: [{ type: "error", code: "invalid_prompt" }] }, "failed");
+  await once({ status: 400, code: "invalid_request_error" }, "failed");
+  await once({ status: 404 }, "failed");
+  await once({ status: 429, code: "subscription_sharing_usage_limit_exceeded" }, "usage_limit");
+  await once({ status: 503, code: "subscription_sharing_usage_limit_exceeded" }, "usage_limit");
+  await once({ status: 500, code: "subscription_sharing_unsupported_capability" }, "unsupported");
+  assert.deepEqual(s.waits, []);
+});
+
+test("a failure says what OpenAI said of it, and nothing that could be a credential", async (t) => {
+  const s = await setup(t);
+  await signIn(s);
+  const told = async (script: Parameters<typeof s.fake.script>[0]) => {
+    s.fake.script(script);
+    const error = await s
+      .call("session", "respond", {
+        requestId: crypto.randomUUID(),
+        model: "gpt-test",
+        instructions: "",
+        input: [],
+      })
+      .then(
+        () => undefined,
+        (refused: Error) => refused,
+      );
+    assert.ok(error, JSON.stringify(script));
+    return error.message;
+  };
+  assert.match(
+    await told({ status: 400, code: "invalid_request_error", message: "The model\n is unknown." }),
+    /^OpenAI answered 400 invalid_request_error \(request req_[\w-]+\)\. OpenAI said: The model is unknown\.$/,
+  );
+  assert.match(
+    await told({ events: [{ type: "error", code: "invalid_prompt", message: "Bad prompt." }] }),
+    /^OpenAI ended the response with an error invalid_prompt \(request req_[\w-]+\)\. OpenAI said: Bad prompt\.$/,
+  );
+  // Cut at 200 characters, and a model's name or an address stays whole.
+  const failed = (message: string) => ({
+    type: "response.failed",
+    response: { error: { code: "bad_thing", message } },
+  });
+  const long = await told({ events: [failed(`It broke. ${"so it goes ".repeat(40)}`)] });
+  assert.equal(long.split("OpenAI said: ")[1]?.length, 200);
+  assert.match(
+    await told({ status: 404, message: "The model `gpt-5.1-codex-mini-2025-11-13` is gone." }),
+    /OpenAI said: The model `gpt-5\.1-codex-mini-2025-11-13` is gone\.$/,
+  );
+  // A run long enough to be a token is left out, in a reply and inside a stream: 32 characters
+  // is one, 31 is not.
+  const run = "a1b2c3d4-e5f6_a7b8c9d0e1f2a3b4c5";
+  assert.equal(run.length, 32);
+  assert.match(await told({ status: 400, message: `Saw ${run} here.` }), /Saw … here\.$/);
+  assert.match(await told({ events: [failed(`Saw ${run} here.`)] }), /Saw … here\.$/);
+  assert.match(await told({ status: 400, message: `Saw ${run.slice(1)} here.` }), /Saw a?1b2c3/);
+  // Nothing of a message about a credential, which can quote one in part, wherever it comes;
+  // and nothing of a reply that refuses the sign-in, whatever it says.
+  const [token] = [...s.fake.secrets].filter((secret) => secret.length >= 32);
+  assert.ok(token, "the fake issued a token");
+  const partly = `${token.slice(0, 12)}****${token.slice(-12)}`;
+  for (const message of [
+    `Incorrect API key provided: ${partly}.`,
+    `The token ${token} has expired.`,
+    `Bad credentials\n${partly}`,
+  ]) {
+    assert.doesNotMatch(await told({ status: 400, message }), /OpenAI said/, message);
+    assert.doesNotMatch(await told({ events: [failed(message)] }), /OpenAI said/, message);
+    assert.doesNotMatch(
+      await told({ events: [{ type: "error", code: "bad_thing", message }] }),
+      /OpenAI said/,
+      message,
+    );
+  }
+  assert.doesNotMatch(await told({ status: 403, message: "Not for you." }), /OpenAI said/);
+  s.fake.script({ status: 401, message: "Signed out." });
+  assert.doesNotMatch(await told({ status: 401, message: "Signed out." }), /OpenAI said/);
+  // OpenAI said nothing: the line ends where it did.
+  assert.match(await told({ status: 404 }), /^OpenAI answered 404 \(request req_[\w-]+\)\.$/);
+  assert.match(
+    await told({
+      events: [
+        {
+          type: "response.incomplete",
+          response: { incomplete_details: { reason: "max_output_tokens" } },
+        },
+      ],
+    }),
+    /^The response ended incomplete \(max_output_tokens\)\.$/,
+  );
+});
+
+test("a cancel during the wait before another try is a cancel, and nothing more is asked", async (t) => {
+  const s = await setup(t);
+  await signIn(s);
+  const responses = () => s.fake.requests.filter((r) => r.url.endsWith("/v1/responses")).length;
+  let waiting: (() => void) | undefined;
+  s.held.wait = (signal) =>
+    new Promise<void>((resolve) => {
+      waiting = resolve;
+      signal.addEventListener("abort", () => resolve(), { once: true });
+    });
+  s.fake.script({ status: 500 });
+  const before = responses();
+  const asking = s.call("session", "respond", {
+    requestId: "held",
+    model: "gpt-test",
+    instructions: "",
+    input: [],
+  });
+  const settled = asking.then(
+    () => "answered",
+    (error: { code?: string }) => error.code,
+  );
+  for (let i = 0; i < 200 && !waiting; i++) await new Promise((soon) => setImmediate(soon));
+  assert.ok(waiting, "it waits before the next try");
+  await s.call("session", "cancel", { requestId: "held" });
+  assert.equal(await settled, "cancelled");
+  assert.equal(responses() - before, 1);
+});
+
+test("the wait between tries ends when its time is up, and at once when cancelled", async () => {
+  const started = Date.now();
+  await sleep(30, new AbortController().signal);
+  assert.ok(Date.now() - started >= 25);
+
+  const during = new AbortController();
+  const waiting = sleep(60_000, during.signal);
+  during.abort();
+  await assert.rejects(waiting, { code: "cancelled" });
+  // One cancelled before it began rejects the same way. Neither leaves a timer: the test ends.
+  await assert.rejects(sleep(60_000, during.signal), { code: "cancelled" });
 });
