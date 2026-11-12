@@ -55,9 +55,11 @@ export const sectionOf = (route: Route): Tab | undefined =>
 export function SettingsFrame({ tab, children }: { tab: Tab; children: React.ReactNode }) {
   const [action, setAction] = useState<Offer>();
   return (
-    <div className="mx-auto h-full max-w-[1080px] pt-2">
-      <div className="flex h-full flex-col">
-        <div className="no-bar flex shrink-0 items-center justify-between gap-2 overflow-x-auto px-5 pt-4 tight:px-3.5">
+    // The row and the page under it are 1080 wide and centred; what scrolls is as wide as the
+    // page area, so the wheel works beside the page as well as over it.
+    <div className="flex h-full flex-col pt-2">
+      <div className="mx-auto w-full max-w-[1080px] shrink-0">
+        <div className="no-bar flex items-center justify-between gap-2 overflow-x-auto px-5 pt-4 tight:px-3.5">
           <Tabs value={tab} onValueChange={(next) => go(ROUTES[next as Tab])}>
             <TabsList>
               <TabsTrigger value="templates">Templates</TabsTrigger>
@@ -77,9 +79,9 @@ export function SettingsFrame({ tab, children }: { tab: Tab; children: React.Rea
             </Button>
           )}
         </div>
-        <div className="min-h-0 flex-1">
-          <Offered.Provider value={setAction}>{children}</Offered.Provider>
-        </div>
+      </div>
+      <div className="min-h-0 flex-1">
+        <Offered.Provider value={setAction}>{children}</Offered.Provider>
       </div>
     </div>
   );

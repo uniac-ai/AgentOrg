@@ -13,8 +13,8 @@ test.after(() => browser.close());
 
 type Gateway = Awaited<ReturnType<typeof standIn>>;
 
-async function open(gateway: Gateway, hash: string, width = 1440): Promise<Page> {
-  const page = await browser.newPage({ viewport: { width, height: 900 } });
+async function open(gateway: Gateway, hash: string, width = 1440, height = 900): Promise<Page> {
+  const page = await browser.newPage({ viewport: { width, height } });
   page.setDefaultTimeout(8000);
   await page.addInitScript((session) => localStorage.setItem("agentorg.session", session), SESSION);
   await page.goto(`${gateway.url}/${hash}`);
@@ -430,6 +430,51 @@ test(
         await main.getByRole("button", { name: /ChatGPT/ }).count(),
         0,
         "the way in is Home's",
+      );
+    }
+    await page.close();
+  }),
+);
+
+test(
+  "a section's page moves with the wheel from anywhere under the row: beside the page as well as over it",
+  withGateway(async (gateway) => {
+    // Wide enough that there is room at each side of the page, and too short for its list.
+    const page = await open(gateway, "#/skills", 1900, 150);
+    const first = row(page, "cite-sources");
+    await first.waitFor();
+    const top = async (of: ReturnType<Page["locator"]>) => (await of.boundingBox())?.y ?? 0;
+    const area = await page.getByRole("main").boundingBox();
+    const list = await page.getByRole("main").getByRole("list").boundingBox();
+    const tabs = page.getByRole("main").getByRole("tablist");
+    assert.ok(area && list);
+    const [rowWas, tabsWas] = [await top(first), await top(tabs)];
+    for (const [side, x] of [
+      ["right of the page", list.x + list.width + 80],
+      ["left of the page", list.x - 80],
+      ["page", list.x + list.width / 2],
+    ] as const) {
+      assert.ok(x > area.x && x < area.x + area.width, `the ${side} is in the page area`);
+      await page.mouse.move(x, area.y + area.height - 40);
+      await page.mouse.wheel(0, 20);
+      await page.waitForFunction(
+        ([was, name]) => {
+          const rows = [...document.querySelectorAll("main li")];
+          const one = rows.find((li) => li.textContent?.includes(name as string));
+          return !!one && one.getBoundingClientRect().y < (was as number);
+        },
+        [rowWas, "cite-sources"] as const,
+      );
+      // The row of sections stays where it is: the page under it is what moves.
+      assert.equal(await top(tabs), tabsWas);
+      await page.mouse.wheel(0, -400);
+      await page.waitForFunction(
+        ([was, name]) => {
+          const rows = [...document.querySelectorAll("main li")];
+          const one = rows.find((li) => li.textContent?.includes(name as string));
+          return one?.getBoundingClientRect().y === was;
+        },
+        [rowWas, "cite-sources"] as const,
       );
     }
     await page.close();

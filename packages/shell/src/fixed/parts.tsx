@@ -105,7 +105,9 @@ export const Nothing = ({ children }: { children: React.ReactNode }) => (
 export const rowClass = (focused: boolean) =>
   `group/row -mx-2 grid min-h-14 items-center gap-x-4 rounded-xl px-2 py-2 ${focused ? "bg-[var(--selected)]" : ""}`;
 
-/** A page's own scroll. */
+/** A Settings page's own scroll: as wide as the page area, with the page 1080 wide in it. */
 export const Scroll = ({ children }: { children: React.ReactNode }) => (
-  <div className="no-bar h-full overflow-y-auto p-5 tight:p-3.5">{children}</div>
+  <div className="no-bar h-full overflow-y-auto">
+    <div className="mx-auto max-w-[1080px] p-5 tight:p-3.5">{children}</div>
+  </div>
 );

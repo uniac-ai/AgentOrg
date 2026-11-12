@@ -491,6 +491,10 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
       walks: "answered" as "answered" | "held" | "refused",
       /** The walks held, each to be answered when it is let go. */
       waiting: [] as (() => void)[],
+      /** Whether a part of a file is given when it is asked for, or held until it is let go. */
+      reads: "answered" as "answered" | "held",
+      /** The parts held. */
+      parts: [] as (() => void)[],
     },
     /** Browser sockets, each with the tab it is shown, and what the operating ones sent. */
     screens: new Map<WebSocket, { shown: number | null; chose: boolean }>(),
@@ -1093,15 +1097,19 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
         if (!file) return send({ type: "refused", message: `There's no file at ${path}.` });
         const offset = Number(request.offset);
         const bytes = file.bytes.subarray(offset, offset + Number(request.length));
-        send({
-          type: "data",
-          path,
-          offset,
-          length: bytes.length,
-          size: file.bytes.length,
-          modifiedAt: file.modifiedAt,
-        });
-        return socket.send(bytes);
+        const answer = () => {
+          if (socket.readyState !== socket.OPEN) return;
+          send({
+            type: "data",
+            path,
+            offset,
+            length: bytes.length,
+            size: file.bytes.length,
+            modifiedAt: file.modifiedAt,
+          });
+          socket.send(bytes);
+        };
+        return live.files.reads === "held" ? void live.files.parts.push(answer) : answer();
       }
       if (request.type === "write") {
         if (request.offset === 0) parts = [];
@@ -1293,6 +1301,11 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
     endWalks() {
       live.files.walks = "answered";
       for (const answer of live.files.waiting.splice(0)) answer();
+    },
+    /** The parts of files held are given, and those to come are too. */
+    endReads() {
+      live.files.reads = "answered";
+      for (const answer of live.files.parts.splice(0)) answer();
     },
     /** A file in the workspace, last changed so many minutes ago. */
     putFile(path: string, content: string | Buffer, minutesAgo = 0) {
