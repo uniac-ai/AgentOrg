@@ -75,6 +75,12 @@ export const Template = z.strictObject({
   base: StackBase.extend({ provider: ProviderName }),
   units: z.array(StackUnit.extend({ provider: ProviderName })).max(64),
 });
+/**
+ * A template as the listing gives it. `shipped` is on one that came with the app: it can't be
+ * removed. A template saved under its id is listed in its place, and removing that one brings it
+ * back.
+ */
+export const ListedTemplate = Template.extend({ shipped: z.literal(true).optional() });
 /** What is filled in for one unit of a template, by its position: prefills it replaces, and secrets. */
 const Fill = z.strictObject({
   values: FieldValues.optional(),
@@ -176,10 +182,10 @@ export const agents = defineInterface({
         units: z.array(Unit.extend({ provider: Id, providerName: ActorName })),
       }),
     }),
-    /** The templates: what the app ships and what the person saved. */
+    /** The templates: what the app ships, each marked `shipped`, and what the person saved. */
     templates: method({
       input: z.object({}),
-      output: z.object({ templates: z.array(Template) }),
+      output: z.object({ templates: z.array(ListedTemplate) }),
     }),
     /** Save a template, replacing the one of its id. A saved template holds no secret. */
     saveTemplate: method({ input: Template, output: z.object({}) }),

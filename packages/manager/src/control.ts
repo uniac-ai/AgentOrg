@@ -1092,7 +1092,8 @@ export function createControl(parts: ControlParts) {
     }),
     verb({
       name: "template_list",
-      description: "The templates there are.",
+      description:
+        "The templates there are. One with `shipped` came with the app: it can't be removed.",
       input: z.object({}),
       needs: own,
       changes: false,
