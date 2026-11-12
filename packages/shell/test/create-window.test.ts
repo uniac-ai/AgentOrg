@@ -183,7 +183,35 @@ test(
         probe.remove();
         return color;
       }),
-      "in the colour of a caution",
+      "in the colour of a caution, which its unit marks it as",
+    );
+    // An answer its unit doesn't mark says what it means in the muted colour.
+    await choose(page, "Where it resides", /^Its own container/);
+    const plain = computer.getByText("Isolated from your files.");
+    await plain.waitFor();
+    assert.equal(await note.count(), 0);
+    assert.equal(
+      await plain.evaluate((e) => getComputedStyle(e).color),
+      await computer.getByText("Where it resides", { exact: true }).evaluate((e) => {
+        const probe = document.createElement("i");
+        probe.className = "text-muted-foreground";
+        e.append(probe);
+        const color = getComputedStyle(probe).color;
+        probe.remove();
+        return color;
+      }),
+      "muted",
+    );
+    assert.notEqual(
+      await plain.evaluate((e) => getComputedStyle(e).color),
+      await computer.evaluate((e) => {
+        const probe = document.createElement("i");
+        probe.style.color = "var(--warn)";
+        e.append(probe);
+        const color = getComputedStyle(probe).color;
+        probe.remove();
+        return color;
+      }),
     );
     assert.doesNotMatch(await computer.innerText(), /A browser of its own/);
     assert.equal(await computer.getByRole("button", { name: /^(About|Browse)/ }).count(), 0);
@@ -390,6 +418,40 @@ test(
     assert.equal(await window_.getByRole("button", { name: "Build options" }).isVisible(), false);
     const form = await boxOf(window_.getByRole("form", { name: "Build" }));
     assert.deepEqual([form.x, form.y, form.width, form.height], [16, box.y + 68, 358, 632]);
+    await page.close();
+  }),
+);
+
+test(
+  "a unit a stack holds once isn't offered while the stack has it, and one it may hold again is",
+  withGateway(async (gateway) => {
+    const page = await open(gateway);
+    const offered = async () => {
+      await panel(page).getByRole("button", { name: "Add a unit" }).click();
+      const names = (await page.getByRole("menuitem").allInnerTexts()).map(
+        (text) => text.split("\n")[0],
+      );
+      await page.keyboard.press("Escape");
+      await page.getByRole("menu").waitFor({ state: "detached" });
+      return names;
+    };
+    // An empty stack is offered every unit.
+    await agentsRead(page);
+    await plus(page).click();
+    await panel(page).locator("#build-name").waitFor();
+    const all = await offered();
+    assert.ok(all.includes("Computer") && all.includes("Web"), all.join(", "));
+    // Assistant brings a computer and web search: the computer is held once, web search isn't.
+    await named(page, /^Assistant/).click();
+    await card(page, "Computer").waitFor();
+    const held = await offered();
+    assert.ok(!held.includes("Computer"), `Computer isn't offered: ${held.join(", ")}`);
+    assert.ok(held.includes("Web"));
+    assert.equal(held.length, all.length - 1);
+    // Taken out of the stack, it is offered again.
+    await card(page, "Computer").getByRole("button", { name: "Remove Computer" }).click();
+    await card(page, "Computer").waitFor({ state: "detached" });
+    assert.deepEqual(await offered(), all);
     await page.close();
   }),
 );

@@ -240,6 +240,8 @@ const UNITS: Units["units"] = [
     id: "computer",
     title: "Computer",
     description: "Terminal, files and a browser",
+    // A stack holds it once, as the service's own does.
+    once: true,
     needs: [],
     gives: { slots: [], skills: [], results: ["computer"] },
     form: [
@@ -250,7 +252,12 @@ const UNITS: Units["units"] = [
         title: "Where it resides",
         required: true,
         options: [
-          { value: "local", title: "This computer", description: "It acts as you on this Mac." },
+          {
+            value: "local",
+            title: "This computer",
+            description: "It acts as you on this Mac.",
+            caution: true,
+          },
           {
             value: "container",
             title: "Its own container",

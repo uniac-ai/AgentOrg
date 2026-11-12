@@ -100,6 +100,12 @@ function Choose() {
 function Stack() {
   const building = useBuilding();
   const { catalog, draft, hide, refreshUnits, saveTemplate, setText, setProblems } = building;
+  // What can be added: a unit a stack holds once isn't offered while the stack has it.
+  const addable = catalog.units.filter(
+    (unit) =>
+      !unit.once ||
+      !draft?.units.some((held) => held.unit?.provider === unit.provider && held.id === unit.id),
+  );
   const act = useAct();
   // Made while signed out of the model account, an agent can't work yet: the foot says so.
   const needs = needsOf(useLogin());
@@ -210,7 +216,7 @@ function Stack() {
                 variant="ghost"
                 size="sm"
                 className="mt-2 w-full justify-start text-muted-foreground"
-                disabled={catalog.units.length === 0}
+                disabled={addable.length === 0}
               >
                 <PlusIcon />
                 Add a unit
@@ -218,7 +224,7 @@ function Stack() {
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start" className="w-72">
               <DropdownMenuLabel className="sr-only">Units</DropdownMenuLabel>
-              {catalog.units.map((unit) => (
+              {addable.map((unit) => (
                 <DropdownMenuItem
                   key={`${unit.provider}/${unit.id}`}
                   onSelect={() => building.addUnit(unit)}
