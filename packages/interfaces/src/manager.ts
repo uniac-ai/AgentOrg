@@ -243,7 +243,10 @@ export const agents = defineInterface({
       input: OnAgent,
       output: AgentEntry.extend({
         instructions: z.string().max(200_000),
-        /** Which unit gave each is its `instance`. */
+        /**
+         * Which unit of its stack gave each is its `instance`: none for one exposed to it, by the
+         * person or by the agent that made it.
+         */
         skills: z.array(SkillEntry.extend({ instance: Id.optional() })),
         mcp: z.array(
           z.object({
@@ -254,7 +257,7 @@ export const agents = defineInterface({
             instance: Id.optional(),
           }),
         ),
-        /** Its stack, top to bottom. */
+        /** Its stack, top to bottom. What was exposed to it is no unit of it. */
         units: z.array(AppliedUnit),
         /**
          * What it holds, in the stack's order. Management always gives it, empty for an agent
@@ -296,7 +299,12 @@ export const agents = defineInterface({
       ]),
       output: z.object({}),
     }),
-    /** Add a unit to a living agent, below those it has; it takes effect at the next request. */
+    /**
+     * Add a unit to a living agent, below those it has; it takes effect at the next request. For
+     * management's own Skill unit, or its Connection or MCP unit on a connection there is, the
+     * instance is the exposure's own: `get` lists no unit for it, and `removeUnit` with it takes
+     * the exposure off, as `unexpose` does.
+     */
     addUnit: method({ input: z.strictObject(AddUnit), output: z.object({ instance: Id }) }),
     /** Remove a unit from a living agent: what it made goes. Refused `state` while another needs it. */
     removeUnit: method({ input: z.object({ agent: Id, instance: Id }), output: z.object({}) }),
