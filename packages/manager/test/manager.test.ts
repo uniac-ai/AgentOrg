@@ -777,14 +777,18 @@ async function setup(t: test.TestContext) {
     }
   };
   /** An agent leaves and comes back offering its chats as `offered`, as a new release's would. */
-  const rejoin = async (agent: string, offered: Interface) => {
+  const rejoin = async (
+    agent: string,
+    offered: Interface,
+    more: Record<string, Interface> = {},
+  ) => {
     running.get(agent)?.close();
     const client = await connect({
       hubUrl: server.url,
       actorId: agent,
       credential: credentials.get(agent) as string,
       slots: { settings: agentSettings },
-      exports: { chat: offered },
+      exports: { chat: offered, ...more },
       start() {},
     });
     running.set(agent, client as never);
@@ -813,6 +817,8 @@ async function setup(t: test.TestContext) {
   return {
     restart,
     rejoin,
+    /** An agent's connection goes, as when its provider stops. */
+    leave: (agent: string) => running.get(agent)?.close(),
     exposedTo,
     personSlot,
     chats,
@@ -1972,7 +1978,7 @@ async function delegating(t: test.TestContext) {
   return { ...s, agentsUnit, parent, made, names };
 }
 
-test("an agent that manages its own reads the Work of each it made, while it manages them", async (t) => {
+test("an agent that manages its own reads the Work of each it made, while it manages them and they are connected", async (t) => {
   const s = await delegating(t);
   await s.calls.agents.saveTemplate({
     id: "workhand",
@@ -1981,8 +1987,8 @@ test("an agent that manages its own reads the Work of each it made, while it man
     base: { provider: "Agents", creatable: "working" },
     units: [],
   });
-  const { agent: parent, tools } = await s.parent({ templates: ["workhand", "helper"] });
-  const kid = await s.made(tools, "create_workhand", { name: "Kid", purpose: "Do a part." });
+  const { agent: parent, tools: manages } = await s.parent({ templates: ["workhand", "helper"] });
+  const kid = await s.made(manages, "create_workhand", { name: "Kid", purpose: "Do a part." });
   const slot = `work_${kid}`;
   const reached = async () =>
     (await s.bindingsOf(parent))
@@ -2005,7 +2011,7 @@ test("an agent that manages its own reads the Work of each it made, while it man
     ["control"],
   );
   // One whose creatable gives it no Work isn't reached.
-  await s.made(tools, "create_helper", { name: "Plain", purpose: "Hold none." });
+  await s.made(manages, "create_helper", { name: "Plain", purpose: "Hold none." });
   assert.deepEqual(await reached(), [[slot, kid]]);
   // Its agents unit gone, it reaches none; back, at "own", it reaches them again.
   const control = (await s.calls.agents.get({ agent: parent })).units.find(
@@ -2032,6 +2038,31 @@ test("an agent that manages its own reads the Work of each it made, while it man
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
   assert.deepEqual(await reached(), [[slot, kid]]);
+  // While it is away, its maker doesn't reach it: no slot of its maker's waits for it.
+  s.leave(kid);
+  for (let i = 0; (await reached()).length > 0; i++) {
+    assert.ok(i < 300, "it was still reached");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  // Back, it is reached again.
+  await s.rejoin(kid, chat, { tools });
+  for (let i = 0; (await reached()).length === 0; i++) {
+    assert.ok(i < 300, "it was never reached again once back");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  s.leave(kid);
+  for (let i = 0; (await reached()).length > 0; i++) {
+    assert.ok(i < 300, "it was still reached");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  // Nor once management starts while it is away, though the Hub kept its slot.
+  await s.person.slots.grants.call.expose({ provider: kid, export: "tools", to: parent, as: slot });
+  assert.deepEqual(await reached(), [[slot, kid]]);
+  await s.restart(() => {});
+  for (let i = 0; (await reached()).length > 0; i++) {
+    assert.ok(i < 300, "it was still reached after the start");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
 });
 
 test("an agent creates, messages, reads, stops and removes an agent of its own", async (t) => {
