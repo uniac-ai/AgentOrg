@@ -196,6 +196,9 @@ export function sampleAgents(gateway: Gateway) {
     'import { session } from "./session";\n\nexport async function submit(cart) {\n  await session.pay(cart);\n}',
     weeks,
   );
+  // The two files its task changed lately: one new, one edited.
+  gateway.putFile("storefront/src/checkout/retry.test.ts", "t".repeat(344), 1);
+  gateway.putFile("storefront/src/checkout/retry.ts", "r".repeat(1300), 0.5);
   // What Research was built from: the template, its two units as they were filled in, and as
   // many connections and skills as the design's has, under the same names.
   const research = gateway.agents.get("a-research") as Agent;
@@ -272,8 +275,11 @@ export async function openWindow(page: Page, beside: boolean) {
   await page.getByRole("group", { name: "Window" }).getByRole("navigation").waitFor();
 }
 
-/** Research's files in front on its page, in its storefront folder, with a file open if one is named. */
-export async function openFiles(page: Page, file?: string) {
+/**
+ * Research's files in front on its page, in its storefront folder: with a file open if one is
+ * named, or what changed lately listed in the folder's place.
+ */
+export async function openFiles(page: Page, file?: string, changed = false) {
   const main = page.getByRole("main");
   await main
     .getByRole("navigation", { name: "Dock" })
@@ -282,9 +288,15 @@ export async function openFiles(page: Page, file?: string) {
   const window = main.getByRole("group", { name: "Files" });
   await window.getByRole("button", { name: "storefront" }).click();
   await window.getByRole("button", { name: /README\.md/ }).waitFor();
+  // How many changed is said once the files have been walked for it.
+  await window.getByRole("tab", { name: /^Changed\s*\d/ }).waitFor();
   if (file) {
     await window.getByRole("button", { name: file }).click();
     await window.locator("pre").getByText("Storefront").waitFor();
+  }
+  if (changed) {
+    await window.getByRole("tab", { name: /^Changed/ }).click();
+    await window.getByRole("list", { name: "Changed files" }).getByRole("button").first().waitFor();
   }
 }
 

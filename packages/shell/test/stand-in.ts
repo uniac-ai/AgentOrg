@@ -484,6 +484,10 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
       held: new Map<string, { bytes: Buffer; modifiedAt: string }>(),
       asked: [] as Record<string, unknown>[],
       sockets: new Set<WebSocket>(),
+      /** What a walk for what changed comes to: its answer, none yet, or a refusal. */
+      walks: "answered" as "answered" | "held" | "refused",
+      /** The walks held, each to be answered when it is let go. */
+      waiting: [] as (() => void)[],
     },
     /** Browser sockets, each with the tab it is shown, and what the operating ones sent. */
     screens: new Map<WebSocket, { shown: number | null; chose: boolean }>(),
@@ -1060,6 +1064,26 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
           more: false,
         });
       }
+      if (request.type === "changed") {
+        const since = Date.parse(String(request.since));
+        if (Number.isNaN(since)) return send({ type: "refused", message: "That isn't a time." });
+        if (live.files.walks === "refused")
+          return send({ type: "refused", message: "The walk took too long." });
+        // What changed is what it is when the walk ends.
+        const answer = () => {
+          const changes = [...held]
+            .filter(([, file]) => Date.parse(file.modifiedAt) > since)
+            .map(([at, file]) => ({
+              path: at,
+              size: file.bytes.length,
+              modifiedAt: file.modifiedAt,
+            }))
+            .sort((a, b) => Date.parse(b.modifiedAt) - Date.parse(a.modifiedAt));
+          if (socket.readyState === socket.OPEN)
+            send({ type: "changes", since: request.since, changes, more: false });
+        };
+        return live.files.walks === "held" ? void live.files.waiting.push(answer) : answer();
+      }
       if (request.type === "read") {
         const file = held.get(path);
         if (!file) return send({ type: "refused", message: `There's no file at ${path}.` });
@@ -1260,6 +1284,11 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
     /** Every tab's AgentOrg sign-in ends, as when its session is revoked. */
     endSessions() {
       for (const socket of sockets.clients) socket.close(4401, "Sign in again");
+    },
+    /** The walks held are answered, and those to come are too. */
+    endWalks() {
+      live.files.walks = "answered";
+      for (const answer of live.files.waiting.splice(0)) answer();
     },
     /** A file in the workspace, last changed so many minutes ago. */
     putFile(path: string, content: string | Buffer, minutesAgo = 0) {

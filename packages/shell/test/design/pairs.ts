@@ -345,7 +345,7 @@ const SCREENS: Screen[] = [
       built: (page) => openWindow(page, beside),
     }),
   ),
-  ...(["folder", "file"] as const).map(
+  ...(["folder", "file", "changed"] as const).map(
     (state): Screen => ({
       name: `files-${state}`,
       sizes: ["wide"],
@@ -354,9 +354,10 @@ const SCREENS: Screen[] = [
       hash: "#/a/a-research",
       design: async (page) => {
         await openDesignAgent(page, "Research");
-        await openFiles(page, state === "file" ? "README.md" : undefined);
+        await openFiles(page, state === "file" ? "README.md" : undefined, state === "changed");
       },
-      built: (page) => openFiles(page, state === "file" ? "README.md" : undefined),
+      built: (page) =>
+        openFiles(page, state === "file" ? "README.md" : undefined, state === "changed"),
       part: (page) => page.getByRole("main").getByRole("group", { name: "Files" }),
     }),
   ),
