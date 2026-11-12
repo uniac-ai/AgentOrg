@@ -5,6 +5,7 @@ import { MessageCircleIcon, SlidersHorizontalIcon, SquarePenIcon } from "lucide-
 import { useState } from "react";
 import { type AgentTab, api, go } from "../data.ts";
 import { Button } from "../ui/button.tsx";
+import { ActivityBox } from "./activity.tsx";
 import { useAllChats } from "./all-chats.tsx";
 import { ChatRow } from "./chat-parts.tsx";
 import { useChats } from "./chats.tsx";
@@ -53,9 +54,11 @@ export function AgentPage({
   const computer = windowsOf(surfaces).length > 0;
   const load = surfaces.find((s) => s.protocol === LOAD && !s.unavailable);
   const start = () => act.run(() => api.call("agents", "start", { agent: id }));
+  // Overview comes last, so the page opens as it did.
   const tabs: { id: AgentTab; title: string }[] = [
     ...(computer ? [{ id: "computer" as const, title: "Computer" }] : []),
     { id: "chats", title: "Chats" },
+    { id: "overview", title: "Overview" },
   ];
   const tab = tabs.find((t) => t.id === asked) ?? tabs[0];
   // Its own page lists its chats while it is stopped too: only one archived by hand is left out.
@@ -175,6 +178,11 @@ export function AgentPage({
                   </li>
                 ))}
               </ul>
+            </div>
+          )}
+          {tab?.id === "overview" && (
+            <div className="mx-auto flex max-w-[720px] flex-col gap-7">
+              <ActivityBox agent={id} detail={detail} />
             </div>
           )}
         </div>

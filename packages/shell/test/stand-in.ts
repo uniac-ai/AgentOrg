@@ -6,6 +6,7 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { extname } from "node:path";
 import {
+  type Activity,
   agents as agentsInterface,
   chat as chatInterface,
   connections as connectionsInterface,
@@ -34,6 +35,8 @@ type Status = z.output<typeof chatInterface.methods.state.output>;
 type ChatEntry = z.output<typeof chatInterface.events.chat.payload>;
 type Problem = NonNullable<ChatEntry["problem"]>;
 type ChatEvent = keyof typeof chatInterface.events;
+/** A piece of an agent's work with every entry it has: `work` answers the latest, and pages. */
+export type Work = Omit<z.input<typeof Activity>["works"][number], "more">;
 export type Creatable = z.output<
   typeof agentsInterface.methods.creatable.output
 >["creatables"][number];
@@ -63,6 +66,8 @@ export interface Agent {
   units?: z.output<typeof agentsInterface.methods.get.output>["units"];
   /** The model chosen for it; none is its provider's default. */
   model?: string;
+  /** Its pieces of work, newest first, as its Work capability holds them. None by default. */
+  works?: Work[];
   /**
    * The chat a test speaks in through `addMessage`, with the agent's status: whether it works. It
    * has an `id` once something has been said in it; an agent with nothing said has no chat. Its
@@ -527,6 +532,43 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
     ...(template ? { template } : {}),
   });
   const chatSlot = (agent: string) => `chat_${agent.replaceAll("-", "_")}`;
+  /** The person's slots to an agent's Work: its `capability@1`, and its operation's `tools@1`. */
+  const workSlot = (agent: string) => `work_${agent.replaceAll("-", "_")}`;
+  const workToolsSlot = (agent: string) => `worktools_${agent.replaceAll("-", "_")}`;
+  /** What the `work` tool answers, as the assistant does: the latest of each, or a page of one. */
+  const workCall = (agent: Agent, input: Record<string, unknown>) => {
+    const refused = refusals.get("work.call");
+    if (refused) {
+      refusals.delete("work.call");
+      throw refused;
+    }
+    const always = refusing.get("work.call");
+    if (always) throw always;
+    if (input.name !== "work") throw new Refusal("unknown", "There is no such tool.");
+    const { work, before, limit } = (input.arguments ?? {}) as Record<string, unknown>;
+    const works = agent.works ?? [];
+    if (work === undefined)
+      return {
+        output: JSON.stringify({
+          works: works.slice(0, 6).map((one) => ({
+            ...one,
+            entries: one.entries.slice(-3),
+            more: one.entries.length > 3,
+          })),
+        }),
+      };
+    const one = works.find((w) => w.id === work);
+    if (!one) return { output: "There is no such piece of work.", failed: true };
+    // Before an entry it doesn't have, it has none.
+    const end =
+      before === undefined ? one.entries.length : one.entries.findIndex((e) => e.id === before);
+    if (end === -1) return { output: JSON.stringify({ work, entries: [], more: false }) };
+    const most = typeof limit === "number" && Number.isInteger(limit) && limit > 0 ? limit : 20;
+    const start = Math.max(0, end - Math.min(most, 20));
+    return {
+      output: JSON.stringify({ work, entries: one.entries.slice(start, end), more: start > 0 }),
+    };
+  };
 
   type Input = Record<string, never> & Record<string, unknown>;
   const management: Record<string, Record<string, (input: Input) => unknown>> = {
@@ -551,6 +593,29 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
             };
           }),
           units: agent.units ?? [],
+          // Its Work, as an assistant holds it of itself: one view, reached through the person's
+          // own two slots.
+          capabilities: [
+            {
+              id: "work",
+              title: "Activity",
+              slots: ["work"],
+              surfaces: [],
+              views: [
+                {
+                  id: "activity",
+                  place: "column",
+                  kind: "activity",
+                  operation: "work",
+                  slot: "work",
+                },
+              ],
+              person: {
+                capability: workSlot(agent.agent),
+                operations: { work: workToolsSlot(agent.agent) },
+              },
+            },
+          ],
         };
       },
       units: () => ({
@@ -928,6 +993,16 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
         chatCall(agent, method, spec.input.parse(input) as Record<string, unknown>),
       );
     }
+    if (slot.startsWith("worktools_")) {
+      const agent = agentOf(slot.slice(10).replaceAll("_", "-"));
+      if (method !== "call") throw new Refusal("invalid", `tools has no method ${method} here.`);
+      return workCall(agent, input);
+    }
+    if (slot.startsWith("work_")) {
+      agentOf(slot.slice(5).replaceAll("_", "-"));
+      if (method !== "state") throw new Refusal("invalid", `capability has no ${method} here.`);
+      return { state: "connected", surfaces: [] };
+    }
     if (slot === "bindings") {
       const bound = (slot: string, provider: string, exported: string, iface: string) => ({
         consumer: PERSON,
@@ -1266,7 +1341,11 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
           );
         }
       };
-      const slot = message.slot.startsWith("chat_") ? "chat" : message.slot;
+      const slot = message.slot.startsWith("chat_")
+        ? "chat"
+        : message.slot.startsWith("worktools_")
+          ? "work"
+          : message.slot;
       const held = holds.get(`${slot}.${message.method}`);
       if (held) void held.then(answer);
       else answer();
@@ -1283,6 +1362,11 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
     agents,
     connections,
     calls,
+    /** An agent's pieces of work come to be these, and its Work says its view changed. */
+    setWorks(agent: string, works: Work[]) {
+      agentOf(agent).works = works;
+      emit(workSlot(agent), "changed", { view: "activity" });
+    },
     /** What an agent can be built from comes to be this: its bases, units and templates. */
     setCatalog(next: { bases: Creatable[]; units: Units["units"]; templates: Template[] }) {
       creatables = next.bases;

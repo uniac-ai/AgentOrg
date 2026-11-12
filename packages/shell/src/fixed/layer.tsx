@@ -6,6 +6,7 @@ import { ArchiveIcon, ChevronLeftIcon, MessageCircleIcon, SquarePenIcon } from "
 import { useEffect, useRef } from "react";
 import { api } from "../data.ts";
 import { Button } from "../ui/button.tsx";
+import { ActivityWindow } from "./activity.tsx";
 import { useAllChats } from "./all-chats.tsx";
 import { ChatRow, CloseChats } from "./chat-parts.tsx";
 import { useChats } from "./chats.tsx";
@@ -200,14 +201,16 @@ const ROOM = {
 
 /**
  * The layer's parts, over the page: the chat at the right, and to its left a window, an agent's
- * computer, in the room the chat leaves. Neither moves or resizes the other. Where the open chat
+ * computer or its activity, in the room the chat leaves. Neither moves or resizes the other. Where the open chat
  * leaves a window too little room the two overlap, the one opened last on top; on a phone each
  * takes the screen.
  */
 export function Layer() {
   const { open } = useChats();
-  const { shown } = useComputers();
+  const { shown: computer, activity } = useComputers();
   const { byId } = useAgents();
+  /** The window's own key: whose it is, and which. */
+  const shown = computer ?? (activity && `activity ${activity}`);
   /** Whether the chat has been open: collapsed after that, it is collapsed by its Close. */
   const opened = useRef(false);
   if (open) opened.current = true;
@@ -218,20 +221,27 @@ export function Layer() {
   if (shown && shown !== last.current.shown) last.current.onTop = "window";
   Object.assign(last.current, { open, shown });
   const { onTop } = last.current;
-  const owner = shown ? byId.get(shown) : undefined;
+  const owner = computer ? byId.get(computer) : undefined;
   const surfaces = surfacesOf(owner?.detail);
+  const doer = activity ? byId.get(activity) : undefined;
+  const room = `${ROOM[open ? "panel" : "pill"]} ${onTop === "window" ? "narrow:z-[60]" : ""}`;
   return (
     <>
-      {shown && owner && windowsOf(surfaces).length > 0 && (
-        <Window
-          key={shown}
-          className={`${ROOM[open ? "panel" : "pill"]} ${onTop === "window" ? "narrow:z-[60]" : ""}`}
-        >
+      {computer && owner && windowsOf(surfaces).length > 0 && (
+        <Window key={shown} className={room}>
           <Computer
-            agent={{ id: shown, name: owner.entry.name, tone: owner.now.tone }}
+            agent={{ id: computer, name: owner.entry.name, tone: owner.now.tone }}
             surfaces={surfaces}
-            onStart={() => api.call("agents", "start", { agent: shown })}
+            onStart={() => api.call("agents", "start", { agent: computer })}
             overlay
+          />
+        </Window>
+      )}
+      {activity && doer && (
+        <Window key={shown} className={room}>
+          <ActivityWindow
+            agent={{ id: activity, name: doer.entry.name, tone: doer.now.tone }}
+            detail={doer.detail}
           />
         </Window>
       )}

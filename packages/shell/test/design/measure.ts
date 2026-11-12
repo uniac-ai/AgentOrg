@@ -45,6 +45,7 @@ import {
   sampleChats,
   sampleLoad,
   sampleSettings,
+  sampleWork,
   signInAccount,
   signInHash,
   signInState,
@@ -74,6 +75,7 @@ const PARTS = [
   "settings",
   "said",
   "bar",
+  "activity",
 ] as const;
 for (const one of only?.split(",") ?? [])
   if (!(PARTS as readonly string[]).includes(one))
@@ -100,8 +102,9 @@ type Parts = Record<string, Measured | string | number | null>;
  * way to a chat's older messages, Home, an agent's page, its setup, its computer's frame on its
  * page, that computer as the layer's window, its files window's own rows, the model
  * account's states, the create window, Settings' frame with its Templates, Settings' other
- * sections and what two of them offer, what a page says where it has nothing it can show, or
- * the shell's bar and what is said when something pressed is refused.
+ * sections and what two of them offer, what a page says where it has nothing it can show,
+ * the shell's bar and what is said when something pressed is refused, or an agent's activity in
+ * its box and as the layer's window.
  */
 type Part =
   | "frame"
@@ -121,7 +124,8 @@ type Part =
   | "templates"
   | "settings"
   | "said"
-  | "bar";
+  | "bar"
+  | "activity";
 type Gateway = Awaited<ReturnType<typeof standIn>>;
 
 /**
@@ -417,6 +421,69 @@ const probe = (what: Part): Parts => {
     parts.words = [recent?.querySelector("p"), bar, first, missing]
       .map((e) => e?.textContent ?? "")
       .join(" | ");
+    return parts;
+  }
+
+  if (what === "activity") {
+    // An agent's activity: the box on its Overview, from the frame's top left, and the layer's
+    // window it opens into, from its own top left. Of each, its pieces of work: how many, how many
+    // rows each has, and the first and last piece's head and first row, from the piece's top left.
+    const shell = document.querySelector("[data-shell]");
+    if (!shell) return parts;
+    origin = shell.getBoundingClientRect();
+    const pieces = (key: string, holder: Element | null | undefined) => {
+      const all = [...(holder?.querySelectorAll(":scope > section[aria-label]") ?? [])];
+      parts[`${key}.pieces`] = all.map((one) => one.children[1]?.children.length ?? 0).join(",");
+      for (const [name, piece] of [
+        ["first", all[0]],
+        ["last", all.at(-1)],
+      ] as const) {
+        if (!piece) continue;
+        const head = piece.children[0];
+        parts[`${key}.${name}.head`] = inside(piece, head);
+        parts[`${key}.${name}.title`] = inside(piece, head?.querySelector("h3"), "w");
+        const status = head?.children[1];
+        parts[`${key}.${name}.status`] = inside(piece, status, "w");
+        parts[`${key}.${name}.dot`] = inside(piece, status?.querySelector('[role="img"]'));
+        const row = piece.children[1]?.children[0];
+        parts[`${key}.${name}.row`] = inside(piece, row, "w");
+        const line = row?.matches("[data-call]") ? row : row?.querySelector("[data-call], button");
+        parts[`${key}.${name}.row.icon`] = inside(piece, line?.querySelector("svg"));
+        parts[`${key}.${name}.row.words`] = inside(piece, line?.querySelector("span"), "w");
+      }
+    };
+    const box = document.querySelector('main section[aria-label="Activity"]');
+    if (box) {
+      controls("box", box);
+      parts.box = of(box, "h");
+      parts["box.head"] = of(box.children[0]);
+      parts["box.title"] = of(box.querySelector("h2"), "w");
+      parts["box.expand"] = of(box.querySelector('button[aria-label="Expand"]'));
+      const held = box.children[1]?.children[0];
+      parts["box.held"] = of(held, "h");
+      parts["box.said"] = held?.matches("p") ? (held.textContent ?? "") : null;
+      if (held && !held.matches("p")) pieces("box", held);
+    }
+    const win = document.querySelector('section[aria-label$="\'s activity"]');
+    if (win) {
+      controls("window", win);
+      parts.window = of(win);
+      origin = win.getBoundingClientRect();
+      const head = win.children[0];
+      parts["window.head"] = of(head);
+      parts["window.face"] = of(head?.querySelector("h3")?.children[0]);
+      parts["window.title"] = of(head?.querySelector("h3 span:last-child"), "w");
+      parts["window.close"] = of(head?.querySelector("button"));
+      const frame = win.querySelector(".window");
+      parts["window.frame"] = of(frame);
+      const scroller = frame?.children[0];
+      parts["window.scroll"] = of(scroller);
+      const column = scroller?.children[0];
+      parts["window.column"] = of(column, "h");
+      const first = column?.children[0];
+      parts["window.said"] = first?.matches("p") ? (first.textContent ?? "") : null;
+      if (first && !first.matches("p")) pieces("window", column);
+    }
     return parts;
   }
 
@@ -2160,6 +2227,75 @@ if (wants("settings")) {
         await openOffer(page, section);
         await rest(page, "wide");
         all[`settings.${section}.offer.${theme}.${side}`] = await measure(page, "settings");
+        await page.close();
+        await gateway?.close();
+      }
+}
+
+// An agent's activity: Research's box on its Overview and its window, wide and on a phone, and the
+// window beside an open chat; then the box with nothing yet (the design's Docs, the built side's
+// Reviewer), that can't be read, and Research's once it is stopped. The built side's Research is
+// given the design's pieces of work.
+if (wants("activity")) {
+  type ActivityCase = { state: string; size: Size };
+  const CASES: ActivityCase[] = [
+    { state: "box", size: "wide" },
+    { state: "box", size: "phone" },
+    { state: "window", size: "wide" },
+    { state: "window", size: "phone" },
+    { state: "beside", size: "wide" },
+    { state: "none", size: "wide" },
+    { state: "unread", size: "wide" },
+    { state: "stopped", size: "wide" },
+  ];
+  for (const one of CASES)
+    for (const theme of ["dark", "light"] as const)
+      for (const side of ["design", "built"] as const) {
+        const gateway = side === "built" ? await standIn() : undefined;
+        const name = one.state === "none" ? (gateway ? "Reviewer" : "Docs") : "Research";
+        if (gateway) {
+          sampleAgents(gateway);
+          sampleWork(gateway, one.state === "stopped");
+          if (one.state === "unread") gateway.refuseEvery("work.call", "unavailable", "Not now.");
+          if (one.state === "beside") sampleChats(gateway);
+        }
+        const page = gateway
+          ? await builtPage(
+              gateway,
+              one.size,
+              theme,
+              `#/a/${name === "Reviewer" ? "a-reviewer" : "a-research"}/overview`,
+            )
+          : await designPage(one.size, theme);
+        if (!gateway) {
+          if (one.state === "unread") await inDesign(page, /^Activity:/);
+          await openDesignAgent(page, name, "Overview");
+          if (one.state === "stopped") {
+            await page.getByRole("main").getByRole("button", { name: "More for Research" }).click();
+            await page.getByRole("menuitem", { name: "Stop" }).click();
+          }
+        }
+        const box = page.getByRole("main").getByRole("region", { name: "Activity" });
+        await box
+          .getByText(
+            one.state === "none"
+              ? "No activity"
+              : one.state === "unread"
+                ? "Can't be read right now"
+                : "Is the branch pushed?",
+          )
+          .first()
+          .waitFor();
+        if (one.state === "window" || one.state === "beside") {
+          await box.getByRole("button", { name: "Expand" }).click();
+          if (one.state === "beside") await openSampleChat(page);
+          await page
+            .getByRole("region", { name: "Research's activity" })
+            .getByText("Which issues are oldest?")
+            .waitFor();
+        }
+        await rest(page, one.size);
+        all[`activity.${one.state}.${one.size}.${theme}.${side}`] = await measure(page, "activity");
         await page.close();
         await gateway?.close();
       }
