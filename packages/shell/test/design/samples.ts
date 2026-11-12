@@ -226,6 +226,173 @@ export function downTriage(gateway: Gateway) {
   if (linear?.status.state === "down") linear.status.detail = "its server didn't answer";
 }
 
+/**
+ * Research's pieces of work as the design's sample has them when it opens: the one it works on,
+ * the one whose message wasn't answered, and the oldest. Stopped, none is worked on.
+ */
+export function sampleWork(gateway: Gateway, stopped = false) {
+  const ago = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
+  let n = 0;
+  const run = (exit: number | "running", seconds: number, text: string) =>
+    `exit_code: ${exit}\nseconds: ${seconds}\nsession_id: ${exit === "running" ? "s1" : "none"}\ntext:\n${text}`;
+  const call = (
+    name: string,
+    input: unknown,
+    output: string | undefined,
+    minutes: number,
+    state: "done" | "refused" | "running" = "done",
+  ) => ({
+    id: `s${++n}`,
+    at: ago(minutes),
+    call: {
+      name,
+      state,
+      input: JSON.stringify(input),
+      ...(output === undefined ? {} : { output }),
+    },
+  });
+  const words = (text: string, minutes: number) => ({
+    id: `s${++n}`,
+    at: ago(minutes),
+    words: text,
+  });
+  const OPEN = "http://localhost:4173/checkout";
+  const shown = (snapshot: string) =>
+    `### Page state\n- Page URL: ${OPEN}\n- Page Title: Checkout · Storefront\n- Page Snapshot:\n\`\`\`yaml\n${snapshot}\n\`\`\``;
+  const diff = (path: string, body: string) =>
+    `===================================================================\n--- ${path}\n+++ ${path}\n${body}\n`;
+  const research = gateway.agents.get("a-research") as Agent;
+  if (stopped) research.status = { state: "stopped" };
+  research.works = [
+    {
+      id: "w-checkouts",
+      title: "Why are checkouts failing?",
+      state: stopped ? "stopped" : "working",
+      at: ago(6),
+      entries: [
+        call("github_acme__search_issues", { q: "is:open checkout" }, "14 open issues", 12),
+        words(
+          "14 open issues, and 6 of them fail when a payment is retried. I'll look at how the session is kept.",
+          12,
+        ),
+        call(
+          "exa__web_search_exa",
+          { query: "payment session expired when retrying checkout" },
+          "Title: Sessions\nURL: https://docs.example.com/s\nTitle: Retries\nURL: https://docs.example.com/r\nTitle: Payments\nURL: https://docs.example.com/p",
+          11,
+        ),
+        call(
+          "exa__web_fetch_exa",
+          { urls: ["https://docs.example.com/payments/sessions"] },
+          "Sessions end when a payment is declined.",
+          11,
+        ),
+        call(
+          "computer__exec_command",
+          { cmd: "git clone --depth 1 https://github.com/acme/storefront" },
+          run(0, 3.8, "Cloning into 'storefront'..."),
+          10,
+        ),
+        call("computer__read", { path: "storefront/src/checkout/retry.ts" }, "1\tx", 9),
+        call("computer__read", { path: "storefront/src/checkout/session.ts" }, "1\ty", 9),
+        call("computer__list", { path: "storefront/src/checkout" }, "retry.ts", 9),
+        call("computer__search", { pattern: "session.pay" }, "retry.ts:4", 9),
+        call(
+          "computer__exec_command",
+          { cmd: "npm ci", workdir: "storefront" },
+          run(0, 22.1, "added 812"),
+          8,
+        ),
+        call(
+          "computer__exec_command",
+          { cmd: "npm run dev", workdir: "storefront" },
+          run("running", 3, "Local"),
+          7,
+        ),
+        call(
+          "web__browser_navigate",
+          { url: OPEN },
+          shown('- heading "Checkout" [level=1]\n- textbox "Card number" [ref=e14]'),
+          6,
+        ),
+        call(
+          "web__browser_type",
+          { element: "Card number", ref: "e14", text: "4000 0000 0000 0002" },
+          shown('- textbox "Card number" [ref=e14]: 4000 0000 0000 0002'),
+          6,
+        ),
+        call(
+          "web__browser_click",
+          { element: "Pay now", ref: "e19" },
+          shown("- alert: Your card was declined."),
+          5,
+        ),
+        call(
+          "web__browser_click",
+          { element: "Pay now", ref: "e19" },
+          shown("- alert: Your session has expired."),
+          5,
+        ),
+        words("Reproduced it: the second Pay now reuses the session the declined card ended.", 4),
+        call(
+          "computer__edit",
+          { path: "storefront/src/checkout/retry.test.ts", old_text: "" },
+          diff("retry.test.ts", "@@ -0,0 +1,8 @@\n+a\n+b\n+c\n+d\n+e\n+f\n+g\n+h"),
+          4,
+        ),
+        call(
+          "computer__exec_command",
+          { cmd: "npm test -- checkout", workdir: "storefront" },
+          run(1, 9.2, "FAIL"),
+          3,
+        ),
+        call(
+          "computer__edit",
+          { path: "storefront/src/checkout/retry.ts", old_text: "x" },
+          "old_text isn't in the file.",
+          2,
+          "refused",
+        ),
+        call(
+          "computer__edit",
+          { path: "storefront/src/checkout/retry.ts", old_text: "y" },
+          diff("retry.ts", "@@ -1,2 +1,2 @@\n-a\n-b\n+c\n+d"),
+          1,
+        ),
+        call(
+          "computer__exec_command",
+          { cmd: "npm test -- checkout", workdir: "storefront", yield_time_ms: 10000 },
+          undefined,
+          0,
+          "running",
+        ),
+      ],
+    },
+    {
+      id: "w-pushed",
+      title: "Is the branch pushed?",
+      state: stopped ? "stopped" : "idle",
+      at: ago(20),
+      entries: [
+        call(
+          "computer__exec_command",
+          { cmd: "git status -sb", workdir: "storefront" },
+          run(0, 0.084, "## fix-retry-session"),
+          20,
+        ),
+        words("The branch is local only: it has no upstream yet.", 20),
+      ],
+    },
+    {
+      id: "w-issues",
+      title: "Which issues are oldest?",
+      state: stopped ? "stopped" : "idle",
+      at: ago(120),
+      entries: [call("github_acme__search_issues", { q: "is:open sort:created-asc" }, "#212", 120)],
+    },
+  ];
+}
+
 /** An agent's page in the design, reached as a person reaches it: from the bar, then its tab. */
 export async function openDesignAgent(page: Page, name: string, tab?: string) {
   if ((page.viewportSize()?.width ?? 0) < 640)

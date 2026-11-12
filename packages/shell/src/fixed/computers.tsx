@@ -1,7 +1,7 @@
 // What the frames of the agents' computers share: the window each computer has in front, the
-// one computer that is open as a window in the layer, and which frames are drawn now. That window
-// is its agent's, not a chat's: opening or closing it leaves the chat as it is, and another
-// agent's takes its place.
+// one window open in the layer, and which frames are drawn now. The layer's window is an agent's
+// computer or its activity, one at a time. It is its agent's, not a chat's: opening or closing it
+// leaves the chat as it is, and another takes its place.
 import { createContext, useCallback, useContext, useMemo, useState } from "react";
 import type { OpenSurface } from "./computer.tsx";
 
@@ -21,6 +21,10 @@ interface Computers {
   /** The agent whose computer is open in the layer, if one is. */
   shown?: string | undefined;
   open(agent: string): void;
+  /** The agent whose activity is open in the layer instead, if one is. */
+  activity?: string | undefined;
+  openActivity(agent: string): void;
+  /** Closes the layer's window. */
   close(): void;
   /** The frames drawn now. A computer's views are one set, shown in one of its frames. */
   frames: readonly DrawnFrame[];
@@ -33,7 +37,8 @@ export const useComputers = () => useContext(Context) as Computers;
 
 export function ComputersProvider({ children }: { children: React.ReactNode }) {
   const [picked, setPicked] = useState<Record<string, string>>({});
-  const [shown, setShown] = useState<string>();
+  /** What the layer's window shows: whose, and which. */
+  const [layered, setLayered] = useState<{ agent: string; activity: boolean }>();
   const [frames, setFrames] = useState<readonly DrawnFrame[]>([]);
   const erase = useCallback(
     (agent: string, overlay: boolean) =>
@@ -52,14 +57,16 @@ export function ComputersProvider({ children }: { children: React.ReactNode }) {
     () => ({
       picked,
       pick: (agent, kind) => setPicked((was) => ({ ...was, [agent]: kind })),
-      shown,
-      open: setShown,
-      close: () => setShown(undefined),
+      shown: layered && !layered.activity ? layered.agent : undefined,
+      open: (agent) => setLayered({ agent, activity: false }),
+      activity: layered?.activity ? layered.agent : undefined,
+      openActivity: (agent) => setLayered({ agent, activity: true }),
+      close: () => setLayered(undefined),
       frames,
       draw,
       erase,
     }),
-    [picked, shown, frames, draw, erase],
+    [picked, layered, frames, draw, erase],
   );
   return <Context.Provider value={value}>{children}</Context.Provider>;
 }

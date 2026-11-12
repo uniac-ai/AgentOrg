@@ -123,7 +123,7 @@ test(
 );
 
 test(
-  "an agent with no window to show has no Computer tab: its page is its chats",
+  "an agent with no window to show has no Computer tab: its page opens on its chats",
   withGateway(async (gateway) => {
     withSurfaces(gateway, [
       { surface: "radio", protocol: "radio@9", operate: false },
@@ -132,8 +132,11 @@ test(
     const page = await open(gateway);
     const main = page.getByRole("main");
     await main.getByRole("list", { name: "Chats with Research" }).waitFor();
-    assert.equal(await main.getByRole("tablist").count(), 0);
-    assert.equal(await main.getByRole("region").count(), 0);
+    assert.deepEqual(await main.getByRole("tablist").getByRole("tab").allInnerTexts(), [
+      "Chats",
+      "Overview",
+    ]);
+    assert.equal(await main.getByRole("region", { name: /computer/ }).count(), 0);
     await page.close();
   }),
 );
@@ -150,7 +153,11 @@ test(
       .getByRole("tabpanel", { name: "Computer" })
       .getByRole("group", { name: "Terminal" })
       .waitFor();
-    assert.deepEqual(await tabs.getByRole("tab").allInnerTexts(), ["Computer", "Chats"]);
+    assert.deepEqual(await tabs.getByRole("tab").allInnerTexts(), [
+      "Computer",
+      "Chats",
+      "Overview",
+    ]);
     assert.equal(await selected(), "Computer");
     await tabs.getByRole("tab", { name: "Chats" }).click();
     await page.waitForURL(/#\/a\/a-research\/chats$/);

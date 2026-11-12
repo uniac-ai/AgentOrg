@@ -80,7 +80,7 @@ export function useLoad<T>(
 }
 
 /** What an agent's page can show under its head. */
-export type AgentTab = "computer" | "chats";
+export type AgentTab = "computer" | "chats" | "overview";
 /** The hash route: home, an agent, or settings. */
 export type Route =
   | { screen: "home" }
@@ -99,7 +99,7 @@ function routeOf(hash: string): Route {
       ...(managed[2] === "add" ? { adding: true } : {}),
       ...(managed[3] ? { focus: decodeURIComponent(managed[3]) } : {}),
     };
-  const [, agent, under] = /^#\/a\/([^/]+)(?:\/(computer|chats))?$/.exec(hash) ?? [];
+  const [, agent, under] = /^#\/a\/([^/]+)(?:\/(computer|chats|overview))?$/.exec(hash) ?? [];
   if (!agent) return { screen: "home" };
   return {
     screen: "agent",

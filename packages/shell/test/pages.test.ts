@@ -391,8 +391,10 @@ test(
     const main = page.getByRole("main");
     await main.getByRole("heading", { name: "Reviewer", level: 1 }).waitFor();
     await main.getByText("Chats and uses what you connect").waitFor();
-    // With no computer it has one thing to show, so no tabs: its chats, the archived left out.
-    assert.equal(await main.getByRole("tablist").count(), 0);
+    // With no computer it opens on its chats, the archived left out; its Overview is the tab after.
+    const tabs = main.getByRole("tablist", { name: "Reviewer" });
+    await tabs.getByRole("tab", { name: "Chats", selected: true }).waitFor();
+    assert.deepEqual(await tabs.getByRole("tab").allInnerTexts(), ["Chats", "Overview"]);
     const chats = main.getByRole("list", { name: "Chats with Reviewer" });
     await chats.getByRole("button").first().waitFor();
     assert.equal(await chats.getByText("An old review").count(), 0);
