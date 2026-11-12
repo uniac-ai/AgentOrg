@@ -39,6 +39,8 @@ export function looperWith(
     voice?: string;
     /** What the main loop answers when put `text`: by default, new work. */
     routing?: (text: string) => OutputItem[] | Promise<OutputItem[]> | undefined;
+    /** Who a message said in a thread is from, when not the person. */
+    speaker?: (thread: string) => string | undefined;
   } = {},
 ) {
   const values = options.values ?? new Map<string, Json>();
@@ -233,6 +235,7 @@ export function looperWith(
     },
     ...(options.stopped === undefined ? {} : { stopped: options.stopped }),
     ...(options.stopGroup === undefined ? {} : { stopGroup: options.stopGroup }),
+    ...(options.speaker === undefined ? {} : { speaker: options.speaker }),
     log: { info() {}, warn() {}, error() {} },
   });
   /**

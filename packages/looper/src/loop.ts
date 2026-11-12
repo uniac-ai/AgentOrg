@@ -47,16 +47,16 @@ const CUT_OFF = {
   told: "This turn was cut off by a restart. Check what is already done before you repeat anything, then go on.",
 };
 
-/** A function of the looper's own: what a worker says to the person, in reply to a message. */
+/** A function of the looper's own: what a worker says to whoever said a message, in reply to it. */
 export const SEND: ToolSpec = {
   name: SEND_NAME,
   description:
-    "Says something to the person, in reply to one of their messages, in the conversation it was said in: the only way anything reaches them. It answers that message. You may send more than once, and go on working after.",
+    "Says something to whoever said a message, in reply to it, in the conversation it was said in: the only way anything reaches them. It answers that message. You may send more than once, and go on working after.",
   parameters: {
     type: "object",
     properties: {
       message: { type: "number", description: "The number the message starts with." },
-      text: { type: "string", description: "What to say, as the person will read it." },
+      text: { type: "string", description: "What to say, as they will read it." },
     },
     required: ["message", "text"],
   },
@@ -67,7 +67,7 @@ export const SEND: ToolSpec = {
 export const HAND_BACK: ToolSpec = {
   name: HAND_BACK_NAME,
   description:
-    "Says a message from the person is not for this piece of work, so it can be given to other work or start new work. Once per message.",
+    "Says a message is not for this piece of work, so it can be given to other work or start new work. Once per message.",
   parameters: {
     type: "object",
     properties: {
@@ -88,9 +88,9 @@ export const HAND_BACK: ToolSpec = {
  */
 export const workInstructions = (
   title: string,
-) => `This is one piece of work: ${title}. Other pieces of work may be going on beside it, each with a worker of its own, and a message from the person may reach several of them at once.
+) => `This is one piece of work: ${title}. Other pieces of work may be going on beside it, each with a worker of its own, and a message may reach several of them at once.
 
-Each message from the person starts with its number in brackets, like [12]. Decide each one once. If it asks for something that belongs to this work, do it and answer it by calling \`send\` with its number: only what you send reaches the person. What you write without sending is seen by no one but you, in your later requests. You may send while the work goes on, and more than once. If it asks for something that does not belong to this work, call \`hand_back\` with its number and one sentence why, and send nothing about it: it is then given to other work, or starts new work. A message that asks for nothing, like thanks, still gets a short answer. A message you neither answer nor hand back is shown to the person as not answered when you are done. When you have nothing more to do, end without calling anything.
+Each message starts with its number in brackets, like [12]. One from anyone other than the person then says who it is from, like [12] (from <who>): what you send in reply reaches them. Decide each one once. If it asks for something that belongs to this work, do it and answer it by calling \`send\` with its number: only what you send reaches whoever said it. What you write without sending is seen by no one but you, in your later requests. You may send while the work goes on, and more than once. If it asks for something that does not belong to this work, call \`hand_back\` with its number and one sentence why, and send nothing about it: it is then given to other work, or starts new work. A message that asks for nothing, like thanks, still gets a short answer. A message you neither answer nor hand back is shown as not answered when you are done. When you have nothing more to do, end without calling anything.
 
 A message that begins "(Left out:" is not from the person and needs no answer. It stands for earlier messages, and what was done for them, that no longer fit: all of it was said and done, so do not do it again. A call whose arguments or output say they were left out did run. Message [1] is what this work was asked.`;
 

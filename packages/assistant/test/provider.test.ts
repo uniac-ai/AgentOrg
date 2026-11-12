@@ -161,23 +161,18 @@ async function setup(t: test.TestContext) {
     return answer;
   };
   const talk = caller.slots.chat.call;
-  /** The one chat of the agent the caller is bound to, once a message has started it. */
-  const one = async () => (await talk.list({})).chats[0]?.id;
+  /** Who the caller's one conversation with the agent is with, once a message has begun it. */
+  const one = async () => (await talk.list({})).conversations[0]?.with;
   const turn = async (text: string) => {
     const from = requests.length;
-    const before = await one();
-    await talk.send({ ...(before ? { chat: before } : {}), text });
+    await talk.send({ text });
     await until(
       async () => requests.length > from && (await talk.state({})).state === "idle",
       "the turn to end",
     );
     return requests[from] as Request;
   };
-  const texts = async () => {
-    const chat = await one();
-    if (!chat) return [];
-    return (await talk.history({ chat })).messages.map((m) => `${m.role}: ${m.text}`);
-  };
+  const texts = async () => (await talk.history({})).messages.map((m) => `${m.role}: ${m.text}`);
   const restart = async () => {
     await running.current.close();
     running.current = await start();
@@ -200,6 +195,7 @@ async function setup(t: test.TestContext) {
     gates,
     cancelled,
     caller,
+    callerId: asks.actorId,
     made,
     modelActor,
   };
@@ -255,16 +251,15 @@ test("stop and start keep the transcript, the model and the bindings", async (t)
   const chat = (await s.one()) as string;
   await s.agents.stop({ agent });
   assert.deepEqual(await s.agents.status({ agent }), { state: "stopped" });
-  // It stays on its channel, so what was said can still be read, each chat where it was put.
+  // It stays on its channel, so what was said can still be read.
   assert.equal(s.hub.connected(agent), true);
   assert.deepEqual(
-    (await s.talk.list({})).chats.map((one) => [one.id, one.archived]),
-    [[chat, false]],
+    (await s.talk.list({})).conversations.map((one) => one.with),
+    [chat],
   );
-  assert.equal((await s.talk.history({ chat })).messages.length, 2);
-  // It takes no message, in that chat or a new one.
+  assert.equal((await s.talk.history({})).messages.length, 2);
+  // It takes no message.
   const stopped = { code: "busy", message: /It is stopped/ };
-  await assert.rejects(s.talk.send({ chat, text: "second" }), stopped);
   await assert.rejects(s.talk.send({ text: "second" }), stopped);
   assert.equal(s.requests.length, 1);
   // Stopping again changes nothing.
@@ -284,9 +279,11 @@ test("stop and start keep the transcript, the model and the bindings", async (t)
   await assert.rejects(s.agents.models({ agent: "act_none" }), { code: "unknown" });
   const request = await s.turn("second");
   assert.equal(request.model, "gpt-b");
+  // The caller here is an Actor, not the person: the model is told who it is.
+  const from = `(from ${s.callerId}) `;
   assert.deepEqual(
     request.input.map((item) => item.content),
-    ["first", "first reply", "second"],
+    [`${from}first`, "first reply", `${from}second`],
   );
   // Starting one already running changes nothing.
   await s.agents.start({ agent });
@@ -328,14 +325,14 @@ test("a provider restart brings running agents back, and leaves stopped ones sto
   // The stopped one is back on its channel too, as it was left: read, and taking nothing.
   await until(() => s.caller.slots.chat.bound && s.hub.connected(down), "the stopped one");
   assert.deepEqual(
-    (await s.talk.list({})).chats.map((one) => one.id),
+    (await s.talk.list({})).conversations.map((one) => one.with),
     [chat],
   );
   assert.deepEqual(
-    (await s.talk.history({ chat })).messages.map((m) => m.text),
+    (await s.talk.history({})).messages.map((m) => m.text),
     ["remember this", "ok"],
   );
-  await assert.rejects(s.talk.send({ chat, text: "more" }), { code: "busy" });
+  await assert.rejects(s.talk.send({ text: "more" }), { code: "busy" });
   await s.agents.start({ agent: down });
   assert.deepEqual(await s.texts(), ["user: remember this", "assistant: ok"]);
 });
@@ -364,7 +361,6 @@ test("a stopped agent whose connection ended is down until it is stopped or star
   const s = await setup(t);
   const { agent } = await s.create();
   await s.turn("hello");
-  const one = (await s.one()) as string;
   await s.agents.stop({ agent });
   // Another channel for the same Actor takes its place, then goes.
   const { credential } = JSON.parse(readFileSync(join(s.dir, "agents.json"), "utf8"))[agent];
@@ -387,12 +383,12 @@ test("a stopped agent whose connection ended is down until it is stopped or star
   await s.agents.stop({ agent });
   assert.deepEqual(await s.agents.status({ agent }), { state: "stopped" });
   await until(() => s.caller.slots.chat.bound && s.hub.connected(agent), "the agent to be back");
-  assert.equal((await s.talk.history({ chat: one })).messages.length, 2);
-  await assert.rejects(s.talk.send({ chat: one, text: "more" }), { code: "busy" });
+  assert.equal((await s.talk.history({})).messages.length, 2);
+  await assert.rejects(s.talk.send({ text: "more" }), { code: "busy" });
   await s.agents.start({ agent });
   assert.deepEqual(await s.agents.status({ agent }), { state: "running" });
   await s.turn("again");
-  assert.equal((await s.talk.history({ chat: one })).messages.length, 4);
+  assert.equal((await s.talk.history({})).messages.length, 4);
 });
 
 test("settings and an exposed tools@1 reach the agent as they do any engine", async (t) => {

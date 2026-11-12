@@ -754,6 +754,8 @@ export function createRecord(options: {
   waits(thread: string): boolean;
   /** Whether it has left `thread`: it reads what it holds there, and takes and writes nothing. */
   left(thread: string): boolean;
+  /** A message said in `thread`, as its worker is told it: who it is from, when not the person. */
+  told?(thread: string, text: string): string;
 }) {
   const { id } = options;
   /** Its hold on a message: its own among those the message names, or the message's own. */
@@ -1231,42 +1233,44 @@ export function createRecord(options: {
       const unread = (record: Kept) => record.entry.role === "user" && placeOf(record) > read;
       const exchanges: Item[][] = [];
       /** Said during a turn, and not yet put: what is ahead of them goes first. */
-      const late: Kept[] = [];
+      const late: { thread: string; record: Kept }[] = [];
       /** The place of the newest user message put: what a reply kept by an earlier version answered. */
       let asked = 0;
-      const put = (record: Kept) => {
+      const put = ({ thread, record }: { thread: string; record: Kept }) => {
         const { entry } = record;
         const person = entry.role === "user";
         if (person) asked = placeOf(record);
         if ((person && !joinedOf(record)) || exchanges.length === 0) exchanges.push([]);
         // What a person said starts with its number, which is how the model names it.
-        exchanges
-          .at(-1)
-          ?.push(
-            ...(person
-              ? entry.items.map((item) =>
-                  item.type === "message"
-                    ? { ...item, content: `[${placeOf(record)}] ${item.content}` }
-                    : item,
-                )
-              : earlierReply(entry)
-                ? sentBefore(entry, asked)
-                : entry.items),
-          );
+        exchanges.at(-1)?.push(
+          ...(person
+            ? entry.items.map((item) =>
+                item.type === "message"
+                  ? {
+                      ...item,
+                      content: `[${placeOf(record)}] ${options.told?.(thread, item.content) ?? item.content}`,
+                    }
+                  : item,
+              )
+            : earlierReply(entry)
+              ? sentBefore(entry, asked)
+              : entry.items),
+        );
       };
       /** Put the late messages placed up to `read`. */
       const putLate = (read: number) => {
-        while (late[0] && placeOf(late[0]) <= read) put(late.shift() as Kept);
+        while (late[0] && placeOf(late[0].record) <= read)
+          put(late.shift() as (typeof late)[number]);
       };
-      for (const { record } of records) {
+      for (const { thread, record } of records) {
         // Nothing to send: a user message still being written, or a line with no items.
         if (pending(record) || unread(record) || record.entry.items.length === 0) continue;
         if (joinedOf(record)) {
-          late.push(record);
+          late.push({ thread, record });
           continue;
         }
         putLate(record.entry.ahead ?? last);
-        put(record);
+        put({ thread, record });
       }
       putLate(last);
       const fitted = fit(exchanges);

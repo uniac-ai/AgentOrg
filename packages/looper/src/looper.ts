@@ -162,8 +162,19 @@ export function createLooper(options: {
    * under (see `Tool.run`). Not asked when a turn ends by itself, or when the looper closes.
    */
   stopGroup?(group: string): Promise<unknown>;
+  /**
+   * Who a message said in `thread` is from, as its worker and the main loop are told: none for
+   * the person, whom they are told of by default. In a thread of anyone else, the main loop is
+   * told only of the work that follows it, and so routes into and stops only that.
+   */
+  speaker?(thread: string): string | undefined;
   log: Log;
 }) {
+  /** A message said in `thread`, as a worker or the main loop is told it: who it is from. */
+  const told = (thread: string, text: string) => {
+    const who = options.speaker?.(thread);
+    return who ? `(from ${who}) ${text}` : text;
+  };
   const { store, out, log } = options;
   type Work = ReturnType<typeof open>;
   /** The pieces of work that have a loop here, by id. */
@@ -376,6 +387,7 @@ export function createLooper(options: {
       thread: threadOf,
       waits: (thread) => !hasOwn(thread),
       left: (thread) => kept.get(id)?.left?.includes(thread) === true,
+      told,
     });
     const key = UNFINISHED + encodeURIComponent(id);
     const held = {
@@ -538,16 +550,22 @@ export function createLooper(options: {
   };
 
   const main = createMain({ model: options.model, request: options.request, log });
-  /** The work there is, as the main loop is told of it: in a turn first, then the latest at rest. */
-  const listed = async (): Promise<Listed[]> => {
+  /**
+   * The work there is, as the main loop is told of it for a message in `thread`: in a turn first,
+   * then the latest at rest. In a thread of anyone but the person, only the work that follows it:
+   * the person may reach all of it.
+   */
+  const listed = async (thread: string): Promise<Listed[]> => {
     const turnOf = (id: string) => works.get(id)?.loop.turn();
     // Work that has a record, and work in a turn that has none yet.
     const ids = new Set([
       ...kept.keys(),
       ...[...works.keys()].filter((id) => turnOf(id) !== undefined),
     ]);
+    const reaches = (id: string) =>
+      options.speaker?.(thread) === undefined || (kept.get(id)?.follows ?? [id]).includes(thread);
     const all = await Promise.all(
-      [...ids].map(async (id) => {
+      [...ids].filter(reaches).map(async (id) => {
         const title = await titleOf(id);
         return {
           id,
@@ -637,14 +655,16 @@ export function createLooper(options: {
       return undefined;
     // Work that handed a message back is not told of: it is never given it again.
     const why = new Map(read.back.flatMap(({ by }) => by.map((one) => [one.work, one.why])));
-    const there = (await listed()).filter(({ id }) => !why.has(id));
+    const there = (await listed(thread)).filter(({ id }) => !why.has(id));
     const returners = await Promise.all(
       [...why].map(async ([id, reason]) => ({ id, title: await titleOf(id), why: reason })),
     );
     if (cut()) return undefined;
     const replyId = crypto.randomUUID();
     const decided = await main.decide(
-      read.said,
+      read.said.map((one) =>
+        one.role === "user" ? { ...one, text: told(thread, one.text) } : one,
+      ),
       there,
       (text) => out.delta(thread, replyId, text),
       returners,
@@ -850,13 +870,13 @@ export function createLooper(options: {
         if (cut() || still().length === 0) return;
         const titles = new Map<string, string>();
         for (const { work } of still()) titles.set(work, await titleOf(work));
-        const told = still().map(({ work, turn }) => ({
+        const heardOf = still().map(({ work, turn }) => ({
           id: work,
           title: titles.get(work) ?? "",
           turn,
         }));
-        if (cut() || told.length === 0) return;
-        const heard = await main.hear(text, told);
+        if (cut() || heardOf.length === 0) return;
+        const heard = await main.hear(told(thread, text), heardOf);
         if (!heard || cut()) return;
         const { say, stop } = heard;
         // A line the store refuses is the thread's to be told of: the turn is cut all the same.
@@ -1299,3 +1319,48 @@ export function createLooper(options: {
   };
 }
 export type Looper = ReturnType<typeof createLooper>;
+
+/** Every key of `store` under `prefix`, in order. */
+async function keysOf(store: Store, prefix: string) {
+  const keys: string[] = [];
+  let after: string | undefined;
+  do {
+    const page = await store.list({ prefix, ...(after === undefined ? {} : { after }) });
+    keys.push(...page.keys);
+    after = page.next ?? undefined;
+  } while (after !== undefined);
+  return keys;
+}
+/**
+ * Drop from `store` what a looper keeps of `threads`, before a looper is made on it: each one's
+ * record and mark, and each piece of work's following of it. A piece of work left with no
+ * thread it is still given anything from goes too, with its mark. It answers how many went.
+ */
+export async function forget(store: Store, threads: string[]): Promise<{ works: number }> {
+  const gone = new Set(threads);
+  for (const thread of gone) {
+    // The newest first: a thread cut short keeps how it began, and its newest is no newer.
+    for (const key of (await keysOf(store, recordOf(thread))).reverse())
+      await store.delete({ key });
+    await store.delete({ key: UNROUTED + encodeURIComponent(thread) });
+  }
+  let works = 0;
+  for (const key of await keysOf(store, WORKS)) {
+    const work = Work.safeParse((await store.get({ key })).value);
+    if (!work.success || !work.data.follows.some((thread) => gone.has(thread))) continue;
+    const follows = work.data.follows.filter((thread) => !gone.has(thread));
+    const left = (work.data.left ?? []).filter((thread) => !gone.has(thread));
+    if (follows.every((thread) => left.includes(thread))) {
+      await store.delete({ key });
+      await store.delete({ key: UNFINISHED + key.slice(WORKS.length) });
+      works++;
+      continue;
+    }
+    const { left: _, ...rest } = work.data;
+    await store.set({
+      key,
+      value: { ...rest, follows, ...(left.length > 0 ? { left } : {}) } as Json,
+    });
+  }
+  return { works };
+}

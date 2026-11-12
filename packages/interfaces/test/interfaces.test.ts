@@ -464,22 +464,18 @@ test("account.login@1 takes only a loopback redirect on 127.0.0.1", async () => 
   );
 });
 
-test("chat@1 sends in a chat or starts one, pages its history, and says only whether the agent is working", async () => {
+test("chat@1 sends in the caller's conversation, pages one's history, and says only whether the agent is working", async () => {
   const t = createTestContext(client);
   await t.start();
   const binding = t.bind("chat", {
-    send: ({ chat }) => ({ chat: chat ?? "c1", messageId: "m2" }),
-    history: () => ({
-      messages: [{ id: "m1", role: "tool", text: "layout__place", at: "2026-11-06T00:00:00Z" }],
+    send: () => ({ messageId: "m2" }),
+    history: ({ with: party }) => ({
+      messages: [{ id: "m1", role: "user", text: party ?? "mine", at: "2026-11-06T00:00:00Z" }],
       more: false,
     }),
     state: () => ({ state: "working" as const }),
   });
-  assert.deepEqual(await t.ctx.slots.chat.call.send({ text: "hi" }), {
-    chat: "c1",
-    messageId: "m2",
-  });
-  assert.equal((await t.ctx.slots.chat.call.send({ chat: "c2", text: "hi" })).chat, "c2");
+  assert.deepEqual(await t.ctx.slots.chat.call.send({ text: "hi" }), { messageId: "m2" });
   await assert.rejects(t.ctx.slots.chat.call.send({ text: "   " }), { code: "invalid" });
   // A picture may be sent by itself; a message with neither words nor a picture is refused.
   const picture = { mediaType: "image/png" as const, data: "iVBORw0KGgo=" };
@@ -487,60 +483,59 @@ test("chat@1 sends in a chat or starts one, pages its history, and says only whe
   assert.equal((await t.ctx.slots.chat.call.send({ text: "", images: [picture] })).messageId, "m2");
   await assert.rejects(t.ctx.slots.chat.call.send({} as never), { code: "invalid" });
   await assert.rejects(t.ctx.slots.chat.call.send({ text: " ", images: [] }), { code: "invalid" });
-  const page = await t.ctx.slots.chat.call.history({ chat: "c1", limit: 10 });
-  assert.equal(page.messages[0]?.role, "tool");
-  // A chat's own calls name it; the agent's status names none.
-  await assert.rejects(t.ctx.slots.chat.call.history({} as never), { code: "invalid" });
+  assert.equal((await t.ctx.slots.chat.call.history({})).messages[0]?.text, "mine");
+  assert.equal(
+    (await t.ctx.slots.chat.call.history({ with: "act_1", limit: 10 })).messages[0]?.text,
+    "act_1",
+  );
   assert.deepEqual(await t.ctx.slots.chat.call.state({}), { state: "working" });
   const states: unknown[] = [];
   t.ctx.slots.chat.on("status", (status) => states.push(status));
   binding.emit("status", { state: "working" });
   binding.emit("status", { state: "idle" });
   assert.deepEqual(states, [{ state: "working" }, { state: "idle" }]);
-  // A chat is never said to think, to use a tool or to have failed.
+  // A conversation is never said to think, to use a tool or to have failed.
   for (const state of ["thinking", "tool", "error"])
     assert.throws(() => binding.emit("status", { state } as never), { code: "bad_output" });
-  // And nothing in it stops, runs again or chooses a model.
-  for (const gone of ["cancel", "retry", "models", "setModel"])
+  // And nothing in it stops, runs again, chooses a model, or is renamed or archived.
+  for (const gone of ["cancel", "retry", "models", "setModel", "rename", "archive"])
     assert.equal(gone in chat.methods, false, gone);
 });
 
-test("chat@1 lists an agent's chats, with why a message in one got no answer, and renames and archives one", async () => {
+test("chat@1 lists an agent's conversations, each with its latest message and why one got no answer", async () => {
   const t = createTestContext(client);
   await t.start();
   const entry = {
-    id: "c1",
-    title: "Plan the week",
+    with: "person",
     at: "2026-11-06T00:00:00Z",
-    latest: { id: "m2", at: "2026-11-06T00:00:05Z" },
-    archived: false,
+    latest: { id: "m2", at: "2026-11-06T00:00:05Z", role: "assistant" as const, text: "Done." },
   };
   const binding = t.bind("chat", {
-    list: ({ archived }) => ({ chats: archived ? [] : [entry], more: false }),
-    rename: () => ({}),
-    archive: () => ({}),
+    list: () => ({ conversations: [entry], more: false }),
   });
-  assert.deepEqual(await t.ctx.slots.chat.call.list({}), { chats: [entry], more: false });
-  assert.deepEqual((await t.ctx.slots.chat.call.list({ archived: true, limit: 200 })).chats, []);
+  assert.deepEqual(await t.ctx.slots.chat.call.list({}), {
+    conversations: [entry],
+    more: false,
+  });
   await assert.rejects(t.ctx.slots.chat.call.list({ limit: 201 }), { code: "invalid" });
-  assert.deepEqual(await t.ctx.slots.chat.call.rename({ chat: "c1", title: "Next week" }), {});
-  await assert.rejects(t.ctx.slots.chat.call.rename({ chat: "c1", title: "  " }), {
-    code: "invalid",
-  });
-  assert.deepEqual(await t.ctx.slots.chat.call.archive({ chat: "c1", archived: true }), {});
   const seen: unknown[] = [];
   t.ctx.slots.chat.on("chat", (one) => seen.push(one));
-  binding.emit("chat", { ...entry, archived: true });
-  // A problem is told with the chat it is in, with the code a view offers an action for.
+  // A problem is told with the conversation it is in, with the code a view offers an action for.
   const problem = { code: "usage_limit", message: "Usage limit reached." };
   binding.emit("chat", { ...entry, problem });
-  assert.deepEqual(seen, [
-    { ...entry, archived: true },
-    { ...entry, problem },
-  ]);
+  assert.deepEqual(seen, [{ ...entry, problem }]);
   assert.throws(() => binding.emit("chat", { ...entry, problem: { code: "x" } } as never), {
     code: "bad_output",
   });
+  // An entry carries the head of its latest message, no more.
+  assert.throws(
+    () =>
+      binding.emit("chat", {
+        ...entry,
+        latest: { ...entry.latest, text: "x".repeat(201) },
+      }),
+    { code: "bad_output" },
+  );
 });
 
 test("a field says what an agent may do with it, from a closed list", () => {

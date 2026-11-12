@@ -1,5 +1,5 @@
 /**
- * The engine: the looper bound to one agent. Its chats are the looper's threads, its model is the
+ * The engine: the looper bound to one agent. Its conversations are the looper's threads, its model is the
  * agent's `model` slot, and what a request says and offers is read from what the agent is bound to.
  * Its host says where the records are kept and what the agent is told when no `settings` is bound.
  */
@@ -11,7 +11,7 @@ import { instructionsWith, skillTool } from "./settings.js";
 import { type Candidate, type LeftOut, listedBy, listsTools, offered, relayed } from "./tools.js";
 import { ACTIVITY, serveWork } from "./work.js";
 
-/** Where the agent keeps the model chosen for it, beside its chats in the store. */
+/** Where the agent keeps the model chosen for it, beside its conversations in the store. */
 const MODEL_KEY = "settings/model";
 
 type Host = Pick<
@@ -106,10 +106,10 @@ export function startEngine(
           }),
       ),
     emit: {
-      message: (message) => ctx.exports.chat.emit("message", message),
-      delta: (delta) => ctx.exports.chat.emit("delta", delta),
+      message: (message, to) => ctx.exports.chat.emit("message", message, { to }),
+      delta: (delta, to) => ctx.exports.chat.emit("delta", delta, { to }),
       status: (status) => ctx.exports.chat.emit("status", status),
-      chat: (entry) => ctx.exports.chat.emit("chat", entry),
+      chat: (entry, to) => ctx.exports.chat.emit("chat", entry, { to }),
       worked: () => ctx.exports.capability.emit("changed", { view: ACTIVITY }),
     },
     log: ctx.log,
@@ -120,7 +120,7 @@ export function startEngine(
    * settings answer, and no tools slot is away. As the agent starts, what it is bound to may not
    * be running yet, so this is looked at again whenever that may have changed: a slot's provider
    * is back, a tools slot is made or gone, or one says its tools changed. A tools slot that stays
-   * away holds them back; a message in a chat starts a turn anyway.
+   * away holds them back; a message in a conversation starts a turn anyway.
    */
   let wentOn = false;
   /** Each tools slot heard for its tools changing, with how to stop hearing it. */
@@ -163,13 +163,12 @@ export function startEngine(
   ctx.slots.settings.onBind(look);
   ctx.onExposed(look);
   serveWork(ctx.exports, chats);
+  // Each caller has its own conversation with the agent: the Hub names who calls.
   ctx.exports.chat.implement({
-    send: (input) => chats.send(input),
-    history: (input) => chats.history(input),
+    send: (input, { caller }) => chats.send(input, caller),
+    history: (input, { caller }) => chats.history(input, caller),
     state: () => chats.state(),
-    list: (input) => chats.list(input),
-    rename: (input) => chats.rename(input),
-    archive: (input) => chats.archive(input),
+    list: (input, { caller }) => chats.list(input, caller),
   });
   return {
     /** The models the agent can use, and the one chosen for it. */
@@ -188,7 +187,7 @@ export function startEngine(
         throw new Refused("unknown", `${model} isn't one of the models offered.`);
       await store.set({ key: MODEL_KEY, value: model });
     },
-    /** Stop the agent: its turns are cut and none starts until `start`. Its chats stay readable. */
+    /** Stop the agent: its turns are cut and none starts until `start`. Its conversations stay readable. */
     stop() {
       done();
       return chats.stop();
@@ -202,7 +201,7 @@ export function startEngine(
       done();
       return chats.close();
     },
-    /** Settles when every chat's latest turn has written all it will. */
+    /** Settles when every piece of work's latest turn has written all it will. */
     async settled() {
       await looking;
       await chats.settled();
