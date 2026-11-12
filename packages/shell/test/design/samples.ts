@@ -40,12 +40,12 @@ export function readChat(gateway: Gateway) {
 }
 
 /** A case the design draws for a chat, which the built side's sample chat can be given. */
-export type ChatCase = "noCall" | "limit" | "long";
+export type ChatCase = "limit" | "long";
 
 /**
- * Two chats as the design's sample has them: one with a call and a reply, one with a problem. The
- * first can be given a case the design draws for a chat: a step with no call, the plan's limit
- * reached, or more said in it than a page holds.
+ * Two chats as the design's sample has them: one with a reply, one with a problem. The first can
+ * be given a case the design draws for a chat: the plan's limit reached, or more said in it than a
+ * page holds.
  */
 export function sampleChats(gateway: Gateway, given?: ChatCase) {
   const at = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
@@ -65,28 +65,6 @@ export function sampleChats(gateway: Gateway, given?: ChatCase) {
           }))
         : []),
       { id: "v-u1", role: "user", text: "Review #482 before I merge it.", at: at(13) },
-      ...(given === "noCall"
-        ? [
-            {
-              id: "v-n1",
-              role: "tool" as const,
-              text: "Looked at the pull request",
-              at: at(12),
-            },
-          ]
-        : []),
-      {
-        id: "v-t1",
-        role: "tool",
-        text: "github_acme__get_file_contents",
-        at: at(12),
-        tool: {
-          name: "github_acme__get_file_contents",
-          state: "done",
-          input: '{ "path": "src/cart/coupon.ts" }',
-          output: "export function applyCoupon(cart, code) { … }",
-        },
-      },
       {
         id: "v-a1",
         role: "assistant",
@@ -436,6 +414,50 @@ export async function openSampleChat(page: Page) {
     .getByRole("button", { name: /Review #482/ })
     .click();
   await chats(page).getByRole("heading", { name: "Review #482" }).waitFor();
+}
+
+/** Opens a chat by its title, from the list. */
+export async function openChatTitled(page: Page, title: string) {
+  if (!(await chats(page).count())) await page.getByRole("button", { name: /^Chats/ }).click();
+  await chats(page)
+    .getByRole("button", { name: new RegExp(title.replace("?", "\\?")) })
+    .click();
+  await chats(page).getByRole("heading", { name: title }).waitFor();
+}
+
+/** Research's chat about the oldest issues, answered, as the design's sample has it. */
+export function oldestIssues(gateway: Gateway) {
+  const at = new Date(Date.now() - 2 * 3600_000).toISOString();
+  gateway.addChat("a-research", {
+    id: "c-issues",
+    title: "Which issues are oldest?",
+    said: [
+      { id: "i-u1", role: "user", text: "Which open issues in acme/storefront are oldest?", at },
+      {
+        id: "i-a1",
+        role: "assistant",
+        text: "The three oldest are **#212** (search results jump on load, 14 months), **#240** (address form loses focus, 13 months) and **#267** (totals round the wrong way, 11 months). None has an owner.",
+        at,
+      },
+    ],
+  });
+}
+
+/** Research's chat with a message its work ended a turn without answering, as the design has it. */
+export function notAnswered(gateway: Gateway) {
+  gateway.addChat("a-research", {
+    id: "c-pushed",
+    title: "Is the branch pushed?",
+    said: [
+      {
+        id: "p-u1",
+        role: "user",
+        text: "Is fix-retry-session pushed yet?",
+        at: new Date(Date.now() - 20 * 60_000).toISOString(),
+      },
+    ],
+    problem: { code: "not_answered", message: "Not answered" },
+  });
 }
 
 /** Opens a chat about to be started, with the first agent that can be picked. */

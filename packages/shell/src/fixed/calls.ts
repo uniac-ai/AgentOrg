@@ -1,9 +1,12 @@
-// From an agent's record to what a person reads. Tools we ship are known by their own name, whatever
-// slot they came through, and only when the call has the shape that tool's calls have; anything else
-// stays its name, input and output. A command and every poll of it are one thing.
-import type { ChatMessage } from "./data.ts";
+// From what a piece of an agent's work did to what a person reads. Tools we ship are known by their
+// own name, whatever slot they came through, and only when the call has the shape that tool's calls
+// have; anything else stays its name, input and output. A command and every poll of it are one thing.
+import type { WorkEntry as WorkEntryShape } from "@agentorg/interfaces";
+import type { z } from "zod";
 
-type State = NonNullable<ChatMessage["tool"]>["state"];
+/** One thing a piece of work did: a call, words its worker didn't send, or a line of its own. */
+export type WorkEntry = z.output<typeof WorkEntryShape>;
+type State = Extract<WorkEntry, { call: unknown }>["call"]["state"];
 interface Base {
   id: string;
   at?: string;
@@ -57,6 +60,7 @@ export interface Other extends Base {
   input?: string;
   output?: string;
 }
+/** Words the worker wrote and didn't send. */
 export interface Say {
   kind: "say";
   id: string;
@@ -64,8 +68,16 @@ export interface Say {
   text: string;
   state?: undefined;
 }
+/** A line of its own, as for calls that never ran. */
+export interface Line {
+  kind: "line";
+  id: string;
+  at?: string;
+  text: string;
+  state?: undefined;
+}
 export type Call = Command | Poll | Look | Edit | PageStep | Find | Fetch | Other;
-export type Row = Call | Say;
+export type Row = Call | Say | Line;
 
 type Input = Record<string, unknown>;
 
@@ -147,20 +159,23 @@ export function refusalOf(output = ""): string {
   }
 }
 
-/** The record as rows, in order; a poll joins the command it polls, and adds no row. */
-export function rowsOf(messages: readonly ChatMessage[]): Row[] {
+/** The entries as rows, in order; a poll joins the command it polls, and adds no row. */
+export function rowsOf(entries: readonly WorkEntry[]): Row[] {
   const rows: Row[] = [];
   const running = new Map<string, Command>();
-  for (const message of messages) {
-    const { tool } = message;
-    if (message.role === "user") continue;
-    if (!tool) {
-      rows.push({ kind: "say", id: message.id, at: message.at, text: message.text });
+  for (const entry of entries) {
+    if ("words" in entry) {
+      rows.push({ kind: "say", id: entry.id, at: entry.at, text: entry.words });
       continue;
     }
+    if ("line" in entry) {
+      rows.push({ kind: "line", id: entry.id, at: entry.at, text: entry.line });
+      continue;
+    }
+    const tool = entry.call;
     const name = toolOf(tool.name);
     const input = inputOf(tool.input);
-    const common = { id: message.id, at: message.at, state: tool.state };
+    const common = { id: entry.id, at: entry.at, state: tool.state };
     const answer = answerOf(tool.output);
     const ended = tool.state !== "running";
     const other = () =>
@@ -197,7 +212,7 @@ export function rowsOf(messages: readonly ChatMessage[]): Row[] {
       }
       const chars = typeof input.chars === "string" ? input.chars : "";
       // A poll's seconds are only that wait: how long it has run comes from when it started.
-      const lasted = (Date.parse(message.at) - Date.parse(command.at ?? message.at)) / 1000;
+      const lasted = (Date.parse(entry.at) - Date.parse(command.at ?? entry.at)) / 1000;
       if (answer) command.seconds = (lasted || 0) + answer.seconds;
       command.stopped ||= chars === "\u0003";
       // Each answer is exactly what it wrote since the last: only what was typed needs a line.
@@ -223,7 +238,7 @@ export function rowsOf(messages: readonly ChatMessage[]): Row[] {
       const last = rows.at(-1);
       if (last?.kind === "look" && last.state === "done" && tool.state === "done") {
         last.calls.push(call);
-        last.at = message.at;
+        last.at = entry.at;
       } else rows.push({ ...common, kind: "look", calls: [call] });
     } else if (
       name === "edit" &&
@@ -288,6 +303,7 @@ function lookLine(look: Look): string {
 export function lineOfRow(row: Row): string {
   switch (row.kind) {
     case "say":
+    case "line":
       return row.text;
     case "command":
       if (row.state === "running") return `Running ${row.cmd}`;

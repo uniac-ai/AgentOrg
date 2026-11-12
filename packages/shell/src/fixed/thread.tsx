@@ -10,7 +10,6 @@ import {
   CopyIcon,
   MonitorIcon,
   MoreHorizontalIcon,
-  WrenchIcon,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Streamdown } from "streamdown";
@@ -42,8 +41,6 @@ import {
   useMessageScrollerScrollable,
 } from "../ui/message-scroller.tsx";
 import { type ListedChat, useAllChats } from "./all-chats.tsx";
-import { CallRow } from "./call-row.tsx";
-import { type Row, rowsOf } from "./calls.ts";
 import { ChatRow, CloseChats } from "./chat-parts.tsx";
 import { useChats } from "./chats.tsx";
 import { surfacesOf, windowsOf } from "./computer.tsx";
@@ -63,13 +60,11 @@ interface Sending {
   messageId?: string;
 }
 
-/** What the thread shows: each message of the person, then what the agent did and said. */
+/** What the thread shows: each message of the person, then what the agent said. */
 type Turn =
   | { kind: "user"; id: string; text: string }
   | { kind: "agent"; id: string; parts: Part[] };
-type Part =
-  | { kind: "tool"; message: ChatMessage }
-  | { kind: "text"; id: string; text: string; streaming?: boolean };
+type Part = { id: string; text: string; streaming?: boolean };
 
 function turnsOf(
   messages: readonly ChatMessage[],
@@ -88,12 +83,10 @@ function turnsOf(
   for (const message of messages) {
     if (message.role === "user")
       turns.push({ kind: "user", id: keys.get(message.id) ?? message.id, text: message.text });
-    else if (message.role === "tool") agentTurn(message.id).parts.push({ kind: "tool", message });
-    else agentTurn(message.id).parts.push({ kind: "text", id: message.id, text: message.text });
+    else agentTurn(message.id).parts.push({ id: message.id, text: message.text });
   }
   for (const { id, text } of unrecorded) turns.push({ kind: "user", id, text });
-  for (const [id, text] of streaming)
-    agentTurn(id).parts.push({ kind: "text", id, text, streaming: true });
+  for (const [id, text] of streaming) agentTurn(id).parts.push({ id, text, streaming: true });
   return turns;
 }
 
@@ -319,6 +312,8 @@ export function Thread({ chat }: { chat: ListedChat }) {
   const [streaming, setStreaming] = useState<ReadonlyMap<string, string>>(new Map());
   /** Whether the agent works, in this chat or another. */
   const [working, setWorking] = useState(false);
+  /** A message was sent from here and the agent hasn't gone idle since: its reply may be coming. */
+  const [sentHere, setSentHere] = useState(false);
   /** A call of this thread's that failed; one that was a read ends with a good read. */
   const [failure, setFailure] = useState<{ said: string; read?: boolean }>();
   /** What the person sent, shown at once, until the record has it. */
@@ -428,7 +423,7 @@ export function Thread({ chat }: { chat: ListedChat }) {
               keys.current.set(message.id, taken.id);
               return was.filter((_, i) => i !== at);
             });
-          // The latest word on an id replaces the earlier: a tool call running, then ended.
+          // The latest word on an id replaces the earlier.
           setMessages((was) => {
             const at = was.findIndex((m) => m.id === message.id);
             return at === -1 ? [...was, message] : was.map((m, i) => (i === at ? message : m));
@@ -457,8 +452,12 @@ export function Thread({ chat }: { chat: ListedChat }) {
           setWorking(status.state === "working");
           // What went wrong on this page is over once the agent works again.
           if (status.state === "working") setFailure(undefined);
-          // A reply cut off when the agent was stopped never settles: it goes.
-          if (status.state === "idle") setStreaming(new Map());
+          // A reply cut off when the agent was stopped never settles: it goes. Gone idle, it is
+          // answering nothing sent from here.
+          if (status.state === "idle") {
+            setStreaming(new Map());
+            setSentHere(false);
+          }
         },
         { again: load },
       ),
@@ -472,28 +471,28 @@ export function Thread({ chat }: { chat: ListedChat }) {
 
   const recorded = new Set(messages.map((m) => m.id));
   const unrecorded = sending.filter((m) => !m.messageId || !recorded.has(m.messageId));
-  // A chat awaits a reply while the newest thing said in it is the person's and the agent works.
-  // Until the record has what was sent, "Thinking" never drops out between the two.
-  const asked = messages.findLast((m) => m.role !== "tool")?.role === "user";
-  const awaiting = unrecorded.length > 0 || (working && asked);
+  // A chat awaits a reply while what was sent from here isn't in the record yet, and then while it
+  // is the newest thing said and the agent works. The agent's status is for all its chats, so a
+  // message sent elsewhere, or one whose turn ended unanswered, awaits nothing. Nothing is shown
+  // for it: the agent's own line says it works.
+  const asked = messages.at(-1)?.role === "user";
+  const awaiting = unrecorded.length > 0 || (sentHere && working && asked);
   // While it awaits a reply its problem is not said: the reply ends it, or it is said again. A
   // call of this thread's that failed is said in its place.
   const problem = failure || awaiting ? undefined : entry.problem;
   const wrong = failure?.said ?? problem?.message;
   // A problem that the plan's page can fix ends its line with the way there.
   const fix = problem && fixOf(problem);
-  const rows = useMemo(() => new Map(rowsOf(messages).map((row) => [row.id, row])), [messages]);
   const turns = useMemo(
     () => turnsOf(messages, unrecorded, streaming, keys.current),
     [messages, unrecorded, streaming],
   );
   const lastTurn = turns.at(-1);
-  const toolRunning = messages.at(-1)?.tool?.state === "running";
-  const thinking = awaiting && streaming.size === 0 && !toolRunning;
 
   const send = async (text: string) => {
     if (!slot) return false;
     setFailure(undefined);
+    setSentHere(true);
     const key = `sending-${++sends.current}`;
     setSending((was) => [...was, { id: key, text }]);
     try {
@@ -654,21 +653,13 @@ export function Thread({ chat }: { chat: ListedChat }) {
                   ) : (
                     <Reply
                       parts={turn.parts}
-                      rows={rows}
                       reduced={reduced}
                       isLast={turn === lastTurn}
                       awaiting={awaiting}
-                      thinking={thinking && turn === lastTurn}
                     />
                   )}
                 </MessageScrollerItem>
               ))}
-              {/* Under the person's message; once the agent has done something, under that. */}
-              {thinking && lastTurn?.kind !== "agent" && (
-                <MessageScrollerItem>
-                  <Thinking />
-                </MessageScrollerItem>
-              )}
               {wrong && <ProblemLine fix={fix}>{wrong}</ProblemLine>}
             </MessageScrollerContent>
           </Room>
@@ -682,31 +673,6 @@ export function Thread({ chat }: { chat: ListedChat }) {
       )}
     </div>
   );
-}
-
-/** The agent is at work on a reply, and nothing of it is arriving just now. */
-const Thinking = () => (
-  <div role="status" className="thinking w-fit text-[15px] font-medium">
-    Thinking
-  </div>
-);
-
-/**
- * A call's row; a poll has none of its own, it's part of the command's. Something the agent did
- * that carries no call is its one line, as a call's line without what a call has to open.
- */
-function Tool({ message, row }: { message: ChatMessage; row?: Row | undefined }) {
-  if (!message.tool)
-    return (
-      <p
-        data-call
-        className="flex h-7 items-center gap-2 px-1 text-[13px] text-muted-foreground [[data-call]+&]:-mt-1.5"
-      >
-        <WrenchIcon className="size-3.5 shrink-0" />
-        <span className="min-w-0 truncate">{message.text}</span>
-      </p>
-    );
-  return row && row.kind !== "say" ? <CallRow row={row} /> : null;
 }
 
 /** How soon after a person moves the room its having moved is theirs, and not what came. */
@@ -742,54 +708,44 @@ function Room({ children }: { children: React.ReactNode }) {
 
 function Reply({
   parts,
-  rows,
   reduced,
   isLast,
   awaiting,
-  thinking,
 }: {
   parts: Part[];
-  rows: ReadonlyMap<string, Row>;
   reduced: boolean;
   isLast: boolean;
   /** The chat still awaits its reply: the last one isn't settled, and offers nothing yet. */
   awaiting: boolean;
-  /** Nothing of it is arriving just now. */
-  thinking: boolean;
 }) {
   const [copied, setCopied] = useState(false);
-  const texts = parts.flatMap((part) => (part.kind === "text" ? [part.text] : []));
-  const settled = !(isLast && (awaiting || parts.some((p) => p.kind === "text" && p.streaming)));
-  /** Nothing was said in it, only done: there is nothing to copy. */
+  const texts = parts.map((part) => part.text);
+  const settled = !(isLast && (awaiting || parts.some((p) => p.streaming)));
+  /** Nothing in it has words: there is nothing to copy. */
   const wordless = texts.every((text) => !text.trim());
   return (
     <Message className="group/reply">
       <MessageContent className="gap-2">
-        {parts.map((part) =>
-          part.kind === "tool" ? (
-            <Tool key={part.message.id} message={part.message} row={rows.get(part.message.id)} />
-          ) : (
-            <Bubble key={part.id} variant="ghost" className="w-full">
-              {/* Its size is said here: the bubble's own would outrank a rule of the sheet's. */}
-              <BubbleContent className="prose-chat w-full text-[15px] leading-[1.6]">
-                <Streamdown
-                  controls={{ table: false, code: true }}
-                  animated={{
-                    animation: "reveal",
-                    duration: 260,
-                    easing: "ease-out",
-                    stagger: 14,
-                    maxBacklogMs: 420,
-                  }}
-                  isAnimating={!!part.streaming && !reduced}
-                >
-                  {part.text}
-                </Streamdown>
-              </BubbleContent>
-            </Bubble>
-          ),
-        )}
-        {thinking && <Thinking />}
+        {parts.map((part) => (
+          <Bubble key={part.id} variant="ghost" className="w-full">
+            {/* Its size is said here: the bubble's own would outrank a rule of the sheet's. */}
+            <BubbleContent className="prose-chat w-full text-[15px] leading-[1.6]">
+              <Streamdown
+                controls={{ table: false, code: true }}
+                animated={{
+                  animation: "reveal",
+                  duration: 260,
+                  easing: "ease-out",
+                  stagger: 14,
+                  maxBacklogMs: 420,
+                }}
+                isAnimating={!!part.streaming && !reduced}
+              >
+                {part.text}
+              </Streamdown>
+            </BubbleContent>
+          </Bubble>
+        ))}
         {/* Its room is always kept, so nothing moves when it appears. */}
         <MessageFooter
           className={`h-6 gap-0.5 px-0 ${!settled || wordless ? "invisible" : isLast ? "" : "invisible group-hover/reply:visible"}`}

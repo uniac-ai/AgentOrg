@@ -24,7 +24,10 @@ import {
   downTriage,
   inDesign,
   newChatWithFirst,
+  notAnswered,
   noted,
+  oldestIssues,
+  openChatTitled,
   openDesignAgent,
   openFiles,
   openOffer,
@@ -1070,13 +1073,17 @@ const probe = (what: Part): Parts => {
     parts["head.agent"] = of(title?.nextElementSibling, "w");
     parts["head.options"] = of(head?.querySelector('button[aria-label="Chat options"]'));
     parts["head.close"] = of(head?.querySelector('button[aria-label="Close chats"]'));
-    const said = panel?.querySelector(".whitespace-pre-wrap");
-    parts.said = of(said);
-    // A call, which opens; not a step with none, which is measured below.
-    const call = panel?.querySelector("[data-call]:not(p)");
-    parts.call = of(call);
-    parts["call.line"] = of(call?.querySelector("button"));
-    parts["call.words"] = of(call?.querySelector("button > span"));
+    const mine = [...(panel?.querySelectorAll(".whitespace-pre-wrap") ?? [])];
+    parts.said = of(mine[0]);
+    // The person's last message, and the words shown under it: none while its work runs.
+    const last = mine.at(-1);
+    parts["said.last"] = mine.length > 1 ? of(last) : null;
+    let after = "";
+    for (let item = last?.closest('[data-slot="message-scroller-item"]') ?? null; item; ) {
+      item = item.nextElementSibling;
+      after += item instanceof HTMLElement ? item.innerText.trim() : "";
+    }
+    parts["said.after"] = after || "nothing";
     const reply = panel?.querySelector(".prose-chat");
     parts.reply = of(reply);
     parts["reply.copy"] = of(panel?.querySelector('button[aria-label="Copy"]'));
@@ -1085,11 +1092,6 @@ const probe = (what: Part): Parts => {
     parts["wrong.words"] = of(wrong?.children[0], "w");
     // What helps, at the end of the line, after the words: the same words on both sides.
     parts["wrong.fix"] = inside(wrong, wrong?.querySelector("button"));
-    // Something the agent did that carries no call.
-    const note = panel?.querySelector("p[data-call]");
-    parts.note = of(note);
-    parts["note.icon"] = of(note?.querySelector("svg"));
-    parts["note.words"] = of(note?.querySelector("span"), "w");
     const box = panel?.querySelector('textarea[aria-label="Message"]');
     const group = box?.closest('[data-slot="input-group"]') ?? box?.parentElement;
     parts.composer = of(group);
@@ -1506,8 +1508,8 @@ if (wants("chat"))
     }
 
 // The cases the design draws for a chat, each from its own control, and the built side given the
-// same: a step with no call, a problem with its fix, a send and a first message refused, and more
-// said than a page holds.
+// same: a message just sent, one its work didn't answer, a problem with its fix, a send and a first
+// message refused, and more said than a page holds.
 if (wants("thread"))
   for (const theme of ["dark", "light"] as const)
     for (const side of ["design", "built"] as const) {
@@ -1517,6 +1519,8 @@ if (wants("thread"))
         given: ChatCase | undefined,
         reach: (page: Page, gateway?: Gateway) => Promise<void>,
         part: Part = "thread",
+        /** Measured as `reach` leaves it, without the pointer's move and the wait. */
+        now = false,
       ) => {
         const gateway = side === "built" ? await standIn() : undefined;
         if (gateway) sampleChats(gateway, given);
@@ -1524,16 +1528,40 @@ if (wants("thread"))
           ? await builtPage(gateway, "wide", theme)
           : await designPage("wide", theme);
         await reach(page, gateway);
-        await rest(page, "wide");
+        if (!now) await rest(page, "wide");
         all[`thread.${state}.${theme}.${side}`] = await measure(page, part);
         await page.close();
         await gateway?.close();
       };
       const panel = (page: Page) => page.getByRole("complementary", { name: "Chats" });
-      await one("noCall", "noCall", async (page, gateway) => {
-        await openSampleChat(page);
-        if (!gateway) await inDesign(page, "A step with no call");
-        await panel(page).getByText("Looked at the pull request").waitFor();
+      // Measured as soon as it shows: the design's own turn writes its first words after 1.8 s.
+      await one(
+        "sent",
+        undefined,
+        async (page, gateway) => {
+          if (gateway) {
+            gateway.setChatStatus("a-research", { state: "idle" });
+            oldestIssues(gateway);
+          }
+          await openChatTitled(page, "Which issues are oldest?");
+          // What was said before is there first: a send goes under it.
+          await panel(page).locator(".prose-chat").first().waitFor();
+          await page.waitForTimeout(800);
+          const box = panel(page).getByRole("textbox", { name: "Message" });
+          await box.fill("And the oldest bug?");
+          await box.press("Enter");
+          await panel(page)
+            .locator(".whitespace-pre-wrap", { hasText: "And the oldest bug?" })
+            .waitFor();
+          await page.waitForTimeout(300);
+        },
+        "thread",
+        true,
+      );
+      await one("notAnswered", undefined, async (page, gateway) => {
+        if (gateway) notAnswered(gateway);
+        await openChatTitled(page, "Is the branch pushed?");
+        await panel(page).getByRole("alert").waitFor();
       });
       await one("limit", "limit", async (page, gateway) => {
         await openSampleChat(page);
@@ -1566,13 +1594,17 @@ if (wants("thread"))
     }
 
 // Home: the chats that need you and the recent ones, wide and on a phone. The built side has as
-// many that need you as the design's sample: one with a problem, one with a reply not yet read.
+// many that need you as the design's sample: one with a problem, one whose message wasn't answered,
+// and one with a reply not yet read.
 if (wants("home"))
   for (const size of ["wide", "phone"] as const)
     for (const theme of ["dark", "light"] as const)
       for (const side of ["design", "built"] as const) {
         const gateway = side === "built" ? await standIn() : undefined;
-        if (gateway) sampleChats(gateway);
+        if (gateway) {
+          sampleChats(gateway);
+          notAnswered(gateway);
+        }
         const page = gateway
           ? await builtPage(gateway, size, theme)
           : await designPage(size, theme);
@@ -1580,7 +1612,7 @@ if (wants("home"))
           await noted(gateway);
           unreadReply(gateway, 1);
         }
-        await page.getByRole("region", { name: "Needs you" }).getByRole("button").nth(1).waitFor();
+        await page.getByRole("region", { name: "Needs you" }).getByRole("button").nth(2).waitFor();
         await rest(page, size);
         all[`home.${size}.${theme}.${side}`] = await measure(page, "home");
         await page.close();

@@ -143,8 +143,8 @@ const PAGE = 50;
 /** How many of a chat's newest messages are read for the last thing said in it. */
 const NEWEST = 10;
 
-/** What a person or an agent said. What an agent did is not a chat's words. */
-const isSaid = (message: ChatMessage) => message.role !== "tool" && message.text.trim() !== "";
+/** What a person or an agent said: a message with words. */
+const isSaid = (message: ChatMessage) => message.text.trim() !== "";
 /** A message as a chat's last words: who said it when it was you, and its first line. */
 const wordsOf = (message: ChatMessage) => {
   const line = message.text.trim().split("\n")[0]?.replace(/[*`|]/g, "").trim() ?? "";

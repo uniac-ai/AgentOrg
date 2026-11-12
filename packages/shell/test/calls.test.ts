@@ -1,8 +1,7 @@
-// What a person reads, worked out from tool messages in the shapes the bundled tools really answer.
+// What a person reads, worked out from calls in the shapes the bundled tools really answer.
 import assert from "node:assert/strict";
 import test from "node:test";
-import { type Call, lineOfRow, rowsOf } from "../src/fixed/calls.ts";
-import type { ChatMessage } from "../src/fixed/data.ts";
+import { type Call, lineOfRow, rowsOf, type WorkEntry } from "../src/fixed/calls.ts";
 
 const start = Date.parse("2026-11-09T10:00:00Z");
 let n = 0;
@@ -12,16 +11,14 @@ const call = (
   output?: string,
   state: "done" | "running" | "refused" = "done",
   seconds = n * 10,
-): ChatMessage => ({
+): WorkEntry => ({
   id: `m${++n}`,
-  role: "tool",
-  text: name,
   at: new Date(start + seconds * 1000).toISOString(),
-  tool: { name, state, input: JSON.stringify(input), ...(output !== undefined ? { output } : {}) },
+  call: { name, state, input: JSON.stringify(input), ...(output !== undefined ? { output } : {}) },
 });
 const answer = (exit: number | "running", seconds: number, session: string, text: string) =>
   `exit_code: ${exit}\nseconds: ${seconds}\nsession_id: ${session}\ntext:\n${text}`;
-const one = (message: ChatMessage) => rowsOf([message])[0] as Call;
+const one = (entry: WorkEntry) => rowsOf([entry])[0] as Call;
 const PAGE =
   "### Ran Playwright code\n```js\nawait page.click();\n```\n### Page\n- Page URL: http://localhost:4173/checkout\n- Page Title: Checkout\n### Snapshot\n- [Snapshot](page-1.yml)";
 
@@ -183,8 +180,24 @@ test("a tool we don't know, or one that only shares a name, stays as it came", (
   assert.equal(one(call("other__edit", { path: "x" }, "saved")).kind, "other", "no diff");
   assert.equal(one(call("b__browser_resize", { width: 1 }, "ok")).kind, "other", "not one we draw");
   const bad = {
-    ...call("x__y", {}),
-    tool: { name: "x__y", state: "done" as const, input: "not json" },
+    ...call("c__exec_command", {}),
+    call: { name: "c__exec_command", state: "done" as const, input: "not json" },
   };
-  assert.equal(one(bad).kind, "other");
+  assert.equal(one(bad).kind, "other", "input that isn't JSON");
+});
+
+test("words a worker didn't send and a line of its own are rows of their own, between the calls", () => {
+  const rows = rowsOf([
+    call("c__exec_command", { cmd: "git status" }, answer(0, 0.1, "none", "clean")),
+    { id: "w1", at: new Date(start).toISOString(), words: "The branch is local only." },
+    { id: "l1", at: new Date(start).toISOString(), line: "Looked at the pull request" },
+  ]);
+  assert.deepEqual(
+    rows.map((row) => [row.kind, lineOfRow(row)]),
+    [
+      ["command", "Ran git status"],
+      ["say", "The branch is local only."],
+      ["line", "Looked at the pull request"],
+    ],
+  );
 });
