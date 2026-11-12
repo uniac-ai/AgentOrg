@@ -495,7 +495,11 @@ const BUILD_UNITS: Units["units"] = [
             description: "Runs as you, with your files and no approvals.",
             caution: true,
           },
-          { value: "container", title: "A new container" },
+          {
+            value: "container",
+            title: "A new container",
+            description: "Kept apart from your files and programs.",
+          },
         ],
       },
       {
@@ -503,8 +507,9 @@ const BUILD_UNITS: Units["units"] = [
         type: "directory",
         value: "string",
         title: "Workspace directory",
+        description: "The folder it works in. Removing the agent leaves it.",
         required: true,
-        placeholder: "~/Agents/Scout",
+        placeholder: "~/Agents/{name}",
         visible: { field: "where", in: ["local"] },
       },
       {
@@ -515,8 +520,16 @@ const BUILD_UNITS: Units["units"] = [
         required: true,
         default: "terminal",
         options: [
-          { value: "terminal", title: "Files and terminal" },
-          { value: "files", title: "Files" },
+          {
+            value: "terminal",
+            title: "Files and terminal",
+            description: "It can run any command.",
+          },
+          {
+            value: "files",
+            title: "Files",
+            description: "It reads and changes files, and runs nothing.",
+          },
         ],
       },
       {
@@ -527,7 +540,7 @@ const BUILD_UNITS: Units["units"] = [
         required: true,
         default: "on",
         options: [
-          { value: "on", title: "With a browser" },
+          { value: "on", title: "With a browser", description: "It opens pages and acts on them." },
           { value: "off", title: "No browser" },
         ],
         visible: { field: "access", in: ["terminal"] },
@@ -580,9 +593,13 @@ const BUILD_UNITS: Units["units"] = [
         title: "Where new agents go",
         required: true,
         options: [
-          { value: "own", title: "In its own directory" },
+          { value: "own", title: "In its own directory", description: "They share its files." },
           { value: "remote", title: "On an existing remote place" },
-          { value: "new", title: "On a new computer" },
+          {
+            value: "new",
+            title: "On a new computer",
+            description: "Each gets a computer of its own.",
+          },
         ],
       },
       {
@@ -599,6 +616,7 @@ const BUILD_UNITS: Units["units"] = [
         type: "number",
         value: "number",
         title: "How many at once",
+        description: "More than this wait their turn.",
         required: true,
         default: 3,
         min: 0,

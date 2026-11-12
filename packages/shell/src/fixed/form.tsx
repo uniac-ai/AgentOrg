@@ -32,6 +32,9 @@ function controlOf(field: Field): string {
 interface Option {
   value: string;
   title: string;
+  /** What choosing it means, and whether that is a caution. */
+  description?: string | undefined;
+  caution?: true | undefined;
 }
 
 function OneOf({
@@ -56,9 +59,19 @@ function OneOf({
         <SelectValue placeholder={hint ?? "Choose"}>{chosen?.title}</SelectValue>
       </SelectTrigger>
       <SelectContent>
+        {/* Each answer says what it means before it is chosen. */}
         {options.map((o) => (
           <SelectItem key={o.value} value={o.value}>
-            {o.title}
+            <span className="flex flex-col">
+              <span>{o.title}</span>
+              {o.description && (
+                <span
+                  className={`text-xs ${o.caution ? "!text-[var(--warn)]" : "text-muted-foreground"}`}
+                >
+                  {o.description}
+                </span>
+              )}
+            </span>
           </SelectItem>
         ))}
       </SelectContent>
@@ -86,16 +99,27 @@ function SomeOf({
         <label
           key={o.value}
           htmlFor={`${id}-${o.value}`}
-          className="flex items-center gap-2 text-sm"
+          className="flex items-start gap-2 text-sm"
         >
           <Checkbox
             id={`${id}-${o.value}`}
+            className="mt-0.5"
             checked={value.includes(o.value)}
             onCheckedChange={(on) =>
               onChange(on ? [...value, o.value] : value.filter((v) => v !== o.value))
             }
           />
-          {o.title}
+          {/* Each box says what it means. */}
+          <span className="flex flex-col">
+            <span>{o.title}</span>
+            {o.description && (
+              <span
+                className={`text-xs ${o.caution ? "text-[var(--warn)]" : "text-muted-foreground"}`}
+              >
+                {o.description}
+              </span>
+            )}
+          </span>
         </label>
       ))}
     </div>
@@ -168,13 +192,17 @@ export function FormField({
   const value = fieldValue(field, values);
   const text = typeof value === "string" || typeof value === "number" ? String(value) : "";
   const list = Array.isArray(value) ? value : [];
-  // What the chosen answer means stays under it: as a caution where its unit marks it as one.
+  // Under its control: what the chosen answer means, as a caution where its unit marks it as
+  // one; a field with no answer chosen says what it is. A set of boxes says it on each box.
   const chosen = field.options?.find((o) => o.value === value);
+  const under = control === "choices" ? undefined : (chosen?.description ?? field.description);
   const notes = (
     <>
-      {chosen?.description && (
-        <p className={`text-xs ${chosen.caution ? "text-[var(--warn)]" : "text-muted-foreground"}`}>
-          {chosen.description}
+      {under && (
+        <p
+          className={`text-xs ${chosen?.description && chosen.caution ? "text-[var(--warn)]" : "text-muted-foreground"}`}
+        >
+          {under}
         </p>
       )}
       {problem && <FieldError className="text-xs">{problem}</FieldError>}

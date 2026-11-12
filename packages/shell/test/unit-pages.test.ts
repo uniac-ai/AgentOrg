@@ -210,7 +210,8 @@ test(
       if (field.id === "where") field.default = "local";
     });
     await create.click();
-    await computer.getByText("It acts as you on this Mac.").waitFor();
+    // Under the field, apart from the list's hidden copy of each answer's words.
+    await computer.locator("p", { hasText: "It acts as you on this Mac." }).waitFor();
     assert.equal(
       await computer.getByRole("combobox", { name: "Where it resides" }).innerText(),
       "This computer",
