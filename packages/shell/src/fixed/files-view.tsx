@@ -1,6 +1,7 @@
 // A computer's files, over its `files@1` surface: walk the workspace's folders, open a file, bring
-// one in, take one out. Nothing here deletes or renames. Each request is answered by its id; a
-// file's bytes come as one binary message right after the answer that says what they are.
+// one in, take one out. What changed lately is marked, by its date, whoever changed it. Nothing
+// here deletes or renames. Each request is answered by its id; a file's bytes come as one binary
+// message right after the answer that says what they are.
 import { ArrowLeftIcon, DownloadIcon, FileIcon, FolderIcon, UploadIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "../ui/button.tsx";
@@ -11,6 +12,8 @@ import { useLive } from "./live-socket.ts";
 
 /** The most of a file one request reads or writes, which is the most the surface takes. */
 const PART = 1_048_576;
+/** How long ago "lately" reaches, counted from when the window opens. */
+const LATELY_MS = 24 * 60 * 60 * 1000;
 
 interface Entry {
   name: string;
@@ -18,9 +21,16 @@ interface Entry {
   size: number;
   modifiedAt: string;
 }
+/** A file that changed lately, by its path from the workspace. */
+interface Change {
+  path: string;
+  size: number;
+  modifiedAt: string;
+}
 /** What the surface answers, by the id of what was asked; `bytes` are a read's. */
 type Answer =
   | { type: "entries"; entries: Entry[] }
+  | { type: "changes"; changes: Change[] }
   | { type: "data"; size: number; modifiedAt: string; bytes: ArrayBuffer }
   | { type: "written" }
   | { type: "refused"; message: string };
@@ -32,6 +42,29 @@ const sized = (bytes: number) =>
       ? `${(bytes / 1000).toFixed(1)} KB`
       : `${(bytes / 1e6).toFixed(1)} MB`;
 const under = (folder: string, name: string) => (folder ? `${folder}/${name}` : name);
+const tab = (on: boolean) =>
+  `h-8 min-w-0 shrink truncate rounded-lg px-3 text-[13px] ${on ? "bg-[var(--selected)] font-medium text-foreground" : "text-muted-foreground hover:bg-[var(--hover)]"}`;
+const ROW =
+  "flex h-9 w-full min-w-0 items-center gap-2.5 rounded-lg px-2.5 text-left hover:bg-[var(--hover)]";
+
+const Changed = () => (
+  <span
+    role="img"
+    aria-label="Changed"
+    className="size-1.5 shrink-0 rounded-full bg-[var(--unread)]"
+  />
+);
+/** A file's two facts: how big it is, and how long ago it changed. */
+const Facts = ({ size, modifiedAt }: { size: number; modifiedAt: string }) => (
+  <>
+    <span className="w-16 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
+      {sized(size)}
+    </span>
+    <span className="w-14 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
+      {age(modifiedAt)}
+    </span>
+  </>
+);
 
 export function FilesView({ target, corner }: ViewerProps) {
   const operate = target.mode === "operate";
@@ -40,6 +73,16 @@ export function FilesView({ target, corner }: ViewerProps) {
   const [folder, setFolder] = useState("");
   /** A folder's entries, with the folder they are of: rows are only ever those of the one shown. */
   const [listed, setListed] = useState<{ folder: string; entries: Entry[] }>();
+  /** Only what changed lately is listed, by its path. */
+  const [only, setOnly] = useState(false);
+  /** Since when a file counts as changed lately: fixed when the window opens. */
+  const [since] = useState(() => new Date(Date.now() - LATELY_MS).toISOString());
+  /** What changed lately, once the surface has said. */
+  const [changes, setChanges] = useState<Change[]>();
+  /** One walk of the workspace is asked for at a time. */
+  const walking = useRef(false);
+  /** The last walk wasn't answered with what changed: it isn't asked for again by itself. */
+  const gaveUp = useRef(false);
   /** The file that is open, with its words once they are read. */
   const [file, setFile] = useState<{ path: string; text?: string }>();
   const [sent, setSent] = useState(0);
@@ -100,6 +143,39 @@ export function FilesView({ target, corner }: ViewerProps) {
       current = false;
     };
   }, [open, folder, tick, sent]);
+
+  // What changed lately is asked for when the window opens and after something is brought in,
+  // and again as often as the folder is read, one walk at a time. A walk the surface refuses, as
+  // one that takes too long, isn't asked for again until one of the first two.
+  const walk = () => {
+    if (!open) {
+      walking.current = false;
+      return;
+    }
+    if (walking.current) return;
+    walking.current = true;
+    void ask({ type: "changed", since }).then((answer) => {
+      walking.current = false;
+      gaveUp.current = answer.type !== "changes";
+      // The surface gives the newest first; they are listed as a folder's are, by their path.
+      if (answer.type === "changes")
+        setChanges([...answer.changes].sort((a, b) => a.path.localeCompare(b.path)));
+    });
+  };
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `walk` is this socket's own.
+  useEffect(walk, [open, sent]);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `walk` is this socket's own.
+  useEffect(() => {
+    if (!gaveUp.current) walk();
+  }, [tick]);
+  /** A file that changed lately, or a folder that holds one. */
+  const changed = (path: string) =>
+    !!changes?.some((one) => one.path === path || one.path.startsWith(`${path}/`));
+  /** One list or the other, from its start. */
+  const pick = (which: boolean) => {
+    setOnly(which);
+    setFile(undefined);
+  };
 
   const show = async (path: string) => {
     setFile({ path });
@@ -173,11 +249,23 @@ export function FilesView({ target, corner }: ViewerProps) {
             <button
               type="button"
               role="tab"
-              aria-selected
-              className="h-8 min-w-0 shrink truncate rounded-lg bg-[var(--selected)] px-3 text-[13px] font-medium text-foreground"
-              onClick={() => setFile(undefined)}
+              aria-selected={!only}
+              className={tab(!only)}
+              onClick={() => pick(false)}
             >
               All
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={only}
+              className={tab(only)}
+              onClick={() => pick(true)}
+            >
+              Changed
+              {changes && (
+                <span className="ml-1.5 tabular-nums text-muted-foreground">{changes.length}</span>
+              )}
             </button>
           </div>
         </div>
@@ -189,7 +277,7 @@ export function FilesView({ target, corner }: ViewerProps) {
           variant="ghost"
           size="icon-sm"
           aria-label="Up"
-          disabled={!file && !folder}
+          disabled={!file && (only || !folder)}
           onClick={up}
         >
           <ArrowLeftIcon />
@@ -200,7 +288,7 @@ export function FilesView({ target, corner }: ViewerProps) {
           aria-label="Folder"
           className="ml-1 flex h-8 min-w-0 flex-1 items-center truncate rounded-full bg-[var(--raised)] px-3.5 font-mono text-xs outline-none"
         >
-          {file ? file.path : folder}
+          {file ? file.path : only ? "" : folder}
         </span>
         {file ? (
           <Button
@@ -218,7 +306,7 @@ export function FilesView({ target, corner }: ViewerProps) {
             size="icon-sm"
             className="ml-1"
             aria-label="Upload"
-            disabled={!operate}
+            disabled={!operate || only}
             onClick={() => picker.current?.click()}
           >
             <UploadIcon />
@@ -242,6 +330,19 @@ export function FilesView({ target, corner }: ViewerProps) {
           <pre className="mt-1 rounded-lg bg-[var(--raised)] px-3 py-2 font-mono text-xs whitespace-pre-wrap">
             {file.text ?? ""}
           </pre>
+        ) : only ? (
+          <ul aria-label="Changed files">
+            {changes?.map((one) => (
+              <li key={one.path}>
+                <button type="button" onClick={() => void show(one.path)} className={ROW}>
+                  <FileIcon className="size-4 shrink-0 text-muted-foreground" />
+                  <span className="min-w-0 flex-1 truncate font-mono text-xs">{one.path}</span>
+                  <Changed />
+                  <Facts size={one.size} modifiedAt={one.modifiedAt} />
+                </button>
+              </li>
+            ))}
+          </ul>
         ) : (
           <ul aria-label="Files">
             {(listed?.folder === folder ? listed.entries : []).map((entry) => (
@@ -253,7 +354,7 @@ export function FilesView({ target, corner }: ViewerProps) {
                       ? setFolder(under(folder, entry.name))
                       : void show(under(folder, entry.name))
                   }
-                  className="flex h-9 w-full min-w-0 items-center gap-2.5 rounded-lg px-2.5 text-left hover:bg-[var(--hover)]"
+                  className={ROW}
                 >
                   {entry.kind === "folder" ? (
                     <FolderIcon className="size-4 shrink-0 text-muted-foreground" />
@@ -261,17 +362,11 @@ export function FilesView({ target, corner }: ViewerProps) {
                     <FileIcon className="size-4 shrink-0 text-muted-foreground" />
                   )}
                   <span className="min-w-0 flex-1 truncate font-mono text-xs">{entry.name}</span>
+                  {changed(under(folder, entry.name)) && <Changed />}
                   {entry.kind === "folder" ? (
                     <span className="w-[130px] shrink-0" />
                   ) : (
-                    <>
-                      <span className="w-16 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
-                        {sized(entry.size)}
-                      </span>
-                      <span className="w-14 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
-                        {age(entry.modifiedAt)}
-                      </span>
-                    </>
+                    <Facts size={entry.size} modifiedAt={entry.modifiedAt} />
                   )}
                 </button>
               </li>

@@ -514,6 +514,13 @@ const probe = (what: Part): Parts => {
     // How many tabs it has is listed with what is seen, each by its name.
     parts.tablist = of(list, "w");
     parts["tab.all"] = of(list.children[0]);
+    // What changed lately: its tab, how many, and which of the two lists is shown.
+    const changed = list.children[1];
+    parts["tab.changed"] = of(changed);
+    parts["tab.changed.count"] = of(changed?.querySelector("span"));
+    parts["tab.shown"] = [...list.children].findIndex(
+      (tab) => tab.getAttribute("aria-selected") === "true",
+    );
     const tabs = [...list.children].map((tab) => `which: ${tab.childNodes[0]?.textContent}`);
     parts["window.seen"] = [parts["window.seen"], ...tabs].join(" | ");
     const expand = bar.querySelector('button[aria-label="Expand"]');
@@ -540,6 +547,7 @@ const probe = (what: Part): Parts => {
       parts[`row.${name}`] = of(row);
       parts[`row.${name}.icon`] = of(row?.querySelector("svg"));
       parts[`row.${name}.name`] = of(row?.querySelector("svg + span"), "w");
+      parts[`row.${name}.changed`] = of(row?.querySelector('[role="img"]'));
       // A file's two facts are its numbers; a folder has neither.
       const [size, age] = row?.querySelectorAll("span.tabular-nums") ?? [];
       parts[`row.${name}.size`] = of(size);
@@ -1445,7 +1453,7 @@ if (wants("signin"))
 
 // The files window: a folder's rows, and a file open, in Research's storefront folder.
 if (wants("files"))
-  for (const state of ["folder", "file"] as const)
+  for (const state of ["folder", "file", "changed"] as const)
     for (const theme of ["dark", "light"] as const)
       for (const side of ["design", "built"] as const) {
         const gateway = side === "built" ? await standIn() : undefined;
@@ -1454,7 +1462,7 @@ if (wants("files"))
           ? await builtPage(gateway, "wide", theme, "#/a/a-research")
           : await designPage("wide", theme);
         if (!gateway) await openDesignAgent(page, "Research");
-        await openFiles(page, state === "file" ? "README.md" : undefined);
+        await openFiles(page, state === "file" ? "README.md" : undefined, state === "changed");
         await rest(page, "wide");
         all[`files.${state}.${theme}.${side}`] = await measure(page, "files");
         await page.close();
