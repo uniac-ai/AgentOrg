@@ -118,6 +118,10 @@ const Gives = z.object({
  * a list, includes one. A field that isn't shown has no value. `description` is written once, for a
  * person and an agent alike.
  *
+ * `caution`, on a choice's option, says its `description` warns of what choosing it risks: a
+ * host draws it as a caution while that option is the answer. A host that doesn't know it draws
+ * it as any description.
+ *
  * `adds`, on a choice's option or on a toggle (when on), is what that adds to what the unit gives.
  * What a unit will give is worked out from this and the values, with no call to its logic. Field ids are unique in a form, and management refuses a form that isn't
  * well made: a default of the wrong kind, a `visible` naming no field.
@@ -146,6 +150,7 @@ export const Field = z.object({
         value: z.string().max(256),
         title: Title,
         description: Description.optional(),
+        caution: z.literal(true).optional(),
         adds: Gives.optional(),
       }),
     )
@@ -177,6 +182,14 @@ export const Unit = z.object({
    * asked, through what it holds, and the unit is not.
    */
   capability: z.strictObject({ id: CapabilityId, title: Title }).optional(),
+  /**
+   * An agent's stack holds this unit at most once: management refuses a second, and a host
+   * leaves it out of what can be added to a stack that has it. A host that doesn't know it
+   * offers the unit again, and the second is refused. Without it a unit may be there more than
+   * once, as far as what each one gives allows. A unit that builds a `capability` is held once
+   * by that, and needn't say so.
+   */
+  once: z.literal(true).optional(),
   form: Form,
   needs: z.array(ResultKind).max(16),
   gives: Gives.extend({ results: z.array(ResultKind).max(16) }),
