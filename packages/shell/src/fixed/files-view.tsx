@@ -29,7 +29,7 @@ interface Change {
 }
 /** What the surface answers, by the id of what was asked; `bytes` are a read's. */
 type Answer =
-  | { type: "entries"; entries: Entry[] }
+  | { type: "entries"; entries: Entry[]; workspace?: string }
   | { type: "changes"; changes: Change[] }
   | { type: "data"; size: number; modifiedAt: string; bytes: ArrayBuffer }
   | { type: "written" }
@@ -73,6 +73,8 @@ export function FilesView({ target, corner }: ViewerProps) {
   const [folder, setFolder] = useState("");
   /** A folder's entries, with the folder they are of: rows are only ever those of the one shown. */
   const [listed, setListed] = useState<{ folder: string; entries: Entry[] }>();
+  /** The workspace's own name, where the surface says it: an older one doesn't. */
+  const [workspace, setWorkspace] = useState("");
   /** Only what changed lately is listed, by its path. */
   const [only, setOnly] = useState(false);
   /** Since when a file counts as changed lately: fixed when the window opens. */
@@ -136,8 +138,9 @@ export function FilesView({ target, corner }: ViewerProps) {
     if (!open) return;
     let current = true;
     void ask({ type: "list", ...(folder ? { path: folder } : {}) }).then((answer) => {
-      if (current)
-        setListed(answer.type === "entries" ? { folder, entries: answer.entries } : undefined);
+      if (!current) return;
+      setListed(answer.type === "entries" ? { folder, entries: answer.entries } : undefined);
+      if (answer.type === "entries") setWorkspace(answer.workspace ?? "");
     });
     return () => {
       current = false;
@@ -288,7 +291,7 @@ export function FilesView({ target, corner }: ViewerProps) {
           aria-label="Folder"
           className="ml-1 flex h-8 min-w-0 flex-1 items-center truncate rounded-full bg-[var(--raised)] px-3.5 font-mono text-xs outline-none"
         >
-          {file ? file.path : only ? "" : folder}
+          {[workspace, file ? file.path : only ? "" : folder].filter(Boolean).join("/")}
         </span>
         {file ? (
           <Button

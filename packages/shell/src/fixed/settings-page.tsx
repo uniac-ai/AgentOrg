@@ -1,3 +1,5 @@
+import { PlusIcon } from "lucide-react";
+import { createContext, useContext, useLayoutEffect, useRef, useState } from "react";
 import { USAGE } from "../app.tsx";
 import { api, go, type Route, setTheme, type ThemeName, useLoad, useTheme } from "../data.ts";
 import { signIn, useSigningIn } from "../sign-in.ts";
@@ -11,9 +13,6 @@ import { Jump, rowClass, Scroll, Section, UsedBy } from "./parts.tsx";
 const countOf = (n: number) => `${n} ${n === 1 ? "connection" : "connections"}`;
 const THREE = "grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)_minmax(0,1fr)] tight:grid-cols-1";
 
-const SECTION =
-  "h-8 flex-none justify-start rounded-lg px-2.5 text-[13px] font-normal hover:bg-[var(--hover)] data-active:bg-[var(--selected)] dark:data-active:border-transparent dark:data-active:bg-[var(--selected)]";
-
 type Tab = "templates" | "skills" | "mcps" | "providers" | "account";
 const ROUTES: Record<Tab, Route> = {
   templates: { screen: "settings", tab: "templates" },
@@ -23,61 +22,77 @@ const ROUTES: Record<Tab, Route> = {
   account: { screen: "settings", tab: "account" },
 };
 
-/** Settings' sections down the left, with what the section offers beneath them. */
-export function SettingsFrame({
-  tab,
-  action,
-  children,
-}: {
-  tab: Tab;
-  action?: React.ReactNode;
-  children: React.ReactNode;
-}) {
+/** What a section offers, by its name. */
+interface Offer {
+  label: string;
+  run(): void;
+}
+const Offered = createContext<(offer?: Offer) => void>(() => {});
+/** The section drawn under the frame offers this at the end of the row of sections. */
+export function useOffer(label: string, run: () => void) {
+  const offer = useContext(Offered);
+  const latest = useRef(run);
+  latest.current = run;
+  // Before anything is painted, so a section and what it offers change as one.
+  useLayoutEffect(() => {
+    offer({ label, run: () => latest.current() });
+    return () => offer(undefined);
+  }, [offer, label]);
+}
+
+/** The section a route is, if it is one of Settings'. */
+export const sectionOf = (route: Route): Tab | undefined =>
+  route.screen === "settings"
+    ? route.tab
+    : route.screen === "skills" || route.screen === "mcps"
+      ? route.screen
+      : undefined;
+
+/**
+ * Settings' sections across the top, with what the section offers at their end, over its page.
+ * Where there is little room what it offers is its mark alone. It is one frame for every section,
+ * so the row keeps the keyboard and its place as the section under it changes.
+ */
+export function SettingsFrame({ tab, children }: { tab: Tab; children: React.ReactNode }) {
+  const [action, setAction] = useState<Offer>();
   return (
-    // Set in the type it was built in, not the frame's.
-    <div className="flex h-full text-[14px] leading-[1.45] tight:flex-col">
-      <div className="flex w-48 shrink-0 flex-col gap-3 p-3 tight:w-auto tight:flex-row tight:items-center tight:gap-2 tight:pb-0">
-        <Tabs
-          className="no-bar min-w-0 tight:flex-1 tight:overflow-x-auto"
-          orientation="vertical"
-          value={tab}
-          onValueChange={(next) => go(ROUTES[next as Tab])}
-        >
-          <TabsList className="w-full items-stretch gap-0.5 bg-transparent p-0 tight:w-fit tight:flex-row! tight:justify-start">
-            <TabsTrigger className={SECTION} value="templates">
-              Templates
-            </TabsTrigger>
-            <TabsTrigger className={SECTION} value="skills">
-              Skills
-            </TabsTrigger>
-            <TabsTrigger className={SECTION} value="mcps">
-              <span className="tight:hidden">MCP connections</span>
-              <span className="hidden tight:inline">MCPs</span>
-            </TabsTrigger>
-            <TabsTrigger className={SECTION} value="providers">
-              Providers
-            </TabsTrigger>
-            <TabsTrigger className={SECTION} value="account">
-              Account
-            </TabsTrigger>
-          </TabsList>
-        </Tabs>
-        {action && <div className="shrink-0">{action}</div>}
+    <div className="mx-auto h-full max-w-[1080px] pt-2">
+      <div className="flex h-full flex-col">
+        <div className="no-bar flex shrink-0 items-center justify-between gap-2 overflow-x-auto px-5 pt-4 tight:px-3.5">
+          <Tabs value={tab} onValueChange={(next) => go(ROUTES[next as Tab])}>
+            <TabsList>
+              <TabsTrigger value="templates">Templates</TabsTrigger>
+              <TabsTrigger value="skills">Skills</TabsTrigger>
+              <TabsTrigger value="mcps">
+                <span className="tight:hidden">MCP connections</span>
+                <span className="hidden tight:inline">MCPs</span>
+              </TabsTrigger>
+              <TabsTrigger value="providers">Providers</TabsTrigger>
+              <TabsTrigger value="account">Account</TabsTrigger>
+            </TabsList>
+          </Tabs>
+          {action && (
+            <Button size="sm" aria-label={action.label} onClick={action.run}>
+              <PlusIcon />
+              <span className="tight:hidden">{action.label}</span>
+            </Button>
+          )}
+        </div>
+        <div className="min-h-0 flex-1">
+          <Offered.Provider value={setAction}>{children}</Offered.Provider>
+        </div>
       </div>
-      <div className="min-h-0 min-w-0 flex-1">{children}</div>
     </div>
   );
 }
 
 export function SettingsPage({ tab }: { tab: "providers" | "account" }) {
   return (
-    <SettingsFrame tab={tab}>
-      <Scroll>
-        <div className="mx-auto flex max-w-5xl flex-col gap-7">
-          {tab === "providers" ? <Providers /> : <AccountTab />}
-        </div>
-      </Scroll>
-    </SettingsFrame>
+    <Scroll asBuilt>
+      <div className="mx-auto flex max-w-5xl flex-col gap-7">
+        {tab === "providers" ? <Providers /> : <AccountTab />}
+      </div>
+    </Scroll>
   );
 }
 

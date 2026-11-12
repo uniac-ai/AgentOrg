@@ -105,9 +105,11 @@ export const Nothing = ({ children }: { children: React.ReactNode }) => (
 export const rowClass = (focused: boolean) =>
   `group/row -mx-2 grid min-h-14 items-center gap-x-4 rounded-xl px-2 py-2 ${focused ? "bg-[var(--selected)]" : ""}`;
 
-export const Scroll = ({ children }: { children: React.ReactNode }) => (
-  // The pages not yet redrawn are set in the type they were built in, not the frame's.
-  <div className="no-bar h-full overflow-y-auto p-5 text-[14px] leading-[1.45] tight:p-3.5">
+/** A page's own scroll. A page not yet redrawn is set in the type it was built in (`asBuilt`). */
+export const Scroll = ({ children, asBuilt }: { children: React.ReactNode; asBuilt?: boolean }) => (
+  <div
+    className={`no-bar h-full overflow-y-auto p-5 tight:p-3.5 ${asBuilt ? "text-[14px] leading-[1.45]" : ""}`}
+  >
     {children}
   </div>
 );

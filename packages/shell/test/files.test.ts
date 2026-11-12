@@ -115,7 +115,7 @@ test(
     );
     // A folder has its name alone; a file its size and how long ago it changed.
     assert.deepEqual(await rows(page), ["storefront", "notes.txt | 18 B | 3 min"]);
-    assert.equal(await where(page), "");
+    assert.equal(await where(page), "Research");
     assert.equal(await up(page).isDisabled(), true);
     await files(page).getByRole("button", { name: "storefront" }).click();
     await files(page)
@@ -126,19 +126,19 @@ test(
       "package.json | 24 B | 1 d",
       "README.md | 33 B | 2 h",
     ]);
-    assert.equal(await where(page), "storefront");
+    assert.equal(await where(page), "Research/storefront");
     await files(page).getByRole("button", { name: "src" }).click();
     await files(page).getByRole("button", { name: "checkout" }).click();
     await files(page)
       .getByRole("button", { name: /form\.ts/ })
       .waitFor();
-    assert.equal(await where(page), "storefront/src/checkout");
+    assert.equal(await where(page), "Research/storefront/src/checkout");
     await up(page).click();
     await up(page).click();
     await files(page)
       .getByRole("button", { name: /README\.md/ })
       .waitFor();
-    assert.equal(await where(page), "storefront");
+    assert.equal(await where(page), "Research/storefront");
     // What appears there while it is shown is listed without asking.
     gateway.putFile("storefront/CHANGELOG.md", "# Changes");
     await files(page)
@@ -169,7 +169,7 @@ test(
       .click();
     const words = files(page).locator("pre");
     await words.getByText("Remember the milk.").waitFor();
-    assert.equal(await where(page), "notes.txt");
+    assert.equal(await where(page), "Research/notes.txt");
     // Open, it has Download where Upload was, and Up closes it.
     assert.equal(await files(page).getByRole("button", { name: "Upload" }).count(), 0);
     const saved = page.waitForEvent("download");
@@ -372,14 +372,14 @@ test(
       "in place of the folder's rows",
     );
     // It is no folder: nowhere to go up to, and nowhere to bring a file in.
-    assert.equal(await where(page), "");
+    assert.equal(await where(page), "Research");
     assert.equal(await up(page).isDisabled(), true);
     assert.equal(await files(page).getByRole("button", { name: "Upload" }).isDisabled(), true);
 
     // A file opens from it, and Up comes back to it.
     await list.getByRole("button", { name: /notes\.txt/ }).click();
     await files(page).locator("pre").getByText("Remember the milk.").waitFor();
-    assert.equal(await where(page), "notes.txt");
+    assert.equal(await where(page), "Research/notes.txt");
     await files(page).getByRole("button", { name: "Download" }).waitFor();
     await up(page).click();
     await list.getByRole("button").first().waitFor();
@@ -397,7 +397,7 @@ test(
     await files(page)
       .getByRole("button", { name: /README\.md/ })
       .waitFor();
-    assert.equal(await where(page), "storefront");
+    assert.equal(await where(page), "Research/storefront");
     assert.equal(await files(page).getByRole("button", { name: "Upload" }).isDisabled(), false);
     await page.close();
   }),
@@ -472,5 +472,37 @@ test(
       .waitFor();
     assert.equal(walks(gateway).length, 2, "asked of the new one, once");
     await page.close();
+  }),
+);
+
+test(
+  "the folder's field starts with the workspace's own name where the surface says it, and is the path alone where it doesn't",
+  withGateway(async (gateway) => {
+    const page = await open(gateway);
+    assert.equal(await where(page), "Research", "at the top it is the name alone");
+    await files(page).getByRole("button", { name: "storefront" }).click();
+    await files(page)
+      .getByRole("button", { name: /README\.md/ })
+      .waitFor();
+    assert.equal(await where(page), "Research/storefront");
+    await files(page)
+      .getByRole("button", { name: /README\.md/ })
+      .click();
+    await files(page).locator("pre").getByText("Storefront").waitFor();
+    assert.equal(await where(page), "Research/storefront/README.md");
+    await page.close();
+
+    // An older service says no name, and the top of a disk has none: the path alone.
+    for (const none of [undefined, ""]) {
+      gateway.live.files.workspace = none;
+      const older = await open(gateway);
+      assert.equal(await where(older), "");
+      await files(older).getByRole("button", { name: "storefront" }).click();
+      await files(older)
+        .getByRole("button", { name: /README\.md/ })
+        .waitFor();
+      assert.equal(await where(older), "storefront");
+      await older.close();
+    }
   }),
 );

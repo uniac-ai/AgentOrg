@@ -54,6 +54,54 @@ test(
 );
 
 test(
+  "a template's row says what it is and what it is built from, in the shell's own type; the way to delete it shows when it is pointed at",
+  withGateway(async (gateway) => {
+    const page = await open(gateway);
+    await page.getByRole("button", { name: "Dismiss" }).click();
+    await page
+      .getByRole("navigation", { name: "Main" })
+      .getByRole("button", { name: "Templates" })
+      .click();
+    const main = page.getByRole("main");
+    await main.getByRole("tab", { name: "Templates", selected: true }).waitFor();
+    assert.equal(
+      (await main.getByRole("button", { name: "New template", exact: true }).innerText()).trim(),
+      "New template",
+      "what the section offers, in words where there is room",
+    );
+    const row = main
+      .getByRole("list", { name: "Templates" })
+      .getByRole("listitem")
+      .filter({ hasText: "From elsewhere" });
+    assert.deepEqual(
+      (await row.innerText()).split("\n").filter((word) => word.trim()),
+      ["From elsewhere", "Made on another home", "mystery", "Use"],
+    );
+    const title = row.getByText("From elsewhere", { exact: true });
+    assert.deepEqual(
+      await title.evaluate((e) => [getComputedStyle(e).fontSize, getComputedStyle(e).fontWeight]),
+      ["15px", "500"],
+    );
+    const [name, units, use] = [
+      await title.boundingBox(),
+      await row.getByText("mystery").boundingBox(),
+      await row.getByRole("button", { name: "Use" }).boundingBox(),
+    ];
+    assert.ok(name && units && use);
+    assert.ok(units.x > name.x + name.width && use.x > units.x + units.width, "across one row");
+    const remove = row.getByRole("button", { name: "Delete From elsewhere" });
+    const seen = () => remove.evaluate((e) => getComputedStyle(e).opacity);
+    await page.mouse.move(5, 5);
+    assert.equal(await seen(), "0");
+    await row.hover();
+    // It fades in.
+    await remove.evaluate((e) => Promise.all(e.getAnimations().map((moving) => moving.finished)));
+    assert.equal(await seen(), "1");
+    await page.close();
+  }),
+);
+
+test(
   "a saved template keeps no secret and nothing that isn't shown, and the stack stays open",
   withGateway(async (gateway) => {
     const page = await open(gateway);

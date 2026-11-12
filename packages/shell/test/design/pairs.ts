@@ -23,6 +23,7 @@ import {
   openFiles,
   openSampleChat,
   openSetup,
+  openTemplates,
   openWindow,
   readChat,
   refuseSend,
@@ -386,6 +387,14 @@ const SCREENS: Screen[] = [
       built: (page) => createState(page, state, false),
     }),
   ),
+  {
+    name: "templates",
+    sizes: ["wide", "rail", "phone"],
+    themes: ["dark", "light"],
+    build: true,
+    design: openTemplates,
+    built: openTemplates,
+  },
   {
     name: "agent-setup",
     sizes: ["wide", "phone"],
