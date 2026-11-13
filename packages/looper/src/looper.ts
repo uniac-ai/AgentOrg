@@ -39,20 +39,14 @@
  */
 
 import { z } from "zod";
+import type { FilesOf } from "./compaction.js";
 import { createLoop, type Place } from "./loop.js";
 import { createMain, type Listed, stopWord, TOLD, titled } from "./main.js";
-import {
-  createRecord,
-  createThread,
-  head,
-  messageOf,
-  READS,
-  type Thread,
-  userEntry,
-} from "./record.js";
+import { createRecord, createThread, messageOf, READS, type Thread, userEntry } from "./record.js";
 import {
   type Call,
   codeOf,
+  head,
   type Json,
   type Log,
   type Model,
@@ -169,6 +163,11 @@ export function createLooper(options: {
    * told only of the work that follows it, and so routes into and stops only that.
    */
   speaker?(thread: string): string | undefined;
+  /**
+   * The files a call of its tools read and changed, by the call's name and arguments: a summary of
+   * a work's earlier steps lists them, carried from one summary to the next.
+   */
+  files?: FilesOf;
   log: Log;
 }) {
   /** A message said in `thread`, as a worker or the main loop is told it: who it is from. */
@@ -431,6 +430,7 @@ export function createLooper(options: {
         title: () => titleOf(id),
         back: (handed) => returned(id, handed),
         ...(options.stopGroup ? { stopGroup: options.stopGroup } : {}),
+        ...(options.files ? { files: options.files } : {}),
         // Marked before anything of the turn is kept, so a looper that goes in between leaves
         // it for the next to go on with.
         async starting(after) {

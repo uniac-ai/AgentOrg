@@ -8,8 +8,8 @@
  * work, and it has one function to call. Each time is one model request, which holds nothing of
  * those before it but what it is given.
  */
-import { head, PICTURES_BUDGET, withPictures } from "./record.js";
-import type { Item, Log, Model, Picture, ToolSpec } from "./types.js";
+import { PICTURES_BUDGET, withPictures } from "./record.js";
+import { head, type Item, type Log, type Model, type Picture, type ToolSpec } from "./types.js";
 
 /** What the main loop is told, before who it speaks as. */
 export const MAIN_INSTRUCTIONS = `You are the front desk. You do none of the work: you say whose a message is, answer it yourself when it needs no work, or stop a piece of work it asks to stop.

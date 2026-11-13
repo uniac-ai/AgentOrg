@@ -66,8 +66,9 @@ export interface Tool extends ToolSpec {
 
 /**
  * The model: one stateless answer to a whole conversation. A request that can't be answered rejects,
- * with a `Refusal` when there is a code to show. Text it writes while it answers is given to the
- * looper's `delta`, with the request's id.
+ * with a `Refusal` when there is a code to show: `context_length` for one too long for the model,
+ * which a piece of work's loop then compacts and asks once more. Text it writes while it answers
+ * is given to the looper's `delta`, with the request's id.
  */
 export interface Model {
   respond(request: {
@@ -133,6 +134,12 @@ export class Refusal extends Error {
     super(message, options);
     this.code = code;
   }
+}
+
+/** The first `length` UTF-16 units of `text`, never ending inside a surrogate pair. */
+export function head(text: string, length: number): string {
+  const cut = text.slice(0, length);
+  return /[\uD800-\uDBFF]$/.test(cut) ? cut.slice(0, -1) : cut;
 }
 
 /** The code and message of anything a call or a turn can throw. */

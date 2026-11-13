@@ -20,7 +20,10 @@ test("the looper depends on nothing of this repository: its source imports its o
     const source = readFileSync(join(src, file), "utf8");
     // Only static imports, which can be read here: nothing is loaded by a computed name.
     assert.doesNotMatch(source, /\brequire\s*\(|\bimport\s*\(|\bimport\.meta\b/, file);
-    for (const [, from] of source.matchAll(/\b(?:from|import)\s*["']([^"']+)["']/g)) {
+    // Statements at the start of a line: a prompt's words can say `from "…"` too.
+    for (const [, from] of source.matchAll(
+      /^(?:(?:import|export|\})[^\n]*?\bfrom|import)\s*["']([^"']+)["']/gm,
+    )) {
       imports++;
       assert.ok(
         from === "zod" ||

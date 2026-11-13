@@ -1,3 +1,4 @@
+export type { FilesOf } from "./compaction.js";
 export {
   createLooper,
   forget,

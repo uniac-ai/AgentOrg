@@ -8,7 +8,8 @@
  * work when it was given to several.
  */
 import { z } from "zod";
-import { Item, type Json, type Log, type Picture, type Shown, type Store } from "./types.js";
+import { Compacted, summaryItem, type ToCompact } from "./compaction.js";
+import { head, Item, type Json, type Log, type Picture, type Shown, type Store } from "./types.js";
 
 /**
  * One piece of work's hold on a user message that names the work it was given to: where it stands
@@ -82,6 +83,11 @@ export const Entry = z.object({
    * to: their ids. Such a message is decided, and not put to the main loop again.
    */
   answers: z.array(z.string()).optional(),
+  /**
+   * For a line of its work's own that summarizes what the work held before it: from then on the
+   * model is sent that summary in place of what it covers.
+   */
+  compacted: Compacted.optional(),
 });
 export type Entry = z.output<typeof Entry>;
 
@@ -136,9 +142,10 @@ export function leaveOut(item: Item, keep: (picture: Picture) => boolean): Item 
  * The exchanges with the pictures a request gives, within `room`, each kind newest first: those
  * the person sent with the messages its turn is answering, the latest exchange's and those of the
  * exchanges before it that nothing has answered yet; then those its calls gave; then the
- * person's older ones, as they fit.
+ * person's older ones, as they fit. An exchange that holds the `summary` of what came before is
+ * not one the turn opens on.
  */
-export function withPictures(exchanges: Item[][], room: number): Item[][] {
+export function withPictures(exchanges: Item[][], room: number, summary?: Item): Item[][] {
   const newestFirst = (items: Item[], of: (item: Item) => boolean) =>
     items
       .flatMap((item) => (of(item) && item.type !== "function_call" ? (item.images ?? []) : []))
@@ -147,7 +154,11 @@ export function withPictures(exchanges: Item[][], room: number): Item[][] {
   const calls = (item: Item) => item.type === "function_call_output";
   // A turn that opens on several messages has an exchange for each, each of them alone.
   let from = exchanges.length - 1;
-  while (from > 0 && (exchanges[from - 1] as Item[]).every(persons)) from--;
+  while (
+    from > 0 &&
+    (exchanges[from - 1] as Item[]).every((item) => persons(item) && item !== summary)
+  )
+    from--;
   const order = [
     ...newestFirst(exchanges.slice(from).flat(), persons),
     ...newestFirst(exchanges.at(-1) ?? [], calls),
@@ -184,6 +195,8 @@ const ARGUMENTS_LEFT_OUT = '{"left_out":"too large to keep"}';
  * did.
  */
 export const CUT_STEP = INPUT_BUDGET / 4;
+/** What stays word for word past a compaction: about 20,000 tokens, at four bytes each. */
+export const KEEP_RECENT = 80_000;
 /** The number a user message starts with, as it is sent: `[12]`. */
 const numberOf = (item: Item | undefined) =>
   item?.type === "message" && item.role === "user" ? /^\[\d+\]/.exec(item.content)?.[0] : undefined;
@@ -195,12 +208,13 @@ const numberOf = (item: Item | undefined) =>
  *    still paired with an output, so what was said stays longest: a `send`'s words are what was
  *    said;
  * 2. whole exchanges, except the latest two, so "go on" after a long turn still has that turn,
- *    and except the message the work opened with, `[1]`: one line stands where they were,
- *    saying after and before which messages;
+ *    and except the message the work opened with, `[1]`, or, after a compaction, all of the first
+ *    exchange up to its `summary`: one line stands where they were, saying after and before which
+ *    messages;
  * 3. what the calls of the latest exchange were given and gave back.
  * What was said is never cut: exchanges that are over the budget without their calls are sent so.
  */
-function fit(exchanges: Item[][]): Item[][] {
+function fit(exchanges: Item[][], summary?: Item): Item[][] {
   const total = exchanges.reduce((sum, items) => sum + wordsSize(items), 0);
   if (total <= INPUT_BUDGET) return exchanges;
   const toCut = Math.ceil((total - INPUT_BUDGET) / CUT_STEP) * CUT_STEP;
@@ -226,8 +240,14 @@ function fit(exchanges: Item[][]): Item[][] {
   };
   for (const items of left.slice(0, -1)) leaveOut(items);
   // The opening message stays: it is what the work was asked, in the person's own words. A
-  // record whose first message is gone, past what it keeps, has none.
-  const opening = numberOf(left[0]?.[0]) === "[1]" ? (left[0] as Item[]).slice(0, 1) : [];
+  // record whose first message is gone, past what it keeps, has none. So does the summary of
+  // what came before, which stands for what is left out.
+  const first = left[0] ?? [];
+  const lead = numberOf(first[0]) === "[1]" ? 1 : 0;
+  const opening = first.slice(
+    0,
+    summary && first.includes(summary) ? first.indexOf(summary) + 1 : lead,
+  );
   let gone = 0;
   let lost = 0;
   while (cut < toCut && gone < left.length - 2) {
@@ -249,11 +269,6 @@ function fit(exchanges: Item[][]): Item[][] {
   return [[...opening, gap], ...rest];
 }
 
-/** The first `length` UTF-16 units of `text`, never ending inside a surrogate pair. */
-export function head(text: string, length: number): string {
-  const cut = text.slice(0, length);
-  return /[\uD800-\uDBFF]$/.test(cut) ? cut.slice(0, -1) : cut;
-}
 /** `text`, cut so its JSON fits `max` bytes, saying so when it is cut. */
 export function fitted(text: string, max: number): string {
   let kept = text;
@@ -267,7 +282,7 @@ const MAX_SHOWN = 100_000;
 export const textOf = (entry: Entry) =>
   head(entry.text ?? sentIn(entry.items) ?? wordsOf(entry.items), MAX_SHOWN);
 /** The words of the messages among `items`. */
-const wordsOf = (items: Item[]) =>
+export const wordsOf = (items: Item[]) =>
   items.flatMap((item) => (item.type === "message" ? [item.content] : [])).join("");
 /** What a `send` among `items` said, as its arguments carry it. */
 function sentIn(items: Item[]): string | undefined {
@@ -973,6 +988,64 @@ export function createRecord(options: {
     const kept = said.findLast(({ record }) => holdOf(record).back === undefined);
     return (kept ?? said.at(-1))?.thread ?? id;
   };
+  /**
+   * What the model reads of a message in `thread`: what a person said starts with its number,
+   * which is how the model names it; a reply an earlier version kept reads as a `send` to the
+   * message at `asked`.
+   */
+  const itemsOf = (thread: string, record: Kept, asked: number): Item[] => {
+    const { entry } = record;
+    if (entry.role === "user")
+      return entry.items.map((item) =>
+        item.type === "message"
+          ? {
+              ...item,
+              content: `[${placeOf(record)}] ${options.told?.(thread, item.content) ?? item.content}`,
+            }
+          : item,
+      );
+    return earlierReply(entry) ? sentBefore(entry, asked) : entry.items;
+  };
+  type Readable = Placed & { asked: number };
+  /**
+   * What a request can send of its messages, as they stand now, in the order the model reads
+   * them: each with the place of the newest user message before it, which a reply an earlier
+   * version kept answers. A message said during a turn comes after whatever is `ahead` of it, so
+   * the model reads it as not yet answered. `read` is the place up to which every user message
+   * is read: up to the first that isn't its to send yet, being written or taken, so the model
+   * never reads a later message without an earlier one. And its latest compaction.
+   */
+  const readable = (records: Placed[]) => {
+    const last = topOf(records);
+    const unwritten = records.find(({ record }) => pending(record));
+    const read = unwritten ? placeOf(unwritten.record) - 1 : last;
+    const unread = (record: Kept) => record.entry.role === "user" && placeOf(record) > read;
+    const sent: Readable[] = [];
+    /** Said during a turn, and not yet put: what is ahead of them goes first. */
+    const late: Placed[] = [];
+    let asked = 0;
+    const put = (one: Placed) => {
+      if (one.record.entry.role === "user") asked = placeOf(one.record);
+      sent.push({ ...one, asked });
+    };
+    const putLate = (upTo: number) => {
+      while (late[0] && placeOf(late[0].record) <= upTo) put(late.shift() as Placed);
+    };
+    for (const one of records) {
+      const { record } = one;
+      // Nothing to send: a user message not yet read, or a line with no items.
+      if (pending(record) || unread(record) || record.entry.items.length === 0) continue;
+      if (joinedOf(record)) late.push(one);
+      else {
+        putLate(record.entry.ahead ?? last);
+        put(one);
+      }
+    }
+    putLate(last);
+    const compacted = records.findLast(({ record }) => record.entry.compacted)?.record.entry
+      .compacted;
+    return { sent, read, unread, compacted };
+  };
 
   /** Keep an entry of its in `thread`, made once nothing waits there, from what the thread holds. */
   const keep = async (
@@ -1266,68 +1339,94 @@ export function createRecord(options: {
     },
     /**
      * The conversation to send: its exchanges (each from a user message that is not `joined` on),
-     * as `fit` fits them to the budget. A message said during a turn comes after
-     * whatever is `ahead` of it, so the model reads it as not yet answered. `read` is the place up
-     * to which every user message was read, for `append` and `saidAfter`: one still being written
-     * is not read yet. `thread` is where what comes of it is kept. Its pictures fit what a
-     * request leaves beside its words and `besides`, the request's instructions and tools.
+     * as `fit` fits them to the budget, in the order `readable` gives. `read` is the place up to
+     * which every user message was read, for `append` and `saidAfter`. `thread` is where what
+     * comes of it is kept. Its pictures fit what a request leaves beside its words and `besides`,
+     * the request's instructions and tools. After a compaction, what it covers is sent as its
+     * summary, after the opening message and the messages it covers that are still to answer,
+     * which are sent as they are, so the model can still answer them by number. `over` says
+     * whether the exchanges were over the budget before they were fitted.
      */
-    async input(besides: unknown = {}): Promise<{ items: Item[]; read: number; thread: string }> {
-      const records = own(await load());
-      const last = topOf(records);
-      // Read up to the first user message that isn't its to send yet: one said after that waits
-      // with it, so the model never reads a later message without an earlier one.
-      const unwritten = records.find(({ record }) => pending(record));
-      const read = unwritten ? placeOf(unwritten.record) - 1 : last;
-      const unread = (record: Kept) => record.entry.role === "user" && placeOf(record) > read;
+    async input(
+      besides: unknown = {},
+    ): Promise<{ items: Item[]; read: number; thread: string; over: boolean }> {
+      const held = await load();
+      const records = own(held);
+      const { sent, read, unread, compacted } = readable(records);
+      const summary = compacted && summaryItem(compacted);
+      const opening = records.find(({ record }) => record.entry.role === "user")?.record;
+      const open = compacted && new Set(openOf(held, 0).map(({ record }) => record));
       const exchanges: Item[][] = [];
-      /** Said during a turn, and not yet put: what is ahead of them goes first. */
-      const late: { thread: string; record: Kept }[] = [];
-      /** The place of the newest user message put: what a reply kept by an earlier version answered. */
-      let asked = 0;
-      const put = ({ thread, record }: { thread: string; record: Kept }) => {
-        const { entry } = record;
-        const person = entry.role === "user";
-        if (person) asked = placeOf(record);
-        if ((person && !joinedOf(record)) || exchanges.length === 0) exchanges.push([]);
-        // What a person said starts with its number, which is how the model names it.
-        exchanges.at(-1)?.push(
-          ...(person
-            ? entry.items.map((item) =>
-                item.type === "message"
-                  ? {
-                      ...item,
-                      content: `[${placeOf(record)}] ${options.told?.(thread, item.content) ?? item.content}`,
-                    }
-                  : item,
-              )
-            : earlierReply(entry)
-              ? sentBefore(entry, asked)
-              : entry.items),
-        );
+      /** Put the summary, once: before the first message it doesn't cover. */
+      let placed = !summary;
+      const putSummary = () => {
+        if (placed) return;
+        placed = true;
+        if (exchanges.length === 0) exchanges.push([]);
+        exchanges.at(-1)?.push(summary as Item);
       };
-      /** Put the late messages placed up to `read`. */
-      const putLate = (read: number) => {
-        while (late[0] && placeOf(late[0].record) <= read)
-          put(late.shift() as (typeof late)[number]);
-      };
-      for (const { thread, record } of records) {
-        // Nothing to send: a user message still being written, or a line with no items.
-        if (pending(record) || unread(record) || record.entry.items.length === 0) continue;
-        if (joinedOf(record)) {
-          late.push({ thread, record });
-          continue;
-        }
-        putLate(record.entry.ahead ?? last);
-        put({ thread, record });
+      for (const { thread, record, asked } of sent) {
+        const covered = compacted && placeOf(record) <= compacted.upTo;
+        if (covered && record !== opening && !open?.has(record)) continue;
+        if (!covered) putSummary();
+        // What it covers and still sends is one exchange with the opening message, so what
+        // follows the summary reads as coming after all of it.
+        const person = record.entry.role === "user";
+        if ((person && !joinedOf(record) && !covered) || exchanges.length === 0) exchanges.push([]);
+        exchanges.at(-1)?.push(...itemsOf(thread, record, asked));
       }
-      putLate(last);
-      const fitted = fit(exchanges);
+      putSummary();
+      const fitted = fit(exchanges, summary);
       const room = REQUEST_BUDGET - wordsSize(fitted) - size(besides);
       return {
-        items: withPictures(fitted, Math.max(0, Math.min(PICTURES_BUDGET, room))).flat(),
+        items: withPictures(fitted, Math.max(0, Math.min(PICTURES_BUDGET, room)), summary).flat(),
         read,
         thread: whereOf(records.filter(({ record }) => !unread(record))),
+        over: fitted !== exchanges,
+      };
+    },
+    /**
+     * What compacting it now would summarize: all it has read since its latest compaction, but
+     * for the newest `KEEP_RECENT` bytes or so, which stay word for word, cut between entries, so
+     * a call stays with its output. Nothing when that leaves nothing to summarize, as right after
+     * a compaction; nor when what goes, the opening message and those still to answer aside, as
+     * they are sent anyway, is nothing, or, unless the model `refused` a request for its length,
+     * under a step of the budget: what `fit` cuts then costs no request.
+     */
+    async toCompact(refused = false): Promise<ToCompact | undefined> {
+      const held = await load();
+      const records = own(held);
+      const { sent, read, compacted: previous } = readable(records);
+      const since = sent
+        .filter(({ record }) => placeOf(record) > (previous?.upTo ?? 0) && placeOf(record) <= read)
+        .sort((a, b) => placeOf(a.record) - placeOf(b.record));
+      let cut = since.length;
+      for (let recent = 0; cut > 0 && recent < KEEP_RECENT; )
+        recent += wordsSize((since[--cut] as Readable).record.entry.items);
+      const going = since.slice(0, cut);
+      if (going.length === 0) return undefined;
+      const opening = records.find(({ record }) => record.entry.role === "user")?.record;
+      const open = new Set(openOf(held, 0).map(({ record }) => record));
+      const bytes = going.reduce(
+        (sum, { record }) =>
+          record === opening || open.has(record) ? sum : sum + wordsSize(record.entry.items),
+        0,
+      );
+      if (bytes === 0 || (!refused && bytes < CUT_STEP)) return undefined;
+      // An exchange the cut falls inside, from the message that opens it, is summarized apart.
+      const opens = ({ record }: Readable) => record.entry.role === "user" && !joinedOf(record);
+      const start = opens(since[cut] as Readable) ? -1 : going.findLastIndex(opens);
+      const split = start === -1 ? going.length : start;
+      // Written out in the order the model read them.
+      const items = (part: Readable[]) =>
+        sent
+          .filter((one) => part.includes(one))
+          .flatMap(({ thread, record, asked }) => itemsOf(thread, record, asked));
+      return {
+        history: items(going.slice(0, split)),
+        prefix: items(going.slice(split)),
+        previous,
+        upTo: placeOf((going.at(-1) as Readable).record),
       };
     },
     /** Whether a user message of its has been stored after the place `read`, which `input` gave. */

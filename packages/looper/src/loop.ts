@@ -8,11 +8,19 @@
  * each of the person's messages by a number. It has two functions beside its tools:
  * `send`, the only way anything it says reaches the person, which answers a message, and
  * `hand_back`, which says a message is not this work's. What it writes without sending, and what
- * its calls did, are kept for the work and said in no thread.
+ * its calls did, are kept for the work and said in no thread. When what a request would send is
+ * over the budget, or the model refuses it for its length, the work's earlier steps are first
+ * summarized by its own model (see compaction.ts).
  */
 import {
+  COMPACTION_LINE,
+  CONTEXT_LENGTH,
+  type FilesOf,
+  SUMMARY_BEGINS,
+  summarize,
+} from "./compaction.js";
+import {
   HAND_BACK_NAME,
-  head,
   type LoopRecord,
   messageOf,
   PICTURES_BUDGET,
@@ -20,11 +28,13 @@ import {
   SENT,
   userEntry,
   type WorkEntry,
+  wordsOf,
 } from "./record.js";
 import { capped, refused, runTool } from "./tools.js";
 import {
   type Call,
   codeOf,
+  head,
   type Item,
   type Log,
   type Model,
@@ -90,7 +100,7 @@ export const workInstructions = (
 
 Each message starts with its number in brackets, like [12]. One from anyone other than the person then says who it is from, like [12] (from <who>): what you send in reply reaches them. Decide each one once. If it asks for something that belongs to this work, do it and answer it by calling \`send\` with its number: only what you send reaches whoever said it. What you write without sending is seen by no one but you, in your later requests. You may send while the work goes on, and more than once. If it asks for something that does not belong to this work, call \`hand_back\` with its number and one sentence why, and send nothing about it: it is then given to other work, or starts new work. A message that asks for nothing, like thanks, still gets a short answer. A message you neither answer nor hand back is shown as not answered when you are done. When you have nothing more to do, end without calling anything.
 
-A message that begins "(Left out:" is not from the person and needs no answer. It stands for earlier messages, and what was done for them, that no longer fit: all of it was said and done, so do not do it again. A call whose arguments or output say they were left out did run. Message [1] is what this work was asked.`;
+A message that begins "(Left out:" or "${SUMMARY_BEGINS}" is not from the person and needs no answer. It stands for earlier messages, and what was done for them, that no longer fit: all of it was said and done, so do not do it again. A call whose arguments or output say they were left out did run. Message [1] is what this work was asked.`;
 
 type FunctionCall = Extract<Item, { type: "function_call" }>;
 /**
@@ -163,6 +173,8 @@ interface Turn {
   group: string;
   /** Its calls whose pictures are kept, oldest first, each with what its pictures carry. */
   pictured: { id: string; size: number }[];
+  /** Set once summarizing its work's earlier steps failed: it cuts them for the rest of it. */
+  summaryFailed?: boolean;
 }
 /** A turn's place among the turns running: `entered` settles when it has it, or has left. */
 export interface Place {
@@ -205,6 +217,8 @@ export function createLoop(options: {
    * the thread it was said in too. It gives what the worker is told of it.
    */
   back(handed: { message: number; why: string; leave: boolean }): Promise<string>;
+  /** The files a call read and changed, by its name and arguments, for a compaction to list. */
+  files?: FilesOf;
   out: LoopOut;
   log: Log;
 }) {
@@ -426,8 +440,65 @@ export function createLoop(options: {
     await record.append({ role: "tool", text, items: [] }, { thread });
     out.worked();
   };
+  /** Ask the model, as the request `current` is making now, which a stop cancels. */
+  const respond = async (
+    current: Turn,
+    request: Omit<Parameters<Model["respond"]>[0], "requestId">,
+  ) => {
+    const requestId = crypto.randomUUID();
+    current.requestId = requestId;
+    try {
+      return (await model.respond({ requestId, ...request })).output;
+    } finally {
+      current.requestId = undefined;
+    }
+  };
+  /**
+   * Summarize the work's earlier steps with the model `chosen`, and keep the summary in its
+   * record, in `thread`, after what a request that read up to `read` would keep, with one line
+   * for its Activity. It says whether it did: not when there is nothing to summarize, when the
+   * turn is stopped, or when summarizing fails, after which the turn cuts what is over the budget
+   * instead. `tooLong` says the model refused a request for its length.
+   */
+  const compact = async (
+    current: Turn,
+    chosen: string | undefined,
+    at: { thread: string; read: number },
+    tooLong: boolean,
+  ) => {
+    if (current.summaryFailed) return false;
+    try {
+      const compacting = await record.toCompact(tooLong);
+      if (!compacting || current.cancelled) return false;
+      const ask = async (instructions: string, text: string) => {
+        if (current.cancelled) throw new Refusal("cancelled", "The turn was stopped.");
+        return wordsOf(
+          await respond(current, {
+            ...(chosen ? { model: chosen } : {}),
+            instructions,
+            input: [{ type: "message", role: "user", content: text }],
+            tools: [],
+          }),
+        );
+      };
+      const compacted = await summarize(ask, compacting, options.files);
+      if (current.cancelled) return false;
+      await record.append({ role: "tool", text: COMPACTION_LINE, items: [], compacted }, at);
+      out.worked();
+      return true;
+    } catch (error) {
+      if (current.cancelled) return false;
+      current.summaryFailed = true;
+      log.warn("A work's earlier steps couldn't be summarized; the oldest are cut instead.", {
+        error: String(error),
+      });
+      return false;
+    }
+  };
 
   async function run(current: Turn) {
+    /** Set while a request the model refused for its length is asked again. */
+    let again = false;
     for (;;) {
       const { instructions, tools: theirs, model: chosen } = await options.request();
       const tools = [...theirs, handBack];
@@ -436,23 +507,29 @@ export function createLoop(options: {
         instructions: instructions ? `${instructions}\n\n${told}` : told,
         tools: [...theirs.map(({ run: _, ...tool }) => tool), SEND, HAND_BACK],
       };
-      const { items: input, read, thread } = await record.input(offered);
+      let { items: input, read, thread, over } = await record.input(offered);
+      if (current.cancelled) return;
+      if (over && (await compact(current, chosen, { thread, read }, false)))
+        ({ items: input, read, thread } = await record.input(offered));
       if (current.cancelled) return;
       current.thread = thread;
-      const requestId = crypto.randomUUID();
-      current.requestId = requestId;
       current.streams = new Map();
-      let output: Awaited<ReturnType<typeof model.respond>>["output"];
+      let output: Awaited<ReturnType<typeof respond>>;
       try {
-        ({ output } = await model.respond({
-          requestId,
+        output = await respond(current, {
           ...(chosen ? { model: chosen } : {}),
           ...offered,
           input,
-        }));
-      } finally {
-        current.requestId = undefined;
+        });
+      } catch (error) {
+        // Refused for its length: once, the earlier steps are summarized and it is asked again.
+        const length = error instanceof Refusal && error.code === CONTEXT_LENGTH;
+        if (!length || again || current.cancelled) throw error;
+        again = true;
+        if (await compact(current, chosen, { thread, read }, true)) continue;
+        throw error;
       }
+      again = false;
       if (current.cancelled) return;
       const texts = output.flatMap((item) => (item.type === "message" ? [item.content] : []));
       const called = output.filter((item): item is FunctionCall => item.type === "function_call");
