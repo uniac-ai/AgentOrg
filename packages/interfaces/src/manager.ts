@@ -99,7 +99,8 @@ const AddUnit = {
 /**
  * Something an agent holds, as it was built: what a page for the agent is put together from,
  * with no unit asked. `from` is the applied unit it came from, read to show what the agent was
- * built from and for nothing else; none for one the agent's creatable gives it of itself. `slots`
+ * built from, and to build it another way when it offers ways forward; none for one the agent's
+ * creatable gives it of itself. `slots`
  * are the slots its operations are exposed to the agent under. A view whose rows were fixed when
  * the agent was built carries them as `fixed`.
  *

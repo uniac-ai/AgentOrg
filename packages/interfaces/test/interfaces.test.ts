@@ -9,6 +9,7 @@ import {
   agentProvider,
   agentSettings,
   agents,
+  capability,
   chat,
   connections,
   Field,
@@ -134,6 +135,26 @@ test("a connection's status can't carry extra fields, and a base holds only what
   };
   assert.ok(creatables({ creatables: [creatable] }));
   assert.equal(creatables({ creatables: [{ ...creatable, mcp: [] }] }), false);
+});
+
+test("a capability that can't be reached may say ways forward: a unit, and the values to open its form with", () => {
+  const state = compiled(capability)["state.output"];
+  assert.ok(state);
+  const way = {
+    title: "Attach this computer",
+    description: "Its work happens in ~/Agents/Support, as before.",
+    unit: "computer",
+    values: { computer: "this", workspace: "~/Agents/Support", browser: true },
+  };
+  assert.ok(state({ state: "down", detail: "Not started.", surfaces: [], ways: [way] }));
+  assert.ok(state({ state: "connected", surfaces: [] }), "none said: none offered");
+  // A way holds nothing else, and names a unit by its id.
+  assert.equal(state({ state: "down", surfaces: [], ways: [{ ...way, secrets: {} }] }), false);
+  assert.equal(state({ state: "down", surfaces: [], ways: [{ ...way, unit: "Computer" }] }), false);
+  assert.equal(
+    state({ state: "down", surfaces: [], ways: [{ ...way, values: { nested: { a: 1 } } }] }),
+    false,
+  );
 });
 
 test("an agent's status tells stopped by the person from down", () => {
