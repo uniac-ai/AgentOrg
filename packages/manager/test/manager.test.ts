@@ -1925,7 +1925,7 @@ type ToolCalls = {
   call(input: { name: string; arguments: object }): Promise<{ output: string; failed?: true }>;
 };
 
-/** An agent's conversations, as the agent that made it reaches them. */
+/** An agent's conversations, as another agent reaches them. */
 type ChatCalls = Slot<typeof chat>["call"];
 
 /** Templates to delegate with, and a parent holding an agents unit filled in as asked. */
@@ -2686,6 +2686,84 @@ test("with all, an agent reaches every other agent, and removes only its own lin
   const removed = await call("agent_remove", { agent: grandchild });
   assert.equal(removed.failed, undefined, removed.output);
   assert.ok(!(await s.openActors()).includes(grandchild));
+});
+
+test("with all, an agent talks to every other agent from itself, as agents come and go and its unit changes", async (t) => {
+  const s = await delegating(t);
+  // Agents that keep a record of their work: only its own gives it their Work.
+  await s.calls.agents.saveTemplate({
+    id: "workhand",
+    title: "workhand",
+    description: "The workhand.",
+    base: { provider: "Agents", creatable: "working" },
+    units: [],
+  });
+  const { agent: other } = await s.calls.agents.create({ template: "workhand", name: "Other" });
+  const { agent: boss, tools } = await s.parent(
+    { templates: ["workhand"], agents: "all" },
+    undefined,
+    "Boss",
+  );
+  const reachedBy = async (kind: string) =>
+    (await s.bindingsOf(boss))
+      .filter((one) => one.consumer === boss && one.slot.startsWith(kind))
+      .map((one) => one.provider)
+      .sort();
+  const talksTo = async (want: string[], why: string) => {
+    for (
+      let i = 0;
+      JSON.stringify(await reachedBy("chat_")) !== JSON.stringify([...want].sort());
+      i++
+    ) {
+      assert.ok(i < 300, `${why}: ${JSON.stringify(await reachedBy("chat_"))}`);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+  };
+  // Every other agent's conversations, and not its own, as it is made.
+  await talksTo([other], "it never reached the other agent");
+  // From itself: the other agent's conversation is with it.
+  const talk = await s.exposedTo<ChatCalls>(boss, `chat_${other}`);
+  await talk.send({ text: "Status?" });
+  assert.deepEqual(
+    s.chats.get(other)?.map((one) => [one.with, one.text]),
+    [[boss, "Status?"]],
+  );
+  // One made later, by the person or by it, is reached too; Work only of its own.
+  const later = await s.makeStack([], "Later");
+  const kid = await s.made(tools, "create_workhand", { name: "Kid", purpose: "P." });
+  await talksTo([other, later, kid], "it never reached the agents made later");
+  for (let i = 0; JSON.stringify(await reachedBy("work_")) !== JSON.stringify([kid]); i++) {
+    assert.ok(
+      i < 300,
+      `its own Work was never reached: ${JSON.stringify(await reachedBy("work_"))}`,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  // One removed goes from it.
+  await s.calls.agents.remove({ agent: later });
+  await talksTo([other, kid], "a removed agent stayed");
+  // With no agents unit it reaches none; at "own", only its own; at "all" again, every other.
+  const control = (await s.calls.agents.get({ agent: boss })).units.find(
+    (one) => one.unit === "control",
+  )?.instance as string;
+  await s.calls.agents.removeUnit({ agent: boss, instance: control });
+  assert.deepEqual(await reachedBy("chat_"), []);
+  assert.deepEqual(await reachedBy("work_"), []);
+  const { instance } = await s.calls.agents.addUnit({
+    agent: boss,
+    unit: s.agentsUnit({ templates: ["workhand"] }),
+  } as never);
+  await talksTo([kid], "at own it never reached its own");
+  await s.calls.agents.removeUnit({ agent: boss, instance });
+  await s.calls.agents.addUnit({
+    agent: boss,
+    unit: s.agentsUnit({ templates: ["workhand"], agents: "all" }),
+  } as never);
+  await talksTo([other, kid], "at all again it never reached every other agent");
+  for (let i = 0; JSON.stringify(await reachedBy("work_")) !== JSON.stringify([kid]); i++) {
+    assert.ok(i < 300, "its own Work was never reached again");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
 });
 
 test("an agent gives only connections listed for it, or its own, and only to itself or its own", async (t) => {

@@ -55,9 +55,9 @@ There is one create tool per template you may use. Read its description and fiel
 
 ## Working with it
 
-- You have one conversation with each agent you made. \`agents__send\` says a message in it, naming the agent by its id, and returns at once; it works on its own after that, and answers there. It knows the message is yours.
+- You have one conversation with each agent you made, and, if the person let you reach every agent, with every other agent too. \`agents__send\` says a message in it, naming the agent by its id, and returns at once; it works on its own after that, and answers there. It knows the message is yours.
 - \`agents__read\` shows that conversation, whether the agent is working, and, if a message got no answer, its \`problem\`: send it another once the problem is dealt with. Check back when you need the result, rather than after every step.
-- An agent that keeps a record of its work also gives you a tool \`work_<its id>__work\` while it is connected: what each of its pieces of work is doing and did. Read it to see how its work goes, without messaging it.
+- An agent you made that keeps a record of its work also gives you a tool \`work_<its id>__work\` while it is connected: what each of its pieces of work is doing and did. Read it to see how its work goes, without messaging it.
 - Say what you want back and in what form. It knows only what you send it and its purpose.
 
 ## When it is done
@@ -98,7 +98,7 @@ export function agentsUnit(
           {
             value: "all",
             title: "All",
-            description: "It also sees, stops and starts every other agent.",
+            description: "It also sees, messages, stops and starts every other agent.",
           },
         ],
       },
@@ -289,10 +289,19 @@ const boundOf = (values: Values): Bound => ({
 });
 /** Whether a bound lets an agent create and manage agents of its own. */
 const own = (bound: Bound) => atLeast(AGENTS, bound.agents, "own");
+/** What an agent's agents unit allows it, if it holds management's. */
+const agentsBound = (self: string, record: TheAgent | undefined) => {
+  const unit = record?.units.find((one) => one.provider === self && one.unit === AGENTS_UNIT);
+  return unit && boundOf(unit.values);
+};
 /** Whether an agent manages the agents it made: it holds management's agents unit, at "own" or more. */
 export function managesOwn(self: string, record: TheAgent | undefined): boolean {
-  const unit = record?.units.find((one) => one.provider === self && one.unit === AGENTS_UNIT);
-  return unit !== undefined && own(boundOf(unit.values));
+  const bound = agentsBound(self, record);
+  return bound !== undefined && own(bound);
+}
+/** Whether an agent sees and talks to every other agent: its agents unit is at "all". */
+export function managesAll(self: string, record: TheAgent | undefined): boolean {
+  return agentsBound(self, record)?.agents === "all";
 }
 
 /** A template as a parent may use it: the units it applies, and the places it may go. */
