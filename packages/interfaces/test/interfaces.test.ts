@@ -137,6 +137,27 @@ test("a connection's status can't carry extra fields, and a base holds only what
   assert.equal(creatables({ creatables: [{ ...creatable, mcp: [] }] }), false);
 });
 
+test("a choice's option may say why it can't be chosen now", () => {
+  const field = {
+    id: "made",
+    type: "choice",
+    value: "string",
+    title: "Made as",
+    options: [
+      {
+        value: "container",
+        title: "A container on this machine",
+        unavailable: "A container needs Docker, which isn't answering on this machine.",
+      },
+    ],
+  };
+  assert.ok(Field.safeParse(field).success);
+  const option = (extra: object) => ({ ...field, options: [{ ...field.options[0], ...extra }] });
+  assert.equal(Field.safeParse(option({ unavailable: "" })).success, false, "a reason, or none");
+  const units = compiled(unitProvider)["units.output"];
+  assert.ok(units?.({ units: [{ ...computer, form: [field] }] }));
+});
+
 test("a capability that can't be reached may say ways forward: a unit, and the values to open its form with", () => {
   const state = compiled(capability)["state.output"];
   assert.ok(state);

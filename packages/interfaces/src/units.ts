@@ -170,6 +170,10 @@ const Gives = z.object({
  * a list, includes one. A field that isn't shown has no value. `description` is written once, for a
  * person and an agent alike.
  *
+ * `unavailable`, on a choice's option, says why it can't be chosen now, in its provider's words: a
+ * host draws the option greyed with that reason. A host that doesn't know it offers the option,
+ * and the unit's own check refuses it.
+ *
  * `caution`, on a choice's option, says its `description` warns of what choosing it risks: a
  * host draws it as a caution while that option is the answer. A host that doesn't know it draws
  * it as any description.
@@ -203,6 +207,7 @@ export const Field = z.object({
         title: Title,
         description: Description.optional(),
         caution: z.literal(true).optional(),
+        unavailable: z.string().min(1).max(2000).optional(),
         adds: Gives.optional(),
       }),
     )
