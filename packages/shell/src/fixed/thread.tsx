@@ -173,8 +173,8 @@ function Composer({
     );
     return true;
   };
-  // Words go with every message, as chat@1 takes it; and nothing goes while a picture is being fitted.
-  const ready = !!text.trim() && box.fitting === 0;
+  // A message is words, pictures or both; nothing goes while a picture is being fitted.
+  const ready = (!!text.trim() || box.pictures.length > 0) && box.fitting === 0;
   const submit = async () => {
     const body = text.trim();
     if (!ready) return;
