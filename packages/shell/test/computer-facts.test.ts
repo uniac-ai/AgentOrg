@@ -93,10 +93,10 @@ test(
       computer({
         state: "down",
         detail:
-          "no AgentComputer is running on this computer. Install it with npm install -g @agentorg/computer, start it with agentcomputer serve, and try again.",
+          "AgentComputer isn't installed on this computer. Install it with npm install -g @agentorg/computer and try again. AgentOrg starts it for you.",
       }),
     ]);
-    await frame.getByText(/^No AgentComputer is running on this computer\. Install it/).waitFor();
+    await frame.getByText(/^AgentComputer isn't installed on this computer\. Install it/).waitFor();
     assert.equal(await frame.getByRole("navigation", { name: "Dock" }).count(), 0);
     assert.equal(await frame.getByRole("group").count(), 0);
     const about = page
