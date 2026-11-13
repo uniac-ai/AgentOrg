@@ -1,5 +1,6 @@
 // Your conversations, one with each agent you talk to, as one list: its last words, and whether it
-// has said something you haven't read. A conversation is read when its thread has shown its reply;
+// has said something you haven't read; and apart, the agents' conversations with each other, which
+// you read and never write in. A conversation of yours is read when its thread has shown its reply;
 // when each was read is kept in the app's notes, so it survives restarts.
 import {
   createContext,
@@ -15,8 +16,10 @@ import type { ChatMessage, Conversation, Tone } from "./data.ts";
 import { useAgents } from "./watch.tsx";
 
 export interface ListedChat {
-  /** The agent it is with. */
+  /** The agent whose conversation it is. */
   agent: { id: string; name: string; tone: Tone };
+  /** Who it is with: you, or another agent by its id. */
+  with: string;
   entry: Conversation;
   /** Its last words, in one line. */
   words: string;
@@ -28,15 +31,17 @@ export interface ListedChat {
 }
 
 interface AllChats {
-  /** What was said last comes first. */
+  /** Yours, what was said last first. */
   chats: ListedChat[];
+  /** The agents' conversations with other agents, what was said last first. */
+  others: ListedChat[];
   /** Every agent there is has had its chats listed once, or said it couldn't: all are here. */
   listed: boolean;
   /** Your conversation with an agent has shown a reply of its, said at `at`. */
   read(agent: string, at: string): void;
 }
 
-const Context = createContext<AllChats>({ chats: [], listed: false, read: () => {} });
+const Context = createContext<AllChats>({ chats: [], others: [], listed: false, read: () => {} });
 export const useAllChats = () => useContext(Context);
 
 /** Who you are in a conversation, as the Hub names you. */
@@ -134,6 +139,7 @@ function useRead() {
 
 interface Held {
   agent: string;
+  with: string;
   entry: Conversation;
   words: string;
   /** When its last words were said, once they are known. */
@@ -153,12 +159,12 @@ const isSaid = (message: ChatMessage) =>
  * A message as a conversation's last words: who said it when it was you, and its first line. A
  * picture sent with no words is named, as its words would be.
  */
-const wordsOf = (message: Pick<ChatMessage, "role" | "text" | "images">) => {
+const wordsOf = (message: Pick<ChatMessage, "role" | "text" | "images">, party: string) => {
   const count = message.images?.length ?? 0;
   const line =
     message.text.trim().split("\n")[0]?.replace(/[*`|]/g, "").trim() ||
     (count === 1 ? "Picture" : count > 1 ? `${count} pictures` : "");
-  return message.role === "user" ? `You: ${line}` : line;
+  return message.role === "user" && party === PERSON ? `You: ${line}` : line;
 };
 
 /** One agent's conversations, read from its own slot and followed from there. */
@@ -182,40 +188,46 @@ function Follow({
   useEffect(() => {
     if (connection !== "open") return;
     let over = false;
-    /** Whether the last words of your conversation have been asked for. */
-    let asked = false;
+    /** The parties whose conversation's last words have been asked for. */
+    let asked = new Set<string>();
 
-    const hears = (message: Pick<ChatMessage, "role" | "text" | "images" | "at">) => {
+    const hears = (
+      party: string,
+      message: Pick<ChatMessage, "role" | "text" | "images" | "at">,
+    ) => {
       if (!isSaid(message as ChatMessage)) return;
-      put(keyOf(agent, PERSON), (was) =>
+      put(keyOf(agent, party), (was) =>
         // An answer that comes late never replaces what was said after it.
         was && !(was.said && later(was.said, message.at))
-          ? { ...was, words: wordsOf(message), said: message.at }
+          ? { ...was, words: wordsOf(message, party), said: message.at }
           : undefined,
       );
     };
-    // Your conversation with the agent is listed; one it has with another agent is not yours.
+    // Each of its conversations, yours or another agent's with it.
     const told = (entry: Conversation) => {
-      if (entry.with !== PERSON) return;
-      put(keyOf(agent, PERSON), (was) =>
+      const party = entry.with;
+      put(keyOf(agent, party), (was) =>
         // A list read while the conversation changed never replaces what an event said since.
         was?.entry.latest && (!entry.latest || later(was.entry.latest.at, entry.latest.at))
           ? undefined
-          : { agent, words: "", ...was, entry },
+          : { agent, with: party, words: "", ...was, entry },
       );
       const { latest } = entry;
       // Its latest words come with it; a message of pictures alone is read to be named.
-      if (latest && isSaid(latest as ChatMessage)) return hears(latest);
-      if (!latest || asked) return;
-      asked = true;
+      if (latest && isSaid(latest as ChatMessage)) return hears(party, latest);
+      if (!latest || asked.has(party)) return;
+      asked.add(party);
       void api
-        .call<{ messages: ChatMessage[] }>(slot, "history", { limit: NEWEST })
+        .call<{ messages: ChatMessage[] }>(slot, "history", {
+          limit: NEWEST,
+          ...(party === PERSON ? {} : { with: party }),
+        })
         .then((reply) => reply.messages.findLast(isSaid))
-        .then((last) => last && !over && hears(last))
+        .then((last) => last && !over && hears(party, last))
         .catch(() => {});
     };
     const load = async () => {
-      asked = false;
+      asked = new Set();
       let before: string | undefined;
       do {
         const { conversations, more }: { conversations: Conversation[]; more: boolean } =
@@ -238,7 +250,7 @@ function Follow({
       api.subscribe(slot, "chat", (payload) => told(payload as Conversation), { again: reload }),
       api.subscribe(slot, "message", (payload) => {
         const message = payload as ChatMessage & { with: string };
-        if (message.with === PERSON) hears(message);
+        hears(message.with, message);
       }),
     ];
     reload();
@@ -270,10 +282,10 @@ export function AllChatsProvider({ children }: { children: React.ReactNode }) {
     [],
   );
 
-  const chats = useMemo(
+  const all = useMemo(
     () =>
       [...held.entries()]
-        .flatMap(([key, { agent, entry, words, said }]): ListedChat[] => {
+        .flatMap(([key, { agent, with: party, entry, words, said }]): ListedChat[] => {
           // A deleted agent's conversation goes with it.
           const watched = byId.get(agent);
           if (!watched) return [];
@@ -282,14 +294,16 @@ export function AllChatsProvider({ children }: { children: React.ReactNode }) {
           return [
             {
               agent: { id: agent, name: watched.entry.name, tone: watched.now.tone },
+              with: party,
               entry,
               words,
               ...(problem ? { problem } : {}),
               // Until its last words are known, its latest message says when; else when it began.
               at: said ?? latest?.at ?? entry.at,
-              // Its reply is new until it is read.
+              // A reply to you is new until it is read.
               unread:
                 !!note &&
+                party === PERSON &&
                 latest?.role === "assistant" &&
                 later(latest.at, note.at[key] ?? note.since),
             },
@@ -298,8 +312,10 @@ export function AllChatsProvider({ children }: { children: React.ReactNode }) {
         .sort((a, b) => Date.parse(b.at) - Date.parse(a.at)),
     [held, byId, note],
   );
+  const chats = useMemo(() => all.filter((one) => one.with === PERSON), [all]);
+  const others = useMemo(() => all.filter((one) => one.with !== PERSON), [all]);
   const read = useCallback<AllChats["read"]>((agent, at) => mark(keyOf(agent, PERSON), at), [mark]);
-  const value = useMemo(() => ({ chats, listed, read }), [chats, listed, read]);
+  const value = useMemo(() => ({ chats, others, listed, read }), [chats, others, listed, read]);
   return (
     <Context.Provider value={value}>
       {[...byId.values()].map(

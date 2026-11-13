@@ -449,6 +449,78 @@ test(
 );
 
 test(
+  "an agent's conversations with other agents are on both their pages, named by the other, and read in the chat with nothing to write in",
+  withGateway(async (gateway) => {
+    gateway.sayWith("a-reviewer", "a-research", {
+      id: "q1",
+      role: "user",
+      text: "Which changes touched checkout?",
+      at: new Date(Date.now() - 60_000).toISOString(),
+    });
+    gateway.sayWith("a-reviewer", "a-research", reply("q2", "28 of the 62."));
+    // One with a party that is no agent here is left out.
+    gateway.sayWith("a-reviewer", "management", reply("q3", "Said to nobody here."));
+    // Research has one of its own with Reviewer too: a second conversation, the other way.
+    gateway.sayWith("a-research", "a-reviewer", {
+      id: "p1",
+      role: "user",
+      text: "Is #482 merged?",
+      at: new Date(Date.now() - 120_000).toISOString(),
+    });
+    const page = await visit(gateway, "a-reviewer");
+    const others = (name: string) =>
+      page.getByRole("main").getByRole("list", { name: `${name}'s chats with other agents` });
+    await others("Reviewer").getByRole("button").filter({ hasText: "28 of the 62." }).waitFor();
+    // Its own with Research, and Research's with it.
+    await others("Reviewer").getByRole("button").nth(1).waitFor();
+    assert.deepEqual(
+      (await others("Reviewer").getByRole("button").allInnerTexts()).map((row) =>
+        row.split("\n").filter(Boolean).slice(1, 3),
+      ),
+      [
+        ["Research", "28 of the 62."],
+        ["Research", "Is #482 merged?"],
+      ],
+    );
+    // A reply between agents is not yours to read: nothing is new, there or in the chat.
+    gateway.sayWith("a-reviewer", "a-research", reply("q5", "One more thing."));
+    await others("Reviewer").getByText("One more thing.").waitFor();
+    assert.equal(await others("Reviewer").getByRole("img", { name: "New" }).count(), 0);
+    await page.getByRole("button", { name: "Chats", exact: true }).waitFor();
+    // The other agent's page lists it too, by the agent it is with.
+    await page.goto(`${gateway.url}/#/a/a-research/chats`);
+    const row = others("Research").getByRole("button").filter({ hasText: "One more thing." });
+    await row.getByText("Reviewer").waitFor();
+    await row.click();
+    await panel(page).getByRole("heading", { name: "Reviewer and Research" }).waitFor();
+    await panel(page).getByText("You can read it, not write in it").waitFor();
+    // Who asked is said above what they asked; there is no box.
+    const asked = panel(page).locator('[data-slot="message-scroller-item"]').first();
+    assert.deepEqual((await asked.innerText()).split("\n").filter(Boolean), [
+      "Research",
+      "Which changes touched checkout?",
+    ]);
+    await panel(page).getByText("28 of the 62.").waitFor();
+    assert.equal(await input(page).count(), 0);
+    const read = gateway.calls.find((c) => c.method === "history" && c.input.with);
+    assert.equal(read?.input.with, "a-research");
+    // What comes in it shows as it comes; what is said to you doesn't.
+    gateway.delta("a-reviewer", "q4", "Three touch the retry path.", "a-research");
+    gateway.delta("a-reviewer", "r9", "Said to you.");
+    await panel(page).getByText("Three touch the retry path.").waitFor();
+    assert.equal(await panel(page).getByText("Said to you.").count(), 0);
+    // Reading it marks nothing of yours as read.
+    const note = gateway.notes.get("ui/read-conversations") as { at: Record<string, string> };
+    assert.deepEqual(Object.keys(note?.at ?? {}), []);
+    // With an agent of it gone, the chat shows the list.
+    gateway.agents.delete("a-research");
+    gateway.changed();
+    await panel(page).getByRole("list", { name: "Chats" }).waitFor();
+    await page.close();
+  }),
+);
+
+test(
   "search in the bar finds agents, not what was said to them",
   withGateway(async (gateway) => {
     gateway.converse("a-research", [reply("o1", "The three oldest are #212, #240 and #251.")]);

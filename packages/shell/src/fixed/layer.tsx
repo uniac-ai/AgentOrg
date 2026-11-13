@@ -128,12 +128,20 @@ function Chats() {
 /** The chat as a panel: at the right, the height of the layer, with the page still in use beside it. */
 function ChatPanel() {
   const { view } = useChats();
-  const { chats } = useAllChats();
+  const { chats, others } = useAllChats();
   const { byId } = useAgents();
-  // Your conversation with an agent, begun or not, or the list. An agent that is gone shows the list.
+  // Your conversation with an agent, begun or not; an agent's with another, once it is listed and
+  // both agents are here; or the list. An agent that is gone shows the list.
+  const party = view.kind === "chat" ? view.with : undefined;
   const agent = view.kind === "chat" ? byId.get(view.agent) : undefined;
-  const chat = agent && chats.find((one) => one.agent.id === agent.entry.agent);
-  const shown = agent ? `chat ${agent.entry.agent}` : view.kind;
+  const other = party ? byId.get(party) : undefined;
+  const chat =
+    agent &&
+    (party ? others : chats).find(
+      (one) => one.agent.id === agent.entry.agent && (!party || one.with === party),
+    );
+  const open = !!agent && (!party || (!!chat && !!other));
+  const shown = open ? `chat ${view.kind === "chat" ? view.agent : ""} ${party ?? ""}` : view.kind;
   // The chat takes the keyboard when it opens and when what it shows changes: the button that
   // was pressed is gone.
   const panel = useRef<HTMLElement>(null);
@@ -146,11 +154,14 @@ function ChatPanel() {
       aria-label="Chats"
       className="window outline-none absolute top-[var(--inset)] right-[var(--inset)] bottom-[var(--inset)] z-50 flex w-[var(--panel)] flex-col overflow-hidden rounded-3xl bg-background shadow-2xl phone:inset-0 phone:w-auto phone:rounded-none"
     >
-      {agent ? (
+      {open && agent ? (
         <Thread
           key={shown}
           agent={{ id: agent.entry.agent, name: agent.entry.name, tone: agent.now.tone }}
           chat={chat}
+          {...(party && other
+            ? { other: { id: party, name: other.entry.name, tone: other.now.tone } }
+            : {})}
         />
       ) : (
         <Chats />

@@ -16,6 +16,7 @@ import { useAct, useCreatables } from "./data.ts";
 import { Face, MARK } from "./face.tsx";
 import { needsOf, useLogin } from "./login.tsx";
 import { Overview } from "./overview.tsx";
+import { Section } from "./parts.tsx";
 import { Setup } from "./setup.tsx";
 import { useAgents } from "./watch.tsx";
 
@@ -31,7 +32,7 @@ export function AgentPage({
   const { byId, list, unread, reads } = useAgents();
   // The list as it was when the page opened may not have an agent just made: only a read since says.
   const [opened] = useState(reads);
-  const { chats } = useAllChats();
+  const { chats, others } = useAllChats();
   const { openChat } = useChats();
   const creatables = useCreatables();
   const [failed, setFailed] = useState<string>();
@@ -65,6 +66,15 @@ export function AgentPage({
   const tab = tabs.find((t) => t.id === asked) ?? tabs[0];
   // Your conversation with it, listed on its page while it is stopped too.
   const mine = chats.find((chat) => chat.agent.id === id);
+  // Its conversations with other agents, either way: its own with them, and theirs with it. Each is
+  // named by the other agent; one with a party that is no agent here is left out.
+  const between = others.flatMap((chat) => {
+    const party = chat.agent.id === id ? chat.with : chat.with === id ? chat.agent.id : undefined;
+    const other = party === undefined ? undefined : byId.get(party);
+    return party && other
+      ? [{ chat, other: { id: party, name: other.entry.name, tone: other.now.tone } }]
+      : [];
+  });
   // How it stands, and no more. What it did, and what went wrong in a chat, is read in its chats.
   const tone = failed ? "trouble" : now.tone;
   // Signed out of the model account, a running agent can't work: that comes before how it stands.
@@ -176,7 +186,8 @@ export function AgentPage({
             </div>
           )}
           {tab?.id === "chats" && (
-            // Your conversation with it, or the way to begin it: it opens in the chat at the right.
+            // Your conversation with it, or the way to begin it; beneath, its conversations with other
+            // agents, to read. Each opens in the chat at the right.
             <div className="mx-auto flex max-w-[720px] flex-col gap-7">
               <ul aria-label={`Chats with ${entry.name}`}>
                 <li>
@@ -196,6 +207,21 @@ export function AgentPage({
                   )}
                 </li>
               </ul>
+              {between.length > 0 && (
+                <Section title="With other agents">
+                  <ul aria-label={`${entry.name}'s chats with other agents`}>
+                    {between.map(({ chat, other }) => (
+                      <li key={`${chat.agent.id} ${chat.with}`}>
+                        <ChatRow
+                          chat={chat}
+                          agent={other}
+                          onOpen={() => openChat(chat.agent.id, chat.with)}
+                        />
+                      </li>
+                    ))}
+                  </ul>
+                </Section>
+              )}
             </div>
           )}
           {tab?.id === "overview" && <Overview entry={entry} detail={detail} />}

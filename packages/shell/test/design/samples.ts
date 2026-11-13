@@ -50,12 +50,13 @@ export const docsAgent = (gateway: Gateway) =>
   likeAgent(gateway, "a-docs", "Docs", "Keeps the product docs in step with what ships");
 /** Release notes, with a reply you haven't read, as the design's sample has it. */
 export function releaseNotes(gateway: Gateway) {
-  likeAgent(
-    gateway,
-    "a-release",
-    "Release notes",
-    "Drafts release notes from merged pull requests",
-  );
+  if (!gateway.agents.has("a-release"))
+    likeAgent(
+      gateway,
+      "a-release",
+      "Release notes",
+      "Drafts release notes from merged pull requests",
+    );
   gateway.addMessage("a-release", {
     id: "n-a1",
     role: "assistant",
@@ -63,6 +64,49 @@ export function releaseNotes(gateway: Gateway) {
     // Said after the note of what is read was begun, so it is new.
     at: new Date().toISOString(),
   });
+}
+
+/** Research's conversation with Release notes, as the design's sample has it: read from either page. */
+export function between(gateway: Gateway) {
+  if (!gateway.agents.has("a-release"))
+    likeAgent(
+      gateway,
+      "a-release",
+      "Release notes",
+      "Drafts release notes from merged pull requests",
+    );
+  // It has a computer of its own, as the design's sample has it.
+  computer(gateway, [{ surface: "browser", protocol: "screencast@1", operate: true }], "a-release");
+  const at = new Date(Date.now() - 9 * 60_000).toISOString();
+  gateway.sayWith("a-release", "a-research", {
+    id: "q-u1",
+    role: "user",
+    text: "Which changes since 4.1 touched checkout? I'm fixing a retry bug there.",
+    at,
+  });
+  gateway.sayWith("a-release", "a-research", {
+    id: "q-a1",
+    role: "assistant",
+    text: "28 of the 62. Three touch the retry path: #471, #476 and #480. #476 is the one that started reusing the session.",
+    at,
+  });
+}
+
+/** Opens the conversation between Release notes and Research, from Release notes' page. */
+export async function openBetween(page: Page) {
+  // The built bar names an agent after how it stands; the design's, by its name alone.
+  await page
+    .getByRole("navigation", { name: "Main" })
+    .getByRole("button", { name: /(^| )Release notes$/ })
+    .click();
+  await page.getByRole("main").getByRole("tab", { name: "Chats" }).click();
+  await page
+    .getByRole("main")
+    .getByRole("list", { name: "Release notes's chats with other agents" })
+    .getByRole("button")
+    .first()
+    .click();
+  await chats(page).getByRole("heading", { name: "Release notes and Research" }).waitFor();
 }
 
 /** A plain picture of a size, as a PNG in base64: the design's sample picture is 640 by 420. */
