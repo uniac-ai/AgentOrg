@@ -6,7 +6,7 @@ import { defineInterface, method, NotConnected, OutcomeUnknown, Refused } from "
 import { createTestContext } from "@agentorg/sdk/testing";
 import { z } from "zod";
 import { MAX_INSTRUCTIONS } from "../src/settings.ts";
-import { MAX_TOOLS, TOOLS_BUDGET } from "../src/tools.ts";
+import { filesOf, MAX_TOOLS, TOOLS_BUDGET } from "../src/tools.ts";
 import { asAsked, followsSend, named, sendOf } from "./as-asked.ts";
 import engine, { engines, INSTRUCTIONS } from "./engine-actor.ts";
 
@@ -1287,10 +1287,12 @@ test("with no summary to be had, the model gets the opening message, a line for 
   assert.ok(s.summaries.length > 0);
 });
 
-test("the next message still has a long turn: its earlier steps summarized once, its latest calls whole", async () => {
+test("the next message still has a long turn: its earlier steps summarized once, with the files read and changed, its latest calls whole", async () => {
   const s = await setup();
-  s.actor.expose("big", tools, listing({ read: () => "x".repeat(10_000) }));
-  for (let i = 0; i < 60; i++) s.script.push(calls(callTool("big__read", {}, `c${i}`)));
+  s.actor.expose("big", tools, listing({ read: () => "x".repeat(10_000), edit: () => "Edited." }));
+  s.script.push(calls(callTool("big__edit", { path: "notes.md" }, "e0")));
+  for (let i = 0; i < 60; i++)
+    s.script.push(calls(callTool("big__read", { path: `f${i}.ts` }, `c${i}`)));
   s.script.push(say("Done with the long part."));
   await s.turn("Do the long part.");
   s.script.push(say("Going on."));
@@ -1301,9 +1303,14 @@ test("the next message still has a long turn: its earlier steps summarized once,
   assert.ok(bytes(JSON.stringify(sent)) <= INPUT_BUDGET);
   const said = sent.filter((item) => item.type === "message").map((item) => item.content);
   assert.equal(said[0], "Do the long part.");
+  // The files of the calls the summary stands for, oldest first: those before the first call
+  // sent whole read, and the one before them changed.
+  const first = Number(String(sent.find((item) => item.type === "function_call")?.callId).slice(1));
+  assert.ok(first > 0);
+  const read = Array.from({ length: first }, (_, i) => `f${i}.ts`);
   assert.equal(
     said[1],
-    "The conversation history before this point was compacted into the following summary:\n\n<summary>\n## Goal\n- Summary 1.\n</summary>",
+    `The conversation history before this point was compacted into the following summary:\n\n<summary>\n## Goal\n- Summary 1.\n\n<read-files>\n${read.join("\n")}\n</read-files>\n\n<modified-files>\nnotes.md\n</modified-files>\n</summary>`,
   );
   assert.deepEqual(said.slice(2), ["Done with the long part.", "Go on."]);
   // The calls since are sent whole, the newest last; those before are the summary's.
@@ -1311,6 +1318,35 @@ test("the next message still has a long turn: its earlier steps summarized once,
   assert.ok(outputs.length > 0 && outputs.length < 60);
   assert.ok(outputs.every((item) => !String(item.output).includes("Left out")));
   assert.equal(sent.findLast((item) => item.type === "function_call")?.callId, "c59");
+});
+
+test("a call names no file unless it is a slot's read or edit with a path", () => {
+  const call = (name: string, args: unknown) => ({ name, arguments: JSON.stringify(args) });
+  for (const name of ["computer__exec_command", "computer__write_stdin", "x__reader", "x__write"])
+    assert.equal(filesOf(call(name, { path: "a.ts" })), undefined, name);
+  assert.equal(filesOf(call("computer__read", { file: "a.ts" })), undefined);
+  assert.equal(filesOf(call("computer__edit", { path: "" })), undefined);
+  assert.equal(filesOf({ name: "computer__read", arguments: "{" }), undefined);
+  assert.equal(filesOf({ name: "computer__read", arguments: "null" }), undefined);
+});
+
+test("a request the model refuses for its length is asked again once its earlier steps are summarized", async () => {
+  const s = await setup();
+  s.actor.expose("big", tools, listing({ read: () => "x".repeat(10_000) }));
+  for (let i = 0; i < 10; i++)
+    s.script.push(calls(callTool("big__read", { path: `f${i}.ts` }, `c${i}`)));
+  s.script.push(() => {
+    throw new Refused("context_length", "The request is longer than the model takes.");
+  }, say("Done."));
+  await s.turn("Read them all.");
+  // Under the budget, so only the refusal made it summarize: once, and the request after has it.
+  assert.equal(s.summaries.length, 1);
+  const sent = s.requests.at(-1)?.input ?? [];
+  assert.match(
+    String(sent[1]?.content),
+    /^The conversation history before this point was compacted/,
+  );
+  assert.ok(s.messages().includes("assistant: Done."));
 });
 
 test("with no summary to be had, a latest exchange over the budget leaves out its oldest outputs, never a call", async () => {

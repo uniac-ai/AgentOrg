@@ -24,7 +24,7 @@ import {
 } from "@agentorg/looper";
 import { type Log, Refused, type Slot } from "@agentorg/sdk";
 import { z } from "zod";
-import { head, relayed } from "./tools.js";
+import { filesOf, head, relayed } from "./tools.js";
 
 type Store = Slot<typeof kv>["call"];
 type Listed = z.input<typeof Conversation>;
@@ -251,6 +251,7 @@ export function createChats(options: {
         const party = byThread.get(thread)?.with;
         return party === PERSON ? undefined : (party ?? "a party it doesn't know");
       },
+      files: filesOf,
       log,
     }),
   );

@@ -5,7 +5,7 @@
  * other.
  */
 import { type ToolEntry, tools as toolsInterface } from "@agentorg/interfaces";
-import { type Outcome, Refusal, type Tool } from "@agentorg/looper";
+import { type FilesOf, type Outcome, Refusal, type Tool } from "@agentorg/looper";
 import {
   type DescribedInterface,
   describeInterface,
@@ -72,6 +72,24 @@ export const relayed = <T>(call: Promise<T>): Promise<T> =>
       ? error
       : new Refusal(code, message, { cause: error });
   });
+
+/**
+ * The file a call read or changed, by its `path`, for a summary of a work's earlier steps to list,
+ * by the tool's name: any slot's `read` reads it, and its `edit` changes it, as the computer's
+ * file tools do.
+ */
+export const filesOf: FilesOf = (call) => {
+  const tool = /__(read|edit)$/.exec(call.name)?.[1];
+  if (!tool) return undefined;
+  let path: unknown;
+  try {
+    path = (JSON.parse(call.arguments) as { path?: unknown } | null)?.path;
+  } catch {
+    return undefined;
+  }
+  if (typeof path !== "string" || !path) return undefined;
+  return tool === "read" ? { read: [path] } : { changed: [path] };
+};
 
 /** Whether a slot is a `tools@1`, whose tools are whatever it lists. */
 export const listsTools = (described: DescribedInterface) => described.id === TOOLS_ID;
