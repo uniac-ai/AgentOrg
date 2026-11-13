@@ -143,11 +143,18 @@ const PAGE = 50;
 /** How many of a chat's newest messages are read for the last thing said in it. */
 const NEWEST = 10;
 
-/** What a person or an agent said: a message with words. */
-const isSaid = (message: ChatMessage) => message.text.trim() !== "";
-/** A message as a chat's last words: who said it when it was you, and its first line. */
+/** What a person or an agent said: a message with words, or with pictures. */
+const isSaid = (message: ChatMessage) =>
+  message.text.trim() !== "" || (message.images?.length ?? 0) > 0;
+/**
+ * A message as a chat's last words: who said it when it was you, and its first line. A picture
+ * sent with no words is named, as its words would be.
+ */
 const wordsOf = (message: ChatMessage) => {
-  const line = message.text.trim().split("\n")[0]?.replace(/[*`|]/g, "").trim() ?? "";
+  const count = message.images?.length ?? 0;
+  const line =
+    message.text.trim().split("\n")[0]?.replace(/[*`|]/g, "").trim() ||
+    (count === 1 ? "Picture" : count > 1 ? `${count} pictures` : "");
   return message.role === "user" ? `You: ${line}` : line;
 };
 
