@@ -4,10 +4,10 @@
  * with each.
  */
 import { chat } from "@agentorg/interfaces";
-import type { Outcome } from "@agentorg/looper";
+import { cut, type Outcome } from "@agentorg/looper";
 import { describeInterface, type ExposedSlot, type Slot } from "@agentorg/sdk";
 import type { Candidate } from "./tools.js";
-import { cut, fits } from "./work.js";
+import { fits } from "./work.js";
 
 const SLOT = "agents";
 const CHAT_ID = describeInterface(chat).id;

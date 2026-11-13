@@ -142,6 +142,75 @@ export function head(text: string, length: number): string {
   return /[\uD800-\uDBFF]$/.test(cut) ? cut.slice(0, -1) : cut;
 }
 
+/** How a cut text ends: with how many more characters it had. */
+const CUT_NOTE = /… \((\d+) more characters\)$/;
+/**
+ * `text` cut to `most` characters, saying how many more there were; whole when it fits. A text
+ * cut before counts what it left out then too.
+ */
+export function cut(text: string, most: number): string {
+  if (text.length <= most) return text;
+  const noted = CUT_NOTE.exec(text);
+  const whole = noted ? text.slice(0, noted.index) : text;
+  const kept = head(whole, most);
+  return `${kept}… (${whole.length - kept.length + Number(noted?.[1] ?? 0)} more characters)`;
+}
+
+/** A string cut inside JSON keeps at least this many characters. */
+const MIN_KEPT = 40;
+/**
+ * `json` with its long strings cut inside, until `measure` of it is at most `most`: every string
+ * longer than one length is cut to it, the longest length that fits, so it stays JSON and its
+ * short values, a path or a name, stay whole. A string is cut only where that makes it shorter.
+ * Nothing when it isn't JSON, or is still over with every string cut to `MIN_KEPT`. Read back
+ * and written again, a number past what JSON numbers here hold may change.
+ */
+export function cutInside(
+  json: string,
+  most: number,
+  measure: (json: string) => number,
+): string | undefined {
+  try {
+    let value: unknown = JSON.parse(json);
+    /** Each string in it longer than what it may be cut to: its whole text, and how to put it back. */
+    const strings: { text: string; put: (text: string) => void }[] = [];
+    const find = (at: unknown, put: (text: string) => void) => {
+      if (typeof at === "string") {
+        if (at.length > MIN_KEPT) strings.push({ text: at, put });
+      } else if (at && typeof at === "object")
+        for (const key of Object.keys(at))
+          find((at as Record<string, unknown>)[key], (text) => {
+            (at as Record<string, unknown>)[key] = text;
+          });
+    };
+    find(value, (text) => {
+      value = text;
+    });
+    /** Its measure with every string cut to `length` where that makes it shorter. */
+    const at = (length: number) => {
+      for (const { text, put } of strings) {
+        // Shorter by more than the note's "…" takes beyond one character, in bytes too.
+        const cutTo = cut(text, length);
+        put(cutTo.length + 2 < text.length ? cutTo : text);
+      }
+      return measure(JSON.stringify(value));
+    };
+    if (at(MIN_KEPT) > most) return undefined;
+    let low = MIN_KEPT;
+    let high = strings.reduce((longest, { text }) => Math.max(longest, text.length), MIN_KEPT);
+    while (low < high) {
+      const mid = Math.ceil((low + high) / 2);
+      if (at(mid) <= most) low = mid;
+      else high = mid - 1;
+    }
+    at(low);
+    return JSON.stringify(value);
+  } catch {
+    // Nested too deep to walk or to write.
+    return undefined;
+  }
+}
+
 /** The code and message of anything a call or a turn can throw. */
 export function codeOf(error: unknown): { code: string; message: string } {
   if (error instanceof Refusal) return { code: error.code, message: error.message };

@@ -1413,11 +1413,12 @@ test("a long message is stored once, under storage's value limit, and a big call
   assert.equal(await s.turn("Big arguments."), undefined);
   for (const value of s.store.values.values())
     assert.ok(bytes(JSON.stringify(value)) <= VALUE_LIMIT);
-  // The call ran and is recorded, its arguments left out of the record.
+  // The call ran and is recorded, its long string cut in the record, which says so.
   const sent = s.requests.at(-1)?.input ?? [];
   const call = sent.find((item) => item.callId === "big");
   assert.ok(call);
-  assert.match(call.arguments as string, /left_out/);
+  const { pad } = JSON.parse(call.arguments as string) as { pad: string };
+  assert.match(pad, /^x+… \(\d+ more characters\)$/);
   assert.equal(
     sent.find((item) => item.type === "function_call_output" && item.callId === "big")?.output,
     '{"home":[]}',

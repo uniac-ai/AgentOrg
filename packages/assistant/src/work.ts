@@ -4,7 +4,7 @@
  * changed. It answers while the agent is stopped too: what its work did is still there to read.
  */
 import type { Activity, ActivityPage, capability, tools } from "@agentorg/interfaces";
-import type { WorkEntry } from "@agentorg/looper";
+import { cut, cutInside, type WorkEntry } from "@agentorg/looper";
 import { type Export, Refused } from "@agentorg/sdk";
 import type { z } from "zod";
 
@@ -17,9 +17,6 @@ const LATEST = 3;
 const PAGE_MAX = 20;
 /** What one entry says keeps this many characters. */
 const SHOWN = 2_000;
-/** A string of a call's input is kept at least this long, and what its cut says is at most this long. */
-const MIN_KEPT = 40;
-const CUT_SAYS = 30;
 /** An answer is at most this many characters, so another agent's loop takes it whole. */
 const BUDGET = 28_000;
 
@@ -52,63 +49,14 @@ interface Source {
   ): Promise<{ entries: WorkEntry[]; more: boolean }>;
 }
 
-/** `text` cut to `most` characters, saying how many more there were. */
-export const cut = (text: string, most = SHOWN) => {
-  if (text.length <= most) return text;
-  // Never half of a surrogate pair.
-  const kept = text.slice(0, most).replace(/[\uD800-\uDBFF]$/, "");
-  return `${kept}… (${text.length - kept.length} more characters)`;
-};
 /**
- * A call's input, its arguments as JSON, cut to `SHOWN`: while it is longer, the string with the
- * most kept is cut further, from its whole text, as far as needed, so what it says stays JSON and
- * keeps its short values, a path or a name. One that isn't JSON, or can't be cut so, is cut as
- * text. Read back and written again, a number past what JSON numbers here hold may change.
+ * A call's input, its arguments as JSON, cut to `SHOWN`: JSON still, with its short values, a
+ * path or a name, whole, when it is JSON and can be cut so; otherwise as text.
  */
-function cutInput(input: string): string {
-  if (input.length <= SHOWN) return input;
-  let value: unknown;
-  try {
-    value = JSON.parse(input);
-  } catch {
-    return cut(input);
-  }
-  /** Each string in it long enough that cutting it saves room: its whole text, how much of it is kept, and how to put it back cut. */
-  const strings: { text: string; kept: number; put: (text: string) => void }[] = [];
-  const find = (at: unknown, put: (text: string) => void) => {
-    if (typeof at === "string") {
-      if (at.length > MIN_KEPT + CUT_SAYS) strings.push({ text: at, kept: at.length, put });
-    } else if (at && typeof at === "object")
-      for (const key of Object.keys(at))
-        find((at as Record<string, unknown>)[key], (text) => {
-          (at as Record<string, unknown>)[key] = text;
-        });
-  };
-  find(value, (text) => {
-    value = text;
-  });
-  // Cut as far as each may be, it still doesn't fit: cut as text.
-  for (const one of strings) one.put(cut(one.text, MIN_KEPT));
-  if (JSON.stringify(value).length > SHOWN) return cut(input);
-  for (const one of strings) one.put(one.text);
-  for (let now = JSON.stringify(value); now.length > SHOWN; now = JSON.stringify(value)) {
-    const most = strings.reduce((best, one) => (one.kept > best.kept ? one : best));
-    // The most kept whose written form, escapes and all, takes off what is over.
-    const over = now.length - SHOWN;
-    const written = (kept: number) => JSON.stringify(cut(most.text, kept)).length;
-    const room = written(most.kept) - over;
-    let low = MIN_KEPT;
-    let high = most.kept - 1;
-    while (low < high) {
-      const mid = Math.ceil((low + high) / 2);
-      if (written(mid) <= room) low = mid;
-      else high = mid - 1;
-    }
-    most.kept = low;
-    most.put(cut(most.text, most.kept));
-  }
-  return JSON.stringify(value);
-}
+const cutInput = (input: string) =>
+  input.length <= SHOWN
+    ? input
+    : (cutInside(input, SHOWN, (json) => json.length) ?? cut(input, SHOWN));
 /** An entry as an answer carries it: each text it says cut to `SHOWN`. */
 function shown(entry: WorkEntry): WorkEntry {
   if ("call" in entry) {
@@ -118,12 +66,12 @@ function shown(entry: WorkEntry): WorkEntry {
       call: {
         ...call,
         input: cutInput(call.input),
-        ...(output === undefined ? {} : { output: cut(output) }),
+        ...(output === undefined ? {} : { output: cut(output, SHOWN) }),
       },
     };
   }
-  if ("words" in entry) return { ...entry, words: cut(entry.words) };
-  return { ...entry, line: cut(entry.line) };
+  if ("words" in entry) return { ...entry, words: cut(entry.words, SHOWN) };
+  return { ...entry, line: cut(entry.line, SHOWN) };
 }
 /** Whether an answer is within what another agent's loop takes whole. */
 export const fits = (answer: object) => JSON.stringify(answer).length <= BUDGET;
