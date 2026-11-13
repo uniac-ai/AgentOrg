@@ -340,7 +340,7 @@ export function createChats(options: {
      * messages are given to each: one with no turn running starts a turn, and a turn running
      * takes it at its next model request.
      */
-    async send({ chat, text, images }: Input<"send">) {
+    async send({ chat, text = "", images }: Input<"send">) {
       if (chat !== undefined) {
         await heldOf(chat);
         const { messageId } = await looper.send(chat, text, images);

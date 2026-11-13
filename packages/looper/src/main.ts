@@ -264,7 +264,8 @@ export function createMain(options: {
         });
       const title = titled(typeof routed?.title === "string" ? routed.title : "");
       const newest = said.findLast(({ role }) => role === "user")?.text ?? "";
-      return { ...answered, placed: { title: title || titled(newest) } };
+      // A picture sent by itself has no words to name it by.
+      return { ...answered, placed: { title: title || titled(newest) || "A picture" } };
     },
     /**
      * Hear a message that joined a turn of each of `works`, which have it: the main loop may only

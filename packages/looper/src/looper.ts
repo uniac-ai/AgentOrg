@@ -837,11 +837,11 @@ export function createLooper(options: {
    * are, when the message asks to stop and doesn't say which: that is kept as no work's. This is
    * beside the message's path, after the decisions asked before it, and stops nothing once a
    * turn has ended. A message a work takes with a thread, said before it followed that thread,
-   * is not told of. It is not kept: one cut off by a stop, a close or a restart is not heard,
-   * and the workers have the message all the same.
+   * is not told of, nor is one with no words, which can ask nothing. It is not kept: one cut off
+   * by a stop, a close or a restart is not heard, and the workers have the message all the same.
    */
   const hear = (thread: string, joined: { work: string; turn: number }[], text: string) => {
-    if (stopped || closed || joined.length === 0) return;
+    if (stopped || closed || joined.length === 0 || !/\S/.test(text)) return;
     const at = cuts;
     const cut = () => at !== cuts;
     const still = () => joined.filter(({ work, turn }) => of(work).loop.turn() === turn);

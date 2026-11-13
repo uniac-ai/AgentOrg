@@ -336,6 +336,11 @@ test("the Hub's schemas hold the rules that matter on the wire", () => {
   for (const authorizeUrl of ["javascript:alert(1)", "http://auth.example/", "file:///etc/passwd"])
     assert.equal(authorize({ authorizeUrl }), false, authorizeUrl);
   assert.equal(compiled(chat)["send.input"]?.({ text: "   " }), false);
+  // A picture may be sent by itself, but a message has words or a picture.
+  const picture = { mediaType: "image/png", data: "iVBORw0KGgo=" };
+  assert.equal(compiled(chat)["send.input"]?.({ images: [picture] }), true);
+  assert.equal(compiled(chat)["send.input"]?.({ text: " ", images: [] }), false);
+  assert.equal(compiled(chat)["send.input"]?.({}), false);
   assert.equal(
     compiled(llmSession)["respond.output"]?.({
       output: [{ type: "message", role: "user", content: "x" }],
@@ -476,6 +481,12 @@ test("chat@1 sends in a chat or starts one, pages its history, and says only whe
   });
   assert.equal((await t.ctx.slots.chat.call.send({ chat: "c2", text: "hi" })).chat, "c2");
   await assert.rejects(t.ctx.slots.chat.call.send({ text: "   " }), { code: "invalid" });
+  // A picture may be sent by itself; a message with neither words nor a picture is refused.
+  const picture = { mediaType: "image/png" as const, data: "iVBORw0KGgo=" };
+  assert.equal((await t.ctx.slots.chat.call.send({ images: [picture] })).messageId, "m2");
+  assert.equal((await t.ctx.slots.chat.call.send({ text: "", images: [picture] })).messageId, "m2");
+  await assert.rejects(t.ctx.slots.chat.call.send({} as never), { code: "invalid" });
+  await assert.rejects(t.ctx.slots.chat.call.send({ text: " ", images: [] }), { code: "invalid" });
   const page = await t.ctx.slots.chat.call.history({ chat: "c1", limit: 10 });
   assert.equal(page.messages[0]?.role, "tool");
   // A chat's own calls name it; the agent's status names none.

@@ -410,7 +410,7 @@ async function setup(t: test.TestContext) {
               const failed = (chat: string) => (script.failed ?? []).includes(chat);
               own.exports.chat.implement({
                 // A message with no chat starts one, titled by its first line, as the engine does.
-                send({ chat, text }) {
+                send({ chat, text = "" }) {
                   if (chat !== undefined && !started.has(chat))
                     throw new Refused("unknown", "This agent has no such chat.");
                   const at = new Date().toISOString();

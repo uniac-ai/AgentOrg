@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { Item, Json, Picture, Tool } from "../src/index.ts";
-import { gate, idle, looperWith, says, sends, until } from "./support.ts";
+import { gate, idle, looperWith, route, says, sends, until } from "./support.ts";
 
 const picture = (name: string): Picture => ({ mediaType: "image/png", data: name });
 /** The pictures among `items`, by their data, and the words said where one was left out. */
@@ -194,5 +194,20 @@ test("a request whose instructions and tools leave no room for pictures says eac
   await until(() => asked.length === 1, "the request");
   assert.deepEqual(seen(raw[0] ?? []), ["(A picture, left out.)"]);
   answer("Look at this.\n(A picture, left out.)", sends("Can't see it."));
+  await looper.settled();
+});
+
+test("work a picture sent by itself starts is titled so, and the main loop isn't asked of one joining its turn", async () => {
+  const { looper, asked, mains, answer } = looperWith({ routing: () => route({}) });
+  await looper.send("a", "", [picture("cat")]);
+  await until(() => asked.length === 1, "the work's request");
+  assert.equal((await looper.works(1, 0))[0]?.title, "A picture");
+  // Another picture by itself joins the turn: it can ask nothing, so the main loop isn't asked.
+  await looper.send("a", "", [picture("dog")]);
+  await idle();
+  assert.equal(mains.length, 1);
+  answer("", sends("Seen."));
+  await until(() => asked.length === 2, "the request that reads the second");
+  answer("", sends("Seen too."));
   await looper.settled();
 });
