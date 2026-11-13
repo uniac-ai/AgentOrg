@@ -11,7 +11,7 @@ Use only the tools you have. You may be able to read and not change.
 | ------------------ | ---------------------------------------------------------------------------------------------------------------------- |
 | `computer__list`   | A folder. Folders end in `/`; files give their size in bytes                                                           |
 | `computer__search` | Text under a folder, as `path:line:text`. Exact text unless you pass `regex: true`. It skips what `.gitignore` ignores |
-| `computer__read`   | A file as numbered lines. Use `offset` and `limit` for part of a long one                                              |
+| `computer__read`   | A file as numbered lines, or a picture (PNG, JPEG, GIF, WebP) as itself. Use `offset` and `limit` for part of a long one |
 | `computer__edit`   | Replaces exact text and answers with a diff                                                                            |
 
 Paths are relative to your workspace. A path outside it is refused.

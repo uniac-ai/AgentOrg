@@ -5,7 +5,7 @@ description: Open web pages and act on them in a real browser. Use when a task n
 
 # Using the browser
 
-The browser's tools are named `browser__browser_…`. It reads pages as text, as a list of what's on them, so you don't need to see them.
+The browser's tools are named `browser__browser_…`. It reads pages as text, as a list of what's on them, so you don't need to see them to act on them.
 
 ## The loop
 
@@ -15,6 +15,10 @@ The browser's tools are named `browser__browser_…`. It reads pages as text, as
 4. Take a new snapshot after anything that changes the page. References go out of date.
 
 Every answer gives the page's address and title, so check you've landed where you meant to.
+
+## Seeing a page
+
+To see a page, call `browser__browser_take_screenshot` without `filename`: its answer is the picture. With a `filename` it's only saved, not shown to you: read the file with `computer__read` to see it.
 
 ## When a page is slow or stuck
 
