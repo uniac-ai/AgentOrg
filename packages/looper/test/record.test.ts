@@ -56,28 +56,93 @@ const user = (content: string) => ({
   items: [{ type: "message" as const, role: "user" as const, content }],
 });
 
-test("the oldest messages are deleted past the cap, by count and by bytes", async () => {
+test("past the cap, the oldest calls are deleted and then the oldest pictures, never what was said", async () => {
   const s = store();
   const record = single(s.calls as never, { keep: 5, keepBytes: 1_000_000 });
-  for (let i = 1; i <= 12; i++) await record.append(user(`m${i}`));
-  assert.equal(s.values.size, 5);
-  const page = await record.page(undefined, 100);
+  const callsSent = async () =>
+    (await record.input()).items.flatMap((item) =>
+      item.type === "function_call" ? [item.callId] : [],
+    );
+  await record.append(user("m1"));
+  for (let i = 1; i <= 6; i++) await record.append(ran(`c${i}`, "seen"));
+  await record.append(user("m2"));
+  // Five calls kept: the oldest went, and both messages stay.
+  assert.equal(s.values.size, 7);
+  assert.deepEqual(await callsSent(), ["c2", "c3", "c4", "c5", "c6"]);
+  // What was said isn't counted, and stays however much of it there is: calls after it are kept
+  // as before, and a restart reads it all.
+  for (let i = 3; i <= 8; i++) await record.append(user(`m${i}`));
+  await record.append(ran("c7", "seen"));
+  await record.append(ran("c8", "seen"));
+  assert.deepEqual(await callsSent(), ["c4", "c5", "c6", "c7", "c8"]);
+  const said = ["m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8"];
   assert.deepEqual(
-    page.messages.map((m) => m.text),
-    ["m8", "m9", "m10", "m11", "m12"],
+    (await record.page(undefined, 100)).messages.map((m) => m.text),
+    said,
   );
-  // A restart reads only what is kept, and numbers go on.
   const again = single(s.calls as never, { keep: 5, keepBytes: 1_000_000 });
-  await again.append(user("m13"));
+  await again.append(user("m9"));
   assert.deepEqual(
     (await again.page(undefined, 100)).messages.map((m) => m.text),
-    ["m9", "m10", "m11", "m12", "m13"],
+    [...said, "m9"],
   );
 
+  // A work's newest call holds its place, and stays however old: here another work's, in a thread
+  // that keeps two calls.
+  const shared = createThread(store().calls as never, log, { keep: 2, keepBytes: 1_000_000 });
+  const work = (id: string) =>
+    createRecord({
+      id,
+      follows: () => ["t"],
+      thread: () => shared,
+      waits: () => true,
+      left: () => false,
+    });
+  const own = work("t");
+  const other = work("w2");
+  const callsOf = async (one: typeof own) =>
+    (await one.input()).items.flatMap((item) =>
+      item.type === "function_call" ? [item.callId] : [],
+    );
+  await own.append(user("go"), { thread: "t" });
+  await other.append(ran("b1", "seen"), { thread: "t" });
+  for (const id of ["a1", "a2", "a3"]) await own.append(ran(id, "seen"), { thread: "t" });
+  assert.deepEqual(await callsOf(other), ["b1"]);
+  assert.deepEqual(await callsOf(own), ["a3"]);
+
+  // Past its bytes, the oldest pictures of answered messages are left out, each by a line; an
+  // open message keeps its own, and every word stays.
   const t = store();
   const bytes = single(t.calls as never, { keep: 1000, keepBytes: 2_000 });
-  for (let i = 0; i < 10; i++) await bytes.append(user("x".repeat(500)));
-  assert.ok(t.values.size <= 4);
+  await bytes.append(ran("k1", "seen"));
+  await bytes.append(userWith("q0", [picture("Q0", 600)]));
+  for (let i = 1; i <= 3; i++) {
+    const { id } = await bytes.append(userWith(`p${i}`, [picture(`P${i}`, 600)]));
+    await bytes.append({
+      role: "assistant",
+      closes: id,
+      items: [{ type: "message", role: "assistant", content: `seen ${i}` }],
+    });
+  }
+  const shown = async (record: ReturnType<typeof single>) =>
+    (await record.page(undefined, 100)).messages
+      .filter((m) => m.role === "user")
+      .map((m) => [m.text, m.images?.length ?? 0]);
+  const expected = [
+    ["q0", 1],
+    ["p1\n(A picture, left out.)", 0],
+    ["p2", 1],
+    ["p3", 1],
+  ];
+  assert.deepEqual(await shown(bytes), expected);
+  // And so it is stored. Pictures have a budget of their own: no call went for them.
+  const stored = single(t.calls as never, { keep: 1000, keepBytes: 2_000 });
+  assert.deepEqual(await shown(stored), expected);
+  assert.ok(
+    (await stored.input()).items.some(
+      (item) => item.type === "function_call" && item.callId === "k1",
+    ),
+  );
 });
 
 test("text is cut at a character and says so", () => {
@@ -380,19 +445,22 @@ test("a line stands only where something was left out, and with message [1] gone
     (await sent(close)).map((one) => one.slice(0, 8)),
     ["the task", "and this", "a1 xxxxx", "a2 xxxxx", "go on", "b1 xxxxx"],
   );
-  // A record that keeps eleven messages has lost its first two: there is no opening message
-  // to keep, and the line names only the message it stands before.
-  const short = single(store().calls as never, { keep: 11, keepBytes: 64 * 1024 * 1024 });
+  // A record an earlier version cut has lost its first two: there is no opening message to keep,
+  // and the line names only the message it stands before.
+  const earlier = store();
+  const writer = single(earlier.calls as never);
   for (const [asked, name] of [
     ["the task", "a"],
     ["second", "b"],
     ["third", "c"],
     ["fourth", "d"],
   ]) {
-    await short.append(user(asked as string));
-    await short.append(reply(`${name}1 ${filler(0.3)}`));
-    await short.append(reply(`${name}2 ${filler(0.3)}`));
+    await writer.append(user(asked as string));
+    await writer.append(reply(`${name}1 ${filler(0.3)}`));
+    await writer.append(reply(`${name}2 ${filler(0.3)}`));
   }
+  for (const key of [...earlier.values.keys()].sort().slice(0, 2)) earlier.values.delete(key);
+  const short = single(earlier.calls as never);
   await short.append(user("go on"));
   const { items } = await short.input();
   assert.deepEqual(

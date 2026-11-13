@@ -1,4 +1,3 @@
-export { MAX_CALLS } from "./loop.js";
 export {
   createLooper,
   forget,

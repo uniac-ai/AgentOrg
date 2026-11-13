@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { chat, tools } from "@agentorg/interfaces";
-import { capped, Entry, INPUT_BUDGET, MAX_CALLS, MAX_OUTPUT, textOf } from "@agentorg/looper";
+import { capped, Entry, INPUT_BUDGET, MAX_OUTPUT, textOf } from "@agentorg/looper";
 import { defineInterface, method, NotConnected, OutcomeUnknown, Refused } from "@agentorg/sdk";
 import { createTestContext } from "@agentorg/sdk/testing";
 import { z } from "zod";
@@ -756,32 +756,67 @@ test("a function call runs through its slot, and its result or refusal goes back
     if (item.type === "function_call") assert.equal(last[i + 1]?.callId, item.callId);
 });
 
-test("a turn makes at most MAX_CALLS tool calls, and says so as its chat's problem", async () => {
+test("a turn goes on for as many calls as it makes, and a stop still ends it", async () => {
   const s = await setup();
   let runs = 0;
+  /** How many calls run before one waits, until it is let go. */
+  let holdAt = 0;
+  const held = gate();
+  const go = gate();
   s.actor.expose(
     "layout",
     tools,
     listing({
-      get: () => {
+      get: async () => {
         runs++;
+        if (runs === holdAt) {
+          held.open();
+          await go.shut;
+        }
         return { home: [] };
       },
     }),
   );
-  for (let i = 0; i < MAX_CALLS + 10; i++) s.script.push(calls(callTool("layout__get", {})));
-  assert.equal((await s.turn("Loop."))?.code, "limit");
-  assert.equal(runs, MAX_CALLS);
-  assert.equal(s.requests.length, MAX_CALLS);
-  // Many calls in one reply: those past the limit are answered "limit", so every call is paired.
-  s.script.length = 0;
+  /**
+   * Say `text`, and wait for the turn's answer, the script's last step: `until` gives up long
+   * before hundreds of calls are done.
+   */
+  const answered = async (text: string) => {
+    const done = gate();
+    s.script.push(() => {
+      done.open();
+      return say("Done.");
+    });
+    const from = s.actor.emitted.length;
+    await s.chat("send", { text });
+    await done.shut;
+    return s.ended(from);
+  };
+  // Many calls, one request after another, and then the answer: no count ends the turn.
+  const many = 300;
+  for (let i = 0; i < many; i++) s.script.push(calls(callTool("layout__get", {})));
+  assert.equal(await answered("Go on."), undefined);
+  assert.equal(runs, many);
+  assert.equal(s.requests.length, many + 1);
+  // As many in one reply all run.
   s.script.push(
-    calls(...Array.from({ length: MAX_CALLS + 5 }, (_, i) => callTool("layout__get", {}, `m${i}`))),
+    calls(...Array.from({ length: many }, (_, i) => callTool("layout__get", {}, `m${i}`))),
   );
   runs = 0;
-  assert.equal((await s.turn("Many."))?.code, "limit");
-  assert.equal(runs, MAX_CALLS);
-  assert.equal(recorded(s).filter((line) => line === "5 calls: limit").length, 1);
+  assert.equal(await answered("All at once."), undefined);
+  assert.equal(runs, many);
+  // A turn that would go on is ended by a stop, and makes no request after it.
+  const queued = many + 10;
+  for (let i = 0; i < queued; i++) s.script.push(calls(callTool("layout__get", {})));
+  runs = 0;
+  holdAt = many + 1;
+  await s.chat("send", { text: "Keep going." });
+  await held.shut;
+  const stopping = s.cut();
+  go.open();
+  await stopping;
+  assert.equal(runs, many + 1);
+  assert.equal(s.script.length, queued - (many + 1));
 });
 
 test("stopping the agent stops the model's response, and started again it takes a message at once", async () => {
@@ -1284,21 +1319,27 @@ test("a latest exchange over the budget leaves out its oldest outputs, never a c
   assert.ok(outputs.some((item) => String(item.output).startsWith("(Left out")));
 });
 
-test("thousands of calls in one reply cost a handful of writes", async () => {
-  const s = await setup();
-  s.actor.expose("layout", tools, listing({ get: () => ({ home: [] }) }));
-  s.script.push(
-    calls(...Array.from({ length: 2000 }, (_, i) => callTool("layout__get", {}, `x${i}`))),
-  );
-  const before = s.store.writes.count;
-  assert.equal((await s.turn("Flood."))?.code, "limit");
-  // The chat's entry, three times: started, with its message, and with its problem. The message,
-  // the mark that its turn hasn't ended, `MAX_CALLS` calls, and one entry answering the other
-  // 1,980. And four for a new chat's first message: the mark that it waits for the main loop,
-  // the work's record, when it is placed and when its turn ends, and its turn's mark once more,
-  // as a turn on a message kept before it.
-  assert.equal(s.store.writes.count - before, MAX_CALLS + 10);
-  assert.equal(recorded(s).length, MAX_CALLS + 2, "the message, each call, and the note");
+test("the calls of one reply cost one write each, however many", async () => {
+  const writes = async (many: number) => {
+    const s = await setup();
+    s.actor.expose("layout", tools, listing({ get: () => ({ home: [] }) }));
+    const done = gate();
+    s.script.push(
+      calls(...Array.from({ length: many }, (_, i) => callTool("layout__get", {}, `x${i}`))),
+      () => {
+        done.open();
+        return say("Done.");
+      },
+    );
+    const before = s.store.writes.count;
+    const from = s.actor.emitted.length;
+    await s.chat("send", { text: "Flood." });
+    await done.shut;
+    assert.equal(await s.ended(from), undefined);
+    return s.store.writes.count - before;
+  };
+  // Whatever else a turn writes is the same however many calls it makes.
+  assert.equal((await writes(300)) - (await writes(100)), 200);
 });
 
 test("a long message is stored once, under storage's value limit, and a big call is still kept", async () => {
