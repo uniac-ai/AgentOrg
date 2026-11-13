@@ -49,6 +49,8 @@ export function looperWith(
     summarizing?: (text: string) => OutputItem[] | Promise<OutputItem[]>;
     /** The files a call read and changed. */
     files?: FilesOf;
+    /** What the host tells each request's model, before the looper's own words. */
+    instructions?: string;
   } = {},
 ) {
   const values = options.values ?? new Map<string, Json>();
@@ -243,7 +245,7 @@ export function looperWith(
       },
     },
     request: async () => ({
-      instructions: "",
+      instructions: options.instructions ?? "",
       tools: options.tools ?? [],
       ...(options.voice === undefined ? {} : { voice: options.voice }),
     }),

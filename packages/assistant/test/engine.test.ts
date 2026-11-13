@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { chat, tools } from "@agentorg/interfaces";
-import { capped, Entry, INPUT_BUDGET, MAX_OUTPUT, textOf } from "@agentorg/looper";
+import { capped, Entry, MAX_OUTPUT, REQUEST_BUDGET, textOf } from "@agentorg/looper";
 import { defineInterface, method, NotConnected, OutcomeUnknown, Refused } from "@agentorg/sdk";
 import { createTestContext } from "@agentorg/sdk/testing";
 import { z } from "zod";
@@ -1267,7 +1267,8 @@ test("with no summary to be had, the model gets the opening message, a line for 
   s.actor.expose("layout", tools, listing({ get: () => ({ home: [] }) }));
   s.script.push(calls(callTool("layout__get", {}, "first")));
   await s.turn("Message 1.");
-  const bigs = Array.from({ length: 5 }, (_, i) => `${i}${"x".repeat(95_000)}`);
+  // Past the room a request has: a megabyte, less what the agent is told and can call.
+  const bigs = Array.from({ length: 12 }, (_, i) => `${i}${"x".repeat(95_000)}`);
   for (const big of bigs) await s.turn(big);
   await s.turn("Small.");
   const sent = s.requests.at(-1)?.input ?? [];
@@ -1281,9 +1282,10 @@ test("with no summary to be had, the model gets the opening message, a line for 
     "the call left with the rest of its exchange",
   );
   assert.equal(texts.includes(bigs[0] as string), false);
-  assert.equal(texts.includes(bigs[4] as string), true);
+  assert.equal(texts.includes(bigs.at(-1) as string), true);
   assert.equal(texts.at(-1), "Small.");
-  assert.ok(bytes(JSON.stringify(sent)) <= INPUT_BUDGET);
+  // The whole request fits: what it was told and offered, and the conversation cut to the rest.
+  assert.ok(bytes(JSON.stringify(s.whole.at(-1))) <= REQUEST_BUDGET);
   assert.ok(s.summaries.length > 0);
 });
 
@@ -1291,16 +1293,20 @@ test("the next message still has a long turn: its earlier steps summarized once,
   const s = await setup();
   s.actor.expose("big", tools, listing({ read: () => "x".repeat(10_000), edit: () => "Edited." }));
   s.script.push(calls(callTool("big__edit", { path: "notes.md" }, "e0")));
-  for (let i = 0; i < 60; i++)
+  // A hundred and fifty calls of 10,000 characters: past the room one request has.
+  for (let i = 0; i < 150; i++)
     s.script.push(calls(callTool("big__read", { path: `f${i}.ts` }, `c${i}`)));
   s.script.push(say("Done with the long part."));
   await s.turn("Do the long part.");
   s.script.push(say("Going on."));
   await s.turn("Go on.");
   // Once, when the turn went past the budget, with nothing to call.
-  assert.equal(s.summaries.length, 1);
+  // One summary, of the turn's earlier steps in two pieces: past what one summary request reads,
+  // its older piece is summarized first, and its newest apart, as the turn's own context.
+  assert.equal(s.summaries.length, 2);
+  assert.match(String(s.summaries[1]?.input[0]?.content), /^# Conversation\n/);
   const sent = s.requests.at(-1)?.input ?? [];
-  assert.ok(bytes(JSON.stringify(sent)) <= INPUT_BUDGET);
+  for (const request of s.whole) assert.ok(bytes(JSON.stringify(request)) <= REQUEST_BUDGET);
   const said = sent.filter((item) => item.type === "message").map((item) => item.content);
   assert.equal(said[0], "Do the long part.");
   // The files of the calls the summary stands for, oldest first: those before the first call
@@ -1310,14 +1316,14 @@ test("the next message still has a long turn: its earlier steps summarized once,
   const read = Array.from({ length: first }, (_, i) => `f${i}.ts`);
   assert.equal(
     said[1],
-    `The conversation history before this point was compacted into the following summary:\n\n<summary>\n## Goal\n- Summary 1.\n\n<read-files>\n${read.join("\n")}\n</read-files>\n\n<modified-files>\nnotes.md\n</modified-files>\n</summary>`,
+    `The conversation history before this point was compacted into the following summary:\n\n<summary>\n## Goal\n- Summary 1.\n\n---\n\n**Turn Context (split turn):**\n\n## Goal\n- Summary 2.\n\n<read-files>\n${read.join("\n")}\n</read-files>\n\n<modified-files>\nnotes.md\n</modified-files>\n</summary>`,
   );
   assert.deepEqual(said.slice(2), ["Done with the long part.", "Go on."]);
   // The calls since are sent whole, the newest last; those before are the summary's.
   const outputs = sent.filter((item) => item.type === "function_call_output");
-  assert.ok(outputs.length > 0 && outputs.length < 60);
+  assert.ok(outputs.length > 0 && outputs.length < 150);
   assert.ok(outputs.every((item) => !String(item.output).includes("Left out")));
-  assert.equal(sent.findLast((item) => item.type === "function_call")?.callId, "c59");
+  assert.equal(sent.findLast((item) => item.type === "function_call")?.callId, "c149");
 });
 
 test("a call names no file unless it is a slot's read or edit with a path", () => {
@@ -1370,11 +1376,12 @@ test("with no summary to be had, a latest exchange over the budget leaves out it
       }),
     }),
   );
-  for (let i = 0; i < 20; i++) s.script.push(calls(callTool("actors__list", {}, `k${i}`)));
+  // Sixty lists of 15,000 characters beside a 198,000-byte message: past the room one request has.
+  for (let i = 0; i < 60; i++) s.script.push(calls(callTool("actors__list", {}, `k${i}`)));
   s.script.push(say("done"));
   await s.turn("é".repeat(99_000));
   const big = s.requests.at(-1)?.input ?? [];
-  assert.ok(bytes(JSON.stringify(big)) <= INPUT_BUDGET + 20_000);
+  assert.ok(bytes(JSON.stringify(s.whole.at(-1))) <= REQUEST_BUDGET);
   const outputs = big.filter((item) => item.type === "function_call_output");
   assert.equal(outputs.length, big.filter((item) => item.type === "function_call").length);
   assert.ok(outputs.some((item) => String(item.output).startsWith("(Left out")));
@@ -1430,11 +1437,11 @@ test("with no summary to be had, calls with large arguments never take a request
   s.summarizing.fails = true;
   s.actor.expose("layout", tools, listing({ get: () => ({ home: [] }) }));
   // Arguments, not outputs, fill this exchange: only leaving out old arguments keeps it in budget.
-  for (let i = 0; i < 20; i++)
+  // Sixty calls given 15,000 characters each, beside a 198,000-byte message: past the room.
+  for (let i = 0; i < 60; i++)
     s.script.push(calls(callTool("layout__get", { pad: "y".repeat(15_000) }, `a${i}`)));
   await s.turn("é".repeat(99_000));
-  for (const request of s.requests)
-    assert.ok(bytes(JSON.stringify(request.input)) <= INPUT_BUDGET + 20_000);
+  for (const request of s.whole) assert.ok(bytes(JSON.stringify(request)) <= REQUEST_BUDGET);
   const last = s.requests.at(-1)?.input ?? [];
   assert.equal(
     last.filter((item) => item.type === "function_call").length,

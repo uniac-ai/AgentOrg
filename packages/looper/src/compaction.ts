@@ -12,6 +12,8 @@ import { head, type Item } from "./types.js";
 const MAX_SUMMARY = 16_000;
 /** What a summary request is given of the conversation, at most, in characters. */
 export const SUMMARY_INPUT = 160_000;
+/** A compaction reads at most this many pieces of that size: past them the oldest are left out. */
+const PIECES = 8;
 /** A call's arguments and its output, written out for a summary, keep this many characters. */
 const CALL_CHARS = 2_000;
 /** Each list of files keeps its newest paths within this many characters. */
@@ -145,11 +147,12 @@ const cut = (text: string) =>
     : text;
 
 /**
- * A conversation written out as one text, so the model reads it as something to
- * summarize and not to go on with: each call's arguments and output cut to `CALL_CHARS`. Past
- * `SUMMARY_INPUT` its oldest parts are left out, and it begins by saying so.
+ * A conversation written out as text, so the model reads it as something to
+ * summarize and not to go on with: each call's arguments and output cut to `CALL_CHARS`. In
+ * pieces of whole parts, the oldest first, each at most `SUMMARY_INPUT` characters; a part longer
+ * than that is cut to fit one, and says so.
  */
-export function serialize(items: Item[]): string {
+export function serialize(items: Item[]): string[] {
   const parts: string[] = [];
   const calls: string[] = [];
   const flush = () => {
@@ -167,15 +170,22 @@ export function serialize(items: Item[]): string {
     } else if (item.output) parts.push(`[Tool result]: ${cut(item.output)}`);
   }
   flush();
-  let total = parts.reduce((sum, part) => sum + part.length + 2, 0);
-  if (total > SUMMARY_INPUT) {
-    // Room is kept for the line that says so.
-    let gone = 0;
-    for (; parts.length > 1 && total > SUMMARY_INPUT - 100; gone++)
-      total -= (parts.shift() as string).length + 2;
-    parts.unshift(`[... ${gone} earlier parts of the conversation left out]`);
+  const pieces: string[] = [];
+  let piece = "";
+  const fits = (part: string) => {
+    if (part.length <= SUMMARY_INPUT) return part;
+    const kept = head(part, SUMMARY_INPUT - 100);
+    return `${kept}\n\n[... ${part.length - kept.length} more characters truncated]`;
+  };
+  for (const part of parts.map(fits)) {
+    if (piece && piece.length + 2 + part.length > SUMMARY_INPUT) {
+      pieces.push(piece);
+      piece = "";
+    }
+    piece = piece ? `${piece}\n\n${part}` : part;
   }
-  return head(parts.join("\n\n"), SUMMARY_INPUT);
+  if (piece) pieces.push(piece);
+  return pieces;
 }
 /** A call's arguments as they are written out: `name=value` for each, or as they are if not an object. */
 function argumentsOf(args: string): string {
@@ -227,8 +237,9 @@ function filesOf(compacting: ToCompact, files?: FilesOf) {
 
 /**
  * Summarize what `compacting` names, asking the work's model with `ask` (its instructions and one
- * user message, no tools): the history with the first or the update prompt, and an exchange cut
- * inside with the turn-prefix prompt, after it. Past `MAX_SUMMARY` the history gives way, so the
+ * user message, no tools): the history a piece at a time, with the first prompt and then the
+ * update prompt, so nothing of it goes unread; and the newest piece of an exchange cut inside
+ * with the turn-prefix prompt, after it. Past `MAX_SUMMARY` the history gives way, so the
  * exchange the latest steps belong to stays. It rejects when a summary comes back empty.
  */
 export async function summarize(
@@ -243,23 +254,34 @@ export async function summarize(
     if (summary === "") throw new Error("The model gave no summary.");
     return summary;
   };
+  // What came before, a piece at a time, each updating the summary; and, for an exchange cut
+  // inside, its earlier pieces too, so its newest one is summarized apart.
+  const turn = serialize(prefix);
+  const newest = turn.pop();
+  const pieces = [...serialize(history), ...turn];
+  const gone = Math.max(0, pieces.length - PIECES);
+  const kept = pieces.slice(gone);
+  if (gone > 0) kept[0] = `[... ${gone} earlier pieces of the conversation left out]\n\n${kept[0]}`;
   let summary = previous?.summary ?? "";
-  if (history.length > 0)
-    summary = await written(
-      `<conversation>\n${serialize(history)}\n</conversation>\n\n${
-        previous ? `<previous-summary>\n${previous.summary}\n</previous-summary>\n\n` : ""
-      }${previous ? UPDATE_SUMMARIZATION_PROMPT : SUMMARIZATION_PROMPT}`,
-    );
-  if (prefix.length > 0) {
-    const turn = head(
+  for (const piece of kept)
+    summary = head(
       await written(
-        `# Conversation\n${serialize(prefix)}\n\n# Instructions\n${TURN_PREFIX_SUMMARIZATION_PROMPT}`,
+        `<conversation>\n${piece}\n</conversation>\n\n${
+          summary ? `<previous-summary>\n${summary}\n</previous-summary>\n\n` : ""
+        }${summary ? UPDATE_SUMMARIZATION_PROMPT : SUMMARIZATION_PROMPT}`,
+      ),
+      MAX_SUMMARY,
+    );
+  if (newest !== undefined) {
+    const part = head(
+      await written(
+        `# Conversation\n${newest}\n\n# Instructions\n${TURN_PREFIX_SUMMARIZATION_PROMPT}`,
       ),
       MAX_SUMMARY,
     );
     const before = summary ? `\n\n---\n\n**Turn Context (split turn):**\n\n` : "";
-    const room = MAX_SUMMARY - turn.length - before.length;
-    summary = room > 0 && summary ? `${head(summary, room)}${before}${turn}` : turn;
+    const room = MAX_SUMMARY - part.length - before.length;
+    summary = room > 0 && summary ? `${head(summary, room)}${before}${part}` : part;
   }
   return {
     summary: head(summary, MAX_SUMMARY),

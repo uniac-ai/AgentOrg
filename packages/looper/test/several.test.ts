@@ -1623,3 +1623,50 @@ test("work stopped while a message is still being given to the thread's other wo
   );
   await second.looper.stop();
 });
+
+test("a worker is told the titles of the other work in its conversation, and a question about one of them goes back to it", async () => {
+  const { looper, asked, told, numbered, answer } = looperWith({
+    routing: (text) =>
+      text.includes("because: About the review.")
+        ? routeTo("a")
+        : text.startsWith(BACK)
+          ? newWork("Write the architecture")
+          : newWork("Review security"),
+  });
+  await looper.send("a", "Review the code's security.");
+  await until(() => asked.length === 1, "the first work's request");
+  // Alone in its conversation, it is told of no other work.
+  assert.equal(told[0]?.instructions, workInstructions("Review security"));
+  answer("Review the code's security.", sends("Fixed two."));
+  await looper.settled();
+  // The next message goes to it, the one last active; it hands it back, and new work takes it,
+  // told of the first.
+  await looper.send("a", "Write the architecture.");
+  await until(() => asked.length === 2, "its request");
+  answer("Write the architecture.", handsBack(3, "Not the review."));
+  await until(() => asked.length === 3, "the new work's request");
+  assert.equal(
+    told[2]?.instructions,
+    workInstructions("Write the architecture", ["Review security"]),
+  );
+  answer("Write the architecture.", sends("Written."));
+  await looper.settled();
+  // A question about the review reaches the work last active, which hands it back, and the main
+  // loop gives it to the review, told of the other.
+  await looper.send("a", "What did your review fix?");
+  await until(() => asked.length === 4, "the last active work's request");
+  assert.equal(
+    told[3]?.instructions,
+    workInstructions("Write the architecture", ["Review security"]),
+  );
+  const asking = numbered[3]?.find((line) => line.endsWith("What did your review fix?")) ?? "";
+  const number = Number(/^\[(\d+)\]/.exec(asking)?.[1]);
+  answer("What did your review fix?", handsBack(number, "About the review."));
+  await until(() => asked.length === 5, "the review's request");
+  assert.equal(
+    told[4]?.instructions,
+    workInstructions("Review security", ["Write the architecture"]),
+  );
+  answer("What did your review fix?", sends("Two fixes."));
+  await looper.settled();
+});

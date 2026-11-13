@@ -7,7 +7,7 @@ export {
   PLACES,
   WAITING,
 } from "./looper.js";
-export { Entry, INPUT_BUDGET, textOf, type WorkEntry } from "./record.js";
+export { Entry, REQUEST_BUDGET, textOf, type WorkEntry } from "./record.js";
 export { capped, MAX_OUTPUT } from "./tools.js";
 export {
   type Call,

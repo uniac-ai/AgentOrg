@@ -106,7 +106,7 @@ const keyOf = (seq: number) => `${MESSAGES}${String(seq).padStart(12, "0")}`;
 const seqOf = (key: string) => Number(key.slice(MESSAGES.length)) || 0;
 // The record's limits are fixed here for now, sized for a host that carries a model request, or a
 // page of messages, in one piece of about a megabyte.
-/** What the model is sent of a conversation fits this many bytes of JSON where `fit` can make it. */
+/** The least room a request leaves a conversation's words, in bytes of JSON. */
 export const INPUT_BUDGET = 400_000;
 /**
  * Past this many calls, or this many bytes of them, a thread's oldest calls are deleted; past this
@@ -131,7 +131,19 @@ const wordsSize = (value: unknown) =>
  */
 export const PICTURES_BUDGET = 500_000;
 /** A whole request stays under this, a little below the piece of a megabyte that carries it. */
-const REQUEST_BUDGET = 1_000_000;
+export const REQUEST_BUDGET = 1_000_000;
+/**
+ * The bytes of JSON the words of `exchanges` may take in a request with `room` beside its
+ * instructions and tools: what is left after the pictures the exchanges hold, as many as a
+ * request gives, and never less than `INPUT_BUDGET`.
+ */
+const wordsBudget = (exchanges: Item[][], room: number) => {
+  let pictures = 0;
+  for (const item of exchanges.flat())
+    if (item.type !== "function_call")
+      for (const one of item.images ?? []) pictures += one.data.length;
+  return Math.max(INPUT_BUDGET, room - Math.min(pictures, PICTURES_BUDGET));
+};
 /** What stands where a picture was left out. */
 const PICTURE_LEFT_OUT = "(A picture, left out.)";
 /** `item` with only the pictures `keep` keeps: a line for each other one says it was left out. */
@@ -211,7 +223,7 @@ const numberOf = (item: Item | undefined) =>
   item?.type === "message" && item.role === "user" ? /^\[\d+\]/.exec(item.content)?.[0] : undefined;
 
 /**
- * The exchanges to send, within the budget where they can be. What is over it,
+ * The exchanges to send, within `budget` where they can be. What is over it,
  * rounded up to a step, goes in this order, each the oldest first:
  * 1. what the calls of every exchange except the latest were given and gave back, each call
  *    still paired with an output, so what was said stays longest: a `send`'s words are what was
@@ -223,10 +235,10 @@ const numberOf = (item: Item | undefined) =>
  * 3. what the calls of the latest exchange were given and gave back.
  * What was said is never cut: exchanges that are over the budget without their calls are sent so.
  */
-function fit(exchanges: Item[][], summary?: Item): Item[][] {
+function fit(exchanges: Item[][], budget: number, summary?: Item): Item[][] {
   const total = exchanges.reduce((sum, items) => sum + wordsSize(items), 0);
-  if (total <= INPUT_BUDGET) return exchanges;
-  const toCut = Math.ceil((total - INPUT_BUDGET) / CUT_STEP) * CUT_STEP;
+  if (total <= budget) return exchanges;
+  const toCut = Math.ceil((total - budget) / CUT_STEP) * CUT_STEP;
   let cut = 0;
   const left = exchanges.map((items) => [...items]);
   /** Leave out what the calls among `items` were given and gave back, until enough is cut. */
@@ -1350,15 +1362,19 @@ export function createRecord(options: {
       const first = own(await load()).find(({ record }) => record.entry.role === "user");
       return first ? textOf(first.record.entry) : "";
     },
+    /** When it began: the time of the first message it holds, as it was kept. */
+    async began(): Promise<string> {
+      return own(await load())[0]?.record.entry.at ?? "";
+    },
     /**
      * The conversation to send: its exchanges (each from a user message that is not `joined` on),
-     * as `fit` fits them to the budget, in the order `readable` gives. `read` is the place up to
-     * which every user message was read, for `append` and `saidAfter`. `thread` is where what
-     * comes of it is kept. Its pictures fit what a request leaves beside its words and `besides`,
-     * the request's instructions and tools. After a compaction, what it covers is sent as its
-     * summary, after the opening message and the messages it covers that are still to answer,
-     * which are sent as they are, so the model can still answer them by number. `over` says
-     * whether the exchanges were over the budget before they were fitted.
+     * as `fit` fits them to the room one request has beside `besides`, its instructions and tools,
+     * and the pictures they hold, in the order `readable` gives. `read` is the place up to which
+     * every user message was read, for `append` and `saidAfter`. `thread` is where what comes of
+     * it is kept. Its pictures fit what the request leaves beside its words. After a compaction,
+     * what it covers is sent as its summary, after the opening message and the messages it covers
+     * that are still to answer, which are sent as they are, so the model can still answer them by
+     * number. `over` says whether the exchanges were over that room before they were fitted.
      */
     async input(
       besides: unknown = {},
@@ -1389,10 +1405,14 @@ export function createRecord(options: {
         exchanges.at(-1)?.push(...itemsOf(thread, record, asked));
       }
       putSummary();
-      const fitted = fit(exchanges, summary);
-      const room = REQUEST_BUDGET - wordsSize(fitted) - size(besides);
+      const room = REQUEST_BUDGET - size(besides);
+      const fitted = fit(exchanges, wordsBudget(exchanges, room), summary);
       return {
-        items: withPictures(fitted, Math.max(0, Math.min(PICTURES_BUDGET, room)), summary).flat(),
+        items: withPictures(
+          fitted,
+          Math.max(0, Math.min(PICTURES_BUDGET, room - wordsSize(fitted))),
+          summary,
+        ).flat(),
         read,
         thread: whereOf(records.filter(({ record }) => !unread(record))),
         over: fitted !== exchanges,

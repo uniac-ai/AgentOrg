@@ -428,6 +428,7 @@ export function createLooper(options: {
         enter,
         record,
         title: () => titleOf(id),
+        others: () => othersOf(id),
         back: (handed) => returned(id, handed),
         ...(options.stopGroup ? { stopGroup: options.stopGroup } : {}),
         ...(options.files ? { files: options.files } : {}),
@@ -487,6 +488,29 @@ export function createLooper(options: {
   /** A work's title: the main loop's, or its opening line for work begun before it had one. */
   const titleOf = async (id: string): Promise<string> =>
     kept.get(id)?.title || titled(await of(id).record.opening());
+  /**
+   * The titles of the other work in the threads a piece of work follows and hasn't left, in the
+   * order they began, the newest `TOLD.works`: kept with their messages, an order that changes
+   * only as work begins, so the request its worker makes begins alike. A title once, and none it
+   * has itself.
+   */
+  const othersOf = async (id: string): Promise<string[]> => {
+    const work = kept.get(id);
+    const ids = new Set<string>();
+    for (const thread of work?.follows ?? [id])
+      if (!work?.left?.includes(thread))
+        for (const other of await followersOf(thread)) if (other !== id) ids.add(other);
+    const others = await Promise.all(
+      [...ids].map(async (other) => ({
+        began: await of(other).record.began(),
+        title: await titleOf(other),
+      })),
+    );
+    others.sort((a, b) => a.began.localeCompare(b.began));
+    const titles = new Set(others.map(({ title }) => title).filter((title) => title !== ""));
+    titles.delete(await titleOf(id));
+    return [...titles].slice(-TOLD.works);
+  };
   /** Keep a work's record as it stands when its turn to be written comes. */
   const save = (id: string) => {
     const work = of(id);
