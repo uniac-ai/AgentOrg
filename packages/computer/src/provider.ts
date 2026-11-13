@@ -2,9 +2,10 @@
 // asks the service for it through its SDK, then opens an ordinary `url` connection to each endpoint
 // with the computer's token, and joins the computer's capability as an Actor of its own, which the
 // person is connected to. The web unit is one connection to a hosted server. When no service runs
-// on this machine and AgentComputer is installed, `agentcomputer up` starts one: when a computer
-// here is added, and at start for computers kept here. The app doesn't include AgentComputer. The
-// control token and each computer's token stay in this provider's private file.
+// on this machine and AgentComputer is installed, `agentcomputer up` starts one, isolated as the
+// one here last was: when a computer here is added, and at start for computers kept here. The app
+// doesn't include AgentComputer. The control token and each computer's token stay in this
+// provider's private file.
 import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import {
@@ -84,6 +85,8 @@ interface Reached {
 }
 
 const FILE = "instances.json";
+/** Holds `lastIsolation`. */
+const ISOLATION_FILE = "local-service.json";
 const SKILLS_DIR = fileURLToPath(new URL("../../skills/", import.meta.url));
 const EXA_URL = "https://mcp.exa.ai/mcp?tools=web_search_exa,web_fetch_exa";
 const SERVICE_ANSWERS_MS = 2000;
@@ -108,7 +111,10 @@ export interface ComputerProviderOptions {
   /** The provider's own Actor, bound to `hub.actors@1` at its slot `actors`. */
   actorId: string;
   credential: string;
-  /** A private folder of the provider's, which holds each connection's Hub credential. */
+  /**
+   * A private folder of the provider's, which holds each connection's Hub credential, and how the
+   * service here was last isolated.
+   */
   dir: string;
   /**
    * Where a service on this machine writes its address and token, and where `agentcomputer up`
@@ -273,11 +279,13 @@ export async function startComputerProvider(
       return {};
     }
   };
-  const stored = read();
-  const save = () => {
-    writeFileSync(`${path}.tmp`, JSON.stringify(stored), { mode: 0o600, flush: true });
-    renameSync(`${path}.tmp`, path);
+  /** Write `value` to `file` in one step, for this user alone. */
+  const keep = (file: string, value: unknown) => {
+    writeFileSync(`${file}.tmp`, JSON.stringify(value), { mode: 0o600, flush: true });
+    renameSync(`${file}.tmp`, file);
   };
+  const stored = read();
+  const save = () => keep(path, stored);
 
   /** A service on this machine, by what it wrote; it needn't be running. */
   const localService = (): Reached | undefined => {
@@ -306,16 +314,41 @@ export async function startComputerProvider(
     }
     return undefined;
   };
-  /** How the service on this machine isolates, if it answers now. */
+  type Isolation = NonNullable<Found>["isolation"];
+  const isolationPath = join(dir, ISOLATION_FILE);
+  /**
+   * How the service here was isolated when it last answered, so it starts again so: AgentComputer
+   * gives a computer recorded with no isolation the service's. `none` until one answers.
+   */
+  let lastIsolation: Isolation = "none";
+  try {
+    if (JSON.parse(readFileSync(isolationPath, "utf8")).isolation === "container")
+      lastIsolation = "container";
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT")
+      log.warn(`How the service here was last isolated can't be read: ${messageOf(error)}`);
+  }
+  /** What the file holds, so a write that failed is tried again at the next answer. */
+  let keptIsolation = lastIsolation;
+  /** How the service on this machine isolates, if it answers now. A change is kept. */
   const answering = async () => {
     const reached = localService();
     const info = reached && (await within(SERVICE_ANSWERS_MS, Computer.serviceInfo(reached)));
-    return reached && info ? { reached, isolation: info.isolation } : undefined;
+    const isolation = info?.isolation;
+    if (!reached || (isolation !== "none" && isolation !== "container")) return undefined;
+    lastIsolation = isolation;
+    if (isolation !== keptIsolation)
+      try {
+        keep(isolationPath, { isolation });
+        keptIsolation = isolation;
+      } catch (error) {
+        log.warn(`How the service here is isolated wasn't kept: ${messageOf(error)}`);
+      }
+    return { reached, isolation };
   };
   /**
-   * The service on this machine. When none answers, `agentcomputer up` starts one with its
-   * default isolation, `none`, or finds one that answers after all. Calls made while it runs share
-   * it.
+   * The service on this machine. When none answers, `agentcomputer up` starts one, isolated as
+   * the one here last was, or finds one that answers after all. Calls made while it runs share it.
    */
   let starting: Promise<Reached> | undefined;
   const startedLocal = (): Promise<Reached> =>
@@ -325,13 +358,14 @@ export async function startComputerProvider(
       const command = onPath();
       if (!command) throw new Refused("invalid", INSTALL_STEPS);
       const data = options.dataFolder ?? defaultDataFolder();
-      await promisify(execFile)(command, ["up", "--data", data], { timeout: UP_MS }).catch(
+      const args = ["up", "--data", data, "--isolation", lastIsolation];
+      await promisify(execFile)(command, args, { timeout: UP_MS }).catch(
         (error: { killed?: boolean; stderr?: unknown }) => {
           const said = String(error.stderr ?? "").trim();
           throw new Refused(
             "unavailable",
             error.killed
-              ? `AgentComputer didn't answer within ${UP_MS / 1000} seconds of being started. It may still be starting: try again in a moment.`
+              ? `AgentComputer didn't answer within ${UP_MS / 1000} seconds of being started. It may still be starting${lastIsolation === "container" ? ": the first start in containers after an update fetches their image" : ""}. Try again in a moment.`
               : `AgentComputer couldn't be started on this computer. ${said.slice(0, 1000) || messageOf(error)}`,
           );
         },
@@ -346,7 +380,7 @@ export async function startComputerProvider(
     }));
   /** The service on this machine as the form says it: how it isolates, or that it will start. */
   const findLocal = async (): Promise<Found> =>
-    (await answering()) ?? (onPath() ? { isolation: "none", starts: true } : undefined);
+    (await answering()) ?? (onPath() ? { isolation: lastIsolation, starts: true } : undefined);
 
   const running = new Map<string, Connection[]>();
   /** Connect a link. A service on this machine may have moved to another port since. */

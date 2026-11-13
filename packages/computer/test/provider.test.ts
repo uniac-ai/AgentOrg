@@ -352,6 +352,58 @@ test("with AgentComputer installed and none running, adding a computer starts it
   }
 });
 
+test("the service is started again isolated as it was when it last answered here", async (t) => {
+  // An install whose start fails, saying why, after noting what it was asked.
+  const bin = realpathSync(mkdtempSync(join(tmpdir(), "agentorg-bin-")));
+  t.after(() => rmSync(bin, { recursive: true, force: true }));
+  const asked = join(bin, "asked");
+  writeFileSync(
+    join(bin, "agentcomputer"),
+    `#!/bin/sh\necho "$@" >> "${asked}"\necho "Docker isn't answering." >&2\nexit 1\n`,
+    { mode: 0o755 },
+  );
+  const { units, apply, local, restart, data } = await setup(t, { service: false, path: bin });
+  const line = async () =>
+    form(
+      (await units.units({})).units.find((one) => one.id === "computer"),
+      "service",
+    )?.options?.[0]?.description ?? "";
+  // A service answers here, with its computers in containers.
+  const fake = createServer((_, response) => {
+    response.setHeader("content-type", "application/json");
+    response.end(JSON.stringify({ version: "0.0.16", isolation: "container" }));
+  });
+  await new Promise<void>((resolve) => fake.listen(0, "127.0.0.1", resolve));
+  t.after(() => fake.close());
+  // A live pid, so the record isn't taken for a crashed service's.
+  const alive = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60_000)"]);
+  t.after(() => alive.kill());
+  mkdirSync(data, { recursive: true });
+  writeFileSync(
+    join(data, "server.json"),
+    JSON.stringify({
+      url: `http://127.0.0.1:${(fake.address() as AddressInfo).port}`,
+      pid: alive.pid,
+      isolation: "container",
+    }),
+  );
+  writeFileSync(join(data, "control-token"), "token");
+  assert.match(
+    await line(),
+    /^On this computer, by AgentComputer\. Each agent's computer is a container/,
+  );
+  // Gone, the form says it starts in containers, and adding a computer asks for them.
+  await new Promise((resolve) => fake.close(resolve));
+  rmSync(join(data, "server.json"));
+  const again = /started when you add this computer\. Each agent's computer is a container/;
+  assert.match(await line(), again);
+  await assert.rejects(apply(local("read")), /Docker isn't answering/);
+  assert.equal(readFileSync(asked, "utf8"), `up --data ${data} --isolation container\n`);
+  // And so after the connector starts again.
+  await restart();
+  assert.match(await line(), again);
+});
+
 test("check says what's wrong by field, and changes nothing", async (t) => {
   const { units, running, root, workspace } = await setup(t);
   const fields = async (values: object, secrets: string[] = []) =>
