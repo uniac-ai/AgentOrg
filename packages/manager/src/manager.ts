@@ -401,7 +401,7 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
                 log.warn(`Holding what agents give themselves: ${messageOf(error)}`);
             });
             // An agent that now holds its own Work is reached by the one that made it.
-            await stacks.reachMade();
+            await stacks.reachAgents();
           } while (owningAgain);
         })().finally(() => {
           owning = undefined;
@@ -412,9 +412,11 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
           // One that has closed, or isn't back yet, has nothing to reach, and the agent that
           // made it reaches its Work no more until it is back.
           if (actor && !(await hub.actors.get({ actorId: actor })).connected)
-            return void (await stacks.reachMade((made) => made === actor));
+            return void (await stacks.reachAgents((reached) => reached === actor));
           await Promise.all([stacks.holdOwns(actor), stacks.reachHeld(actor)]);
-          await stacks.reachMade((made, maker) => !actor || made === actor || maker === actor);
+          await stacks.reachAgents(
+            (reached, holder) => !actor || reached === actor || holder === actor,
+          );
         })().catch((error) => {
           if (!alreadyGone(error)) log.warn(`Reaching what an agent holds: ${messageOf(error)}`);
         });
@@ -575,9 +577,9 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
         create: (input, { caller }) => stacks.create(input, caller),
         async addUnit(input, { caller }) {
           const added = await stacks.serial(input.agent, () => stacks.addUnit(input, caller));
-          // An agents unit added reaches the agents it made before.
+          // An agents unit added reaches the agents it may talk to.
           if (input.unit.unit === AGENTS_UNIT)
-            await stacks.reachMade((_, maker) => maker === input.agent);
+            await stacks.reachAgents((_, holder) => holder === input.agent);
           return added;
         },
         removeUnit: (input) => stacks.serial(input.agent, () => stacks.removeUnit(input)),

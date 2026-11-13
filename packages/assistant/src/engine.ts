@@ -59,7 +59,7 @@ export function startEngine(
     const told = instructionsWith(voice, settings?.skills ?? []);
     const own: Candidate[] = [
       ...(settings?.skills.length ? [skillTool(ctx.slots.settings)] : []),
-      // The agents it made, which it talks to from itself.
+      // The agents whose conversations are exposed to it, which it talks to from itself.
       ...agentTools(ctx.exposed()),
     ];
     // In the order they came, each asked at once so one slow server delays only itself.
