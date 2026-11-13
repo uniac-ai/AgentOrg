@@ -93,7 +93,7 @@ test(
     const state = main.getByRole("status", { name: "State" });
     await state.getByText(SENTENCE).waitFor();
     // A chat with it has the way in where a message would be written.
-    await main.getByRole("button", { name: "Message" }).click();
+    await main.getByRole("button", { name: "Message", exact: true }).click();
     const panel = page.getByRole("complementary", { name: "Chats" });
     const place = panel.getByRole("group", { name: "Sign in to send" });
     await place.getByText(SENTENCE).waitFor();
@@ -196,7 +196,7 @@ test(
   withGateway(async (gateway) => {
     const page = await open(gateway, "#/a/a-reviewer");
     const main = page.getByRole("main");
-    await main.getByRole("button", { name: "Message" }).click();
+    await main.getByRole("button", { name: "Message", exact: true }).click();
     const box = page
       .getByRole("complementary", { name: "Chats" })
       .getByRole("textbox", { name: "Message" });

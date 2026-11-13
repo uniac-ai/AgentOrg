@@ -632,7 +632,7 @@ export async function signInState(page: Page, state: SignIn, design: boolean) {
   } else if (state === "gone") return main.getByRole("heading", { name: "AgentOrg" }).waitFor();
   if (state === "line") return main.getByRole("button", { name: "Set up" }).waitFor();
   if (state === "chat") {
-    await main.getByRole("button", { name: "Message" }).click();
+    await main.getByRole("button", { name: "Message", exact: true }).click();
     return page.getByRole("group", { name: "Sign in to send" }).waitFor();
   }
   const place = main.getByRole("region", { name: "Set up" });

@@ -298,8 +298,31 @@ test(
     );
     const page = await open(gateway);
     assert.equal(await panel(page).getByText("Old note 3", { exact: true }).count(), 0);
+    // The reply shown is the same one after earlier messages come in above it, not drawn anew.
+    await panel(page)
+      .locator(".prose-chat")
+      .last()
+      .evaluate((e) => e.setAttribute("data-kept", ""));
     await panel(page).getByRole("button", { name: "Earlier messages" }).click();
     await panel(page).getByText("Old note 3", { exact: true }).waitFor({ state: "attached" });
+    assert.equal(await panel(page).getByRole("button", { name: "Earlier messages" }).count(), 0);
+    assert.equal(await panel(page).locator("[data-kept]").count(), 1);
+    // Read again, as when the agent comes back, what was read before stays where it was.
+    chat.status = { state: "down", detail: "Its program exited." };
+    gateway.changed();
+    await page
+      .getByRole("main")
+      .getByRole("status", { name: "State" })
+      .getByText(/exited/)
+      .waitFor();
+    const reads = () => gateway.calls.filter((c) => c.method === "history").length;
+    const read = reads();
+    chat.status = { state: "running" };
+    gateway.changed();
+    await until(() => reads() > read);
+    await page.waitForTimeout(300);
+    assert.equal(await panel(page).getByText("Old note 3", { exact: true }).count(), 1);
+    assert.equal(await panel(page).getByRole("button", { name: "Earlier messages" }).count(), 0);
     assert.equal(await panel(page).getByRole("combobox", { name: "Model" }).count(), 0);
     await page.close();
   }),
