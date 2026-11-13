@@ -5,6 +5,7 @@ import {
   type AgentDetail,
   type AgentEntry,
   type ChatStatus,
+  type DownCapability,
   getAgent,
   listAgents,
   type Now,
@@ -23,6 +24,8 @@ export interface Watched {
   detail?: AgentDetail;
   /** Whether it works, in any chat. */
   status?: ChatStatus;
+  /** Something it holds that is down, if one is. */
+  held?: DownCapability;
   now: Now;
 }
 
@@ -75,6 +78,7 @@ function Watch({
       ...(slot ? { slot } : {}),
       ...(detail ? { detail } : {}),
       ...(status ? { status } : {}),
+      ...(held ? { held } : {}),
       now: nowOf(entry.status, status, detail?.mcp, held),
     });
   }, [entry, slot, detail, status, held]);

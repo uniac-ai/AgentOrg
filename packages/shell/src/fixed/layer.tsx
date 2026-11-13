@@ -227,12 +227,13 @@ export function Layer() {
   const room = `${ROOM[open ? "panel" : "pill"]} ${onTop === "window" ? "narrow:z-[60]" : ""}`;
   return (
     <>
-      {computer && owner && windowsOf(surfaces).length > 0 && (
+      {computer && owner && (windowsOf(surfaces).length > 0 || owner.held?.windows) && (
         <Window key={shown} className={room}>
           <Computer
             agent={{ id: computer, name: owner.entry.name, tone: owner.now.tone }}
             surfaces={surfaces}
             onStart={() => api.call("agents", "start", { agent: computer })}
+            {...(owner.held?.windows ? { down: owner.held.detail ?? "" } : {})}
             overlay
           />
         </Window>

@@ -6,6 +6,13 @@ import { api, useLoad } from "../data.ts";
 import { ActivityBox } from "./activity.tsx";
 import { useBuilding } from "./building.tsx";
 import { age } from "./chat-parts.tsx";
+
+/** How long ago a change was, as Overview says it: the day before is Yesterday. */
+const ago = (at: string) => {
+  const said = age(at);
+  return said === "1 d" ? "Yesterday" : said;
+};
+
 import { type AgentDetail, type AgentEntry, REFRESH_MS, useEvery } from "./data.ts";
 import { Nothing, Section, UNREAD } from "./parts.tsx";
 import { useAgents } from "./watch.tsx";
@@ -107,7 +114,7 @@ function Changes({ agent, titleOf }: { agent: string; titleOf(template: string):
               {did(change, verb)}
             </span>
             <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
-              {age(change.at)}
+              {ago(change.at)}
             </span>
           </div>
         ))

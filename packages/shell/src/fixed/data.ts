@@ -4,6 +4,7 @@ import { NotConnected, Refused } from "@agentorg/sdk";
 import { useEffect, useState } from "react";
 import type { z } from "zod";
 import { api, useConnection, useLoad } from "../data.ts";
+import { within } from "./words.ts";
 
 type Out<M extends { output: z.ZodType }> = z.output<M["output"]>;
 
@@ -185,8 +186,8 @@ export interface DownCapability {
   detail?: string | undefined;
 }
 
-/** Why, after what is down and what that leaves out, when it says. */
-const why = (detail: string | undefined) => (detail ? `: ${detail}` : "");
+/** Why, after what is down and what that leaves out, when it says: set inside the sentence. */
+const why = (detail: string | undefined) => (detail ? `: ${within(detail)}` : "");
 
 /** A capability's title inside a sentence: lower case at its start, unless it has capitals after. */
 const named = (title: string) =>
