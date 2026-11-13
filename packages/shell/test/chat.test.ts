@@ -574,6 +574,18 @@ test(
     /** How far what is shown is from the end of what was said. */
     const short = () =>
       room.evaluate((view) => Math.round(view.scrollHeight - view.scrollTop - view.clientHeight));
+    /** What is shown comes to the end of what was said: it follows a frame or more behind. */
+    const atEnd = async (what: string) => {
+      try {
+        await page.waitForFunction(
+          (view) => !!view && view.scrollHeight - view.scrollTop - view.clientHeight <= 8,
+          await room.elementHandle(),
+          { timeout: 3000 },
+        );
+      } catch {
+        assert.fail(`${what} (${await short()} short)`);
+      }
+    };
     const lines = (from: number, to: number) =>
       Array.from({ length: to - from }, (_, n) => `Finding ${from + n} is on a line of its own.`);
     const write = async (id: string, said: string[]) => {
@@ -589,15 +601,11 @@ test(
     // Its words pass the foot of the room as they come: what is shown stays at the last of them.
     await write("long", lines(0, 60));
     await panel(page).getByText("Finding 59 is").waitFor();
-    assert.ok(
-      (await short()) <= 8,
-      `the end is in view while it is written (${await short()} short)`,
-    );
+    await atEnd("the end is in view while it is written");
     gateway.addMessage("a-reviewer", reply("long", lines(0, 60).join("\n\n")));
     gateway.setChatStatus("a-reviewer", { state: "idle" });
     await panel(page).locator("[data-sd-animate]").first().waitFor({ state: "detached" });
-    await page.waitForTimeout(400);
-    assert.ok((await short()) <= 8, `and when it is done (${await short()} short)`);
+    await atEnd("and when it is done");
     assert.ok(await panel(page).getByText("Finding 59 is").isVisible());
 
     // A person who has scrolled away is left where they are.
@@ -620,8 +628,7 @@ test(
     );
     await write("more", lines(80, 100));
     await panel(page).getByText("Finding 99 is").waitFor();
-    await page.waitForTimeout(400);
-    assert.ok((await short()) <= 8, `followed again from the end (${await short()} short)`);
+    await atEnd("followed again from the end");
     await page.close();
   }),
 );
