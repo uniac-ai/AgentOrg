@@ -1,6 +1,6 @@
 /** Inference on the person's ChatGPT plan: the Responses API, streamed, with nothing stored at OpenAI. */
 import type { Item, llmSession, OutputItem, Pictures } from "@agentorg/interfaces";
-import { Refused } from "@agentorg/sdk";
+import { type Log, Refused } from "@agentorg/sdk";
 import type { z } from "zod";
 import { type Account, notEligible } from "./account.js";
 import { type Fetch, word } from "./oauth.js";
@@ -138,10 +138,22 @@ export function refusalOf(
 }
 
 /**
- * The refusals by which OpenAI read a request and wouldn't take it as it is: a 400 or a 422, and
- * an error inside a response's stream.
+ * The refusals by which OpenAI may not have taken a request as it is: a 400 or a 422, and an
+ * error inside a response's stream, unless it passes; and one with no code.
  */
 const notTaken = new WeakSet<Refused>();
+
+/**
+ * The names of an object's fields, as they are fit to log: twenty at most, and none that could
+ * be a token, never their values.
+ */
+const fieldsOf = (value: unknown) =>
+  value && typeof value === "object"
+    ? Object.keys(value)
+        .slice(0, 20)
+        .map((name) => (/^[\w.-]{1,31}$/.test(name) ? name : "…"))
+        .join(", ")
+    : "";
 
 /** A reply that isn't a response, as a refusal, marked when it passes, with the wait it asks for. */
 async function errorOf(response: Response) {
@@ -159,12 +171,14 @@ async function errorOf(response: Response) {
     said: error?.message,
   });
   const waitMs = waitOf(response.headers);
-  if (response.status === 400 || response.status === 422) notTaken.add(refused);
-  return marked(refused, {
+  marked(refused, {
     status: response.status,
     ...(code === undefined ? {} : { code }),
     ...(waitMs === undefined ? {} : { waitMs }),
   });
+  if ((response.status === 400 || response.status === 422) && !passing.has(refused))
+    notTaken.add(refused);
+  return refused;
 }
 
 const BLANK_LINE = /\r?\n\r?\n/;
@@ -351,6 +365,8 @@ export function createSession(options: {
   /** How a wait between two tries is spent, and the time: a timer and the clock, unless a test gives its own. */
   wait?: (ms: number, signal: AbortSignal) => Promise<void>;
   now?: () => number;
+  /** Where an error inside a response's stream that has no code is logged, by its fields' names. */
+  log: Log;
 }) {
   const { fetch, account } = options;
   let listed: Promise<{ id: string; name: string }[]> | undefined;
@@ -516,13 +532,29 @@ export function createSession(options: {
     );
     const requestId = response.headers.get("x-request-id");
     if (!response.body) throw refusalOf("empty_stream", { status: response.status, requestId });
-    /** An error OpenAI sent inside the stream, marked when it passes. */
-    const inStream = async (error: Record<string, unknown>) => {
-      const code = typeof error.code === "string" ? error.code : undefined;
-      const refused = refusalOf(code, { requestId, said: error.message });
-      notTaken.add(refused);
+    /**
+     * An error OpenAI sent inside the stream, in an event of `type`, marked when it passes. One
+     * with no code is logged by its fields' names, or, with no error at all, its `response`'s:
+     * nothing says why, so nothing says it won't pass.
+     */
+    const inStream = async (type: string, error: unknown, response?: unknown) => {
+      const found = (error && typeof error === "object" ? error : {}) as Record<string, unknown>;
+      const code = typeof found.code === "string" && found.code ? found.code : undefined;
+      const refused = marked(
+        refusalOf(code, { requestId, said: found.message }),
+        code ? { code } : {},
+      );
+      if (code === undefined) {
+        options.log.error(
+          found === error
+            ? `OpenAI ended a response with an error that has no code, in its ${type} event; its fields: ${fieldsOf(error) || "none"}.`
+            : `OpenAI ended a response with no error, in its ${type} event; its response's fields: ${fieldsOf(response) || "none"}.`,
+        );
+        pass(refused);
+      }
+      if (code === undefined || !passing.has(refused)) notTaken.add(refused);
       if (refused.code === "ineligible") await account.ineligible();
-      return marked(refused, code ? { code } : {});
+      return refused;
     };
     /** The functions whose calls' arguments are passed on as they come; any other's are only in the output. */
     const streamed = new Set(
@@ -572,9 +604,8 @@ export function createSession(options: {
             };
           }
           case "response.failed": {
-            const error = ((event.response as Record<string, unknown> | undefined)?.error ??
-              {}) as Record<string, unknown>;
-            throw await inStream(error);
+            const failed = event.response as Record<string, unknown> | undefined;
+            throw await inStream(event.type, failed?.error, failed);
           }
           case "response.incomplete": {
             const details = (event.response as Record<string, unknown> | undefined)
@@ -582,8 +613,12 @@ export function createSession(options: {
             const why = word(details?.reason);
             throw new Refused("failed", `The response ended incomplete${why ? ` (${why})` : ""}.`);
           }
+          // Its fields are the event's own, and any nested in `error` over them.
           case "error":
-            throw await inStream(event);
+            throw await inStream(
+              event.type,
+              event.error && typeof event.error === "object" ? { ...event, ...event.error } : event,
+            );
         }
       }
     } catch (error) {
@@ -597,7 +632,8 @@ export function createSession(options: {
 
   /**
    * A response, tried again when its failure is marked as passing: OpenAI couldn't be reached,
-   * said to try again later, its server failed or was overloaded, or the stream broke off.
+   * said to try again later, its server failed or was overloaded, it ended the stream with an
+   * error that has no code, or the stream broke off.
    * `RETRIES` times at most, each after a wait that doubles from `BACKOFF_MS`, a tenth more or
    * less, or after the wait OpenAI asked for when that is longer. A wait past `WAIT_MAX_MS` isn't
    * taken, nor one that would begin a try more than `RETRY_WITHIN_MS` after the first: the
@@ -606,11 +642,12 @@ export function createSession(options: {
    * call of any other function streams nothing and doesn't stop a try. Nor once it is cancelled,
    * which also ends a wait.
    *
-   * A try that had reasoning put back, and that OpenAI wouldn't take as it is (`notTaken`) for
-   * good with no words of its own (`failed`), before any text, is made once more without it, at
-   * once and apart from those tries, and that reasoning is not sent again. It is the one part of
-   * a request this program adds, and what was sealed for one model or sign-in may not be taken
-   * with another: so a try after the account's state changed goes without it too.
+   * A try that had reasoning put back, and that OpenAI may not have taken as it is (`notTaken`),
+   * with no words of its own (`failed`), before any text, is made once more without it, at once
+   * and apart from those tries, and that reasoning is not sent again; if its error had no code, it
+   * then gets the tries above. It is the one part of a request this program adds, and what was
+   * sealed for one model or sign-in may not be taken with another: so a try after the account's
+   * state changed goes without it too.
    */
   async function tried(input: RespondInput, caller: string, signal: AbortSignal) {
     const now = options.now ?? Date.now;
@@ -630,8 +667,7 @@ export function createSession(options: {
         });
       } catch (error) {
         const again = error instanceof Refused ? passing.get(error) : undefined;
-        const refused =
-          error instanceof Refused && notTaken.has(error) && error.code === "failed" && !again;
+        const refused = error instanceof Refused && notTaken.has(error) && error.code === "failed";
         const inTime = now() - began <= RETRY_WITHIN_MS;
         if (refused && used.length && !written && inTime && !signal.aborted) {
           for (const key of used) sealed.delete(key);

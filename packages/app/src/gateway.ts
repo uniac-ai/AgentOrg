@@ -104,6 +104,9 @@ export interface App {
   readonly closed: Promise<{ lost: boolean }>;
 }
 
+/** A line of the app's log on standard error, beginning with its time in UTC. */
+const log = (message: string) => process.stderr.write(`${new Date().toISOString()} ${message}\n`);
+
 /** The port the kept sessions were given at, if any are kept. */
 function keptPort(sessions: string): number | undefined {
   try {
@@ -212,12 +215,10 @@ export async function startApp(options: AppOptions): Promise<App> {
   const ran = startPrograms(personSide, {
     home,
     hubUrl: listener.url,
-    log: (message) => process.stderr.write(`${message}\n`),
+    log,
     ...options.firstRun,
   }).catch((error: unknown) => {
-    process.stderr.write(
-      `First run didn't work: ${error instanceof Error ? error.message : String(error)}\n`,
-    );
+    log(`First run didn't work: ${error instanceof Error ? error.message : String(error)}`);
     return undefined;
   });
 
