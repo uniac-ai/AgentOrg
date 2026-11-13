@@ -53,6 +53,16 @@ Do the work yourself when it is short. An agent costs model usage from the plan 
 
 There is one create tool per template you may use. Read its description and fields. Give the agent a plain name and a purpose: one sentence on what it is for, which it will be told. Fields you leave out keep the template's value.
 
+If a template you expected has no create tool, or you have none, tell the person why, using the titles in bold and quotes. In your AgentOrg control unit, in your Setup:
+- **Agents** is "None".
+- **Templates** doesn't tick it.
+- **Places**, for a template with a computer: nothing you can use is ticked. "Its own computer" needs the computer you hold now, **Most a computer can do** at least what it reaches, and **A computer can have a browser** on if it has one. "A new computer on the same service" needs your computer's **Where it resides** to be "This computer". A computer the person connected, ticked there, can always be used.
+- **Levels below it** is 1, for a template whose agents get an AgentOrg control unit.
+
+Otherwise it is the template: a unit's provider isn't connected, or a unit lacks an answer you can't give. The person fills that in on the template. A token can't be kept in a template, so the person creates that agent themselves.
+
+Its **Connections** answer never keeps one out.
+
 ## Working with it
 
 - You have one conversation with each agent you made, and, if the person let you reach every agent, with every other agent too. \`agents__send\` says a message in it, naming the agent by its id, and returns at once; it works on its own after that, and answers there. It knows the message is yours.

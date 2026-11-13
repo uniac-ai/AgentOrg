@@ -2099,7 +2099,12 @@ test("an agent creates, messages, reads, stops and removes an agent of its own",
     held.skills.map((one) => one.name),
     ["delegating"],
   );
-  assert.match((await s.calls.skills.get({ name: "delegating" })).text, /agents of your own/);
+  const skill = (await s.calls.skills.get({ name: "delegating" })).text;
+  assert.match(skill, /agents of your own/);
+  // It says which of its unit's answers keeps a template out, and that its connections never do.
+  for (const answer of ["Agents", "Templates", "Places", "Levels below it", "Connections"])
+    assert.match(skill, new RegExp(`\\*\\*${answer}\\*\\*`));
+  assert.match(skill, /Its \*\*Connections\*\* answer never keeps one out\./);
 
   const child = await s.made(tools, "create_helper", {
     name: "Kid",
