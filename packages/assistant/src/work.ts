@@ -49,10 +49,11 @@ interface Source {
   ): Promise<{ entries: WorkEntry[]; more: boolean }>;
 }
 
-const cut = (text: string) => {
-  if (text.length <= SHOWN) return text;
+/** `text` cut to `most` characters, saying how many more there were. */
+export const cut = (text: string, most = SHOWN) => {
+  if (text.length <= most) return text;
   // Never half of a surrogate pair.
-  const kept = text.slice(0, SHOWN).replace(/[\uD800-\uDBFF]$/, "");
+  const kept = text.slice(0, most).replace(/[\uD800-\uDBFF]$/, "");
   return `${kept}… (${text.length - kept.length} more characters)`;
 };
 /** An entry as an answer carries it: each text it says cut to `SHOWN`. */
@@ -71,7 +72,8 @@ function shown(entry: WorkEntry): WorkEntry {
   if ("words" in entry) return { ...entry, words: cut(entry.words) };
   return { ...entry, line: cut(entry.line) };
 }
-const fits = (answer: object) => JSON.stringify(answer).length <= BUDGET;
+/** Whether an answer is within what another agent's loop takes whole. */
+export const fits = (answer: object) => JSON.stringify(answer).length <= BUDGET;
 
 /**
  * The answer with no `work`: its oldest entries go first, then its least recently active pieces

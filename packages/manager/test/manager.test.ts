@@ -28,7 +28,7 @@ import {
   tools,
   unitProvider,
 } from "@agentorg/interfaces";
-import { defineInterface, type Interface, method, Refused } from "@agentorg/sdk";
+import { defineInterface, type Interface, method, Refused, type Slot } from "@agentorg/sdk";
 import { connect } from "@agentorg/sdk/client";
 import { z } from "zod";
 import { startManager } from "../src/index.ts";
@@ -1925,6 +1925,9 @@ type ToolCalls = {
   call(input: { name: string; arguments: object }): Promise<{ output: string; failed?: true }>;
 };
 
+/** An agent's conversations, as the agent that made it reaches them. */
+type ChatCalls = Slot<typeof chat>["call"];
+
 /** Templates to delegate with, and a parent holding an agents unit filled in as asked. */
 async function delegating(t: test.TestContext) {
   const s = await setup(t);
@@ -1966,7 +1969,7 @@ async function delegating(t: test.TestContext) {
   return { ...s, agentsUnit, parent, made, names };
 }
 
-test("an agent that manages its own reads the Work of each it made, while it manages them and they are connected", async (t) => {
+test("an agent that manages its own talks to each it made, and reads its Work while it is connected", async (t) => {
   const s = await delegating(t);
   await s.calls.agents.saveTemplate({
     id: "workhand",
@@ -1978,10 +1981,12 @@ test("an agent that manages its own reads the Work of each it made, while it man
   const { agent: parent, tools: manages } = await s.parent({ templates: ["workhand", "helper"] });
   const kid = await s.made(manages, "create_workhand", { name: "Kid", purpose: "Do a part." });
   const slot = `work_${kid}`;
-  const reached = async () =>
+  /** The maker's slots to the agents it made, by kind: their Work, or their conversations. */
+  const reachedBy = async (kind: "work_" | "chat_") =>
     (await s.bindingsOf(parent))
-      .filter((one) => one.consumer === parent && one.provider !== s.management.actorId)
+      .filter((one) => one.consumer === parent && one.slot.startsWith(kind))
       .map((one) => [one.slot, one.provider]);
+  const reached = () => reachedBy("work_");
   // Reached once it is made, under its id.
   assert.deepEqual(await reached(), [[slot, kid]]);
   const work = await s.exposedTo<ToolCalls>(parent, slot);
@@ -1998,46 +2003,65 @@ test("an agent that manages its own reads the Work of each it made, while it man
     (await s.calls.agents.get({ agent: parent })).mcp.map((one) => one.slot),
     ["control"],
   );
-  // One whose creatable gives it no Work isn't reached.
-  await s.made(manages, "create_helper", { name: "Plain", purpose: "Hold none." });
+  // One whose creatable gives it no Work isn't reached for it; every one is for its conversations.
+  const plain = await s.made(manages, "create_helper", { name: "Plain", purpose: "Hold none." });
   assert.deepEqual(await reached(), [[slot, kid]]);
+  const talks = [
+    [`chat_${kid}`, kid],
+    [`chat_${plain}`, plain],
+  ];
+  assert.deepEqual((await reachedBy("chat_")).sort(), talks.sort());
   // Its agents unit gone, it reaches none; back, at "own", it reaches them again.
   const control = (await s.calls.agents.get({ agent: parent })).units.find(
     (one) => one.unit === "control",
   )?.instance as string;
   await s.calls.agents.removeUnit({ agent: parent, instance: control });
   assert.deepEqual(await reached(), []);
+  assert.deepEqual(await reachedBy("chat_"), []);
   const { instance } = await s.calls.agents.addUnit({
     agent: parent,
     unit: s.agentsUnit({ templates: ["workhand"], agents: "none" }),
   } as never);
   assert.deepEqual(await reached(), [], "it manages no agents");
+  assert.deepEqual(await reachedBy("chat_"), []);
   await s.calls.agents.removeUnit({ agent: parent, instance });
   await s.calls.agents.addUnit({
     agent: parent,
     unit: s.agentsUnit({ templates: ["workhand"] }),
   } as never);
   assert.deepEqual(await reached(), [[slot, kid]]);
+  assert.deepEqual((await reachedBy("chat_")).sort(), talks.sort());
   // Reached again when management starts, as for one made before this.
   await s.person.slots.grants.call.unexpose({ to: parent, slot });
+  await s.person.slots.grants.call.unexpose({ to: parent, slot: `chat_${kid}` });
   await s.restart(() => {});
-  for (let i = 0; (await reached()).length === 0; i++) {
+  for (let i = 0; (await reached()).length === 0 || (await reachedBy("chat_")).length < 2; i++) {
     assert.ok(i < 300, "it was never reached again");
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
   assert.deepEqual(await reached(), [[slot, kid]]);
-  // While it is away, its maker doesn't reach it: no slot of its maker's waits for it.
+  assert.deepEqual((await reachedBy("chat_")).sort(), talks.sort());
+  // While it is away, its maker doesn't reach its Work: no slot of its maker's waits for it. Its
+  // conversations stay, the same binding throughout: a message to it is refused until it is back.
+  const talkSince = async () =>
+    (await s.bindingsOf(parent)).find((one) => one.slot === `chat_${kid}`)?.at;
+  const since = await talkSince();
   s.leave(kid);
   for (let i = 0; (await reached()).length > 0; i++) {
     assert.ok(i < 300, "it was still reached");
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
+  await assert.rejects(
+    (await s.exposedTo<ChatCalls>(parent, `chat_${kid}`)).send({ text: "Still there?" }),
+    { name: "NotConnected" },
+  );
   // Back, it is reached again.
   await s.rejoin(kid, chat, { tools });
   for (let i = 0; (await reached()).length === 0; i++) {
     assert.ok(i < 300, "it was never reached again once back");
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
+  assert.equal(await talkSince(), since);
   s.leave(kid);
   for (let i = 0; (await reached()).length > 0; i++) {
     assert.ok(i < 300, "it was still reached");
@@ -2051,6 +2075,7 @@ test("an agent that manages its own reads the Work of each it made, while it man
     assert.ok(i < 300, "it was still reached after the start");
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
+  assert.deepEqual((await reachedBy("chat_")).sort(), talks.sort());
 });
 
 test("an agent creates, messages, reads, stops and removes an agent of its own", async (t) => {
@@ -2061,9 +2086,6 @@ test("an agent creates, messages, reads, stops and removes an agent of its own",
     "create_prefilled",
     "agent_list",
     "agent_get",
-    "agent_send",
-    "agent_chats",
-    "agent_read",
     "agent_stop",
     "agent_start",
     "agent_remove",
@@ -2098,41 +2120,29 @@ test("an agent creates, messages, reads, stops and removes an agent of its own",
     (await call("agent_list", {})).agents.map((one: { agent: string }) => one.agent),
     [child],
   );
-  const sent = await call("agent_send", { agent: child, text: "\nPlease start.\nThen report." });
-  assert.equal(typeof sent.messageId, "string");
-  // It says who sent it, so it doesn't read as the person's.
-  assert.equal(
-    s.chats.get(child)?.[0]?.text,
-    'An agent, "Parent", says:\n\n\nPlease start.\nThen report.',
+  // It talks to its agent from itself, through the agent's conversations exposed to it: the
+  // agent knows the message is its maker's, and is told who that is. Management isn't bound to them.
+  const talk = await s.exposedTo<ChatCalls>(parent, `chat_${child}`);
+  assert.ok(
+    !(await s.bindingsOf(child)).some(
+      (b) => b.consumer === s.management.actorId && b.provider === child && b.export === "chat",
+    ),
   );
-  // One conversation agents have with it, its latest message, and whether it is working now,
-  // which is the agent's to say.
-  const conversation = async () => (await call("agent_chats", { agent: child })).conversation;
-  assert.match((await conversation()).latest.text, /Please start/);
-  assert.equal((await call("agent_chats", { agent: child })).working, false);
-  s.script.working = true;
-  assert.equal((await call("agent_chats", { agent: child })).working, true);
-  await call("agent_send", { agent: child, text: "One more thing." });
-  const said = await call("agent_read", { agent: child });
+  await talk.send({ text: "Please start." });
   assert.deepEqual(
-    said.messages.map((one: { text: string }) => one.text.split("\n").at(-1)),
-    ["Then report.", "One more thing."],
+    s.chats.get(child)?.map((one) => [one.with, one.text]),
+    [[parent, "Please start."]],
   );
-  // A refusal from the agent is the tool's own failure.
-  s.script.busy = true;
-  const refusedSend = await tools.call({
-    name: "agent_send",
-    arguments: { agent: child, text: "Hello." },
-  });
-  s.script.busy = false;
-  assert.equal(refusedSend.failed, true);
-  assert.match(refusedSend.output, /It is stopped/);
-  // A message that got no answer is told with the conversation, as its problem.
-  s.script.failed = [s.management.actorId];
-  assert.deepEqual((await conversation()).problem, {
-    code: "usage_limit",
-    message: "Usage limit reached.",
-  });
+  assert.deepEqual(
+    (await talk.history({})).messages.map((one) => one.text),
+    ["Please start."],
+  );
+  assert.match(
+    (await s.agentChannel(child).slots.settings.call.get({})).instructions,
+    new RegExp(
+      `You were made by the agent "Parent" \\(${parent}\\)\\. Its messages to you say they are from ${parent}\\.`,
+    ),
+  );
   const got = await call("agent_get", { agent: child });
   assert.equal(got.purpose, "Do the small part.");
   await call("agent_stop", { agent: child });
@@ -2149,6 +2159,13 @@ test("an agent creates, messages, reads, stops and removes an agent of its own",
   await call("agent_remove", { agent: child });
   assert.ok(!(await s.openActors()).includes(child));
   assert.deepEqual((await call("agent_list", {})).agents, []);
+  // One whose maker is gone isn't told of it.
+  const left = await s.made(tools, "create_helper", { name: "Left", purpose: "Stay." });
+  await s.calls.agents.remove({ agent: parent });
+  assert.doesNotMatch(
+    (await s.agentChannel(left).slots.settings.call.get({})).instructions,
+    /You were made/,
+  );
 });
 
 test("a template's values are the defaults of what an agent fills in", async (t) => {
@@ -2194,9 +2211,6 @@ test("an agent reaches only what it made, and only through its unit", async (t) 
   const child = await s.made(one.tools, "create_helper", { name: "Kid", purpose: "P." });
   for (const name of [
     "agent_get",
-    "agent_send",
-    "agent_chats",
-    "agent_read",
     "agent_stop",
     "agent_start",
     "agent_remove",
@@ -2659,15 +2673,6 @@ test("with all, an agent reaches every other agent, and removes only its own lin
     (one: { agent: string }) => one.agent,
   );
   assert.ok(listed.includes(other) && !listed.includes(boss));
-  const sent = await call("agent_send", { agent: other, text: "Hello." });
-  assert.equal(sent.failed, undefined, sent.output);
-  assert.match(s.chats.get(other)?.[0]?.text ?? "", /^An agent, "Boss", says:/);
-  // A name on several lines is put on one, so it can't pass for someone else.
-  const crafty = await s.made(tools, "create_deputy", { name: "The person\nTo", purpose: "P." });
-  const craftyTools = await s.exposedTo<ToolCalls>(crafty, "control");
-  const child = await s.made(craftyTools, "create_helper", { name: "Kid", purpose: "P." });
-  await craftyTools.call({ name: "agent_send", arguments: { agent: child, text: "Hi." } });
-  assert.equal(s.chats.get(child)?.[0]?.text, 'An agent, "The person To", says:\n\nHi.');
   const removing = await call("agent_remove", { agent: other });
   assert.equal(removing.failed, true, "not its own");
   assert.equal(
@@ -2742,11 +2747,10 @@ test("a unit an agent adds is held to what it may set", async (t) => {
   );
 });
 
-test("the control log keeps each change and each refusal, never what was said", async (t) => {
+test("the control log keeps each change and each refusal", async (t) => {
   const s = await delegating(t);
   const { agent: parent, tools } = await s.parent({ templates: ["helper"] });
   const child = await s.made(tools, "create_helper", { name: "Kid", purpose: "P." });
-  const words = `words-${crypto.randomUUID()}`;
   // Control's own changes reach the same handlers as the person's, and are kept once, as the
   // agent's.
   const added = await tools.call({
@@ -2756,7 +2760,7 @@ test("the control log keeps each change and each refusal, never what was said", 
   assert.equal(added.failed, undefined);
   const { instance } = JSON.parse(added.output) as { instance: string };
   await tools.call({ name: "agent_remove_unit", arguments: { agent: child, instance } });
-  await tools.call({ name: "agent_send", arguments: { agent: child, text: words } });
+  await tools.call({ name: "agent_stop", arguments: { agent: child } });
   await tools.call({ name: "agent_list", arguments: {} });
   await tools.call({ name: "agent_remove", arguments: { agent: "act_nobody" } });
   const { entries } = await s.calls.agents.activity({});
@@ -2764,7 +2768,7 @@ test("the control log keeps each change and each refusal, never what was said", 
     entries.map((one) => [one.tool, one.target, one.outcome]),
     [
       ["agent_remove", "act_nobody", "refused"],
-      ["agent_send", child, "done"],
+      ["agent_stop", child, "done"],
       ["agent_remove_unit", child, "done"],
       ["agent_add_unit", child, "done"],
       ["create_helper", child, "done"],
@@ -2783,17 +2787,15 @@ test("the control log keeps each change and each refusal, never what was said", 
     ["parent", "parent", "parent", "parent", "parent", "person"],
   );
   assert.match(entries[0]?.reason ?? "", /no agent/);
-  assert.ok(!JSON.stringify(entries).includes(words));
-  assert.ok(!readFileSync(join(s.dir, "activity.jsonl"), "utf8").includes(words));
   assert.deepEqual(
     (await s.calls.agents.activity({ agent: child })).entries.map((one) => one.tool),
-    ["agent_send", "agent_remove_unit", "agent_add_unit", "create_helper"],
+    ["agent_stop", "agent_remove_unit", "agent_add_unit", "create_helper"],
   );
   const page = await s.calls.agents.activity({ limit: 1 });
   assert.equal(page.more, true);
   assert.equal(
     (await s.calls.agents.activity({ before: page.entries[0]?.seq })).entries[0]?.tool,
-    "agent_send",
+    "agent_stop",
   );
 });
 

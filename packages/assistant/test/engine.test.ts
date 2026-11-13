@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { tools } from "@agentorg/interfaces";
+import { chat, tools } from "@agentorg/interfaces";
 import { capped, Entry, INPUT_BUDGET, MAX_CALLS, MAX_OUTPUT, textOf } from "@agentorg/looper";
 import { defineInterface, method, NotConnected, OutcomeUnknown, Refused } from "@agentorg/sdk";
 import { createTestContext } from "@agentorg/sdk/testing";
@@ -336,6 +336,87 @@ test("a person's pictures reach the model with their message and stay in the cha
   };
   const last = after.findLast((one) => one.role === "user");
   assert.deepEqual([last?.text, last?.images], ["", [png]]);
+});
+
+test("an agent talks to the agents whose conversations are exposed to it, from itself", async () => {
+  const s = await setup();
+  // Before any is exposed, it is offered nothing to talk to them with.
+  await s.turn("Hello.");
+  assert.ok(!s.whole[0]?.tools?.some((tool) => tool.name.startsWith("agents__")));
+  const sent: { caller: string; text?: string }[] = [];
+  const at = "2026-11-12T00:00:00Z";
+  const long = (n: number, id: string) => ({
+    id,
+    role: "assistant" as const,
+    text: "x".repeat(n),
+    at,
+  });
+  // Found by whose it is, whatever its slot is named.
+  const kid = { actor: "act_kid", export: "chat" };
+  s.actor.expose(
+    "anyName",
+    chat,
+    {
+      send: ({ text }, { caller }) => {
+        sent.push({ caller, ...(text === undefined ? {} : { text }) });
+        return { messageId: "m1" };
+      },
+      history: ({ limit }) =>
+        limit === 3
+          ? { messages: [long(15_000, "m2"), long(15_000, "m3"), long(25_000, "m4")], more: false }
+          : { messages: [{ id: "m1", role: "user" as const, text: "Start.", at }], more: false },
+      state: () => ({ state: "working" as const }),
+      list: () => ({
+        conversations: [
+          {
+            with: "assistant",
+            at,
+            problem: { code: "usage_limit", message: "Usage limit reached." },
+          },
+        ],
+        more: false,
+      }),
+    },
+    kid,
+  );
+  s.script.push(
+    calls(
+      callTool("agents__send", { agent: "act_kid", text: "Start." }, "a1"),
+      callTool("agents__read", { agent: "act_kid" }, "a2"),
+      callTool("agents__send", { agent: "act_none", text: "Hi." }, "a3"),
+      callTool("agents__read", { agent: "act_kid", limit: 3 }, "a4"),
+    ),
+  );
+  await s.turn("Get the kid going.");
+  // It is told the ids it can reach.
+  const offeredSend = s.whole.at(-2)?.tools?.find((tool) => tool.name === "agents__send");
+  const offeredIds = offeredSend?.parameters as
+    | { properties: { agent: { enum: string[] } } }
+    | undefined;
+  assert.deepEqual(offeredIds?.properties.agent.enum, ["act_kid"]);
+  // It sent from itself: the agent it made knows who speaks.
+  assert.deepEqual(sent, [{ caller: "assistant", text: "Start." }]);
+  const outputs = (s.requests.at(-1)?.input ?? [])
+    .filter((item) => item.type === "function_call_output")
+    .map((item) => String(item.output));
+  assert.deepEqual(JSON.parse(outputs[0] ?? "{}"), { messageId: "m1" });
+  assert.deepEqual(JSON.parse(outputs[1] ?? "{}"), {
+    working: true,
+    problem: { code: "usage_limit", message: "Usage limit reached." },
+    messages: [{ id: "m1", role: "user", text: "Start.", at: "2026-11-12T00:00:00Z" }],
+    more: false,
+  });
+  assert.match(outputs[2] ?? "", /You have no agent act_none/);
+  // A read fits what a loop takes whole: a long message is cut, and the oldest go first.
+  const fitted = JSON.parse(outputs[3] ?? "{}") as {
+    messages: { id: string; text: string }[];
+    more: boolean;
+  };
+  assert.deepEqual(
+    fitted.messages.map((one) => [one.id, one.text.length]),
+    [["m4", 20_000 + "… (5000 more characters)".length]],
+  );
+  assert.equal(fitted.more, true);
 });
 
 test("what is exposed to the agent becomes its tools at the next turn, and goes when removed", async () => {

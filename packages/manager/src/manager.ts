@@ -6,7 +6,6 @@ import {
   agents,
   type ConnectionOrigin,
   type ConnectionStatus,
-  chat,
   connections,
   type FieldValues,
   hubActors,
@@ -30,7 +29,6 @@ import { type AgentRecord, createStacks, Records, slotFieldOf } from "./stack.js
 type Origin = z.infer<typeof ConnectionOrigin>;
 type Agents = Slot<typeof agentProvider>["call"];
 type Units = Slot<typeof unitProvider>["call"];
-type Chats = Slot<typeof chat>["call"];
 type Status = z.infer<typeof ConnectionStatus>;
 
 const FILE = "manager.json";
@@ -38,8 +36,6 @@ const ACTIVITY = "activity.jsonl";
 /** Who a control call is made as, when it isn't on an agent's own behalf. */
 const PERSON_CALLER = "person";
 type Handler = (input: unknown, context: { caller: string }) => unknown;
-const CHAT_WAIT_MS = 2000;
-const CHAT = "chat@1";
 /** What one agent may add of its own, at most. */
 const AGENT_CONNECTIONS = 16;
 const AGENT_SKILLS = 32;
@@ -368,38 +364,15 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
           save();
           return {};
         });
-      /** A child's chat: exposed to management when it is made, which takes a moment to arrive. */
-      const chatOf = async (agent: string) => {
-        const exposedChat = () => exposed<Chats>(chat).find((one) => one.actor === agent);
-        if (!exposedChat()) {
-          // One the person made: its chat is reached as the person reaches it.
-          const { bindings } = await hub.bindings.list({ actor: PERSON_CALLER });
-          const theirs = bindings.find(
-            (one) =>
-              one.provider === agent && one.interface === CHAT && one.consumer === PERSON_CALLER,
-          );
-          if (theirs)
-            await hub.grants
-              .expose({ provider: agent, export: theirs.export, to: options.actorId })
-              .catch((error) => log.warn(`Reaching a chat: ${messageOf(error)}`));
-        }
-        for (let waited = 0; waited < CHAT_WAIT_MS; waited += 20) {
-          const found = exposed<Chats>(chat).find((one) => one.actor === agent);
-          if (found) return found.call;
-          await new Promise((resolve) => setTimeout(resolve, 20));
-        }
-        throw new Refused("not_connected", "That agent's chat can't be reached now.");
-      };
       /**
-       * An agent's chats reach the person, and management too for an agent another agent made. The
-       * Hub keeps both across an update of either end, and drops them when the agent stops offering
-       * its chats, so they are made again each time it connects: nothing changes when they are there.
+       * An agent's conversations reach the person. The Hub keeps that across an update of either
+       * end, and drops it when the agent stops offering them, so it is made again each time it
+       * connects: nothing changes when it is there.
        */
       const reachChats = async (agent: string) => {
         const record = records.agents[agent];
         if (!record || !(await hub.actors.get({ actorId: agent })).connected) return;
-        for (const to of [PERSON_CALLER, ...(record.parent ? [options.actorId] : [])])
-          await hub.grants.expose({ provider: agent, export: record.chat, to });
+        await hub.grants.expose({ provider: agent, export: record.chat, to: PERSON_CALLER });
       };
       const reaching = (agent: string) =>
         void reachChats(agent).catch((error) => log.warn(`Reaching a chat: ${messageOf(error)}`));
@@ -471,7 +444,6 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
         serial: stacks.serial,
         create: (input, caller, child) => stacks.create(input, caller, child),
         nameOf,
-        chatOf,
         statusOf: agentStatus,
         start: startAgent,
         stop: stopAgent,
@@ -551,11 +523,20 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
 
       ctx.exports.settings.implement({
         get: (_, { caller }) => {
-          const { instructions, purpose, skills: names } = settingsOf(caller);
+          const { instructions, purpose, parent, skills: names } = settingsOf(caller);
+          // A message from its maker says it is from its id: this says whose that is, while the
+          // maker is here. Its name is the maker's own words, kept to one line.
+          const maker = parent && records.agents[parent.agent] ? parent : undefined;
           return {
-            instructions: purpose
-              ? `${instructions}\n\nWhat you are for: ${purpose}`
-              : instructions,
+            instructions: [
+              instructions,
+              ...(purpose ? [`What you are for: ${purpose}`] : []),
+              ...(maker
+                ? [
+                    `You were made by the agent ${JSON.stringify(maker.name.replace(/\s+/g, " ").trim())} (${maker.agent}). Its messages to you say they are from ${maker.agent}.`,
+                  ]
+                : []),
+            ].join("\n\n"),
             skills: names.flatMap((name) => library.entry(name) ?? []),
           };
         },
@@ -594,7 +575,7 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
         create: (input, { caller }) => stacks.create(input, caller),
         async addUnit(input, { caller }) {
           const added = await stacks.serial(input.agent, () => stacks.addUnit(input, caller));
-          // An agents unit added reaches the Work of the agents it made before.
+          // An agents unit added reaches the agents it made before.
           if (input.unit.unit === AGENTS_UNIT)
             await stacks.reachMade((_, maker) => maker === input.agent);
           return added;
