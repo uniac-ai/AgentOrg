@@ -1715,10 +1715,12 @@ test("a message its conversation's work hands back is taken up by new work in th
     (await shownIn(s, PERSON)).map((m) => m.text),
     ["Write the report.", "Report done.", "What is the weather?", "Sunny."],
   );
-  // The chat's next message reaches both.
+  // The conversation's next message goes to the work last active there, the new one; the first
+  // starts no turn.
   await sendAs(s, "Thanks.");
   await s.host.settled();
-  assert.equal(s.requests.length, 5);
+  assert.equal(s.requests.length, 4);
+  assert.deepEqual(s.whole[3]?.input[0]?.content, "[1] What is the weather?");
 });
 
 test("a closing engine cuts its turns and starts no other", async () => {
@@ -1984,12 +1986,14 @@ test("on upgrade the person's chat last written in becomes their conversation, a
   const again = await setup(values);
   assert.equal((await listed(again)).conversations.length, 1);
   assert.deepEqual(values, kept);
-  // And it goes on in it: both pieces of work that follow it are given the message.
+  // And it goes on in it: of the two pieces of work that follow it, the one last active takes
+  // the message, and the other starts no turn.
   await exchange(again, "Add a chart.");
   await again.host.settled();
+  assert.equal(again.requests.length, 1);
   assert.deepEqual(
     (await shownIn(again, PERSON)).map((m) => m.text),
-    ["Write the report.", "Report written.", "Add a chart.", "ok", "ok"],
+    ["Write the report.", "Report written.", "Add a chart.", "ok"],
   );
 });
 

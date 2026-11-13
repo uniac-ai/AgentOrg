@@ -449,8 +449,8 @@ export function createChats(options: {
      * conversation no work follows is put to the agent's main loop. When that answers it itself,
      * the conversation stays no work's, and its next message is put to the main loop too. When it
      * gives it to new work or to work there is, that work follows the conversation from then on,
-     * beside any that already does, and its messages are given to each: one with no turn running
-     * starts a turn, and a turn running takes it at its next model request.
+     * beside any that already does. A message there goes to each piece of work in a turn, at its
+     * next model request, or, with none in a turn, to the one last active, which starts a turn.
      */
     async send(
       { text = "", images }: Input<"send">,

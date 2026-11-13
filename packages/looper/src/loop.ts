@@ -110,6 +110,8 @@ const WORDS = /(?:[^"\\]|\\(?:["\\/bfnrt]|u[0-9a-fA-F]{4}))*/y;
 export interface LoopOut {
   /** A message said in `thread`: what the person said, or a reply sent there. */
   message(thread: string, message: Shown): void;
+  /** This work sent a reply in `thread`, after it is said there. */
+  replied?(thread: string): void;
   /** A piece of a reply as it is sent: `id` is the reply's, which its message has once it is said. */
   delta(thread: string, id: string, text: string): void;
   /** What its work did changed: a call began, or something was kept for it. */
@@ -348,6 +350,7 @@ export function createLoop(options: {
         `There is no message [${message}] of this work to answer: check its number, and that it wasn't handed back.`,
       );
     show(sent);
+    out.replied?.(sent.thread);
   };
   /**
    * Say what a `send` being written has said and hasn't been said yet, once the thread of the

@@ -49,6 +49,42 @@ async function reported(
   return made;
 }
 
+/**
+ * Let a few milliseconds pass, so the turn that ends next is last active: a work's time is kept to
+ * the millisecond.
+ */
+const later = () => new Promise((soon) => setTimeout(soon, 5));
+
+/**
+ * Thread `a` followed by two pieces of work, each in a turn with its request out: the report,
+ * still in its first turn, which handed back a message said as it worked, and the weather, made
+ * for that one. Each request ends with "What is the weather?"; the report's began with "Write the
+ * report.", and the weather's with "What is the weather?".
+ */
+async function inTurns(options: Parameters<typeof looperWith>[0] = {}) {
+  const made = looperWith({
+    ...options,
+    routing: (text) =>
+      options.routing?.(text) ??
+      (text.startsWith(BACK) ? newWork("The weather") : newWork("The report")),
+  });
+  await made.looper.send("a", "Write the report.");
+  await until(() => made.asked.length === 1, "the report's request");
+  // It joins the report's turn, and the main loop hears of it.
+  await made.looper.send("a", "What is the weather?");
+  await until(() => made.mains.length === 2, "the main loop to hear of it");
+  made.answer("Write the report.", []);
+  await until(() => made.asked.length === 2, "the report's request that reads both");
+  made.answer("What is the weather?", handsBack(numberIn(made.numbered, "report")));
+  await until(() => made.asked.length === 4, "the report's turn to go on, and the weather's");
+  return made;
+}
+/** Let the two pieces of work `inTurns` made answer the requests they have out. */
+const goOn = (made: Awaited<ReturnType<typeof inTurns>>) => {
+  made.answer("What is the weather?", sends("Report done."), "report");
+  made.answer("What is the weather?", sends("Sunny."), "weather");
+};
+
 test("a worker is told which work it is, reads each message by its number, and is offered the way to hand one back", async () => {
   const { looper, asked, numbered, told, answer } = looperWith({
     routing: () => newWork("The report"),
@@ -70,7 +106,11 @@ test("a worker is told which work it is, reads each message by its number, and i
 
 test("a message its thread's work hands back is the main loop's: new work starts for it in the same thread, and says nothing of the handing back", async () => {
   const { looper, values, said, asked, mains, inputs, numbered, answer } = await reported((text) =>
-    text.startsWith(BACK) ? newWork("The weather") : undefined,
+    text.startsWith(BACK)
+      ? text.includes(": The weather;")
+        ? routeTo("a")
+        : newWork("The weather")
+      : undefined,
   );
   await looper.send("a", "What is the weather?");
   await until(() => asked.length === 2, "the report's worker to read it");
@@ -88,6 +128,7 @@ test("a message its thread's work hands back is the main loop's: new work starts
   // The report's turn ended there, with no further request and nothing said.
   assert.deepEqual(looper.state("a"), { state: "idle" });
   assert.deepEqual(numbered[2], ["[1] What is the weather?"]);
+  await later();
   answer("What is the weather?", sends("Sunny."));
   await looper.settled();
   assert.deepEqual(said, [
@@ -109,8 +150,14 @@ test("a message its thread's work hands back is the main loop's: new work starts
     (await looper.page("a", undefined, 50)).messages.map((message) => message.text),
     ["Write the report.", "Report done.", "What is the weather?", "Sunny."],
   );
+  // The next message there is the weather's, the work last active there. It hands it back, and
+  // the main loop gives it to the report.
   await looper.send("a", "Make the report shorter.");
-  await until(() => asked.length === 5, "both to read it");
+  await until(() => asked.length === 4, "the weather to read it");
+  assert.equal(inputs[3]?.[0], "What is the weather?");
+  answer("Make the report shorter.", handsBack(numberIn(numbered, "weather"), "The report's."));
+  await until(() => asked.length === 5, "the report to read it");
+  assert.equal(mains.length, 3);
   assert.deepEqual(
     inputs.slice(3).find((input) => input[0] === "Write the report."),
     [
@@ -125,96 +172,99 @@ test("a message its thread's work hands back is the main loop's: new work starts
   await looper.stop();
 });
 
-test("a message in a thread two pieces of work follow reaches both: the one it is for answers, and the other hands it back", async () => {
-  const { looper, said, asked, mains, inputs, numbered, working, answer } = await reported(
-    (text) => (text.startsWith(BACK) ? newWork("The weather") : undefined),
-  );
-  await looper.send("a", "What is the weather?");
-  await until(() => asked.length === 2, "the report's worker to read it");
-  answer("What is the weather?", handsBack(3));
-  await until(() => asked.length === 3, "the new work's request");
-  answer("What is the weather?", sends("Sunny."));
-  await looper.settled();
+test("a message in a thread followed by two pieces of work in a turn reaches both: the one it is for answers, and the other hands it back", async () => {
+  const made = await inTurns();
+  const { looper, said, asked, mains, inputs, numbered, working, answer } = made;
 
-  // Kept once, and given to each: both start a turn.
+  // Kept once, and given to each: both take it in their turn, at their next request.
   await looper.send("a", "And tomorrow?");
-  await until(() => asked.length === 5, "both to read it");
+  goOn(made);
+  await until(() => asked.length === 6, "both to read it");
   assert.equal(said.filter((line) => line === "a: user: And tomorrow?").length, 1);
   assert.deepEqual(
     inputs
-      .slice(3)
+      .slice(4)
       .map((input) => input[0])
       .sort(),
     ["What is the weather?", "Write the report."],
   );
-  // The report's hands it back; the weather's answers. Nothing is put to the main loop.
+  // The weather's answers; the report's hands it back. Nothing is put to the main loop, which
+  // only heard of it as it joined their turns.
+  answer("And tomorrow?", sends("Rain."), "weather");
+  await until(() => said.at(-1) === "a: assistant: Rain.", "the weather's reply");
+  await later();
   answer(
     "And tomorrow?",
     handsBack(numberIn(numbered, "report"), "It is about the weather."),
     "report",
   );
-  answer("And tomorrow?", sends("Rain."), "weather");
+  // Its turn, which answered the report, goes on once, and ends calling nothing.
+  await until(() => asked.length === 7, "the report's turn to go on");
+  answer("And tomorrow?", [], "report");
   await looper.settled();
-  assert.equal(mains.length, 2);
-  assert.equal(asked.length, 5);
+  assert.equal(mains.length, 4);
+  assert.equal(mains[3]?.instructions, HEARD_INSTRUCTIONS);
+  assert.equal(asked.length, 7);
   assert.equal(said.at(-1), "a: assistant: Rain.");
-  // The report's worker handed it back: its next request reads that it did.
+  // The weather answered it last, so the thread's next message is the weather's alone: the
+  // report, which handed it back, starts no turn.
   await looper.send("a", "Thanks.");
-  await until(() => asked.length === 7, "both to read it");
-  assert.deepEqual(inputs.findLast((input) => input[0] === "Write the report.")?.slice(-4), [
-    "And tomorrow?",
-    "call hand_back",
-    "output Handed back.",
-    "Thanks.",
-  ]);
+  await until(() => asked.length === 8, "the weather to read it");
+  await idle();
+  assert.equal(asked.length, 8);
+  assert.deepEqual(inputs.at(-1)?.slice(0, 1), ["What is the weather?"]);
+  assert.equal(inputs.at(-1)?.at(-1), "Thanks.");
   await looper.stop();
   assert.equal(working.at(-1), false);
 });
 
 test("a message every piece of work handed back is put to the main loop with who and why; what it answers is no work's", async () => {
-  const { looper, said, asked, mains, inputs, numbered, answer } = await reported((text) =>
-    text.startsWith(BACK)
-      ? text.includes("The weather")
+  const made = await inTurns({
+    routing: (text) =>
+      text.startsWith(BACK) && text.includes("The weather")
         ? says("I can't help with that.")
-        : newWork("The weather")
-      : undefined,
-  );
-  await looper.send("a", "What is the weather?");
-  await until(() => asked.length === 2, "the report's worker to read it");
-  answer("What is the weather?", handsBack(3));
-  await until(() => asked.length === 3, "the new work's request");
-  answer("What is the weather?", sends("Sunny."));
-  await looper.settled();
+        : undefined,
+  });
+  const { looper, said, asked, mains, inputs, numbered, answer } = made;
 
   await looper.send("a", "Book a table for two.");
-  await until(() => asked.length === 5, "both to read it");
+  goOn(made);
+  await until(() => asked.length === 6, "both to read it");
   answer(
     "Book a table for two.",
     handsBack(numberIn(numbered, "report"), "Not the report."),
     "report",
   );
+  // Each turn, which answered a message of its own, goes on after handing it back.
+  await until(() => asked.length === 7, "the report's turn to go on");
   await idle();
-  // Handed back by one of two: it is still the other's.
-  assert.equal(mains.length, 2);
+  // Handed back by one of two: it is still the other's. The main loop only heard of it.
+  assert.equal(mains.length, 4);
   answer(
     "Book a table for two.",
     handsBack(numberIn(numbered, "weather"), "Not the weather."),
     "weather",
   );
   await until(() => said.at(-1) === "a: assistant: I can't help with that.", "the answer");
-  await looper.settled();
-  const put = mains[2]?.input ?? [];
+  await until(() => asked.length === 8, "the weather's turn to go on");
+  const put = mains[4]?.input ?? [];
   assert.equal(put[0], "There is no work.");
   assert.equal(put.at(-2), "Book a table for two.");
   assert.match(String(put.at(-1)), /^That was given to this work, which handed it back:\n- /);
   assert.match(String(put.at(-1)), /The report; because: Not the report\./);
   assert.match(String(put.at(-1)), /The weather; because: Not the weather\./);
-  // Neither worker reads what the main loop answered, and the next message reaches both again.
+  // Neither worker reads what the main loop answered, and the next message, said while both
+  // are still in a turn, reaches both again: the main loop only hears of it.
   await looper.send("a", "Thanks.");
-  await until(() => asked.length === 7, "both to read it");
-  for (const input of inputs.slice(5))
+  answer("Book a table for two.", [], "report");
+  answer("Book a table for two.", [], "weather");
+  await until(() => asked.length === 10, "both to read it");
+  for (const input of inputs.slice(8)) {
+    assert.equal(input.at(-1), "Thanks.");
     assert.equal(input.includes("I can't help with that."), false);
-  assert.equal(mains.length, 3);
+  }
+  assert.equal(mains.length, 6);
+  assert.equal(mains[5]?.instructions, HEARD_INSTRUCTIONS);
   await looper.stop();
 });
 
@@ -256,18 +306,13 @@ test("what came back can be given to work there is, which then follows that thre
 });
 
 test("a reply one piece of work sends answers the message for every piece it reached", async () => {
-  const { looper, said, asked, failures, answer } = await reported((text) =>
-    text.startsWith(BACK) ? newWork("The weather") : undefined,
-  );
-  await looper.send("a", "What is the weather?");
-  await until(() => asked.length === 2, "the report's worker to read it");
-  answer("What is the weather?", handsBack(3));
-  await until(() => asked.length === 3, "the new work's request");
-  answer("What is the weather?", sends("Sunny."));
-  await looper.settled();
-  // Both read the next; the weather's answers it, and the report's ends saying nothing.
+  const made = await inTurns();
+  const { looper, said, asked, failures, answer } = made;
+  // Both read the next, said while both are in a turn; the weather's answers it, and the
+  // report's ends saying nothing.
   await looper.send("a", "And tomorrow?");
-  await until(() => asked.length === 5, "both to read it");
+  goOn(made);
+  await until(() => asked.length === 6, "both to read it");
   answer("And tomorrow?", sends("Rain."), "weather");
   await until(() => said.at(-1) === "a: assistant: Rain.", "the reply");
   answer("And tomorrow?", [], "report");
@@ -351,29 +396,21 @@ test("work given a thread can leave it as it hands a message back, and never the
 });
 
 test("with two pieces of work in a turn, the main loop hears of a message once, with both, and what it says of which are in a turn is no work's", async () => {
-  const { looper, said, asked, mains, inputs, answer } = await reported((text) =>
-    text.startsWith(BACK)
-      ? newWork("The weather")
-      : text === "Stop."
+  const made = await inTurns({
+    routing: (text) =>
+      text === "Stop."
         ? says("The report and the weather are both in a turn. Which one?")
         : undefined,
-  );
-  await looper.send("a", "What is the weather?");
-  await until(() => asked.length === 2, "the report's worker to read it");
-  answer("What is the weather?", handsBack(3));
-  await until(() => asked.length === 3, "the new work's request");
-  answer("What is the weather?", sends("Sunny."));
-  await looper.settled();
-  await looper.send("a", "Both of you, go on.");
-  await until(() => asked.length === 5, "both in a turn");
+  });
+  const { looper, said, asked, mains, inputs } = made;
   const weather = inputs.findIndex((input) => input[0] === "What is the weather?");
   assert.ok(weather >= 0);
 
   await looper.send("a", "Stop.");
-  await until(() => mains.length === 3, "the main loop to hear of it");
-  assert.equal(mains[2]?.instructions, HEARD_INSTRUCTIONS);
+  await until(() => mains.length === 4, "the main loop to hear of it");
+  assert.equal(mains[3]?.instructions, HEARD_INSTRUCTIONS);
   assert.match(
-    String(mains[2]?.input[0]),
+    String(mains[3]?.input[0]),
     /^The work there is:\n- .*: The report \(in a turn\)\n- .*: The weather \(in a turn\)$/,
   );
   await until(
@@ -382,12 +419,11 @@ test("with two pieces of work in a turn, the main loop hears of a message once, 
   );
   // Heard once, nothing was stopped, and neither worker reads that line.
   await idle();
-  assert.equal(mains.length, 3);
+  assert.equal(mains.length, 4);
   assert.deepEqual(looper.state("a"), { state: "thinking" });
-  answer("Both of you, go on.", sends("Report goes on."), "report");
-  answer("Both of you, go on.", sends("Weather goes on."), "weather");
-  await until(() => asked.length === 7, "both to read the stop");
-  for (const input of inputs.slice(5))
+  goOn(made);
+  await until(() => asked.length === 6, "both to read the stop");
+  for (const input of inputs.slice(4))
     assert.equal(
       input.some((line) => line.includes("Which one?")),
       false,
@@ -397,36 +433,38 @@ test("with two pieces of work in a turn, the main loop hears of a message once, 
 
 test("with two pieces of work in a turn, a message that names one to stop stops that one, and the other goes on", async () => {
   let weather = "";
-  const { looper, values, said, asked, inputs, answer } = await reported((text) =>
-    text.startsWith(BACK)
-      ? newWork("The weather")
-      : text === "Stop the weather."
+  const { looper, values, said, asked, inputs, numbered, answer } = await inTurns({
+    routing: (text) =>
+      text === "Stop the weather."
         ? [...says("Stopped the weather."), ...stops(weather)]
-        : undefined,
-  );
-  await looper.send("a", "What is the weather?");
-  await until(() => asked.length === 2, "the report's worker to read it");
-  answer("What is the weather?", handsBack(3));
-  await until(() => asked.length === 3, "the new work's request");
-  answer("What is the weather?", sends("Sunny."));
-  await looper.settled();
+        : text.startsWith(BACK) && text.includes("The weather's.")
+          ? routeTo(weather)
+          : undefined,
+  });
   weather = works(values).find(({ title }) => title === "The weather")?.id ?? "";
-  await looper.send("a", "Both of you, go on.");
-  await until(() => asked.length === 5, "both in a turn");
   await looper.send("a", "Stop the weather.");
   await until(() => said.at(-1) === "a: assistant: Stopped the weather.", "the thread to be told");
   assert.deepEqual(looper.state(weather), { state: "idle" });
   assert.deepEqual(looper.state("a"), { state: "thinking" });
   // What the main loop said is the stopped work's to read next, and not the other's.
-  answer("Both of you, go on.", sends("Report goes on."), "report");
-  await until(() => asked.length === 6, "the report to read the stop");
-  assert.equal(inputs[5]?.includes("Stopped the weather."), false);
+  answer("What is the weather?", sends("Report goes on."), "report");
+  await until(() => asked.length === 5, "the report to read the stop");
+  assert.equal(inputs[4]?.includes("Stopped the weather."), false);
+  await later();
   answer("Stop the weather.", sends("Still on the report."), "report");
   await looper.settled();
+  // The next is the report's, the work last active there, which hands it back: the main loop
+  // gives it to the weather, which reads it after the line it was stopped with.
   await looper.send("a", "Weather again, please.");
-  await until(() => asked.length === 8, "both to read it");
+  await until(() => asked.length === 6, "the report to read it");
+  answer(
+    "Weather again, please.",
+    handsBack(numberIn(numbered, "report"), "The weather's."),
+    "report",
+  );
+  await until(() => asked.length === 7, "the weather to read it");
   assert.deepEqual(inputs.findLast((input) => input[0] === "What is the weather?")?.slice(-4), [
-    "Both of you, go on.",
+    "What is the weather?",
     "Stop the weather.",
     "Stopped the weather.",
     "Weather again, please.",
@@ -517,7 +555,10 @@ test("a hand-back the store refuses hands nothing back, and the worker is told s
   assert.equal(mains.length, 1);
 });
 
-/** Thread `a` followed by two pieces of work at rest: the report, and the weather. */
+/**
+ * Thread `a` followed by two pieces of work at rest: the report, and the weather, which was
+ * active last.
+ */
 async function two(options: Parameters<typeof looperWith>[0] = {}) {
   const made = looperWith({
     ...options,
@@ -533,6 +574,7 @@ async function two(options: Parameters<typeof looperWith>[0] = {}) {
   await until(() => made.asked.length === 2, "the report's worker to read it");
   made.answer("What is the weather?", handsBack(3));
   await until(() => made.asked.length === 3, "the weather's request");
+  await later();
   made.answer("What is the weather?", sends("Sunny."));
   await made.looper.settled();
   return made;
@@ -544,6 +586,44 @@ const readBy = (inputs: string[][], from: number, text: string) =>
     .filter((input) => input.includes(text))
     .map((input) => input[0])
     .sort();
+
+test("a message in a thread whose pieces of work are all at rest goes to the one last active, and the others start no turn", async () => {
+  const { looper, values, said, asked, mains, inputs, numbered, answer } = await two({
+    routing: (text) =>
+      text.startsWith(BACK) && text.includes(": The weather;") ? routeTo("a") : undefined,
+  });
+  const weather = works(values).find(({ title }) => title === "The weather")?.id ?? "";
+  // The weather was active last: it alone reads the next, as its own, and nothing is put to the
+  // main loop.
+  await looper.send("a", "And tomorrow?");
+  await until(() => asked.length === 4, "the weather to read it");
+  await idle();
+  assert.equal(asked.length, 4);
+  assert.deepEqual(numbered[3], ["[1] What is the weather?", "Sunny.", "[3] And tomorrow?"]);
+  assert.deepEqual(looper.state(weather), { state: "thinking" });
+  assert.deepEqual(looper.state("a"), { state: "idle" });
+  assert.equal(mains.length, 2);
+  answer("And tomorrow?", sends("Rain."));
+  await looper.settled();
+  // It hands the next back, and the main loop gives it to the report, which is then the one
+  // last active there.
+  await looper.send("a", "Make the report shorter.");
+  await until(() => asked.length === 5, "the weather to read it");
+  answer("Make the report shorter.", handsBack(numberIn(numbered, "weather"), "The report's."));
+  await until(() => asked.length === 6, "the report to read it");
+  await later();
+  answer("Make the report shorter.", sends("Shorter now."), "report");
+  await looper.settled();
+  await looper.send("a", "Thanks.");
+  await until(() => asked.length === 7, "the report to read it");
+  await idle();
+  assert.equal(asked.length, 7);
+  assert.equal(inputs[6]?.[0], "Write the report.");
+  assert.equal(inputs[6]?.at(-1), "Thanks.");
+  assert.deepEqual(looper.state(weather), { state: "idle" });
+  assert.equal(said.filter((line) => line === "a: user: Thanks.").length, 1);
+  await looper.stop();
+});
 
 test("a message that comes back while the main loop decides on another in its thread is decided next", async () => {
   const hold = gate();
@@ -577,15 +657,31 @@ test("a looper stopped or closed between two pieces of work taking a message sta
   for (const end of ["stop", "close"] as const) {
     let writes = 0;
     let armed = false;
+    let marked = false;
+    const mark = gate();
     const hold = gate();
-    const made = await two({
-      // The message's first write keeps it; its second is the first of the two taking it.
-      writing: (key) =>
-        armed && key === "thread/a/msg/000000000006" && ++writes === 2 ? hold.shut : undefined,
+    const made = await inTurns({
+      // The thread is marked once both are found to take it. The message's first write keeps
+      // it, after the weather's reply; its second is the first of the two taking it.
+      writing: (key) => {
+        if (!armed) return undefined;
+        if (key === "unrouted/a" && !marked) {
+          marked = true;
+          return mark.shut;
+        }
+        return key === "thread/a/msg/000000000005" && ++writes === 2 ? hold.shut : undefined;
+      },
     });
-    const { looper, values, asked, inputs } = made;
+    const { looper, values, said, asked, inputs, answer } = made;
     armed = true;
     const sending = looper.send("a", "Both, go on.");
+    await until(() => marked, "both to be found to take it");
+    // The weather's turn ends meanwhile, with a reply, so it is the work last active there:
+    // taking the message, it would start a turn. The report's turn is cut after.
+    answer("What is the weather?", sends("Sunny."), "weather");
+    await until(() => said.at(-1) === "a: assistant: Sunny.", "the weather's reply");
+    await later();
+    mark.open();
     await until(() => writes === 2, "the first to be taking it");
     const ending = looper[end]();
     await idle();
@@ -593,14 +689,21 @@ test("a looper stopped or closed between two pieces of work taking a message sta
     await ending;
     await sending;
     await idle();
-    assert.equal(asked.length, 3, end);
+    assert.equal(asked.length, 4, end);
     if (end === "stop") {
-      // Started again, the thread's next message goes to both, with the one that waited.
+      // Started again, the thread's next message goes to the weather, which answered there last,
+      // and it takes the one that waited for it too; the report, which took that one before the
+      // stop, starts no turn.
       looper.start();
       await looper.send("a", "And now?");
-      await until(() => asked.length === 5, "both to read them");
-      for (const input of inputs.slice(3))
-        assert.deepEqual(input.slice(-2), ["Both, go on.", "And now?"], end);
+      await until(() => asked.length === 5, "the weather to read them");
+      await idle();
+      assert.equal(asked.length, 5, end);
+      assert.deepEqual(
+        inputs.slice(4).map((input) => [input[0], ...input.slice(-3)]),
+        [["What is the weather?", "Sunny.", "Both, go on.", "And now?"]],
+        end,
+      );
       await looper.stop();
     } else {
       // The next looper goes on with it: each reads it once.
@@ -616,27 +719,47 @@ test("a looper stopped or closed between two pieces of work taking a message sta
   }
 });
 
+test("a message goes to the work in a turn, not to the work at rest that answered there last", async () => {
+  const made = await inTurns();
+  const { looper, asked, inputs, said, answer } = made;
+  // The weather answers and rests, last active there; the report is still in its turn.
+  answer("What is the weather?", sends("Sunny."), "weather");
+  await until(() => said.at(-1) === "a: assistant: Sunny.", "the weather's reply");
+  await idle();
+  const before = asked.length;
+  await looper.send("a", "Add the forecast to the report.");
+  answer("What is the weather?", sends("Report done."), "report");
+  await until(() => asked.length === before + 1, "the report to read it");
+  await idle();
+  assert.equal(asked.length, before + 1);
+  assert.equal(inputs.at(-1)?.[0], "Write the report.");
+  assert.equal(inputs.at(-1)?.at(-1), "Add the forecast to the report.");
+  await looper.stop();
+});
+
 test("a message one of its works can't take is kept and told to have failed for it, and that work takes it with its next", async () => {
   let refusing = false;
   let writes = 0;
-  const { looper, asked, inputs, failures, answer } = await two({
+  const { looper, asked, inputs, failures, answer } = await inTurns({
     // The second taking of the message is refused once.
     writing: (key) =>
-      refusing && key === "thread/a/msg/000000000006" && ++writes === 3
+      refusing && key === "thread/a/msg/000000000004" && ++writes === 3
         ? Promise.reject(new Error("the store refused it"))
         : undefined,
   });
   refusing = true;
   const { messageId } = await looper.send("a", "Both, go on.");
   assert.ok(messageId);
-  await until(() => asked.length === 4, "the one that took it");
+  // The report took it, and reads it at its next request.
+  answer("What is the weather?", sends("Report done."), "report");
+  await until(() => asked.length === 5, "the one that took it");
   await idle();
-  assert.equal(asked.length, 4);
+  assert.equal(asked.length, 5);
   assert.equal(failures.length, 1);
   answer("Both, go on.", sends("Went on."));
-  await looper.settled();
-  await looper.send("a", "And now?");
-  await until(() => asked.length === 6, "both to read it");
+  // The weather takes it with what it keeps next: its reply to what it was at.
+  answer("What is the weather?", sends("Sunny."), "weather");
+  await until(() => asked.length === 6, "the weather to read it");
   assert.deepEqual(readBy(inputs, 4, "Both, go on."), [
     "What is the weather?",
     "Write the report.",
@@ -648,24 +771,19 @@ test("a turn reads a message it took though another piece of work is still takin
   let armed = false;
   let writes = 0;
   const hold = gate();
-  const { looper, asked, inputs, answer } = await two({
+  const { looper, asked, inputs, answer } = await inTurns({
     // The third write of the message is the second piece of work taking it.
     writing: (key) =>
-      armed && key === "thread/a/msg/000000000008" && ++writes === 3 ? hold.shut : undefined,
+      armed && key === "thread/a/msg/000000000004" && ++writes === 3 ? hold.shut : undefined,
   });
-  await looper.send("a", "Shorten the report.");
-  await until(() => asked.length === 5, "both to read it");
-  answer("Shorten the report.", sends("Not the weather's."), "weather");
-  await until(() => looper.state("a").state === "thinking", "the report alone in a turn");
-  await idle();
   armed = true;
   const sending = looper.send("a", "Also add a summary.");
   await until(() => writes === 3, "the weather to be taking it");
   // The report's request, which had not read it, answers while that write is out.
-  answer("Shorten the report.", sends("Shortened."), "report");
-  await until(() => asked.length === 6, "the report's turn to go on");
-  assert.deepEqual(inputs[5]?.slice(-3), [
-    "Shorten the report.",
+  answer("What is the weather?", sends("Shortened."), "report");
+  await until(() => asked.length === 5, "the report's turn to go on");
+  assert.deepEqual(inputs[4]?.slice(-3), [
+    "output Handed back.",
     "Shortened.",
     "Also add a summary.",
   ]);
@@ -813,25 +931,33 @@ test("two messages said one after the other reach each piece of work in that ord
   let writes = 0;
   let armed = false;
   const hold = gate();
-  const { looper, asked, inputs, answer } = await two({
+  const made = await inTurns({
     writing: (key) =>
-      armed && key === "thread/a/msg/000000000006" && ++writes === 1 ? hold.shut : undefined,
+      armed && key === "thread/a/msg/000000000004" && ++writes === 1 ? hold.shut : undefined,
   });
+  const { looper, asked, inputs, answer } = made;
   armed = true;
   const sending = [looper.send("a", "First."), looper.send("a", "Second.")];
   await idle();
   hold.open();
   await Promise.all(sending);
-  await until(() => asked.length >= 5, "both to read the first");
+  // Both are said while both pieces of work are in a turn: each reads them at its next request.
+  goOn(made);
+  await until(() => asked.length === 6, "both to read them");
+  for (const input of inputs.slice(4)) {
+    assert.ok(input.indexOf("First.") >= 0);
+    assert.ok(input.indexOf("First.") < input.indexOf("Second."));
+  }
   for (let round = 0; round < 3; round++) {
     for (const text of ["First.", "Second."])
       for (const of of ["report", "weather"]) answer(text, sends("ok"), of);
     await idle();
   }
   await looper.settled();
+  // The work last active there reads the third after them, as its record keeps them.
   const before = asked.length;
   await looper.send("a", "Third.");
-  await until(() => asked.length === before + 2, "both to read the third");
+  await until(() => asked.length === before + 1, "the work last active to read the third");
   for (const input of inputs.slice(before)) {
     assert.ok(input.indexOf("First.") >= 0);
     assert.ok(input.indexOf("First.") < input.indexOf("Second."));
@@ -964,18 +1090,18 @@ test("work that left a thread takes nothing said there after, and writes nothing
 });
 
 test("a store left as a message was being given to two pieces of work has the next looper give it to both, once", async () => {
-  // Left as the first of the two begins to take it, and left after that one has taken it and
-  // before its turn has run.
+  // Both are in a turn. Left as the first of the two begins to take it, and left after that one
+  // has taken it, as the second begins to.
   const points: ((key: string, count: (key: string) => number) => boolean)[] = [
-    (key, count) => key === "thread/a/msg/000000000006" && count(key) === 2,
-    (key, count) => key.startsWith("unfinished/") && count("unfinished/") === 2,
+    (key, count) => key === "thread/a/msg/000000000004" && count(key) === 2,
+    (key, count) => key === "thread/a/msg/000000000004" && count(key) === 3,
   ];
   for (const [n, at] of points.entries()) {
     const values = new Map<string, never>();
     let left: Map<string, never> | undefined;
     const counts = new Map<string, number>();
     let armed = false;
-    const { looper } = await two({
+    const { looper } = await inTurns({
       values,
       writing: (key) => {
         if (!armed || left) return undefined;
@@ -1120,15 +1246,18 @@ test("a store left after the main loop gave what came back to new work, and befo
 });
 
 test("a thread stays marked while the main loop decides on a message two pieces of work handed back together", async () => {
-  const { looper, values, asked, mains, numbered, answer } = await two({
+  const made = await inTurns({
     routing: (text) =>
       text.startsWith(BACK) && text.includes("A table.") ? new Promise(() => {}) : undefined,
   });
+  const { looper, values, asked, mains, numbered, answer } = made;
   await looper.send("a", "Book a table.");
-  await until(() => asked.length === 5, "both to read it");
+  goOn(made);
+  await until(() => asked.length === 6, "both to read it");
   answer("Book a table.", handsBack(numberIn(numbered, "report"), "A table."), "report");
   answer("Book a table.", handsBack(numberIn(numbered, "weather"), "A table."), "weather");
-  await until(() => mains.length === 3, "the main loop to be given it");
+  // Heard of as it joined their turns, then given to decide.
+  await until(() => mains.length === 5, "the main loop to be given it");
   await idle();
   assert.equal(values.get("unrouted/a"), true);
   await looper.close();
@@ -1190,19 +1319,20 @@ test("a message both of its works leave before taking is handed back by their le
   await until(() => asked.length === 2, "the map's request");
   answer("Draw the map.", sends("Map done."));
   await looper.settled();
-  // A third thread comes to be followed by both.
+  // A third thread comes to be followed by both, each in a turn there: the report, given what
+  // was said there, hands back one said as it works, and the map is given that one.
   await looper.send("t", "Look at this.");
   await until(() => asked.length === 3, "the report to read it");
-  answer("Look at this.", sends("Looked."));
-  await looper.settled();
   await looper.send("t", "And the map legend?");
-  await until(() => asked.length === 4, "the report to read it");
+  answer("Look at this.", []);
+  await until(() => asked.length === 4, "the report to read both");
   answer("And the map legend?", handsBack(numberIn(numbered, "report")));
-  await until(() => asked.length === 5, "the map to read it");
-  answer("And the map legend?", sends("Legend done."));
-  await looper.settled();
+  await until(() => asked.length === 6, "the report's turn to go on, and the map to read it");
+  // Said while both are in a turn: each reads it at its next request.
   await looper.send("t", "Unrelated: taxes?");
-  await until(() => asked.length === 7, "both to read it");
+  answer("And the map legend?", sends("Looked."), "report");
+  answer("And the map legend?", sends("Legend done."), "Draw the map");
+  await until(() => asked.length === 8, "both to read it");
   const [report, map] = [numberIn(numbered, "report"), numberIn(numbered, "Draw the map")];
   // The next message is still being stored when both hand the first back and leave.
   holding = true;
@@ -1217,6 +1347,10 @@ test("a message both of its works leave before taking is handed back by their le
     () => mains.some(({ input }) => input.at(-2) === "Second unrelated."),
     "the main loop to be given the second",
   );
+  // Each turn, which answered a message of its own, goes on once, and ends calling nothing.
+  await until(() => asked.length === 10, "both turns to go on");
+  answer("Unrelated: taxes?", [], "report");
+  answer("Unrelated: taxes?", [], "Draw the map");
   await looper.settled();
   // Neither took it; each handed it back by leaving, and the main loop is told so.
   const put = mains.find(({ input }) => input.at(-2) === "Second unrelated.")?.input.at(-1);
@@ -1264,7 +1398,7 @@ test("a thread stays marked while a piece of work in a turn is still taking a me
   let writes = 0;
   const report = gate();
   const weather = gate();
-  const { looper, values, asked, numbered, answer } = await two({
+  const made = await inTurns({
     // The message's second write is the report taking it, and its third the weather.
     writing: (at) => {
       if (!armed || !at.startsWith("thread/a/msg/")) return undefined;
@@ -1274,10 +1408,10 @@ test("a thread stays marked while a piece of work in a turn is still taking a me
       return writes === 2 ? report.shut : writes === 3 ? weather.shut : undefined;
     },
   });
+  const { looper, values, asked, numbered, answer } = made;
   await looper.send("a", "How warm is it?");
-  await until(() => asked.length === 5, "both to read it");
-  answer("How warm is it?", sends("Not the report's."), "report");
-  await until(() => values.has("unfinished/a") === false, "the report to be at rest");
+  goOn(made);
+  await until(() => asked.length === 6, "both to read it");
   await idle();
   armed = true;
   const sending = looper.send("a", "And tomorrow?");
@@ -1292,7 +1426,9 @@ test("a thread stays marked while a piece of work in a turn is still taking a me
   assert.equal(values.get("unrouted/a"), true, "what the store holds still waits for the weather");
   weather.open();
   await sending;
-  await until(() => asked.length === 7, "both to read it");
+  await until(() => asked.length === 7, "the weather to read it");
+  answer("How warm is it?", sends("Not the report's."), "report");
+  await until(() => asked.length === 8, "the report to read it");
   assert.equal(values.has("unrouted/a"), false);
   await looper.stop();
 });
@@ -1300,7 +1436,7 @@ test("a thread stays marked while a piece of work in a turn is still taking a me
 test("a message that comes back while a decision on its thread is out is decided on though that decision fails", async () => {
   const failing = gate();
   let decisions = 0;
-  const { looper, values, said, asked, mains, numbered, failures, answer } = await two({
+  const made = await inTurns({
     routing: (text) =>
       !text.startsWith(BACK) || !text.includes("Not ours.")
         ? undefined
@@ -1308,23 +1444,37 @@ test("a message that comes back while a decision on its thread is out is decided
           ? failing.shut.then(() => says("Never said."))
           : says("Nobody here does that."),
   });
+  const { looper, values, said, asked, mains, numbered, failures, answer } = made;
   const back = (text: string) => {
     answer(text, handsBack(numberIn(numbered, "report"), "Not ours."), "report");
     answer(text, handsBack(numberIn(numbered, "weather"), "Not ours."), "weather");
   };
+  /** Have both turns, which answered messages of their own, end once they go on. */
+  const end = async (text: string, count: number) => {
+    await until(() => asked.length === count, "both turns to go on");
+    answer(text, [], "report");
+    answer(text, [], "weather");
+  };
   await looper.send("a", "Book a table.");
-  await until(() => asked.length === 5, "both to read it");
+  goOn(made);
+  await until(() => asked.length === 6, "both to read it");
   back("Book a table.");
-  await until(() => mains.length === 3, "the main loop to be given it");
+  // Heard of as it joined their turns, then given to decide.
+  await until(() => mains.length === 5, "the main loop to be given it");
   await idle();
-  // While that decision is out, another comes back from both.
+  // While that decision is out, another comes back from both, still in their turns.
+  await until(() => asked.length === 8, "both turns to go on");
   await looper.send("a", "Book a taxi.");
-  await until(() => asked.length === 7, "both to read the next");
+  await end("Book a table.", 8);
+  await until(() => asked.length === 10, "both to read the next");
   back("Book a taxi.");
   await idle();
-  assert.equal(mains.length, 3);
+  assert.equal(mains.length, 5);
   failing.fail();
-  await until(() => mains.length === 4, "the main loop to be given both");
+  // The main loop hears of the next once the decision has failed, and is given both.
+  await until(() => mains.length === 7, "the main loop to be given both");
+  assert.equal(mains[5]?.instructions, HEARD_INSTRUCTIONS);
+  await end("Book a taxi.", 12);
   await looper.settled();
   assert.deepEqual(failures, ["a: failed"]);
   assert.equal(said.at(-1), "a: assistant: Nobody here does that.");
@@ -1352,17 +1502,18 @@ test("work that leaves a thread as the main loop gives it another follows that o
   await looper.settled();
   await looper.send("b", "Plan the trip.");
   await until(() => asked.length === 2, "the trip's request");
-  answer("Plan the trip.", sends("Trip planned."));
-  await looper.settled();
-  // The trip hands a message back, and it is given to the report, which then follows `b` too.
+  // The trip hands back a message said as it works, and it is given to the report, which then
+  // follows `b` too: both are in a turn there.
   await looper.send("b", "And the figures?");
+  answer("Plan the trip.", []);
   await until(() => asked.length === 3, "the trip to read it");
-  answer("And the figures?", handsBack(3));
-  await until(() => asked.length === 4, "the report to read it");
-  answer("And the figures?", sends("Figures added."), "report");
-  await looper.settled();
+  answer("And the figures?", handsBack(2));
+  await until(() => asked.length === 5, "the trip's turn to go on, and the report to read it");
+  // Said while both are in a turn: each reads it at its next request.
   await looper.send("b", "Which hotel?");
-  await until(() => asked.length === 6, "both to read it");
+  answer("And the figures?", sends("Trip planned."), "trip");
+  answer("And the figures?", sends("Figures added."), "report");
+  await until(() => asked.length === 7, "both to read it");
   const number = numberIn(numbered, "report");
   // The next message there is still being written when the report leaves: what waits for it
   // there is handed back after that write.
@@ -1377,7 +1528,7 @@ test("work that leaves a thread as the main loop gives it another follows that o
   hold.open();
   await next;
   await given;
-  await until(() => asked.length >= 7, "the report to read what it was given");
+  await until(() => asked.length >= 8, "the report to read what it was given");
   const report = works(values).find(({ id }) => id === "a") as {
     follows: string[];
     left?: string[];
@@ -1392,7 +1543,7 @@ test("work that leaves a thread as the main loop gives it another follows that o
 test("a looper that closes as work with nothing to take is starting leaves the next nothing to go on with in that work", async () => {
   let refusing = false;
   let writes = 0;
-  const first = await two({
+  const first = await inTurns({
     // The message's third write is the weather taking it.
     writing: (key) =>
       refusing && key.startsWith("thread/a/msg/") && ++writes === 3
@@ -1401,9 +1552,12 @@ test("a looper that closes as work with nothing to take is starting leaves the n
   });
   refusing = true;
   await first.looper.send("a", "Thanks, both.");
-  await until(() => first.asked.length === 4, "the report to read it");
+  // The report reads it at its next request, answers, and is at rest; the weather, which
+  // couldn't take it, is still at what it was when the looper closes.
+  first.answer("What is the weather?", sends("Report done."), "report");
+  await until(() => first.asked.length === 5, "the report to read it");
   first.answer("Thanks, both.", sends("Welcome."));
-  await first.looper.settled();
+  await until(() => first.values.has("unfinished/a") === false, "the report to be at rest");
   await idle();
   refusing = false;
   await first.looper.close();
@@ -1440,20 +1594,15 @@ test("a looper that closes as work with nothing to take is starting leaves the n
 test("work stopped while a message is still being given to the thread's other work is not started again by the next looper", async () => {
   const hold = gate();
   let armed = false;
-  const first = await two({
-    // The weather's mark, as it starts a turn for the message.
-    writing: (key) => {
-      if (!armed || !key.startsWith("unfinished/") || key === "unfinished/a") return undefined;
-      armed = false;
-      return hold.shut;
-    },
+  let writes = 0;
+  const first = await inTurns({
+    // The message's third write: the weather, in a turn, taking it after the report.
+    writing: (key) =>
+      armed && key === "thread/a/msg/000000000004" && ++writes === 3 ? hold.shut : undefined,
   });
   armed = true;
   const sending = first.looper.send("a", "Thanks, both.");
-  await until(
-    () => !armed && first.asked.length === 4,
-    "the report's request, the weather starting",
-  );
+  await until(() => writes === 3, "the report to have taken it, the weather taking it");
   // The report's turn is stopped, and the looper closes before the weather has the message.
   await first.looper.cancel("a");
   await idle();

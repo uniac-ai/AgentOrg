@@ -4,11 +4,12 @@
  * piece of work, with a loop of its own, or, when a message needs no work, the main loop.
  *
  * Intake is code. A thread may be followed by several pieces of work, and a message in it is
- * given to each. One in a thread nothing follows is kept, and the main loop decides on the
- * thread: it answers itself, and the thread stays no work's; or it says whose the message is,
- * new work, or work there is, in a turn or at rest, which then follows that thread too. The main
- * loop makes one decision at a time, and one for a thread on all that waits in it. A piece of
- * work answers in the thread of the newest message it has read.
+ * given to each of them in a turn, or with none, to the one last active. One in a thread nothing
+ * follows is kept, and the main loop decides on the thread: it answers itself, and the thread
+ * stays no work's; or it says whose the message is, new work, or work there is, in a turn or at
+ * rest, which then follows that thread too. The main loop makes one decision at a time, and one
+ * for a thread on all that waits in it. A piece of work answers in the thread of the newest
+ * message it has read.
  *
  * A worker decides each message it is given: it does it and answers, or hands it back, saying
  * it is not this work's. A message every piece of work it was given to has handed back is the
@@ -189,6 +190,11 @@ export function createLooper(options: {
   /** What is kept of each piece of work, and the pieces of work each thread is followed by. */
   const kept = new Map<string, z.output<typeof Work>>();
   const followed = new Map<string, string[]>();
+  /**
+   * Each thread's piece of work last active there: the last to answer there, or to be given a
+   * message there, in code or by the main loop.
+   */
+  const lastIn = new Map<string, string>();
   /**
    * Have a thread be followed by a piece of work too, beside what follows it: its own work, if
    * it has one, is there first.
@@ -446,6 +452,8 @@ export function createLooper(options: {
         },
         out: {
           message: out.message,
+          // A work that answers in a thread is the one last active there.
+          replied: (thread) => lastIn.set(thread, id),
           delta: out.delta,
           failed: out.failed,
           worked: () => out.worked(id),
@@ -725,7 +733,10 @@ export function createLooper(options: {
     } finally {
       // Only now is the thread its work's to be sent in: after what the main loop said there,
       // or couldn't keep. Whose it is stands either way, as it is kept.
-      if (work !== undefined) link(thread, work);
+      if (work !== undefined) {
+        link(thread, work);
+        lastIn.set(thread, work);
+      }
     }
     return work;
   };
@@ -761,6 +772,7 @@ export function createLooper(options: {
               await follow(thread, work, kept.has(work) ? undefined : title);
               link(thread, work);
             }
+          for (const { work } of offers) lastIn.set(thread, work);
           return offers.map(({ work }) => work);
         };
         await offered();
@@ -828,6 +840,22 @@ export function createLooper(options: {
     decided = routing;
     routes.set(thread, routing);
     tally();
+  };
+  /**
+   * Of `followers`, the pieces of work that follow `thread`, those a message said there is given
+   * to: each in a turn, running or waiting for a place; with none, the one last active there.
+   * Until one has been since the looper started, it is the one whose last turn ended latest, and
+   * on a tie the one that followed later. What that one hands back is the main loop's to decide.
+   * So a message costs a request for each in a turn, or at most two, however much work a thread
+   * gathers.
+   */
+  const takersOf = (thread: string, followers: string[]) => {
+    const inTurn = followers.filter((id) => works.get(id)?.loop.turn() !== undefined);
+    if (inTurn.length > 0 || followers.length === 0) return inTurn;
+    const there = lastIn.get(thread);
+    if (there !== undefined && followers.includes(there)) return [there];
+    const last = (id: string) => kept.get(id)?.at ?? "";
+    return [followers.reduce((one, other) => (last(other) >= last(one) ? other : one))];
   };
   /** Keep a message in a thread nothing follows, and have it routed, unless a stop came since `at`. */
   const intake = async (thread: string, text: string, at: number, images?: Picture[]) => {
@@ -928,9 +956,9 @@ export function createLooper(options: {
     route(thread);
   };
   /**
-   * Give a message to the work its thread is followed by. With one piece of work it is that
-   * work's to keep. With several it is kept once, naming each, and each takes it in its own
-   * order: the work at rest starts a turn, and a turn running takes it at its next request.
+   * Give a message to `to`, the work following its thread that takes it. With one piece of work
+   * it is that work's to keep. With several it is kept once, naming each, and each takes it in its
+   * own order: a turn takes it at its next request, and work whose turn has ended since starts one.
    */
   const give = async (
     to: string[],
@@ -944,6 +972,9 @@ export function createLooper(options: {
     let missed = false;
     let sent: { messageId: string };
     const [only] = to;
+    // Given to several, the one that followed later is last active there.
+    const latest = to.at(-1);
+    if (latest !== undefined) lastIn.set(thread, latest);
     if (to.length === 1 && only !== undefined) {
       const { turn, ...kept } = await using(only, (loop) => loop.send(text, thread, images));
       if (turn !== undefined) joined.push({ work: only, turn });
@@ -1165,11 +1196,11 @@ export function createLooper(options: {
   return {
     /**
      * Say a message in a thread. It is recorded and said at once. In a thread that work follows
-     * it is given to each piece of it: one with no turn running starts one, which waits for a place
-     * if none is free, and a turn running or waiting takes it at its next model request. In a
-     * thread nothing follows, the main loop answers it or says whose it is first. Refused `busy`
-     * while `WAITING` turns already wait and it would start one more, or while the looper is
-     * stopped; and `unavailable` once it has closed.
+     * it is given to each piece of it in a turn, which takes it at its next model request; with
+     * none in a turn, to the one last active, which starts a turn, waiting for a place if none is
+     * free. In a thread nothing follows, the main loop answers it or says whose it is first.
+     * Refused `busy` while `WAITING` turns already wait and it would start one more, or while the
+     * looper is stopped; and `unavailable` once it has closed.
      */
     send(thread: string, text: string, images?: Picture[]) {
       try {
@@ -1178,16 +1209,18 @@ export function createLooper(options: {
         return Promise.reject(error);
       }
       const at = cuts;
-      // Work known here is asked at once, so a stop that comes after this cuts it too.
-      // With several pieces of work it goes through the thread's line, so each takes one message
-      // after another in the order they were said.
-      const known =
-        followed.get(thread) ?? (!marks.has(thread) && works.has(thread) ? [thread] : undefined);
-      if (known?.length === 1 && !lines.get(thread)?.waiting)
+      // Work known here is asked at once, so a stop that comes after this cuts it too. Given to
+      // several, it goes through the thread's line, so each takes one message after another in
+      // the order they were said.
+      const known = takersOf(
+        thread,
+        followed.get(thread) ?? (!marks.has(thread) && works.has(thread) ? [thread] : []),
+      );
+      if (known.length === 1 && !lines.get(thread)?.waiting)
         return give(known, thread, text, at, images);
       return started(
         inLine(thread, async () => {
-          const to = await followersOf(thread);
+          const to = takersOf(thread, await followersOf(thread));
           // Stopped or closed while its work was found: nothing of it is kept.
           mayStart(at);
           return to.length === 0
