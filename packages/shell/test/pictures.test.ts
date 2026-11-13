@@ -168,6 +168,36 @@ test(
 );
 
 test(
+  "a picture can be sent with no words: alone in the message, and named in its chat's row",
+  withGateway(async (gateway) => {
+    const page = await open(gateway);
+    const send = panel(page).getByRole("button", { name: "Send", exact: true });
+    assert.equal(await send.isDisabled(), true, "nothing to send yet");
+    await panel(page).getByLabel("Pictures to attach").setInputFiles({
+      name: "shot.png",
+      mimeType: "image/png",
+      buffer: PNG,
+    });
+    await box(page).getByRole("img", { name: "Picture 1" }).waitFor();
+    await send.click();
+    const sent = panel(page).getByRole("log").getByRole("img", { name: "Picture 1" });
+    await sent.waitFor();
+    const input = gateway.calls.find((c) => c.method === "send")?.input as {
+      text?: string;
+      images?: unknown[];
+    };
+    assert.equal(input.text?.trim() ?? "", "");
+    assert.equal(input.images?.length, 1);
+    // No words under it: the picture is the message.
+    const message = sent.locator("xpath=ancestor::*[@data-slot='message-scroller-item'][1]");
+    assert.equal((await message.innerText()).trim(), "");
+    await panel(page).getByRole("button", { name: "All chats" }).click();
+    await panel(page).getByRole("list", { name: "Chats" }).getByText("You: Picture").waitFor();
+    await page.close();
+  }),
+);
+
+test(
   "a message of pictures with no words is named in its chat's row",
   withGateway(async (gateway) => {
     const page = await open(gateway);
