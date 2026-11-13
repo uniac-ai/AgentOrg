@@ -982,6 +982,17 @@ test("a response that has streamed text or a streamed function's arguments, or t
   await once({ status: 429, code: "subscription_sharing_usage_limit_exceeded" }, "usage_limit");
   await once({ status: 503, code: "subscription_sharing_usage_limit_exceeded" }, "usage_limit");
   await once({ status: 500, code: "subscription_sharing_unsupported_capability" }, "unsupported");
+  // A request longer than the model takes, in a reply or inside the stream: its caller can make
+  // it shorter, so it is the answer at once.
+  await once({ status: 400, code: "context_length_exceeded" }, "context_length");
+  await once(
+    {
+      events: [
+        { type: "response.failed", response: { error: { code: "context_length_exceeded" } } },
+      ],
+    },
+    "context_length",
+  );
   assert.deepEqual(s.waits, []);
 });
 
@@ -1325,6 +1336,13 @@ test("a request that had reasoning put back and fails before any text, in a way 
   assert.equal(s.waits.length, 1);
   assert.deepEqual(latest(s, 2).kinds, bare);
   assert.deepEqual(latest(s).kinds, bare);
+  // A request longer than the model takes is the answer at once, reasoning or not: its caller can
+  // make it shorter.
+  turn = await kept("c9");
+  s.fake.script({ status: 400, code: "context_length_exceeded" });
+  before = latest(s).count;
+  await assert.rejects(ask(turn), { code: "context_length" });
+  assert.equal(latest(s).count - before, 1);
   // A server's error in the stream passes as it is: the try after it keeps the reasoning.
   turn = await kept("c8");
   s.waits.length = 0;

@@ -65,6 +65,7 @@ export const Tool = z.object({
  * - `unavailable`: the service is unavailable for now; try again later;
  * - `ineligible`: the account isn't eligible;
  * - `unsupported`: the request asked for something the service doesn't support;
+ * - `context_length`: the request is longer than the model takes;
  * - `failed`: anything else, with a diagnostic message.
  */
 export const llmSession = defineInterface({

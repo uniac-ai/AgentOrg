@@ -122,6 +122,8 @@ export function refusalOf(
         "unsupported",
         `The request asked for something plan usage doesn't support${at.param ? `: ${word(at.param)}` : ""}${ref}.`,
       );
+    case "context_length_exceeded":
+      return new Refused("context_length", `The request is longer than the model takes${ref}.`);
   }
   if (at.status === 429) return refusalOf("subscription_sharing_usage_limit_exceeded", at);
   if (at.status === 503) return refusalOf("subscription_sharing_usage_unavailable", at);
