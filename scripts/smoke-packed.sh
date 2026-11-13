@@ -10,7 +10,9 @@
 #   person's;
 # - 0.0.7, 0.0.8 and 0.0.9: an agent that must still run, bound exactly as it was (to its model
 #   and a connection's tools among others), whose two chats must become one conversation with the
-#   person, the one last written in, which takes a message.
+#   person, the one last written in, which takes a message;
+# - 0.0.10: an agent with an AgentOrg control unit that must still run, bound exactly as it was,
+#   whose conversation takes a message, and whose unit's skill is brought up to date.
 # Once a version is published, it gets a section here, or joins the loop of an earlier version
 # when it takes the same commands and the same is asked of this build on its home (not in the
 # change that releases it: the registry has it only after its tag). A section makes, with that
@@ -467,4 +469,127 @@ for v in 0.0.7 0.0.8 0.0.9; do
   fi
   stop_app
 done
+
+# 0.0.10 keeps one conversation with each agent where those before it kept chats, so it has a
+# section of its own. Its agent has an AgentOrg control unit, whose skill 0.0.10 copied into the
+# home: this build brings it up to date at its first start, since it is still as 0.0.10 copied it.
+v=0.0.10
+step "a home the published $v made: its agent runs, bound as it was, its conversation takes a message, and its unit's skill is brought up to date"
+oldv="$work/old-$v"
+mkdir "$oldv"
+(cd "$oldv" && echo '{"private":true}' >package.json &&
+  npm install --silent --no-audit --no-fund --cache "$work/cache" "@agentorg/cli@$v")
+was="$oldv/node_modules/.bin/agentorg"
+homev="$work/home-$v"
+start_on "$was" "$homev" "$work/old-$v.log"
+for _ in $(seq 1 120); do
+  "$was" call agents creatable --home "$homev" >"$work/creatable-$v.json" 2>/dev/null &&
+    grep -Eq '"id": ?"assistant"' "$work/creatable-$v.json" &&
+    "$was" call agents units --home "$homev" >"$work/units-$v.json" 2>/dev/null &&
+    grep -Eq '"id": ?"control"' "$work/units-$v.json" && break
+  kill -0 "$pid" 2>/dev/null || { cat "$work/old-$v.log" >&2; exit 1; }
+  sleep 0.5
+done
+grep -Eq '"id": ?"control"' "$work/units-$v.json" ||
+  { echo "$v offered no AgentOrg control" >&2; cat "$work/old-$v.log" >&2; exit 1; }
+create="$(node -e '
+  const read = (f) => JSON.parse(require("fs").readFileSync(f, "utf8"));
+  const { creatables: [one] } = read(process.argv[1]);
+  const control = read(process.argv[2]).units.find((unit) => unit.id === "control");
+  const templates = control.form.find((field) => field.id === "templates").options;
+  console.log(JSON.stringify({
+    stack: {
+      base: { provider: one.provider, creatable: one.id },
+      units: [{ provider: control.provider, unit: "control", values: { templates: [templates[0].value] } }],
+    },
+    name: "Elder",
+  }));
+' "$work/creatable-$v.json" "$work/units-$v.json")"
+"$was" call agents create "$create" --home "$homev" >/dev/null ||
+  { echo "$v made no agent with AgentOrg control" >&2; cat "$work/old-$v.log" >&2; exit 1; }
+# The skill as the home keeps it, and as this build's AgentOrg control gives it now: 0.0.10's
+# copy must differ, and be this build's text once it has started.
+skill="$homev/programs/management/skills/delegating/SKILL.md"
+node --input-type=module -e '
+  const { skillFile } = await import(process.argv[1]);
+  process.stdout.write(skillFile("SKILL.md"));
+' "$work/install/node_modules/@agentorg/cli/dist/node_modules/@agentorg/manager/dist/src/control.js" >"$work/delegating-now.md"
+[ -s "$work/delegating-now.md" ] || { echo "This build gave no delegating skill" >&2; exit 1; }
+[ -f "$skill" ] || { echo "$v copied no delegating skill" >&2; cat "$work/old-$v.log" >&2; exit 1; }
+cmp -s "$skill" "$work/delegating-now.md" &&
+  { echo "$v's delegating skill is already this build's" >&2; exit 1; }
+slot="$(chat_slot "$was" "$homev")"
+[ -n "$slot" ] || { echo "$v gave the person no conversation" >&2; exit 1; }
+# Its conversation answers once the agent has joined; then one message is said in it.
+answered=""
+for _ in $(seq 1 60); do
+  "$was" call "$slot" history '{}' --home "$homev" >/dev/null 2>&1 && { answered=1; break; }
+  kill -0 "$pid" 2>/dev/null || break
+  sleep 0.5
+done
+[ -n "$answered" ] || { echo "$v's conversation never answered" >&2; cat "$work/old-$v.log" >&2; exit 1; }
+"$was" call "$slot" send "{\"text\":\"Said on $v.\"}" --home "$homev" >/dev/null ||
+  { echo "$v's conversation took no message" >&2; cat "$work/old-$v.log" >&2; exit 1; }
+connection="$(fixture_connection "$was" "$homev")"
+[ -n "$connection" ] || { echo "$v offered no way to connect" >&2; cat "$work/old-$v.log" >&2; exit 1; }
+elder="$("$was" call agents list --home "$homev" | node -e '
+  const { agents } = JSON.parse(require("fs").readFileSync(0, "utf8"));
+  console.log(agents.find((a) => a.name === "Elder")?.agent ?? "");
+')"
+"$was" call agents expose "{\"agent\":\"$elder\",\"connection\":\"$connection\",\"as\":\"fixture\"}" --home "$homev" >/dev/null ||
+  { echo "$v exposed no connection to its agent" >&2; cat "$work/old-$v.log" >&2; exit 1; }
+agent_bindings "$was" "$homev" "$elder" >"$work/bound-$v.txt" ||
+  { echo "$v didn't say what its agent is bound to" >&2; cat "$work/old-$v.log" >&2; exit 1; }
+for bound in model fixture control; do
+  grep -q "^$bound " "$work/bound-$v.txt" ||
+    { echo "$v bound its agent to no $bound" >&2; cat "$work/bound-$v.txt" >&2; exit 1; }
+done
+stop_app
+start_on "$agentorg" "$homev" "$work/up-$v.log"
+# The person keeps the conversation's slot, which answers once the agent is back.
+back=""
+for _ in $(seq 1 120); do
+  [ "$(chat_slot "$agentorg" "$homev")" = "$slot" ] &&
+    "$agentorg" call "$slot" history '{}' --home "$homev" >/dev/null 2>&1 && { back=1; break; }
+  kill -0 "$pid" 2>/dev/null || { cat "$work/up-$v.log" >&2; exit 1; }
+  sleep 0.5
+done
+[ -n "$back" ] ||
+  { echo "The person lost the $v agent's conversation on this build" >&2; cat "$work/up-$v.log" >&2; exit 1; }
+# The skill is brought up to date as management starts, beside the agent coming back.
+for _ in $(seq 1 60); do
+  cmp -s "$skill" "$work/delegating-now.md" && break
+  sleep 0.5
+done
+cmp -s "$skill" "$work/delegating-now.md" ||
+  { echo "This build didn't bring $v's delegating skill up to date" >&2; cat "$work/up-$v.log" >&2; exit 1; }
+echo "This build brought $v's delegating skill up to date"
+"$agentorg" call "$slot" send '{"text":"And on this build."}' --home "$homev" >/dev/null
+"$agentorg" call "$slot" history '{}' --home "$homev" >"$work/history-$v.json"
+"$agentorg" call agents list --home "$homev" >"$work/agents-$v.json"
+node -e '
+  const read = (f) => JSON.parse(require("fs").readFileSync(f, "utf8"));
+  const got = {
+    agent: read(process.argv[2]).agents.find((a) => a.name === "Elder")?.status.state,
+    said: read(process.argv[1]).messages.filter((m) => m.role === "user").map((m) => m.text),
+  };
+  const want = { agent: "running", said: [`Said on ${process.argv[3]}.`, "And on this build."] };
+  if (JSON.stringify(got) !== JSON.stringify(want)) {
+    console.error(JSON.stringify(got));
+    process.exit(1);
+  }
+  console.log(`${process.argv[3]}'"'"'s agent is ${got.agent}, and its conversation took a message`);
+' "$work/history-$v.json" "$work/agents-$v.json" "$v" ||
+  { echo "This build lost something of the $v home" >&2; cat "$work/up-$v.log" >&2; exit 1; }
+agent_bindings "$agentorg" "$homev" "$elder" >"$work/bound-$v-now.txt" ||
+  { echo "This build didn't say what the $v agent is bound to" >&2; cat "$work/up-$v.log" >&2; exit 1; }
+diff "$work/bound-$v.txt" "$work/bound-$v-now.txt" ||
+  { echo "The $v agent is not bound on this build as it was" >&2; cat "$work/up-$v.log" >&2; exit 1; }
+echo "$v's agent is bound as it was:"
+cat "$work/bound-$v.txt"
+if grep -E "didn't work|Error" "$work/up-$v.log"; then
+  echo "This build reported a problem on the $v home" >&2
+  exit 1
+fi
+stop_app
 echo "smoke passed"
