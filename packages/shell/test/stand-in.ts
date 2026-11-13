@@ -990,7 +990,12 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
         };
       }
       const record = other ? other.messages : agent.chat.messages;
-      const message = text(`u${record.length}-${++sent}`, "user", String(input.text), 0);
+      const message = {
+        ...text(`u${record.length}-${++sent}`, "user", String(input.text), 0),
+        ...(Array.isArray(input.images) && input.images.length > 0
+          ? { images: input.images as Message["images"] }
+          : {}),
+      };
       record.push(message);
       // The status is said when it changes: an agent already at work says nothing more.
       const idle = agent.chat.status.state === "idle";

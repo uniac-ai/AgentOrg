@@ -1,6 +1,7 @@
 // What the built side is given for the measured screens, as the design's sample has it: its
 // agents and computer and terminals, replies not yet read, sample chats to open, and what a page asks; and
 // the design page's own controls, which put it in the cases it draws.
+import { crc32, deflateSync } from "node:zlib";
 import type { Page } from "@playwright/test";
 import type { Agent, Creatable, Held, standIn, Template, Units } from "../stand-in.ts";
 
@@ -39,6 +40,32 @@ export function readChat(gateway: Gateway) {
   });
 }
 
+/** A plain picture of a size, as a PNG in base64: the design's sample picture is 640 by 420. */
+function png(width: number, height: number) {
+  const chunk = (type: string, data: Buffer) => {
+    const body = Buffer.concat([Buffer.from(type), data]);
+    const out = Buffer.alloc(12 + data.length);
+    out.writeUInt32BE(data.length, 0);
+    body.copy(out, 4);
+    out.writeUInt32BE(crc32(body), 8 + data.length);
+    return out;
+  };
+  const head = Buffer.alloc(13);
+  head.writeUInt32BE(width, 0);
+  head.writeUInt32BE(height, 4);
+  head.set([8, 2, 0, 0, 0], 8);
+  const rows = Buffer.alloc((width * 3 + 1) * height, 0xf1);
+  for (let y = 0; y < height; y++) rows[y * (width * 3 + 1)] = 0;
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk("IHDR", head),
+    chunk("IDAT", deflateSync(rows)),
+    chunk("IEND", Buffer.alloc(0)),
+  ]).toString("base64");
+}
+/** The picture the person sent in the design's sample chat. */
+const SHOT = png(640, 420);
+
 /** A case the design draws for a chat, which the built side's sample chat can be given. */
 export type ChatCase = "limit" | "long";
 
@@ -64,7 +91,13 @@ export function sampleChats(gateway: Gateway, given?: ChatCase) {
             at: at(2000 - n),
           }))
         : []),
-      { id: "v-u1", role: "user", text: "Review #482 before I merge it.", at: at(13) },
+      {
+        id: "v-u1",
+        role: "user",
+        text: "Review #482 before I merge it. This is what the coupon does on staging.",
+        at: at(13),
+        images: [{ mediaType: "image/png", data: SHOT }],
+      },
       {
         id: "v-a1",
         role: "assistant",

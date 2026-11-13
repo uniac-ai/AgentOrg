@@ -1628,7 +1628,10 @@ if (wants("thread"))
         now = false,
       ) => {
         const gateway = side === "built" ? await standIn() : undefined;
-        if (gateway) sampleChats(gateway, given);
+        if (gateway) {
+          sampleAgents(gateway);
+          sampleChats(gateway, given);
+        }
         const page = gateway
           ? await builtPage(gateway, "wide", theme)
           : await designPage("wide", theme);
