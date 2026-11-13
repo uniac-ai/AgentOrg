@@ -1,7 +1,8 @@
 /**
  * What a loop runs on, kept in a store. A thread keeps its messages, one key each: the items a
  * model reads for it, and for a line of a piece of work's own, its text. A thread is read once, then
- * kept in memory, and its oldest messages are deleted past a retention cap. A piece of work reads
+ * kept in memory. Past a retention cap its oldest calls are deleted, and past one of their own the
+ * oldest pictures said in it are left out; what was said in it is never deleted. A piece of work reads
  * its context from the threads it follows: each message is kept once, in the thread where it is
  * shown, and says which work it belongs to when that isn't its thread's own, or which pieces of
  * work when it was given to several.
@@ -92,7 +93,10 @@ const seqOf = (key: string) => Number(key.slice(MESSAGES.length)) || 0;
 // page of messages, in one piece of about a megabyte.
 /** What the model is sent of a conversation fits this many bytes of JSON where `fit` can make it. */
 export const INPUT_BUDGET = 400_000;
-/** At most this many messages are kept, in at most this many bytes, oldest deleted first. */
+/**
+ * Past this many calls, or this many bytes of them, a thread's oldest calls are deleted; past this
+ * many bytes of pictures said in it, the oldest are left out. Its words stay, however many.
+ */
 export const KEEP = 2000;
 export const KEEP_BYTES = 16 * 1024 * 1024;
 /** A stored message's text, and a call's arguments, are cut to fit these, in bytes of JSON. */
@@ -420,6 +424,18 @@ const mainEntry = (text: string, after: number) => ({
   items: [{ type: "message" as const, role: "assistant" as const, content: text }],
 });
 
+/** Whether a record is a call: what the retention cap deletes. */
+const isCall = (one: { entry: Entry }) =>
+  one.entry.role === "tool" && one.entry.items.some((item) => item.type === "function_call");
+/** What the pictures said in `entry` carry, in characters of base64. */
+const picturesIn = (entry: Entry) =>
+  entry.items.reduce(
+    (sum, item) =>
+      item.type === "function_call"
+        ? sum
+        : (item.images ?? []).reduce((all, one) => all + one.data.length, sum),
+    0,
+  );
 /** A message as a thread holds it. */
 interface Kept {
   /** Its number in its thread. */
@@ -440,7 +456,6 @@ interface Kept {
 interface Held {
   records: Kept[];
   last: number;
-  bytes: number;
 }
 
 /**
@@ -462,7 +477,6 @@ export function createThread(
     const attempt = (async () => {
       const records: Kept[] = [];
       let last = 0;
-      let bytes = 0;
       let after: string | undefined;
       do {
         const page = await store.list({
@@ -484,12 +498,11 @@ export function createThread(
             }
             const record = { seq: seqOf(key), key, entry: parsed.data, bytes: size(parsed.data) };
             records.push(record);
-            bytes += record.bytes;
           });
         }
         after = page.next ?? undefined;
       } while (after);
-      return { records, last, bytes };
+      return { records, last };
     })();
     loaded = attempt;
     attempt.catch(() => {
@@ -519,7 +532,6 @@ export function createThread(
     };
     record.bytes = size(record.entry);
     held.records.push(record);
-    held.bytes += record.bytes;
     const first = store.set({ key, value: record.entry as Json });
     record.writes = first.catch(() => {});
     const stored = (async () => {
@@ -529,41 +541,83 @@ export function createThread(
       } catch (error) {
         if (entry.role !== "tool") {
           held.records.splice(held.records.indexOf(record), 1);
-          held.bytes -= record.bytes;
           throw error;
         }
         log.error("A tool message couldn't be stored; it is kept until a restart.", {
           error: String(error),
         });
       }
-      while (
-        held.records.length > 1 &&
-        (held.records.length > limits.keep || held.bytes > limits.keepBytes)
-      ) {
-        const oldest = held.records.shift() as Kept;
-        held.bytes -= oldest.bytes;
-        await store.delete({ key: oldest.key }).catch((error: unknown) =>
-          log.warn("An old message couldn't be deleted.", {
-            key: oldest.key,
-            error: String(error),
-          }),
-        );
-      }
+      await trim(held, record);
     })();
     return { record, stored };
   };
 
+  /**
+   * Keep the thread within its cap, which bounds its calls and the pictures said in it, each by
+   * itself, and never its words. Past it the oldest calls are deleted, but never `pushed`, just
+   * kept, nor a work's newest call here, which holds its place. And the oldest pictures said are
+   * left out, each by a line: of what is not a person's message, or of one that is stored, not
+   * being taken, and answered or closed without an answer.
+   */
+  const trim = async (held: Held, pushed: Kept) => {
+    for (;;) {
+      const calls = held.records.filter(isCall);
+      const bytes = calls.reduce((sum, one) => sum + one.bytes, 0);
+      if (calls.length <= limits.keep && bytes <= limits.keepBytes) break;
+      const newest = new Map(calls.map((one) => [one.entry.work ?? "", one]));
+      const call = calls.find((one) => one !== pushed && newest.get(one.entry.work ?? "") !== one);
+      if (!call) break;
+      held.records.splice(held.records.indexOf(call), 1);
+      // After its own write, so that can't bring it back.
+      await (call.writes ?? Promise.resolve())
+        .then(() => store.delete({ key: call.key }))
+        .catch((error: unknown) =>
+          log.warn("An old call couldn't be deleted.", { key: call.key, error: String(error) }),
+        );
+    }
+    for (;;) {
+      const said = held.records.filter((one) => !isCall(one));
+      if (said.reduce((sum, one) => sum + picturesIn(one.entry), 0) <= limits.keepBytes) return;
+      const answered = new Set(
+        said.flatMap(({ entry }) => [
+          ...(entry.closes === undefined ? [] : [entry.closes]),
+          ...(entry.answers ?? []),
+        ]),
+      );
+      const oldest = said.find(
+        (one) =>
+          one !== pushed &&
+          !one.writing &&
+          !one.taking?.size &&
+          picturesIn(one.entry) > 0 &&
+          (one.entry.role !== "user" ||
+            one.entry.unanswered === true ||
+            answered.has(one.entry.id)),
+      );
+      if (!oldest) return;
+      await change(
+        oldest,
+        (entry) => ({ ...entry, items: entry.items.map((item) => leaveOut(item, () => false)) }),
+        (entry) => entry,
+      )
+        .store()
+        .catch((error: unknown) =>
+          log.warn("An old picture couldn't be left out.", {
+            key: oldest.key,
+            error: String(error),
+          }),
+        );
+    }
+  };
+
   const change = (
-    held: Held,
     record: Kept,
     apply: (entry: Entry) => Entry,
     revert: (entry: Entry) => Entry,
   ) => {
     const swap = (entry: Entry) => {
-      const bytes = size(entry);
-      held.bytes += bytes - record.bytes;
       record.entry = entry;
-      record.bytes = bytes;
+      record.bytes = size(entry);
     };
     swap(apply(record.entry));
     return {
@@ -673,7 +727,6 @@ export function createThread(
         if (!ids.includes(record.entry.id) || !record.entry.to) continue;
         if (record.entry.to.some((one) => one.work === work)) continue;
         const offered = change(
-          held,
           record,
           (entry) => ({
             ...entry,
@@ -841,9 +894,7 @@ export function createRecord(options: {
     const changes = waiting.map((record) => {
       const place = ++top;
       record.taking = (record.taking ?? new Set()).add(id);
-      return options
-        .thread(thread)
-        .change(from, record, (entry) => taken(entry, place, joined), untaken);
+      return options.thread(thread).change(record, (entry) => taken(entry, place, joined), untaken);
     });
     // Stored one after another in that order, so what a crash or a refusal leaves taken is the
     // start of them: the rest stay waiting, and are taken after it.
@@ -1019,7 +1070,6 @@ export function createRecord(options: {
         back: why,
       };
       const change = options.thread(thread).change(
-        held.get(thread) as Held,
         record,
         // It names those it was given to from now on, which says the same of a single holder.
         ({ work: _, place: __, joined: ___, ...entry }) => ({
@@ -1081,7 +1131,6 @@ export function createRecord(options: {
       const left = openOf(held, from).filter(({ record }) => placeOf(record) <= read);
       for (const { thread, record } of left) {
         const change = options.thread(thread).change(
-          held.get(thread) as Held,
           record,
           (entry) => ({ ...entry, unanswered: true as const }),
           ({ unanswered: _, ...entry }) => entry,
@@ -1109,7 +1158,7 @@ export function createRecord(options: {
       // store refuses they wait for it again.
       const dropped = from.records.filter(offered);
       const changes = dropped.map((record) =>
-        options.thread(thread).change(from, record, hold(why), hold()),
+        options.thread(thread).change(record, hold(why), hold()),
       );
       for (const [i, change] of changes.entries())
         await change.store().catch((error: unknown) => {
@@ -1127,10 +1176,10 @@ export function createRecord(options: {
     async unpicture(ids: string[]): Promise<void> {
       const held = await load();
       for (const { thread, record } of own(held)) {
-        if (!ids.includes(record.entry.id)) continue;
+        // One the thread's cap deleted meanwhile stays deleted.
+        if (!ids.includes(record.entry.id) || !held.get(thread)?.records.includes(record)) continue;
         const was = record.entry;
         const change = options.thread(thread).change(
-          held.get(thread) as Held,
           record,
           (entry) => ({ ...entry, items: entry.items.map((item) => leaveOut(item, () => false)) }),
           (entry) => ({ ...entry, items: was.items }),

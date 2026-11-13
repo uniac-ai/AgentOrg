@@ -1,11 +1,11 @@
 /**
  * A loop: a turn sends its record and the tools to the model, runs each function the model calls,
- * and sends the results back, until a request calls nothing, or the turn has made its
- * `MAX_CALLS` calls. A message said while a turn runs is recorded at once, and the turn
- * takes it at its next model request. A loop is one piece of work's: its messages come in the
- * threads the work follows, and what comes of a request is kept in the thread of the newest
- * message that request read and the work has not handed back. Its worker is told which work this
- * is and reads each of the person's messages by a number. It has two functions beside its tools:
+ * and sends the results back, until a request calls nothing or the turn is stopped, however many
+ * calls that takes. A message said while a turn runs is recorded at once, and the turn takes it
+ * at its next model request. A loop is one piece of work's: its messages come in the threads the
+ * work follows, and what comes of a request is kept in the thread of the newest message that
+ * request read and the work has not handed back. Its worker is told which work this is and reads
+ * each of the person's messages by a number. It has two functions beside its tools:
  * `send`, the only way anything it says reaches the person, which answers a message, and
  * `hand_back`, which says a message is not this work's. What it writes without sending, and what
  * its calls did, are kept for the work and said in no thread.
@@ -39,8 +39,6 @@ import {
 
 /** What a message's thread is told when its work's turn ended without a reply to it. */
 const NOT_ANSWERED = { code: "not_answered", message: "Not answered" };
-/** A brake on a turn, not a budget: nothing approves a call, and the person can stop it. */
-export const MAX_CALLS = 200;
 /** What its work keeps, and its model is told, when a turn that was cut off goes on. */
 const CUT_OFF = {
   kept: "Cut off by a restart: going on from where it stopped.",
@@ -427,7 +425,6 @@ export function createLoop(options: {
   };
 
   async function run(current: Turn) {
-    let calls = 0;
     for (;;) {
       const { instructions, tools: theirs, model: chosen } = await options.request();
       const tools = [...theirs, handBack];
@@ -501,12 +498,10 @@ export function createLoop(options: {
       /** Whether every call of this request handed a message back. */
       let handedAll = true;
       for (const [i, call] of called.entries()) {
-        if (current.cancelled || calls >= MAX_CALLS) {
-          const rest = called.slice(i);
-          await skipped(rest, current.cancelled ? "cancelled" : "limit", thread);
+        if (current.cancelled) {
+          await skipped(called.slice(i), "cancelled", thread);
           break;
         }
-        calls++;
         const id = crypto.randomUUID();
         // Sending is the looper's own: what was sent is kept as said, with its call. One that
         // can't be sent is kept for the model, and shown to nobody.
@@ -554,8 +549,6 @@ export function createLoop(options: {
         }
       }
       if (current.cancelled) return;
-      if (calls >= MAX_CALLS)
-        throw new Refusal("limit", `This turn stopped after ${MAX_CALLS} tool calls.`);
       // A request that only handed messages back, in a turn that has done nothing else and has
       // nothing else left unanswered, has nothing to go on with: the turn ends there, unless
       // more was said meanwhile.
