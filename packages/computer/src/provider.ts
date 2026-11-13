@@ -1,8 +1,11 @@
 // The units' provider, and the connector to AgentComputer. A computer is one the service runs: this
 // asks the service for it through its SDK, then opens an ordinary `url` connection to each endpoint
 // with the computer's token, and joins the computer's capability as an Actor of its own, which the
-// person is connected to. The web unit is one connection to a hosted server. Nothing here starts
-// a service. The control token and each computer's token stay in this provider's private file.
+// person is connected to. The web unit is one connection to a hosted server. When no service runs
+// on this machine and AgentComputer is installed, `agentcomputer up` starts one: when a computer
+// here is added, and at start for computers kept here. The app doesn't include AgentComputer. The
+// control token and each computer's token stay in this provider's private file.
+import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import {
   accessSync,
@@ -17,8 +20,9 @@ import {
 } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { Computer, ComputerError, type LiveSurface } from "@agentorg/computer";
 import {
   capability,
@@ -83,6 +87,8 @@ const FILE = "instances.json";
 const SKILLS_DIR = fileURLToPath(new URL("../../skills/", import.meta.url));
 const EXA_URL = "https://mcp.exa.ai/mcp?tools=web_search_exa,web_fetch_exa";
 const SERVICE_ANSWERS_MS = 2000;
+/** How long `agentcomputer up` may take to have a service answer. */
+const UP_MS = 30_000;
 type FactRow = z.input<typeof FactRowShape>;
 /** The most a row's value holds, as `FactRow` has it. */
 const ROW_VALUE_MAX = 1024;
@@ -104,10 +110,15 @@ export interface ComputerProviderOptions {
   credential: string;
   /** A private folder of the provider's, which holds each connection's Hub credential. */
   dir: string;
-  /** Where a service on this machine writes its address and token; the service's own default. */
+  /**
+   * Where a service on this machine writes its address and token, and where `agentcomputer up`
+   * starts one; the service's own default.
+   */
   dataFolder?: string;
   /** Where an agent's own folder goes when none is named; `~/Agents` by default. */
   agentsFolder?: string;
+  /** Where `agentcomputer` is looked for, to start a service here: `PATH` by default. */
+  path?: string;
   /** The hosted server the web unit connects to; Exa's by default. For tests. */
   webUrl?: string;
   log?: Log;
@@ -148,6 +159,23 @@ const defaultDataFolder = () =>
   (process.env.XDG_DATA_HOME
     ? join(process.env.XDG_DATA_HOME, "agentcomputer")
     : join(homedir(), ".local", "share", "agentcomputer"));
+
+/** `promise`'s value, or undefined if it fails or takes longer than `ms`. */
+async function within<T>(ms: number, promise: Promise<T>): Promise<T | undefined> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<undefined>((resolve) => {
+        timer = setTimeout(resolve, ms, undefined);
+      }),
+    ]);
+  } catch {
+    return undefined;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 /** A folder as a person writes it: `~/` is their home. */
 const fromHome = (folder: unknown) =>
@@ -266,24 +294,59 @@ export async function startComputerProvider(
       return undefined;
     }
   };
-  /** The service on this machine, if it answers now. */
-  const findLocal = async (): Promise<Found> => {
-    const reached = localService();
-    if (!reached) return undefined;
-    let timer: NodeJS.Timeout | undefined;
-    try {
-      return await Promise.race([
-        Computer.serviceInfo(reached),
-        new Promise<undefined>((resolve) => {
-          timer = setTimeout(resolve, SERVICE_ANSWERS_MS, undefined);
-        }),
-      ]);
-    } catch {
-      return undefined;
-    } finally {
-      clearTimeout(timer);
+  /** The `agentcomputer` command on the path, if AgentComputer is installed here. */
+  const onPath = () => {
+    for (const folder of (options.path ?? process.env.PATH ?? "").split(delimiter)) {
+      if (!folder) continue;
+      const command = join(folder, "agentcomputer");
+      try {
+        accessSync(command, constants.X_OK);
+        return command;
+      } catch {}
     }
+    return undefined;
   };
+  /** How the service on this machine isolates, if it answers now. */
+  const answering = async () => {
+    const reached = localService();
+    const info = reached && (await within(SERVICE_ANSWERS_MS, Computer.serviceInfo(reached)));
+    return reached && info ? { reached, isolation: info.isolation } : undefined;
+  };
+  /**
+   * The service on this machine. When none answers, `agentcomputer up` starts one with its
+   * default isolation, `none`, or finds one that answers after all. Calls made while it runs share
+   * it.
+   */
+  let starting: Promise<Reached> | undefined;
+  const startedLocal = (): Promise<Reached> =>
+    (starting ??= (async () => {
+      const here = await answering();
+      if (here) return here.reached;
+      const command = onPath();
+      if (!command) throw new Refused("invalid", INSTALL_STEPS);
+      const data = options.dataFolder ?? defaultDataFolder();
+      await promisify(execFile)(command, ["up", "--data", data], { timeout: UP_MS }).catch(
+        (error: { killed?: boolean; stderr?: unknown }) => {
+          const said = String(error.stderr ?? "").trim();
+          throw new Refused(
+            "unavailable",
+            error.killed
+              ? `AgentComputer didn't answer within ${UP_MS / 1000} seconds of being started. It may still be starting: try again in a moment.`
+              : `AgentComputer couldn't be started on this computer. ${said.slice(0, 1000) || messageOf(error)}`,
+          );
+        },
+      );
+      log.info("AgentComputer is running on this computer.");
+      const started = localService();
+      if (!started)
+        throw new Refused("unavailable", "AgentComputer started, but can't be reached.");
+      return started;
+    })().finally(() => {
+      starting = undefined;
+    }));
+  /** The service on this machine as the form says it: how it isolates, or that it will start. */
+  const findLocal = async (): Promise<Found> =>
+    (await answering()) ?? (onPath() ? { isolation: "none", starts: true } : undefined);
 
   const running = new Map<string, Connection[]>();
   /** Connect a link. A service on this machine may have moved to another port since. */
@@ -364,26 +427,13 @@ export async function startComputerProvider(
   };
   const askSurfaces = async (computer: NonNullable<Instance["computer"]>) => {
     const reached = reachOf(computer.service);
-    if (!reached) return undefined;
-    let timer: NodeJS.Timeout | undefined;
-    try {
-      const info = await Promise.race([
-        Computer.getInfo(computer.id, reached),
-        new Promise<undefined>((resolve) => {
-          timer = setTimeout(resolve, SURFACES_MS, undefined);
-        }),
-      ]);
-      return info?.surfaces.map(({ surface, protocol, operate, unavailable }) => ({
-        surface,
-        protocol,
-        operate,
-        ...(unavailable ? { unavailable } : {}),
-      }));
-    } catch {
-      return undefined;
-    } finally {
-      clearTimeout(timer);
-    }
+    const info = reached && (await within(SURFACES_MS, Computer.getInfo(computer.id, reached)));
+    return info?.surfaces.map(({ surface, protocol, operate, unavailable }) => ({
+      surface,
+      protocol,
+      operate,
+      ...(unavailable ? { unavailable } : {}),
+    }));
   };
 
   /** Make the computer, and say what each of its endpoints is and the rows fixed for its views. */
@@ -396,9 +446,9 @@ export async function startComputerProvider(
   ) => {
     const local = values.service === LOCAL;
     const reached = local
-      ? localService()
+      ? await startedLocal()
       : { apiUrl: String(values.address).replace(/\/$/, ""), apiKey: secrets.token as string };
-    if (!reached) throw new Refused("invalid", INSTALL_STEPS);
+    // Named, so the computer has the isolation its targets and rows below say.
     const { isolation } = await Computer.serviceInfo(reached);
     const access = values.access as Access | "none";
     const workspace = (
@@ -416,6 +466,7 @@ export async function startComputerProvider(
       }
     const computer = await Computer.create({
       ...reached,
+      isolation,
       access,
       browser: values.browser === true,
       name,
@@ -552,6 +603,13 @@ export async function startComputerProvider(
       server.onState(() => client.exports.capability.emit("changed", {}));
   };
 
+  // Computers kept here come back with their service, started first if none runs, so their
+  // connections find it where it is.
+  if (
+    onPath() &&
+    Object.values(stored).some((entry) => entry.computer && "local" in entry.computer.service)
+  )
+    await startedLocal().catch((error) => log.error(messageOf(error)));
   for (const [instance, entry] of Object.entries(stored)) {
     const servers: Connection[] = [];
     try {

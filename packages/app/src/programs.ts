@@ -19,8 +19,11 @@ export interface ProgramsOptions {
   log?: (message: string) => void;
   /** How ChatGPT's requests leave, instead of the network. For tests. */
   fetch?: (request: Request, init: RequestInit) => Promise<Response>;
-  /** Where the computer connector looks for a local service, the web unit's server, and agents' folders. For tests. */
-  computer?: { dataFolder?: string; webUrl?: string; agentsFolder?: string };
+  /**
+   * Where the computer connector looks for a local service and for `agentcomputer` to start one,
+   * the web unit's server, and agents' folders. For tests.
+   */
+  computer?: { dataFolder?: string; webUrl?: string; agentsFolder?: string; path?: string };
 }
 
 export interface Programs {

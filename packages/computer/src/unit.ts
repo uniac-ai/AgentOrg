@@ -46,19 +46,24 @@ const WITH_FILES = {
 
 export const LOCAL = "local";
 export const ANOTHER = "another";
-/** What to do when there is no service here: the app never starts or ships one. */
+/** What to do when AgentComputer isn't installed here: the app doesn't include it. */
 export const INSTALL_STEPS =
-  "No AgentComputer is running on this computer. Install it with npm install -g @agentorg/computer, start it with agentcomputer serve, and try again.";
+  "AgentComputer isn't installed on this computer. Install it with npm install -g @agentorg/computer and try again. AgentOrg starts it for you.";
 
-/** How the service on this machine isolates its computers, if one is running. */
-export type Found = { isolation: "none" | "container" } | undefined;
+/**
+ * How the service here isolates. With `starts`, none runs yet, and one with no isolation is
+ * started when a computer is added. Undefined when none runs and AgentComputer isn't installed.
+ */
+export type Found = { isolation: "none" | "container"; starts?: true } | undefined;
 /** What a computer here reaches is said in one place, for how the service here isolates. */
 const localLine = (found: Found) =>
   !found
     ? INSTALL_STEPS
-    : found.isolation === "container"
-      ? "On this computer, by a service you started. Each agent's computer is a container of its own, and the only folder of yours in it is its workspace directory."
-      : "On this computer, by a service you started. No isolation: it acts as you, and with a terminal it reaches everything you can.";
+    : `On this computer, by AgentComputer${found.starts ? ", started when you add this computer" : ""}. ${
+        found.isolation === "container"
+          ? "Each agent's computer is a container of its own, and the only folder of yours in it is its workspace directory."
+          : "No isolation: it acts as you, and with a terminal it reaches everything you can."
+      }`;
 
 /** The form as it stands now, with what was found on this machine. */
 export const computerUnit = (found: Found): z.input<typeof Unit> => ({
@@ -81,7 +86,7 @@ export const computerUnit = (found: Found): z.input<typeof Unit> => ({
           value: LOCAL,
           title: "This computer",
           description: localLine(found),
-          // The line warns of no isolation whenever it says so: not with a container or no service.
+          // The line warns of no isolation whenever it says so: not with a container or none installed.
           ...(found && found.isolation !== "container" ? { caution: true as const } : {}),
         },
         {

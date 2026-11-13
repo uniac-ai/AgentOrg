@@ -1,7 +1,7 @@
 // The connector against a real Hub and a real AgentComputer: the published service, on a port and
 // in a folder of each test's own, driving the headless shell Playwright installed.
 import assert from "node:assert/strict";
-import { type ChildProcess, spawn } from "node:child_process";
+import { type ChildProcess, execFile, spawn } from "node:child_process";
 import { once } from "node:events";
 import {
   existsSync,
@@ -21,6 +21,7 @@ import type { AddressInfo } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
+import { promisify } from "node:util";
 import { Computer } from "@agentorg/computer";
 import { Hub, listen, PERSON } from "@agentorg/hub";
 import { capability, tools, Unit, unitProvider } from "@agentorg/interfaces";
@@ -97,7 +98,7 @@ async function startService(data: string): Promise<Service> {
   };
 }
 
-async function setup(t: test.TestContext, { service = true, webUrl = "" } = {}) {
+async function setup(t: test.TestContext, { service = true, webUrl = "", path = "" } = {}) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "agentorg-computer-")));
   const dir = join(root, "provider");
   const data = join(root, "service");
@@ -109,6 +110,10 @@ async function setup(t: test.TestContext, { service = true, webUrl = "" } = {}) 
   const server = await listen(hub);
   t.after(async () => {
     for (const leave of leaving.reverse()) await leave();
+    // A service the connector started in this test's folder, if one is still recorded there.
+    try {
+      process.kill(JSON.parse(readFileSync(join(data, "server.json"), "utf8")).pid);
+    } catch {}
     await server.close();
     hub.close();
     rmSync(root, { recursive: true, force: true });
@@ -127,6 +132,8 @@ async function setup(t: test.TestContext, { service = true, webUrl = "" } = {}) 
       dir,
       dataFolder: data,
       agentsFolder: join(root, "Agents"),
+      // No `agentcomputer` to start unless a test gives one.
+      path,
       ...(webUrl ? { webUrl } : {}),
       timing: { firstDelayMs: 50, pingEveryMs: 200 },
     });
@@ -211,6 +218,7 @@ async function setup(t: test.TestContext, { service = true, webUrl = "" } = {}) 
     dir,
     running,
     root,
+    data,
   };
 }
 
@@ -273,7 +281,7 @@ test("each skill the form names can be read, and an unknown one is refused", asy
   );
 });
 
-test("with no service here, it says what to install and start, and nothing is made", async (t) => {
+test("with AgentComputer not installed, it says how to install it, and nothing is made", async (t) => {
   const { units, apply, local, hub } = await setup(t, { service: false });
   const unit = (await units.units({})).units.find((one) => one.id === "computer");
   assert.match(form(unit, "service")?.options?.[0]?.description ?? "", /npm install -g/);
@@ -288,11 +296,60 @@ test("with no service here, it says what to install and start, and nothing is ma
       problems.map((one) => one.field),
       ["service"],
     );
-    assert.match(problems[0]?.message ?? "", /agentcomputer serve/);
+    assert.match(problems[0]?.message ?? "", /npm install -g @agentorg\/computer/);
   }
   const before = hub.state.actors().length;
   await assert.rejects(apply(local("terminal")), refused("invalid"));
   assert.equal(hub.state.actors().length, before);
+});
+
+test("with AgentComputer installed and none running, adding a computer starts it, and a restart starts it again for its computer", async (t) => {
+  // An install puts `agentcomputer` on the path; this one listens where nothing else does.
+  const bin = realpathSync(mkdtempSync(join(tmpdir(), "agentorg-bin-")));
+  t.after(() => rmSync(bin, { recursive: true, force: true }));
+  const command = join(bin, "agentcomputer");
+  writeFileSync(
+    command,
+    `#!/bin/sh\nexec "${process.execPath}" "${SERVICE}" "$@" --listen 127.0.0.1:0\n`,
+    { mode: 0o755 },
+  );
+  const { units, apply, local, connected, restart, data } = await setup(t, {
+    service: false,
+    path: bin,
+  });
+  const down = () => promisify(execFile)(command, ["down", "--data", data]);
+  try {
+    // The form says it is started when the computer is added, with no isolation, and it can be.
+    const unit = (await units.units({})).units.find((one) => one.id === "computer");
+    assert.equal((form(unit, "service") as { default?: unknown }).default, "local");
+    assert.match(
+      form(unit, "service")?.options?.[0]?.description ?? "",
+      /started when you add this computer\. No isolation/,
+    );
+    assert.deepEqual(
+      (await units.check({ unit: "computer", values: local("read"), secrets: [] })).problems,
+      [],
+    );
+    assert.equal(existsSync(join(data, "server.json")), false, "nothing is started by reading");
+    const { instance } = await apply(local("read"));
+    await connected(instance);
+    // Its computer has no isolation, as the form said.
+    const reached = {
+      apiUrl: JSON.parse(readFileSync(join(data, "server.json"), "utf8")).url as string,
+      apiKey: readFileSync(join(data, "control-token"), "utf8").trim(),
+    };
+    assert.deepEqual(
+      (await Computer.list(reached)).map((one) => one.isolation),
+      ["none"],
+    );
+    // Gone, the service is started again when the connector starts, and its computer is back.
+    await down();
+    assert.equal(existsSync(join(data, "server.json")), false);
+    await restart();
+    await connected(instance);
+  } finally {
+    await down().catch(() => {});
+  }
 });
 
 test("check says what's wrong by field, and changes nothing", async (t) => {

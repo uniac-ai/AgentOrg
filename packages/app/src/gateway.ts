@@ -78,9 +78,10 @@ export interface AppOptions {
   /** Where the shell's static files are; `@agentorg/shell`'s build by default. */
   shell?: string;
   /**
-   * How the first run, at each start, logs and reaches ChatGPT: the app's own by default.
+   * How the first run, at each start, logs, reaches ChatGPT and finds a computer service: the
+   * app's own by default.
    */
-  firstRun?: Pick<ProgramsOptions, "fetch" | "log">;
+  firstRun?: Pick<ProgramsOptions, "fetch" | "log" | "computer">;
 }
 
 export interface App {

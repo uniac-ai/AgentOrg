@@ -161,7 +161,12 @@ async function open(
   const start = async () => {
     const app = await startApp({
       home,
-      firstRun: { log: () => {}, ...(computer ? { computer } : {}), ...(fetch ? { fetch } : {}) },
+      firstRun: {
+        log: () => {},
+        // An empty path: the test starts any service itself.
+        computer: { path: "", ...computer },
+        ...(fetch ? { fetch } : {}),
+      },
     });
     const person = personOf(app, home);
     started.push({ app, person });
@@ -502,7 +507,7 @@ test("the bundled Assistant is a computer and the web, and its computer goes wit
     templates.map((one) => [one.id, one.units.map((unit) => unit.unit)]),
     [["assistant", ["computer", "web"]]],
   );
-  // With no service found, the app says what to do. It starts nothing.
+  // With AgentComputer not installed, the app says how to install it, and starts nothing.
   const { units } = await person.call<{
     units: { id: string; provider: string }[];
   }>("agents", "units");
@@ -520,11 +525,11 @@ test("the bundled Assistant is a computer and the web, and its computer goes wit
   const { problems } = await person.call<{ problems: { message: string }[] }>("agents", "check", {
     stack: { base, units: [unit] },
   });
-  assert.match(problems[0]?.message ?? "", /agentcomputer serve/);
+  assert.match(problems[0]?.message ?? "", /npm install -g @agentorg\/computer/);
   // An untouched Assistant is refused the same way, and nothing is made.
   await assert.rejects(
     person.call("agents", "create", { template: "assistant", name: "Too soon" }),
-    /agentcomputer serve/,
+    /npm install -g @agentorg\/computer/,
   );
   assert.deepEqual((await person.call<{ agents: unknown[] }>("agents", "list")).agents, []);
   assert.equal(existsSync(join(data, "server.json")), false);
