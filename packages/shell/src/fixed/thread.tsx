@@ -307,14 +307,17 @@ const ProblemLine = ({
 
 /**
  * The head of your conversation with an agent: back to the list, its face to its page, its name;
- * and, once it has begun, its computer.
+ * and, once it has begun, its computer. One between two agents is named by both, and says it is
+ * there to be read.
  */
 function Head({
   agent,
+  other,
   begun,
   children,
 }: {
   agent: { id: string; name: string; tone: Tone };
+  other?: { name: string } | undefined;
   begun: boolean;
   children?: React.ReactNode;
 }) {
@@ -343,7 +346,14 @@ function Head({
       {/* One not begun is headed by the agent alone, as the design draws it. */}
       {begun ? (
         <div className="ml-1.5 min-w-0 flex-1">
-          <h2 className="truncate text-[15px] leading-5 font-semibold">{agent.name}</h2>
+          <h2 className="truncate text-[15px] leading-5 font-semibold">
+            {other ? `${agent.name} and ${other.name}` : agent.name}
+          </h2>
+          {other && (
+            <div className="truncate text-[13px] leading-[18px] text-muted-foreground">
+              You can read it, not write in it
+            </div>
+          )}
         </div>
       ) : (
         <h2 className="ml-1.5 min-w-0 flex-1 truncate text-[15px] font-semibold">{agent.name}</h2>
@@ -362,10 +372,13 @@ function Head({
 export function Thread({
   agent,
   chat,
+  other,
 }: {
   agent: { id: string; name: string; tone: Tone };
   /** As the list has it, once it is listed. */
   chat?: ListedChat | undefined;
+  /** The agent its conversation is with, when it is not yours: read here, never written in. */
+  other?: { id: string; name: string; tone: Tone } | undefined;
 }) {
   const { byId } = useAgents();
   const { read } = useAllChats();
@@ -408,15 +421,17 @@ export function Thread({
   // A reply shown here is read.
   const replied = messages.findLast((m) => m.role === "assistant")?.at;
   useEffect(() => {
-    if (replied) read(agent.id, replied);
-  }, [read, agent.id, replied]);
+    if (replied && !other) read(agent.id, replied);
+  }, [read, agent.id, replied, other]);
+  /** Who the conversation is with, as its calls and events name the party. */
+  const party = other?.id ?? PERSON;
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: `state` says when to read again.
   useEffect(() => {
     if (connection !== "open" || !slot) return;
     let live = true;
-    // What is said in your conversation with it; one it has with another agent is not here.
-    const here = (payload: unknown) => (payload as { with: string }).with === PERSON;
+    // What is said in this conversation; one it has with anyone else is not here.
+    const here = (payload: unknown) => (payload as { with: string }).with === party;
     /**
      * The record and the status now. The record outranks what streamed, and only what arrives
      * while the page is read is newer than it.
@@ -428,7 +443,10 @@ export function Thread({
       heard = false;
       try {
         const [{ messages: page, more }, now] = await Promise.all([
-          api.call<{ messages: ChatMessage[]; more: boolean }>(slot, "history", { limit: PAGE }),
+          api.call<{ messages: ChatMessage[]; more: boolean }>(slot, "history", {
+            limit: PAGE,
+            ...(other ? { with: party } : {}),
+          }),
           // The status is the agent's.
           api.call<ChatStatus>(slot, "state", {}),
         ]);
@@ -514,7 +532,7 @@ export function Thread({
       live = false;
       for (const stop of stops) stop();
     };
-  }, [slot, connection, state]);
+  }, [slot, connection, state, party]);
 
   const recorded = new Set(messages.map((m) => m.id));
   const unrecorded = sending.filter((m) => !m.messageId || !recorded.has(m.messageId));
@@ -563,7 +581,7 @@ export function Thread({
       const { messages: page, more } = await api.call<{
         messages: ChatMessage[];
         more: boolean;
-      }>(slot, "history", { before: oldest.id, limit: PAGE });
+      }>(slot, "history", { before: oldest.id, limit: PAGE, ...(other ? { with: party } : {}) });
       setMessages((was) => {
         const known = new Set(was.map((m) => m.id));
         return [...page.filter((m) => !known.has(m.id)), ...was];
@@ -577,7 +595,7 @@ export function Thread({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <Head agent={agent} begun={!!chat}>
+      <Head agent={agent} other={other} begun={!!chat}>
         {hasComputer && (
           <Button
             variant="ghost"
@@ -619,6 +637,12 @@ export function Thread({
                   {turn.kind === "user" ? (
                     <Message align="end">
                       <MessageContent className="gap-1">
+                        {/* Between two agents, who said it. */}
+                        {other && (
+                          <span className="pr-3 text-right text-[13px] text-muted-foreground">
+                            {other.name}
+                          </span>
+                        )}
                         {/* The pictures sent with it, above its words, each at its own shape. */}
                         {turn.images.map((image, n) => (
                           <span
@@ -659,7 +683,8 @@ export function Thread({
           <MessageScrollerButton />
         </MessageScroller>
       </MessageScrollerProvider>
-      {!off && (
+      {/* One between two agents is read here, never written in. */}
+      {!off && !other && (
         <div className="mx-auto w-full max-w-[720px] shrink-0 px-3 pb-3">
           <Composer name={agent.name} draft={agent.id} onSend={send} />
         </div>

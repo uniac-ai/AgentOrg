@@ -16,9 +16,19 @@ export function age(at: string, now = Date.now()): string {
   return days < 7 ? `${days} d` : `${Math.floor(days / 7)} wk`;
 }
 
-/** One conversation in a list: the agent, and its latest message or its problem. */
-export function ChatRow({ chat, onOpen }: { chat: ListedChat; onOpen(): void }) {
-  const { agent } = chat;
+/**
+ * One conversation in a list: the agent, and its latest message or its problem. One between two
+ * agents is shown by the agent it is with, where the other's page lists it.
+ */
+export function ChatRow({
+  chat,
+  agent = chat.agent,
+  onOpen,
+}: {
+  chat: ListedChat;
+  agent?: ListedChat["agent"];
+  onOpen(): void;
+}) {
   const fresh = chat.unread;
   return (
     <button

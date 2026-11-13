@@ -15,6 +15,7 @@ import { SESSION, standIn } from "../stand-in.ts";
 import {
   ASKED,
   ASKS,
+  between,
   type ChatCase,
   CREATES,
   closeEveryTab,
@@ -27,6 +28,7 @@ import {
   messageDocs,
   notAnswered,
   noted,
+  openBetween,
   openConversation,
   openDesignAgent,
   openFiles,
@@ -628,6 +630,14 @@ const probe = (what: Part): Parts => {
     parts["chats.new.button"] = of(chats?.previousElementSibling?.querySelector("button"));
     parts["chats.new.icon"] = of(chats?.previousElementSibling?.querySelector("svg"));
     parts["chats.row"] = of(chats?.querySelector("li button"));
+    // Its conversations with other agents, beneath: the section's head and its first row.
+    const others = under?.querySelector('section[aria-label="With other agents"]');
+    parts.others = of(others);
+    parts["others.title"] = of(others?.querySelector("h2"), "w");
+    const other = others?.querySelector("li button");
+    parts["others.row"] = of(other);
+    parts["others.row.name"] = of(other?.children[1]?.children[0], "w");
+    parts["others.row.words"] = of(other?.children[1]?.children[1], "w");
     return parts;
   }
 
@@ -1181,6 +1191,13 @@ const probe = (what: Part): Parts => {
     parts["head.close"] = of(head?.querySelector('button[aria-label="Close chats"]'));
     const mine = [...(panel?.querySelectorAll(".whitespace-pre-wrap") ?? [])];
     parts.said = of(mine[0]);
+    // Between two agents, who said it, above it.
+    parts["said.from"] = of(
+      mine[0]
+        ?.closest('[data-slot="message-content"]')
+        ?.querySelector(":scope > span:not(.window)"),
+      "w",
+    );
     // The person's last message, and the words shown under it: none while its work runs.
     const last = mine.at(-1);
     parts["said.last"] = mine.length > 1 ? of(last) : null;
@@ -1681,6 +1698,14 @@ if (wants("thread"))
         await openSampleChat(page);
         await refuseSend(page, gateway);
       });
+      await one("between", undefined, async (page, gateway) => {
+        if (gateway) {
+          between(gateway);
+          gateway.changed();
+        }
+        await openBetween(page);
+        await panel(page).locator(".prose-chat").first().waitFor();
+      });
       await one("refused.first", undefined, async (page, gateway) => {
         if (gateway) {
           docsAgent(gateway);
@@ -1743,6 +1768,7 @@ const AGENT_PAGES = [
   { state: "stopped", size: "wide", id: "a-weekly", name: "Weekly report" },
   { state: "held", size: "wide", id: "a-research", name: "Research" },
   { state: "never", size: "wide", id: "a-docs", name: "Docs" },
+  { state: "others", size: "wide", id: "a-release", name: "Release notes" },
 ] as const;
 if (wants("agent"))
   for (const { state, size, id, name } of AGENT_PAGES)
@@ -1752,11 +1778,13 @@ if (wants("agent"))
       for (const side of ["design", "built"] as const) {
         const gateway = side === "built" ? await standIn() : undefined;
         // Research's computer down, as the design's control puts it, is seen on its Chats.
-        const chats = state === "chats" || state === "held" || state === "never";
+        const chats =
+          state === "chats" || state === "held" || state === "never" || state === "others";
         if (gateway) {
           sampleAgents(gateway);
           sampleChats(gateway);
           docsAgent(gateway);
+          between(gateway);
           downTriage(gateway);
           if (state === "held")
             gateway.setHeld("a-research", [
@@ -1774,6 +1802,12 @@ if (wants("agent"))
           ? await builtPage(gateway, size, theme, hash)
           : await designPage(size, theme);
         const main = page.getByRole("main");
+        // Release notes' own conversation, with a reply not read, as the design's sample has it.
+        if (gateway && state === "others") {
+          await noted(gateway);
+          releaseNotes(gateway);
+          gateway.changed();
+        }
         if (!gateway && state === "held") await inDesign(page, "Computer down");
         if (!gateway) await openDesignAgent(page, name, chats ? "Chats" : undefined);
         await main.getByRole("heading", { name, level: 1 }).waitFor();
