@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { CUT_STEP, createRecord, createThread, fitted, head, INPUT_BUDGET } from "../src/record.ts";
-import type { Item, Picture, Store } from "../src/types.ts";
+import { COMPACTION_LINE } from "../src/compaction.ts";
+import { CUT_STEP, createRecord, createThread, fitted, INPUT_BUDGET } from "../src/record.ts";
+import { head, type Item, type Picture, type Store } from "../src/types.ts";
 
 /** A store in memory, as the record uses it. */
 function store() {
@@ -49,6 +50,7 @@ function single(calls: Store, limits?: { keep: number; keepBytes: number }) {
     page: thread.page,
     input: record.input,
     saidAfter: record.saidAfter,
+    toCompact: record.toCompact,
   };
 }
 const user = (content: string) => ({
@@ -656,4 +658,128 @@ test("pictures are given once the conversation is fitted: what is left out of it
     /^\(Left out: all that was said and done after \[1\] and before \[5\]/,
   );
   assert.equal(said.at(-1), "a screen t");
+});
+
+/** A reply sent to the message `id`, which answers it. */
+const sentTo = (id: string, text: string) => ({
+  role: "assistant" as const,
+  closes: id,
+  items: [
+    {
+      type: "function_call" as const,
+      callId: `send-${id}`,
+      name: "send",
+      arguments: JSON.stringify({ message: 0, text }),
+    },
+    { type: "function_call_output" as const, callId: `send-${id}`, output: "Sent." },
+  ],
+});
+/** A compaction of what the record holds up to the place `upTo`. */
+const compaction = (upTo: number, summary = "S", read?: string[], changed?: string[]) => ({
+  role: "tool" as const,
+  text: COMPACTION_LINE,
+  items: [],
+  compacted: { summary, upTo, ...(read ? { read } : {}), ...(changed ? { changed } : {}) },
+});
+
+test("after a compaction, its summary is sent in place of what it covers, after the opening message and what it covers still to answer, sent as it is", async () => {
+  const record = single(store().calls as never);
+  const task = await record.append(user("the task")); // 1
+  await record.append(ran("a1", "read a")); // 2
+  await record.append(sentTo(task.id, "did a")); // 3
+  const b = await record.append(user("and b")); // 4
+  await record.append(ran("b1", "read b")); // 5
+  await record.append(sentTo(b.id, "did b")); // 6
+  await record.append(user("and c")); // 7, still to answer
+  await record.append(ran("c1", "read c")); // 8
+  await record.append(compaction(8, "## Goal\n- The task.", ["a.ts"], ["b.ts"])); // 9
+  await record.append(ran("c2", "read more")); // 10
+  const { items, over } = await record.input();
+  assert.equal(over, false);
+  assert.deepEqual(await sent(record), [
+    "the task",
+    "and c",
+    "The conversation history before this poi",
+    "call c2",
+    "output c2",
+  ]);
+  // The summary in its words, with the files read and changed.
+  assert.deepEqual(items[2], {
+    type: "message",
+    role: "user",
+    content:
+      "The conversation history before this point was compacted into the following summary:\n\n<summary>\n## Goal\n- The task.\n\n<read-files>\na.ts\n</read-files>\n\n<modified-files>\nb.ts\n</modified-files>\n</summary>",
+  });
+  // Over the budget, the summary stays with what is sent before it, as what was left out after it.
+  for (const name of ["d", "e", "f"]) {
+    await record.append(user(name));
+    await record.append(reply(`${name}1 ${filler(0.45)}`));
+  }
+  await record.append(user("go on"));
+  const fitted = await record.input();
+  assert.equal(fitted.over, true);
+  assert.deepEqual(
+    (await sent(record)).map((one) => one.slice(0, 12)),
+    ["the task", "and c", "The conversa", "(Left out: a", "f", "f1 xxxxxxxxx", "go on"],
+  );
+});
+
+test("a compaction is made only for what it takes out of the request: not the opening message, nor what is still to answer", async () => {
+  const record = single(store().calls as never);
+  await record.append(user(`the task ${filler(0.3)}`)); // 1, sent whatever is summarized
+  for (let i = 0; i < 3; i++) await record.append(ran(`a${i}`, filler(0.1)));
+  // The opening message and one call would go: under a step of the budget, so only a refusal
+  // for length summarizes it.
+  assert.equal(await record.toCompact(), undefined);
+  assert.equal((await record.toCompact(true))?.upTo, 2);
+  // With only the opening message to go, nothing would be taken out: no summary at all.
+  const opening = single(store().calls as never);
+  await opening.append(user(`the task ${filler(0.3)}`));
+  for (let i = 0; i < 2; i++) await opening.append(ran(`a${i}`, filler(0.1)));
+  assert.equal(await opening.toCompact(true), undefined);
+});
+
+test("a compaction takes all since the one before but the newest bytes, cut between entries, and the exchange it cuts inside apart", async () => {
+  const record = single(store().calls as never);
+  await record.append(user("the task")); // 1
+  for (let i = 0; i < 4; i++) await record.append(ran(`a${i}`, filler(0.1))); // 2-5
+  await record.append(reply("did a")); // 6
+  await record.append(user("go on")); // 7
+  for (let i = 0; i < 4; i++) await record.append(ran(`b${i}`, filler(0.1))); // 8-11
+  // The newest two calls are over 80,000 bytes: they stay, and the rest is summarized, the
+  // exchange the cut falls in apart from what came before it.
+  const first = await record.toCompact();
+  assert.ok(first);
+  assert.equal(first.upTo, 9);
+  assert.equal(first.previous, undefined);
+  const said = (items: Item[]) =>
+    items.map((item) =>
+      item.type === "message"
+        ? item.content
+        : item.type === "function_call"
+          ? `call ${item.callId}`
+          : `output ${item.callId}`,
+    );
+  assert.deepEqual(said(first.history), [
+    "[1] the task",
+    ...["a0", "a1", "a2", "a3"].flatMap((call) => [`call ${call}`, `output ${call}`]),
+    "did a",
+  ]);
+  assert.deepEqual(said(first.prefix), [
+    "[7] go on",
+    ...["b0", "b1"].flatMap((call) => [`call ${call}`, `output ${call}`]),
+  ]);
+  await record.append(compaction(first.upTo));
+  // Nothing again right after: what stays is all there is since.
+  assert.equal(await record.toCompact(), undefined);
+  assert.equal(await record.toCompact(true), undefined);
+  // A little more is done: under a step of the budget is left to the cut, unless a request was
+  // refused for its length.
+  await record.append(ran("b4", filler(0.1)));
+  assert.equal(await record.toCompact(), undefined);
+  const forced = await record.toCompact(true);
+  assert.ok(forced);
+  assert.deepEqual(said(forced.history), ["call b2", "output b2"]);
+  assert.deepEqual(forced.prefix, []);
+  assert.equal(forced.previous?.summary, "S");
 });

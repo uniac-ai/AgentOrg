@@ -1,6 +1,7 @@
 import {
   createLooper,
   Entry,
+  type FilesOf,
   type Json,
   type OutputItem,
   type Picture,
@@ -41,6 +42,13 @@ export function looperWith(
     routing?: (text: string) => OutputItem[] | Promise<OutputItem[]> | undefined;
     /** Who a message said in a thread is from, when not the person. */
     speaker?: (thread: string) => string | undefined;
+    /**
+     * What the model answers a request for a summary, which offers nothing to call: by default a
+     * summary that names how many it has given.
+     */
+    summarizing?: (text: string) => OutputItem[] | Promise<OutputItem[]>;
+    /** The files a call read and changed. */
+    files?: FilesOf;
   } = {},
 ) {
   const values = options.values ?? new Map<string, Json>();
@@ -76,6 +84,8 @@ export function looperWith(
   /** Each worker's request's items, as the model got them. */
   const raw: unknown[][] = [];
   const told: { instructions: string; tools: string[] }[] = [];
+  /** Each request for a summary, as the model got it: what it was told, and the one message. */
+  const summaries: { instructions: string; text: string }[] = [];
   /** The requests still out, each by the last thing said to it and the first. */
   const open: {
     text: string;
@@ -87,7 +97,7 @@ export function looperWith(
      */
     newest: number;
     answer(output: OutputItem[]): void;
-    fail(): void;
+    fail(error?: Error): void;
   }[] = [];
   const close = (id: string) => {
     const at = open.findIndex((request) => request.id === id);
@@ -122,6 +132,21 @@ export function looperWith(
         new Promise((answer, fail) => {
           const last = input.findLast((item) => item.type === "message" && item.role === "user");
           const text = last?.type === "message" ? unnumbered(last.content) : "";
+          if (tools.length === 0) {
+            summaries.push({ instructions, text });
+            open.push({
+              text: "a summary",
+              first: "",
+              id: requestId,
+              newest: 0,
+              answer: () => {},
+              fail: () => fail(gone()),
+            });
+            Promise.resolve(
+              options.summarizing?.(text) ?? says(`## Goal\n- Summary ${summaries.length}.`),
+            ).then((output) => answer({ output }), fail);
+            return;
+          }
           if (tools.some((tool) => tool.name === "route")) {
             routed.push(text);
             mainIds.push(requestId);
@@ -205,7 +230,7 @@ export function looperWith(
             id: requestId,
             newest,
             answer: (output) => answer({ output: output.map((item) => naming(item, newest)) }),
-            fail: () => fail(gone()),
+            fail: (error) => fail(error ?? gone()),
           });
         }),
       async cancel({ requestId }) {
@@ -236,6 +261,7 @@ export function looperWith(
     ...(options.stopped === undefined ? {} : { stopped: options.stopped }),
     ...(options.stopGroup === undefined ? {} : { stopGroup: options.stopGroup }),
     ...(options.speaker === undefined ? {} : { speaker: options.speaker }),
+    ...(options.files === undefined ? {} : { files: options.files }),
     log: { info() {}, warn() {}, error() {} },
   });
   /**
@@ -251,7 +277,7 @@ export function looperWith(
   };
   const answer = (text: string, output: OutputItem[] = sends("Done."), of?: string) =>
     found(text, of)?.answer(output);
-  const fail = (text: string) => found(text)?.fail();
+  const fail = (text: string, error?: Error) => found(text)?.fail(error);
   /** Threads no message was sent in before, each sent one and left in its turn. */
   const fill = async (names: string[]) => {
     const before = asked.length;
@@ -267,6 +293,7 @@ export function looperWith(
     numbered,
     raw,
     told,
+    summaries,
     routed,
     mains,
     mainRaw,

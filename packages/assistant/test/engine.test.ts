@@ -149,9 +149,21 @@ async function setup(values = new Map<string, unknown>(), rest?: (actor: Actor) 
   const routing: { to?: string; says?: string } = {};
   const cancels: string[] = [];
   const script: Step[] = [];
+  /**
+   * The requests for a summary of a work's earlier steps, which offer nothing to call: answered
+   * at once, apart from `script`, or refused while `summarizing.fails` is set.
+   */
+  const summaries: Request[] = [];
+  const summarizing = { fails: false };
   const model = actor.bind("model", {
     models: () => ({ models: OFFERED }),
     respond: async (request) => {
+      if (!request.tools?.length) {
+        summaries.push(request as Request);
+        if (summarizing.fails) throw new Refused("failed", "No summary.");
+        const content = `## Goal\n- Summary ${summaries.length}.`;
+        return { output: [{ type: "message", role: "assistant", content }] } as never;
+      }
       // The main loop is answered at once, with new work; `requests` and `script` are the workers'.
       if (request.tools?.some((tool) => tool.name === "route")) {
         routed.push(request as Request);
@@ -233,6 +245,8 @@ async function setup(values = new Map<string, unknown>(), rest?: (actor: Actor) 
     routing,
     cancels,
     script,
+    summaries,
+    summarizing,
     model,
     chat,
     id,
@@ -1247,8 +1261,9 @@ test("history pages back, survives a restart, and skips what doesn't read back",
   assert.ok(restarted.actor.logs.some((line) => line.level === "warn"));
 });
 
-test("the model gets the opening message, a line for what was left out, and the newest whole exchanges that fit", async () => {
+test("with no summary to be had, the model gets the opening message, a line for what was left out, and the newest whole exchanges that fit", async () => {
   const s = await setup();
+  s.summarizing.fails = true;
   s.actor.expose("layout", tools, listing({ get: () => ({ home: [] }) }));
   s.script.push(calls(callTool("layout__get", {}, "first")));
   await s.turn("Message 1.");
@@ -1269,9 +1284,10 @@ test("the model gets the opening message, a line for what was left out, and the 
   assert.equal(texts.includes(bigs[4] as string), true);
   assert.equal(texts.at(-1), "Small.");
   assert.ok(bytes(JSON.stringify(sent)) <= INPUT_BUDGET);
+  assert.ok(s.summaries.length > 0);
 });
 
-test("the next message still has a long turn, with its oldest outputs left out", async () => {
+test("the next message still has a long turn: its earlier steps summarized once, its latest calls whole", async () => {
   const s = await setup();
   s.actor.expose("big", tools, listing({ read: () => "x".repeat(10_000) }));
   for (let i = 0; i < 60; i++) s.script.push(calls(callTool("big__read", {}, `c${i}`)));
@@ -1279,18 +1295,27 @@ test("the next message still has a long turn, with its oldest outputs left out",
   await s.turn("Do the long part.");
   s.script.push(say("Going on."));
   await s.turn("Go on.");
+  // Once, when the turn went past the budget, with nothing to call.
+  assert.equal(s.summaries.length, 1);
   const sent = s.requests.at(-1)?.input ?? [];
-  assert.ok(bytes(JSON.stringify(sent)) <= INPUT_BUDGET + 20_000);
+  assert.ok(bytes(JSON.stringify(sent)) <= INPUT_BUDGET);
   const said = sent.filter((item) => item.type === "message").map((item) => item.content);
-  assert.deepEqual(said, ["Do the long part.", "Done with the long part.", "Go on."]);
+  assert.equal(said[0], "Do the long part.");
+  assert.equal(
+    said[1],
+    "The conversation history before this point was compacted into the following summary:\n\n<summary>\n## Goal\n- Summary 1.\n</summary>",
+  );
+  assert.deepEqual(said.slice(2), ["Done with the long part.", "Go on."]);
+  // The calls since are sent whole, the newest last; those before are the summary's.
   const outputs = sent.filter((item) => item.type === "function_call_output");
-  assert.equal(outputs.length, 60, "every call keeps an output");
-  assert.match(outputs[0]?.output as string, /Left out/);
-  assert.doesNotMatch(outputs.at(-1)?.output as string, /Left out/);
+  assert.ok(outputs.length > 0 && outputs.length < 60);
+  assert.ok(outputs.every((item) => !String(item.output).includes("Left out")));
+  assert.equal(sent.findLast((item) => item.type === "function_call")?.callId, "c59");
 });
 
-test("a latest exchange over the budget leaves out its oldest outputs, never a call", async () => {
+test("with no summary to be had, a latest exchange over the budget leaves out its oldest outputs, never a call", async () => {
   const s = await setup();
+  s.summarizing.fails = true;
   s.actor.expose(
     "actors",
     tools,
@@ -1363,8 +1388,9 @@ test("a long message is stored once, under storage's value limit, and a big call
   );
 });
 
-test("calls with large arguments never take a request past its budget", async () => {
+test("with no summary to be had, calls with large arguments never take a request past its budget", async () => {
   const s = await setup();
+  s.summarizing.fails = true;
   s.actor.expose("layout", tools, listing({ get: () => ({ home: [] }) }));
   // Arguments, not outputs, fill this exchange: only leaving out old arguments keeps it in budget.
   for (let i = 0; i < 20; i++)
