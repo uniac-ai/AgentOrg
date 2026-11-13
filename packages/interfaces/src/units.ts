@@ -171,8 +171,7 @@ const Gives = z.object({
  * person and an agent alike.
  *
  * `unavailable`, on a choice's option, says why it can't be chosen now, in its provider's words: a
- * host draws the option greyed with that reason. A host that doesn't know it offers the option,
- * and the unit's own check refuses it.
+ * host draws the option greyed with that reason, and management refuses it with that reason.
  *
  * `caution`, on a choice's option, says its `description` warns of what choosing it risks: a
  * host draws it as a caution while that option is the answer. A host that doesn't know it draws

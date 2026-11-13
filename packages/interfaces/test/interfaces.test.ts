@@ -151,7 +151,7 @@ test("a choice's option may say why it can't be chosen now", () => {
       },
     ],
   };
-  assert.ok(Field.safeParse(field).success);
+  assert.equal(Field.parse(field).options?.[0]?.unavailable, field.options[0]?.unavailable);
   const option = (extra: object) => ({ ...field, options: [{ ...field.options[0], ...extra }] });
   assert.equal(Field.safeParse(option({ unavailable: "" })).success, false, "a reason, or none");
   const units = compiled(unitProvider)["units.output"];

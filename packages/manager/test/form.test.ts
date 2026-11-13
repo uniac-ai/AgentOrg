@@ -112,6 +112,27 @@ test("what is filled in is held to the form", () => {
   assert.deepEqual(messages({}, ["host"]), ["host isn't a secret of this unit."]);
 });
 
+test("an option its provider can't give now is refused with the provider's reason", () => {
+  const made = {
+    id: "made",
+    type: "choice",
+    value: "string",
+    title: "Made as",
+    default: "container",
+    options: [
+      { value: "container", title: "A container", unavailable: "Docker isn't answering." },
+      { value: "remote", title: "At another address" },
+    ],
+  };
+  const problems = (values: object) =>
+    settle([made] as never, values as never, []).problems.map((p) => p.message);
+  assert.deepEqual(problems({}), ["Made as: Docker isn't answering."], "a default too");
+  assert.deepEqual(problems({ made: "remote" }), []);
+  // An agent filling the form reads why too.
+  const schema = schemaOf([made] as never) as { properties: { made: { description: string } } };
+  assert.match(schema.properties.made.description, /container can't be chosen now: Docker isn't/);
+});
+
 test("an empty answer is no answer", () => {
   const required = [
     { id: "a", type: "text", value: "string", title: "A", required: true },
