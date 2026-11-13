@@ -18,7 +18,7 @@ import { createRequire } from "node:module";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import test from "node:test";
+import test, { after } from "node:test";
 import { Computer } from "@agentorg/computer";
 import { HubState } from "@agentorg/hub";
 import { completed, fakeOpenAI } from "chatgpt/fake-openai";
@@ -150,13 +150,26 @@ const chatSlot = async (person: Person, agent: string) => {
   return bindings.find((b) => b.provider === agent && b.export === "chat")?.slot as string;
 };
 
+const folders: string[] = [];
+after(() => {
+  for (const one of folders) rmSync(one, { recursive: true, force: true });
+});
+/**
+ * A new folder, removed after the file's last test. A test's after hooks run in the order added,
+ * so one added here would run before the hook that stops the app writing in it.
+ */
+const newFolder = (prefix: string) => {
+  const one = mkdtempSync(join(tmpdir(), prefix));
+  folders.push(one);
+  return one;
+};
+
 async function open(
   t: test.TestContext,
   computer?: { dataFolder: string; webUrl: string; agentsFolder: string },
   fetch?: (request: Request) => Promise<Response>,
 ) {
-  const home = mkdtempSync(join(tmpdir(), "agentorg-programs-"));
-  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const home = newFolder("agentorg-programs-");
   const started: { app: App; person: Person }[] = [];
   const start = async () => {
     const app = await startApp({
@@ -424,8 +437,7 @@ test("the app's notes are its own file, and the person's store answers from it",
 });
 
 test("a home an earlier release ran starts as a fresh one: its package Actors closed, its files left", async (t) => {
-  const home = mkdtempSync(join(tmpdir(), "agentorg-programs-"));
-  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const home = newFolder("agentorg-programs-");
   // Made as an earlier release made them: a package Actor recorded in the Hub, and its stores.
   const earlier = HubState.open(home);
   earlier.close();
@@ -460,8 +472,7 @@ test("a home an earlier release ran starts as a fresh one: its package Actors cl
 });
 
 test("the templates' listing says which came with the app: it can't be removed, and one saved under its id takes its place", async (t) => {
-  const root = mkdtempSync(join(tmpdir(), "agentorg-templates-"));
-  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const root = newFolder("agentorg-templates-");
   const s = await open(t, {
     dataFolder: join(root, "service"),
     webUrl: "http://127.0.0.1:9/mcp",
@@ -492,8 +503,7 @@ test("the templates' listing says which came with the app: it can't be removed, 
 });
 
 test("the bundled Assistant is a computer and the web, and its computer goes with it", async (t) => {
-  const root = mkdtempSync(join(tmpdir(), "agentorg-assistant-"));
-  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const root = newFolder("agentorg-assistant-");
   const data = join(root, "service");
   const workspace = join(root, "workspace");
   mkdirSync(workspace);
@@ -585,8 +595,7 @@ test("the bundled Assistant is a computer and the web, and its computer goes wit
 });
 
 test("a socket from the person reaches a computer's surfaces live, with no token in it", async (t) => {
-  const root = mkdtempSync(join(tmpdir(), "agentorg-live-"));
-  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const root = newFolder("agentorg-live-");
   const data = join(root, "service");
   const workspace = join(root, "workspace");
   mkdirSync(workspace);
