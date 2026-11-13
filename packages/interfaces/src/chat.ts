@@ -8,6 +8,12 @@ const ChatId = z.string().min(1).max(128);
 export const CHAT_TITLE_MAX = 200;
 /** One chat of an agent's, where a call names it. */
 const OnChat = z.object({ chat: ChatId });
+/** What a message may hold: `send` takes it with words, or with a picture at least. */
+const Sent = z.object({
+  chat: ChatId.optional(),
+  text: z.string().max(100_000).optional(),
+  images: Pictures.optional(),
+});
 
 /**
  * A tool call a `tool` message stood for: its name, whether it was `running` or ended `done` or
@@ -74,16 +80,16 @@ export const chat = defineInterface({
   kind: "rpc",
   methods: {
     /**
-     * Send this message in `chat`, or in a new chat; the result says which. The agent answers it
-     * in that chat. An archived chat takes a message like any other, and stays archived. Refused
-     * `busy` when the provider can't take it now.
+     * Send this message in `chat`, or in a new chat; the result says which. A message is words,
+     * pictures or both. The agent answers it in that chat. An archived chat takes a message like
+     * any other, and stays archived. Refused `busy` when the provider can't take it now.
      */
     send: method({
-      input: z.object({
-        chat: ChatId.optional(),
-        text: z.string().min(1).max(100_000).regex(/\S/),
-        images: Pictures.optional(),
-      }),
+      input: z.union([
+        Sent.extend({ text: z.string().min(1).max(100_000).regex(/\S/) }),
+        // Or one picture at least, with any words or none.
+        Sent.extend({ images: Pictures.min(1) }),
+      ]),
       output: z.object({ chat: ChatId, messageId: MessageId }),
     }),
     /**

@@ -328,6 +328,20 @@ test("a person's pictures reach the model with their message and stay in the cha
     s.chat("send", { text: "And this?", images: [{ mediaType: "image/png", data: "not base64" }] }),
     (error: Error & { code?: string }) => error.code === "invalid",
   );
+  // A picture sent by itself reaches the model with no words, and is shown so.
+  const sentAt = s.actor.emitted.length;
+  await s.chat("send", { images: [png] });
+  await s.ended(sentAt);
+  const alone = s.whole.at(-1)?.input.at(-1) as { content?: string; images?: { data: string }[] };
+  assert.deepEqual(
+    [alone.content?.replace(/^\[\d+\] /, ""), alone.images?.map(({ data }) => data)],
+    ["", [png.data]],
+  );
+  const { messages: after } = (await s.chat("history", {})) as {
+    messages: { role: string; text: string; images?: unknown }[];
+  };
+  const last = after.findLast((one) => one.role === "user");
+  assert.deepEqual([last?.text, last?.images], ["", [png]]);
 });
 
 test("what is exposed to the agent becomes its tools at the next turn, and goes when removed", async () => {
