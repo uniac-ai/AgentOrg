@@ -1,7 +1,7 @@
 /**
  * The bundled agent provider: it offers one creatable, Assistant, and runs each agent in this
- * process as its own Actor on its own channel. A stopped agent stays on its channel, so its chats
- * can be read, and runs no turn until it is started. Each agent's chats and model choice are kept
+ * process as its own Actor on its own channel. A stopped agent stays on its channel, so its
+ * conversations can be read, and runs no turn until it is started. Each agent's conversations and model choice are kept
  * in the provider's private folder.
  */
 import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";

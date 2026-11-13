@@ -325,8 +325,10 @@ async function setup(t: test.TestContext) {
     alsoFail?: string;
     settings?: string;
     chat?: string;
-    /** Chats whose turn failed, by id. */
+    /** Parties whose conversation's turn failed. */
     failed?: string[];
+    /** Its agents refuse a message, as a stopped one does. */
+    busy?: boolean;
     /** Whether an agent says it is working. */
     working?: boolean;
     noTools?: boolean;
@@ -362,11 +364,8 @@ async function setup(t: test.TestContext) {
   const running = new Map<string, { close(): void; slots: never; on?: never }>();
   const credentials = new Map<string, string>();
   const heard = new Map<string, number>();
-  /** Every message sent to each agent, in the order they came, whichever chat it was in. */
-  const chats = new Map<string, { text: string }[]>();
-  /** Each agent's chats by id, the newest last: its title, when it started and where it is. */
-  type Started = Map<string, { title: string; at: string; archived: boolean }>;
-  const startedIn = new Map<string, Started>();
+  /** Every message sent to each agent, in the order they came, whoever sent it. */
+  const chats = new Map<string, { text: string; with: string }[]>();
   /** Each agent's own side, to reach what is exposed to it as it would. */
   const contexts = new Map<
     string,
@@ -402,64 +401,54 @@ async function setup(t: test.TestContext) {
             exports: { chat, capability, tools },
             start(own) {
               contexts.set(actorId, own as never);
-              const said: { id: string; role: "user"; text: string; at: string; chat: string }[] =
+              const said: { id: string; role: "user"; text: string; at: string; with: string }[] =
                 [];
               chats.set(actorId, said);
-              const started: Started = new Map();
-              startedIn.set(actorId, started);
-              const failed = (chat: string) => (script.failed ?? []).includes(chat);
+              const failed = (party: string) => (script.failed ?? []).includes(party);
               own.exports.chat.implement({
-                // A message with no chat starts one, titled by its first line, as the engine does.
-                send({ chat, text = "" }) {
-                  if (chat !== undefined && !started.has(chat))
-                    throw new Refused("unknown", "This agent has no such chat.");
-                  const at = new Date().toISOString();
-                  const into = chat ?? `c${started.size + 1}`;
-                  if (chat === undefined)
-                    started.set(into, { title: text.split("\n")[0] ?? "", at, archived: false });
+                // A message is in the caller's conversation, as the engine keeps it.
+                send({ text = "" }, { caller }) {
+                  if (script.busy) throw new Refused("busy", "It is stopped.");
                   const id = `m-${said.length + 1}`;
-                  said.push({ id, role: "user", text, at, chat: into });
-                  return { chat: into, messageId: id };
+                  said.push({ id, role: "user", text, at: new Date().toISOString(), with: caller });
+                  return { messageId: id };
                 },
-                history({ chat }) {
-                  if (!started.has(chat))
-                    throw new Refused("unknown", "This agent has no such chat.");
+                history({ with: party }, { caller }) {
+                  const of = party ?? caller;
                   return {
                     messages: said
-                      .filter((one) => one.chat === chat)
-                      .map(({ chat: _, ...message }) => message),
+                      .filter((one) => one.with === of)
+                      .map(({ with: _, ...message }) => message),
                     more: false,
                   };
                 },
                 // The agent is working when a test says so.
                 state: () => ({ state: script.working ? ("working" as const) : ("idle" as const) }),
-                list({ archived = false, before }) {
-                  const ids = [...started.keys()].reverse();
+                list(_, { caller }) {
+                  const parties = [...new Set(said.map((one) => one.with))]
+                    .filter((party) => caller === "person" || party === caller)
+                    .reverse();
                   return {
-                    chats: ids
-                      .slice(before === undefined ? 0 : ids.indexOf(before) + 1)
-                      .map((id) => ({
-                        id,
-                        ...(started.get(id) as { title: string; at: string; archived: boolean }),
-                        // A chat a test names as failed has that problem.
-                        ...(failed(id)
+                    conversations: parties.map((party) => {
+                      const theirs = said.filter((one) => one.with === party);
+                      const last = theirs.at(-1) as (typeof said)[number];
+                      return {
+                        with: party,
+                        at: theirs[0]?.at ?? last.at,
+                        latest: {
+                          id: last.id,
+                          at: last.at,
+                          role: "user" as const,
+                          text: last.text.slice(0, 200),
+                        },
+                        // A party a test names as failed has that problem.
+                        ...(failed(party)
                           ? { problem: { code: "usage_limit", message: "Usage limit reached." } }
                           : {}),
-                      }))
-                      .filter((one) => one.archived === archived),
+                      };
+                    }),
                     more: false,
                   };
-                },
-                // A title is one line: the first of what it is given.
-                rename({ chat, title }) {
-                  const one = started.get(chat);
-                  if (one) one.title = title.split("\n")[0] ?? "";
-                  return {};
-                },
-                archive({ chat, archived }) {
-                  const one = started.get(chat);
-                  if (one) one.archived = archived;
-                  return {};
                 },
               });
               own.slots.settings.on("changed", () => {
@@ -822,7 +811,6 @@ async function setup(t: test.TestContext) {
     exposedTo,
     personSlot,
     chats,
-    startedIn,
     hub,
     person,
     dir,
@@ -2111,66 +2099,40 @@ test("an agent creates, messages, reads, stops and removes an agent of its own",
     [child],
   );
   const sent = await call("agent_send", { agent: child, text: "\nPlease start.\nThen report." });
+  assert.equal(typeof sent.messageId, "string");
   // It says who sent it, so it doesn't read as the person's.
   assert.equal(
     s.chats.get(child)?.[0]?.text,
     'An agent, "Parent", says:\n\n\nPlease start.\nThen report.',
   );
-  // The message started a chat, called by what was asked and not by whose message it is.
-  type Chat = { id: string; title: string; at: string };
-  const chatsOf = async () => (await call("agent_chats", { agent: child })).chats as Chat[];
-  assert.deepEqual(
-    (await chatsOf()).map((one) => [one.id, one.title]),
-    [[sent.chat, "Please start."]],
-  );
-  // And whether it is working now, which is the agent's to say, not a chat's.
+  // One conversation agents have with it, its latest message, and whether it is working now,
+  // which is the agent's to say.
+  const conversation = async () => (await call("agent_chats", { agent: child })).conversation;
+  assert.match((await conversation()).latest.text, /Please start/);
   assert.equal((await call("agent_chats", { agent: child })).working, false);
   s.script.working = true;
   assert.equal((await call("agent_chats", { agent: child })).working, true);
-  const saidIn = (chat: string) => call("agent_read", { agent: child, chat });
-  assert.match((await saidIn(sent.chat)).messages[0].text, /Please start/);
-  // It goes on in that chat by naming it, and starts another by naming none.
-  const more = await call("agent_send", { agent: child, chat: sent.chat, text: "One more thing." });
-  assert.equal(more.chat, sent.chat);
-  const apart = await call("agent_send", { agent: child, text: "Something else." });
-  assert.notEqual(apart.chat, sent.chat);
+  await call("agent_send", { agent: child, text: "One more thing." });
+  const said = await call("agent_read", { agent: child });
   assert.deepEqual(
-    (await chatsOf()).map((one) => one.title),
-    ["Something else.", "Please start."],
+    said.messages.map((one: { text: string }) => one.text.split("\n").at(-1)),
+    ["Then report.", "One more thing."],
   );
-  assert.equal((await saidIn(sent.chat)).messages.length, 2);
-  assert.equal((await saidIn(apart.chat)).messages.length, 1);
-  // A page follows the chat the one before ended on, and the archived are listed apart.
-  const page = (input: object) => call("agent_chats", { agent: child, ...input });
-  assert.deepEqual(
-    (await page({ before: apart.chat })).chats.map((one: Chat) => one.id),
-    [sent.chat],
-  );
-  (s.startedIn.get(child)?.get(sent.chat) as { archived: boolean }).archived = true;
-  assert.deepEqual(
-    (await chatsOf()).map((one) => one.id),
-    [apart.chat],
-  );
-  assert.deepEqual(
-    (await page({ archived: true })).chats.map((one: Chat) => one.id),
-    [sent.chat],
-  );
-  // A message that got no answer is told with its chat, as its problem.
-  s.script.failed = [apart.chat];
-  assert.deepEqual((await chatsOf())[0], {
-    id: apart.chat,
-    title: "Something else.",
-    at: (await chatsOf())[0]?.at,
-    archived: false,
-    problem: { code: "usage_limit", message: "Usage limit reached." },
-  });
-  // A refusal from the agent's chat is the tool's own: a chat it doesn't have.
-  const none = await tools.call({
+  // A refusal from the agent is the tool's own failure.
+  s.script.busy = true;
+  const refusedSend = await tools.call({
     name: "agent_send",
-    arguments: { agent: child, chat: "no-such", text: "Hello." },
+    arguments: { agent: child, text: "Hello." },
   });
-  assert.equal(none.failed, true);
-  assert.match(none.output, /no such chat/);
+  s.script.busy = false;
+  assert.equal(refusedSend.failed, true);
+  assert.match(refusedSend.output, /It is stopped/);
+  // A message that got no answer is told with the conversation, as its problem.
+  s.script.failed = [s.management.actorId];
+  assert.deepEqual((await conversation()).problem, {
+    code: "usage_limit",
+    message: "Usage limit reached.",
+  });
   const got = await call("agent_get", { agent: child });
   assert.equal(got.purpose, "Do the small part.");
   await call("agent_stop", { agent: child });

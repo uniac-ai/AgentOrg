@@ -6,10 +6,11 @@
 # with `agentorg call agents create`; and the gateway must serve the shell and the sign-in page.
 # Last, this build must start on a home each published version made:
 # - 0.0.5: its old Actors closed, and `agents create` working;
-# - 0.0.6: a connection that must still answer, and an agent whose conversation must be its first
-#   chat;
+# - 0.0.6: a connection that must still answer, and an agent whose conversation must be the
+#   person's;
 # - 0.0.7, 0.0.8 and 0.0.9: an agent that must still run, bound exactly as it was (to its model
-#   and a connection's tools among others), whose two chats must be read, the older one added to.
+#   and a connection's tools among others), whose two chats must become one conversation with the
+#   person, the one last written in, which takes a message.
 # Once a version is published, it gets a section here, or joins the loop of an earlier version
 # when it takes the same commands and the same is asked of this build on its home (not in the
 # change that releases it: the registry has it only after its tag). A section makes, with that
@@ -319,8 +320,8 @@ slot="$(chat_slot "$was" "$home6")"
 stop_app
 start_on "$agentorg" "$home6" "$work/up6.log"
 # Its chats changed shape since 0.0.6: the person's reach to them must answer, at the slot it had,
-# with the conversation as the agent's first chat. The slot keeps its name while the agent is
-# away, so the name alone doesn't say the reach works: its chats must answer.
+# with the conversation as the person's. The slot keeps its name while the agent is away, so the
+# name alone doesn't say the reach works: its conversations must answer.
 for _ in $(seq 1 120); do
   [ "$(chat_slot "$agentorg" "$home6")" = "$slot" ] &&
     "$agentorg" call "$slot" list --home "$home6" >"$work/chats6.json" 2>/dev/null && break
@@ -331,12 +332,13 @@ done
   { echo "The person lost the 0.0.6 agent's chat on this build" >&2; cat "$work/up6.log" >&2; exit 1; }
 <"$work/chats6.json" \
   node -e '
-    const { chats } = JSON.parse(require("fs").readFileSync(0, "utf8"));
-    if (chats.length !== 1 || chats[0].title !== "Said on 0.0.6.") {
-      console.error(JSON.stringify(chats));
+    const { conversations } = JSON.parse(require("fs").readFileSync(0, "utf8"));
+    const [one] = conversations;
+    if (conversations.length !== 1 || one.with !== "person" || one.latest?.text !== "Said on 0.0.6.") {
+      console.error(JSON.stringify(conversations));
       process.exit(1);
     }
-    console.log(`0.0.6'"'"'s conversation is the chat "${chats[0].title}"`);
+    console.log(`0.0.6'"'"'s conversation is the person'"'"'s, its latest "${one.latest.text}"`);
   '
 wait_answers "$agentorg" ||
   { echo "0.0.6's connection doesn't work on this build" >&2; cat "$work/up6.log" >&2; exit 1; }
@@ -397,8 +399,8 @@ for v in 0.0.7 0.0.8 0.0.9; do
         console.log(chat);
       '
   }
-  first="$(started "Said on $v.")" || { echo "$v started no chat" >&2; exit 1; }
-  second="$(started "A second chat.")" || { echo "$v started no second chat" >&2; exit 1; }
+  started "Said on $v." >/dev/null || { echo "$v started no chat" >&2; exit 1; }
+  started "A second chat." >/dev/null || { echo "$v started no second chat" >&2; exit 1; }
   # A connection of the person's, exposed to the agent as tools: the agent must keep it on this
   # build, with what it was bound to as it was made.
   connection="$(fixture_connection "$was" "$homev")"
@@ -418,8 +420,8 @@ for v in 0.0.7 0.0.8 0.0.9; do
   done
   stop_app
   start_on "$agentorg" "$homev" "$work/up-$v.log"
-  # The chat interface is the one the version had, so the person keeps the slot: its chats
-  # answer once the agent is back.
+  # The person keeps the slot across the change of the chat interface: its conversations answer
+  # once the agent is back.
   for _ in $(seq 1 120); do
     [ "$(chat_slot "$agentorg" "$homev")" = "$slot" ] &&
       "$agentorg" call "$slot" list --home "$homev" >"$work/chats-$v.json" 2>/dev/null && break
@@ -428,33 +430,29 @@ for v in 0.0.7 0.0.8 0.0.9; do
   done
   [ -s "$work/chats-$v.json" ] ||
     { echo "The person lost the $v agent's chats on this build" >&2; cat "$work/up-$v.log" >&2; exit 1; }
-  # A message in the older chat is kept after what the version kept there.
-  "$agentorg" call "$slot" send "{\"chat\":\"$first\",\"text\":\"And on this build.\"}" --home "$homev" >/dev/null
-  "$agentorg" call "$slot" history "{\"chat\":\"$first\"}" --home "$homev" >"$work/history-$v.json"
-  "$agentorg" call "$slot" history "{\"chat\":\"$second\"}" --home "$homev" >"$work/history-$v-second.json"
+  # The chat last written in is the person's one conversation, which takes a message after what
+  # the version kept there; the other chat is gone.
+  "$agentorg" call "$slot" send '{"text":"And on this build."}' --home "$homev" >/dev/null
+  "$agentorg" call "$slot" history '{}' --home "$homev" >"$work/history-$v.json"
   "$agentorg" call agents list --home "$homev" >"$work/agents-$v.json"
   node -e '
-    const v = process.argv[5];
     const read = (f) => JSON.parse(require("fs").readFileSync(f, "utf8"));
-    const said = (f) => read(f).messages.filter((m) => m.role === "user").map((m) => m.text);
     const got = {
-      agent: read(process.argv[4]).agents.find((a) => a.name === "Elder")?.status.state,
-      titles: read(process.argv[1]).chats.map((chat) => chat.title).sort(),
-      older: said(process.argv[2]),
-      newer: said(process.argv[3]),
+      agent: read(process.argv[3]).agents.find((a) => a.name === "Elder")?.status.state,
+      with: read(process.argv[1]).conversations.map((one) => one.with),
+      said: read(process.argv[2]).messages.filter((m) => m.role === "user").map((m) => m.text),
     };
     const want = {
       agent: "running",
-      titles: ["A second chat.", `Said on ${v}.`],
-      older: [`Said on ${v}.`, "And on this build."],
-      newer: ["A second chat."],
+      with: ["person"],
+      said: ["A second chat.", "And on this build."],
     };
     if (JSON.stringify(got) !== JSON.stringify(want)) {
       console.error(JSON.stringify(got));
       process.exit(1);
     }
-    console.log(`${v}'"'"'s agent is ${got.agent}, its ${got.titles.length} chats are read, and the older one took a message`);
-  ' "$work/chats-$v.json" "$work/history-$v.json" "$work/history-$v-second.json" "$work/agents-$v.json" "$v" ||
+    console.log(`${process.argv[4]}'"'"'s agent is ${got.agent}, its chat last written in is the person'"'"'s conversation and took a message`);
+  ' "$work/chats-$v.json" "$work/history-$v.json" "$work/agents-$v.json" "$v" ||
     { echo "This build lost something of the $v home" >&2; cat "$work/up-$v.log" >&2; exit 1; }
   # The agent is bound exactly as it was: to its model, its tools, and the rest.
   agent_bindings "$agentorg" "$homev" "$elder" >"$work/bound-$v-now.txt" ||

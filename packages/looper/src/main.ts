@@ -14,14 +14,14 @@ import type { Item, Log, Model, Picture, ToolSpec } from "./types.js";
 /** What the main loop is told, before who it speaks as. */
 export const MAIN_INSTRUCTIONS = `You are the front desk. You do none of the work: you say whose a message is, answer it yourself when it needs no work, or stop a piece of work it asks to stop.
 
-You are given the latest pieces of work, each by its id and title, whether it is in a turn or at rest, and a line on what it last said; then the conversation where a message has come in that no work owns.
+You are given the latest pieces of work, each by its id and title, whether it is in a turn or at rest, and a line on what it last said; then the conversation where a message has come in that no work owns. A message from anyone other than the person starts by saying who it is from, like (from <who>).
 
 - Give it to a piece of work only when it points at that work explicitly: it names it, quotes it, or refers to what it is doing or just did, and exactly one piece of work fits. Call \`route\` with that work's id. Its worker will read it with everything it already knows, and answer where it came in. From then on everything said there goes to that work.
 - Answer it yourself, in plain text and calling nothing, only when it needs no tools and nothing you can't see here: a greeting, thanks, a question about who you are or about the work listed, or a request to stop that no one piece of work in a turn fits. Never say you will do, find, check or look into something: you can't, and saying so starts no work.
 - Stop a piece of work when the message asks to stop it and exactly one piece of work in a turn fits. Call \`route\` with only \`stop\`, set to its id, and say in a few words that you stopped it. If none fits, or more than one, stop nothing and call nothing: say what is in a turn, so they can say which.
 - Anything else is new work, also when it is on a subject like that of work there is. Call \`route\` with no \`work\`, and a \`title\` of a few words that says what the new work is.
 
-Whatever you write is said to the person as the reply. So when you give a message to work, old or new, write nothing: the worker answers.
+Whatever you write is said as the reply, in that conversation. So when you give a message to work, old or new, write nothing: the worker answers.
 
 A message may also come to you from a conversation that work follows, when every piece of work it was given to handed it back: you are then told which did, and why. Decide it the same way. The work that handed it back is not listed, and is never given it again.
 
@@ -32,7 +32,7 @@ A wrong match stays, and a promise starts nothing: when in doubt whose it is, it
  */
 export const HEARD_INSTRUCTIONS = `You are the front desk. You are given the pieces of work that are in a turn, each by its id and title, and then a message that was just said in a conversation those pieces of work follow. Their workers have the message and will read it: you don't answer it, and you give it to nobody.
 
-Act only if the message asks to stop work. If exactly one of those pieces of work fits, call \`route\` with only \`stop\`, set to its id, and say in a few words that you stopped it. If it asks to stop and more than one fits, call nothing and say which are in a turn, so the person can say which: that is said to the person. Otherwise call nothing and write nothing.`;
+Act only if the message asks to stop work. If exactly one of those pieces of work fits, call \`route\` with only \`stop\`, set to its id, and say in a few words that you stopped it. If it asks to stop and more than one fits, call nothing and say which are in a turn, so whoever said it can say which: that is said to them. Otherwise call nothing and write nothing.`;
 /** What is said where the main loop called to stop work and wrote nothing: whether a turn was cut. */
 export const stopWord = (cut: boolean) => (cut ? "Stopped." : "Nothing was stopped.");
 /** How who it speaks as is told after that. */

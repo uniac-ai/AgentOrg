@@ -260,12 +260,12 @@ test("an agent is made through agents, and the person reaches its chat, across a
       ),
     "the chat to be exposed",
   );
-  assert.deepEqual(await person.call(slot, "list"), { chats: [], more: false });
+  assert.deepEqual(await person.call(slot, "list"), { conversations: [], more: false });
 
   // Its events reach the person too; with no sign-in, the chat is told to have that problem.
   const sub = await person.subscribe(slot, "chat");
-  const { chat } = await person.call<{ chat: string }>(slot, "send", { text: "hello" });
-  type Told = { id?: string; problem?: { code: string } } | undefined;
+  await person.call(slot, "send", { text: "hello" });
+  type Told = { with?: string; problem?: { code: string } } | undefined;
   await until(
     () =>
       person.heard.some(
@@ -273,9 +273,7 @@ test("an agent is made through agents, and the person reaches its chat, across a
       ),
     "the chat to be told it has no sign-in",
   );
-  const { messages } = await person.call<{ messages: { text: string }[] }>(slot, "history", {
-    chat,
-  });
+  const { messages } = await person.call<{ messages: { text: string }[] }>(slot, "history", {});
   assert.deepEqual(
     messages.map((message) => message.text),
     ["hello"],
@@ -285,23 +283,27 @@ test("an agent is made through agents, and the person reaches its chat, across a
   ({ person } = await s.start());
   await until(
     () =>
-      person.call(slot, "history", { chat }).then(
+      person.call(slot, "history", {}).then(
         () => true,
         () => false,
       ),
     "the chat to be back",
   );
   assert.deepEqual(
-    (await person.call<{ messages: { text: string }[] }>(slot, "history", { chat })).messages.map(
+    (await person.call<{ messages: { text: string }[] }>(slot, "history", {})).messages.map(
       (message) => message.text,
     ),
     ["hello"],
   );
+  // The person's one conversation with the agent, found by who they are.
   assert.deepEqual(
-    (await person.call<{ chats: { id: string; title: string }[] }>(slot, "list")).chats.map(
-      (one) => [one.id, one.title],
-    ),
-    [[chat, "hello"]],
+    (
+      await person.call<{ conversations: { with: string; latest?: { text: string } }[] }>(
+        slot,
+        "list",
+      )
+    ).conversations.map((one) => [one.with, one.latest?.text]),
+    [["person", "hello"]],
   );
   assert.equal(
     (await person.call<{ agents: { name: string }[] }>("agents", "list")).agents[0]?.name,
@@ -347,7 +349,7 @@ test("a turn cut off as the app stops goes on when it is started again, with the
     );
   await until(() => reached(person), "the chat to be exposed");
   held = true;
-  const { chat } = await person.call<{ chat: string }>(slot, "send", { text: "a long one" });
+  await person.call(slot, "send", { text: "a long one" });
   await until(() => asked.length === 1, "the model to be asked");
   await s.stop();
 
@@ -362,7 +364,7 @@ test("a turn cut off as the app stops goes on when it is started again, with the
   ({ person } = await s.start());
   await until(() => reached(person), "the chat to be back");
   const texts = async () =>
-    (await person.call<{ messages: { text: string }[] }>(slot, "history", { chat })).messages.map(
+    (await person.call<{ messages: { text: string }[] }>(slot, "history", {})).messages.map(
       (message) => message.text,
     );
   await until(async () => (await texts()).at(-1) === "Went on.", "the turn to go on");
