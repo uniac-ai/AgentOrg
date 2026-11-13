@@ -68,7 +68,7 @@ test(
 );
 
 test(
-  "an agent's state follows its events, and a chat's problem is that chat's to say",
+  "an agent's state follows its events, and a conversation's problem is that conversation's to say",
   withGateway(async (gateway) => {
     const page = await open(gateway, "#/a/a-research");
     const row = (on: Page) =>
@@ -77,8 +77,8 @@ test(
     // An agent at work says so in the bar, whatever page is open.
     gateway.setChatStatus("a-reviewer", { state: "working" });
     await inBar(page, "Working Reviewer").waitFor();
-    // What it was answering failed. The agent is idle, with nothing wrong of its own: the chat's
-    // row says the problem, whichever chat it is, and the chat holds what can be done.
+    // What it was answering failed. The agent is idle, with nothing wrong of its own: the
+    // conversation's row says the problem, and the conversation holds what can be done.
     gateway.failChat("a-research", {
       code: "usage_limit",
       message: "You've reached your plan's limit.",
@@ -87,17 +87,12 @@ test(
     await state(page).getByText("Idle", { exact: true }).waitFor();
     assert.equal(await state(page).getByRole("button").count(), 0);
     await inBar(page, "Idle Research").waitFor();
-    gateway.addChat("a-research", {
-      id: "c-later",
-      title: "Started later",
-      said: [],
-      problem: { code: "failed", message: "The model refused it." },
-    });
+    gateway.failChat("a-research", { code: "failed", message: "The model refused it." });
     await row(page).getByText("The model refused it.").waitFor();
     assert.equal((await state(page).innerText()).trim(), "Idle");
     // A page opened late reads the same.
     const late = await open(gateway, "#/a/a-research");
-    await row(late).getByText("You've reached your plan's limit.").waitFor();
+    await row(late).getByText("The model refused it.").waitFor();
     await state(late).getByText("Idle", { exact: true }).waitFor();
     await late.close();
     // Its next reply ends the problem.
@@ -107,7 +102,8 @@ test(
       text: "Three causes explain it.",
       at: new Date().toISOString(),
     });
-    await row(page).getByText("You've reached your plan's limit.").waitFor({ state: "detached" });
+    await row(page).getByText("The model refused it.").waitFor({ state: "detached" });
+    await row(page).getByText("Three causes explain it.").waitFor();
     await page.close();
   }),
 );
@@ -379,35 +375,41 @@ test(
 );
 
 test(
-  "an agent's page is who it is, how it stands, and its chats; what it's made of is one press away",
+  "an agent's page is who it is, how it stands, and your conversation with it; what it's made of is one press away",
   withGateway(async (gateway) => {
-    gateway.addChat("a-reviewer", {
-      id: "c-old",
-      title: "An old review",
-      said: [{ id: "o1", role: "assistant", text: "Merged.", at: "2026-01-01T10:00:00Z" }],
-      archived: true,
-    });
     const page = await open(gateway, "#/a/a-reviewer");
     const main = page.getByRole("main");
     await main.getByRole("heading", { name: "Reviewer", level: 1 }).waitFor();
     await main.getByText("Chats and uses what you connect").waitFor();
-    // With no computer it opens on its chats, the archived left out; its Overview is the tab after.
+    // With no computer it opens on its chats; its Overview is the tab after.
     const tabs = main.getByRole("tablist", { name: "Reviewer" });
     await tabs.getByRole("tab", { name: "Chats", selected: true }).waitFor();
     assert.deepEqual(await tabs.getByRole("tab").allInnerTexts(), ["Chats", "Overview"]);
+    // Its tab is your conversation with it, which opens in the chat at the right.
     const chats = main.getByRole("list", { name: "Chats with Reviewer" });
     await chats.getByRole("button").first().waitFor();
-    assert.equal(await chats.getByText("An old review").count(), 0);
+    assert.equal(await chats.getByRole("button").count(), 1);
     await chats.getByRole("button").first().click();
     const panel = page.getByRole("complementary", { name: "Chats" });
     await panel.getByText("Reviewed #482 with 3 comments").first().waitFor();
     await panel.getByRole("button", { name: "Close chats" }).click();
-    // Message and New chat both start a chat with it.
-    for (const name of ["Message", "New chat"]) {
-      await main.getByRole("button", { name }).click();
-      await panel.getByPlaceholder("Message Reviewer").waitFor();
-      await panel.getByRole("button", { name: "Close chats" }).click();
-    }
+    // Message opens the same conversation.
+    assert.equal(await main.getByRole("button", { name: "New chat" }).count(), 0);
+    await main.getByRole("button", { name: "Message", exact: true }).click();
+    await panel.getByText("Reviewed #482 with 3 comments").first().waitFor();
+    await panel.getByPlaceholder("Message Reviewer").waitFor();
+    await panel.getByRole("button", { name: "Close chats" }).click();
+    // An agent you have never messaged has the way to begin, in its conversation's place.
+    await page.goto(`${gateway.url}/#/a/a-triage`);
+    const begin = main
+      .getByRole("list", { name: "Chats with Triage" })
+      .getByRole("button", { name: "Message Triage" });
+    await begin.click();
+    await panel.getByRole("heading", { name: "Triage" }).waitFor();
+    await panel.getByPlaceholder("Message Triage").waitFor();
+    assert.equal(await panel.locator('[data-slot="message-scroller-item"]').count(), 0);
+    await panel.getByRole("button", { name: "Close chats" }).click();
+    await page.goto(`${gateway.url}/#/a/a-reviewer`);
     // What it's made of is a sheet over its page, closed again with Escape.
     const sheet = await openSetup(page, "Reviewer");
     await page.keyboard.press("Escape");

@@ -17,7 +17,7 @@ export type McpProvider = Out<typeof connections.methods.providers>["providers"]
 export type Skill = Out<typeof skills.methods.list>["skills"][number];
 export type ChatMessage = Out<typeof chat.methods.history>["messages"][number];
 export type ChatStatus = Out<typeof chat.methods.state>;
-export type ChatEntry = z.output<typeof chat.events.chat.payload>;
+export type Conversation = z.output<typeof chat.events.chat.payload>;
 type Binding = Out<typeof hubBindings.methods.list>["bindings"][number];
 
 /** How often what has no event is read again: a server going down, say. */

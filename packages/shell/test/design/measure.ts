@@ -21,13 +21,13 @@ import {
   computerWith,
   cpuOf,
   createState,
+  docsAgent,
   downTriage,
   inDesign,
-  newChatWithFirst,
+  messageDocs,
   notAnswered,
   noted,
-  oldestIssues,
-  openChatTitled,
+  openConversation,
   openDesignAgent,
   openFiles,
   openOffer,
@@ -38,6 +38,7 @@ import {
   openWindow,
   readChat,
   refuseSend,
+  releaseNotes,
   SECTIONS,
   SIGN_INS,
   sampleAgents,
@@ -1579,8 +1580,9 @@ if (wants("browser"))
       await gateway?.close();
     }
 
-// The chat in the layer: collapsed with one, two and three chats unread, at rest and under the
-// pointer, then open on its list.
+// The chat in the layer: collapsed with one and two conversations unread, at rest and under the
+// pointer, then open on its list. The design's control gives two at most: a third reply goes to a
+// chat it no longer lists.
 if (wants("chat"))
   for (const theme of ["dark", "light"] as const)
     for (const side of ["design", "built"] as const) {
@@ -1589,7 +1591,7 @@ if (wants("chat"))
         ? await builtPage(gateway, "wide", theme)
         : await designPage("wide", theme);
       if (gateway) await noted(gateway);
-      for (const unread of [1, 2, 3]) {
+      for (const unread of [1, 2]) {
         // One more chat says something: in the design by its own control, in the build by its agent.
         if (!gateway) {
           if (unread > 1) await page.getByRole("button", { name: "A reply arrives" }).click();
@@ -1605,7 +1607,7 @@ if (wants("chat"))
       }
       // And one with nothing unread, to be measured beside them.
       if (gateway) readChat(gateway);
-      await page.getByRole("button", { name: "Chats, 3 new" }).click();
+      await page.getByRole("button", { name: "Chats, 2 new" }).click();
       await rest(page, "wide");
       all[`chat.panel.${theme}.${side}`] = await measure(page, "chat");
       await page.close();
@@ -1647,11 +1649,7 @@ if (wants("thread"))
         "sent",
         undefined,
         async (page, gateway) => {
-          if (gateway) {
-            gateway.setChatStatus("a-research", { state: "idle" });
-            oldestIssues(gateway);
-          }
-          await openChatTitled(page, "Which issues are oldest?");
+          await openConversation(page, "Reviewer");
           // What was said before is there first: a send goes under it.
           await panel(page).locator(".prose-chat").first().waitFor();
           await page.waitForTimeout(800);
@@ -1667,8 +1665,8 @@ if (wants("thread"))
         true,
       );
       await one("notAnswered", undefined, async (page, gateway) => {
-        if (gateway) notAnswered(gateway);
-        await openChatTitled(page, "Is the branch pushed?");
+        await notAnswered(page, gateway);
+        await openConversation(page, "Reviewer");
         await panel(page).getByRole("alert").waitFor();
       });
       await one("limit", "limit", async (page, gateway) => {
@@ -1684,7 +1682,11 @@ if (wants("thread"))
         await refuseSend(page, gateway);
       });
       await one("refused.first", undefined, async (page, gateway) => {
-        await newChatWithFirst(page);
+        if (gateway) {
+          docsAgent(gateway);
+          gateway.changed();
+        }
+        await messageDocs(page);
         await refuseSend(page, gateway);
       });
       await one(
@@ -1710,17 +1712,18 @@ if (wants("home"))
       for (const side of ["design", "built"] as const) {
         const gateway = side === "built" ? await standIn() : undefined;
         if (gateway) {
+          sampleAgents(gateway);
           sampleChats(gateway);
-          notAnswered(gateway);
         }
         const page = gateway
           ? await builtPage(gateway, size, theme)
           : await designPage(size, theme);
         if (gateway) {
           await noted(gateway);
-          unreadReply(gateway, 1);
+          releaseNotes(gateway);
+          gateway.changed();
         }
-        await page.getByRole("region", { name: "Needs you" }).getByRole("button").nth(2).waitFor();
+        await page.getByRole("region", { name: "Needs you" }).getByRole("button").nth(1).waitFor();
         await rest(page, size);
         all[`home.${size}.${theme}.${side}`] = await measure(page, "home");
         await page.close();
@@ -1739,6 +1742,7 @@ const AGENT_PAGES = [
   { state: "trouble", size: "wide", id: "a-triage", name: "Triage" },
   { state: "stopped", size: "wide", id: "a-weekly", name: "Weekly report" },
   { state: "held", size: "wide", id: "a-research", name: "Research" },
+  { state: "never", size: "wide", id: "a-docs", name: "Docs" },
 ] as const;
 if (wants("agent"))
   for (const { state, size, id, name } of AGENT_PAGES)
@@ -1748,10 +1752,11 @@ if (wants("agent"))
       for (const side of ["design", "built"] as const) {
         const gateway = side === "built" ? await standIn() : undefined;
         // Research's computer down, as the design's control puts it, is seen on its Chats.
-        const chats = state === "chats" || state === "held";
+        const chats = state === "chats" || state === "held" || state === "never";
         if (gateway) {
           sampleAgents(gateway);
           sampleChats(gateway);
+          docsAgent(gateway);
           downTriage(gateway);
           if (state === "held")
             gateway.setHeld("a-research", [
@@ -1949,13 +1954,16 @@ if (wants("setup"))
         await gateway?.close();
       }
 
-// One chat, a chat with a problem, a chat about to be started, and chats found from the bar: the
-// design's sample chats, and the same two on the built side.
+// A conversation, one with a problem, and one with an agent never messaged: the design's sample,
+// and the same on the built side.
 if (wants("thread"))
   for (const theme of ["dark", "light"] as const)
     for (const side of ["design", "built"] as const) {
       const gateway = side === "built" ? await standIn() : undefined;
-      if (gateway) sampleChats(gateway);
+      if (gateway) {
+        sampleChats(gateway);
+        docsAgent(gateway);
+      }
       const page = gateway
         ? await builtPage(gateway, "wide", theme)
         : await designPage("wide", theme);
@@ -1964,25 +1972,15 @@ if (wants("thread"))
         await rest(page, "wide");
         all[`thread.${state}.${theme}.${side}`] = await measure(page, "thread");
       };
-      await page.getByRole("button", { name: /^Chats/ }).click();
-      await panel.getByRole("button", { name: /Review #482/ }).click();
-      await panel.getByRole("heading", { name: "Review #482" }).waitFor();
+      await openConversation(page, "Reviewer");
       await at("chat");
       await panel.getByRole("button", { name: "All chats" }).click();
-      await panel.getByRole("button", { name: /Route today's issues/ }).click();
+      await panel.getByRole("button").filter({ hasText: "Triage" }).click();
       await panel.getByRole("alert").waitFor();
       await at("problem");
-      await panel.getByRole("button", { name: "All chats" }).click();
-      await panel.getByRole("button", { name: "New chat" }).click();
-      await panel.getByRole("heading", { name: "New chat" }).waitFor();
-      await at("new");
-      await panel.getByRole("list", { name: "Who with" }).locator("button:enabled").first().click();
-      await panel.getByRole("textbox", { name: "Message" }).waitFor();
-      await at("picked");
       await panel.getByRole("button", { name: "Close chats" }).click();
-      await page.getByRole("searchbox", { name: "Search" }).fill("Route today");
-      await page.getByRole("list", { name: "Chats found" }).waitFor();
-      await at("found");
+      await messageDocs(page);
+      await at("first");
       await page.close();
       await gateway?.close();
     }

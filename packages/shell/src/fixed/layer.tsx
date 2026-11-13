@@ -2,10 +2,9 @@
 // above it. The chat lives in it, at the right, collapsed to a narrow column or open as a panel.
 // One inset from the screen's edges places it; nothing in it dims the page, and it closes by its
 // own Close.
-import { ArchiveIcon, ChevronLeftIcon, MessageCircleIcon, SquarePenIcon } from "lucide-react";
+import { MessageCircleIcon } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { api } from "../data.ts";
-import { Button } from "../ui/button.tsx";
 import { ActivityWindow } from "./activity.tsx";
 import { useAllChats } from "./all-chats.tsx";
 import { ChatRow, CloseChats } from "./chat-parts.tsx";
@@ -14,7 +13,7 @@ import { Computer, surfacesOf, windowsOf } from "./computer.tsx";
 import { useComputers } from "./computers.tsx";
 import { useEvery } from "./data.ts";
 import { Face } from "./face.tsx";
-import { NewChat, Thread } from "./thread.tsx";
+import { Thread } from "./thread.tsx";
 import { useAgents } from "./watch.tsx";
 
 /** How many faces the collapsed chat shows; the count on its button says how many are unread. */
@@ -35,7 +34,7 @@ const ICON = 40;
  */
 function ChatPill({ returned }: { returned: boolean }) {
   const { expand, openChat } = useChats();
-  const unread = useAllChats().chats.filter((chat) => !chat.archived && chat.unread);
+  const unread = useAllChats().chats.filter((chat) => chat.unread);
   const faces = unread.slice(0, FACES);
   // Closed, the chat hands the keyboard back to the button that opens it.
   const button = useRef<HTMLButtonElement>(null);
@@ -80,15 +79,15 @@ function ChatPill({ returned }: { returned: boolean }) {
             <ul aria-label="Unread chats" className="absolute inset-0">
               {faces.map((chat, i) => (
                 <li
-                  key={`${chat.agent.id} ${chat.entry.id}`}
+                  key={chat.agent.id}
                   style={{ right: at(i + 1), zIndex: FACES - i }}
                   className="absolute top-0"
                 >
                   <button
                     type="button"
-                    aria-label={`Open ${chat.entry.title}`}
-                    title={chat.entry.title}
-                    onClick={() => openChat(chat.agent.id, chat.entry.id)}
+                    aria-label={`Open ${chat.agent.name}`}
+                    title={chat.agent.name}
+                    onClick={() => openChat(chat.agent.id)}
                     className="grid rounded-full ring-2 ring-[var(--surface)]"
                   >
                     <Face agent={chat.agent} size={ICON} plain bare />
@@ -103,58 +102,25 @@ function ChatPill({ returned }: { returned: boolean }) {
   );
 }
 
-/** The chats, newest first; or the archived ones. */
-function Chats({ archived }: { archived: boolean }) {
-  const { show, openChat, newChat } = useChats();
+/** Your conversations, one with each agent you talk to, newest first. Another is begun from its agent's page. */
+function Chats() {
+  const { openChat } = useChats();
   const { chats } = useAllChats();
-  const shown = chats.filter((chat) => chat.archived === archived);
-  const kept = chats.filter((chat) => chat.archived).length;
   // The ages are read again as time passes.
   useEvery(30_000);
   return (
     <>
       <header className="flex h-14 shrink-0 items-center gap-1 pr-2.5 pl-4">
-        {archived && (
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            className="-ml-2"
-            aria-label="All chats"
-            onClick={() => show({ kind: "list" })}
-          >
-            <ChevronLeftIcon />
-          </Button>
-        )}
-        <h2 className="min-w-0 flex-1 truncate text-[17px] font-semibold">
-          {archived ? "Archived" : "Chats"}
-        </h2>
-        <Button variant="ghost" size="icon-sm" aria-label="New chat" onClick={() => newChat()}>
-          <SquarePenIcon />
-        </Button>
+        <h2 className="min-w-0 flex-1 truncate text-[17px] font-semibold">Chats</h2>
         <CloseChats />
       </header>
-      <ul
-        aria-label={archived ? "Archived chats" : "Chats"}
-        className="no-bar min-h-0 flex-1 overflow-y-auto px-2"
-      >
-        {shown.map((chat) => (
-          <li key={`${chat.agent.id} ${chat.entry.id}`}>
-            <ChatRow chat={chat} onOpen={() => openChat(chat.agent.id, chat.entry.id)} />
+      <ul aria-label="Chats" className="no-bar min-h-0 flex-1 overflow-y-auto px-2 pb-2">
+        {chats.map((chat) => (
+          <li key={chat.agent.id}>
+            <ChatRow chat={chat} onOpen={() => openChat(chat.agent.id)} />
           </li>
         ))}
       </ul>
-      <div className="flex h-12 shrink-0 items-center px-2">
-        <Button
-          variant="ghost"
-          size="sm"
-          className={`text-muted-foreground ${archived || kept === 0 ? "invisible" : ""}`}
-          onClick={() => show({ kind: "archived" })}
-        >
-          <ArchiveIcon />
-          Archived
-          <span className="tabular-nums">{kept}</span>
-        </Button>
-      </div>
     </>
   );
 }
@@ -163,13 +129,11 @@ function Chats({ archived }: { archived: boolean }) {
 function ChatPanel() {
   const { view } = useChats();
   const { chats } = useAllChats();
-  // One chat, one being started, or a list. A chat that is gone, with its agent or not yet
-  // listed, shows the list.
-  const chat =
-    view.kind === "chat"
-      ? chats.find((one) => one.agent.id === view.agent && one.entry.id === view.id)
-      : undefined;
-  const shown = chat ? `${view.kind} ${chat.agent.id} ${chat.entry.id}` : view.kind;
+  const { byId } = useAgents();
+  // Your conversation with an agent, begun or not, or the list. An agent that is gone shows the list.
+  const agent = view.kind === "chat" ? byId.get(view.agent) : undefined;
+  const chat = agent && chats.find((one) => one.agent.id === agent.entry.agent);
+  const shown = agent ? `chat ${agent.entry.agent}` : view.kind;
   // The chat takes the keyboard when it opens and when what it shows changes: the button that
   // was pressed is gone.
   const panel = useRef<HTMLElement>(null);
@@ -182,12 +146,14 @@ function ChatPanel() {
       aria-label="Chats"
       className="window outline-none absolute top-[var(--inset)] right-[var(--inset)] bottom-[var(--inset)] z-50 flex w-[var(--panel)] flex-col overflow-hidden rounded-3xl bg-background shadow-2xl phone:inset-0 phone:w-auto phone:rounded-none"
     >
-      {chat ? (
-        <Thread key={shown} chat={chat} />
-      ) : view.kind === "new" ? (
-        <NewChat key={view.agent ?? "any"} {...(view.agent ? { agent: view.agent } : {})} />
+      {agent ? (
+        <Thread
+          key={shown}
+          agent={{ id: agent.entry.agent, name: agent.entry.name, tone: agent.now.tone }}
+          chat={chat}
+        />
       ) : (
-        <Chats archived={view.kind === "archived"} />
+        <Chats />
       )}
     </aside>
   );

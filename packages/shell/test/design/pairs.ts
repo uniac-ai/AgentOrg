@@ -16,9 +16,11 @@ import {
   computerWith,
   cpuOf,
   createState,
+  docsAgent,
   inDesign,
-  newChatWithFirst,
+  messageDocs,
   noted,
+  openConversation,
   openDesignAgent,
   openFiles,
   openOffer,
@@ -29,6 +31,7 @@ import {
   openWindow,
   readChat,
   refuseSend,
+  releaseNotes,
   SECTIONS,
   SIGN_INS,
   type SignIn,
@@ -160,21 +163,15 @@ const browserOf = async (page: Page) => {
   await ownTab(page);
 };
 /** One chat, opened from the list. */
-const chatNamed = async (page: Page, title: RegExp) => {
-  await page.getByRole("button", { name: /^Chats/ }).click();
-  const panel = page.getByRole("complementary", { name: "Chats" });
-  await panel.getByRole("button", { name: title }).click();
-  await panel.getByRole("button", { name: "All chats" }).waitFor();
-};
 /** Where a chat has older messages than the page holds, the way to them is brought into view. */
 const earlierInView = async (page: Page) => {
   const earlier = page.getByRole("button", { name: "Earlier messages" });
   if (await earlier.count()) await earlier.scrollIntoViewIfNeeded();
 };
-/** The design's own control makes one more chat say something. */
-const twoMoreReplies = async (page: Page) => {
-  for (let n = 0; n < 2; n++) await page.getByRole("button", { name: "A reply arrives" }).click();
-  await page.getByRole("button", { name: "Chats, 3 new" }).waitFor();
+/** The design's own control makes one more conversation say something: two unread, its most. */
+const oneMoreReply = async (page: Page) => {
+  await page.getByRole("button", { name: "A reply arrives" }).click();
+  await page.getByRole("button", { name: "Chats, 2 new" }).waitFor();
 };
 const SCREENS: Screen[] = [
   {
@@ -204,8 +201,8 @@ const SCREENS: Screen[] = [
     sizes: ["wide", "phone"],
     themes: ["dark", "light"],
     unread: true,
-    design: twoMoreReplies,
-    built: (page) => page.getByRole("button", { name: "Chats, 3 new" }).waitFor(),
+    design: oneMoreReply,
+    built: (page) => page.getByRole("button", { name: "Chats, 2 new" }).waitFor(),
   },
   {
     name: "chat-panel",
@@ -213,22 +210,15 @@ const SCREENS: Screen[] = [
     themes: ["dark", "light"],
     unread: true,
     design: async (page) => {
-      await twoMoreReplies(page);
-      await page.getByRole("button", { name: "Chats, 3 new" }).click();
+      await oneMoreReply(page);
+      await page.getByRole("button", { name: "Chats, 2 new" }).click();
     },
-    built: (page) => page.getByRole("button", { name: "Chats, 3 new" }).click(),
+    built: (page) => page.getByRole("button", { name: "Chats, 2 new" }).click(),
   },
   ...(
     [
-      ["chat-thread", (page: Page) => chatNamed(page, /Review #482/)],
-      ["chat-problem", (page: Page) => chatNamed(page, /Route today's issues/)],
-      [
-        "chat-new",
-        async (page: Page) => {
-          await page.getByRole("button", { name: /^Chats/ }).click();
-          await page.getByRole("button", { name: "New chat" }).click();
-        },
-      ],
+      ["chat-thread", (page: Page) => openConversation(page, "Reviewer")],
+      ["chat-problem", (page: Page) => openConversation(page, "Triage")],
     ] as const
   ).map(
     ([name, reach]): Screen => ({
@@ -267,7 +257,7 @@ const SCREENS: Screen[] = [
   ...(
     [
       ["refused", openSampleChat],
-      ["refused-first", newChatWithFirst],
+      ["refused-first", messageDocs],
     ] as const
   ).map(
     ([name, reach]): Screen => ({
@@ -280,6 +270,8 @@ const SCREENS: Screen[] = [
         await refuseSend(page);
       },
       built: async (page, gateway) => {
+        docsAgent(gateway);
+        gateway.changed();
         await reach(page);
         await refuseSend(page, gateway);
       },
@@ -294,7 +286,8 @@ const SCREENS: Screen[] = [
     // As many need you as in the design's sample: one with a problem, one with a reply not read.
     built: async (page, gateway) => {
       await noted(gateway);
-      unreadReply(gateway, 1);
+      releaseNotes(gateway);
+      gateway.changed();
       await page.getByRole("region", { name: "Needs you" }).getByRole("button").nth(1).waitFor();
     },
   },
@@ -605,7 +598,7 @@ for (const screen of SCREENS.filter((one) => wanted(one.name)))
           if (screen.chats) sampleChats(gateway, screen.given);
           if (screen.unread) {
             await noted(gateway);
-            for (const n of [1, 2, 3]) unreadReply(gateway, n);
+            for (const n of [1, 2]) unreadReply(gateway, n);
             readChat(gateway);
           }
           await screen.built(page, gateway);

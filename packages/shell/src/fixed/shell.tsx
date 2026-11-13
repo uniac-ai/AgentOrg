@@ -4,7 +4,6 @@ import {
   LayoutTemplateIcon,
   LoaderCircleIcon,
   MenuIcon,
-  MessageCircleIcon,
   PlusIcon,
   SearchIcon,
   SettingsIcon,
@@ -17,7 +16,7 @@ import { go, type Route, useConnection, useRoute } from "../data.ts";
 import { Button } from "../ui/button.tsx";
 import { TooltipProvider } from "../ui/tooltip.tsx";
 import { AgentPage } from "./agent-page.tsx";
-import { AllChatsProvider, useAllChats } from "./all-chats.tsx";
+import { AllChatsProvider } from "./all-chats.tsx";
 import { BuildDialog } from "./build.tsx";
 import { BuildingProvider, useBuilding } from "./building.tsx";
 import { ChatsProvider, useChats } from "./chats.tsx";
@@ -134,8 +133,6 @@ function LeftBar({
 }) {
   const route = useRoute();
   const { list, byId, unread } = useAgents();
-  const { chats } = useAllChats();
-  const { openChat } = useChats();
   const login = useLogin();
   const [query, setQuery] = useState("");
   const rail = !drawer;
@@ -143,11 +140,9 @@ function LeftBar({
     go(next);
     onGo?.();
   };
-  // Search finds agents and chats by name. The agents it finds stay where the agents are.
+  // Search finds agents by name, and they stay where the agents are. A conversation has no name of
+  // its own: it is its agent's.
   const wanted = query.trim().toLowerCase();
-  const foundChats = wanted
-    ? chats.filter((chat) => !chat.archived && chat.entry.title.toLowerCase().includes(wanted))
-    : [];
   const current = "agent" in route ? route.agent : undefined;
   return (
     <nav
@@ -226,27 +221,6 @@ function LeftBar({
           <p className={`px-2 py-2 text-[13px] text-[var(--faint)] ${rail ? "rail:hidden" : ""}`}>
             {UNREAD}
           </p>
-        )}
-        {foundChats.length > 0 && (
-          <ul aria-label="Chats found" className="mt-3 flex flex-col gap-0.5">
-            {foundChats.map((chat) => (
-              <li key={`${chat.agent.id} ${chat.entry.id}`}>
-                <button
-                  type="button"
-                  onClick={() => {
-                    openChat(chat.agent.id, chat.entry.id);
-                    onGo?.();
-                  }}
-                  className="flex h-10 w-full min-w-0 items-center gap-3 rounded-xl px-2 text-left text-[15px] hover:bg-[var(--hover)]"
-                >
-                  <span className="grid size-7 shrink-0 place-items-center">
-                    <MessageCircleIcon className="size-[18px] text-muted-foreground" />
-                  </span>
-                  <span className="min-w-0 flex-1 truncate">{chat.entry.title}</span>
-                </button>
-              </li>
-            ))}
-          </ul>
         )}
       </div>
       <BarRow

@@ -1,6 +1,6 @@
-// Home is built from chats, since a chat is where anything an agent did can be read. First the
-// chats that need you, then the recent ones. There is no list of what agents are doing, and a chat
-// has no working state: an agent works, in as many chats as its engine lets it.
+// Home is built from your conversations, one with each agent you talk to. First those that need
+// you, then the recent ones. There is no list of what agents are doing, and a conversation has no
+// working state: an agent works on as many things as its engine lets it.
 import { Button } from "../ui/button.tsx";
 import { type ListedChat, useAllChats } from "./all-chats.tsx";
 import { useBuilding } from "./building.tsx";
@@ -11,7 +11,7 @@ import { LeftToSetUp } from "./login.tsx";
 import { Nothing, UNREAD } from "./parts.tsx";
 import { useAgents } from "./watch.tsx";
 
-/** How many recent chats Home shows; the rest are a press away, in the list. */
+/** How many recent conversations Home shows; the rest are a press away, in the list. */
 const RECENT = 6;
 
 const heading = "text-[13px] font-medium text-muted-foreground";
@@ -23,13 +23,12 @@ export function HomePage() {
   const building = useBuilding();
   // The ages are read again as time passes.
   useEvery(30_000);
-  const live = chats.filter((chat) => !chat.archived);
-  // A chat needs you when its last message got no answer, or it said something you haven't read.
-  const needs = live.filter((chat) => !!chat.problem || chat.unread);
-  const recent = live.filter((chat) => !needs.includes(chat)).slice(0, RECENT);
+  // One needs you when its last message got no answer, or it said something you haven't read.
+  const needs = chats.filter((chat) => !!chat.problem || chat.unread);
+  const recent = chats.filter((chat) => !needs.includes(chat)).slice(0, RECENT);
   const nothing = agents.unread
     ? UNREAD
-    : !agents.loaded || live.length > 0
+    : !agents.loaded || chats.length > 0
       ? undefined
       : agents.list.length === 0
         ? "No agents"
@@ -54,8 +53,8 @@ export function HomePage() {
         </div>
         <ul>
           {list.map((chat) => (
-            <li key={`${chat.agent.id} ${chat.entry.id}`}>
-              <ChatRow chat={chat} onOpen={() => openChat(chat.agent.id, chat.entry.id)} />
+            <li key={chat.agent.id}>
+              <ChatRow chat={chat} onOpen={() => openChat(chat.agent.id)} />
             </li>
           ))}
         </ul>

@@ -1,7 +1,7 @@
 // An agent's own page: who it is and how it stands, then what belongs to it. Its computer comes
 // first, where it has one. What it's made of is behind one button, never on the everyday surface.
 // Its line follows no chat: a chat's problem is said on that chat's row, and in the chat.
-import { MessageCircleIcon, SlidersHorizontalIcon, SquarePenIcon } from "lucide-react";
+import { MessageCircleIcon, SlidersHorizontalIcon } from "lucide-react";
 import { useState } from "react";
 import { type AgentTab, api, go } from "../data.ts";
 import { Button } from "../ui/button.tsx";
@@ -32,7 +32,7 @@ export function AgentPage({
   // The list as it was when the page opened may not have an agent just made: only a read since says.
   const [opened] = useState(reads);
   const { chats } = useAllChats();
-  const { newChat, openChat } = useChats();
+  const { openChat } = useChats();
   const creatables = useCreatables();
   const [failed, setFailed] = useState<string>();
   const [setup, setSetup] = useState(false);
@@ -63,8 +63,8 @@ export function AgentPage({
     { id: "overview", title: "Overview" },
   ];
   const tab = tabs.find((t) => t.id === asked) ?? tabs[0];
-  // Its own page lists its chats while it is stopped too: only one archived by hand is left out.
-  const mine = chats.filter((chat) => chat.agent.id === id && !chat.entry.archived);
+  // Your conversation with it, listed on its page while it is stopped too.
+  const mine = chats.find((chat) => chat.agent.id === id);
   // How it stands, and no more. What it did, and what went wrong in a chat, is read in its chats.
   const tone = failed ? "trouble" : now.tone;
   // Signed out of the model account, a running agent can't work: that comes before how it stands.
@@ -86,7 +86,7 @@ export function AgentPage({
             <Button
               className={`${big} tight:flex-1`}
               disabled={stopped}
-              onClick={() => newChat(id)}
+              onClick={() => openChat(id)}
             >
               <MessageCircleIcon />
               Message
@@ -176,19 +176,25 @@ export function AgentPage({
             </div>
           )}
           {tab?.id === "chats" && (
-            <div className="mx-auto max-w-[720px]">
-              <div className="flex h-10 items-center justify-end">
-                <Button variant="ghost" size="sm" disabled={stopped} onClick={() => newChat(id)}>
-                  <SquarePenIcon />
-                  New chat
-                </Button>
-              </div>
+            // Your conversation with it, or the way to begin it: it opens in the chat at the right.
+            <div className="mx-auto flex max-w-[720px] flex-col gap-7">
               <ul aria-label={`Chats with ${entry.name}`}>
-                {mine.map((chat) => (
-                  <li key={chat.entry.id}>
-                    <ChatRow chat={chat} onOpen={() => openChat(id, chat.entry.id)} />
-                  </li>
-                ))}
+                <li>
+                  {mine ? (
+                    <ChatRow chat={mine} onOpen={() => openChat(id)} />
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => openChat(id)}
+                      className="flex h-[68px] w-full items-center gap-3 rounded-xl px-2.5 text-left hover:bg-[var(--hover)]"
+                    >
+                      <Face agent={{ id, name: entry.name, tone: now.tone }} size={40} plain />
+                      <span className="min-w-0 flex-1 truncate text-[15px] font-medium">
+                        Message {entry.name}
+                      </span>
+                    </button>
+                  )}
+                </li>
               </ul>
             </div>
           )}
