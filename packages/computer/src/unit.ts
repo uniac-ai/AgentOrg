@@ -51,7 +51,7 @@ export const INSTALL_STEPS =
   "AgentComputer isn't installed on this computer. Install it with npm install -g @agentorg/computer and try again. AgentOrg starts it for you.";
 
 /**
- * How the service here isolates. With `starts`, none runs yet, and one with no isolation is
+ * How the service here isolates. With `starts`, none runs yet, and one with this isolation is
  * started when a computer is added. Undefined when none runs and AgentComputer isn't installed.
  */
 export type Found = { isolation: "none" | "container"; starts?: true } | undefined;
