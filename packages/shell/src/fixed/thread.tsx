@@ -92,10 +92,12 @@ function turnsOf(
   keys: ReadonlyMap<string, string>,
 ): Turn[] {
   const turns: Turn[] = [];
-  const agentTurn = (id: string) => {
+  // A reply is known by what it answers, so earlier messages read in above it, or more of it as
+  // it comes, never draw it anew.
+  const agentTurn = () => {
     const last = turns.at(-1);
     if (last?.kind === "agent") return last;
-    const turn: Turn = { kind: "agent", id, parts: [] };
+    const turn: Turn = { kind: "agent", id: `reply ${last?.id ?? "first"}`, parts: [] };
     turns.push(turn);
     return turn;
   };
@@ -107,10 +109,10 @@ function turnsOf(
         text: message.text,
         images: message.images ?? [],
       });
-    else agentTurn(message.id).parts.push({ id: message.id, text: message.text });
+    else agentTurn().parts.push({ id: message.id, text: message.text });
   }
   for (const { id, text, images } of unrecorded) turns.push({ kind: "user", id, text, images });
-  for (const [id, text] of streaming) agentTurn(id).parts.push({ id, text, streaming: true });
+  for (const [id, text] of streaming) agentTurn().parts.push({ id, text, streaming: true });
   return turns;
 }
 
@@ -439,7 +441,8 @@ export function Thread({
     /** Whether the status was said while the record was being read: that is the newer word. */
     let heard = false;
     const load = async () => {
-      const since = shown.current.length;
+      /** What is shown as the read begins: anything else shown when it ends came meanwhile. */
+      const before = new Set(shown.current.map((m) => m.id));
       heard = false;
       try {
         const [{ messages: page, more }, now] = await Promise.all([
@@ -452,8 +455,17 @@ export function Thread({
         ]);
         if (!live) return;
         const known = new Set(page.map((m) => m.id));
-        setMessages([...page, ...shown.current.slice(since).filter((m) => !known.has(m.id))]);
-        setHasEarlier(more);
+        // A read again takes back nothing shown: earlier pages stay above the newest one, and what
+        // came while it was read stays below it.
+        const was = shown.current;
+        const first = was.findIndex((m) => known.has(m.id));
+        const older = first > 0 ? was.slice(0, first) : [];
+        const newer = was.filter(
+          (m, i) => i >= Math.max(first, 0) && !known.has(m.id) && !before.has(m.id),
+        );
+        setMessages([...older, ...page, ...newer]);
+        // With earlier pages kept, whether there are earlier still is as their read said.
+        if (older.length === 0) setHasEarlier(more);
         // A reply that settled while nothing was heard is in the record: its partial text goes.
         setStreaming((was) => {
           const left = new Map([...was].filter(([reply]) => !known.has(reply)));

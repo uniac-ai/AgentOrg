@@ -46,7 +46,7 @@ test(
     );
     const within = async (name: string, box: { x: number; width: number } | null) =>
       assert.ok(box && box.x >= 0 && box.x + box.width <= 390, `${name}: ${JSON.stringify(box)}`);
-    const message = await main.getByRole("button", { name: "Message" }).boundingBox();
+    const message = await main.getByRole("button", { name: "Message", exact: true }).boundingBox();
     const name = await main.getByRole("heading", { name: "Research", level: 1 }).boundingBox();
     await within("Message", message);
     assert.ok(

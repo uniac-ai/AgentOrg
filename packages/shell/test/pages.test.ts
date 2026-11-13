@@ -296,7 +296,7 @@ test(
     await stop.click();
     // Stopped, it is started where it says so, and there is nothing to stop or to message.
     await state(page).getByText("Stopped", { exact: true }).waitFor();
-    const message = page.getByRole("main").getByRole("button", { name: "Message" });
+    const message = page.getByRole("main").getByRole("button", { name: "Message", exact: true });
     assert.equal(await message.isDisabled(), true);
     await menu.click();
     assert.equal(await stop.getAttribute("aria-disabled"), "true");
