@@ -6,6 +6,7 @@
 import type { agentSettings, capability, chat, kv, llmSession, tools } from "@agentorg/interfaces";
 import type { Model } from "@agentorg/looper";
 import { type Context, Refused, type Slot } from "@agentorg/sdk";
+import { agentTools } from "./agents.js";
 import { createChats } from "./chats.js";
 import { instructionsWith, skillTool } from "./settings.js";
 import { type Candidate, type LeftOut, listedBy, listsTools, offered, relayed } from "./tools.js";
@@ -56,7 +57,11 @@ export function startEngine(
     // The agent's own instructions: who its main loop speaks as, with nothing of its skills.
     const voice = settings ? settings.instructions : options.instructions();
     const told = instructionsWith(voice, settings?.skills ?? []);
-    const own: Candidate[] = settings?.skills.length ? [skillTool(ctx.slots.settings)] : [];
+    const own: Candidate[] = [
+      ...(settings?.skills.length ? [skillTool(ctx.slots.settings)] : []),
+      // The agents it made, which it talks to from itself.
+      ...agentTools(ctx.exposed()),
+    ];
     // In the order they came, each asked at once so one slow server delays only itself.
     const exposed = await Promise.all(
       ctx

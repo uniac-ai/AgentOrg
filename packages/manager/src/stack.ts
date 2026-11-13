@@ -265,6 +265,10 @@ const CAPABILITY_EXPORT = "capability";
 const TOOLS_EXPORT = "tools";
 /** The slot an agent's Work is reached at by the agent that made it: named by its id. */
 const workSlot = (agent: string) => `work_${agent}`;
+/** The slot an agent's conversations are reached at by the agent that made it: named by its id. */
+const chatSlot = (agent: string) => `chat_${agent}`;
+/** What tells a binding that reaches an agent from the agent that made it. */
+type MadeBinding = { slot: string; provider: string };
 
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
 const alreadyGone = (error: unknown) => error instanceof Refused && error.code === "unknown";
@@ -638,10 +642,15 @@ export function createStacks(parts: StackParts) {
       (binding) =>
         binding.consumer === agent && binding.interface === TOOLS && !madeWork(agent, binding),
     );
-  /** Whether a binding of `maker`'s is the Work of an agent it made, which no page shows. */
-  const madeWork = (maker: string, binding: { slot: string; provider: string }) =>
+  /** Whether a binding of `maker`'s is to an agent it made, at the slot `slot` names it by. */
+  const madeBy = (maker: string, binding: MadeBinding, slot: (agent: string) => string) =>
     records.agents[binding.provider]?.parent?.agent === maker &&
-    binding.slot === workSlot(binding.provider);
+    binding.slot === slot(binding.provider);
+  /** Whether a binding of `maker`'s is the Work of an agent it made, which no page shows. */
+  const madeWork = (maker: string, binding: MadeBinding) => madeBy(maker, binding, workSlot);
+  /** Whether a binding of `maker`'s reaches an agent it made: its Work, or its conversations. */
+  const madeReach = (maker: string, binding: MadeBinding) =>
+    madeWork(maker, binding) || madeBy(maker, binding, chatSlot);
 
   const placeOnAgent = async (input: AddInput) => {
     const record = recordOf(input.agent);
@@ -708,35 +717,43 @@ export function createStacks(parts: StackParts) {
     });
   };
   /**
-   * Have each agent that manages its own reach the Work of the agents it made, as the person
-   * does: each one's own `tools`, exposed to it under that agent's id, while that agent is
-   * connected. One that is away, or whose maker no longer manages its own, is taken off: a
-   * maker's turns that go on after a restart wait for every tools slot that is away. `which`
-   * limits it to the pairs it is true of. Each is done in the maker's queue, so it never races
-   * its agents unit.
+   * Have each agent that manages its own reach the agents it made. It talks to each from itself,
+   * through that agent's `chat` exposed to it under the agent's id, so the agent knows who
+   * speaks. It reads each one's Work as the person does, through its own `tools`, while that
+   * agent is connected: a maker's turns that go on after a restart wait for every tools slot that
+   * is away. A maker that no longer manages its own has both taken off. `which` limits it to the
+   * pairs it is true of. Each is done in the maker's queue, so it never races its agents unit.
    */
   const reachMade = async (which: (made: string, maker: string) => boolean = () => true) => {
+    const warned = (error: unknown) => {
+      // Closed, with its record still here, or already taken off: nothing to do.
+      if (!alreadyGone(error) && !(error instanceof Refused && error.code === "state"))
+        log.warn(`Reaching an agent it made: ${messageOf(error)}`);
+    };
     for (const [id, record] of Object.entries(records.agents)) {
       const parent = record.parent?.agent;
-      if (!parent || !which(id, parent) || !givesWork(id)) continue;
+      if (!parent || !which(id, parent)) continue;
       await serial(parent, async () => {
-        if (!records.agents[id] || !givesWork(id)) return;
-        if (
-          managesOwn(self, records.agents[parent]) &&
-          (await hub.actors.get({ actorId: id })).connected
-        )
-          return void (await hub.grants.expose({
-            provider: id,
-            export: TOOLS_EXPORT,
-            to: parent,
-            as: workSlot(id),
-          }));
-        await unreachMade(parent, id);
-      }).catch((error) => {
-        // Closed, with its record still here, or already taken off: nothing to do.
-        if (!alreadyGone(error) && !(error instanceof Refused && error.code === "state"))
-          log.warn(`Reaching an agent's work: ${messageOf(error)}`);
-      });
+        const made = records.agents[id];
+        if (!made) return;
+        if (!managesOwn(self, records.agents[parent])) return void (await unreachMade(parent, id));
+        // Each apart, so one that fails leaves the other as it should be.
+        const work = async () => {
+          if (!givesWork(id)) return;
+          if ((await hub.actors.get({ actorId: id })).connected)
+            await hub.grants.expose({
+              provider: id,
+              export: TOOLS_EXPORT,
+              to: parent,
+              as: workSlot(id),
+            });
+          else await unreachMade(parent, id, madeWork);
+        };
+        await work().catch(warned);
+        await hub.grants
+          .expose({ provider: id, export: made.chat, to: parent, as: chatSlot(id) })
+          .catch(warned);
+      }).catch(warned);
     }
   };
   /** Whether an agent holds Work of its own with an operation to call. */
@@ -1041,12 +1058,15 @@ export function createStacks(parts: StackParts) {
       ...records.templates,
     });
 
-  /** Take back from `parent` the Work of the agents it made, or of `made` alone. */
-  const unreachMade = async (parent: string, made?: string) => {
+  /**
+   * Take back from `parent` its reach to the agents it made, or to `made` alone: what `which`
+   * says, by default their Work and their conversations.
+   */
+  const unreachMade = async (parent: string, made?: string, which = madeReach) => {
     for (const binding of (await hub.bindings.list({ actor: parent })).bindings)
       if (
         binding.consumer === parent &&
-        madeWork(parent, binding) &&
+        which(parent, binding) &&
         (made === undefined || binding.provider === made)
       )
         await hub.grants.unexpose({ to: parent, slot: binding.slot }).catch((error) => {
@@ -1390,8 +1410,6 @@ export function createStacks(parts: StackParts) {
             await parts.exposeConnection(agent, connection, slot);
           for (const name of child.skills)
             if (library.has(name) && !record.skills.includes(name)) record.skills.push(name);
-          // Its parent reaches its chat through management, which needs it for that.
-          await hub.grants.expose({ provider: agent, export: made.chat, to: self });
         }
         await hub.grants.expose({ provider: agent, export: made.chat, to: "person" });
         if (creatable.capability) await holdOwn(record, agent, creatable.capability, undo);
@@ -1400,7 +1418,7 @@ export function createStacks(parts: StackParts) {
         keepOrigins(work);
         save();
         creating.delete(agent);
-        // Its maker reads its Work now if it is connected, and otherwise once it connects.
+        // Its maker reaches it now: its conversations, and its Work once it is connected.
         if (child) await reachMade((made) => made === agent);
         return { agent };
       } catch (error) {

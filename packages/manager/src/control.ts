@@ -4,16 +4,8 @@
  * management's tools, and management, which holds that authority, works out who is calling, what
  * that caller's unit allows, and whether the target is within its reach.
  */
-import type {
-  chat,
-  Field,
-  FieldValues,
-  Problem,
-  Template,
-  ToolEntry,
-  Unit,
-} from "@agentorg/interfaces";
-import { Refused, type Slot } from "@agentorg/sdk";
+import type { Field, FieldValues, Problem, Template, ToolEntry, Unit } from "@agentorg/interfaces";
+import { Refused } from "@agentorg/sdk";
 import { z } from "zod";
 import { schemaOf, settle } from "./form.js";
 import type { AgentRecord, Offer, StackInput } from "./stack.js";
@@ -46,8 +38,6 @@ export const HOME_CAP = 24;
 const HOME = "home";
 
 const OUTPUT_MAX = 200_000;
-const READ_DEFAULT = 20;
-const READ_MAX = 200;
 
 const SKILL = "delegating";
 const SKILL_FILE = "SKILL.md";
@@ -65,9 +55,8 @@ There is one create tool per template you may use. Read its description and fiel
 
 ## Working with it
 
-- \`agent_send\` gives it a message and returns at once. It works on its own after that. Your name is on the message's first line.
-- You and your agents have one conversation with each agent: everything you send it is there, and its answers come there.
-- \`agent_chats\` says whether it is working, and gives that conversation's latest message and, if a message got no answer, its \`problem\`: send it another once the problem is dealt with. \`agent_read\` shows what was said. Check back when you need the result, rather than after every step.
+- You have one conversation with each agent you made. \`agents__send\` says a message in it, naming the agent by its id, and returns at once; it works on its own after that, and answers there. It knows the message is yours.
+- \`agents__read\` shows that conversation, whether the agent is working, and, if a message got no answer, its \`problem\`: send it another once the problem is dealt with. Check back when you need the result, rather than after every step.
 - An agent that keeps a record of its work also gives you a tool \`work_<its id>__work\` while it is connected: what each of its pieces of work is doing and did. Read it to see how its work goes, without messaging it.
 - Say what you want back and in what form. It knows only what you send it and its purpose.
 
@@ -109,7 +98,7 @@ export function agentsUnit(
           {
             value: "all",
             title: "All",
-            description: "It also sees, messages, stops and starts every other agent.",
+            description: "It also sees, stops and starts every other agent.",
           },
         ],
       },
@@ -542,8 +531,6 @@ const CreateArgs = z.object({
 const OnWhom = z.object({ agent: Id.optional().describe("One of your agents; you, if none.") });
 
 type Tool = z.infer<typeof ToolEntry>;
-/** What the control tools use of an agent's chats. */
-type ChatCalls = Pick<Slot<typeof chat>["call"], "send" | "history" | "list" | "state">;
 /** What management's own interfaces answer, called as the person would. */
 type Person = (
   iface: "agents" | "connections" | "skills",
@@ -590,8 +577,6 @@ export interface ControlParts {
     },
   ): Promise<{ agent: string }>;
   nameOf(actor: string): Promise<string>;
-  /** A child's chat, once the Hub has told management of it. */
-  chatOf(agent: string): Promise<ChatCalls>;
   statusOf(agent: string, provider: string): Promise<{ state: string; detail?: string }>;
   start(agent: string): Promise<unknown>;
   stop(agent: string): Promise<unknown>;
@@ -899,8 +884,6 @@ export function createControl(parts: ControlParts) {
       );
     });
 
-  const callerName = (caller: string) => parts.nameOf(caller).catch(() => caller);
-
   /**
    * The tools, one per verb of the person's interfaces, each with the scope it needs. Apart from
    * creating, each calls what the person's surface calls, after the checks here.
@@ -960,59 +943,6 @@ export function createControl(parts: ControlParts) {
               ({ slot, status, instance }) => ({ slot, status, ...(instance ? { instance } : {}) }),
             );
         return { ...read, mcp };
-      },
-    }),
-    verb({
-      name: "agent_send",
-      description: "Send an agent a message, with your name on it. It returns at once.",
-      input: Target.extend({ text: z.string().min(1).max(90_000).regex(/\S/) }),
-      needs: own,
-      changes: true,
-      async run(caller, bound, { agent, text }) {
-        reachable(caller, bound, agent);
-        // It says who it's from: otherwise it reads as if the person had typed it. The name is
-        // on one line, quoted, so that no name can look like someone else.
-        const name = (await callerName(caller)).replace(/\s+/g, " ").trim().slice(0, 128);
-        const from = `An agent, "${name}", says:\n\n`;
-        return (await parts.chatOf(agent)).send({ text: `${from}${text}` });
-      },
-    }),
-    verb({
-      name: "agent_chats",
-      description:
-        "Whether an agent is working now, and the conversation agents have with it: its latest message and, if a message in it got no answer, the problem.",
-      input: Target,
-      needs: own,
-      changes: false,
-      async run(caller, bound, { agent }) {
-        reachable(caller, bound, agent);
-        const one = await parts.chatOf(agent);
-        const [conversation] = (await one.list({})).conversations;
-        return {
-          working: (await one.state({})).state === "working",
-          ...(conversation ? { conversation } : {}),
-        };
-      },
-    }),
-    verb({
-      name: "agent_read",
-      description: "What was said in the conversation agents have with an agent, oldest first.",
-      input: Target.extend({
-        limit: z.number().int().min(1).max(READ_MAX).optional(),
-        before: z.string().min(1).max(128).optional().describe("Read messages before this one."),
-      }),
-      needs: own,
-      changes: false,
-      async run(caller, bound, { agent, limit, before }) {
-        reachable(caller, bound, agent);
-        const { messages, more } = await (await parts.chatOf(agent)).history({
-          limit: limit ?? READ_DEFAULT,
-          ...(before ? { before } : {}),
-        });
-        return {
-          messages: messages.map(({ id, role, text, at }) => ({ id, role, text, at })),
-          more,
-        };
       },
     }),
     verb({

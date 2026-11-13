@@ -110,7 +110,7 @@ const entryKey = (party: string) => CONVERSATIONS + encodeURIComponent(party);
 const CHATS_BEFORE = "chats/";
 /**
  * The first line management wrote into a message an agent sent another through it, as control's
- * `agent_send` writes it: a chat that began so was that agent's.
+ * `agent_send` wrote it before an agent sent its own: a chat that began so was that agent's.
  */
 const FROM_AGENT = /^An agent, ".*", says:\n/;
 
