@@ -4,6 +4,7 @@
  * management's tools, and management, which holds that authority, works out who is calling, what
  * that caller's unit allows, and whether the target is within its reach.
  */
+import { createHash } from "node:crypto";
 import type { Field, FieldValues, Problem, Template, ToolEntry, Unit } from "@agentorg/interfaces";
 import { Refused } from "@agentorg/sdk";
 import { z } from "zod";
@@ -75,6 +76,29 @@ Its **Connections** answer never keeps one out.
 \`agent_remove\` it when its work is finished, so your limit is free for the next one. \`agent_stop\` it to keep it for later. You can remove only agents you made, and theirs. The person sees every agent you create: it is listed with the person's own agents, and has a page of its own. The person also sees every change you make through these tools, and can undo any of it.
 `;
 export const skillFile = (path: string) => (path === SKILL_FILE ? SKILL_TEXT : undefined);
+/**
+ * The sha256 of every text `delegating`'s SKILL.md has had in a version shipped, the current one
+ * among them: a change of the text appends its new hash and keeps the old ones.
+ */
+export const SKILL_SHIPPED = [
+  "b487e0efa6046b7e8562c7077f9b3ace72becce770de28e659c830ffbbdeb312",
+  "c4c8ec80c821466939cd6de8074bc9199a032c297c7f81e19396c28bbfe1e8cc",
+  "76aa0d9d1c275925377946143e129d8c5b8af002b5109fd97c06cd292a1e7997",
+  "f588cd6b3c5296510e5faf67ddfd853e396f5b3f101beef999e485bac3466c9d",
+  "b35596138c01eb176fcf6ac4fcc1ebc98c74269b5bd87506a523659a1d8bd4b3",
+  "583bb3b732747ef805ee176e8c598e0086b289c36b6949c4382afd4a1ea69784",
+  "1fd777f2c3bd101c93d34a1753564e90a5ed6e0b5fd4271c648f7bcf7b351277",
+  "0243df48c66b8c70ddc262f3fd720e35133c9dfdb1b95fdebf48d98858348654",
+  "8b199ea52a14241b9c0345190a40bebf4bc4150186a2eb6e737792dea8a95850",
+  "c8398d20782eae4c52bb043f03385d8b219883a572c8aade8b53c82e8ca7272b",
+  "dc702fb7e319e148a0ec617af453f29d70b3717654f10096f87f9e623b20cfb4",
+];
+/** The sha256 of each earlier text of a file of the skill, so a copy of one is told from an edit. */
+export const skillShipped = (path: string) => {
+  if (path !== SKILL_FILE) return [];
+  const now = createHash("sha256").update(SKILL_TEXT).digest("hex");
+  return SKILL_SHIPPED.filter((hash) => hash !== now);
+};
 
 type Values = z.infer<typeof FieldValues>;
 type Value = Values[string];

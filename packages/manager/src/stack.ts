@@ -2,6 +2,7 @@
  * An agent built as a stack of units on a base: checking one, applying it all or none, keeping its
  * instances, removing them last first, and the templates that prefill one.
  */
+import { createHash } from "node:crypto";
 import {
   AgentCapability,
   type agentProvider,
@@ -33,6 +34,7 @@ import {
   reachOf,
   reachProblems,
   skillFile,
+  skillShipped,
 } from "./control.js";
 import {
   formProblems,
@@ -103,6 +105,25 @@ export const Records = z.object({
   templates: z.record(z.string(), Template).default({}),
   /** A connection the person made, to its provider's id for it; none means they are the same. */
   instances: z.record(z.string(), z.string()).default({}),
+  /**
+   * Each skill a unit gave, as it was copied here: its unit's provider and unit, and the sha256 of
+   * each of its files. It is replaced when its provider serves other text and it is as copied.
+   */
+  copies: z
+    .record(
+      z.string(),
+      z.object({
+        provider: z.string(),
+        unit: z.string(),
+        files: z.record(z.string(), z.string()),
+      }),
+    )
+    .default({}),
+  /**
+   * The skills units gave in a home from before copies were kept, still to be taken as copies:
+   * each is, once every file is its provider's text or one it shipped.
+   */
+  uncopied: z.array(z.string()).default([]),
   /** The agent that added a skill or saved a template, which only it may replace or remove. */
   authors: z
     .object({
@@ -272,6 +293,21 @@ const chatSlot = (agent: string) => `chat_${agent}`;
 type AgentBinding = { slot: string; provider: string; export: string };
 
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
+/** The sha256 of each file of a skill, by its path. */
+const hashesOf = (files: SkillFiles) =>
+  Object.fromEntries(
+    Object.entries(files).map(([path, text]) => [
+      path,
+      createHash("sha256").update(text).digest("hex"),
+    ]),
+  );
+/** Whether two lists name the same paths. */
+const samePaths = (a: string[], b: string[]) =>
+  a.length === b.length && [...a].sort().every((path, i) => path === [...b].sort()[i]);
+/** Whether two skills' files hash alike, path by path. */
+const sameFiles = (a: Record<string, string>, b: Record<string, string>) =>
+  Object.keys(a).length === Object.keys(b).length &&
+  Object.entries(a).every(([path, hash]) => b[path] === hash);
 const alreadyGone = (error: unknown) => error instanceof Refused && error.code === "unknown";
 const refusal = (problems: TheProblem[]) =>
   new Refused(
@@ -766,6 +802,111 @@ export function createStacks(parts: StackParts) {
       }).catch(warned);
     await Promise.all(holders.map(reachFrom));
   };
+  /** The skills left as they are this start, each logged once. */
+  const toldLeft = new Set<string>();
+  const left = (name: string, why: string) => {
+    if (!toldLeft.has(name)) log.info(`The skill ${name} ${why}, so it is left as it is.`);
+    toldLeft.add(name);
+  };
+  /** The files a unit says a skill of its has, in what it gives or what an answer adds. */
+  const unitSkillFiles = (unit: TheUnit, name: string) =>
+    [
+      ...unit.gives.skills,
+      ...unit.form.flatMap((field) => [
+        ...(field.adds?.skills ?? []),
+        ...(field.options ?? []).flatMap((option) => option.adds?.skills ?? []),
+      ]),
+    ].find((skill) => "name" in skill && skill.name === name) as
+      | { name: string; files: string[] }
+      | undefined;
+  /**
+   * Bring each skill a unit gave up to the files its unit gives now. A skill is replaced only
+   * while it is as it was copied, and the agents that hold it are told; then its new copy is kept.
+   * It follows the provider it was copied from: while that isn't here, it waits. A skill still to
+   * be taken as a copy (`uncopied`) is taken from the first unit that gives its files, when each
+   * file is the text that unit's provider serves now or one it shipped, and is otherwise left. A
+   * skill the person or an agent added has no copy, and is never replaced.
+   */
+  const refreshSkills = async () => {
+    const offers = await catalog();
+    const offerOf = (by: string, unit: string) =>
+      offers.find((one) => one.provider === by && one.unit.id === unit);
+    const pending = new Set(records.uncopied);
+    /** For each skill: the unit it was copied from, or, still to be taken, those that give it. */
+    const givers = new Map<string, Offer[]>();
+    for (const [name, copy] of Object.entries(records.copies)) {
+      const offer = offerOf(copy.provider, copy.unit);
+      if (offer) givers.set(name, [offer]);
+    }
+    for (const record of Object.values(records.agents))
+      for (const unit of record.units)
+        for (const name of unit.skills) {
+          const offer = offerOf(unit.provider, unit.unit);
+          if (!offer || !pending.has(name) || records.copies[name]) continue;
+          givers.set(name, [...(givers.get(name) ?? []), offer]);
+        }
+    for (const [name, all] of givers) {
+      const copy = records.copies[name];
+      const offer = all.find((one) => unitSkillFiles(one.unit, name));
+      if (!offer) continue;
+      const paths = unitSkillFiles(offer.unit, name)?.files as string[];
+      try {
+        if (!library.has(name)) continue;
+        const herePaths = library.paths(name);
+        const hereNow = () =>
+          hashesOf(
+            Object.fromEntries(herePaths.map((path) => [path, library.read(name, path) ?? ""])),
+          );
+        const here = hereNow();
+        // Changed here since it was copied: nothing is asked of the provider.
+        if (copy && !sameFiles(here, copy.files)) {
+          left(name, "isn't as it was copied here");
+          continue;
+        }
+        const served: SkillFiles = {};
+        const shipped: Record<string, string[]> = {};
+        for (const path of paths) {
+          const got = offer.call
+            ? await offer.call.skill({ unit: offer.unit.id, name, path })
+            : { text: skillFile(path), shipped: skillShipped(path) };
+          if (got.text === undefined) throw new Refused("unknown", `${name} has no ${path} now.`);
+          served[path] = got.text;
+          shipped[path] = got.shipped ?? [];
+        }
+        const now = hashesOf(served);
+        const shippedHere =
+          samePaths(herePaths, paths) &&
+          paths.every(
+            (path) =>
+              here[path] === now[path] || shipped[path]?.includes(here[path] as string) === true,
+          );
+        if (!copy && !shippedHere) {
+          left(name, "isn't the text its unit gives");
+          continue;
+        }
+        // What changed here while the provider answered is left to the next refresh.
+        const still =
+          library.has(name) &&
+          samePaths(library.paths(name), herePaths) &&
+          sameFiles(hereNow(), here) &&
+          records.copies[name] === copy &&
+          (copy !== undefined || records.uncopied.includes(name));
+        if (!still) continue;
+        if (!sameFiles(here, now)) {
+          library.add(served, name);
+          for (const [agent, record] of Object.entries(records.agents))
+            if (record.skills.includes(name)) parts.changed(agent);
+        }
+        if (!copy || !sameFiles(copy.files, now)) {
+          records.copies[name] = { provider: offer.provider, unit: offer.unit.id, files: now };
+          records.uncopied = records.uncopied.filter((one) => one !== name);
+          save();
+        }
+      } catch (error) {
+        log.warn(`A skill couldn't be brought up to date: ${messageOf(error)}`, { skill: name });
+      }
+    }
+  };
   /** Whether an agent holds Work of its own with an operation to call. */
   const givesWork = (agent: string) =>
     records.agents[agent]?.capabilities.some(
@@ -988,14 +1129,21 @@ export function createStacks(parts: StackParts) {
             ? (await offer.call.skill({ unit: offer.unit.id, name, path })).text
             : (skillFile(path) as string);
         library.add(copied, name);
+        records.copies[name] = {
+          provider: offer.provider,
+          unit: offer.unit.id,
+          files: hashesOf(copied),
+        };
         // Another agent may have been given it meanwhile, and then it stays.
         undo.push(() => {
           if (
             ![...Object.values(records.agents), ...creating.values()].some((one) =>
               one.skills.includes(name),
             )
-          )
+          ) {
             library.remove(name);
+            delete records.copies[name];
+          }
         });
       }
       record.skills.push(name);
@@ -1210,6 +1358,7 @@ export function createStacks(parts: StackParts) {
     reachHeld,
     holdOwns,
     reachAgents,
+    refreshSkills,
     unitMaking,
     catalog,
     allTemplates: templates,

@@ -286,10 +286,20 @@ export const unitProvider = defineInterface({
   kind: "rpc",
   methods: {
     units: method({ input: z.object({}), output: z.object({ units: z.array(Unit) }) }),
-    /** A file of a skill a unit comes with. Refused `unknown` when there is no such file. */
+    /**
+     * A file of a skill a unit comes with, and `shipped`, the sha256 of each text it had in
+     * earlier versions the provider shipped, so a copy of one of those can be told from an edit.
+     * Refused `unknown` when there is no such file.
+     */
     skill: method({
       input: z.object({ unit: UnitId, name: SkillName, path: SkillPath }),
-      output: z.object({ text: z.string().max(SKILL_FILE_MAX) }),
+      output: z.object({
+        text: z.string().max(SKILL_FILE_MAX),
+        shipped: z
+          .array(z.string().regex(/^[0-9a-f]{64}$/))
+          .max(256)
+          .optional(),
+      }),
     }),
     /**
      * The unit's own validation of what was filled in. It changes nothing. `secrets` names the

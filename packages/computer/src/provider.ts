@@ -7,7 +7,7 @@
 // doesn't include AgentComputer. The control token and each computer's token stay in this
 // provider's private file.
 import { execFile } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import {
   accessSync,
   chmodSync,
@@ -88,6 +88,15 @@ const FILE = "instances.json";
 /** Holds `lastIsolation`. */
 const ISOLATION_FILE = "local-service.json";
 const SKILLS_DIR = fileURLToPath(new URL("../../skills/", import.meta.url));
+/**
+ * The sha256 of every text each skill file has had in a version shipped, the current one among
+ * them, by `<skill>/<path>`, from skills/shipped.json: a change of a file appends its new text's
+ * hash there and keeps the old ones.
+ */
+const SKILLS_SHIPPED = JSON.parse(readFileSync(join(SKILLS_DIR, "shipped.json"), "utf8")) as Record<
+  string,
+  string[]
+>;
 const EXA_URL = "https://mcp.exa.ai/mcp?tools=web_search_exa,web_fetch_exa";
 const SERVICE_ANSWERS_MS = 2000;
 /** How long `agentcomputer up` may take to have a service answer. */
@@ -684,7 +693,10 @@ export async function startComputerProvider(
         async skill({ unit, name, path: file }) {
           if (!SKILLS[unit]?.includes(name) || file !== "SKILL.md")
             throw new Refused("unknown", `${unit} has no file ${file} of a skill ${name}.`);
-          return { text: await readFile(join(SKILLS_DIR, name, file), "utf8") };
+          const text = await readFile(join(SKILLS_DIR, name, file), "utf8");
+          const now = createHash("sha256").update(text).digest("hex");
+          const shipped = (SKILLS_SHIPPED[`${name}/${file}`] ?? []).filter((hash) => hash !== now);
+          return { text, ...(shipped.length > 0 ? { shipped } : {}) };
         },
         async check({ unit, values, secrets }) {
           known(unit);

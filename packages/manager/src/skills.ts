@@ -116,9 +116,12 @@ export function createSkills(dir: string) {
         .filter((found): found is Entry => found !== undefined)
         .sort((a, b) => a.name.localeCompare(b.name));
     },
+    /** Its files' paths, leaving out what a folder on a Mac gathers, as `readSkillFolder` does. */
     paths(name: string) {
       const paths: string[] = [];
-      walk(folderOf(name), (_, path) => paths.push(path));
+      walk(folderOf(name), (_, path) => {
+        if (basename(path) !== ".DS_Store") paths.push(path);
+      });
       return paths.sort();
     },
     /**

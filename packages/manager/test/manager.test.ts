@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import {
   mkdirSync,
   mkdtempSync,
@@ -31,6 +32,7 @@ import {
 import { defineInterface, type Interface, method, Refused, type Slot } from "@agentorg/sdk";
 import { connect } from "@agentorg/sdk/client";
 import { z } from "zod";
+import { SKILL_SHIPPED, skillFile } from "../src/control.ts";
 import { startManager } from "../src/index.ts";
 
 const until = async (condition: () => boolean, ms = 15_000) => {
@@ -309,12 +311,15 @@ async function setup(t: test.TestContext) {
       export: slot,
     })),
   });
+  /** What management logged as information. */
+  const logged: string[] = [];
   const startManagement = () =>
     startManager({
       hubUrl: server.url,
       actorId: management.actorId,
       credential: management.credential as string,
       dir,
+      log: { info: (line) => logged.push(line), warn: () => {}, error: () => {} },
     });
   let manager = await startManagement();
   leaving.push(() => manager.close());
@@ -333,6 +338,9 @@ async function setup(t: test.TestContext) {
     working?: boolean;
     noTools?: boolean;
     skillName?: string;
+    /** The text of the skills it serves, and the sha256 of earlier texts it says it shipped. */
+    skillText?: string;
+    shipped?: string[];
     /** The slot a unit says it made, instead of the one it declared. */
     wrongSlot?: string;
     /** A unit that gives no result, though it said it would. */
@@ -527,7 +535,11 @@ async function setup(t: test.TestContext) {
         units: () => ({ units: UNITS as never }),
         skill: ({ path, name }) => {
           failing("skill");
-          return { text: path === "SKILL.md" ? SKILL(script.skillName ?? name) : "A guide." };
+          return {
+            text:
+              path === "SKILL.md" ? SKILL(script.skillName ?? name, script.skillText) : "A guide.",
+            ...(script.shipped ? { shipped: script.shipped } : {}),
+          };
         },
         check: (input) => {
           given.checked.push(input);
@@ -815,6 +827,7 @@ async function setup(t: test.TestContext) {
     person,
     dir,
     script,
+    logged,
     given,
     heard,
     agentActor,
@@ -3564,4 +3577,82 @@ test("an agent whose creatable gives it a capability holds it with no unit, the 
   const [now] = again;
   assert.ok((await bound()).includes(`${now?.person.capability} ${agent} capability`));
   assert.ok((await bound()).includes(`${now?.person.operations.work} ${agent} tools`));
+});
+
+/** A unit's skill "notes" as management keeps it, and a wait until it says `text`. */
+const notesOf = (s: Awaited<ReturnType<typeof setup>>) => {
+  const notes = async () => (await s.calls.skills.get({ name: "notes" })).text;
+  const becomes = async (text: RegExp, why: string) => {
+    for (let i = 0; !text.test(await notes()); i++) {
+      assert.ok(i < 300, `${why}: ${await notes()}`);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+  };
+  /** Wait until management logs `line`, as many times as `times`. */
+  const logs = (line: string, times = 1) =>
+    until(() => s.logged.filter((one) => one === line).length >= times);
+  return { notes, becomes, logs };
+};
+
+test("a skill a unit gave is brought up to date with its provider while it is as copied", async (t) => {
+  const s = await setup(t);
+  const { notes, becomes, logs } = notesOf(s);
+  await s.makeStack([s.unit("files", { folder: "/work" })]);
+  assert.match(await notes(), /Use it well\./);
+  // Its provider serves new text: management, started again, brings the copy here up to date.
+  s.script.skillText = "Use it better.";
+  await s.restart(() => {});
+  await becomes(/Use it better\./, "the new text never came");
+  // Changed here on disk, it is left as it is, and that is logged once at each start.
+  const left = "The skill notes isn't as it was copied here, so it is left as it is.";
+  writeFileSync(join(s.dir, "skills", "notes", "SKILL.md"), SKILL("notes", "Edited here."));
+  s.script.skillText = "Use it best.";
+  await s.restart(() => {});
+  await logs(left);
+  await s.restart(() => {});
+  await logs(left, 2);
+  assert.match(await notes(), /Edited here\./);
+  // Replaced by the person, even with what was copied, it is theirs, and never brought up to date.
+  await s.calls.skills.add({
+    files: { "SKILL.md": SKILL("notes", "Use it better."), "more/guide.md": "A guide." },
+  });
+  assert.equal(
+    JSON.parse(readFileSync(join(s.dir, "manager.json"), "utf8")).copies.notes,
+    undefined,
+    "no unit's copy any more",
+  );
+  await s.restart(() => {});
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.match(await notes(), /Use it better\./);
+  assert.equal(s.logged.filter((one) => one === left).length, 2);
+});
+
+test("a skill in a home from before copies were kept is brought up to date only when its text is one its provider shipped", async (t) => {
+  const s = await setup(t);
+  const { notes, becomes, logs } = notesOf(s);
+  await s.makeStack([s.unit("files", { folder: "/work" })]);
+  const sha = (text: string) => createHash("sha256").update(text).digest("hex");
+  const withoutCopies = (kept: Record<string, unknown>) => {
+    delete kept.copies;
+  };
+  // Its text isn't one the provider shipped: it may be an edit, and is left.
+  s.script.skillText = "Use it better.";
+  await s.restart(withoutCopies);
+  await logs("The skill notes isn't the text its unit gives, so it is left as it is.");
+  assert.match(await notes(), /Use it well\./);
+  // Still to be taken, at a later start, once the provider says it shipped that text: it is taken
+  // as a copy, and brought up to date.
+  s.script.shipped = [sha(SKILL("notes"))];
+  await s.restart(() => {});
+  await becomes(/Use it better\./, "it was never brought up to date");
+});
+
+test("the delegating skill's text is among the texts it says it shipped", () => {
+  const now = createHash("sha256")
+    .update(skillFile("SKILL.md") ?? "")
+    .digest("hex");
+  assert.ok(
+    SKILL_SHIPPED.includes(now),
+    `append ${now} to SKILL_SHIPPED in packages/manager/src/control.ts, and keep the others`,
+  );
 });

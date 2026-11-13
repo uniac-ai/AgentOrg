@@ -123,6 +123,8 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
       connections: {},
       templates: {},
       instances: {},
+      copies: {},
+      uncopied: [],
       authors: { skills: {}, templates: {} },
     };
     let raw: string;
@@ -133,7 +135,19 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
       throw error;
     }
     try {
-      return Records.parse(JSON.parse(raw));
+      const parsed = JSON.parse(raw);
+      const read = Records.parse(parsed);
+      // From before copies were kept: its units' skills are still to be taken as copies, each
+      // when its text is one its provider shipped.
+      if (parsed && typeof parsed === "object" && !("copies" in parsed))
+        read.uncopied = [
+          ...new Set(
+            Object.values(read.agents).flatMap((agent) =>
+              agent.units.flatMap((unit) => unit.skills),
+            ),
+          ),
+        ];
+      return read;
     } catch {
       renameSync(path, `${path}.unreadable-${Date.now()}`);
       log.error("Management's records can't be read: they are set aside and start empty.");
@@ -300,6 +314,8 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
         });
       const dropSkill = (name: string) => {
         library.remove(name);
+        delete records.copies[name];
+        records.uncopied = records.uncopied.filter((one) => one !== name);
         for (const [agent, record] of Object.entries(records.agents))
           if (record.skills.includes(name)) {
             record.skills = record.skills.filter((skill) => skill !== name);
@@ -407,12 +423,37 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
           owning = undefined;
         });
       };
+      /**
+       * Bring the skills units gave up to date: one pass at a time, and one more after it for
+       * whatever asked while it ran.
+       */
+      let refreshingNow: Promise<void> | undefined;
+      let refreshAgain = false;
+      const refreshing = () => {
+        if (refreshingNow) {
+          refreshAgain = true;
+          return refreshingNow;
+        }
+        refreshingNow = (async () => {
+          do {
+            refreshAgain = false;
+            await stacks
+              .refreshSkills()
+              .catch((error) => log.warn(`Bringing skills up to date: ${messageOf(error)}`));
+          } while (refreshAgain);
+        })().finally(() => {
+          refreshingNow = undefined;
+        });
+        return refreshingNow;
+      };
       const holding = (actor?: string) =>
         void (async () => {
           // One that has closed, or isn't back yet, has nothing to reach, and the agent that
           // made it reaches its Work no more until it is back.
           if (actor && !(await hub.actors.get({ actorId: actor })).connected)
             return void (await stacks.reachAgents((reached) => reached === actor));
+          // A unit provider that is back may serve newer skills than were copied here.
+          if (actor && unitProviders().some((one) => one.actor === actor)) void refreshing();
           await Promise.all([stacks.holdOwns(actor), stacks.reachHeld(actor)]);
           await stacks.reachAgents(
             (reached, holder) => !actor || reached === actor || holder === actor,
@@ -426,6 +467,8 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
       // An agent provider exposed to it says what its agents hold of themselves: an agent made
       // before its creatable gave one holds it from then on.
       ctx.onExposed(owns);
+      // And a unit provider exposed to it may serve newer skills than were copied here.
+      ctx.onExposed(() => void refreshing());
       /** The person's own handlers, which an agent's control tools call after their checks. */
       const personHandlers: Partial<
         Record<"agents" | "connections" | "skills", Record<string, Handler>>
@@ -853,13 +896,20 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
             if (bytes > AGENT_SKILL_BYTES)
               throw new Refused("limit", "An agent's skill can be at most 1 MB.");
             const added = library.add(input.files, named);
+            // An agent's own: no unit's copy any more.
+            delete records.copies[added.name];
+            records.uncopied = records.uncopied.filter((one) => one !== added.name);
             records.authors.skills[added.name] = agent;
             save();
             return added;
           }
           const added = library.add("path" in input ? readSkillFolder(input.path) : input.files);
+          // The person's own: no unit's copy any more, and never brought up to date.
+          delete records.copies[added.name];
+          records.uncopied = records.uncopied.filter((one) => one !== added.name);
           // Replaced by the person, it's the person's.
           delete records.authors.skills[added.name];
+          save();
           for (const [agent, record] of Object.entries(records.agents))
             if (record.skills.includes(added.name)) changed(agent);
           return added;
