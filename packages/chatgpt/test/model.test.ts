@@ -838,6 +838,82 @@ test("what passes is a server's failure by status or code, and a refusal that sa
   assert.equal((await ask()).output.length, 1);
 });
 
+test("an error with no code inside a stream is asked for again, and logged by its fields' names", async (t) => {
+  const s = await setup(t);
+  await signIn(s);
+  const responses = () => s.fake.requests.filter((r) => r.url.endsWith("/v1/responses")).length;
+  const ask = () =>
+    s.call("session", "respond", {
+      requestId: crypto.randomUUID(),
+      model: "gpt-test",
+      instructions: "",
+      input: [],
+    });
+  // Nothing says why, so nothing says it won't pass: each is tried again after a wait, and the
+  // fourth try answers.
+  s.fake.script(
+    { events: [{ type: "response.failed", response: { id: "resp_1", status: "failed" } }] },
+    { events: [{ type: "error", message: "Something went wrong.", param: null }] },
+    { events: [{ type: "response.failed", response: { error: { message: "Try later." } } }] },
+    { events: [delta("Hello"), completed([text("Hello")])] },
+  );
+  const before = responses();
+  assert.deepEqual((await ask()).output, [
+    { type: "message", role: "assistant", content: "Hello" },
+  ]);
+  assert.equal(responses() - before, 4);
+  assert.equal(s.waits.length, 3);
+  // Each is logged by its event and the names of the fields it had, never by what they held.
+  const lines = s.actor.logs
+    .filter((line) => line.message.startsWith("OpenAI ended a response"))
+    .map((line) => `${line.level} ${line.message}`);
+  assert.deepEqual(lines, [
+    "error OpenAI ended a response with no error, in its response.failed event; its response's fields: id, status.",
+    "error OpenAI ended a response with an error that has no code, in its error event; its fields: type, message, param.",
+    "error OpenAI ended a response with an error that has no code, in its response.failed event; its fields: message.",
+  ]);
+  const logged = JSON.stringify(s.actor.logs);
+  assert.ok(!logged.includes("Something went wrong") && !logged.includes("Try later"));
+  // Past the last try the failure is the answer, as it would have been at once.
+  s.waits.length = 0;
+  s.fake.script(
+    ...Array.from({ length: 1 + RETRIES }, () => ({
+      events: [{ type: "response.failed", response: { error: {} } }],
+    })),
+  );
+  await assert.rejects(ask(), {
+    code: "failed",
+    message: /^OpenAI ended the response with an error/,
+  });
+  assert.equal(s.waits.length, RETRIES);
+  // An error event's fields may be nested in its `error`: its code is read there, and one that
+  // is final stays so, in its own words, and isn't logged.
+  s.waits.length = 0;
+  const ended = () =>
+    s.actor.logs.filter((line) => line.message.startsWith("OpenAI ended a response")).length;
+  const logs = ended();
+  s.fake.script({
+    events: [{ type: "error", error: { code: "invalid_prompt", message: "Bad prompt." } }],
+  });
+  await assert.rejects(ask(), {
+    code: "failed",
+    message: /error invalid_prompt .*OpenAI said: Bad prompt\.$/,
+  });
+  assert.deepEqual(s.waits, []);
+  assert.equal(ended(), logs);
+  // And one nested there with no code is asked for again, logged by the fields of both.
+  s.fake.script(
+    { events: [{ type: "error", error: { message: "Oops." } }] },
+    { events: [completed([text("Hello")])] },
+  );
+  assert.equal((await ask()).output.length, 1);
+  assert.equal(s.waits.length, 1);
+  assert.equal(
+    s.actor.logs.findLast((line) => line.message.startsWith("OpenAI ended a response"))?.message,
+    "OpenAI ended a response with an error that has no code, in its error event; its fields: type, error, message.",
+  );
+});
+
 test("a break while the model writes a call of a function that isn't streamed is asked for again", async (t) => {
   const s = await setup(t);
   await signIn(s);
@@ -1051,10 +1127,10 @@ const called = (id: string) => [
 ];
 const user = (content: string) => ({ type: "message", role: "user", content });
 const assistant = (content: string) => ({ type: "message", role: "assistant", content });
-/** What the latest `/responses` request sent: its body, and its input by kind. */
-const latest = (s: Awaited<ReturnType<typeof setup>>) => {
+/** What the latest `/responses` request sent, or the one `back` from it: its body, and its input by kind. */
+const latest = (s: Awaited<ReturnType<typeof setup>>, back = 1) => {
   const sent = s.fake.requests.filter((r) => r.url.endsWith("/v1/responses"));
-  const body = JSON.parse(sent.at(-1)?.body ?? "{}");
+  const body = JSON.parse(sent.at(-back)?.body ?? "{}");
   const kinds = (
     body.input as { type: string; id?: string; call_id?: string; content?: string }[]
   ).map((item) =>
@@ -1134,7 +1210,7 @@ test("a model's reasoning is kept here and sent back before its call until a use
   assert.equal(JSON.stringify([first, s.actor.emitted, s.actor.logs]).includes("sealed-"), false);
 });
 
-test("a request that had reasoning put back and fails for good before any text is made once more without it, and that reasoning is not sent again", async (t) => {
+test("a request that had reasoning put back and fails before any text, in a way OpenAI may not have taken, is made once more without it, and that reasoning is not sent again", async (t) => {
   const s = await setup(t);
   await signIn(s);
   const ask = (input: unknown[]) =>
@@ -1215,7 +1291,7 @@ test("a request that had reasoning put back and fails for good before any text i
   const withIt = ["Look.", "rs_c5", "function_call", "function_call_output"];
   for (const events of [
     [{ type: "response.incomplete", response: {} }],
-    [delta("Half"), { type: "response.failed", response: { error: { code: "bad_thing" } } }],
+    [delta("Half"), { type: "response.failed", response: { error: {} } }],
   ]) {
     s.fake.script({ events });
     before = latest(s).count;
@@ -1237,6 +1313,30 @@ test("a request that had reasoning put back and fails for good before any text i
   assert.equal(latest(s).count - before, 4);
   assert.deepEqual(s.waits, [50_000, 50_000]);
   assert.deepEqual(latest(s).kinds, bare);
+  // An error in the stream with no code: once without the reasoning, at once, and then the
+  // tries a passing failure gets.
+  turn = await kept("c7");
+  s.waits.length = 0;
+  const uncoded = { events: [{ type: "response.failed", response: { error: {} } }] };
+  s.fake.script(uncoded, uncoded, { events: [completed([text("Done.")])] });
+  before = latest(s).count;
+  assert.equal((await ask(turn)).output.length, 1);
+  assert.equal(latest(s).count - before, 3);
+  assert.equal(s.waits.length, 1);
+  assert.deepEqual(latest(s, 2).kinds, bare);
+  assert.deepEqual(latest(s).kinds, bare);
+  // A server's error in the stream passes as it is: the try after it keeps the reasoning.
+  turn = await kept("c8");
+  s.waits.length = 0;
+  s.fake.script(
+    { events: [{ type: "error", code: "server_error" }] },
+    { events: [completed([text("Done.")])] },
+  );
+  before = latest(s).count;
+  assert.equal((await ask(turn)).output.length, 1);
+  assert.equal(latest(s).count - before, 2);
+  assert.equal(s.waits.length, 1);
+  assert.deepEqual(latest(s).kinds, ["Look.", "rs_c8", "function_call", "function_call_output"]);
 });
 
 test("the reasoning kept is bounded, for one call and for one caller, and goes when the sign-in does", async (t) => {

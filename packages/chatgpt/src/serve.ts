@@ -46,6 +46,7 @@ export function serveChatGPT(
     account,
     ...(options.wait ? { wait: options.wait } : {}),
     ...(options.now ? { now: options.now } : {}),
+    log,
     // Each consumer's text goes to that consumer alone.
     delta: (caller, requestId, text, call) =>
       exports.session.emit("delta", { requestId, text, ...(call ? { call } : {}) }, { to: caller }),
