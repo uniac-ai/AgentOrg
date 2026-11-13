@@ -1,7 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { COMPACTION_LINE } from "../src/compaction.ts";
-import { CUT_STEP, createRecord, createThread, fitted, INPUT_BUDGET } from "../src/record.ts";
+import {
+  CUT_STEP,
+  createRecord,
+  createThread,
+  fitted,
+  INPUT_BUDGET,
+  PICTURES_BUDGET,
+  REQUEST_BUDGET,
+} from "../src/record.ts";
 import { cut, cutInside, head, type Item, type Picture, type Store } from "../src/types.ts";
 
 /** A store in memory, as the record uses it. */
@@ -189,22 +197,22 @@ test("a message said during a turn is read after what was asked for without it, 
   await record.append(user("old"));
   await record.append(reply("old reply"));
   await record.append(user("open"));
-  const first = await record.input();
+  const first = await record.input(FLOOR);
   await record.append(during("one"));
   assert.equal(await record.saidAfter(first.read), true);
   // What came of the request that read up to `open` is ahead of `one`.
   await record.append(reply(`to open ${large}`), undefined, first.read);
-  const second = await record.input();
+  const second = await record.input(FLOOR);
   assert.equal(await record.saidAfter(second.read), false);
   await record.append(during("two"));
   // What came of the request that read `one` follows it, and is ahead of `two` only.
   await record.append(reply(`to one ${large}`), undefined, second.read);
   await record.append(during("three"));
-  await record.append(reply("to two and three"), undefined, (await record.input()).read);
+  await record.append(reply("to two and three"), undefined, (await record.input(FLOOR)).read);
   // The turn is over the budget, and stays whole from the message that opened it: it is one
   // exchange, not four.
   assert.deepEqual(
-    (await record.input()).items.map((item) =>
+    (await record.input(FLOOR)).items.map((item) =>
       item.type === "message" ? item.content.slice(0, 9) : "",
     ),
     // Each thing the person said starts with its number, which is its place in the record.
@@ -333,7 +341,7 @@ const ran = (callId: string, output: string, given = "{}") => ({
 });
 /** What is sent, each item in a few words: what was said without its number, and for a call's parts whether they were left out. */
 const sent = async (record: ReturnType<typeof single>) =>
-  (await record.input()).items.map((item) =>
+  (await record.input(FLOOR)).items.map((item) =>
     item.type === "message"
       ? item.content.replace(/^\[\d+\] /, "").slice(0, 40)
       : item.type === "function_call"
@@ -342,6 +350,8 @@ const sent = async (record: ReturnType<typeof single>) =>
   );
 /** Text of this share of the budget. */
 const filler = (share: number) => "x".repeat(INPUT_BUDGET * share);
+/** A request's instructions that leave its words no more than `INPUT_BUDGET`, with no pictures. */
+const FLOOR = { instructions: "x".repeat(REQUEST_BUDGET - INPUT_BUDGET) };
 
 test("over the budget, what was run goes before anything that was said, the oldest first, and the latest exchange's last", async () => {
   const record = single(store().calls as never);
@@ -402,7 +412,7 @@ test("when what was said is itself too much, whole exchanges go except the openi
   await exchange("second", "b");
   await exchange("third", "c");
   await record.append(user("go on"));
-  const { items } = await record.input();
+  const { items } = await record.input(FLOOR);
   const said = items.map((item) => (item.type === "message" ? item.content.slice(0, 12) : ""));
   // The opening message with its number, the line, and what still fits, whole.
   assert.equal(said[0], "[1] the task");
@@ -424,7 +434,7 @@ test("when what was said is itself too much, whole exchanges go except the openi
   // they alone are over the budget.
   await record.append(reply(`d1 ${filler(0.4)}`));
   await record.append(reply(`d2 ${filler(0.4)}`));
-  const over = (await record.input()).items;
+  const over = (await record.input(FLOOR)).items;
   assert.deepEqual(
     over.map((item) =>
       item.type === "message" ? item.content.replace(/^\[\d+\] /, "").slice(0, 5) : "",
@@ -464,7 +474,7 @@ test("a line stands only where something was left out, and with message [1] gone
   for (const key of [...earlier.values.keys()].sort().slice(0, 2)) earlier.values.delete(key);
   const short = single(earlier.calls as never);
   await short.append(user("go on"));
-  const { items } = await short.input();
+  const { items } = await short.input(FLOOR);
   assert.deepEqual(
     items.map((item) => (item.type === "message" ? item.content.slice(0, 12) : "")),
     ["(Left out: a", "[10] fourth", "d1 xxxxxxxxx", "d2 xxxxxxxxx", "[13] go on"],
@@ -504,7 +514,7 @@ test("the same is left out while a conversation grows within one step, so the re
   await record.append(user("the task"));
   for (let i = 0; i < 8; i++) await record.append(ran(`a${i}`, filler(0.14)));
   await record.append(user("go on"));
-  const first = await record.input();
+  const first = await record.input(FLOOR);
   const cut = (items: typeof first.items) =>
     items.filter((item) => item.type === "function_call_output" && item.output.startsWith("(Left"))
       .length;
@@ -512,12 +522,12 @@ test("the same is left out while a conversation grows within one step, so the re
   // A little more is done: what is sent begins exactly as before, and nothing more is cut.
   await record.append(ran("b0", "y".repeat(CUT_STEP / 10)));
   await record.append(ran("b1", "y".repeat(CUT_STEP / 10)));
-  const second = await record.input();
+  const second = await record.input(FLOOR);
   assert.deepEqual(second.items.slice(0, first.items.length), first.items);
   assert.equal(cut(second.items), cut(first.items));
   // Past the step, more is cut, and from then the beginning is the new one.
   await record.append(ran("b2", "y".repeat(CUT_STEP)));
-  assert.ok(cut((await record.input()).items) > cut(first.items));
+  assert.ok(cut((await record.input(FLOOR)).items) > cut(first.items));
 });
 
 /** A picture named by its first letters, of `size` characters. */
@@ -604,7 +614,7 @@ test("a turn that opens on several messages gives the pictures of each first", a
   ]);
 });
 
-test("pictures don't count toward the conversation's budget, and kept and paged they stay with their message", async () => {
+test("pictures aren't counted as words, and kept and paged they stay with their message", async () => {
   const s = store();
   const record = single(s.calls as never);
   await record.append(userWith("the task", [picture("p1", 400_000)]));
@@ -654,7 +664,14 @@ test("pictures are given once the conversation is fitted: what is left out of it
   await record.append(reply(`c2 ${filler(0.2)}`));
   await record.append(user("go on"));
   await record.append(ranWith("z", "a screen", [picture("t", 300_000)]));
-  const said = pictured((await record.input()).items);
+  const said = pictured(
+    // Words have 400,000 bytes beside the pictures' full share.
+    (
+      await record.input({
+        instructions: "x".repeat(REQUEST_BUDGET - INPUT_BUDGET - PICTURES_BUDGET),
+      })
+    ).items,
+  );
   assert.match(
     said[1] ?? "",
     /^\(Left out: all that was said and done after \[1\] and before \[5\]/,
@@ -696,7 +713,7 @@ test("after a compaction, its summary is sent in place of what it covers, after 
   await record.append(ran("c1", "read c")); // 8
   await record.append(compaction(8, "## Goal\n- The task.", ["a.ts"], ["b.ts"])); // 9
   await record.append(ran("c2", "read more")); // 10
-  const { items, over } = await record.input();
+  const { items, over } = await record.input(FLOOR);
   assert.equal(over, false);
   assert.deepEqual(await sent(record), [
     "the task",
@@ -718,7 +735,7 @@ test("after a compaction, its summary is sent in place of what it covers, after 
     await record.append(reply(`${name}1 ${filler(0.45)}`));
   }
   await record.append(user("go on"));
-  const fitted = await record.input();
+  const fitted = await record.input(FLOOR);
   assert.equal(fitted.over, true);
   assert.deepEqual(
     (await sent(record)).map((one) => one.slice(0, 12)),
@@ -862,4 +879,21 @@ test("long strings are cut to one length, as long as fits, so short values stay 
   // Too deep to walk is no JSON to cut.
   assert.equal(cutInside(`${"[".repeat(100_000)}${"]".repeat(100_000)}`, 1_000, sized), undefined);
   assert.equal(cut(cut("x".repeat(100), 50), 20), `${"x".repeat(20)}… (80 more characters)`);
+});
+
+test("a request's words have the room it has left beside what it is told and the pictures it carries", async () => {
+  const record = single(store().calls as never);
+  await record.append(user("the task"));
+  for (let i = 0; i < 6; i++) await record.append(ran(`a${i}`, filler(0.25)));
+  // 600,000 bytes of calls and nothing else: all sent, where 400,000 was the most before.
+  const plain = await record.input({});
+  assert.equal(plain.over, false);
+  // Told more, or carrying pictures, it has less room for words, and the oldest are cut.
+  assert.equal((await record.input({ instructions: "x".repeat(450_000) })).over, true);
+  await record.append(ranWith("p", "a screen", [picture("p", 450_000)]));
+  const pictured = await record.input({});
+  assert.equal(pictured.over, true);
+  assert.ok(
+    pictured.items.some((item) => item.type === "function_call_output" && item.images?.length),
+  );
 });

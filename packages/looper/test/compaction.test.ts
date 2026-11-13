@@ -8,9 +8,10 @@ import {
   summarize,
 } from "../src/compaction.ts";
 import { type Item, type OutputItem, Refusal, type Tool, type WorkEntry } from "../src/index.ts";
-import { idle, looperWith, sends, until } from "./support.ts";
+import { INPUT_BUDGET, REQUEST_BUDGET } from "../src/record.ts";
+import { handsBack, idle, looperWith, says, sends, until } from "./support.ts";
 
-/** A tool that reads a file: each output is 25,000 characters, so twenty are over the budget. */
+/** A tool that reads a file: each output is 25,000 characters, so twenty are over the least room. */
 const look: Tool = {
   name: "look",
   parameters: {},
@@ -41,6 +42,11 @@ const items = (input: unknown[]) =>
   (input as Item[]).map((item) =>
     item.type === "message" ? item.content.slice(0, 30) : `${item.type} ${item.callId}`,
   );
+/**
+ * What the host tells a worker, long enough that its requests' words have only the least room,
+ * `INPUT_BUDGET`: so twenty calls of `look` are over it.
+ */
+const FLOOR = "x".repeat(REQUEST_BUDGET - INPUT_BUDGET);
 /** A summary's first words, as `items` gives them. */
 const SUMMARY = SUMMARY_BEGINS.slice(0, 30);
 /** The words of the message at `at` among a request's items. */
@@ -48,7 +54,10 @@ const contentOf = (input: unknown[] | undefined, at: number) =>
   ((input ?? [])[at] as { content: string }).content;
 
 test("past the budget, a work's earlier steps are summarized once by its own model, and it is sent the opening message, the summary and its latest steps", async () => {
-  const { looper, asked, raw, summaries, answer } = looperWith({ tools: [look] });
+  const { looper, asked, raw, summaries, answer } = looperWith({
+    tools: [look],
+    instructions: FLOOR,
+  });
   await looper.send("a", "Read every file.");
   await until(() => asked.length === 1, "the request");
   answer("Read every file.", looks(0, 20));
@@ -87,7 +96,11 @@ test("past the budget, a work's earlier steps are summarized once by its own mod
 });
 
 test("each later summary updates the one before, and the files read and changed are carried", async () => {
-  const { looper, asked, raw, summaries, answer } = looperWith({ tools: [look, write], files });
+  const { looper, asked, raw, summaries, answer } = looperWith({
+    tools: [look, write],
+    files,
+    instructions: FLOOR,
+  });
   await looper.send("a", "Read every file.");
   await until(() => asked.length === 1, "the request");
   answer("Read every file.", [
@@ -120,6 +133,7 @@ test("each later summary updates the one before, and the files read and changed 
 test("when summarizing fails, the oldest are cut as before, and the turn doesn't ask again", async () => {
   const { looper, asked, raw, summaries, answer } = looperWith({
     tools: [look],
+    instructions: FLOOR,
     summarizing: () => Promise.reject(new Error("The model is down.")),
   });
   await looper.send("a", "Read every file.");
@@ -139,16 +153,23 @@ test("when summarizing fails, the oldest are cut as before, and the turn doesn't
   await looper.settled();
   const { entries } = await looper.entries("a", undefined, 30);
   assert.ok(!entries.map(shown).includes(COMPACTION_LINE));
-  // The next turn tries again.
+  // The next turn tries again, once it has done something of its own: the request that only
+  // decides whether to take the message is cut as before.
   await looper.send("a", "Go on.");
   await until(() => asked.length === 4, "the next turn's request");
+  assert.equal(summaries.length, 1);
+  answer("Go on.", looks(24, 1));
+  await until(() => asked.length === 5, "the request after its call");
   assert.equal(summaries.length, 2);
   answer("Go on.", sends("Still down."));
   await looper.settled();
 });
 
 test("a request the model refuses for its length is asked again once after a summary; refused again, the turn fails", async () => {
-  const { looper, asked, raw, summaries, answer, fail, failures } = looperWith({ tools: [look] });
+  const { looper, asked, raw, summaries, answer, fail, failures } = looperWith({
+    tools: [look],
+    instructions: FLOOR,
+  });
   await looper.send("a", "Read every file.");
   await until(() => asked.length === 1, "the request");
   // Under the budget: nothing is summarized until the model refuses.
@@ -174,6 +195,7 @@ test("a request the model refuses for its length is asked again once after a sum
 test("a turn stopped while its steps are summarized keeps nothing of the summary", async () => {
   const { looper, asked, summaries, answer } = looperWith({
     tools: [look],
+    instructions: FLOOR,
     summarizing: () => new Promise<OutputItem[]>(() => {}),
   });
   await looper.send("a", "Read every file.");
@@ -263,8 +285,8 @@ test("a summary keeps 16,000 characters, the history giving way to the turn's pa
   assert.ok(read.every((path) => path.length < 1_000));
 });
 
-test("a conversation is written out for a summary, each call's arguments and output cut, and the oldest left out past its bound, saying so", () => {
-  assert.equal(
+test("a conversation is written out for a summary, each call's arguments and output cut, in pieces that leave nothing out", () => {
+  assert.deepEqual(
     serialize([
       said("[1] the task"),
       {
@@ -276,15 +298,75 @@ test("a conversation is written out for a summary, each call's arguments and out
       { type: "function_call_output", callId: "c1", output: "x".repeat(2_500) },
       { type: "message", role: "assistant", content: "Read it." },
     ]),
-    `[User]: [1] the task\n\n[Assistant tool calls]: look(path="a.ts", text="${"y".repeat(1_981)}\n\n[... 1020 more characters truncated])\n\n[Tool result]: ${"x".repeat(2_000)}\n\n[... 500 more characters truncated]\n\n[Assistant]: Read it.`,
+    [
+      `[User]: [1] the task\n\n[Assistant tool calls]: look(path="a.ts", text="${"y".repeat(1_981)}\n\n[... 1020 more characters truncated])\n\n[Tool result]: ${"x".repeat(2_000)}\n\n[... 500 more characters truncated]\n\n[Assistant]: Read it.`,
+    ],
   );
+  // Past its bound, in pieces of whole parts, the oldest first.
   const long = serialize(
     Array.from({ length: 200 }, (_, i) => said(`[${i}] ${"y".repeat(1_000)}`)),
   );
-  assert.ok(long.length <= SUMMARY_INPUT);
-  assert.match(
-    long,
-    /^\[\.\.\. \d+ earlier parts of the conversation left out\]\n\n\[User\]: \[\d+\] y/,
+  assert.ok(long.length > 1 && long.every((piece) => piece.length <= SUMMARY_INPUT));
+  assert.ok(long[0]?.startsWith("[User]: [0] y"));
+  assert.ok(long.at(-1)?.endsWith(`[199] ${"y".repeat(1_000)}`));
+  assert.equal(long.join("\n\n").split("[User]: ").length - 1, 200);
+});
+
+test("a history past what one summary request reads is summarized a piece at a time, each updating the summary", async () => {
+  const asks: string[] = [];
+  const ask = async (_instructions: string, text: string) => {
+    asks.push(text);
+    return `summary ${asks.length}`;
+  };
+  const history = ["a", "b", "c"].map((name) => said(`[1] ${name.repeat(100_000)}`));
+  const result = await summarize(ask, { history, prefix: [], upTo: 3 });
+  assert.equal(asks.length, 3);
+  assert.ok(asks[0]?.startsWith("<conversation>\n[User]: [1] a"));
+  assert.ok(!asks[0]?.includes("<previous-summary>"));
+  assert.ok(asks[2]?.includes("<previous-summary>\nsummary 2\n</previous-summary>"));
+  assert.ok(asks[2]?.includes("The messages above are NEW conversation messages"));
+  assert.equal(result.summary, "summary 3");
+  // Each request stays within what one text of a model request can hold.
+  assert.ok(asks.every((text) => text.length < 200_000));
+  // With a summary before, the first piece updates it; a part longer than a piece is cut, and
+  // says so; and past eight pieces the oldest are left out, and the first read says so.
+  asks.length = 0;
+  const previous = { summary: "before", upTo: 0 };
+  const long = [said(`[1] ${"x".repeat(200_000)}`)];
+  await summarize(ask, { history: long, prefix: [], upTo: 1, previous });
+  assert.ok(asks[0]?.includes("<previous-summary>\nbefore\n</previous-summary>"));
+  assert.match(asks[0] ?? "", /\[\.\.\. \d+ more characters truncated\]/);
+  asks.length = 0;
+  const many = Array.from({ length: 10 }, (_, i) => said(`[${i}] ${"z".repeat(100_000)}`));
+  await summarize(ask, { history: many, prefix: [], upTo: 10 });
+  assert.equal(asks.length, 8);
+  assert.ok(
+    asks[0]?.startsWith("<conversation>\n[... 2 earlier pieces of the conversation left out]"),
   );
-  assert.ok(long.endsWith(`[199] ${"y".repeat(1_000)}`));
+});
+
+test("a request that only decides whether to take a message makes no summary, though over the budget", async () => {
+  const { looper, asked, numbered, summaries, answer } = looperWith({
+    tools: [look],
+    instructions: FLOOR,
+    summarizing: () => Promise.reject(new Error("The model is down.")),
+  });
+  await looper.send("a", "Read every file.");
+  await until(() => asked.length === 1, "the request");
+  answer("Read every file.", looks(0, 20));
+  await until(() => asked.length === 2, "the request after the calls");
+  assert.equal(summaries.length, 1);
+  answer("Read every file.", sends("Read most."));
+  await looper.settled();
+  // Its record is still over the budget: a message it hands back costs no summary.
+  await looper.send("a", "What is the weather?");
+  await until(() => asked.length === 3, "its request");
+  const number = Number(/^\[(\d+)\]/.exec(numbered[2]?.at(-1) ?? "")?.[1]);
+  // Words written beside the hand-back are not acting.
+  answer("What is the weather?", [...says("Not mine."), ...handsBack(number, "Not this work's.")]);
+  await until(() => asked.length === 4, "the new work's request");
+  assert.deepEqual(numbered[3], ["[1] What is the weather?"]);
+  assert.equal(summaries.length, 1);
+  answer("What is the weather?", sends("Sunny."));
+  await looper.settled();
 });

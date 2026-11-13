@@ -9,8 +9,8 @@
  * `send`, the only way anything it says reaches the person, which answers a message, and
  * `hand_back`, which says a message is not this work's. What it writes without sending, and what
  * its calls did, are kept for the work and said in no thread. When what a request would send is
- * over the budget, or the model refuses it for its length, the work's earlier steps are first
- * summarized by its own model (see compaction.ts).
+ * over its budget once its turn has done something of its own, or the model refuses it for its
+ * length, the work's earlier steps are first summarized by its own model (see compaction.ts).
  */
 import {
   COMPACTION_LINE,
@@ -96,9 +96,14 @@ export const HAND_BACK: ToolSpec = {
  */
 export const workInstructions = (
   title: string,
+  others: string[] = [],
 ) => `This is one piece of work: ${title}. Other pieces of work may be going on beside it, each with a worker of its own, and a message may reach several of them at once.
 
-Each message starts with its number in brackets, like [12]. One from anyone other than the person then says who it is from, like [12] (from <who>): what you send in reply reaches them. Decide each one once. If it asks for something that belongs to this work, do it and answer it by calling \`send\` with its number: only what you send reaches whoever said it. What you write without sending is seen by no one but you, in your later requests. You may send while the work goes on, and more than once. If it asks for something that does not belong to this work, call \`hand_back\` with its number and one sentence why, and send nothing about it: it is then given to other work, or starts new work. A message that asks for nothing, like thanks, still gets a short answer. A message you neither answer nor hand back is shown as not answered when you are done. When you have nothing more to do, end without calling anything.
+Each message starts with its number in brackets, like [12]. One from anyone other than the person then says who it is from, like [12] (from <who>): what you send in reply reaches them. Decide each one once. If it asks for something that belongs to this work, do it and answer it by calling \`send\` with its number: only what you send reaches whoever said it. What you write without sending is seen by no one but you, in your later requests. You may send while the work goes on, and more than once. If it asks for something that does not belong to this work, call \`hand_back\` with its number and one sentence why, and send nothing about it: it is then given to other work, or starts new work.${
+  others.length > 0
+    ? ` The other work in its conversations, in the order it began: ${others.map((one) => JSON.stringify(one)).join(", ")}. A message about what one of them did or decided is not this work's, though it says "you": call \`hand_back\` for it.`
+    : ""
+} A message that asks for nothing, like thanks, still gets a short answer. A message you neither answer nor hand back is shown as not answered when you are done. When you have nothing more to do, end without calling anything.
 
 A message that begins "(Left out:" or "${SUMMARY_BEGINS}" is not from the person and needs no answer. It stands for earlier messages, and what was done for them, that no longer fit: all of it was said and done, so do not do it again. A call whose arguments or output say they were left out did run. Message [1] is what this work was asked.`;
 
@@ -161,8 +166,8 @@ interface Turn {
    */
   from?: number;
   /**
-   * Set once it has written or sent something, or run a call of its tools: it is at something of
-   * its own.
+   * Set once it has sent something, or run a call of its tools: it is at something of its own.
+   * Words it only wrote, as beside handing a message back, are not.
    */
   acted?: boolean;
   /** The thread it answers in now: that of the newest message its latest request read. */
@@ -198,6 +203,8 @@ export function createLoop(options: {
   record: LoopRecord;
   /** The work's title, for its worker to know which work this is. */
   title(): Promise<string>;
+  /** The titles of the other work in the conversations it follows, in the order it began. */
+  others(): Promise<string[]>;
   /**
    * A turn is about to start, after the place `after`, the highest its work holds: settles once
    * that is kept, before anything of the turn is, so whoever goes on after a host that went in
@@ -502,14 +509,16 @@ export function createLoop(options: {
     for (;;) {
       const { instructions, tools: theirs, model: chosen } = await options.request();
       const tools = [...theirs, handBack];
-      const told = workInstructions(await options.title());
+      const told = workInstructions(await options.title(), await options.others());
       const offered = {
         instructions: instructions ? `${instructions}\n\n${told}` : told,
         tools: [...theirs.map(({ run: _, ...tool }) => tool), SEND, HAND_BACK],
       };
       let { items: input, read, thread, over } = await record.input(offered);
       if (current.cancelled) return;
-      if (over && (await compact(current, chosen, { thread, read }, false)))
+      // A request that only decides whether to take what it was given is cut to fit instead: one
+      // that hands it back would have summarized for nothing.
+      if (over && current.acted && (await compact(current, chosen, { thread, read }, false)))
         ({ items: input, read, thread } = await record.input(offered));
       if (current.cancelled) return;
       current.thread = thread;
@@ -535,7 +544,6 @@ export function createLoop(options: {
       const called = output.filter((item): item is FunctionCall => item.type === "function_call");
       // What it wrote without sending is kept for the work, and said to nobody.
       if (texts.some((text) => text.trim() !== "")) {
-        current.acted = true;
         await record.append(
           {
             role: "assistant",
