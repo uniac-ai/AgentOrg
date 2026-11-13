@@ -1,6 +1,6 @@
 ---
 name: browser
-description: Open web pages and act on them in a real browser. Use when a task needs a site that requires clicking, typing or signing in, or when you need to see what a page actually shows.
+description: Open web pages and act on them in a real browser. Use when a task needs a site that requires clicking, typing or signing in, or when you need to see what a page actually shows. To see a page, call `browser__browser_take_screenshot` without `filename`, and its answer is the picture.
 ---
 
 # Using the browser
