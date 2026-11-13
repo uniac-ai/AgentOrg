@@ -2,7 +2,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { type Browser, chromium, type Page } from "@playwright/test";
-import { newChatWithFirst } from "./design/samples.ts";
 import { SESSION, standIn } from "./stand-in.ts";
 
 let browser: Browser;
@@ -222,7 +221,7 @@ test(
 );
 
 test(
-  "a message its work didn't answer says so, whatever the agent then does in its other chats",
+  "a message its work didn't answer says so, whatever the agent then does elsewhere",
   withGateway(async (gateway) => {
     const page = await open(gateway);
     await input(page).fill("Is the branch pushed?");
@@ -232,7 +231,7 @@ test(
     gateway.failChat("a-reviewer", { code: "not_answered", message: "Not answered" });
     const line = panel(page).getByRole("alert");
     await line.getByText("Not answered").waitFor();
-    // The agent works again, on another chat: this one still says its message wasn't answered.
+    // The agent works again, on something else: this conversation still says its message wasn't answered.
     gateway.setChatStatus("a-reviewer", { state: "working" });
     await page
       .getByRole("main")
@@ -309,25 +308,23 @@ test(
 test(
   "a stopped agent's chat is for reading: it has no composer until the agent starts",
   withGateway(async (gateway) => {
-    gateway.addChat("a-weekly", {
-      id: "c-weekly",
-      title: "Numbers for last week",
-      said: [reply("w1", "Signups were up 4%.")],
-    });
+    gateway.converse("a-weekly", [reply("w1", "Signups were up 4%.")]);
     const page = await visit(gateway, "a-weekly");
-    // Its own page still lists the chat; nothing can be started with it.
+    // Its own page still lists your conversation with it; Message waits for it to start.
     await page
       .getByRole("main")
       .getByRole("list", { name: "Chats with Weekly report" })
-      .getByText("Numbers for last week")
+      .getByText("Signups were up 4%.")
       .waitFor();
-    const chat = page.getByRole("main").getByRole("button", { name: "Message" });
+    const chat = page.getByRole("main").getByRole("button", { name: "Message", exact: true });
     assert.equal(await chat.isDisabled(), true);
+    // It stays in the list, to be read.
     await page.getByRole("button", { name: /^Chats/ }).click();
     await panel(page)
-      .getByRole("button", { name: /^Archived/ })
+      .getByRole("list", { name: "Chats" })
+      .getByRole("button")
+      .filter({ hasText: "Weekly report" })
       .click();
-    await panel(page).getByRole("list").getByText("Numbers for last week").click();
     await panel(page).getByText("Signups were up 4%.").waitFor();
     assert.equal(await input(page).count(), 0);
     // The panel lies over the page's right side: closed, the page's own controls are in reach.
@@ -337,7 +334,7 @@ test(
       .getByRole("button", { name: "Start" })
       .click();
     await page.getByRole("button", { name: /^Chats/ }).click();
-    await panel(page).getByRole("heading", { name: "Numbers for last week" }).waitFor();
+    await panel(page).getByRole("heading", { name: "Weekly report" }).waitFor();
     await input(page).waitFor();
     await page.close();
   }),
@@ -366,77 +363,49 @@ test(
 );
 
 test(
-  "a first message starts a chat, and the next goes on in it",
+  "Message opens your conversation with the agent, empty until its first message makes it, and every message goes on in it",
   withGateway(async (gateway) => {
-    assert.equal(gateway.chatOf("a-triage").id, undefined, "Triage has no chat yet");
-    // A page's Message is a chat about to be started with its agent.
+    assert.deepEqual(gateway.chatOf("a-triage").messages, [], "Triage has no conversation yet");
     const page = await visit(gateway, "a-triage");
-    await page.getByRole("main").getByRole("button", { name: "Message" }).click();
-    await panel(page).getByRole("heading", { name: "New chat" }).waitFor();
-    const who = panel(page).getByRole("list", { name: "Who with" });
-    assert.equal(await who.getByRole("button", { pressed: true }).innerText(), "T\nTriage");
-    // A stopped agent can't be picked.
-    assert.equal(await who.getByRole("button", { name: /Weekly report/ }).isDisabled(), true);
+    const message = page.getByRole("main").getByRole("button", { name: "Message", exact: true });
+    await message.click();
+    // Its head is the agent, and there is nobody to pick.
+    await panel(page).getByRole("heading", { name: "Triage" }).waitFor();
+    assert.equal(await panel(page).getByRole("list", { name: "Who with" }).count(), 0);
+    assert.equal(await panel(page).locator('[data-slot="message-scroller-item"]').count(), 0);
     await input(page).fill("Route today's issues");
     await input(page).press("Enter");
-    // Sent, it is a chat: its thread, called by its first line.
-    await panel(page).getByRole("heading", { name: "Route today's issues" }).waitFor();
     await mine(page, "Route today's issues").waitFor();
-    await until(() => !!gateway.chatOf("a-triage").id);
-    const { id } = gateway.chatOf("a-triage");
-    assert.ok(id, "the message started a chat");
     gateway.addMessage("a-triage", reply("t1", "Routed seven."));
     gateway.setChatStatus("a-triage", { state: "idle" });
     await panel(page).getByText("Routed seven.").waitFor();
-
+    // Begun, it is the same view: the box has kept the keyboard.
+    assert.equal(
+      await page.evaluate(() => document.activeElement?.getAttribute("aria-label")),
+      "Message",
+    );
     await input(page).fill("And yesterday's?");
     await input(page).press("Enter");
-    await panel(page).getByText("And yesterday's?").waitFor();
+    await mine(page, "And yesterday's?").waitFor();
     await until(() => gateway.calls.filter((c) => c.method === "send").length === 2);
-    // A send that named no chat would have started another, with none of this in it.
-    assert.deepEqual(gateway.chatOf("a-triage"), {
-      id,
-      messages: ["Route today's issues", "Routed seven.", "And yesterday's?"],
-    });
-    const sends = gateway.calls.filter((c) => c.method === "send").map((c) => c.input.chat);
+    assert.deepEqual(gateway.chatOf("a-triage").messages, [
+      "Route today's issues",
+      "Routed seven.",
+      "And yesterday's?",
+    ]);
+    // No message names a conversation: the agent knows whose it is.
     assert.deepEqual(
-      sends,
-      [undefined, id],
-      "the first names no chat, the next names the one it made",
+      gateway.calls.filter((c) => c.method === "send").map((c) => Object.keys(c.input)),
+      [["text"], ["text"]],
     );
-
-    // Another chat with the same agent: its earlier chats are offered, and it starts its own.
+    // Message again is the same conversation, and the list has one row for the agent.
     await panel(page).getByRole("button", { name: "Close chats" }).click();
-    await page.getByRole("main").getByRole("button", { name: "Message" }).click();
-    const earlier = panel(page).getByRole("list", { name: "Earlier chats with Triage" });
-    await earlier.getByText("Route today's issues").waitFor();
-    await input(page).fill("A second thing");
-    await input(page).press("Enter");
-    await panel(page).getByRole("heading", { name: "A second thing" }).waitFor();
-    assert.notEqual(gateway.chatOf("a-triage").id, id);
+    await message.click();
+    await mine(page, "Route today's issues").waitFor();
     await panel(page).getByRole("button", { name: "All chats" }).click();
-    const listed = panel(page).getByRole("list", { name: "Chats" });
-    await listed.getByText("A second thing").first().waitFor();
-    await listed.getByText("Route today's issues").first().waitFor();
-    await page.close();
-  }),
-);
-
-test(
-  "a second first message waits for the first: one chat is started, not two",
-  withGateway(async (gateway) => {
-    const release = gateway.hold("chat.send");
-    const page = await visit(gateway, "a-triage");
-    await page.getByRole("main").getByRole("button", { name: "Message" }).click();
-    await input(page).fill("Route today's issues");
-    await input(page).press("Enter");
-    await input(page).fill("And yesterday's");
-    await input(page).press("Enter");
-    // The second isn't sent: it stays in the box.
-    assert.equal(await input(page).inputValue(), "And yesterday's");
-    release();
-    await panel(page).getByRole("heading", { name: "Route today's issues" }).waitFor();
-    assert.equal(gateway.calls.filter((c) => c.method === "send").length, 1);
+    const listed = panel(page).getByRole("list", { name: "Chats" }).getByRole("button");
+    await listed.filter({ hasText: "Triage" }).waitFor();
+    assert.equal(await listed.filter({ hasText: "Triage" }).count(), 1);
     await page.close();
   }),
 );
@@ -446,133 +415,63 @@ test(
   withGateway(async (gateway) => {
     gateway.refuseNext("chat.send", "busy", "It can't take that now.");
     const page = await visit(gateway, "a-triage");
-    await page.getByRole("main").getByRole("button", { name: "Message" }).click();
+    await page.getByRole("main").getByRole("button", { name: "Message", exact: true }).click();
     await input(page).fill("Route today's issues");
     await input(page).press("Enter");
     await panel(page).getByRole("alert").getByText("It can't take that now.").waitFor();
     assert.equal(await input(page).inputValue(), "Route today's issues");
-    await panel(page).getByRole("heading", { name: "New chat" }).waitFor();
+    await panel(page).getByRole("heading", { name: "Triage" }).waitFor();
     await page.close();
   }),
 );
 
 test(
-  "what is said in another chat of the agent's stays out of this one",
+  "what the agent says with another party stays out of your conversation, and out of the list",
   withGateway(async (gateway) => {
     const page = await open(gateway);
-    gateway.addMessage("a-reviewer", reply("r3", "Said in this one."));
-    await panel(page).getByText("Said in this one.").waitFor();
-    // The other chat speaks last, then this one streams: by then both readers have heard it.
-    gateway.addElsewhere("a-reviewer", reply("x1", "Said in another chat."));
+    gateway.addMessage("a-reviewer", reply("r3", "Said to you."));
+    await panel(page).getByText("Said to you.").waitFor();
+    // Its conversation with another agent speaks last, then yours streams: by then both readers
+    // have heard it.
+    gateway.sayWith("a-reviewer", "a-research", reply("x1", "Said to Research."));
+    gateway.delta("a-reviewer", "x2", "Writing to Research", "a-research");
     gateway.delta("a-reviewer", "r4", "Still writing");
     await panel(page).getByText("Still writing").waitFor();
-    assert.equal(await panel(page).getByText("Said in another chat.").count(), 0);
-    await page.close();
-  }),
-);
-
-test(
-  "a chat is renamed in place and archived from its options, and found again among the archived",
-  withGateway(async (gateway) => {
-    const page = await open(gateway);
-    const options = panel(page).getByRole("button", { name: "Chat options" });
-    await options.click();
-    await page.getByRole("menuitem", { name: "Rename" }).click();
-    // The title becomes a field where it stood, ready to type in.
-    const title = panel(page).getByRole("textbox", { name: "Chat title" });
-    await page.waitForFunction(
-      () => document.activeElement?.getAttribute("aria-label") === "Chat title",
-    );
-    await title.fill("The review of #482");
-    await title.press("Enter");
-    await panel(page).getByRole("heading", { name: "The review of #482" }).waitFor();
-    assert.deepEqual(gateway.calls.find((c) => c.method === "rename")?.input, {
-      chat: gateway.chatOf("a-reviewer").id,
-      title: "The review of #482",
-    });
-    // Escape leaves it as it was.
-    await options.click();
-    await page.getByRole("menuitem", { name: "Rename" }).click();
-    await title.fill("Something else");
-    await title.press("Escape");
-    await panel(page).getByRole("heading", { name: "The review of #482" }).waitFor();
-
-    // A rename or an archive that is refused changes nothing, and says why where it was asked.
-    gateway.refuseNext("chat.rename", "unavailable", "It can't be renamed now.");
-    await options.click();
-    await page.getByRole("menuitem", { name: "Rename" }).click();
-    await title.fill("Refused");
-    await title.press("Enter");
-    await panel(page).getByRole("alert").getByText("It can't be renamed now.").waitFor();
-    // Two were asked for in all: the Escape asked for none.
-    assert.deepEqual(
-      gateway.calls.filter((c) => c.method === "rename").map((c) => c.input.title),
-      ["The review of #482", "Refused"],
-    );
-    await panel(page).getByRole("heading", { name: "The review of #482" }).waitFor();
-    gateway.refuseNext("chat.archive", "unavailable", "It can't be archived now.");
-    await options.click();
-    await page.getByRole("menuitem", { name: "Archive", exact: true }).click();
-    await panel(page).getByRole("alert").getByText("It can't be archived now.").waitFor();
-    await panel(page).getByRole("heading", { name: "The review of #482" }).waitFor();
-
-    // Archived, it leaves the list for the archived ones, and comes back from there.
-    await options.click();
-    await page.getByRole("menuitem", { name: "Archive", exact: true }).click();
-    await panel(page).getByRole("heading", { name: "Chats", exact: true }).waitFor();
-    const listed = panel(page).getByRole("list").getByRole("button");
-    await page.waitForFunction(
-      () => !document.querySelector('ul[aria-label="Chats"]')?.textContent?.includes("#482"),
-    );
-    await panel(page)
-      .getByRole("button", { name: /^Archived\s*1$/ })
-      .click();
-    await listed.filter({ hasText: "The review of #482" }).click();
-    await options.click();
-    await page.getByRole("menuitem", { name: "Unarchive" }).click();
+    assert.equal(await panel(page).getByText("Said to Research.").count(), 0);
+    assert.equal(await panel(page).getByText("Writing to Research").count(), 0);
     await panel(page).getByRole("button", { name: "All chats" }).click();
-    await listed.filter({ hasText: "The review of #482" }).waitFor();
+    const listed = panel(page).getByRole("list", { name: "Chats" });
+    await listed.getByText("Said to you.").waitFor();
+    assert.equal(await listed.getByText("Said to Research.").count(), 0);
+    assert.equal(await listed.getByRole("button").filter({ hasText: "Reviewer" }).count(), 1);
     await page.close();
   }),
 );
 
 test(
-  "search in the bar finds chats by title, under the agents, and opens the one picked",
+  "search in the bar finds agents, not what was said to them",
   withGateway(async (gateway) => {
-    gateway.addChat("a-research", {
-      id: "c-oldest",
-      title: "Which issues are oldest?",
-      said: [reply("o1", "The three oldest are #212, #240 and #251.")],
-    });
-    gateway.addChat("a-research", {
-      id: "c-kept",
-      title: "An old issue",
-      said: [],
-      archived: true,
-    });
+    gateway.converse("a-research", [reply("o1", "The three oldest are #212, #240 and #251.")]);
     const page = await visit(gateway, "a-reviewer");
     const bar = page.getByRole("navigation", { name: "Main" });
+    await bar.getByRole("searchbox", { name: "Search" }).fill("oldest");
+    await page.waitForTimeout(300);
     assert.equal(await bar.getByRole("list", { name: "Chats found" }).count(), 0);
-    await bar.getByRole("searchbox", { name: "Search" }).fill("issue");
-    // Not the archived one.
-    const found = bar.getByRole("list", { name: "Chats found" }).getByRole("button");
-    await found.first().waitFor();
-    assert.deepEqual(await found.allInnerTexts(), ["Which issues are oldest?"]);
-    await found.click();
-    await panel(page).getByRole("heading", { name: "Which issues are oldest?" }).waitFor();
-    await panel(page).getByText("The three oldest are #212").waitFor();
     await page.close();
   }),
 );
 
 test(
-  "the chat opens on what it showed last, its face goes to its agent's page, and the list starts a new chat",
+  "the chat opens on what it showed last, its face goes to its agent's page, and nothing in it starts, renames or archives a chat",
   withGateway(async (gateway) => {
     const page = await open(gateway);
     await panel(page).getByRole("button", { name: "Close chats" }).click();
     await page.getByRole("button", { name: /^Chats/ }).click();
     await panel(page).getByRole("textbox", { name: "Message" }).waitFor();
-    // The face in a chat's head is its agent: its page, with the chat out of the way.
+    // Its head is the agent, with nothing to rename or archive.
+    await panel(page).getByRole("heading", { name: "Reviewer" }).waitFor();
+    assert.equal(await panel(page).getByRole("button", { name: "Chat options" }).count(), 0);
+    // The face in a conversation's head is its agent: its page, with the chat out of the way.
     await page
       .getByRole("navigation", { name: "Main" })
       .getByRole("button", { name: "Settings" })
@@ -580,17 +479,17 @@ test(
     await panel(page).getByRole("button", { name: "Reviewer's page" }).click();
     await page.waitForURL(/#\/a\/a-reviewer$/);
     await panel(page).waitFor({ state: "detached" });
-    // From the list, a new chat has nobody picked yet, and nowhere to write until someone is.
+    // The list starts nothing and keeps nothing archived: an agent is messaged from its page.
     await page.getByRole("button", { name: /^Chats/ }).click();
     await panel(page).getByRole("button", { name: "All chats" }).click();
-    await panel(page).getByRole("button", { name: "New chat" }).click();
-    await panel(page).getByRole("heading", { name: "New chat" }).waitFor();
-    const who = panel(page).getByRole("list", { name: "Who with" });
-    assert.equal(await who.getByRole("button", { pressed: true }).count(), 0);
-    assert.equal(await input(page).count(), 0);
-    await who.getByRole("button", { name: /Research/ }).click();
-    await input(page).waitFor();
-    assert.equal(await input(page).getAttribute("placeholder"), "Message Research");
+    await panel(page).getByRole("list", { name: "Chats" }).waitFor();
+    assert.equal(await panel(page).getByRole("button", { name: "New chat" }).count(), 0);
+    assert.equal(
+      await panel(page)
+        .getByRole("button", { name: /^Archived/ })
+        .count(),
+      0,
+    );
     await page.close();
   }),
 );
@@ -656,17 +555,14 @@ test(
 );
 
 test(
-  "a chat's first reply is followed to its end too, though it came whole under a message that was at the top already",
+  "a conversation's first reply is followed to its end too, though it came whole under a message that was at the top already",
   withGateway(async (gateway) => {
-    const page = await visit(gateway, "a-reviewer");
-    await newChatWithFirst(page);
+    const agent = "a-triage";
+    const page = await visit(gateway, agent);
+    await page.getByRole("main").getByRole("button", { name: "Message", exact: true }).click();
     await input(page).fill("List every finding.");
     await input(page).press("Enter");
     await mine(page, "List every finding.").waitFor();
-    const whose = await panel(page)
-      .getByRole("button", { name: /'s page$/ })
-      .getAttribute("aria-label");
-    const agent = `a-${whose?.split("'")[0]?.toLowerCase()}`;
     const room = panel(page).locator('[data-slot="message-scroller-viewport"]');
     const short = () =>
       room.evaluate((view) => Math.round(view.scrollHeight - view.scrollTop - view.clientHeight));

@@ -9,7 +9,8 @@ type Gateway = Awaited<ReturnType<typeof standIn>>;
 
 /** Once the shell has begun its note of what is read: a reply said from here on is new. */
 export async function noted(gateway: Gateway) {
-  while (!gateway.notes.has("ui/read")) await new Promise((done) => setTimeout(done, 20));
+  while (!gateway.notes.has("ui/read-conversations"))
+    await new Promise((done) => setTimeout(done, 20));
   await new Promise((done) => setTimeout(done, 5));
 }
 
@@ -21,22 +22,46 @@ export function unreadReply(gateway: Gateway, n: number) {
     text: "A reply you haven't read.",
     at: new Date().toISOString(),
   };
-  if (n === 1) gateway.addMessage("a-reviewer", reply);
-  else if (n === 2) gateway.addMessage("a-research", reply);
-  else {
-    gateway.addChat("a-triage", { id: "c-triage", title: "Route today's issues", said: [] });
-    gateway.sayIn("a-triage", "c-triage", reply);
-  }
+  gateway.addMessage(["a-reviewer", "a-research", "a-triage"][n - 1] as string, reply);
 }
 
-/** A chat with nothing unread, to be seen beside the unread ones. */
+/** A conversation with nothing unread, to be seen beside the unread ones. */
 export function readChat(gateway: Gateway) {
-  gateway.addChat("a-research", {
-    id: "c-read",
-    title: "Which issues are oldest?",
-    said: [
-      { id: "said-1", role: "user", text: "Which issues are oldest?", at: "2026-01-01T10:00:00Z" },
-    ],
+  gateway.converse("a-triage", [
+    { id: "said-1", role: "user", text: "Monday's numbers?", at: "2026-01-01T10:00:00Z" },
+  ]);
+}
+
+/** Another idle agent as the design's sample has it, with nothing said to it. */
+export function likeAgent(gateway: Gateway, agent: string, name: string, purpose: string) {
+  const like = gateway.agents.get("a-reviewer") as Agent;
+  gateway.agents.set(agent, {
+    ...like,
+    agent,
+    name,
+    purpose,
+    skills: [],
+    mcp: [],
+    chat: { status: { state: "idle" }, messages: [] },
+  });
+}
+/** An agent you have never messaged, as the design's sample has Docs. */
+export const docsAgent = (gateway: Gateway) =>
+  likeAgent(gateway, "a-docs", "Docs", "Keeps the product docs in step with what ships");
+/** Release notes, with a reply you haven't read, as the design's sample has it. */
+export function releaseNotes(gateway: Gateway) {
+  likeAgent(
+    gateway,
+    "a-release",
+    "Release notes",
+    "Drafts release notes from merged pull requests",
+  );
+  gateway.addMessage("a-release", {
+    id: "n-a1",
+    role: "assistant",
+    text: "Grouped 62 changes by area: 28 in checkout, 19 in search, 15 fixes. Should the notes cover 4.2 only?",
+    // Said after the note of what is read was begun, so it is new.
+    at: new Date().toISOString(),
   });
 }
 
@@ -70,19 +95,15 @@ const SHOT = png(640, 420);
 export type ChatCase = "limit" | "long";
 
 /**
- * Two chats as the design's sample has them: one with a reply, one with a problem. The first can
- * be given a case the design draws for a chat: the plan's limit reached, or more said in it than a
- * page holds.
+ * Two conversations as the design's sample has them: Reviewer's with a reply, Triage's with a
+ * problem. The first can be given a case the design draws for a conversation: the plan's limit
+ * reached, or more said in it than a page holds.
  */
 export function sampleChats(gateway: Gateway, given?: ChatCase) {
   const at = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
-  gateway.addChat("a-reviewer", {
-    id: "c-review",
-    title: "Review #482",
-    ...(given === "limit"
-      ? { problem: { code: "usage_limit", message: "You've reached your plan's limit." } }
-      : {}),
-    said: [
+  gateway.converse(
+    "a-reviewer",
+    [
       ...(given === "long"
         ? Array.from({ length: 120 }, (_, n) => ({
             id: `v-old-${n}`,
@@ -105,13 +126,15 @@ export function sampleChats(gateway: Gateway, given?: ChatCase) {
         at: at(12),
       },
     ],
-  });
-  gateway.addChat("a-triage", {
-    id: "c-route",
-    title: "Route today's issues",
-    said: [{ id: "t-u1", role: "user", text: "Route today's new issues.", at: at(60) }],
-    problem: { code: "failed", message: "linear is down, so its tools are left out" },
-  });
+    given === "limit"
+      ? { code: "usage_limit", message: "You've reached your plan's limit." }
+      : undefined,
+  );
+  gateway.converse(
+    "a-triage",
+    [{ id: "t-u1", role: "user", text: "Route today's new issues.", at: at(60) }],
+    { code: "failed", message: "linear is down, so its tools are left out" },
+  );
 }
 
 /** What a page asks, as the design's sample has each. */
@@ -172,18 +195,14 @@ export function sampleAgents(gateway: Gateway) {
     ["a-weekly", "Writes Monday's numbers from the analytics database"],
   ] as const)
     (gateway.agents.get(agent) as Agent).purpose = purpose;
-  gateway.addChat("a-weekly", {
-    id: "c-monday",
-    title: "Monday's numbers",
-    said: [
-      {
-        id: "monday-1",
-        role: "assistant",
-        text: "Signups were up 4% on the week before.",
-        at: new Date(Date.now() - 2 * 24 * 3600_000).toISOString(),
-      },
-    ],
-  });
+  gateway.converse("a-weekly", [
+    {
+      id: "monday-1",
+      role: "assistant",
+      text: "Signups were up 4% on the week before.",
+      at: new Date(Date.now() - 2 * 24 * 3600_000).toISOString(),
+    },
+  ]);
   computer(gateway, [
     { surface: "browser", protocol: "screencast@1", operate: true },
     { surface: "terminal", protocol: "terminal@1", operate: true },
@@ -648,68 +667,53 @@ export const inDesign = (page: Page, name: string | RegExp) =>
 
 const chats = (page: Page) => page.getByRole("complementary", { name: "Chats" });
 
-/** Opens the sample chat that has a call and a reply, from the list. */
+/** Opens the sample conversation that has a reply, Reviewer's, from the list. */
 export async function openSampleChat(page: Page) {
+  await openConversation(page, "Reviewer");
+}
+
+/** Opens your conversation with an agent, by its name, from the list. */
+export async function openConversation(page: Page, name: string) {
   if (!(await chats(page).count())) await page.getByRole("button", { name: /^Chats/ }).click();
   await chats(page)
-    .getByRole("button", { name: /Review #482/ })
+    .getByRole("list", { name: "Chats" })
+    .getByRole("button")
+    .filter({ hasText: name })
     .click();
-  await chats(page).getByRole("heading", { name: "Review #482" }).waitFor();
+  await chats(page).getByRole("heading", { name }).waitFor();
 }
 
-/** Opens a chat by its title, from the list. */
-export async function openChatTitled(page: Page, title: string) {
-  if (!(await chats(page).count())) await page.getByRole("button", { name: /^Chats/ }).click();
-  await chats(page)
-    .getByRole("button", { name: new RegExp(title.replace("?", "\\?")) })
-    .click();
-  await chats(page).getByRole("heading", { name: title }).waitFor();
-}
-
-/** Research's chat about the oldest issues, answered, as the design's sample has it. */
-export function oldestIssues(gateway: Gateway) {
-  const at = new Date(Date.now() - 2 * 3600_000).toISOString();
-  gateway.addChat("a-research", {
-    id: "c-issues",
-    title: "Which issues are oldest?",
-    said: [
-      { id: "i-u1", role: "user", text: "Which open issues in acme/storefront are oldest?", at },
+/**
+ * Reviewer's conversation ends on a message its work didn't answer, as the design's control puts
+ * it: the design's by that control, the built side's by its service.
+ */
+export async function notAnswered(page: Page, gateway?: Gateway) {
+  if (!gateway) return inDesign(page, "Not answered");
+  const said = (gateway.agents.get("a-reviewer") as Agent).chat.messages;
+  gateway.converse(
+    "a-reviewer",
+    [
+      ...said,
       {
-        id: "i-a1",
-        role: "assistant",
-        text: "The three oldest are **#212** (search results jump on load, 14 months), **#240** (address form loses focus, 13 months) and **#267** (totals round the wrong way, 11 months). None has an owner.",
-        at,
-      },
-    ],
-  });
-}
-
-/** Research's chat with a message its work ended a turn without answering, as the design has it. */
-export function notAnswered(gateway: Gateway) {
-  gateway.addChat("a-research", {
-    id: "c-pushed",
-    title: "Is the branch pushed?",
-    said: [
-      {
-        id: "p-u1",
+        id: "v-u2",
         role: "user",
-        text: "Is fix-retry-session pushed yet?",
-        at: new Date(Date.now() - 20 * 60_000).toISOString(),
+        text: "Is #482 ready to merge now?",
+        at: new Date().toISOString(),
       },
     ],
-    problem: { code: "not_answered", message: "Not answered" },
-  });
+    { code: "not_answered", message: "Not answered" },
+  );
 }
 
-/** Opens a chat about to be started, with the first agent that can be picked. */
-export async function newChatWithFirst(page: Page) {
-  if (!(await chats(page).count())) await page.getByRole("button", { name: /^Chats/ }).click();
-  await chats(page).getByRole("button", { name: "New chat" }).click();
-  await chats(page)
-    .getByRole("list", { name: "Who with" })
-    .locator("button:enabled")
-    .first()
+/** Opens your conversation with Docs, never messaged, by its page's Message. */
+export async function messageDocs(page: Page) {
+  // The built bar names an agent after how it stands; the design's, by its name alone.
+  await page
+    .getByRole("navigation", { name: "Main" })
+    .getByRole("button", { name: /(^| )Docs$/ })
     .click();
+  await page.getByRole("main").getByRole("button", { name: "Message", exact: true }).click();
+  await chats(page).getByRole("heading", { name: "Docs" }).waitFor();
 }
 
 /** What a refused send says, on both sides. */

@@ -54,78 +54,49 @@ const withGateway = (run: (gateway: Gateway) => Promise<void>) => async () => {
     await gateway.close();
   }
 };
-/** A chat of an agent's, with one thing said in it so long ago. */
-const chat = (gateway: Gateway, agent: string, id: string, title: string, minutes: number) =>
-  gateway.addChat(agent, { id, title, said: [said(`${id}-1`, "user", title, minutes)] });
+/** Your conversation with an agent, with one thing said in it so long ago. */
+const chat = (gateway: Gateway, agent: string, text: string, minutes: number) =>
+  gateway.converse(agent, [said(`${agent}-1`, "user", text, minutes)]);
 
 test(
-  "Home is the chats that need you, then the recent ones; a row opens its chat, and All the list",
+  "Home is your conversations that need you, then the recent ones; a row opens its conversation, and All the list",
   withGateway(async (gateway) => {
-    chat(gateway, "a-reviewer", "c-review", "Review #482", 30);
-    gateway.addChat("a-triage", {
-      id: "c-route",
-      title: "Route today's issues",
-      said: [said("t1", "user", "Route today's new issues.", 60)],
-      problem: { code: "failed", message: "linear is down, so its tools are left out" },
+    chat(gateway, "a-reviewer", "Review #482", 30);
+    gateway.converse("a-triage", [said("t1", "user", "Route today's new issues.", 60)], {
+      code: "failed",
+      message: "linear is down, so its tools are left out",
     });
-    // An archived chat and a stopped agent's are in neither.
-    gateway.addChat("a-research", {
-      id: "c-kept",
-      title: "An old question",
-      said: [said("k1", "user", "An old question", 3000)],
-      archived: true,
-    });
-    chat(gateway, "a-weekly", "c-weekly", "Numbers for last week", 500);
+    // A stopped agent's is among the recent ones, to be read.
+    chat(gateway, "a-weekly", "Numbers for last week", 500);
     const page = await open(gateway);
-    // A chat needs you when its last message got no answer.
-    await until(() => titles(page, "Needs you"), ["Route today's issues"]);
-    await until(
-      () => titles(page, "Recent"),
-      [
-        "Why are checkouts failing?",
-        // The stand-in's Reviewer was never asked anything, so its own chat has no title.
-        "Reviewer",
-        "Review #482",
-      ],
-    );
-    // The archived one and the stopped agent's have been read by now: they are in the list's
-    // archived ones, and in neither section here.
-    await page.getByRole("button", { name: /^Chats/ }).click();
-    const panel = page.getByRole("complementary", { name: "Chats" });
-    await panel.getByRole("button", { name: /^Archived\s*2$/ }).waitFor();
-    await panel.getByRole("button", { name: "Close chats" }).click();
-    assert.deepEqual(await titles(page, "Needs you"), ["Route today's issues"]);
-    assert.equal((await titles(page, "Recent")).length, 3);
+    // One needs you when its last message got no answer.
+    await until(() => titles(page, "Needs you"), ["Triage"]);
+    await until(() => titles(page, "Recent"), ["Research", "Reviewer", "Weekly report"]);
     // Or when it said something you haven't read: it moves up from the recent ones.
-    gateway.sayIn("a-reviewer", "c-review", {
+    gateway.addMessage("a-reviewer", {
       id: "v-a1",
       role: "assistant",
       text: "Three comments on #482.",
       at: new Date().toISOString(),
     });
     await section(page, "Needs you").getByRole("listitem").nth(1).waitFor();
-    assert.deepEqual(await titles(page, "Needs you"), ["Review #482", "Route today's issues"]);
+    assert.deepEqual(await titles(page, "Needs you"), ["Reviewer", "Triage"]);
     assert.equal(
-      await section(page, "Recent")
-        .getByRole("listitem")
-        .filter({ hasText: "Review #482" })
-        .count(),
+      await section(page, "Recent").getByRole("listitem").filter({ hasText: "Reviewer" }).count(),
       0,
     );
     await section(page, "Needs you").getByRole("img", { name: "New" }).waitFor();
 
-    // A row opens the chat it names; shown, it needs you no more.
+    // A row opens its conversation; shown, it needs you no more.
+    const panel = page.getByRole("complementary", { name: "Chats" });
     await section(page, "Needs you")
-      .getByRole("button", { name: /Review #482/ })
+      .getByRole("button", { name: /Reviewer/ })
       .click();
-    await panel.getByRole("heading", { name: "Review #482" }).waitFor();
+    await panel.getByRole("heading", { name: "Reviewer" }).waitFor();
     await panel.getByText("Three comments on #482.").waitFor();
     await panel.getByRole("button", { name: "Close chats" }).click();
-    await section(page, "Recent")
-      .getByRole("listitem")
-      .filter({ hasText: "Review #482" })
-      .waitFor();
-    assert.deepEqual(await titles(page, "Needs you"), ["Route today's issues"]);
+    await section(page, "Recent").getByRole("listitem").filter({ hasText: "Reviewer" }).waitFor();
+    assert.deepEqual(await titles(page, "Needs you"), ["Triage"]);
 
     // All opens the list.
     await section(page, "Recent").getByRole("button", { name: "All", exact: true }).click();
@@ -135,19 +106,32 @@ test(
 );
 
 test(
-  "Home shows the six newest of the recent chats, and a section with nothing in it isn't there",
+  "Home shows the six newest of the recent conversations, and a section with nothing in it isn't there",
   withGateway(async (gateway) => {
-    for (let n = 0; n < 8; n++) chat(gateway, "a-reviewer", `c-${n}`, `Chat ${n}`, 20 + n);
+    const like = gateway.agents.get("a-triage");
+    assert.ok(like);
+    for (let n = 0; n < 8; n++) {
+      const agent = `a-more-${n}`;
+      gateway.agents.set(agent, {
+        ...like,
+        agent,
+        name: `Agent ${n}`,
+        chat: {
+          status: { state: "idle" },
+          messages: [said(`${agent}-1`, "user", "Hello", 20 + n)],
+        },
+      });
+    }
     const page = await open(gateway);
     await section(page, "Recent").getByRole("listitem").nth(5).waitFor();
     assert.equal(await section(page, "Needs you").count(), 0);
     assert.deepEqual(await titles(page, "Recent"), [
-      "Why are checkouts failing?",
+      "Research",
       "Reviewer",
-      "Chat 0",
-      "Chat 1",
-      "Chat 2",
-      "Chat 3",
+      "Agent 0",
+      "Agent 1",
+      "Agent 2",
+      "Agent 3",
     ]);
     await page.close();
   }),
@@ -156,7 +140,7 @@ test(
 test(
   "Home's column, a section's head and its rows are where the design puts them, wide and on a phone",
   withGateway(async (gateway) => {
-    chat(gateway, "a-reviewer", "c-review", "Review #482", 30);
+    chat(gateway, "a-triage", "Route today's issues", 30);
     const box = async (page: Page, part: ReturnType<Page["locator"]>) => {
       const at = await part.boundingBox();
       assert.ok(at, `${part} is on the page`);

@@ -1,12 +1,8 @@
-// What the chat shows: collapsed or open, and which of its views: the list, the archived ones, one
-// chat, or a chat about to be started.
+// What the chat shows: collapsed or open, and which of its views: the list, or your conversation
+// with one agent.
 import { createContext, useContext, useMemo, useRef, useState } from "react";
 
-export type ChatsView =
-  | { kind: "list" }
-  | { kind: "archived" }
-  | { kind: "chat"; agent: string; id: string }
-  | { kind: "new"; agent?: string };
+export type ChatsView = { kind: "list" } | { kind: "chat"; agent: string };
 
 interface Chats {
   open: boolean;
@@ -15,11 +11,9 @@ interface Chats {
   expand(): void;
   close(): void;
   show(view: ChatsView): void;
-  /** Opens the chat on one chat of an agent's. */
-  openChat(agent: string, id: string): void;
-  /** Opens the chat on one about to be started, with this agent if one is named. */
-  newChat(agent?: string): void;
-  /** What's half typed in each chat, in this session. */
+  /** Opens the chat on your conversation with an agent: empty, with its box, until it begins. */
+  openChat(agent: string): void;
+  /** What's half typed in each conversation, in this session. */
   drafts: Map<string, string>;
 }
 
@@ -41,8 +35,7 @@ export function ChatsProvider({ children }: { children: React.ReactNode }) {
       expand: () => setOpen(true),
       close: () => setOpen(false),
       show,
-      openChat: (agent, id) => show({ kind: "chat", agent, id }),
-      newChat: (agent) => show({ kind: "new", ...(agent ? { agent } : {}) }),
+      openChat: (agent) => show({ kind: "chat", agent }),
       drafts,
     };
   }, [open, view, drafts]);

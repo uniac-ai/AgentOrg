@@ -11,7 +11,6 @@ import {
   CopyIcon,
   ImagePlusIcon,
   MonitorIcon,
-  MoreHorizontalIcon,
   XIcon,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
@@ -19,12 +18,6 @@ import { Streamdown } from "streamdown";
 import { api, go, useConnection } from "../data.ts";
 import { Bubble, BubbleContent } from "../ui/bubble.tsx";
 import { Button } from "../ui/button.tsx";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "../ui/dropdown-menu.tsx";
 import {
   InputGroup,
   InputGroupAddon,
@@ -43,12 +36,12 @@ import {
   useMessageScroller,
   useMessageScrollerScrollable,
 } from "../ui/message-scroller.tsx";
-import { type ListedChat, useAllChats } from "./all-chats.tsx";
-import { ChatRow, CloseChats } from "./chat-parts.tsx";
+import { type ListedChat, PERSON, useAllChats } from "./all-chats.tsx";
+import { CloseChats } from "./chat-parts.tsx";
 import { useChats } from "./chats.tsx";
 import { surfacesOf, windowsOf } from "./computer.tsx";
 import { useComputers } from "./computers.tsx";
-import { type ChatMessage, type ChatStatus, reasonOf } from "./data.ts";
+import { type ChatMessage, type ChatStatus, reasonOf, type Tone } from "./data.ts";
 import { Face } from "./face.tsx";
 import { needsOf, SignInButton, useLogin } from "./login.tsx";
 import { fixOf } from "./notice.ts";
@@ -312,117 +305,73 @@ const ProblemLine = ({
   </div>
 );
 
-/** A chat about to be started: who with, and the first thing said. It exists once that's sent. */
-export function NewChat({ agent: preset }: { agent?: string }) {
-  const { show, openChat } = useChats();
-  const { list, byId } = useAgents();
-  const { chats } = useAllChats();
-  const [picked, setPicked] = useState(preset);
-  const [refused, setRefused] = useState<string>();
-  /** The chat the first message made: it is opened once the list has it. */
-  const [started, setStarted] = useState<{ agent: string; id: string }>();
-  const listed =
-    started && chats.some((c) => c.agent.id === started.agent && c.entry.id === started.id);
-  useEffect(() => {
-    if (started && listed) openChat(started.agent, started.id);
-  }, [started, listed, openChat]);
-  const off = (id: string) => byId.get(id)?.entry.status.state === "stopped";
-  const agent = picked && !off(picked) ? byId.get(picked) : undefined;
-  const earlier = agent
-    ? chats
-        .filter((chat) => chat.agent.id === agent.entry.agent && !chat.entry.archived)
-        .slice(0, 3)
-    : [];
-  /** A first message is on its way: a second would start a second chat. */
-  const starting = useRef(false);
-  const send = async (text: string, images: Sent[]) => {
-    if (!agent?.slot || starting.current) return false;
-    setRefused(undefined);
-    starting.current = true;
-    try {
-      const sent = await api.call<{ chat: string }>(agent.slot, "send", {
-        text,
-        ...(images.length > 0 ? { images } : {}),
-      });
-      setStarted({ agent: agent.entry.agent, id: sent.chat });
-      return true;
-    } catch (error) {
-      starting.current = false;
-      setRefused(reasonOf(error));
-      return false;
-    }
-  };
+/**
+ * The head of your conversation with an agent: back to the list, its face to its page, its name;
+ * and, once it has begun, its computer.
+ */
+function Head({
+  agent,
+  begun,
+  children,
+}: {
+  agent: { id: string; name: string; tone: Tone };
+  begun: boolean;
+  children?: React.ReactNode;
+}) {
+  const { show, close } = useChats();
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <header className="flex h-14 shrink-0 items-center gap-1 pr-2.5 pl-2">
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          aria-label="All chats"
-          onClick={() => show({ kind: "list" })}
-        >
-          <ChevronLeftIcon />
-        </Button>
-        <h2 className="min-w-0 flex-1 truncate text-[17px] font-semibold">New chat</h2>
-        <CloseChats />
-      </header>
-      <div className="no-bar mx-auto flex min-h-0 w-full max-w-[720px] flex-1 flex-col overflow-y-auto px-4">
-        <ul aria-label="Who with" className="no-bar flex shrink-0 gap-1 overflow-x-auto py-3">
-          {list.map((one) => {
-            const watched = byId.get(one.agent);
-            return (
-              <li key={one.agent}>
-                <button
-                  type="button"
-                  aria-pressed={one.agent === agent?.entry.agent}
-                  disabled={off(one.agent)}
-                  onClick={() => {
-                    setPicked(one.agent);
-                    setRefused(undefined);
-                  }}
-                  className={`flex w-[84px] flex-col items-center gap-2 rounded-2xl px-1 py-2.5 enabled:hover:bg-[var(--hover)] disabled:text-muted-foreground ${one.agent === agent?.entry.agent ? "bg-[var(--selected)]" : ""}`}
-                >
-                  <Face
-                    agent={{ id: one.agent, name: one.name, tone: watched?.now.tone ?? "idle" }}
-                    size={48}
-                  />
-                  <span className="w-full truncate text-center text-[13px]">{one.name}</span>
-                </button>
-              </li>
-            );
-          })}
-        </ul>
-        {earlier.length > 0 && agent && (
-          <ul aria-label={`Earlier chats with ${agent.entry.name}`} className="mt-2">
-            {earlier.map((chat) => (
-              <li key={chat.entry.id}>
-                <ChatRow chat={chat} onOpen={() => openChat(chat.agent.id, chat.entry.id)} />
-              </li>
-            ))}
-          </ul>
-        )}
-        {refused && <ProblemLine>{refused}</ProblemLine>}
-      </div>
-      <div className="mx-auto w-full max-w-[720px] shrink-0 px-3 pb-3">
-        {agent ? (
-          <Composer name={agent.entry.name} draft={`new ${agent.entry.agent}`} onSend={send} />
-        ) : (
-          <div className="h-[104px] rounded-3xl bg-[var(--raised)]" />
-        )}
-      </div>
-    </div>
+    <header className="flex h-14 shrink-0 items-center gap-1 pr-2.5 pl-2">
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        aria-label="All chats"
+        onClick={() => show({ kind: "list" })}
+      >
+        <ChevronLeftIcon />
+      </Button>
+      <button
+        type="button"
+        aria-label={`${agent.name}'s page`}
+        className="shrink-0 rounded-full"
+        onClick={() => {
+          go({ screen: "agent", agent: agent.id });
+          close();
+        }}
+      >
+        <Face agent={agent} size={36} />
+      </button>
+      {/* One not begun is headed by the agent alone, as the design draws it. */}
+      {begun ? (
+        <div className="ml-1.5 min-w-0 flex-1">
+          <h2 className="truncate text-[15px] leading-5 font-semibold">{agent.name}</h2>
+        </div>
+      ) : (
+        <h2 className="ml-1.5 min-w-0 flex-1 truncate text-[15px] font-semibold">{agent.name}</h2>
+      )}
+      {begun && children}
+      <CloseChats />
+    </header>
   );
 }
 
-/** One chat: its head, what was said in it, and where the next thing is written. */
-export function Thread({ chat }: { chat: ListedChat }) {
-  const { show, close } = useChats();
+/**
+ * Your conversation with an agent: its head, what was said in it, and where the next thing is
+ * written. One you have never begun is empty, with its box, until the first message makes it; it
+ * stays the same view as it begins, so the box keeps the keyboard.
+ */
+export function Thread({
+  agent,
+  chat,
+}: {
+  agent: { id: string; name: string; tone: Tone };
+  /** As the list has it, once it is listed. */
+  chat?: ListedChat | undefined;
+}) {
   const { byId } = useAgents();
   const { read } = useAllChats();
   const connection = useConnection();
   const reduced = useReducedMotion();
-  const { agent, entry } = chat;
-  const id = entry.id;
+  const entry = chat?.entry;
   const watched = byId.get(agent.id);
   const slot = watched?.slot;
   // Its agent's computer, as a window beside the chat: pressed again, it closes. The chat stays
@@ -451,48 +400,23 @@ export function Thread({ chat }: { chat: ListedChat }) {
   const sends = useRef(0);
   /** A recorded message's key in the thread: the one it was shown under at once, so it stays. */
   const keys = useRef(new Map<string, string>());
-  /** The title as it is being typed, while the chat is renamed. */
-  const [naming, setNaming] = useState<string>();
-  /** Changes what the chat is called or where it is listed: its entry says so when it's done. */
-  const change = (method: "rename" | "archive", input: object) => {
-    if (!slot) return;
-    setFailure(undefined);
-    api.call(slot, method, { chat: id, ...input }).catch((error: unknown) => {
-      leaving.current = false;
-      setFailure({ said: reasonOf(error) });
-    });
-  };
-  // Archived from here, it leaves for the archived ones once its entry says so: the list is
-  // shown, and what was new in it is read. Refused, it stays, and says why.
-  const leaving = useRef(false);
-  useEffect(() => {
-    if (!leaving.current || !entry.archived) return;
-    if (entry.latest) read(agent.id, id, entry.latest.at);
-    show({ kind: "list" });
-  }, [entry.archived, entry.latest, read, show, agent.id, id]);
-  const renaming = useRef(false);
-  const rename = () => {
-    const title = naming?.trim();
-    if (title && title !== entry.title) change("rename", { title });
-    setNaming(undefined);
-  };
-
   // A reply cut off by a problem never settles: it goes.
-  const failed = !!entry.problem;
+  const failed = !!entry?.problem;
   useEffect(() => {
     if (failed) setStreaming(new Map());
   }, [failed]);
   // A reply shown here is read.
   const replied = messages.findLast((m) => m.role === "assistant")?.at;
   useEffect(() => {
-    if (replied) read(agent.id, id, replied);
-  }, [read, agent.id, id, replied]);
+    if (replied) read(agent.id, replied);
+  }, [read, agent.id, replied]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: `state` says when to read again.
   useEffect(() => {
     if (connection !== "open" || !slot) return;
     let live = true;
-    const here = (payload: unknown) => (payload as { chat: string }).chat === id;
+    // What is said in your conversation with it; one it has with another agent is not here.
+    const here = (payload: unknown) => (payload as { with: string }).with === PERSON;
     /**
      * The record and the status now. The record outranks what streamed, and only what arrives
      * while the page is read is newer than it.
@@ -504,10 +428,7 @@ export function Thread({ chat }: { chat: ListedChat }) {
       heard = false;
       try {
         const [{ messages: page, more }, now] = await Promise.all([
-          api.call<{ messages: ChatMessage[]; more: boolean }>(slot, "history", {
-            chat: id,
-            limit: PAGE,
-          }),
+          api.call<{ messages: ChatMessage[]; more: boolean }>(slot, "history", { limit: PAGE }),
           // The status is the agent's.
           api.call<ChatStatus>(slot, "state", {}),
         ]);
@@ -593,7 +514,7 @@ export function Thread({ chat }: { chat: ListedChat }) {
       live = false;
       for (const stop of stops) stop();
     };
-  }, [slot, id, connection, state]);
+  }, [slot, connection, state]);
 
   const recorded = new Set(messages.map((m) => m.id));
   const unrecorded = sending.filter((m) => !m.messageId || !recorded.has(m.messageId));
@@ -605,7 +526,7 @@ export function Thread({ chat }: { chat: ListedChat }) {
   const awaiting = unrecorded.length > 0 || (sentHere && working && asked);
   // While it awaits a reply its problem is not said: the reply ends it, or it is said again. A
   // call of this thread's that failed is said in its place.
-  const problem = failure || awaiting ? undefined : entry.problem;
+  const problem = failure || awaiting ? undefined : entry?.problem;
   const wrong = failure?.said ?? problem?.message;
   // A problem that the plan's page can fix ends its line with the way there.
   const fix = problem && fixOf(problem);
@@ -623,7 +544,6 @@ export function Thread({ chat }: { chat: ListedChat }) {
     setSending((was) => [...was, { id: key, text, images }]);
     try {
       const { messageId } = await api.call<{ messageId: string }>(slot, "send", {
-        chat: id,
         text,
         ...(images.length > 0 ? { images } : {}),
       });
@@ -643,7 +563,7 @@ export function Thread({ chat }: { chat: ListedChat }) {
       const { messages: page, more } = await api.call<{
         messages: ChatMessage[];
         more: boolean;
-      }>(slot, "history", { chat: id, before: oldest.id, limit: PAGE });
+      }>(slot, "history", { before: oldest.id, limit: PAGE });
       setMessages((was) => {
         const known = new Set(was.map((m) => m.id));
         return [...page.filter((m) => !known.has(m.id)), ...was];
@@ -657,48 +577,7 @@ export function Thread({ chat }: { chat: ListedChat }) {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <header className="flex h-14 shrink-0 items-center gap-1 pr-2.5 pl-2">
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          aria-label="All chats"
-          onClick={() => show({ kind: "list" })}
-        >
-          <ChevronLeftIcon />
-        </Button>
-        <button
-          type="button"
-          aria-label={`${agent.name}'s page`}
-          className="shrink-0 rounded-full"
-          onClick={() => {
-            go({ screen: "agent", agent: agent.id });
-            close();
-          }}
-        >
-          <Face agent={agent} size={36} />
-        </button>
-        <div className="ml-1.5 min-w-0 flex-1">
-          {naming === undefined ? (
-            <h2 className="truncate text-[15px] leading-5 font-semibold">{entry.title}</h2>
-          ) : (
-            <input
-              aria-label="Chat title"
-              // biome-ignore lint/a11y/noAutofocus: it is there because Rename was just pressed.
-              autoFocus
-              value={naming}
-              onChange={(event) => setNaming(event.target.value)}
-              onBlur={rename}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") rename();
-                if (event.key === "Escape") setNaming(undefined);
-              }}
-              className="block h-5 w-full bg-transparent p-0 text-[15px] leading-5 font-semibold outline-none"
-            />
-          )}
-          <div className="truncate text-[13px] leading-[18px] text-muted-foreground">
-            {agent.name}
-          </div>
-        </div>
+      <Head agent={agent} begun={!!chat}>
         {hasComputer && (
           <Button
             variant="ghost"
@@ -711,48 +590,15 @@ export function Thread({ chat }: { chat: ListedChat }) {
             <MonitorIcon />
           </Button>
         )}
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon-sm" aria-label="Chat options">
-              <MoreHorizontalIcon />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent
-            align="end"
-            // Closed, the menu gives the keyboard back to its button, unless Rename takes it.
-            onCloseAutoFocus={(event) => {
-              if (renaming.current) event.preventDefault();
-              renaming.current = false;
-            }}
-          >
-            {/* After the menu has closed and let go of the keyboard. */}
-            <DropdownMenuItem
-              onSelect={() => {
-                renaming.current = true;
-                setTimeout(() => setNaming(entry.title), 0);
-              }}
-            >
-              Rename
-            </DropdownMenuItem>
-            {!off && (
-              <DropdownMenuItem
-                onSelect={() => {
-                  leaving.current = !entry.archived;
-                  change("archive", { archived: !entry.archived });
-                }}
-              >
-                {entry.archived ? "Unarchive" : "Archive"}
-              </DropdownMenuItem>
-            )}
-          </DropdownMenuContent>
-        </DropdownMenu>
-        <CloseChats />
-      </header>
+      </Head>
       {/* What is said is followed to its end as it comes, until the person scrolls away. */}
       <MessageScrollerProvider autoScroll defaultScrollPosition="end">
         <MessageScroller className="min-h-0 flex-1">
           <Room>
-            <MessageScrollerContent className="mx-auto w-full max-w-[720px] gap-6 px-4 pt-3 pb-4">
+            {/* Room above the first message; with none yet, what went wrong is at the top. */}
+            <MessageScrollerContent
+              className={`mx-auto w-full max-w-[720px] gap-6 px-4 pb-4 ${turns.length > 0 ? "pt-3" : ""}`}
+            >
               {hasEarlier && (
                 <MessageScrollerItem>
                   <Marker variant="separator" className="justify-center text-xs">
@@ -815,7 +661,7 @@ export function Thread({ chat }: { chat: ListedChat }) {
       </MessageScrollerProvider>
       {!off && (
         <div className="mx-auto w-full max-w-[720px] shrink-0 px-3 pb-3">
-          <Composer name={agent.name} draft={`${agent.id} ${id}`} onSend={send} />
+          <Composer name={agent.name} draft={agent.id} onSend={send} />
         </div>
       )}
     </div>

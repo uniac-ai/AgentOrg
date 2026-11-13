@@ -1,4 +1,4 @@
-// What the chat's views share: a chat's row in a list, and the control that collapses the chat.
+// What the chat's views share: a conversation's row in a list, and the control that collapses the chat.
 import { XIcon } from "lucide-react";
 import { Button } from "../ui/button.tsx";
 import type { ListedChat } from "./all-chats.tsx";
@@ -16,7 +16,7 @@ export function age(at: string, now = Date.now()): string {
   return days < 7 ? `${days} d` : `${Math.floor(days / 7)} wk`;
 }
 
-/** One chat in a list: whose it is, what it's called, where it stands. */
+/** One conversation in a list: the agent, and its latest message or its problem. */
 export function ChatRow({ chat, onOpen }: { chat: ListedChat; onOpen(): void }) {
   const { agent } = chat;
   const fresh = chat.unread;
@@ -29,11 +29,10 @@ export function ChatRow({ chat, onOpen }: { chat: ListedChat; onOpen(): void }) 
       <Face agent={agent} size={40} plain />
       <span className="min-w-0 flex-1">
         <span className={`block truncate text-[15px] ${fresh ? "font-semibold" : "font-medium"}`}>
-          {chat.entry.title}
+          {agent.name}
         </span>
         <span className="flex min-w-0 gap-1.5 text-[13px] text-muted-foreground">
-          <span className="shrink-0">{agent.name}</span>
-          {/* A chat has no working state: only an agent works. A row says its problem, or its last words. */}
+          {/* A conversation has no working state: only an agent works. A row says its problem, or its last words. */}
           {chat.problem ? (
             <span className="truncate text-[var(--bad)]">{chat.problem}</span>
           ) : (

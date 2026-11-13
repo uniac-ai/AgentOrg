@@ -136,7 +136,9 @@ test(
     await layerWindow(page).waitFor({ state: "detached" });
     assert.equal(await button.getAttribute("aria-pressed"), "false");
     // An agent with no computer has no such button.
-    gateway.addChat("a-triage", { id: "c-route", title: "Route today's issues", said: [] });
+    gateway.converse("a-triage", [
+      { id: "t1", role: "user", text: "Route today's issues", at: new Date().toISOString() },
+    ]);
     await page.goto(`${gateway.url}/#/a/a-triage`);
     await page
       .getByRole("main")
