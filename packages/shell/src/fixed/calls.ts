@@ -115,7 +115,12 @@ function answerOf(text = "") {
   };
 }
 
+/** How a text that was cut ends, as `WorkEntry` says it. */
+const CUT = /… \(\d+ more characters\)$/;
+
+/** A diff's added and removed lines; none for one that was cut, whose count would be short. */
 function counted(diff: string) {
+  if (CUT.test(diff)) return { added: 0, removed: 0 };
   const lines = diff.split("\n");
   return {
     added: lines.filter((l) => l.startsWith("+") && !l.startsWith("+++")).length,

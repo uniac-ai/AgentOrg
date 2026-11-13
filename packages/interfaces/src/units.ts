@@ -61,7 +61,8 @@ export const Facts = z.strictObject({ rows: z.array(FactRow).max(32) });
 /**
  * One thing a piece of an agent's work did, as an `activity` view shows it: a call, with whether
  * it is running or how it ended, what it was given and what it gave back; words its worker wrote
- * and didn't send; or a line of its own, as for calls that never ran.
+ * and didn't send; or a line of its own, as for calls that never ran. A text longer than a view
+ * shows is cut, and then ends "… (N more characters)", N being how many it had past the cut.
  */
 export const WorkEntry = z.union([
   z.strictObject({

@@ -112,6 +112,18 @@ test("reading folds together; an edit counts its diff from AgentExec's patch for
     [(edit as { added: number }).added, (edit as { removed: number }).removed],
     [1, 1],
   );
+  // One whose diff was cut says what it edited, and no count, which would be short.
+  const long = one(
+    call(
+      "c__edit",
+      { path: "src/a.ts", old_text: "old", new_text: "new" },
+      `${diff}-gone\n+back\n… (5120 more characters)`,
+    ),
+  );
+  assert.deepEqual(
+    [lineOfRow(long), (long as { added: number }).added, (long as { removed: number }).removed],
+    ["Edited a.ts", 0, 0],
+  );
   const made = one(
     call(
       "c__edit",
