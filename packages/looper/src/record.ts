@@ -9,7 +9,16 @@
  */
 import { z } from "zod";
 import { Compacted, summaryItem, type ToCompact } from "./compaction.js";
-import { head, Item, type Json, type Log, type Picture, type Shown, type Store } from "./types.js";
+import {
+  cutInside,
+  head,
+  Item,
+  type Json,
+  type Log,
+  type Picture,
+  type Shown,
+  type Store,
+} from "./types.js";
 
 /**
  * One piece of work's hold on a user message that names the work it was given to: where it stands
@@ -308,9 +317,13 @@ function sentArguments(args: string): string {
   } catch {}
   return argumentsOf(args);
 }
-/** A call's arguments as they are kept and shown: past their cap, a note in their place. */
+/**
+ * A call's arguments as they are kept and shown, within their cap. Past it, arguments that are
+ * JSON stay JSON, their long strings cut inside to one length, so a path or a name stays whole;
+ * any others, or those still over with every string cut, are a note in their place.
+ */
 export const argumentsOf = (args: string) =>
-  size(args) > MAX_ARGUMENTS ? ARGUMENTS_LEFT_OUT : args;
+  size(args) <= MAX_ARGUMENTS ? args : (cutInside(args, MAX_ARGUMENTS, size) ?? ARGUMENTS_LEFT_OUT);
 
 /**
  * Whether `entry` is a reply an earlier version kept: an assistant entry that isn't the main

@@ -11,6 +11,8 @@ export { Entry, INPUT_BUDGET, textOf, type WorkEntry } from "./record.js";
 export { capped, MAX_OUTPUT } from "./tools.js";
 export {
   type Call,
+  cut,
+  cutInside,
   Item,
   type Json,
   type Log,

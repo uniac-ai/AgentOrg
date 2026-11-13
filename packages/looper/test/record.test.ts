@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { COMPACTION_LINE } from "../src/compaction.ts";
 import { CUT_STEP, createRecord, createThread, fitted, INPUT_BUDGET } from "../src/record.ts";
-import { head, type Item, type Picture, type Store } from "../src/types.ts";
+import { cut, cutInside, head, type Item, type Picture, type Store } from "../src/types.ts";
 
 /** A store in memory, as the record uses it. */
 function store() {
@@ -484,13 +484,15 @@ test("the latest exchange's calls go last, and a call's part is left out only wh
   await record.append(ran("a3", filler(0.3)));
   // One exchange, so nothing of the past to cut: its own oldest go, each call still with an
   // output, and the short output stays as it is, being shorter than the words for one left out.
+  // The arguments a2 was given were cut inside as they were kept; a1's output covers the cut,
+  // so they are sent as stored.
   assert.deepEqual(await sent(record), [
     "the task",
     "call small",
     "output small",
     "call a1",
     "output a1 (left out)",
-    "call a2 (left out)",
+    "call a2",
     "output a2",
     "call a3",
     "output a3",
@@ -782,4 +784,82 @@ test("a compaction takes all since the one before but the newest bytes, cut betw
   assert.deepEqual(said(forced.history), ["call b2", "output b2"]);
   assert.deepEqual(forced.prefix, []);
   assert.equal(forced.previous?.summary, "S");
+});
+
+test("a call's arguments past their cap stay JSON, with their short values whole and their longest strings cut, saying so", async () => {
+  const record = single(store().calls as never);
+  await record.append(user("the task"));
+  /** What is kept of a call given `args`. */
+  const stored = async (args: string, id: string) => {
+    const entry = await record.append(ran(id, "done", args));
+    const call = entry.items.find((item) => item.type === "function_call");
+    return call?.type === "function_call" ? call.arguments : "";
+  };
+  const bytes = (text: string) => new TextEncoder().encode(JSON.stringify(text)).byteLength;
+  // A file written whole: its path and mode stay, and its text is cut to fit. The longest goes
+  // first, so a shorter long string stays whole: cutting the longest is enough.
+  const big = await stored(
+    JSON.stringify({
+      path: "src/app.ts",
+      mode: "w",
+      text: "y".repeat(60_000),
+      note: "n".repeat(3_000),
+      lines: [1, 2, 3],
+    }),
+    "w1",
+  );
+  assert.ok(bytes(big) <= 16 * 1024 && bytes(big) > 15 * 1024, `${bytes(big)}`);
+  const kept = JSON.parse(big) as {
+    path: string;
+    mode: string;
+    text: string;
+    note: string;
+    lines: number[];
+  };
+  assert.equal(kept.path, "src/app.ts");
+  assert.equal(kept.mode, "w");
+  assert.deepEqual(kept.lines, [1, 2, 3]);
+  assert.match(kept.text, /^y+… \(\d+ more characters\)$/);
+  assert.equal(kept.note, "n".repeat(3_000));
+  // Escapes count as they are kept: quotes and line breaks take their written room.
+  const quoted = await stored(JSON.stringify({ path: "q.txt", text: '"\n'.repeat(20_000) }), "w2");
+  assert.ok(bytes(quoted) <= 16 * 1024 && bytes(quoted) > 15 * 1024, `${bytes(quoted)}`);
+  assert.equal((JSON.parse(quoted) as { path: string }).path, "q.txt");
+  // Arguments that aren't JSON, or that are over with every string cut, are a note.
+  const many = Object.fromEntries(
+    Array.from({ length: 400 }, (_, i) => [`k${i}`, "v".repeat(100)]),
+  );
+  for (const [args, id] of [
+    [`{${"z".repeat(20_000)}`, "w3"],
+    [JSON.stringify(many), "w4"],
+  ] as const)
+    assert.equal(await stored(args, id), '{"left_out":"too large to keep"}');
+});
+
+test("long strings are cut to one length, as long as fits, so short values stay whole; and a text cut twice counts all it left out", () => {
+  const sized = (json: string) => json.length;
+  // Two long strings end alike, and a long path beside them stays whole.
+  const path = `/Users/someone/work/${"deep/".repeat(20)}file.ts`;
+  const both = JSON.parse(
+    cutInside(
+      JSON.stringify({ path, a: "a".repeat(20_000), b: "b".repeat(19_000) }),
+      10_000,
+      sized,
+    ) ?? "{}",
+  ) as { path: string; a: string; b: string };
+  assert.equal(both.path, path);
+  assert.ok(Math.abs(both.a.length - both.b.length) <= 2, `${both.a.length} ${both.b.length}`);
+  // Many strings each longer than the path: they are cut, to a length still above it.
+  const many = JSON.parse(
+    cutInside(
+      JSON.stringify({ path, lines: Array.from({ length: 50 }, () => "l".repeat(400)) }),
+      16_000,
+      sized,
+    ) ?? "{}",
+  ) as { path: string; lines: string[] };
+  assert.equal(many.path, path);
+  assert.ok(many.lines.every((line) => line.length < 400 && line.length > path.length));
+  // Too deep to walk is no JSON to cut.
+  assert.equal(cutInside(`${"[".repeat(100_000)}${"]".repeat(100_000)}`, 1_000, sized), undefined);
+  assert.equal(cut(cut("x".repeat(100), 50), 20), `${"x".repeat(20)}… (80 more characters)`);
 });
