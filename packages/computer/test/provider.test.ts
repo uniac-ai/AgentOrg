@@ -2,6 +2,7 @@
 // in a folder of each test's own, driving the headless shell Playwright installed.
 import assert from "node:assert/strict";
 import { type ChildProcess, execFile, spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { once } from "node:events";
 import {
   existsSync,
@@ -21,6 +22,7 @@ import type { AddressInfo } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { Computer } from "@agentorg/computer";
 import { Hub, listen, PERSON } from "@agentorg/hub";
@@ -264,17 +266,20 @@ test("the form says which service, found when it is read, and what each answer g
   );
 });
 
-test("each skill the form names can be read, and an unknown one is refused", async (t) => {
+test("each skill the form names can be read, with what it shipped before, and an unknown one is refused", async (t) => {
   const { units } = await setup(t, { service: false });
   for (const name of ["terminal", "files", "computer", "browser"])
     assert.match(
       (await units.skill({ unit: "computer", name, path: "SKILL.md" })).text,
       new RegExp(`name: ${name}`),
     );
-  assert.match(
-    (await units.skill({ unit: "computer", name: "computer", path: "SKILL.md" })).text,
-    /another machine/,
-  );
+  const computer = await units.skill({ unit: "computer", name: "computer", path: "SKILL.md" });
+  assert.match(computer.text, /another machine/);
+  // With the sha256 of the texts it had before, and not of the one it has now.
+  const now = createHash("sha256").update(computer.text).digest("hex");
+  assert.ok((computer.shipped?.length ?? 0) > 0);
+  assert.ok(!computer.shipped?.includes(now));
+  assert.ok(computer.shipped?.every((hash) => /^[0-9a-f]{64}$/.test(hash)));
   await assert.rejects(
     units.skill({ unit: "computer", name: "nothing", path: "SKILL.md" }),
     refused("unknown"),
@@ -849,4 +854,23 @@ test("a computer's rows say a browser beside what it reaches, and a browser alon
     ["Browser"],
   );
   await units.remove({ instance: alone.instance });
+});
+
+test("each skill's text is among the texts shipped.json says it shipped", () => {
+  const skills = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "skills");
+  const shipped = JSON.parse(readFileSync(join(skills, "shipped.json"), "utf8")) as Record<
+    string,
+    string[]
+  >;
+  for (const name of readdirSync(skills, { withFileTypes: true })
+    .filter((one) => one.isDirectory())
+    .map((one) => one.name)) {
+    const now = createHash("sha256")
+      .update(readFileSync(join(skills, name, "SKILL.md"), "utf8"))
+      .digest("hex");
+    assert.ok(
+      shipped[`${name}/SKILL.md`]?.includes(now),
+      `append ${now} to "${name}/SKILL.md" in packages/computer/skills/shipped.json, and keep the others`,
+    );
+  }
 });
