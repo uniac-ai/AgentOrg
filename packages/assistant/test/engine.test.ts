@@ -2272,6 +2272,29 @@ test("Work pages back through its pieces of work: `before` with no `work` gives 
   });
 });
 
+test("a long call's input stays JSON in Work, its long strings cut and its short ones whole", async () => {
+  const s = await setup();
+  s.actor.expose("files", tools, listing({ write: () => ({}) }));
+  const text = "line\n".repeat(1_000);
+  s.script.push(
+    calls(callTool("files__write", { path: "notes/a.txt", text, mode: "w" }, "w1")),
+    say("Written."),
+  );
+  await s.turn("Write it.");
+  const { works } = JSON.parse(
+    ((await s.actor.call("tools", "call", { name: "work", arguments: {} })) as { output: string })
+      .output,
+  );
+  // Cut as far as needed, escapes and all, and no further.
+  const input = works[0].entries.find((one: { call?: unknown }) => one.call).call.input;
+  assert.ok(input.length > 1_900 && input.length <= 2_000, `${input.length}`);
+  const args = JSON.parse(input);
+  assert.equal(args.path, "notes/a.txt");
+  assert.equal(args.mode, "w");
+  assert.match(args.text, /^line\nline\n/);
+  assert.match(args.text, /… \(\d+ more characters\)$/);
+});
+
 test("Work's answer fits what another agent's loop takes whole: each text cut, then the oldest entries left out", async () => {
   const s = await setup();
   const big = "x".repeat(10_000);
@@ -2302,7 +2325,10 @@ test("Work's answer fits what another agent's loop takes whole: each text cut, t
   assert.ok(
     works.some((one: { more: boolean; entries: unknown[] }) => one.more && one.entries.length < 3),
   );
-  assert.match(works[0].entries.at(-1).call.input, /… \(\d+ more characters\)$/);
+  // A call's input stays JSON: its long string is cut inside it.
+  const input = works[0].entries.at(-1).call.input;
+  assert.ok(input.length <= 2_000, `${input.length}`);
+  assert.match(JSON.parse(input).big, /^x+… \(\d+ more characters\)$/);
   // The first piece of work is the least recently active: the last listed.
   const page = await answer({ work: works.at(-1).id, limit: 20 });
   assert.ok(page.length <= 28_000, `${page.length}`);
