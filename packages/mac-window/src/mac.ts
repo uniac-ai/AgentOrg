@@ -44,8 +44,9 @@ export interface Acting {
   at: string;
 }
 
-/** `GET /v1/computers?state=running`: a computer lent to now, as the service lists it, the newest
- * first. Only what the page reads is named here; `metadata.agent` is the agent's id. */
+/** `GET /v1/computers`, those running or starting: a computer lent to now, as the service lists
+ * it, the newest first. Only what the page reads is named here; `metadata.agent` is the agent's
+ * id. */
 export interface Computer {
   name: string;
   startedAt?: string | null;
