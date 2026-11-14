@@ -37,8 +37,10 @@ import {
   missingNeeds,
   nameOf,
   offeredName,
+  type Secrets,
   type StackProblem,
   toStack,
+  type Values,
 } from "./stack.ts";
 import { useAgents } from "./watch.tsx";
 
@@ -423,7 +425,6 @@ function UnitCard({
   }, [found, checked]);
   const { unit, key, values, secrets } = entry;
   const title = unit?.title ?? entry.id;
-  const gives = unit ? givesOf(unit, values) : { slots: [], skills: [] };
   const lacking = missingNeeds(entry, above)[0];
   const supplier: CatalogUnit | undefined = catalog.units.find((u) =>
     u.gives.results.includes(lacking as string),
@@ -459,67 +460,113 @@ function UnitCard({
       {unfolded && (
         <div className="flex flex-col gap-3 px-3 pb-3 empty:hidden">
           {!unit && <p className="text-xs text-[var(--bad)]">Not available here.</p>}
-          {unit?.form.map(
-            (field) =>
-              isShown(field, unit.form, values) && (
-                <FormField
-                  key={field.id}
-                  id={`unit-${key}-${field.id}`}
-                  agentName={draft?.mode === "agent" ? nameOf(draft, offered) : undefined}
-                  field={field}
-                  values={values}
-                  secret={secrets[field.id] ?? ""}
-                  problem={problems.find((p) => p.field === field.id)?.message}
-                  onChange={(value) => setValue(key, field.id, value)}
-                  onSecret={(value) => setSecret(key, field.id, value)}
-                />
-              ),
-          )}
-          {lacking && (
-            <p className="flex items-center justify-between gap-2 text-xs text-[var(--warn)]">
-              <span>Needs a {lacking} above it</span>
-              {supplier && (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="xs"
-                  onClick={() => addUnit(supplier, key)}
-                >
-                  Add it
-                </Button>
-              )}
-            </p>
-          )}
-          {general.map((p) => (
-            <p key={p.message} className="text-xs text-[var(--bad)]">
-              {p.message}
-            </p>
-          ))}
-          {(gives.slots.length > 0 || gives.skills.length > 0) && (
-            <p
-              data-gives
-              className="flex min-w-0 items-center gap-1.5 font-mono text-[11px] text-[var(--faint)]"
+          {unit && (
+            <UnitForm
+              unit={unit}
+              id={`unit-${key}`}
+              agentName={draft?.mode === "agent" ? nameOf(draft, offered) : undefined}
+              values={values}
+              secrets={secrets}
+              problems={problems}
+              onValue={(field, value) => setValue(key, field, value)}
+              onSecret={(field, value) => setSecret(key, field, value)}
             >
-              {gives.slots.length > 0 && (
-                <>
-                  <PlugIcon role="img" aria-label="MCP" className="size-3 shrink-0" />
-                  <span className="shrink-0">{gives.slots.join(", ")}</span>
-                </>
+              {lacking && (
+                <p className="flex items-center justify-between gap-2 text-xs text-[var(--warn)]">
+                  <span>Needs a {lacking} above it</span>
+                  {supplier && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="xs"
+                      onClick={() => addUnit(supplier, key)}
+                    >
+                      Add it
+                    </Button>
+                  )}
+                </p>
               )}
-              {gives.skills.length > 0 && (
-                <>
-                  <SparklesIcon
-                    role="img"
-                    aria-label="Skills"
-                    className={`size-3 shrink-0 ${gives.slots.length > 0 ? "ml-1.5" : ""}`}
-                  />
-                  <span className="truncate">{gives.skills.join(", ")}</span>
-                </>
-              )}
-            </p>
+              {general.map((p) => (
+                <p key={p.message} className="text-xs text-[var(--bad)]">
+                  {p.message}
+                </p>
+              ))}
+            </UnitForm>
           )}
         </div>
       )}
     </li>
+  );
+}
+
+/**
+ * A unit's form as it is filled in, wherever a unit is chosen: each field that is shown, what is
+ * said of the unit as a whole, then what the unit will give with these answers.
+ */
+export function UnitForm({
+  unit,
+  id,
+  agentName,
+  values,
+  secrets,
+  problems = [],
+  onValue,
+  onSecret,
+  children,
+}: {
+  unit: CatalogUnit;
+  id: string;
+  agentName?: string | undefined;
+  values: Values;
+  secrets: Secrets;
+  problems?: StackProblem[];
+  onValue(field: string, value: Values[string]): void;
+  onSecret(field: string, value: string): void;
+  children?: React.ReactNode;
+}) {
+  const gives = givesOf(unit, values);
+  return (
+    <>
+      {unit.form.map(
+        (field) =>
+          isShown(field, unit.form, values) && (
+            <FormField
+              key={field.id}
+              id={`${id}-${field.id}`}
+              agentName={agentName}
+              field={field}
+              values={values}
+              secret={secrets[field.id] ?? ""}
+              problem={problems.find((p) => p.field === field.id)?.message}
+              onChange={(value) => onValue(field.id, value)}
+              onSecret={(value) => onSecret(field.id, value)}
+            />
+          ),
+      )}
+      {children}
+      {(gives.slots.length > 0 || gives.skills.length > 0) && (
+        <p
+          data-gives
+          className="flex min-w-0 items-center gap-1.5 font-mono text-[11px] text-[var(--faint)]"
+        >
+          {gives.slots.length > 0 && (
+            <>
+              <PlugIcon role="img" aria-label="MCP" className="size-3 shrink-0" />
+              <span className="shrink-0">{gives.slots.join(", ")}</span>
+            </>
+          )}
+          {gives.skills.length > 0 && (
+            <>
+              <SparklesIcon
+                role="img"
+                aria-label="Skills"
+                className={`size-3 shrink-0 ${gives.slots.length > 0 ? "ml-1.5" : ""}`}
+              />
+              <span className="truncate">{gives.skills.join(", ")}</span>
+            </>
+          )}
+        </p>
+      )}
+    </>
   );
 }

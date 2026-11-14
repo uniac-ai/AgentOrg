@@ -456,6 +456,8 @@ export interface Call {
 
 export async function standIn(options: { creatables?: Creatable[] } = {}) {
   let sendDelayMs = 0;
+  /** How many units were added to living agents, to name each one. */
+  let added = 0;
   const { agents, connections } = seed();
   const skills = [
     { name: "cite-sources", description: "Links every claim to its source" },
@@ -725,6 +727,38 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
           stopped.chat.status = { state: "idle" };
           say(stopped, "status", stopped.chat.status);
         }
+        changed();
+        return {};
+      },
+      // A unit added to a living agent goes below those it has; one removed goes, as management does.
+      addUnit: ({ agent, unit: given }) => {
+        const unit = given as unknown as {
+          provider: string;
+          unit: string;
+          values?: Record<string, string | number | boolean | string[]>;
+        };
+        const held = agentOf(agent);
+        const instance = `i-added-${++added}`;
+        held.units = [
+          ...(held.units ?? []),
+          {
+            instance,
+            provider: unit.provider,
+            unit: unit.unit,
+            title: UNITS.find((c) => c.id === unit.unit)?.title ?? unit.unit,
+            values: unit.values ?? {},
+            needs: {},
+            status: { state: "connected" as const },
+          },
+        ];
+        changed();
+        return { instance };
+      },
+      removeUnit: ({ agent, instance }) => {
+        const held = agentOf(agent);
+        if (!held.units?.some((u) => u.instance === instance))
+          throw new Refusal("unknown", `${agent} has no unit ${instance}.`);
+        held.units = held.units.filter((u) => u.instance !== instance);
         changed();
         return {};
       },
