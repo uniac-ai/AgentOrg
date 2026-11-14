@@ -146,6 +146,11 @@ test(
     const box = await input(page).boundingBox();
     assert.ok(box && box.height <= 900 * 0.4 + 1, `the box is ${box?.height} tall`);
     assert.equal(await panel(page).getByRole("alert").isVisible(), true);
+    // One line, cut where the chat is narrow; pointing at it shows the whole of it.
+    assert.equal(
+      await panel(page).getByRole("alert").locator("span").first().getAttribute("title"),
+      "That's too long to send: a message can be at most 100,000 characters. This one has 100,001.",
+    );
     const line = await panel(page).getByRole("alert").boundingBox();
     assert.ok(
       line && line.y >= 0 && line.y + line.height <= (box?.y ?? 0),

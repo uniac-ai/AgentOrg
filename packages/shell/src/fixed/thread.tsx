@@ -299,7 +299,10 @@ function Composer({
   );
 }
 
-/** What went wrong, in the one line a chat says it in; and what helps, where something does. */
+/**
+ * What went wrong, in the one line a chat says it in, the whole of it where a pointer rests on it;
+ * and what helps, where something does.
+ */
 const ProblemLine = ({
   children,
   fix,
@@ -308,7 +311,9 @@ const ProblemLine = ({
   fix?: { label: string; run(): void } | undefined;
 }) => (
   <div role="alert" className="flex h-8 items-center gap-3 text-[15px] text-[var(--bad)]">
-    <span className="min-w-0 truncate">{children}</span>
+    <span className="min-w-0 truncate" title={children}>
+      {children}
+    </span>
     {fix && (
       <Button variant="secondary" size="sm" className="shrink-0" onClick={fix.run}>
         {fix.label}
