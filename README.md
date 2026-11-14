@@ -35,7 +35,7 @@ AgentOrg creates and manages agents. Each part is a program that joins a Hub as 
 
 `@agentorg/cli` provides `agentorg`.
 
-- **`agentorg`**, with no command, runs AgentOrg: a Hub in its home, the person's gateway and the shell, on `127.0.0.1` (`--port N`; else the port a browser is still signed in at, when it can have it; else any free port). It opens the browser already signed in, and prints only its address, never a sign-in code. `--no-open` doesn't open a browser. The code is in the address it hands the system's opener; on Linux, other local users can see that program's arguments for the moment it runs, and the code works for 60 s.
+- **`agentorg`**, with no command, runs AgentOrg: a Hub in its home, the person's gateway and the shell, on `127.0.0.1` (`--port N`; else the port a browser is still signed in at, when it can have it; else any free port). It opens the browser already signed in, and prints only its address, never a sign-in code. `--no-open` doesn't open a browser. `--frontend DIR` serves the frontend in `DIR` instead of the one the package carries: see [the frontend contract](#the-frontend-contract). The code is in the address it hands the system's opener; on Linux, other local users can see that program's arguments for the moment it runs, and the code works for 60 s.
 - **`agentorg --version`** prints the version. An option the command doesn't know is refused with the usage (exit 2); it never starts the app.
 - **`agentorg open`** signs a browser in to the running app again.
 - **`agentorg hub [--port N]`** runs a bare Hub in its home, without the gateway or the shell, serving WebSocket on loopback, and writes the address to `<home>/url`.
@@ -74,9 +74,38 @@ To run the tests, install the browser they drive once, with `npx playwright inst
   - `{id, op: "call", slot, method, input}` is answered `{id, result}` or `{id, error}`;
   - `{sub, op: "subscribe", slot, event}` gets `{sub, payload}` per event, and `{sub, end: true}` when it ends; `{sub, op: "unsubscribe"}` stops it.
 
-  A socket holds 256 subscriptions and 64 calls in flight at most (past it, `busy`). A tab's socket must come from the gateway's own `Origin`, and its first message must be `{op: "hello", session}` with a live session, answered `{op: "hello"}`; otherwise it's closed with code 4401, and the tab signs in again. The CLI gets in with the token in `<home>/cli-token` (0600, new at each start) as a bearer. The gateway answers only to `127.0.0.1:<port>` in `Host`, so a page that rebinds DNS to loopback gets nothing.
+  A socket holds 64 calls in flight at most (past it, a call is refused `busy`) and 256 subscriptions (past it, one ends at once with `quota`). A tab's socket must come from the gateway's own `Origin`, and its first message must be `{op: "hello", session}` with a live session, answered `{op: "hello"}`; otherwise it's closed with code 4401, and the tab signs in again. The CLI gets in with the token in `<home>/cli-token` (0600, new at each start) as a bearer. The gateway answers only to `127.0.0.1:<port>` in `Host`, so a page that rebinds DNS to loopback gets nothing.
 - **What the calls reach:** the person's slots: `actors`, `bindings`, `grants`, `exports`, `audit`, and the four the first run binds: `login` (`account.login@1`, the model's sign-in), `agents`, `connections` and `skills`. A slot exposed to the person at run time, such as an agent's `chat@1`, is reached under its name from `bindings.list`. `store` answers from the app's own notes, `<home>/app-notes.json`.
 - **The first run,** at every start, beside serving (`startPrograms` in `src/programs.ts`; `app.firstRun` settles with what it started): ChatGPT, the agent provider, the MCP provider and management, each an Actor of its own run in this process, with a private folder and a credential under `<home>/programs`. Each provider is connected by exposing its export to management. Each step reads what is there first, so a restart, or a first run that stopped half way, makes nothing twice. Any package Actor an earlier release left is closed before the Hub opens, and its files are left where they are. The app's log is standard error, a line each, beginning with its time in UTC: what its programs log as an error, a step of the first run that didn't work, and a program that didn't stop.
 - **`/oauth/chatgpt`:** where ChatGPT sends the browser back after sign-in. It takes `GET` only and hands the whole address, which holds the sign-in's code, to `login.complete`. Then it sends the tab on (303) to `/oauth/chatgpt?result=<outcome>`, so the code leaves the tab's address and history; that page says how it went and links back to the shell. The code is never logged or shown, and no referrer is sent.
 - **The app's own pages** carry a policy of their own: scripts and styles from the app only, framed by nothing.
-- **The shell,** `@agentorg/shell`, is what the gateway serves at `/`: one socket to `/api`, and nothing it decides on its own. Its pages are fixed: Agents, one agent, Chat, Skills, MCP connections and Settings, each reading the person's slots and what is exposed to the person.
+- **The shell,** `@agentorg/shell`, is the frontend `@agentorg/cli` carries and serves at `/`: one socket to `/api`, and nothing it decides on its own. Its pages are fixed: Agents, one agent, Chat, Skills, MCP connections and Settings, each reading the person's slots and what is exposed to the person.
+
+### The frontend contract
+
+The core and its frontend are built apart: the core serves the frontend it is given, `--frontend DIR`, or the one `@agentorg/cli` carries. Between them is contract 1:
+
+- **The frontend is a folder** of static files with an `index.html`, and a `frontend.json` that says `{ "version", "contract" }`. One without `frontend.json`, or without `contract` in it, speaks contract 1.
+  - The core refuses to start on a folder with no `index.html`, an unreadable `frontend.json`, or another contract. For another contract it says to use the frontend of the same release as the core.
+  - With no frontend at all, the core starts and `/` says how to give one.
+- **Served from the core's one origin, `GET` or `HEAD` only:**
+  - `/` is `index.html`, and any other path is the folder's file. A missing file is a 404; nothing falls back to `index.html`.
+  - Only `.html`, `.js`, `.css` and `.svg` files are served as what they are. Anything else goes as `application/octet-stream`, with `nosniff`.
+  - The core's own paths come first: `/api`, `/api/session`, `/api/code` (the CLI's), `/live`, `/signin`, `/signin.js` and `/oauth/chatgpt`.
+  - The frontend's files and the sign-in pages carry the app's policy: `default-src 'self'`, `script-src 'self'`, `style-src 'self' 'unsafe-inline'`, `img-src 'self' data:`, `connect-src 'self'`, `frame-src 'none'`, `object-src 'none'`, `base-uri 'none'`, `form-action 'self'` and `frame-ancestors 'none'`. The frontend loads nothing from elsewhere.
+- **`/api`,** as above: one socket per tab, from the core's own `Origin` and `Host`; another is refused with HTTP 401 before it opens.
+  - Its first message, within 10 s, is `{op: "hello", session}`.
+  - Then come calls and events by the person's slot, 1 MiB a message at most. Ids are positive integers, and names are 256 characters at most.
+  - A call to a method named `live` is refused `forbidden`.
+  - A tab must sign in again when the socket closes with 4401.
+- **`/live?agent&instance&surface&mode`:** one socket per live view.
+  - `mode` is `watch` (the default) or `operate`.
+  - Its first message, within 10 s, is the same `{op: "hello", session}`, which gets no answer of its own.
+  - The core asks `agents@1`'s `live` for the ticket and dials it itself, so no ticket reaches the frontend.
+  - The core says `{op: "live", protocol}`, then carries that protocol's frames, 4 MiB each at most: `screencast@1`, `terminal@1`, `files@1` or `metrics@1`.
+  - It closes with 4401 without a live session, and with 4404 when the view can't be opened.
+- **Sign-in is the core's,** as above.
+  - `/signin` and `/signin.js` are its own pages, whatever frontend it serves. A code is one-time and lasts 60 s.
+  - The session is in `localStorage` under `agentorg.session`. The frontend says it in each `hello`, and clears it when `/api` closes with 4401.
+  - `/oauth/chatgpt` is the core's route, with a policy of its own, and the frontend passes it as the model's sign-in redirect.
+- **The interfaces** the frontend calls are those of the `@agentorg/interfaces` it was built with, and the person's slots above, `store` among them. The contract's number moves when anything here changes in a way an older frontend can't follow.

@@ -8,10 +8,16 @@
 // worker. Their third-party
 // dependencies are the cli's own, found further up. Run after `npm run build`:
 // `node packages/app/scripts/pack.js <destination>`, which prints the tarball's path.
+//
+// The core and the frontend are also packed alone, as files of a release, not published:
+// - `--core`: the same cli without the shell, as `agentorg-core-<version>.tgz`; it serves the
+//   frontend it is given;
+// - `--frontend`: the shell's built folder, as `frontend/` in `agentorg-frontend-<version>.tgz`.
 import { execFileSync } from "node:child_process";
 import {
   copyFileSync,
   cpSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -38,7 +44,12 @@ const BUNDLED = [
 ];
 /** The AgentComputer SDK, without the service beside it in that package: the app never ships one. */
 const COMPUTER_SDK = "@agentorg/computer";
-const destination = resolve(process.argv[2] ?? ".");
+const flags = process.argv.slice(2).filter((arg) => arg.startsWith("--"));
+const destination = resolve(process.argv.slice(2).find((arg) => !arg.startsWith("--")) ?? ".");
+const alone = flags.includes("--core") ? "core" : flags.includes("--frontend") ? "frontend" : "";
+const { version: release } = JSON.parse(
+  readFileSync(join(root, "packages/app/package.json"), "utf8"),
+);
 
 /** The workspace's `npm pack` of `dir`, unpacked into `into`. */
 function unpack(dir, into, work) {
@@ -60,11 +71,25 @@ function unpack(dir, into, work) {
 
 const work = realpathSync(mkdtempSync(join(tmpdir(), "agentorg-pack-")));
 try {
+  if (alone === "frontend") {
+    const built = join(root, "packages/shell/dist");
+    if (!existsSync(join(built, "index.html")))
+      throw new Error("The shell isn't built: npm run build first.");
+    cpSync(built, join(work, "frontend"), { recursive: true });
+    mkdirSync(destination, { recursive: true });
+    const file = join(destination, `agentorg-frontend-${release}.tgz`);
+    execFileSync("tar", ["-czf", file, "-C", work, "frontend"]);
+    console.log(file);
+    rmSync(work, { recursive: true, force: true });
+    process.exit(0);
+  }
   const stage = join(work, "package");
   const cli = unpack("packages/app", stage, work);
   for (const file of ["README.md", "LICENSE"]) copyFileSync(join(root, file), join(stage, file));
   const bundled = [];
-  for (const name of BUNDLED) {
+  // The core alone carries no frontend: it serves the one it is given.
+  if (alone === "core") delete cli.dependencies["@agentorg/shell"];
+  for (const name of BUNDLED.filter((one) => !(alone === "core" && one === "shell"))) {
     const dir = `packages/${name}`;
     // Under its own name, scoped or not: the code finds it by that name.
     const { name: published } = JSON.parse(readFileSync(join(root, dir, "package.json"), "utf8"));
@@ -109,15 +134,22 @@ try {
   delete cli.scripts;
   writeFileSync(join(stage, "package.json"), `${JSON.stringify(cli, null, 2)}\n`);
   mkdirSync(destination, { recursive: true });
+  // The core alone is packed apart first: under the cli's own name it would take the cli's file.
+  const packedTo = alone === "core" ? work : destination;
   const [{ filename, files }] = JSON.parse(
-    execFileSync("npm", ["pack", "--json", "--pack-destination", destination, stage], {
+    execFileSync("npm", ["pack", "--json", "--pack-destination", packedTo, stage], {
       encoding: "utf8",
     }),
   );
   for (const name of bundled)
     if (!files.some(({ path }) => path === `dist/node_modules/${name}/package.json`))
       throw new Error(`${filename} doesn't hold ${name}.`);
-  console.log(join(destination, filename));
+  if (alone === "core") {
+    const file = join(destination, `agentorg-core-${release}.tgz`);
+    // Copied, not moved: the work folder may be on another disk.
+    copyFileSync(join(work, filename), file);
+    console.log(file);
+  } else console.log(join(destination, filename));
 } finally {
   rmSync(work, { recursive: true, force: true });
 }
