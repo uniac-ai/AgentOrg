@@ -1,6 +1,6 @@
 // The shell as static files for the gateway to serve: one bundled script, its page and its styles.
 import { execFileSync } from "node:child_process";
-import { copyFileSync, mkdirSync } from "node:fs";
+import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { build } from "esbuild";
@@ -28,3 +28,8 @@ execFileSync(
   [join(tailwind, "dist", "index.mjs"), "-i", at("src/styles.css"), "-o", at("dist/app.css")],
   { cwd: at("."), stdio: ["ignore", "ignore", "inherit"] },
 );
+// What the folder is, for the core that serves it: the release it comes with, which is the CLI's
+// version, and the contract it speaks: "The frontend contract" in the repository's README.
+const CONTRACT = 1;
+const { version } = JSON.parse(readFileSync(at("../app/package.json"), "utf8"));
+writeFileSync(at("dist/frontend.json"), `${JSON.stringify({ version, contract: CONTRACT })}\n`);
