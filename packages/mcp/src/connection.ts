@@ -331,9 +331,20 @@ export class Connection {
     return {};
   }
 
-  /** Whether an error says the server can't be reached, rather than that one request failed. */
+  /**
+   * Whether an error says the server can't be reached, rather than that one request failed. A
+   * server that keeps sessions and forgot the one held, as when it started again, is one too: MCP
+   * has the client start a new one. It says so with any 404, or, with no session begun yet, in the
+   * MCP SDK's words, that it isn't initialized.
+   */
   #gone(error: unknown) {
     if (error instanceof TypeError) return true;
+    if (
+      error instanceof SdkHttpError &&
+      (error.status === 404 ||
+        (error.status === 400 && String(error.data.text).includes("Server not initialized")))
+    )
+      return true;
     return (
       error instanceof SdkError &&
       (error.code === SdkErrorCode.ConnectionClosed || error.code === SdkErrorCode.NotConnected)
