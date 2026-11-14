@@ -364,6 +364,27 @@ test(
     await page.close();
   }),
 );
+
+test(
+  "an answer greyed after the page was read shows greyed when Create opens, as the machine stands then",
+  withGateway(async (gateway) => {
+    const page = await open(gateway);
+    await agentsRead(page);
+    // The page has read Create's form; then its provider can't give a container any more, and says
+    // nothing of it, as a part switched off on the machine.
+    await page.waitForTimeout(300);
+    gateway.changeForm("computer", (field) => {
+      const own = field.options?.find((o) => o.value === "container");
+      if (own) own.unavailable = "Docker isn't running.";
+    });
+    await fromTemplate(page, "Assistant");
+    await panel(page).getByRole("combobox", { name: "Where it resides" }).click();
+    const greyed = page.getByRole("option", { name: /^Its own container/ });
+    assert.equal(await greyed.innerText(), "Its own container\nDocker isn't running.");
+    assert.equal(await greyed.getAttribute("aria-disabled"), "true");
+    await page.close();
+  }),
+);
 test(
   "a unit's card starts open whoever brought it, folds to its head alone, and opens again on asking",
   withGateway(async (gateway) => {

@@ -1,5 +1,5 @@
 // The stack being built in the Create window. It lasts as long as the window is open.
-import { createContext, useContext, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { api, useLoad } from "../data.ts";
 import {
   type Catalog,
@@ -35,6 +35,22 @@ function useBuildingState() {
   const draft = held && !held.base && !held.from && first ? { ...held, base: first } : held;
   const keys = useRef(0);
   const nextKey = () => ++keys.current;
+  /**
+   * Opened, the window reads its units again, since what this machine can give changes with it (a
+   * part switched off, a browser set up), and draws the stack once they are read: so no answer is
+   * drawn as it was and then changed. Until then it has its templates, and no stack.
+   */
+  const [opening, setOpening] = useState<{
+    template?: Template | undefined;
+    mode: Draft["mode"];
+    was: Catalog | undefined;
+  }>();
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a new read, or none to be had, is the sign.
+  useEffect(() => {
+    if (!opening || (read.value === opening.was && !read.error)) return;
+    setDraft(draftFrom(opening.template, catalog, opening.mode, nextKey));
+    setOpening(undefined);
+  }, [opening, read.value, read.error]);
 
   /** Any change makes what was found wrong with the stack out of date. */
   const change = (next: (was: Draft) => Partial<Draft>) =>
@@ -47,6 +63,13 @@ function useBuildingState() {
    * for an agent; opening the window starts clean, whatever a closed one was left holding.
    */
   const start = (template?: Template, mode: Draft["mode"] = "agent") => {
+    if (!open) {
+      setDraft(undefined);
+      setOpening({ template, mode, was: read.value });
+      reread();
+      setOpen(true);
+      return;
+    }
     const next = draftFrom(template, catalog, mode, nextKey);
     setDraft((was) => ({
       ...next,
