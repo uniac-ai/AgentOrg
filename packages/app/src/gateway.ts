@@ -1,4 +1,12 @@
-import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createRequire } from "node:module";
 import type { AddressInfo } from "node:net";
@@ -48,11 +56,51 @@ const SLOTS = {
   skills,
 };
 const STATIC = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "static");
-/** The shell's built files, `@agentorg/shell`'s `dist`. */
-const SHELL = join(
-  dirname(createRequire(import.meta.url).resolve("@agentorg/shell/package.json")),
-  "dist",
-);
+/**
+ * The contract between this core and the frontend it serves, as packages/app's README writes it. A
+ * frontend says the one it speaks in its `frontend.json`; one with none speaks the first.
+ */
+export const FRONTEND_CONTRACT = 1;
+/** This core's version, which its own frontend has too. */
+const VERSION = (
+  JSON.parse(readFileSync(join(STATIC, "..", "package.json"), "utf8")) as { version: string }
+).version;
+/** The frontend this package carries, `@agentorg/shell`'s build, when it is installed with it. */
+function carriedFrontend(): string | undefined {
+  try {
+    return join(
+      dirname(createRequire(import.meta.url).resolve("@agentorg/shell/package.json")),
+      "dist",
+    );
+  } catch {
+    return undefined;
+  }
+}
+/**
+ * The frontend to serve: the folder given, else the one carried, else none. A folder that isn't a
+ * frontend, or speaks another contract, is refused with what goes together.
+ */
+export function frontendOf(given?: string): string | undefined {
+  const folder = given === undefined ? carriedFrontend() : resolve(given);
+  if (folder === undefined) return undefined;
+  if (!existsSync(join(folder, "index.html")))
+    throw new Error(`${folder} isn't a frontend: it has no index.html.`);
+  // None at all speaks the first; one that isn't an object can't be read.
+  let said: unknown = {};
+  try {
+    said = JSON.parse(readFileSync(join(folder, "frontend.json"), "utf8"));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") said = undefined;
+  }
+  if (said === null || typeof said !== "object" || Array.isArray(said))
+    throw new Error(`${folder}'s frontend.json can't be read.`);
+  const { version, contract = 1 } = said as { version?: unknown; contract?: unknown };
+  if (contract !== FRONTEND_CONTRACT)
+    throw new Error(
+      `The frontend in ${folder}${typeof version === "string" ? `, ${version},` : ""} speaks contract ${JSON.stringify(contract)}, and this core, ${VERSION}, speaks contract ${FRONTEND_CONTRACT}. Use the frontend of the same release as the core.`,
+    );
+  return folder;
+}
 /** A request body the gateway reads: a sign-in code, nothing more. */
 const MAX_BODY = 1024;
 /** One `/api` message. */
@@ -75,8 +123,8 @@ export interface AppOptions {
   home: string;
   /** The gateway's port on 127.0.0.1; by default the kept sessions' if it can, else any free one. */
   port?: number;
-  /** Where the shell's static files are; `@agentorg/shell`'s build by default. */
-  shell?: string;
+  /** The frontend's folder; the one this package carries by default, if it carries one. */
+  frontend?: string;
   /**
    * How the first run, at each start, logs, reaches ChatGPT and finds a computer service: the
    * app's own by default.
@@ -87,6 +135,8 @@ export interface AppOptions {
 export interface App {
   /** The gateway's origin, `http://127.0.0.1:<port>`. */
   readonly url: string;
+  /** The frontend it serves, if it serves one. */
+  readonly frontend: string | undefined;
   /** Where external Actors reach the Hub. */
   readonly hubUrl: string;
   readonly hub: Hub;
@@ -132,6 +182,8 @@ function writePrivate(file: string, text: string) {
  * and the person's notes are the app's own file.
  */
 export async function startApp(options: AppOptions): Promise<App> {
+  // Before anything is opened: a frontend that won't do refuses the start.
+  const frontend = frontendOf(options.frontend);
   const home = resolve(options.home);
   mkdirSync(home, { recursive: true, mode: 0o700 });
   closePackageActors(home);
@@ -279,7 +331,11 @@ export async function startApp(options: AppOptions): Promise<App> {
     const file =
       url.pathname === "/signin" || url.pathname === "/signin.js"
         ? join(STATIC, url.pathname === "/signin" ? "signin.html" : "signin.js")
-        : staticFile(options.shell ?? SHELL, url.pathname);
+        : frontend
+          ? staticFile(frontend, url.pathname)
+          : url.pathname === "/"
+            ? join(STATIC, "no-frontend.html")
+            : undefined;
     if (!file) return void response.writeHead(404).end();
     let body: Buffer;
     try {
@@ -439,6 +495,7 @@ export async function startApp(options: AppOptions): Promise<App> {
   };
   return {
     url: origin,
+    frontend,
     hubUrl: listener.url,
     hub,
     firstRun: ran,

@@ -44,7 +44,7 @@ trap cleanup EXIT
 step() { echo "== $*"; }
 # Start `agentorg` ($1) on a home ($2) in the background as $pid, logging to $3, until it serves.
 start_on() {
-  "$1" --no-open --home "$2" >"$3" 2>&1 &
+  "$1" --no-open --home "$2" "${@:4}" >"$3" 2>&1 &
   pid=$!
   for _ in $(seq 1 120); do
     grep -q '^AgentOrg at http' "$3" && return 0
@@ -212,6 +212,45 @@ step "stop by pid"
 kill -TERM "$pid"
 wait "$pid" || true
 pid=""
+
+step "the core alone serves the frontend alone, as a release keeps them"
+core="$(node "$root/packages/app/scripts/pack.js" "$work/packs" --core)"
+front="$(node "$root/packages/app/scripts/pack.js" "$work/packs" --frontend)"
+mkdir "$work/core" "$work/front"
+(cd "$work/core" && echo '{"private":true}' >package.json &&
+  npm install --silent --no-audit --no-fund --cache "$work/cache" "$core")
+tar -xzf "$front" -C "$work/front"
+corebin="$work/core/node_modules/.bin/agentorg"
+[ ! -e "$work/core/node_modules/@agentorg/cli/dist/node_modules/@agentorg/shell" ] ||
+  { echo "The core alone carries the shell" >&2; exit 1; }
+# Each path's status, served by the app the log names ($1), as "<status> <path>" lines.
+statuses() {
+  local at
+  at="$(sed -n 's/^AgentOrg at \(http[^,]*\),.*/\1/p' "$1")"
+  shift
+  for path in "$@"; do echo "$(curl -s -o /dev/null -w '%{http_code}' "$at$path") $path"; done
+}
+# With none given, it starts, says so, and its own pages are all it serves.
+start_on "$corebin" "$work/home-core" "$work/core.log"
+grep -q '^No frontend: give one with --frontend DIR' "$work/core.log" ||
+  { cat "$work/core.log" >&2; exit 1; }
+[ "$(statuses "$work/core.log" / /app.js /signin /signin.js | tr '\n' ' ')" = "200 / 404 /app.js 200 /signin 200 /signin.js " ] ||
+  { statuses "$work/core.log" / /app.js /signin /signin.js >&2; exit 1; }
+stop_app
+# Given the frontend of its release, it serves it.
+start_on "$corebin" "$work/home-core" "$work/core.log" --frontend "$work/front/frontend"
+statuses "$work/core.log" / /app.js /app.css /signin /signin.js | tee "$work/served.txt"
+! grep -qv '^200 ' "$work/served.txt" || exit 1
+stop_app
+# One that speaks another contract is refused, saying what goes together.
+printf '{"version":"9.9.9","contract":2}' >"$work/front/frontend/frontend.json"
+# Ended after 60 s if it does start, which fails the check below as well.
+if perl -e 'alarm 60; exec @ARGV' "$corebin" --no-open --home "$work/home-core" \
+  --frontend "$work/front/frontend" >"$work/core.log" 2>&1; then
+  echo "The core started on another contract's frontend" >&2
+  exit 1
+fi
+grep -q 'speaks contract 2, and this core' "$work/core.log" || { cat "$work/core.log" >&2; exit 1; }
 
 step "the global install's Hub starts and answers"
 ghome="$work/ghome"

@@ -1,5 +1,13 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { request } from "node:http";
 import { connect as connectTcp, createServer as createTcpServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -8,7 +16,7 @@ import test from "node:test";
 import { Hub } from "@agentorg/hub";
 import { connect } from "@agentorg/sdk/client";
 import WebSocket from "ws";
-import { HUB_OPTIONS } from "../src/gateway.ts";
+import { FRONTEND_CONTRACT, frontendOf, HUB_OPTIONS } from "../src/gateway.ts";
 import { type App, SignIn, startApp } from "../src/index.ts";
 
 async function setup(t: test.TestContext) {
@@ -449,4 +457,50 @@ test("the app gives a model's reply ten minutes; other interfaces keep the Hub's
   const open = t.mock.method(Hub, "open");
   await setup(t);
   assert.equal(open.mock.calls[0]?.arguments[1], HUB_OPTIONS);
+});
+
+test("the core serves the frontend it is given, and its own sign-in page beside it", async (t) => {
+  const home = mkdtempSync(join(tmpdir(), "agentorg-app-"));
+  const frontend = join(home, "frontend");
+  mkdirSync(frontend);
+  writeFileSync(join(frontend, "index.html"), "<p>given</p>");
+  writeFileSync(
+    join(frontend, "frontend.json"),
+    JSON.stringify({ version: "0.0.0-test", contract: FRONTEND_CONTRACT }),
+  );
+  const app = await startApp({ home, frontend, firstRun: { log: () => {} } });
+  t.after(async () => {
+    await app.close();
+    rmSync(home, { recursive: true, force: true });
+  });
+  assert.equal(app.frontend, frontend);
+  assert.equal(await (await fetch(`${app.url}/`)).text(), "<p>given</p>");
+  assert.equal((await fetch(`${app.url}/signin`)).status, 200);
+  assert.equal((await fetch(`${app.url}/app.js`)).status, 404, "only what the folder has");
+});
+
+test("a frontend of another contract, or a folder that isn't one, is refused before anything starts", async () => {
+  const folder = mkdtempSync(join(tmpdir(), "agentorg-frontend-"));
+  try {
+    // Nothing of the home is made for a start that is refused.
+    const home = join(folder, "home");
+    await assert.rejects(startApp({ home, frontend: folder }), /isn't a frontend/);
+    assert.equal(existsSync(home), false);
+    assert.throws(() => frontendOf(folder), /isn't a frontend: it has no index\.html/);
+    writeFileSync(join(folder, "index.html"), "<p>one</p>");
+    assert.equal(frontendOf(folder), folder, "with no frontend.json, it speaks the first");
+    writeFileSync(join(folder, "frontend.json"), JSON.stringify({ version: "9.9.9", contract: 2 }));
+    assert.throws(
+      () => frontendOf(folder),
+      /, 9\.9\.9, speaks contract 2, and this core, .+, speaks contract 1\. Use the frontend of the same release/,
+    );
+    for (const unreadable of ["{", "null", "[2]", "5"]) {
+      writeFileSync(join(folder, "frontend.json"), unreadable);
+      assert.throws(() => frontendOf(folder), /frontend\.json can't be read/, unreadable);
+    }
+    writeFileSync(join(folder, "frontend.json"), JSON.stringify({ contract: "1" }));
+    assert.throws(() => frontendOf(folder), /speaks contract "1", and this core/);
+  } finally {
+    rmSync(folder, { recursive: true, force: true });
+  }
 });

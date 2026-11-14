@@ -42,6 +42,17 @@ jobs:
         with:
           name: package
           path: agentorg-cli-*.tgz
+      # The core and the frontend alone: files of the release, attached to it, never published.
+      - name: Pack the core and the frontend, each alone
+        run: |
+          node packages/app/scripts/pack.js . --core
+          node packages/app/scripts/pack.js . --frontend
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: core-and-frontend
+          path: |
+            agentorg-core-*.tgz
+            agentorg-frontend-*.tgz
 
   publish:
     needs: build

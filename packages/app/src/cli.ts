@@ -9,7 +9,9 @@ import WebSocket from "ws";
 const USAGE = `Usage: agentorg [command] [--home DIR]
        agentorg --version
 
-  (no command) [--port N] [--no-open]       run AgentOrg: the Hub, your gateway and the shell
+  (no command) [--port N] [--no-open] [--frontend DIR]
+                                            run AgentOrg: the Hub, your gateway and the frontend:
+                                            the one it carries, or the folder DIR
   open                                      sign a browser in to the running app
   hub [--port N]                            run a bare Hub, without the shell
   actors | bindings | exports | audit       each one's list
@@ -34,6 +36,7 @@ const { values, positionals } = parseArgs({
   options: {
     home: { type: "string" },
     port: { type: "string" },
+    frontend: { type: "string" },
     "no-open": { type: "boolean" },
     help: { type: "boolean", short: "h" },
     version: { type: "boolean" },
@@ -46,7 +49,7 @@ const [command, ...rest] = positionals as string[];
 // this command's: an option it doesn't know is a mistake, never a reason to start the app.
 if (command !== "hub") {
   const unknown = Object.keys(values).find(
-    (name) => !["home", "port", "no-open", "help", "version"].includes(name),
+    (name) => !["home", "port", "frontend", "no-open", "help", "version"].includes(name),
   );
   if (unknown !== undefined)
     usage(
@@ -56,9 +59,11 @@ if (command !== "hub") {
   for (const [name, what] of [
     ["home", "a directory"],
     ["port", "a port number"],
+    ["frontend", "a directory"],
   ] as const) {
     const value = values[name];
-    if (typeof value === "boolean" || value?.startsWith("-")) usage(`--${name} takes ${what}.`);
+    if (typeof value === "boolean" || value === "" || value?.startsWith("-"))
+      usage(`--${name} takes ${what}.`);
   }
 }
 if (values.version && command === undefined) {
@@ -177,7 +182,12 @@ async function runApp() {
   const { startApp } = await import("./gateway.js");
   let app: Awaited<ReturnType<typeof startApp>>;
   try {
-    app = await startApp({ home, ...(port === undefined ? {} : { port: Number(port) }) });
+    const frontend = values.frontend as string | undefined;
+    app = await startApp({
+      home,
+      ...(port === undefined ? {} : { port: Number(port) }),
+      ...(frontend === undefined ? {} : { frontend }),
+    });
   } catch (error) {
     // Another Hub already has the home, the port is taken, or the home is from a newer version.
     write(process.stderr, error instanceof Error ? error.message : String(error));
@@ -192,8 +202,14 @@ async function runApp() {
     );
     process.exit(1);
   });
-  // The sign-in code goes to the browser only, never to the terminal.
-  if (!values["no-open"] && !(await openBrowser(app.signInUrl())))
+  // The sign-in code goes to the browser only, never to the terminal. With no frontend, there is
+  // nothing to sign in to.
+  if (!app.frontend)
+    write(
+      process.stdout,
+      "No frontend: give one with --frontend DIR to use AgentOrg in a browser.",
+    );
+  else if (!values["no-open"] && !(await openBrowser(app.signInUrl())))
     write(process.stdout, "No browser opened here. Run agentorg open where you have one.");
   const stop = async () => {
     await app.close();
