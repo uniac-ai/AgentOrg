@@ -90,11 +90,17 @@ const Fill = z.strictObject({
   values: FieldValues.optional(),
   secrets: ConnectionSecrets.optional(),
 });
-/** A unit to add to a living agent: `needs` names, by kind, the instance to take each result from. */
+/**
+ * A unit to add to a living agent: `needs` names, by kind, the instance to take each result from.
+ * `at` is its place: its index in `get`'s `units`, 0 the top, before the unit there now, as when
+ * a unit taken off is added back changed. With none, or past the last, it goes below those the
+ * agent has. Refused `invalid` above a unit it needs.
+ */
 const AddUnit = {
   agent: Id,
   unit: FilledUnit.omit({ needs: true }),
   needs: z.record(ResultKind, Id).optional(),
+  at: z.number().int().min(0).optional(),
 };
 /**
  * Something an agent holds, as it was built: what a page for the agent is put together from,
@@ -301,7 +307,7 @@ export const agents = defineInterface({
       output: z.object({}),
     }),
     /**
-     * Add a unit to a living agent, below those it has; it takes effect at the next request. For
+     * Add a unit to a living agent, below those it has or at `at`; it takes effect at the next request. For
      * management's own Skill unit, or its Connection or MCP unit on a connection there is, the
      * instance is the exposure's own: `get` lists no unit for it, and `removeUnit` with it takes
      * the exposure off, as `unexpose` does.
