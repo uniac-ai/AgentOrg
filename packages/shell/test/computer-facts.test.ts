@@ -40,7 +40,7 @@ const colourOf = (page: Page, value: string) =>
   }, value);
 
 test(
-  "beside the computer: where it is with its load under it, then its folder, what it reaches and how it is isolated",
+  "beside the computer: which it is with its load under it, then what it acts as, where its work happens, what it reaches and its browser, each note quieter under its value",
   withGateway(async (gateway) => {
     sampleAgents(gateway);
     gateway.setHeld("a-research", [computer()]);
@@ -56,17 +56,18 @@ test(
         .split("\n")
         .filter((line) => line.trim())
         .slice(0, 2),
-      ["Where", "This computer"],
+      ["Computer", "This computer"],
     );
-    await about.getByText("None: it acts as you").waitFor();
+    await about.getByText("You, with all you can reach").waitFor();
     assert.deepEqual(
       await about
         .locator("dl > div")
         .evaluateAll((all) => all.map((one) => (one as HTMLElement).innerText.split("\n"))),
       [
-        ["Folder", "~/Agents/Research"],
-        ["Reaches", "Files and terminal, Browser"],
-        ["Isolation", "None: it acts as you"],
+        ["Acts as", "You, with all you can reach"],
+        ["Its work happens in", "~/Agents/Research", "Said to it, not a wall"],
+        ["Reaches", "Files and terminal, your screen"],
+        ["Browser", "Your browser", "Signed in as you"],
       ],
     );
     // A path in mono, a caution in its colour.
@@ -75,8 +76,56 @@ test(
       /mono|Menlo|Courier/i,
     );
     assert.equal(
-      await about.getByText("None: it acts as you").evaluate((e) => getComputedStyle(e).color),
+      await about
+        .getByText("You, with all you can reach")
+        .evaluate((e) => getComputedStyle(e).color),
       await colourOf(page, "var(--warn)"),
+    );
+    // A note is quieter than its value: smaller, in the muted colour.
+    const note = about.getByText("Said to it, not a wall");
+    assert.equal(await note.evaluate((e) => getComputedStyle(e).fontSize), "12px");
+    assert.equal(
+      await note.evaluate((e) => getComputedStyle(e).color),
+      await colourOf(page, "var(--muted)"),
+    );
+    await page.close();
+  }),
+);
+
+test(
+  "a made computer's head says where it was made, in a note quieter than what it is",
+  withGateway(async (gateway) => {
+    sampleAgents(gateway);
+    const made = computer();
+    made.views = [
+      {
+        id: "where",
+        place: "column",
+        kind: "facts",
+        fixed: [{ label: "Computer", value: "A container", note: "Made for it on this machine" }],
+      },
+      ...(made.views ?? []).slice(1),
+    ];
+    gateway.setHeld("a-research", [made]);
+    const page = await open(gateway, "#/a/a-research");
+    gateway.reading(sampleLoad(18));
+    const head = page
+      .getByRole("main")
+      .getByRole("complementary", { name: "About this computer" })
+      .getByRole("region", { name: "A container" });
+    await head.getByRole("meter", { name: "CPU" }).waitFor();
+    assert.deepEqual(
+      (await head.innerText())
+        .split("\n")
+        .filter((line) => line.trim())
+        .slice(0, 3),
+      ["Computer", "A container", "Made for it on this machine"],
+    );
+    const note = head.getByText("Made for it on this machine");
+    assert.equal(await note.evaluate((e) => getComputedStyle(e).fontSize), "12px");
+    assert.equal(
+      await note.evaluate((e) => getComputedStyle(e).color),
+      await colourOf(page, "var(--muted)"),
     );
     await page.close();
   }),
@@ -103,7 +152,11 @@ test(
       .getByRole("main")
       .getByRole("complementary", { name: "About this computer" });
     await about.getByText("~/Agents/Research").waitFor();
-    assert.equal(await about.getByText("None: it acts as you").count(), 0, "it can't be asked");
+    assert.equal(
+      await about.getByText("You, with all you can reach").count(),
+      0,
+      "it can't be asked",
+    );
     assert.equal(await about.getByRole("meter").count(), 0);
     // Back, its windows are.
     gateway.setHeld("a-research", [computer()]);

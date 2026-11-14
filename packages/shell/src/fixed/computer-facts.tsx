@@ -71,7 +71,10 @@ function useRows({ view, held }: Placed): Row[] {
   return asked ? read : (view.fixed ?? []);
 }
 
-/** One fact: what it is, and its value, a path in mono and a caution in its colour. */
+/**
+ * One fact: what it is, and its value, a path in mono and a caution in its colour; under it, a
+ * quieter note on what to make of it, when it has one.
+ */
 function Fact({ row }: { row: Row }) {
   return (
     <div>
@@ -81,6 +84,7 @@ function Fact({ row }: { row: Row }) {
       >
         {row.value}
       </dd>
+      {row.note && <dd className="m-0 truncate text-xs text-muted-foreground">{row.note}</dd>}
     </div>
   );
 }
@@ -125,6 +129,9 @@ export function ComputerFacts({
                 <div key={row.label}>
                   <div className="text-[13px] text-muted-foreground">{row.label}</div>
                   <div className="truncate text-sm">{row.value}</div>
+                  {row.note && (
+                    <div className="truncate text-xs text-muted-foreground">{row.note}</div>
+                  )}
                 </div>
               ))}
               {meters.length > 0 && load && <Load target={load} />}
