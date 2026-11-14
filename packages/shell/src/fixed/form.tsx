@@ -35,6 +35,8 @@ interface Option {
   /** What choosing it means, and whether that is a caution. */
   description?: string | undefined;
   caution?: true | undefined;
+  /** Why its provider can't give it now, when it can't. */
+  unavailable?: string | undefined;
 }
 
 function OneOf({
@@ -59,17 +61,22 @@ function OneOf({
         <SelectValue placeholder={hint ?? "Choose"}>{chosen?.title}</SelectValue>
       </SelectTrigger>
       <SelectContent>
-        {/* Each answer says what it means before it is chosen. */}
+        {/* Each answer says what it means before it is chosen; one its provider can't give now is
+            greyed, with the provider's reason in its place. */}
         {options.map((o) => (
-          <SelectItem key={o.value} value={o.value}>
+          <SelectItem key={o.value} value={o.value} disabled={!!o.unavailable}>
             <span className="flex flex-col">
               <span>{o.title}</span>
-              {o.description && (
-                <span
-                  className={`text-xs ${o.caution ? "!text-[var(--warn)]" : "text-muted-foreground"}`}
-                >
-                  {o.description}
-                </span>
+              {o.unavailable ? (
+                <span className="text-xs text-muted-foreground">{o.unavailable}</span>
+              ) : (
+                o.description && (
+                  <span
+                    className={`text-xs ${o.caution ? "!text-[var(--warn)]" : "text-muted-foreground"}`}
+                  >
+                    {o.description}
+                  </span>
+                )
               )}
             </span>
           </SelectItem>
@@ -99,25 +106,31 @@ function SomeOf({
         <label
           key={o.value}
           htmlFor={`${id}-${o.value}`}
-          className="flex items-start gap-2 text-sm"
+          className={`flex items-start gap-2 text-sm ${o.unavailable ? "opacity-50" : ""}`}
         >
+          {/* One its provider can't give now can't be ticked; one ticked already can be cleared. */}
           <Checkbox
             id={`${id}-${o.value}`}
             className="mt-0.5"
+            disabled={!!o.unavailable && !value.includes(o.value)}
             checked={value.includes(o.value)}
             onCheckedChange={(on) =>
               onChange(on ? [...value, o.value] : value.filter((v) => v !== o.value))
             }
           />
-          {/* Each box says what it means. */}
+          {/* Each box says what it means, or why it can't be ticked now. */}
           <span className="flex flex-col">
             <span>{o.title}</span>
-            {o.description && (
-              <span
-                className={`text-xs ${o.caution ? "text-[var(--warn)]" : "text-muted-foreground"}`}
-              >
-                {o.description}
-              </span>
+            {o.unavailable ? (
+              <span className="text-xs text-muted-foreground">{o.unavailable}</span>
+            ) : (
+              o.description && (
+                <span
+                  className={`text-xs ${o.caution ? "text-[var(--warn)]" : "text-muted-foreground"}`}
+                >
+                  {o.description}
+                </span>
+              )
             )}
           </span>
         </label>
@@ -195,12 +208,15 @@ export function FormField({
   // Under its control: what the chosen answer means, as a caution where its unit marks it as
   // one; a field with no answer chosen says what it is. A set of boxes says it on each box.
   const chosen = field.options?.find((o) => o.value === value);
-  const under = control === "choices" ? undefined : (chosen?.description ?? field.description);
+  const under =
+    control === "choices"
+      ? undefined
+      : (chosen?.unavailable ?? chosen?.description ?? field.description);
   const notes = (
     <>
       {under && (
         <p
-          className={`text-xs ${chosen?.description && chosen.caution ? "text-[var(--warn)]" : "text-muted-foreground"}`}
+          className={`text-xs ${!chosen?.unavailable && chosen?.description && chosen.caution ? "text-[var(--warn)]" : "text-muted-foreground"}`}
         >
           {under}
         </p>
