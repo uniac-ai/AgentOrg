@@ -723,7 +723,7 @@ export function createStacks(parts: StackParts) {
     const computer = placed.find((one) => one.offer.unit.id === "computer");
     const own = reach ?? {
       access: String(computer?.values.access ?? "none"),
-      browser: computer?.values.browser === true,
+      browser: computer?.values.browser === true || computer?.values.ownBrowser === "yours",
     };
     for (const [position, one] of placed.entries())
       if (isAgentsUnit(one.offer))

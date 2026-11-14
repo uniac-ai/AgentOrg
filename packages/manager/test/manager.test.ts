@@ -236,6 +236,35 @@ const UNITS = [
         title: "Browser",
         adds: { slots: [{ name: "browser" }], skills: [] },
       },
+      // This computer's own: the person's screen, and their browser, signed in.
+      {
+        id: "screen",
+        authority: "setting",
+        type: "choice",
+        value: "string",
+        title: "Screen",
+        visible: { field: "kind", in: ["this"] },
+        options: [
+          { value: "on", title: "Your screen", adds: { slots: [{ name: "screen" }], skills: [] } },
+          { value: "off", title: "No screen" },
+        ],
+      },
+      {
+        id: "ownBrowser",
+        authority: "setting",
+        type: "choice",
+        value: "string",
+        title: "Browser",
+        visible: { field: "kind", in: ["this"] },
+        options: [
+          {
+            value: "yours",
+            title: "Your browser",
+            adds: { slots: [{ name: "browser" }], skills: [] },
+          },
+          { value: "none", title: "No browser" },
+        ],
+      },
     ],
     needs: [],
     gives: {
@@ -583,7 +612,11 @@ async function setup(t: test.TestContext) {
                 : unit === "stand-in" || unit === "url"
                   ? [values.slot as string]
                   : unit === "computer"
-                    ? ["computer", ...(values.browser ? ["browser"] : [])]
+                    ? [
+                        "computer",
+                        ...(values.browser || values.ownBrowser === "yours" ? ["browser"] : []),
+                        ...(values.screen === "on" ? ["screen"] : []),
+                      ]
                     : unit === "vault"
                       ? ["vault"]
                       : unit === "desk"
@@ -2741,6 +2774,45 @@ test("a computer no longer held can't be shared", async (t) => {
   assert.ok((await s.names(tools)).includes("create_worker"));
   await s.calls.agents.removeUnit({ agent: child, instance: "slot:computer" });
   assert.ok(!(await s.names(tools)).includes("create_worker"), "it has nothing left to share");
+});
+
+test("an agent's own computer with the person's screen or browser is never shared with one it makes", async (t) => {
+  const s = await delegating(t);
+  for (const held of [{ screen: "on" }, { ownBrowser: "yours" }]) {
+    const { tools } = await s.parent(
+      {
+        templates: ["worker"],
+        places: ["own", "new"],
+        access: "terminal",
+        browser: "ownBrowser" in held,
+      },
+      { kind: "this", access: "terminal", ...held },
+      `Holds ${Object.keys(held)[0]}`,
+    );
+    const schema = (await tools.list({})).tools[0]?.inputSchema as never as {
+      properties: {
+        place: { enum: string[] };
+        units: { properties: { computer: { properties: Record<string, unknown> } } };
+      };
+    };
+    assert.deepEqual(schema.properties.place.enum, ["new"], JSON.stringify(held));
+    // The person's browser is a browser for the bounds: a new computer may then have its own.
+    assert.equal(
+      "browser" in schema.properties.units.properties.computer.properties,
+      "ownBrowser" in held,
+      JSON.stringify(held),
+    );
+  }
+  // Without either, its own computer can be shared, within the bounds.
+  const { tools } = await s.parent(
+    { templates: ["worker"], places: ["own", "new"], access: "terminal" },
+    { kind: "this", access: "terminal", screen: "off", ownBrowser: "none" },
+    "Holds neither",
+  );
+  const schema = (await tools.list({})).tools[0]?.inputSchema as never as {
+    properties: { place: { enum: string[] } };
+  };
+  assert.deepEqual(schema.properties.place.enum, ["own", "new"]);
 });
 
 test("a new computer is a container on its parent's machine, and within its bounds", async (t) => {
