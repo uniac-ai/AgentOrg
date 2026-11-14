@@ -287,7 +287,7 @@ export function Window({ mac }: { mac: Mac }) {
     return () => clearTimeout(timer);
   }, []);
   const busy = useRef<Promise<void> | undefined>(undefined);
-  const again = useRef(false);
+  const readAgain = useRef(false);
 
   /** A setup the service answered with: kept, and each grant it shows granted remembered. */
   const took = useCallback((setup: Setup) => {
@@ -313,7 +313,7 @@ export function Window({ mac }: { mac: Mac }) {
 
   const read = useCallback(async (): Promise<void> => {
     if (busy.current) {
-      again.current = true;
+      readAgain.current = true;
       return busy.current;
     }
     busy.current = (async () => {
@@ -328,8 +328,8 @@ export function Window({ mac }: { mac: Mac }) {
           mac.acting(),
         ]);
         // While the app starts the driver again, the grants can't be read: the cards keep theirs.
-        const again = app.status === "fulfilled" && app.value === "starting again";
-        if (setup.status === "fulfilled" && !again) took(setup.value);
+        const unread = app.status === "fulfilled" && app.value === "starting again";
+        if (setup.status === "fulfilled" && !unread) took(setup.value);
         setReading((was) => ({
           ...was,
           ...(app.status === "fulfilled" && { app: app.value }),
@@ -339,8 +339,8 @@ export function Window({ mac }: { mac: Mac }) {
         }));
       } finally {
         busy.current = undefined;
-        if (again.current) {
-          again.current = false;
+        if (readAgain.current) {
+          readAgain.current = false;
           void read();
         }
       }
