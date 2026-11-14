@@ -1,9 +1,9 @@
 // A stand-in for the app, for the page in a browser: one canned answer per state of the design, in
-// the service's own shapes, chosen by `?state=` (the first open when none). Asking for a browser
-// acts as if the person allowed it: a moment later it reads on. Asking for the screen is macOS's
-// request alone; Open Settings acts as if the person switched the grant on in its pane: a moment
-// later it reads granted, and the app starts the driver again for a moment, while the service reads
-// both grants as unknown. Open Login Items acts as if the person allowed AgentOrg there.
+// the service's own shapes, chosen by `?state=` (the first open when none). A switch asks for
+// nothing the person would see. A row's Set up acts as if the person allowed what it brings: a
+// browser a moment later reads on; a grant, through macOS's request or its pane, reads granted, and
+// the app starts the driver again for a moment, while the service reads both grants as unknown.
+// Open Login Items acts as if the person allowed AgentOrg there.
 import type {
   Acting,
   AppState,
@@ -13,7 +13,6 @@ import type {
   Mac,
   Need,
   NeedName,
-  Refusal,
   Setup,
 } from "./mac.ts";
 
@@ -114,8 +113,8 @@ export const STATES: Record<string, Canned> = {
 /** How long the person takes to allow what was asked, and the app to start the driver again. */
 const ALLOW = 1500;
 const RESTART = 1200;
-/** The service's words when it can't ask for a browser: none is installed. */
-const NO_BROWSER_WORDS = "Neither Chrome nor Edge is installed on this machine.";
+/** What a row's Set up is for: a grant not given, or a browser installed but off. */
+const SET_UP: Need["state"][] = ["not-granted", "unknown", "off"];
 
 export function standIn(name: string): Mac {
   const canned = STATES[name] ?? STATES["first-open"];
@@ -143,11 +142,12 @@ export function standIn(name: string): Mac {
             : true;
   };
   /** The person allows it: a grant is granted, and the driver starts again; a browser is on. */
-  const allow = (capability: Capability, need?: NeedName) =>
+  const allow = (capability: Capability, need: NeedName) =>
     setTimeout(() => {
-      const needs = part(capability).needs;
+      const asked = part(capability).needs.find((n) => n.need === need);
+      if (!asked) return;
       if (capability === "screen") {
-        for (const n of needs) if (!need || n.need === need) n.state = "granted";
+        asked.state = "granted";
         settle();
         app = "starting again";
         changed();
@@ -157,23 +157,10 @@ export function standIn(name: string): Mac {
         }, RESTART);
         return;
       }
-      const browser = needs.find((n) => (need ? n.need === need : n.state === "off"));
-      if (browser) browser.state = "on";
+      asked.state = "on";
       settle();
       changed();
     }, ALLOW);
-  /** What the service refuses: a browser that isn't installed can't be asked for. */
-  const refusal = (capability: Capability, need?: NeedName): Refusal | undefined => {
-    if (capability !== "browser") return undefined;
-    const needs = part(capability).needs;
-    const asked = needs.filter((n) => (need ? n.need === need : n.state !== "missing"));
-    if (asked.some((n) => n.state !== "missing")) return undefined;
-    const browser = asked[0]?.name;
-    return {
-      code: 409,
-      message: browser ? `${browser} isn't installed on this machine.` : NO_BROWSER_WORDS,
-    };
-  };
   /** The service's answer; while the app starts, or isn't allowed to run, it isn't there to answer. */
   const answer = <T>(value: T, state = app): T => {
     if (state === "starting" || state === "turned off")
@@ -191,11 +178,11 @@ export function standIn(name: string): Mac {
     }
     return now;
   };
+  /** A row's Set up; with no need, as the switch, nothing the person would see. */
   const ask = async (capability: Capability, need?: NeedName) => {
-    const refused = refusal(capability, need);
-    if (refused) throw refused;
-    // For the screen, macOS's request alone: the person allows it in the grant's pane.
-    if (!part(capability).ready && capability !== "screen") allow(capability, need);
+    answer(setup);
+    const asked = part(capability).needs.find((n) => n.need === need);
+    if (need && asked && SET_UP.includes(asked.state)) allow(capability, need);
     return read();
   };
   return {
@@ -210,16 +197,7 @@ export function standIn(name: string): Mac {
     setSwitch: async (capability, on) => {
       answer(setup);
       part(capability).on = on;
-      if (!on || part(capability).ready) return read();
-      try {
-        return await ask(capability);
-      } catch (error) {
-        const refused = error as Refusal;
-        throw {
-          ...refused,
-          message: `The browser is on, but asking for what it needs didn't start: ${refused.message}`,
-        };
-      }
+      return read();
     },
     ask,
     openSettings: async (need) => {

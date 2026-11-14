@@ -534,13 +534,13 @@ export function Window({ mac }: { mac: Mac }) {
                   rows={grants.map((n) => ({
                     name: nameOf(n),
                     state: n.state,
-                    // Turning Screen on made macOS's request; a grant still missing opens its pane.
+                    // Only the person's click brings macOS: its request, or the grant's pane.
                     button:
                       n.state === "granted"
                         ? undefined
                         : {
-                            title: "Open Settings",
-                            press: () => void act("screen", () => mac.openSettings(n.need)),
+                            title: "Set up",
+                            press: () => void act("screen", () => mac.ask("screen", n.need)),
                           },
                   }))}
                 />

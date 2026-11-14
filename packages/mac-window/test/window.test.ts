@@ -52,42 +52,49 @@ test("with reduced motion, waiting doesn't pulse", async () => {
   assert.equal(still, "none 0");
 });
 
-test("turning Screen on lists what it needs, each missing grant with Open Settings", async () => {
+/** A row's Set up in Screen's list. */
+const setUp = (tab: Page, row: string) =>
+  tab
+    .getByRole("table", { name: "What Screen needs" })
+    .getByRole("row", { name: new RegExp(row) })
+    .getByRole("button", { name: "Set up" });
+
+test("turning Screen on lists what it needs, each missing grant with Set up", async () => {
   const tab = await open("first-open");
   await tab.getByRole("switch", { name: "Screen" }).click();
   await until(
     () => rows(tab, "What Screen needs"),
     [
-      ["Screen Recording", "Not granted", "Open Settings"],
-      ["Accessibility", "Not granted", "Open Settings"],
+      ["Screen Recording", "Not granted", "Set up"],
+      ["Accessibility", "Not granted", "Set up"],
     ],
   );
   assert.equal(await card(tab, "Screen").getByText("AgentOrg", { exact: true }).count(), 1);
-  // Switched on in its pane, the app starts the driver again for a moment.
-  await tab.getByRole("button", { name: "Open Settings" }).first().click();
+  // Allowed through what Set up brings, the app starts the driver again for a moment.
+  await setUp(tab, "Screen Recording").click();
   await until(() => title(tab), "Starting again");
   assert.equal(await tab.getByRole("switch", { name: "Terminal" }).isDisabled(), true);
   assert.deepEqual(await circle(tab), { ring: false, pulse: false });
   await until(() => title(tab), "Waiting for AgentOrg to connect");
   assert.deepEqual(await rows(tab, "What Screen needs"), [
     ["Screen Recording", "Granted"],
-    ["Accessibility", "Not granted", "Open Settings"],
+    ["Accessibility", "Not granted", "Set up"],
   ]);
   // With both granted, the card closes.
-  await tab.getByRole("button", { name: "Open Settings" }).click();
+  await setUp(tab, "Accessibility").click();
   await until(() => tab.getByRole("table").count(), 0);
   assert.deepEqual(await line(tab, "Screen"), { words: "Sees and controls it", warn: false });
 });
 
-test("Open Settings is for that one grant", async () => {
+test("Set up is for that one grant", async () => {
   const tab = await open("screen-needs-more");
   assert.deepEqual(await rows(tab, "What Screen needs"), [
-    ["Screen Recording", "Not granted", "Open Settings"],
+    ["Screen Recording", "Not granted", "Set up"],
     ["Accessibility", "Granted"],
   ]);
   // Never granted before, it doesn't read as turned off.
   assert.deepEqual(await line(tab, "Screen"), { words: "Sees and controls it", warn: false });
-  await tab.getByRole("button", { name: "Open Settings" }).click();
+  await setUp(tab, "Screen Recording").click();
   await until(() => tab.getByRole("table", { name: "What Screen needs" }).count(), 0);
 });
 
@@ -95,7 +102,7 @@ test("a grant turned off after it was granted says so", async () => {
   const tab = await open("permission-withdrawn");
   await until(() => line(tab, "Screen"), { words: "Screen Recording turned off", warn: true });
   assert.deepEqual(await rows(tab, "What Screen needs"), [
-    ["Screen Recording", "Not granted", "Open Settings"],
+    ["Screen Recording", "Not granted", "Set up"],
     ["Accessibility", "Granted"],
   ]);
 });
@@ -121,7 +128,26 @@ test("Your browser opens and closes, and Set up turns a browser on", async () =>
   ]);
 });
 
-test("with no browser installed, turning it on shows the service's words", async () => {
+test("turning Your browser on opens its list, and only Set up turns a browser on", async () => {
+  const tab = await open("first-open");
+  await tab.getByRole("switch", { name: "Your browser" }).click();
+  await until(
+    () => rows(tab, "Browsers"),
+    [
+      ["Chrome", "Off", "Set up"],
+      ["Edge", "Not installed"],
+    ],
+  );
+  assert.deepEqual(await line(tab, "Your browser"), { words: "No browser set up", warn: true });
+  // Longer than the person takes to allow a browser: the switch asked for nothing.
+  await tab.waitForTimeout(2500);
+  assert.deepEqual(await rows(tab, "Browsers"), [
+    ["Chrome", "Off", "Set up"],
+    ["Edge", "Not installed"],
+  ]);
+});
+
+test("with no browser installed, the list has nothing to set up", async () => {
   const tab = await open("no-browser-installed");
   assert.deepEqual(await rows(tab, "Browsers"), [
     ["Chrome", "Not installed"],
@@ -130,15 +156,7 @@ test("with no browser installed, turning it on shows the service's words", async
   await tab.getByRole("switch", { name: "Your browser" }).click();
   await until(() => line(tab, "Your browser"), { words: "Signed in as you", warn: false });
   await tab.getByRole("switch", { name: "Your browser" }).click();
-  await until(() => line(tab, "Your browser"), {
-    words:
-      "The browser is on, but asking for what it needs didn't start: Neither Chrome nor Edge is installed on this machine.",
-    warn: true,
-  });
-  assert.equal(
-    await tab.getByRole("switch", { name: "Your browser" }).getAttribute("aria-checked"),
-    "true",
-  );
+  await until(() => line(tab, "Your browser"), { words: "No browser set up", warn: true });
 });
 
 test("connected holds still with a green ring, since when and who it is lent to", async () => {
