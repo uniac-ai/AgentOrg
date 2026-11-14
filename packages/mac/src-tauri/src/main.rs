@@ -30,11 +30,17 @@ fn main() {
     match args.first().map(String::as_str) {
         Some("--provider") => provider::run_as_background_item(),
         Some("grant") => grant::ask(&args[1..]),
-        Some("unregister") => {
-            let said = macos::unregister_background_item();
-            log::log("unregister", &said);
-            println!("{said}");
-        }
+        Some("unregister") => match macos::unregister_background_item() {
+            Ok(said) => {
+                log::log("unregister", &said);
+                println!("{said}");
+            }
+            Err(said) => {
+                log::log("unregister", &said);
+                eprintln!("{said}");
+                std::process::exit(1);
+            }
+        },
         Some("granted") => std::process::exit(match args.get(1) {
             Some(need) if macos::granted(need) => 0,
             _ => 1,

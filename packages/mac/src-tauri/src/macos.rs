@@ -43,16 +43,22 @@ fn background_item() -> Option<Retained<AnyObject>> {
 }
 
 /// Unregisters the background item: macOS stops the provider, which stops what it runs. Says
-/// where it then stands, as the log reads it.
-pub fn unregister_background_item() -> String {
-    let Some(item) = background_item() else { return "no background item in this build".into() };
+/// where it then stands, as the log reads it, or why it couldn't.
+pub fn unregister_background_item() -> Result<String, String> {
+    let Some(item) = background_item() else {
+        return Err("no background item in this build".into());
+    };
+    let status: isize = unsafe { msg_send![&*item, status] };
+    if status == 0 {
+        return Ok("the background item isn't registered".into());
+    }
     let done: Result<(), Retained<NSError>> =
         unsafe { msg_send![&*item, unregisterAndReturnError: _] };
     match done {
-        Ok(()) => "the background item is unregistered".into(),
+        Ok(()) => Ok("the background item is unregistered".into()),
         Err(error) => {
             let why = error.localizedDescription();
-            format!("the background item couldn't be unregistered: {why}")
+            Err(format!("the background item couldn't be unregistered: {why}"))
         }
     }
 }
