@@ -95,7 +95,7 @@ The core and its frontend are built apart: the core serves the frontend it is gi
   - The frontend's files and the sign-in pages carry the app's policy: `default-src 'self'`, `script-src 'self'`, `style-src 'self' 'unsafe-inline'`, `img-src 'self' data:`, `connect-src 'self'`, `frame-src 'none'`, `object-src 'none'`, `base-uri 'none'`, `form-action 'self'` and `frame-ancestors 'none'`. The frontend loads nothing from elsewhere.
 - **`/api`,** as above: one socket per tab, from the core's own `Origin` and `Host`; another is refused with HTTP 401 before it opens.
   - Its first message, within 10 s, is `{op: "hello", session}`.
-  - Then come calls and events by the person's slot, 1 MiB a message at most. Ids are positive integers, and names are 256 characters at most.
+  - Then come calls and events by the person's slot, 1 MiB a message at most. A call over it, up to 16 MiB, is refused `invalid` in words, and the socket goes on; a larger message closes the socket with 1009. Ids are positive integers, and names are 256 characters at most.
   - A call to a method named `live` is refused `forbidden`.
   - A tab must sign in again when the socket closes with 4401.
 - **`/live?agent&instance&surface&mode`:** one socket per live view.

@@ -28,7 +28,7 @@ import {
 import { describeInterface, Refused } from "@agentorg/sdk";
 import { connect } from "@agentorg/sdk/client";
 import { WebSocketServer } from "ws";
-import { type PersonSide, serveSocket } from "./api.js";
+import { MAX_MESSAGE, type PersonSide, serveSocket } from "./api.js";
 import { LIVE_MAX, pipeLive, type Ticket } from "./live.js";
 import { Notes } from "./notes.js";
 import { oauthRoute } from "./oauth.js";
@@ -103,8 +103,11 @@ export function frontendOf(given?: string): string | undefined {
 }
 /** A request body the gateway reads: a sign-in code, nothing more. */
 const MAX_BODY = 1024;
-/** One `/api` message. */
-const MAX_MESSAGE = 1024 * 1024;
+/**
+ * The most of one `/api` message that is read. One over the contract's `MAX_MESSAGE` is read only
+ * to be refused in words; past this its socket is closed 1009, and nothing else is touched.
+ */
+const READ_MAX = 16 * MAX_MESSAGE;
 /** How long a tab's socket has to say its session. */
 const HELLO_TIMEOUT_MS = 10_000;
 /** The close code for a socket with no live session: the tab signs in again. */
@@ -353,7 +356,7 @@ export async function startApp(options: AppOptions): Promise<App> {
     });
     response.end(request.method === "HEAD" ? undefined : body);
   };
-  const sockets = new WebSocketServer({ noServer: true, maxPayload: MAX_MESSAGE });
+  const sockets = new WebSocketServer({ noServer: true, maxPayload: READ_MAX });
   const lives = new WebSocketServer({ noServer: true, maxPayload: LIVE_MAX });
   server.on("upgrade", (request, socket, head) => {
     // An upgraded socket has no error handler of its own: a client that resets would crash the app.
@@ -400,13 +403,15 @@ export async function startApp(options: AppOptions): Promise<App> {
       ws.on("message", (data, isBinary) => {
         if (isBinary) return;
         if (served) return served.receive(String(data));
+        clearTimeout(timer);
+        // Before its session is said, a socket is read no further than one message carries.
+        if ((data as Buffer).length > MAX_MESSAGE) return ws.close(SIGN_IN_AGAIN, "Sign in again");
         let hello: { op?: unknown; session?: unknown } | undefined;
         try {
           hello = JSON.parse(String(data));
         } catch {
           // Not a hello.
         }
-        clearTimeout(timer);
         if (hello?.op !== "hello" || !signIn.isSession(hello.session))
           return ws.close(SIGN_IN_AGAIN, "Sign in again");
         serve();
@@ -416,6 +421,9 @@ export async function startApp(options: AppOptions): Promise<App> {
         clearTimeout(timer);
         served?.closed();
       });
+      // A socket's own trouble, such as a message too large to read, which it closes for itself:
+      // unheard, it would end the app.
+      ws.on("error", () => {});
     });
   });
 

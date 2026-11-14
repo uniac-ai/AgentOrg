@@ -18,6 +18,11 @@ export interface Socket {
   close(code?: number, reason?: string): void;
 }
 
+/** The most one message carries, as the frontend contract says. */
+export const MAX_MESSAGE = 1024 * 1024;
+/** What a call in a message over it is answered: nothing of it is done. */
+const TOO_LARGE = "That's too large to send: one message to AgentOrg can be at most 1 MB.";
+
 /** Subscriptions one socket may hold. */
 const MAX_SUBSCRIPTIONS = 256;
 /** Calls one socket may have in flight; past it, `busy`. */
@@ -67,6 +72,12 @@ export function serveSocket(
       if (!isRecord(parsed)) return;
       message = parsed;
     } catch {
+      return;
+    }
+    // Over the most a message carries: a call is told so in words, and nothing of it is done.
+    if (Buffer.byteLength(text) > MAX_MESSAGE) {
+      if (message.op === "call" && isId(message.id))
+        send({ id: message.id, error: errorBody(new Refused("invalid", TOO_LARGE)) });
       return;
     }
     switch (message.op) {
