@@ -712,6 +712,14 @@ export function createStacks(parts: StackParts) {
     const placing = await place(input.unit, input.needs ?? {}, taken, await catalog(), undefined);
     if (placing.placed && isAgentsUnit(placing.placed.offer))
       placing.problems.push(...reachProblems(placing.placed.values, reachOf(record)));
+    // Its place: never above a unit it needs.
+    const { at } = input;
+    if (placing.placed && at !== undefined) {
+      const needed = Object.values(placing.placed.needs);
+      const giver = record.units.find((one, index) => index >= at && needed.includes(one.instance));
+      if (giver)
+        placing.problems.push({ message: `It needs ${giver.title}, which is below that place.` });
+    }
     return placing;
   };
 
@@ -1165,6 +1173,21 @@ export function createStacks(parts: StackParts) {
     return made;
   };
 
+  /**
+   * Put a unit of the agent's at `at` in its stack, from the top, and what the agent holds in the
+   * stack's order: each unit's, then what its creatable gives it, as it was made.
+   */
+  const placeAt = (record: TheAgent, instance: string, at: number) => {
+    const from = record.units.findIndex((one) => one.instance === instance);
+    const [unit] = record.units.splice(from, 1);
+    if (unit) record.units.splice(Math.min(at, record.units.length), 0, unit);
+    const order = (ref = "") => {
+      const index = record.units.findIndex((one) => one.instance === ref);
+      return index < 0 ? record.units.length : index;
+    };
+    record.capabilities.sort((a, b) => order(a.from) - order(b.from));
+  };
+
   const keepOrigins = (work: Work) => {
     Object.assign(records.connections, work.origins);
     work.undo.push(() => {
@@ -1599,7 +1622,7 @@ export function createStacks(parts: StackParts) {
     },
 
     async addUnit(input: AddInput, caller: string) {
-      const { agent } = input;
+      const { agent, at } = input;
       const record = recordOf(agent);
       const { placed, problems } = await placeOnAgent(input);
       if (problems.length || !placed) throw refusal(problems);
@@ -1616,6 +1639,7 @@ export function createStacks(parts: StackParts) {
         const unit = await run(work, placed, (ref) =>
           record.units.find((one) => one.instance === ref),
         );
+        if (unit && at !== undefined) placeAt(record, unit.instance, at);
         keepOrigins(work);
         save();
         changed(agent);

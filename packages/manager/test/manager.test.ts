@@ -1579,6 +1579,46 @@ test("a unit can be added to a living agent and removed, with what it made", asy
   await assert.rejects(s.calls.agents.removeUnit({ agent, instance }), refused("unknown"));
 });
 
+test("a unit taken off and added back changed keeps its place, and can't go above one it needs", async (t) => {
+  const s = await setup(t);
+  const agent = await s.makeStack([
+    s.unit("machine"),
+    s.unit("files", { folder: "/a" }),
+    s.unit("badge"),
+  ]);
+  const stack = async () =>
+    (await s.calls.agents.get({ agent })).units.map((one) =>
+      [one.unit, one.values.folder].filter(Boolean).join(" "),
+    );
+  assert.deepEqual(await stack(), ["machine", "files /a", "badge"]);
+  const files = (await s.calls.agents.get({ agent })).units[1]?.instance as string;
+  // Changed, as setup does: taken off, then added back where it was.
+  await s.calls.agents.removeUnit({ agent, instance: files });
+  await s.calls.agents.addUnit({ agent, unit: s.unit("files", { folder: "/b" }), at: 1 });
+  assert.deepEqual(await stack(), ["machine", "files /b", "badge"]);
+  // With no place, or one past the last, it goes below those there are.
+  const badge = (await s.calls.agents.get({ agent })).units[2]?.instance as string;
+  await s.calls.agents.removeUnit({ agent, instance: badge });
+  await s.calls.agents.addUnit({ agent, unit: s.unit("badge"), at: 9 });
+  assert.deepEqual(await stack(), ["machine", "files /b", "badge"]);
+  // A unit can't go above one it needs: the terminal needs the machine's computer. A check says
+  // so before anything runs.
+  const computer = (await s.calls.agents.get({ agent })).units[0]?.instance as string;
+  assert.deepEqual(
+    (
+      await s.calls.agents.check({ agent, unit: s.unit("terminal"), needs: { computer }, at: 0 })
+    ).problems.map((p) => p.message),
+    ["It needs Machine, which is below that place."],
+  );
+  await assert.rejects(
+    s.calls.agents.addUnit({ agent, unit: s.unit("terminal"), needs: { computer }, at: 0 }),
+    (error: Error & { code?: string }) =>
+      error.code === "invalid" && /needs Machine, which is below that place/.test(error.message),
+  );
+  await s.calls.agents.addUnit({ agent, unit: s.unit("terminal"), needs: { computer }, at: 1 });
+  assert.deepEqual(await stack(), ["machine", "terminal", "files /b", "badge"]);
+});
+
 test("adding a unit is all or none on the living agent", async (t) => {
   const s = await setup(t);
   const agent = await s.makeStack([]);
