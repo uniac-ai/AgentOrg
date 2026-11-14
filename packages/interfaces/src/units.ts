@@ -115,8 +115,9 @@ export const ActivityPage = z.strictObject({
 /**
  * A view a capability gives the person's side, as data: the host draws it and the capability
  * paints nothing. `place` and `kind` name a place and a kind of view in the host's catalogue
- * (places `column` and `frame`; kinds `facts`, `status`, `meters` and `activity`) and are open: a host that
- * doesn't know one doesn't show the view. Views are shown in the order they are given.
+ * (places `column` and `frame`; kinds `facts`, `status`, `meters`, `activity` and `presence`) and
+ * are open: a host that doesn't know one doesn't show the view. Views are shown in the order they
+ * are given.
  *
  * Its data is one of three:
  * - With `operation`: the answer of that tool of the connection the unit gives at `slot`, called
@@ -124,7 +125,8 @@ export const ActivityPage = z.strictObject({
  *   under that slot, so both read the same. For a `facts` view the answer is `Facts`; `rows`
  *   names the rows of it the view shows, by label, and it shows all of them when absent. For an
  *   `activity` view it is `Activity`, and called again with a piece of work, `ActivityPage`.
- * - With `surface`: that live surface of the capability.
+ * - With `surface`: that live surface of the capability. A `presence` view's speaks `presence@1`:
+ *   who is acting on it now, and on what.
  * - With neither: rows fixed when the unit was applied, which `apply` gives.
  *
  * `when` shows it only while the agent is running, or only while the capability can be reached.
