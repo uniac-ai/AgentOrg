@@ -1,0 +1,132 @@
+/*
+ * The window's stylesheet, compiled by scripts/build.js: the client's dark tokens, as the shell has
+ * them, and Tailwind's classes as the page uses them. Every rule is in a layer, because an
+ * unlayered rule would outrank every utility.
+ */
+@layer theme, base, components, utilities;
+@import "tailwindcss/theme" layer(theme);
+@import "tailwindcss/utilities" layer(utilities);
+@import "tw-animate-css";
+
+@source "./**/*.tsx";
+
+/* Our tokens stay the source of truth; shadcn's names map onto them. */
+@theme inline {
+  --color-background: var(--surface);
+  --color-foreground: var(--fg);
+  --color-secondary: var(--raised);
+  --color-secondary-foreground: var(--fg);
+  --color-muted: var(--raised);
+  --color-muted-foreground: var(--muted);
+  --color-primary: var(--accent);
+  --color-primary-foreground: var(--accent-fg);
+  --color-accent: var(--selected);
+  --color-accent-foreground: var(--fg);
+  --color-destructive: var(--bad);
+  --color-border: var(--line);
+  --color-input: var(--line-strong);
+  --color-ring: var(--ring);
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --radius-xl: 14px;
+  --radius-2xl: 18px;
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+/* The client's dark colours, the only ones the window has. */
+:root {
+  --surface: rgb(35 35 35);
+  --raised: rgb(50 50 50);
+  --fg: rgb(250 250 250);
+  --muted: rgb(161 161 161);
+  --faint: rgb(115 115 115);
+  --line: rgb(255 255 255 / 0.08);
+  --line-strong: #ffffff24;
+  --selected: rgb(255 255 255 / 0.08);
+  --accent: rgb(250 250 250);
+  --accent-fg: rgb(24 24 24);
+  --ok: rgb(16 185 129);
+  --bad: rgb(248 113 113);
+  --warn: rgb(251 191 36);
+  --ring: rgb(150 150 150);
+  /* The names a secondary button's hover mixes, which would otherwise leave it with no colour. */
+  --secondary: var(--raised);
+  --foreground: var(--fg);
+  color-scheme: dark;
+}
+
+@layer base {
+  :where(*, *::before, *::after) {
+    box-sizing: border-box;
+    border-color: var(--line);
+  }
+  :where(html) {
+    background: rgb(25 25 25);
+    scrollbar-width: none;
+  }
+  :where(body) {
+    margin: 0;
+    color: var(--fg);
+    font: 15px / 1.5 var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  :where(h1, h2, p) {
+    margin: 0;
+  }
+  :where(button) {
+    background: none;
+    border: 0;
+    padding: 0;
+    color: inherit;
+    font: inherit;
+    cursor: default;
+  }
+}
+
+@layer components {
+  .no-bar {
+    scrollbar-width: none;
+  }
+  .no-bar::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Someone acting now: the dot breathes. */
+  .pulse {
+    animation: pulse 2s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    50% {
+      opacity: 0.45;
+    }
+  }
+
+  /* Waiting: the header's circle sends out a soft pulse that widens and fades into the window. */
+  .ripple {
+    animation: ripple 3.6s cubic-bezier(0.2, 0.6, 0.35, 1) infinite;
+  }
+  @keyframes ripple {
+    0% {
+      transform: scale(1);
+      opacity: 0.9;
+    }
+    65%,
+    100% {
+      transform: scale(2.1);
+      opacity: 0;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .pulse {
+      animation: none;
+    }
+    .ripple {
+      animation: none;
+      opacity: 0;
+    }
+  }
+}
