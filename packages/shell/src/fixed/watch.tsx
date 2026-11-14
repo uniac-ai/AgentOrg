@@ -61,16 +61,25 @@ function Watch({
 }) {
   const status = useWorking(slot, entry.status.state === "running");
   // Whether a connection of its is down: nothing tells, so it's read again. A read that fails
-  // keeps what the last one said, so what hangs on it stays as it was.
+  // keeps what the last one said, so what hangs on it stays as it was. Something it holds going
+  // down or coming back says so at once: it is read again then, so its windows follow.
+  const [flips, setFlips] = useState(0);
   const read = useLoad(
     () => getAgent(entry.agent),
     ["actors", "bindings"],
-    [entry.agent, tick],
+    [entry.agent, tick, flips],
   ).value;
   const last = useRef(read);
   if (read) last.current = read;
   const detail = last.current;
   const held = useHeldDown(detail);
+  const down = held?.title;
+  const was = useRef(down);
+  useEffect(() => {
+    if (was.current === down) return;
+    was.current = down;
+    setFlips((n) => n + 1);
+  }, [down]);
   // biome-ignore lint/correctness/useExhaustiveDependencies: `report` is the provider's own setter.
   useEffect(() => {
     report(entry.agent, {

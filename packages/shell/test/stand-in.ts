@@ -43,6 +43,8 @@ export interface Held {
   detail?: string;
   /** How many surfaces it gives, and the slots its tools come through. */
   surfaces: number;
+  /** The protocols of the surfaces it declares, in their order; `surface<n>@1` where unsaid. */
+  protocols?: string[];
   slots: string[];
   /** Its views, a facts view's fixed rows with it; and what its `about` operation answers. */
   views?: z.input<typeof agentsInterface.methods.get.output>["capabilities"] extends
@@ -654,7 +656,7 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
               slots: held.slots,
               surfaces: Array.from({ length: held.surfaces }, (_, i) => ({
                 surface: `s${i}`,
-                protocol: `surface${i}@1`,
+                protocol: held.protocols?.[i] ?? `surface${i}@1`,
               })),
               views: held.views ?? [],
               person: {
@@ -1439,6 +1441,14 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
     setHeld(agent: string, held: Held[]) {
       agentOf(agent).held = held;
       changed();
+      for (const [n] of held.entries()) emit(heldSlot(agent, n), "changed", {});
+    },
+    /**
+     * What an agent holds comes to be this, said only by each capability, as its provider says
+     * it: the agents aren't said to have changed.
+     */
+    heldSays(agent: string, held: Held[]) {
+      agentOf(agent).held = held;
       for (const [n] of held.entries()) emit(heldSlot(agent, n), "changed", {});
     },
     /** The control log comes to have this change, newest first. */

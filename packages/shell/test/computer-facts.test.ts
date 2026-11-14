@@ -3,7 +3,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { type Browser, chromium, type Page } from "@playwright/test";
-import { heldComputer as computer, sampleAgents, sampleLoad } from "./design/samples.ts";
+import {
+  heldComputer as computer,
+  computer as live,
+  sampleAgents,
+  sampleLoad,
+} from "./design/samples.ts";
 import { SESSION, standIn } from "./stand-in.ts";
 
 let browser: Browser;
@@ -161,6 +166,50 @@ test(
     // Back, its windows are.
     gateway.setHeld("a-research", [computer()]);
     await frame.getByRole("navigation", { name: "Dock" }).waitFor();
+    await page.close();
+  }),
+);
+
+test(
+  "a computer coming back keeps its tab, and its windows come back at once, though only its capability says so",
+  withGateway(async (gateway) => {
+    sampleAgents(gateway);
+    const page = await open(gateway, "#/a/a-research");
+    const tab = page.getByRole("tab", { name: "Computer" });
+    const frame = page.getByRole("main").getByRole("region", { name: "Research's computer" });
+    const dock = frame.getByRole("navigation", { name: "Dock" });
+    await dock.waitFor();
+    // Down: its service lists no live surfaces, and only its capability says so.
+    live(gateway, []);
+    gateway.heldSays("a-research", [
+      computer({ state: "down", detail: "its service here is gone" }),
+    ]);
+    await frame.getByText("Its service here is gone").waitFor();
+    // Long enough for the agent to be read again on its own, with no windows.
+    await page.waitForTimeout(5500);
+    // Back, said only by its capability: its tab stays, and its windows are read again at once,
+    // well before the agent would be read again on its own.
+    live(gateway, [
+      { surface: "browser", protocol: "screencast@1", operate: true },
+      { surface: "terminal", protocol: "terminal@1", operate: true },
+    ]);
+    gateway.heldSays("a-research", [computer()]);
+    const back = Date.now();
+    while (Date.now() - back < 1500 && !(await dock.isVisible())) {
+      assert.equal(await tab.count(), 1, "its tab stays while its windows are read");
+      await page.waitForTimeout(50);
+    }
+    assert.equal(
+      await dock.isVisible(),
+      true,
+      "its windows are back before the agent is read again",
+    );
+    assert.deepEqual(
+      await dock
+        .getByRole("button")
+        .evaluateAll((buttons) => buttons.map((b) => b.getAttribute("aria-label"))),
+      ["Browser", "Terminal"],
+    );
     await page.close();
   }),
 );

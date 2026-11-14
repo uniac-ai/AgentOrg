@@ -105,6 +105,18 @@ export const windowsOf = (surfaces: readonly OpenSurface[]) =>
   });
 
 /**
+ * Whether an agent's computer has its place: windows open now, or down, saying so, or declared by
+ * a capability it holds. So the place stays while a computer comes back, before its windows are
+ * read again.
+ */
+export const hasComputer = (detail: AgentDetail | undefined, down: boolean) =>
+  down ||
+  windowsOf(surfacesOf(detail)).length > 0 ||
+  (detail?.capabilities ?? []).some((held) =>
+    held.surfaces.some((s) => WINDOWS.some((window) => window.protocol === s.protocol)),
+  );
+
+/**
  * The frame: the computer's name, the window in front, and the dock. In the layer it stands
  * apart from any page, so it also says whose it is and closes by its own Close; there it is as
  * large as it gets, so its windows have no Expand.
@@ -159,7 +171,6 @@ export function Computer({
     else erase(agent.id, overlay);
   }, [agent.id, overlay, slot, listed, draw, erase]);
   useLayoutEffect(() => () => erase(agent.id, overlay), [agent.id, overlay, erase]);
-  if (!front && down === undefined) return null;
   return (
     <section
       aria-label={`${agent.name}'s computer`}
@@ -247,7 +258,7 @@ export function Computer({
       </div>
       {/* A stopped computer has no dock; its place stays. */}
       <div className="flex h-[68px] shrink-0 items-center justify-center">
-        {!stopped && down === undefined && (
+        {!stopped && down === undefined && windows.length > 0 && (
           <nav
             aria-label="Dock"
             className="flex gap-1.5 rounded-2xl bg-background/70 p-1.5 backdrop-blur"
