@@ -18,7 +18,7 @@
     "release": "https://api.github.com/repos/trycua/cua/releases/tags/cua-driver-rs-v0.49.7",
     "sha256": "269571f4a456340dae33c946f9986334113621794ac8d6212376ca6555410f95",
     "take": {
-      "cua-driver-rs-0.49.7-darwin-universal/cua-driver": "MacOS/cua-driver",
+      "cua-driver-rs-0.49.7-darwin-universal/cua-driver": "Resources/cua-driver",
       "cua-driver-rs-0.49.7-darwin-universal/LICENSE": "Resources/licenses/cua-driver/LICENSE",
       "cua-driver-rs-0.49.7-darwin-universal/THIRD_PARTY_NOTICES.md": "Resources/licenses/cua-driver/THIRD_PARTY_NOTICES.md"
     }

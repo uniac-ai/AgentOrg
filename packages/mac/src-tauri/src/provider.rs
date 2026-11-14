@@ -68,14 +68,16 @@ pub struct Programs {
 }
 
 impl Programs {
-    /// Where the bundle puts them (tauri.conf.json's `bundle.macOS.files`): the two programs
-    /// beside the app's own, and the service among its resources.
+    /// Where the bundle puts them (tauri.conf.json's `bundle.macOS.files`): Node beside the app's
+    /// own program, and the driver and the service among its resources. The driver draws windows,
+    /// and macOS takes a program in Contents/MacOS that does for the app itself: opening the app
+    /// would then only bring the driver forward.
     fn in_bundle(app: &Path) -> Self {
         let contents = app.join("Contents");
         Programs {
             node: contents.join("MacOS/node"),
             service: contents.join("Resources/agentcomputer/dist/agentcomputer.js"),
-            driver: contents.join("MacOS/cua-driver"),
+            driver: contents.join("Resources/cua-driver"),
         }
     }
 
@@ -633,6 +635,7 @@ mod tests {
             let carried = files.keys().any(|key| inside.starts_with(key));
             assert!(carried, "{} isn't in the bundle's files", inside.display());
         }
+        assert!(!programs.driver.starts_with("/A.app/Contents/MacOS"));
     }
 
     #[test]

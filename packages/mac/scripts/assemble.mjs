@@ -5,9 +5,11 @@
 // - the service, `@agentorg/computer`, from this workspace's install, which its lockfile checked;
 // - their licences.
 // The bundle takes them from `src-tauri/target/assembly/bundle`, through tauri.conf.json's
-// `bundle.macOS.files`: `node` and `cua-driver` into Contents/MacOS, the service and the licences
-// into Contents/Resources. Not as Tauri's sidecars, which are copied when the Rust is compiled, so
-// that every `cargo build` and `cargo test` would need the fetched files. The bundle copies these
+// `bundle.macOS.files`: `node` into Contents/MacOS; `cua-driver`, the service and the licences into
+// Contents/Resources. The driver draws windows, and macOS takes a program in Contents/MacOS that
+// does for the app itself, so it is kept out of there. Not as Tauri's sidecars, which are copied
+// when the Rust is compiled, so that every `cargo build` and `cargo test` would need the fetched
+// files. The bundle copies these
 // as they are, signing none of them, so each program and native file is signed here, with the
 // app's own identity and the entitlements in ../entitlements, before the bundle around them is.
 import { execFileSync } from "node:child_process";
@@ -151,13 +153,13 @@ export function sign(path, identity, entitlements) {
 /** What is signed, and with which entitlements, of what the bundle carries. */
 const SIGNED = {
   "MacOS/node": "node.plist",
-  "MacOS/cua-driver": "cua-driver.plist",
+  "Resources/cua-driver": "cua-driver.plist",
   "Resources/agentcomputer/node_modules/node-pty/prebuilds/darwin-arm64/pty.node": undefined,
   "Resources/agentcomputer/node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper": undefined,
 };
 const PROGRAMS = [
   "MacOS/node",
-  "MacOS/cua-driver",
+  "Resources/cua-driver",
   "Resources/agentcomputer/node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper",
 ];
 
