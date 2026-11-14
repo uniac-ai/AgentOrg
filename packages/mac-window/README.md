@@ -14,7 +14,7 @@ The page knows the app only through one interface, `Mac` in [src/mac.ts](src/mac
 | `setSwitch(capability, on)` | `PUT /v1/setup/{capability}`; a 409 rejects with its `{ code, message }`, which the card shows as its line |
 | `ask(capability, need?)`    | `POST /v1/setup/{capability}/ask`; a 409 the same way                                                      |
 | `connection()`              | `GET /v1/connection`                                                                                       |
-| `computers()`               | `GET /v1/computers?state=running`: each one's `name`, and `metadata.agent`, the agent's id                 |
+| `computers()`               | `GET /v1/computers`, those running or starting: each one's `name`, and `metadata.agent`, the agent's id    |
 | `acting()`                  | `GET /v1/acting`                                                                                           |
 | `appState()`                | the app itself: `starting`, `running` or `starting again`                                                  |
 | `onChanged(listener)`       | the app's event when its state changes                                                                     |

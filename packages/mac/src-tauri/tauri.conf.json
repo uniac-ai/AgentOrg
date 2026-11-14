@@ -34,6 +34,10 @@
   "bundle": {
     "active": true,
     "targets": ["app"],
-    "macOS": { "signingIdentity": "-", "minimumSystemVersion": "13.0" }
+    "macOS": {
+      "signingIdentity": "-",
+      "minimumSystemVersion": "13.0",
+      "files": { "Library/LaunchAgents/dev.agentorg.mac.provider.plist": "provider.plist" }
+    }
   }
 }
