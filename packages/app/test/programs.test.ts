@@ -626,6 +626,7 @@ test("a socket from the person reaches a computer's surfaces live, with no token
       ["terminal", "terminal@1"],
       ["files", "files@1"],
       ["load", "metrics@1"],
+      ["presence", "presence@1"],
     ],
   );
   // A page never holds a ticket: `/api` won't give one.
