@@ -63,6 +63,99 @@ function headlessShell(): string {
   );
 }
 
+/** The computer image a container is made from, where the tests are given one. */
+const IMAGE = process.env.AGENTCOMPUTER_TEST_IMAGE;
+
+/**
+ * A stand-in for a service, which makes computers on paper: it answers what the connector asks as
+ * AgentComputer would, and keeps each request with the token it came with. Its computers' tools
+ * can't be reached.
+ */
+async function standIn(t: test.TestContext, records: Record<string, Record<string, unknown>> = {}) {
+  const token = "the-service-token";
+  const asked: { method: string; path: string; token?: string; body?: Record<string, unknown> }[] =
+    [];
+  const computers = new Map<string, Record<string, unknown>>(Object.entries(records));
+  const server = createServer(async (request, response) => {
+    let raw = "";
+    for await (const chunk of request) raw += chunk;
+    const path = new URL(request.url ?? "/", "http://here").pathname;
+    const given = request.headers.authorization?.replace(/^Bearer /, "");
+    asked.push({
+      method: request.method ?? "",
+      path,
+      ...(given ? { token: given } : {}),
+      ...(raw ? { body: JSON.parse(raw) } : {}),
+    });
+    const send = (status: number, value?: unknown) => {
+      response.statusCode = status;
+      response.setHeader("content-type", "application/json");
+      response.end(value === undefined ? undefined : JSON.stringify(value));
+    };
+    if (given !== token)
+      return send(401, { code: 401, message: "That isn't this service's token." });
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    if (request.method === "GET" && path === "/v1/info")
+      return send(200, {
+        version: "0.0.19",
+        thisComputer: { ready: true, capabilities: [], browsers: [] },
+        made: [{ isolation: "container", ready: true, capabilities: [], browsers: [] }],
+      });
+    if (request.method === "POST" && path === "/v1/computers") {
+      const asks = JSON.parse(raw) as Record<string, unknown>;
+      // A copy as the service takes one: of a folder that is there, with no workspace or files.
+      const from = asks.copyFrom;
+      if (
+        typeof from === "string" &&
+        (asks.workspace !== undefined ||
+          asks.access === "none" ||
+          !statSync(from, { throwIfNoEntry: false })?.isDirectory())
+      )
+        return send(400, { code: 400, message: `That copy can't be made from ${from}.` });
+      const id = `paper${computers.size + 1}`;
+      const made = {
+        computerID: id,
+        name: asks.name,
+        state: "running",
+        access: asks.access,
+        isolation: asks.isolation ?? "container",
+        attached: false,
+        browser: asks.browser ?? false,
+        workspace: asks.workspace ?? (asks.access === "none" ? null : `/service/computers/${id}`),
+        metadata: asks.metadata ?? {},
+        surfaces: [],
+        endpoints: {
+          computer: `${base}/v1/computers/${id}/mcp`,
+          ...(asks.browser ? { browser: `${base}/v1/computers/${id}/browser` } : {}),
+        },
+      };
+      computers.set(id, made);
+      return send(201, { ...made, accessToken: "its-own-token" });
+    }
+    const [, id, more] = path.match(/^\/v1\/computers\/([^/]+)(\/live)?$/) ?? [];
+    const found = id ? computers.get(id) : undefined;
+    if (!found || !id) return send(404, { code: 404, message: "There's no computer by that id." });
+    if (more && request.method === "POST")
+      return send(201, {
+        url: `${base.replace("http", "ws")}/v1/live/once`,
+        protocol: "terminal@1",
+        surface: "terminal",
+        mode: "watch",
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      });
+    if (request.method === "GET") return send(200, found);
+    if (request.method === "DELETE") {
+      computers.delete(id);
+      return send(204);
+    }
+    send(405, { code: 405, message: "Not here." });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const apiUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  return { apiUrl, apiKey: token, asked, computers };
+}
+
 interface Service {
   data: string;
   apiUrl: string;
@@ -82,6 +175,7 @@ async function startService(data: string): Promise<Service> {
       data,
       "--browser-path",
       headlessShell(),
+      ...(IMAGE ? ["--image", IMAGE] : []),
     ],
     { stdio: "ignore" },
   );
@@ -163,8 +257,9 @@ async function setup(t: test.TestContext, { service = true, webUrl = "", path = 
       agent: "act_agent",
       name: "Scout's computer",
     });
+  /** This computer, attached, with its work in the test's folder. */
   const local = (access: string, more: object = {}) => ({
-    service: "local",
+    kind: "this",
     access,
     workspace,
     ...more,
@@ -231,37 +326,49 @@ const form = (unit: { form: { id: string }[] } | undefined, id: string) =>
         value: string;
         required?: true;
         visible?: { field: string; in: unknown[] };
-        options?: { value: string; description?: string; adds?: { skills: { name: string }[] } }[];
+        options?: {
+          value: string;
+          description?: string;
+          unavailable?: string;
+          adds?: { skills: { name: string }[] };
+        }[];
       }
     | undefined;
 
-test("the form says which service, found when it is read, and what each answer grants", async (t) => {
+test("the form says which computer, found when it is read, and what each answer grants", async (t) => {
   const { units } = await setup(t);
   const unit = (await units.units({})).units.find((one) => one.id === "computer");
   Unit.parse(unit);
-  const service = form(unit, "service");
-  assert.equal((service as { default?: unknown }).default, "local", "found, so preselected");
+  const kind = form(unit, "kind");
+  assert.equal((kind as { default?: unknown }).default, undefined, "the person chooses");
   assert.deepEqual(
-    service?.options?.map((one) => one.value),
-    ["local", "another"],
+    kind?.options?.map((one) => one.value),
+    ["this", "new"],
   );
-  assert.match(service?.options?.[0]?.description ?? "", /No isolation: it acts as you/);
-  assert.deepEqual(form(unit, "address")?.visible, { field: "service", in: ["another"] });
+  assert.match(kind?.options?.[0]?.description ?? "", /acts as you/);
+  assert.equal(kind?.options?.[0]?.unavailable, undefined);
+  assert.deepEqual(
+    form(unit, "made")?.options?.map((one) => one.value),
+    ["container", "remote"],
+  );
+  // A container is ready or not as the service here says; either way, the form says which.
+  const container = form(unit, "made")?.options?.[0]?.unavailable;
+  assert.ok(container === undefined || container.length > 0);
+  assert.deepEqual(form(unit, "workspace")?.visible, { field: "kind", in: ["this"] });
+  assert.deepEqual(form(unit, "made")?.visible, { field: "kind", in: ["new"] });
+  assert.equal(form(unit, "folder"), undefined, "a new computer has no folder of yours");
+  for (const id of ["address", "token", "path"])
+    assert.deepEqual(form(unit, id)?.visible, { field: "made", in: ["remote"] }, id);
   assert.equal(form(unit, "token")?.value, "secret");
-  assert.deepEqual(form(unit, "workspace")?.visible, { field: "service", in: ["local"] });
-  assert.deepEqual(form(unit, "path")?.visible, { field: "service", in: ["another"] });
-  assert.equal(form(unit, "where"), undefined);
-  // What an agent may set: how far it reaches, within bounds. Where it runs, never.
+  // What an agent may set: how far it reaches, within bounds. Which computer, never.
   const authority = (id: string) =>
     (form(unit, id) as { authority?: string } | undefined)?.authority;
   assert.deepEqual(
-    ["service", "address", "token", "access", "browser", "workspace", "path"].map(authority),
-    [undefined, undefined, undefined, "setting", "setting", undefined, undefined],
+    ["kind", "workspace", "made", "address", "token", "path", "access", "browser"].map(authority),
+    [undefined, undefined, undefined, undefined, undefined, undefined, "setting", "setting"],
   );
   assert.deepEqual(
-    form(unit, "access")
-      ?.options?.at(-1)
-      ?.adds?.skills.map((one) => one.name),
+    form(unit, "access")?.options?.[0]?.adds?.skills.map((one) => one.name),
     ["terminal", "files", "computer"],
   );
 });
@@ -289,17 +396,16 @@ test("each skill the form names can be read, with what it shipped before, and an
 test("with AgentComputer not installed, it says how to install it, and nothing is made", async (t) => {
   const { units, apply, local, hub } = await setup(t, { service: false });
   const unit = (await units.units({})).units.find((one) => one.id === "computer");
-  assert.match(form(unit, "service")?.options?.[0]?.description ?? "", /npm install -g/);
-  assert.equal(
-    (form(unit, "service") as { default?: unknown }).default,
-    undefined,
-    "nothing to preselect",
-  );
-  for (const values of [local("terminal"), { access: "terminal" }]) {
+  const why = (field: string, value: string) =>
+    form(unit, field)?.options?.find((one) => one.value === value)?.unavailable ?? "";
+  assert.match(why("kind", "this"), /npm install -g/);
+  assert.match(why("made", "container"), /npm install -g/);
+  assert.equal(why("made", "remote"), "", "a service elsewhere needs nothing here");
+  for (const values of [local("terminal"), { kind: "new", made: "container", access: "files" }]) {
     const { problems } = await units.check({ unit: "computer", values, secrets: [] });
     assert.deepEqual(
       problems.map((one) => one.field),
-      ["service"],
+      ["kind"],
     );
     assert.match(problems[0]?.message ?? "", /npm install -g @agentorg\/computer/);
   }
@@ -324,13 +430,9 @@ test("with AgentComputer installed and none running, adding a computer starts it
   });
   const down = () => promisify(execFile)(command, ["down", "--data", data]);
   try {
-    // The form says it is started when the computer is added, with no isolation, and it can be.
+    // Nothing of this machine is greyed: it is started when a computer is added.
     const unit = (await units.units({})).units.find((one) => one.id === "computer");
-    assert.equal((form(unit, "service") as { default?: unknown }).default, "local");
-    assert.match(
-      form(unit, "service")?.options?.[0]?.description ?? "",
-      /started when you add this computer\. No isolation/,
-    );
+    assert.equal(form(unit, "kind")?.options?.[0]?.unavailable, undefined);
     assert.deepEqual(
       (await units.check({ unit: "computer", values: local("read"), secrets: [] })).problems,
       [],
@@ -338,14 +440,14 @@ test("with AgentComputer installed and none running, adding a computer starts it
     assert.equal(existsSync(join(data, "server.json")), false, "nothing is started by reading");
     const { instance } = await apply(local("read"));
     await connected(instance);
-    // Its computer has no isolation, as the form said.
+    // It is this computer, attached.
     const reached = {
       apiUrl: JSON.parse(readFileSync(join(data, "server.json"), "utf8")).url as string,
       apiKey: readFileSync(join(data, "control-token"), "utf8").trim(),
     };
     assert.deepEqual(
-      (await Computer.list(reached)).map((one) => one.isolation),
-      ["none"],
+      (await Computer.list(reached)).map((one) => [one.isolation, one.attached]),
+      [["none", true]],
     );
     // Gone, the service is started again when the connector starts, and its computer is back.
     await down();
@@ -357,29 +459,29 @@ test("with AgentComputer installed and none running, adding a computer starts it
   }
 });
 
-test("the service is started again isolated as it was when it last answered here", async (t) => {
+test("the service is started with no isolation asked of it, and one older than this build is said to need an update", async (t) => {
   // An install whose start fails, saying why, after noting what it was asked.
   const bin = realpathSync(mkdtempSync(join(tmpdir(), "agentorg-bin-")));
   t.after(() => rmSync(bin, { recursive: true, force: true }));
   const asked = join(bin, "asked");
   writeFileSync(
     join(bin, "agentcomputer"),
-    `#!/bin/sh\necho "$@" >> "${asked}"\necho "Docker isn't answering." >&2\nexit 1\n`,
+    `#!/bin/sh\necho "$@" >> "${asked}"\necho "It couldn't start." >&2\nexit 1\n`,
     { mode: 0o755 },
   );
-  const { units, apply, local, restart, data } = await setup(t, { service: false, path: bin });
-  const line = async () =>
+  const { units, apply, local, data } = await setup(t, { service: false, path: bin });
+  const why = async () =>
     form(
       (await units.units({})).units.find((one) => one.id === "computer"),
-      "service",
-    )?.options?.[0]?.description ?? "";
-  // A service answers here, with its computers in containers.
-  const fake = createServer((_, response) => {
+      "kind",
+    )?.options?.[0]?.unavailable;
+  // A service answers here as one before this build did, saying only how it isolates.
+  const old = createServer((_, response) => {
     response.setHeader("content-type", "application/json");
-    response.end(JSON.stringify({ version: "0.0.16", isolation: "container" }));
+    response.end(JSON.stringify({ version: "0.0.18", isolation: "none" }));
   });
-  await new Promise<void>((resolve) => fake.listen(0, "127.0.0.1", resolve));
-  t.after(() => fake.close());
+  await new Promise<void>((resolve) => old.listen(0, "127.0.0.1", resolve));
+  t.after(() => old.close());
   // A live pid, so the record isn't taken for a crashed service's.
   const alive = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60_000)"]);
   t.after(() => alive.kill());
@@ -387,26 +489,19 @@ test("the service is started again isolated as it was when it last answered here
   writeFileSync(
     join(data, "server.json"),
     JSON.stringify({
-      url: `http://127.0.0.1:${(fake.address() as AddressInfo).port}`,
+      url: `http://127.0.0.1:${(old.address() as AddressInfo).port}`,
       pid: alive.pid,
-      isolation: "container",
     }),
   );
   writeFileSync(join(data, "control-token"), "token");
-  assert.match(
-    await line(),
-    /^On this computer, by AgentComputer\. Each agent's computer is a container/,
-  );
-  // Gone, the form says it starts in containers, and adding a computer asks for them.
-  await new Promise((resolve) => fake.close(resolve));
+  assert.match((await why()) ?? "", /older than this AgentOrg needs.*npm install -g/);
+  await assert.rejects(apply(local("read")), /older than this AgentOrg needs/);
+  // Gone, adding a computer starts one, asking for no isolation: the service's own is used.
+  await new Promise((resolve) => old.close(resolve));
   rmSync(join(data, "server.json"));
-  const again = /started when you add this computer\. Each agent's computer is a container/;
-  assert.match(await line(), again);
-  await assert.rejects(apply(local("read")), /Docker isn't answering/);
-  assert.equal(readFileSync(asked, "utf8"), `up --data ${data} --isolation container\n`);
-  // And so after the connector starts again.
-  await restart();
-  assert.match(await line(), again);
+  assert.equal(await why(), undefined);
+  await assert.rejects(apply(local("read")), /It couldn't start/);
+  assert.equal(readFileSync(asked, "utf8"), `up --data ${data}\n`);
 });
 
 test("check says what's wrong by field, and changes nothing", async (t) => {
@@ -415,13 +510,17 @@ test("check says what's wrong by field, and changes nothing", async (t) => {
     (await units.check({ unit: "computer", values: values as never, secrets })).problems.map(
       (one) => one.field,
     );
-  assert.deepEqual(await fields({ service: "local", access: "terminal" }), []);
-  assert.deepEqual(await fields({ service: "local", access: "none" }), ["access"]);
-  assert.deepEqual(await fields({ service: "local", access: "none", browser: true }), []);
+  assert.deepEqual(await fields({ kind: "this", access: "terminal" }), []);
+  assert.deepEqual(await fields({ kind: "this", access: "none" }), ["access"]);
+  // A browser of its own is a made computer's.
+  assert.deepEqual(await fields({ kind: "this", access: "none", browser: true }), ["access"]);
+  assert.deepEqual(
+    await fields({ kind: "new", made: "container", access: "none", browser: true }),
+    [],
+  );
   // A folder that isn't there yet will do: it is made with the computer. A path that isn't a
   // full one, and one where something that isn't a folder is, won't.
-  const typed = (folder: string) =>
-    fields({ service: "local", access: "terminal", workspace: folder });
+  const typed = (folder: string) => fields({ kind: "this", access: "terminal", workspace: folder });
   assert.deepEqual(await typed(join(root, "not", "yet")), []);
   assert.ok(!existsSync(join(root, "not")), "checking makes nothing");
   assert.deepEqual(await typed("not/a/full/path"), ["workspace"]);
@@ -438,8 +537,11 @@ test("check says what's wrong by field, and changes nothing", async (t) => {
   ])
     assert.deepEqual(await typed(folder), ["workspace"], folder);
   assert.deepEqual(await typed(join(root, "closed")), [], "a folder that is there will do");
-  assert.deepEqual(await fields({ service: "other", access: "read" }), ["service"]);
-  const away = { service: "another", access: "read" };
+  // How it's made defaults to a container.
+  assert.deepEqual(await fields({ kind: "new", access: "read" }), []);
+  assert.deepEqual(await fields({ kind: "other", access: "read" }), ["kind"]);
+  assert.deepEqual(await fields({ kind: "new", made: "elsewhere", access: "read" }), ["made"]);
+  const away = { kind: "new", made: "remote", access: "read" };
   assert.deepEqual(await fields({ ...away, address: "not an address" }, ["token"]), ["address"]);
   assert.deepEqual(await fields({ ...away, address: "http://far.example/" }, ["token"]), [
     "address",
@@ -460,7 +562,7 @@ test("on a real service, an agent runs a command, lists it and edits a file, thr
     connections.map((one) => one.slot),
     ["computer"],
   );
-  assert.match(connections[0]?.target ?? "", /this computer, no isolation: files and terminal/);
+  assert.match(connections[0]?.target ?? "", /This computer, as you: files and terminal/);
   await connected(instance);
   const computer = await asAgent(connections[0]?.connection as string);
   const ran = await computer.call({
@@ -498,7 +600,10 @@ test("access goes to the service: a read-only computer can't change or run anyth
   await units.remove({ instance });
 });
 
-test("on a real service, an agent reads a page with its browser", async (t) => {
+test("on a real service, an agent reads a page with its browser, in a container of its own", {
+  skip: !IMAGE && "a container needs AGENTCOMPUTER_TEST_IMAGE",
+  timeout: 180_000,
+}, async (t) => {
   const page = createServer((_, response) => {
     response.setHeader("content-type", "text/html");
     response.end("<title>A page</title><p>Words only a browser could fetch.</p>");
@@ -507,8 +612,13 @@ test("on a real service, an agent reads a page with its browser", async (t) => {
   await once(page, "listening");
   t.after(() => page.close());
   const { port } = page.address() as AddressInfo;
-  const { apply, local, asAgent, connected, units, running } = await setup(t);
-  const { instance, connections } = await apply(local("none", { browser: true }));
+  const { apply, asAgent, connected, units, running } = await setup(t);
+  const { instance, connections } = await apply({
+    kind: "new",
+    made: "container",
+    access: "none",
+    browser: true,
+  });
   assert.deepEqual(
     connections.map((one) => one.slot),
     ["browser"],
@@ -537,13 +647,13 @@ test("on a real service, an agent reads a page with its browser", async (t) => {
   assert.match(`${opened.output}${seen.output}`, /Words only a browser could fetch/);
   await units.remove({ instance });
   // The service is still there for the next one.
-  assert.equal((await Computer.serviceInfo(running as Service)).isolation, "none");
+  assert.equal((await Computer.serviceInfo(running as Service)).thisComputer.ready, true);
 });
 
 test("a typed workspace folder that is missing is made; one that can't be made is refused and leaves no computer", async (t) => {
   const { apply, root, workspace, running, dir } = await setup(t);
   const folder = join(root, "deep", "er", "work");
-  const made = await apply({ service: "local", access: "files", workspace: folder });
+  const made = await apply({ kind: "this", access: "files", workspace: folder });
   assert.ok(statSync(folder).isDirectory());
   const kept = JSON.parse(readFileSync(join(dir, "instances.json"), "utf8"));
   const info = await Computer.getInfo(kept[made.instance].computer.id, running as Service);
@@ -551,55 +661,66 @@ test("a typed workspace folder that is missing is made; one that can't be made i
   // Under a file nothing can be made.
   const before = (await Computer.list(running as Service)).length;
   await assert.rejects(
-    apply({ service: "local", access: "files", workspace: join(workspace, "seen.txt", "under") }),
+    apply({ kind: "this", access: "files", workspace: join(workspace, "seen.txt", "under") }),
     (error: Error & { code?: string }) =>
       error.code === "invalid" && /can't be made/.test(error.message),
   );
   assert.equal((await Computer.list(running as Service)).length, before);
 });
 
-test("removing kills the computer: a named folder stays, one the service made goes", async (t) => {
-  const { apply, local, connected, workspace, units, running, dir } = await setup(t);
+test("removing detaches this computer: the service forgets it, and its folder stays", async (t) => {
+  const { apply, local, connected, workspace, units, running, dir, root } = await setup(t);
   const reached = running as Service;
   const named = await apply(local("terminal"));
-  const made = await apply({ service: "local", access: "files" });
+  // With no folder named, its work happens in one with its name.
+  const unnamed = await apply({ kind: "this", access: "files" });
   await connected(named.instance);
   const kept = JSON.parse(readFileSync(join(dir, "instances.json"), "utf8"));
   const idOf = (instance: string) => kept[instance].computer.id as string;
-  const [namedId, madeId] = [idOf(named.instance), idOf(made.instance)];
-  const folder = (await Computer.getInfo(madeId, reached)).workspace as string;
-  assert.ok(statSync(folder).isDirectory());
-  assert.ok(made.connections[0]?.target.endsWith(`in ${folder}`), "so the person can find it");
+  const [namedId, unnamedId] = [idOf(named.instance), idOf(unnamed.instance)];
+  const folder = join(root, "Agents", "Scout's computer");
+  assert.equal((await Computer.getInfo(unnamedId, reached)).workspace, folder);
+  assert.ok(unnamed.connections[0]?.target.endsWith(`in ${folder}`), "so the person can find it");
   assert.ok(named.connections[0]?.target.endsWith(`in ${workspace}`));
 
   await units.remove({ instance: named.instance });
-  await units.remove({ instance: made.instance });
-  for (const id of [namedId, madeId])
+  await units.remove({ instance: unnamed.instance });
+  for (const id of [namedId, unnamedId])
     await assert.rejects(Computer.getInfo(id, reached), /no computer/);
   assert.equal(readFileSync(join(workspace, "seen.txt"), "utf8"), "the person's file\n");
-  assert.equal(existsSync(folder), false);
+  assert.ok(statSync(folder).isDirectory());
   await assert.rejects(units.status({ instance: named.instance }), refused("unknown"));
 });
 
-test("another address is reached with its token, which stays in the private file", async (t) => {
-  const { apply, units, connected, running, dir, hub, workspace } = await setup(t);
-  const reached = running as Service;
-  const away = { service: "another", address: reached.apiUrl, access: "terminal", path: workspace };
-  const { instance, connections } = await apply(away, { token: reached.apiKey });
-  await connected(instance);
+test("a computer at another address is made there with its token, which stays in the private file", async (t) => {
+  const { apply, units, dir, hub } = await setup(t, { service: false });
+  const there = await standIn(t);
+  const away = {
+    kind: "new",
+    made: "remote",
+    address: there.apiUrl,
+    access: "terminal",
+    path: "/work",
+  };
+  const { instance, connections } = await apply(away, { token: there.apiKey });
+  // Made there as that service makes them: nothing asks it how.
+  const made = there.asked.find((one) => one.method === "POST" && one.path === "/v1/computers");
+  assert.equal(made?.token, there.apiKey);
+  assert.equal(made?.body?.isolation, undefined);
+  assert.equal(made?.body?.workspace, "/work");
+  assert.match(connections[0]?.target ?? "", /^127\.0\.0\.1:\d+: files and terminal in \/work$/);
   const status = await units.status({ instance });
   const file = readFileSync(join(dir, "instances.json"), "utf8");
-  assert.ok(file.includes(reached.apiKey), "kept to reach it again");
+  assert.ok(file.includes(there.apiKey), "kept to reach it again");
   assert.equal(statSync(dir).mode & 0o777, 0o700);
   for (const seen of [
     JSON.stringify(status),
     JSON.stringify(connections),
     JSON.stringify(hub.state.audit(0, 100_000)),
   ])
-    assert.ok(!seen.includes(reached.apiKey));
-  const before = (await Computer.list(reached)).length;
+    assert.ok(!seen.includes(there.apiKey));
   await units.remove({ instance });
-  assert.equal((await Computer.list(reached)).length, before - 1);
+  assert.equal(there.computers.size, 0);
 
   // A wrong token makes nothing.
   const actors = hub.state.actors().length;
@@ -608,32 +729,241 @@ test("another address is reached with its token, which stays in the private file
 });
 
 test("endpoints are at the address given, whatever the service calls itself", async (t) => {
-  const { apply, connected, dir, running, units, workspace } = await setup(t);
-  const reached = running as Service;
-  const { port } = new URL(reached.apiUrl);
+  const { apply, dir, units } = await setup(t, { service: false });
+  const there = await standIn(t);
+  const { port } = new URL(there.apiUrl);
   const { instance } = await apply(
-    {
-      service: "another",
-      address: `http://localhost:${port}`,
-      access: "terminal",
-      path: workspace,
-    },
-    { token: reached.apiKey },
+    { kind: "new", made: "remote", address: `http://localhost:${port}`, access: "terminal" },
+    { token: there.apiKey },
   );
-  await connected(instance);
   const kept = JSON.parse(readFileSync(join(dir, "instances.json"), "utf8"));
   assert.match(kept[instance].links[0].url, new RegExp(`^http://localhost:${port}/`));
   // So is a live session's socket.
-  const status = await units.status({ instance });
-  assert.ok(status.surfaces?.some((one) => one.surface === "terminal"));
   const ticket = await units.live({ instance, surface: "terminal", mode: "watch" });
   assert.match(ticket.url, new RegExp(`^ws://localhost:${port}/`));
-  assert.equal(ticket.protocol, "terminal@1");
-  await assert.rejects(
-    units.live({ instance, surface: "nothing", mode: "watch" }),
-    refused("unknown"),
-  );
   await units.remove({ instance });
+});
+
+test("a new computer here is a container with a workspace of its own, and no folder of yours", async (t) => {
+  const { units, dir, data } = await setup(t, { service: false });
+  // The service here, as the stand-in, recorded where the connector looks for it.
+  const here = await standIn(t);
+  const alive = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60_000)"]);
+  t.after(() => alive.kill());
+  mkdirSync(data, { recursive: true });
+  writeFileSync(join(data, "server.json"), JSON.stringify({ url: here.apiUrl, pid: alive.pid }));
+  writeFileSync(join(data, "control-token"), here.apiKey);
+  const made = await units.apply({
+    unit: "computer",
+    values: { kind: "new", made: "container", access: "files", browser: true },
+    secrets: {},
+    needs: {},
+    agent: "act_agent",
+    name: "Docs' computer",
+  });
+  const asked = here.asked.find((one) => one.method === "POST" && one.path === "/v1/computers");
+  assert.deepEqual(
+    [asked?.body?.isolation, asked?.body?.workspace, asked?.body?.copyFrom, asked?.body?.browser],
+    ["container", undefined, undefined, true],
+  );
+  assert.deepEqual(
+    made.connections.map((one) => [one.slot, one.target]),
+    [
+      ["computer", "A container on this machine: reads and changes files"],
+      ["browser", "A browser, A container on this machine"],
+    ],
+  );
+  assert.deepEqual(made.capability?.rows, {
+    where: [{ label: "Computer", value: "A container on this machine" }],
+    workspace: [
+      { label: "Reaches", value: "Files" },
+      { label: "Browser", value: "Its own browser" },
+    ],
+  });
+  assert.ok(JSON.parse(readFileSync(join(dir, "instances.json"), "utf8"))[made.instance]);
+});
+
+test("a computer an earlier version made with no isolation isn't started: its capability says the two ways on, and removing it keeps its folder", async (t) => {
+  const bin = realpathSync(mkdtempSync(join(tmpdir(), "agentorg-bin-")));
+  t.after(() => rmSync(bin, { recursive: true, force: true }));
+  writeFileSync(join(bin, "agentcomputer"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+  const { hub, units, asPerson, restart, data, dir, root } = await setup(t, {
+    service: false,
+    path: bin,
+  });
+  const kept = join(root, "Agents", "Support");
+  mkdirSync(kept, { recursive: true });
+  // As 0.0.18 made it, and as the service now says of it: no isolation, not attached.
+  const here = await standIn(t, {
+    old: {
+      computerID: "old",
+      name: "Support's computer",
+      state: "failed",
+      access: "files",
+      isolation: "none",
+      attached: false,
+      browser: true,
+      workspace: kept,
+      metadata: { agent: "act_support" },
+      surfaces: [],
+      endpoints: { computer: "http://127.0.0.1:9/mcp" },
+    },
+  });
+  const alive = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60_000)"]);
+  t.after(() => alive.kill());
+  mkdirSync(data, { recursive: true });
+  writeFileSync(join(data, "server.json"), JSON.stringify({ url: here.apiUrl, pid: alive.pid }));
+  writeFileSync(join(data, "control-token"), here.apiKey);
+  // Kept here as the connector kept it then.
+  const link = hub.state.createActor(PERSON, { name: "Support's computer" });
+  const windows = hub.state.createActor(PERSON, { name: "Support's computer (windows)" });
+  writeFileSync(
+    join(dir, "instances.json"),
+    JSON.stringify({
+      computer_old: {
+        agent: "act_support",
+        links: [
+          {
+            slot: "computer",
+            actor: link.actorId,
+            credential: link.credential,
+            url: "http://127.0.0.1:9/mcp",
+          },
+        ],
+        capability: { actor: windows.actorId, credential: windows.credential },
+        computer: { id: "old", token: "its-own-token", service: { local: true } },
+      },
+    }),
+  );
+  await restart();
+  const held = await asPerson(windows.actorId);
+  const state = await held.call.state({});
+  assert.equal(state.state, "down");
+  assert.equal(
+    state.detail,
+    `A computer with no isolation is no longer made. Its folder is kept at ${kept}. Either way, its own browser and what it was signed in to aren't kept.`,
+  );
+  assert.deepEqual(state.surfaces, []);
+  assert.deepEqual(state.ways, [
+    {
+      title: "Attach this computer",
+      description: `Its work happens in ${kept}, as before. Unlike before, it reaches the whole machine, as you.`,
+      unit: "computer",
+      values: { kind: "this", access: "files", workspace: kept },
+    },
+    {
+      title: "Make a container",
+      description: `Its workspace starts with what's in ${kept}.`,
+      unit: "computer",
+      values: { kind: "new", made: "container", access: "files", browser: true },
+    },
+  ]);
+  // Nothing of it is reached: its unit's status says the same, and nothing of it opens.
+  const status = await units.status({ instance: "computer_old" });
+  assert.equal(status.state, "down");
+  assert.deepEqual(status.surfaces, []);
+  await assert.rejects(held.call.live({ surface: "files", mode: "watch" }), refused("state"));
+  assert.ok(!here.asked.some((one) => one.path.endsWith("/live")));
+  // Removing it is the first step either way: the service forgets it, and keeps its folder.
+  await units.remove({ instance: "computer_old" });
+  assert.equal(here.computers.size, 0);
+  assert.deepEqual(JSON.parse(readFileSync(join(dir, "instances.json"), "utf8")), {});
+  // The agent's next computer, as a container, starts with what's in it, and only that one.
+  const next = () =>
+    units.apply({
+      unit: "computer",
+      values: { kind: "new", made: "container", access: "files", browser: true },
+      secrets: {},
+      needs: {},
+      agent: "act_support",
+      name: "Support's computer",
+    });
+  await next();
+  await next();
+  const copies = here.asked
+    .filter((one) => one.method === "POST" && one.path === "/v1/computers")
+    .map((one) => one.body?.copyFrom);
+  assert.deepEqual(copies, [kept, undefined]);
+  // A folder kept from before that is gone since is forgotten, and the container is made empty.
+  writeFileSync(
+    join(dir, "earlier-folders.json"),
+    JSON.stringify({ act_gone: join(root, "gone") }),
+  );
+  await restart();
+  await units.apply({
+    unit: "computer",
+    values: { kind: "new", made: "container", access: "files", browser: false },
+    secrets: {},
+    needs: {},
+    agent: "act_gone",
+    name: "Gone's computer",
+  });
+  const last = here.asked.filter((one) => one.method === "POST" && one.path === "/v1/computers");
+  assert.equal(last.at(-1)?.body?.copyFrom, undefined);
+  assert.deepEqual(JSON.parse(readFileSync(join(dir, "earlier-folders.json"), "utf8")), {});
+});
+
+test("a computer the service says is from before, found only once it is read, is ended and says the ways on", async (t) => {
+  const { hub, asPerson, restart, data, dir } = await setup(t, { service: false });
+  const here = await standIn(t, {
+    late: {
+      computerID: "late",
+      name: "Late's computer",
+      state: "running",
+      access: "read",
+      isolation: "container",
+      attached: false,
+      browser: false,
+      workspace: "/Users/someone/Agents/Late",
+      metadata: { agent: "act_late" },
+      surfaces: [],
+      endpoints: { computer: "http://127.0.0.1:9/mcp" },
+    },
+  });
+  const alive = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60_000)"]);
+  t.after(() => alive.kill());
+  mkdirSync(data, { recursive: true });
+  writeFileSync(join(data, "server.json"), JSON.stringify({ url: here.apiUrl, pid: alive.pid }));
+  writeFileSync(join(data, "control-token"), here.apiKey);
+  const link = hub.state.createActor(PERSON, { name: "Late's computer" });
+  const windows = hub.state.createActor(PERSON, { name: "Late's computer (windows)" });
+  writeFileSync(
+    join(dir, "instances.json"),
+    JSON.stringify({
+      computer_late: {
+        agent: "act_late",
+        links: [
+          {
+            slot: "computer",
+            actor: link.actorId,
+            credential: link.credential,
+            url: "http://127.0.0.1:9/mcp",
+          },
+        ],
+        capability: { actor: windows.actorId, credential: windows.credential },
+        computer: { id: "late", token: "its-own-token", service: { local: true } },
+      },
+    }),
+  );
+  // With no `agentcomputer` here, nothing is looked at as the connector starts: it is opened.
+  await restart();
+  await until(() => hub.connected(link.actorId));
+  const held = await asPerson(windows.actorId);
+  let changed = 0;
+  held.on("changed", () => void changed++);
+  // The service is updated meanwhile, and now says it is from before.
+  Object.assign(here.computers.get("late") as object, { isolation: "none" });
+  await until(async () => (await held.call.state({})).state === "down");
+  assert.ok(changed > 0, "the person is told");
+  assert.match(
+    (await held.call.state({})).detail ?? "",
+    /Its folder is kept at \/Users\/someone\/Agents\/Late\./,
+  );
+  await until(() => !hub.connected(link.actorId));
+  assert.deepEqual(
+    (await held.call.state({})).ways?.map((one) => one.title),
+    ["Attach this computer", "Make a container"],
+  );
 });
 
 test("an agent with no folder named works in one with its name, which stays", async (t) => {
@@ -647,7 +977,7 @@ test("an agent with no folder named works in one with its name, which stays", as
   const make = (agentName?: string) =>
     units.apply({
       unit: "computer",
-      values: { service: "local", access: "files" },
+      values: { kind: "this", access: "files" },
       secrets: {},
       needs: {},
       agent: "act_agent",
@@ -664,10 +994,10 @@ test("an agent with no folder named works in one with its name, which stays", as
   );
   await units.remove({ instance });
   assert.ok(existsSync(folder));
-  // An agent's own child gets no name to go by, and a folder the service makes.
+  // An agent's own child gets no name to go by: its folder has its computer's.
   const child = await make();
   const [made] = await Computer.list(reached);
-  assert.ok(!made?.workspace?.startsWith(join(root, "Agents")));
+  assert.equal(made?.workspace, join(root, "Agents", "Its computer"));
   await units.remove({ instance: child.instance });
   // A name that would be somewhere else stays a folder in there.
   for (const odd of [" ..", " ."]) {
@@ -685,11 +1015,11 @@ test("a service that crashed isn't found, and its port gets no token", async (t)
   mkdirSync(join(root, "service"), { recursive: true });
   writeFileSync(
     join(root, "service", "server.json"),
-    JSON.stringify({ url: "http://127.0.0.1:9", pid: 999_999, isolation: "none" }),
+    JSON.stringify({ url: "http://127.0.0.1:9", pid: 999_999 }),
   );
   writeFileSync(join(root, "service", "control-token"), "stale\n");
   const unit = (await units.units({})).units.find((one) => one.id === "computer");
-  assert.match(form(unit, "service")?.options?.[0]?.description ?? "", /npm install -g/);
+  assert.match(form(unit, "kind")?.options?.[0]?.unavailable ?? "", /npm install -g/);
 });
 
 test("a computer whose Actors are gone is killed, not forgotten", async (t) => {
@@ -718,15 +1048,14 @@ test("a computer whose capability's Actor is gone is killed and forgotten, with 
 });
 
 test("an agent can go even when its service no longer takes the token", async (t) => {
-  const { apply, connected, dir, running, restart, units, workspace } = await setup(t);
-  const reached = running as Service;
+  const { apply, dir, restart, units } = await setup(t, { service: false });
+  const there = await standIn(t);
   const { instance } = await apply(
-    { service: "another", address: reached.apiUrl, access: "read", path: workspace },
-    { token: reached.apiKey },
+    { kind: "new", made: "remote", address: there.apiUrl, access: "read" },
+    { token: there.apiKey },
   );
-  await connected(instance);
   const file = join(dir, "instances.json");
-  writeFileSync(file, readFileSync(file, "utf8").replaceAll(reached.apiKey, "rotated"));
+  writeFileSync(file, readFileSync(file, "utf8").replaceAll(there.apiKey, "rotated"));
   await restart();
   await units.remove({ instance });
   await assert.rejects(units.status({ instance }), refused("unknown"));
@@ -782,10 +1111,12 @@ test("a computer's capability is an Actor of its own: its fixed rows, how it sta
   const made = await apply(local("terminal"));
   // What the person reads beside its windows is fixed as it is made.
   assert.deepEqual(made.capability?.rows, {
-    where: [{ label: "Where", value: "This computer" }],
+    where: [{ label: "Computer", value: "This computer" }],
     workspace: [
-      { label: "Folder", value: workspace, path: true },
+      { label: "Acts as", value: "You, with all you can reach", caution: true },
+      { label: "Its work happens in", value: workspace, path: true },
       { label: "Reaches", value: "Files and terminal" },
+      { label: "Browser", value: "None" },
     ],
   });
   const actor = made.capability?.actor as string;
@@ -810,15 +1141,14 @@ test("a computer's capability is an Actor of its own: its fixed rows, how it sta
   assert.match(ticket.url, /^ws:\/\/127\.0\.0\.1:/);
   await assert.rejects(held.call.live({ surface: "nothing", mode: "watch" }), refused("unknown"));
 
-  // How it is isolated is the agent's own tool's to say, which the person's view names.
+  // That it acts as the person is the agent's own tool's to say too.
   const computer = await asAgent(made.connections[0]?.connection as string);
   const about = JSON.parse((await computer.call({ name: "about", arguments: {} })).output) as {
     rows: { label: string; value: string; caution?: true }[];
   };
-  assert.deepEqual(
-    about.rows.find((row) => row.label === "Isolation"),
-    { label: "Isolation", value: "None: it acts as you", caution: true },
-  );
+  const isolation = about.rows.find((row) => row.label === "Isolation");
+  assert.match(isolation?.value ?? "", /acts as you/);
+  assert.equal(isolation?.caution, true);
 
   // After the provider has been away the Actor is there again, and says its state changed
   // when its connection came back.
@@ -838,19 +1168,19 @@ test("a computer's capability is an Actor of its own: its fixed rows, how it sta
   );
 });
 
-test("a computer's rows say a browser beside what it reaches, and a browser alone", async (t) => {
-  const { apply, local, units } = await setup(t);
-  const both = await apply(local("files", { browser: true }));
-  assert.deepEqual(both.capability?.rows?.workspace?.at(-1), {
-    label: "Reaches",
-    value: "Files, Browser",
-  });
+test("a computer's rows say its browser apart from what it reaches, and a browser alone", async (t) => {
+  const { apply, units } = await setup(t, { service: false });
+  const there = await standIn(t);
+  const away = { kind: "new", made: "remote", address: there.apiUrl };
+  const both = await apply({ ...away, access: "files", browser: true }, { token: there.apiKey });
+  assert.deepEqual(both.capability?.rows?.workspace?.slice(-2), [
+    { label: "Reaches", value: "Files" },
+    { label: "Browser", value: "Its own browser" },
+  ]);
   await units.remove({ instance: both.instance });
-  const alone = await apply({ service: "local", access: "none", browser: true });
+  const alone = await apply({ ...away, access: "none", browser: true }, { token: there.apiKey });
   assert.deepEqual(
-    alone.capability?.rows?.workspace
-      ?.map((row) => row.label === "Reaches" && row.value)
-      .filter(Boolean),
+    alone.capability?.rows?.workspace?.map((row) => row.label),
     ["Browser"],
   );
   await units.remove({ instance: alone.instance });

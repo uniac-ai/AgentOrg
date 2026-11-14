@@ -32,8 +32,9 @@ import {
 import { defineInterface, type Interface, method, Refused, type Slot } from "@agentorg/sdk";
 import { connect } from "@agentorg/sdk/client";
 import { z } from "zod";
-import { SKILL_SHIPPED, skillFile } from "../src/control.ts";
+import { reachOf, SKILL_SHIPPED, skillFile } from "../src/control.ts";
 import { startManager } from "../src/index.ts";
+import { AgentRecord } from "../src/stack.ts";
 
 const until = async (condition: () => boolean, ms = 15_000) => {
   for (let waited = 0; !condition(); waited += 10) {
@@ -216,7 +217,8 @@ const UNITS = [
     title: "Computer",
     description: "A computer to share.",
     form: [
-      { id: "service", type: "text", value: "string", title: "Service" },
+      { id: "kind", type: "text", value: "string", title: "Which computer" },
+      { id: "made", type: "text", value: "string", title: "Made as" },
       {
         id: "access",
         authority: "setting",
@@ -2493,6 +2495,23 @@ test("a template whose option can't be had now stays offered, and creating from 
   assert.match(tried.output, /Where: Here is down for now\./);
 });
 
+test("a computer shared with a child is on this machine as it was kept, before this version too", () => {
+  const kept = (computer: object) =>
+    reachOf(
+      AgentRecord.parse({
+        provider: "act_p",
+        creatable: "plain",
+        instructions: "",
+        skills: [],
+        computer: { access: "files", browser: false, connections: [], skills: [], ...computer },
+      }) as never,
+    ).here;
+  assert.equal(kept({ here: true }), true, "kept across a restart");
+  assert.equal(kept({ service: "local" }), true, "as an earlier version kept it");
+  assert.equal(kept({ service: "another" }), undefined);
+  assert.equal(kept({}), undefined);
+});
+
 test("a place means nothing on a template with no computer", async (t) => {
   const s = await delegating(t);
   const { tools } = await s.parent(
@@ -2590,11 +2609,11 @@ test("a computer no longer held can't be shared", async (t) => {
   assert.ok(!(await s.names(tools)).includes("create_worker"), "it has nothing left to share");
 });
 
-test("a new computer is on its parent's service, and within its bounds", async (t) => {
+test("a new computer is a container on its parent's machine, and within its bounds", async (t) => {
   const s = await delegating(t);
   const { agent: parent, tools } = await s.parent(
     { templates: ["worker"], places: ["new"], access: "files", browser: false },
-    { service: "local", access: "terminal", browser: true },
+    { kind: "this", access: "terminal", browser: true },
   );
   const schema = (await tools.list({})).tools[0]?.inputSchema as never as {
     properties: {
@@ -2604,13 +2623,18 @@ test("a new computer is on its parent's service, and within its bounds", async (
   };
   assert.deepEqual(schema.properties.place.enum, ["new"]);
   const form = schema.properties.units.properties.computer.properties;
-  assert.deepEqual(Object.keys(form), ["access"], "no service, folder or browser to choose");
+  assert.deepEqual(Object.keys(form), ["access"], "no computer, folder or browser to choose");
   assert.deepEqual(form.access?.enum, ["none", "read", "files"]);
 
   const child = await s.made(tools, "create_worker", { name: "N", purpose: "P.", place: "new" });
   const applied = s.given.applied.find((one) => one.agent === child);
   // The template says terminal, and the bound brings it down.
-  assert.deepEqual(applied?.values, { service: "local", access: "files", browser: false });
+  assert.deepEqual(applied?.values, {
+    kind: "new",
+    made: "container",
+    access: "files",
+    browser: false,
+  });
   const own = (await s.calls.agents.get({ agent: parent })).mcp[0]?.connection;
   assert.notEqual((await s.calls.agents.get({ agent: child })).mcp[0]?.connection, own);
 
@@ -2624,7 +2648,7 @@ test("a new computer is on its parent's service, and within its bounds", async (
   };
   await beyond({ access: "terminal" }, /options/);
   await beyond({ browser: true }, /browser/);
-  await beyond({ service: "another" }, /no field service/);
+  await beyond({ made: "remote" }, /no field made/);
   await beyond({ workspace: "/etc" }, /no field workspace/);
 
   // Its computer as it is now, not as it was when the unit was filled in.
@@ -2633,7 +2657,7 @@ test("a new computer is on its parent's service, and within its bounds", async (
   await s.calls.agents.removeUnit({ agent: parent, instance: computer?.instance as string });
   await s.calls.agents.addUnit({
     agent: parent,
-    unit: s.unit("computer", { service: "local", access: "read" }),
+    unit: s.unit("computer", { kind: "new", made: "container", access: "read" }),
   } as never);
   await beyond({ access: "files" }, /options/);
   const lowered = (await tools.list({})).tools[0]?.inputSchema as never as {
@@ -2646,10 +2670,10 @@ test("a new computer is on its parent's service, and within its bounds", async (
     "read",
   ]);
 
-  // Only on a service here: the token for one elsewhere can't pass through an agent.
+  // Only on this machine: the token for a service elsewhere can't pass through an agent.
   const away = await s.parent(
     { templates: ["worker"], places: ["new"], access: "files" },
-    { service: "another", access: "terminal" },
+    { kind: "new", made: "remote", access: "terminal" },
     "Away",
   );
   assert.ok(!(await s.names(away.tools)).includes("create_worker"));

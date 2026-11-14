@@ -23,10 +23,8 @@ const COMPUTER = "computer";
 const URL_KIND = "url";
 /** The place that is the parent's own computer; every other place is a connection's id. */
 const OWN = "own";
-/** A new computer for the child, on the service its parent's computer runs on. */
+/** A new computer for the child: a container on this machine, as its parent's computer is here. */
 const NEW = "new";
-/** The only service a child's computer can go on: elsewhere needs a token no agent may pass on. */
-const LOCAL_SERVICE = "local";
 const LEVELS = ["none", "read", "files", "terminal"];
 
 /** How many agents one agent may have alive at once, at most and unless the person says. */
@@ -57,7 +55,7 @@ There is one create tool per template you may use. Read its description and fiel
 If a template you expected has no create tool, or you have none, tell the person why, using the titles in bold and quotes. In your AgentOrg control unit, in your Setup:
 - **Agents** is "None".
 - **Templates** doesn't tick it.
-- **Places**, for a template with a computer: nothing you can use is ticked. "Its own computer" needs the computer you hold now, **Most a computer can do** at least what it reaches, and **A computer can have a browser** on if it has one. "A new computer on the same service" needs your computer's **Where it resides** to be "This computer". A computer the person connected, ticked there, can always be used.
+- **Places**, for a template with a computer: nothing you can use is ticked. "Its own computer" needs the computer you hold now, **Most a computer can do** at least what it reaches, and **A computer can have a browser** on if it has one. "A new computer on this machine" needs your computer to be on this machine: this computer, or a container here. A computer the person connected, ticked there, can always be used.
 - **Levels below it** is 1, for a template whose agents get an AgentOrg control unit.
 
 Otherwise it is the template: a unit's provider isn't connected, or a unit lacks an answer you can't give. The person fills that in on the template. A token can't be kept in a template, so the person creates that agent themselves.
@@ -92,6 +90,7 @@ export const SKILL_SHIPPED = [
   "8b199ea52a14241b9c0345190a40bebf4bc4150186a2eb6e737792dea8a95850",
   "c8398d20782eae4c52bb043f03385d8b219883a572c8aade8b53c82e8ca7272b",
   "dc702fb7e319e148a0ec617af453f29d70b3717654f10096f87f9e623b20cfb4",
+  "6971b805763a0aec8d900c0cd099c9d6e278af0a4138bdd398c4cd935aaed5e1",
 ];
 /** The sha256 of each earlier text of a file of the skill, so a copy of one is told from an edit. */
 export const skillShipped = (path: string) => {
@@ -203,7 +202,7 @@ export function agentsUnit(
         description: "Where its agents can work, when their template has a computer.",
         options: [
           { value: OWN, title: "Its own computer" },
-          { value: NEW, title: "A new computer on the same service" },
+          { value: NEW, title: "A new computer on this machine" },
           ...places,
         ],
       },
@@ -264,21 +263,38 @@ export interface Reach {
   browser: boolean;
   connections: { slot: string; connection: string }[];
   skills: string[];
-  /** Which service it is on, when it says. */
-  service?: string;
+  /**
+   * Whether it is on this machine: this computer, or a container here. Only here can a child get
+   * a computer of its own: elsewhere needs a token no agent may pass on.
+   */
+  here?: true;
 }
 const NOWHERE: Reach = { access: "none", browser: false, connections: [], skills: [] };
+
+/**
+ * Whether a computer unit's answers put it on this machine: this computer or a container here, or,
+ * as an earlier version answered, the service here.
+ */
+const onThisMachine = (values: Values) =>
+  values.kind === "this" ||
+  (values.kind === "new" && (values.made ?? "container") === "container") ||
+  values.service === "local";
 
 /** How far an agent's own computer reaches now. */
 export function reachOf(record: TheAgent): Reach {
   const unit = record.units.find((one) => one.unit === COMPUTER);
-  if (!unit) return record.computer ?? NOWHERE;
+  if (!unit) {
+    if (!record.computer) return NOWHERE;
+    // Shared, as it was kept: an earlier version said where by its service.
+    const { service, ...shared } = record.computer;
+    return { ...shared, ...(service === "local" || shared.here ? { here: true as const } : {}) };
+  }
   return {
     access: String(unit.values.access ?? "none"),
     browser: unit.values.browser === true,
     connections: unit.connections,
     skills: unit.skills,
-    ...(typeof unit.values.service === "string" ? { service: unit.values.service } : {}),
+    ...(onThisMachine(unit.values) ? { here: true as const } : {}),
   };
 }
 
@@ -419,8 +435,8 @@ function shapeOf(
     reach.connections.length > 0 &&
     rank(reach.access) <= rank(bound.access) &&
     (!reach.browser || bound.browser);
-  // A new one is made within the bounds, on the service its parent is on.
-  const fresh = reach.service === LOCAL_SERVICE;
+  // A new one is made within the bounds, as a container here, where its parent's computer is.
+  const fresh = reach.here === true;
   const places = bound.places.filter((place) => (place !== OWN || own) && (place !== NEW || fresh));
   return places.length ? { units, places, computer } : undefined;
 }
@@ -525,22 +541,21 @@ const withinReach = (bound: Bound, reach: Reach): Bound => ({
   browser: bound.browser && reach.browser,
 });
 
-/** What an agent fills for a new computer: what it may set, within the bounds. */
+/**
+ * What an agent fills for a new computer: what it may set, within the bounds. Which computer it is
+ * isn't asked, so nothing it sets shows only after that.
+ */
 function newComputerForm(computer: NonNullable<Shape["computer"]>, bound: Bound) {
   return computer.offer.unit.form
     .filter(settable)
+    .map(({ visible: _, ...field }) => field)
     .flatMap((field) => cutToLimit(field, limitOf(reachLimits(bound), field)));
 }
 
-/** A new computer's values: the template's, within the bounds, on the parent's service. */
-function newComputer(
-  computer: NonNullable<Shape["computer"]>,
-  given: Values,
-  bound: Bound,
-  service: string,
-) {
+/** A new computer's values: the template's, within the bounds, as a container on this machine. */
+function newComputer(computer: NonNullable<Shape["computer"]>, given: Values, bound: Bound) {
   const asked = settle(newComputerForm(computer, bound), given, []).problems;
-  const values: Values = { ...computer.values, service };
+  const values: Values = { ...computer.values, kind: "new", made: "container" };
   for (const field of computer.offer.unit.form.filter(settable))
     values[field.id] =
       given[field.id] ??
@@ -832,7 +847,6 @@ export function createControl(parts: ControlParts) {
               shape.computer,
               (args.units?.[COMPUTER] ?? {}) as Values,
               withinReach(bound, reach),
-              reach.service as string,
             )
           : undefined;
       if (fresh) problems.push(...fresh.problems);
@@ -844,7 +858,7 @@ export function createControl(parts: ControlParts) {
               browser: fresh.values.browser === true,
               connections: [],
               skills: [],
-              service: reach.service as string,
+              here: true,
             }
           : NOWHERE);
       const shares = shared

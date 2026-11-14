@@ -92,7 +92,10 @@ export const AgentRecord = z.object({
   computer: z
     .object({
       access: z.string(),
+      /** As an earlier version kept it: `local` is on this machine. */
       service: z.string().optional(),
+      /** On this machine: this computer, or a container here. */
+      here: z.literal(true).optional(),
       browser: z.boolean(),
       connections: z.array(z.object({ slot: z.string(), connection: z.string() })),
       skills: z.array(z.string()),

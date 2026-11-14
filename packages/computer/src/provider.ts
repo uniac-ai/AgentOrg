@@ -1,11 +1,12 @@
-// The units' provider, and the connector to AgentComputer. A computer is one the service runs: this
-// asks the service for it through its SDK, then opens an ordinary `url` connection to each endpoint
-// with the computer's token, and joins the computer's capability as an Actor of its own, which the
-// person is connected to. The web unit is one connection to a hosted server. When no service runs
-// on this machine and AgentComputer is installed, `agentcomputer up` starts one, isolated as the
-// one here last was: when a computer here is added, and at start for computers kept here. The app
-// doesn't include AgentComputer. The control token and each computer's token stay in this
-// provider's private file.
+// The units' provider, and the connector to AgentComputer. A computer is this one, attached whole,
+// or one the service makes: this asks the service for it through its SDK, then opens an ordinary
+// `url` connection to each endpoint with the computer's token, and joins the computer's capability
+// as an Actor of its own, which the person is connected to. The web unit is one connection to a
+// hosted server. When no service runs on this machine and AgentComputer is installed,
+// `agentcomputer up` starts one: when a computer here is added, and at start for computers kept
+// here. One an earlier version made with no isolation is no longer started: its capability says
+// the ways on. The app doesn't include AgentComputer. The control token and each computer's token
+// stay in this provider's private file.
 import { execFile } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import {
@@ -24,13 +25,14 @@ import { homedir } from "node:os";
 import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { Computer, ComputerError, type LiveSurface } from "@agentorg/computer";
+import { Computer, type ComputerDetail, ComputerError, type LiveSurface } from "@agentorg/computer";
 import {
   capability,
   type FactRow as FactRowShape,
   hubActors,
   type Problem,
   unitProvider,
+  type WayForward,
 } from "@agentorg/interfaces";
 import { Connection, type Groups, parseConnection, type Timing } from "@agentorg/mcp";
 import { type Log, Refused } from "@agentorg/sdk";
@@ -38,15 +40,17 @@ import { type Client, connect } from "@agentorg/sdk/client";
 import { z } from "zod";
 import {
   type Access,
-  ANOTHER,
   BROWSER_SLOT,
   COMPUTER,
+  CONTAINER,
   computerUnit,
   type Found,
   INSTALL_STEPS,
-  LOCAL,
+  NEW,
   REACHES,
+  REMOTE,
   SKILLS,
+  THIS,
   WEB,
   WEB_UNIT,
   WHERE,
@@ -85,8 +89,8 @@ interface Reached {
 }
 
 const FILE = "instances.json";
-/** Holds `lastIsolation`. */
-const ISOLATION_FILE = "local-service.json";
+/** Holds the folders an earlier version's computers kept, by agent. */
+const EARLIER_FILE = "earlier-folders.json";
 const SKILLS_DIR = fileURLToPath(new URL("../../skills/", import.meta.url));
 /**
  * The sha256 of every text each skill file has had in a version shipped, the current one among
@@ -99,6 +103,9 @@ const SKILLS_SHIPPED = JSON.parse(readFileSync(join(SKILLS_DIR, "shipped.json"),
 >;
 const EXA_URL = "https://mcp.exa.ai/mcp?tools=web_search_exa,web_fetch_exa";
 const SERVICE_ANSWERS_MS = 2000;
+/** What to do when the AgentComputer here is older than this build can use. */
+const UPDATE_STEPS =
+  "AgentComputer on this computer is older than this AgentOrg needs. Update it with npm install -g @agentorg/computer, then stop the one running with agentcomputer down: AgentOrg starts it again for you.";
 /** How long `agentcomputer up` may take to have a service answer. */
 const UP_MS = 30_000;
 type FactRow = z.input<typeof FactRowShape>;
@@ -120,10 +127,7 @@ export interface ComputerProviderOptions {
   /** The provider's own Actor, bound to `hub.actors@1` at its slot `actors`. */
   actorId: string;
   credential: string;
-  /**
-   * A private folder of the provider's, which holds each connection's Hub credential, and how the
-   * service here was last isolated.
-   */
+  /** A private folder of the provider's, which holds each connection's Hub credential. */
   dir: string;
   /**
    * Where a service on this machine writes its address and token, and where `agentcomputer up`
@@ -198,6 +202,54 @@ const fromHome = (folder: unknown) =>
     ? join(homedir(), folder.slice(2))
     : (folder as string | undefined);
 
+/** A computer an earlier version made here with no isolation: the folder kept, and its reach. */
+interface Before {
+  folder: string | null;
+  access: string;
+  browser: boolean;
+}
+/** Whether the service says a computer is one an earlier version made with no isolation. */
+const fromBefore = (info: ComputerDetail) => info.isolation === "none" && info.attached === false;
+const beforeOf = (info: ComputerDetail): Before => ({
+  folder: info.workspace ?? null,
+  access: info.access,
+  browser: info.browser,
+});
+/** What the person reads of one, in the words the service uses, and what goes either way. */
+const beforeDetail = (folder: string | null) =>
+  `A computer with no isolation is no longer made.${folder ? ` Its folder is kept at ${folder}.` : ""} Either way, its own browser and what it was signed in to aren't kept.`;
+/**
+ * The ways on from one: this computer with its folder, or a container whose workspace starts with
+ * what is in it. One with no files has only the container, as this computer has no browser yet.
+ */
+const waysOn = ({ folder, access, browser }: Before): z.input<typeof WayForward>[] => [
+  ...(access === "none"
+    ? []
+    : [
+        {
+          title: "Attach this computer",
+          description: folder
+            ? `Its work happens in ${folder}, as before. Unlike before, it reaches the whole machine, as you.`
+            : "Unlike before, it reaches the whole machine, as you.",
+          unit: COMPUTER,
+          values: { kind: THIS, access, ...(folder ? { workspace: folder } : {}) },
+        },
+      ]),
+  {
+    title: "Make a container",
+    description:
+      folder && access !== "none"
+        ? `Its workspace starts with what's in ${folder}.`
+        : "Made for it on this machine, apart from yours.",
+    unit: COMPUTER,
+    values: { kind: NEW, made: CONTAINER, access, browser },
+  },
+];
+
+/** Whether what was filled in is a computer on this machine: this one, or a container here. */
+const onThisMachine = (values: Record<string, unknown>) =>
+  values.kind === THIS || (values.kind === NEW && (values.made ?? CONTAINER) === CONTAINER);
+
 /** What is wrong with what was filled in; nothing means it can be applied. */
 function problems(
   unit: string,
@@ -210,31 +262,33 @@ function problems(
     if (values.service !== "exa") wrong.push({ field: "service", message: "Choose a service." });
     return wrong;
   }
-  if ((values.service === LOCAL || values.service === undefined) && !found)
-    wrong.push({ field: "service", message: INSTALL_STEPS });
-  else if (values.service === ANOTHER) {
+  if (values.kind !== THIS && values.kind !== NEW)
+    wrong.push({ field: "kind", message: "Choose which computer." });
+  else if (onThisMachine(values) && !found) wrong.push({ field: "kind", message: INSTALL_STEPS });
+  else if (values.kind === NEW && values.made === REMOTE) {
     const given = secrets.includes("token") ? { token: "given" } : {};
     const { why } = parseConnection("url", { url: values.address }, given);
     if (why) wrong.push({ field: "address", message: `That address won't do. ${why}` });
-  } else if (values.service !== LOCAL)
-    wrong.push({ field: "service", message: "Choose where it resides." });
+  } else if (values.kind === NEW && (values.made ?? CONTAINER) !== CONTAINER)
+    wrong.push({ field: "made", message: "Choose how it's made." });
   if (values.access === "none") {
-    if (values.browser !== true)
+    // A browser of its own is a made computer's: this one has none yet.
+    if (!(values.kind === NEW && values.browser === true))
       wrong.push({
         field: "access",
         message: "With no files, no commands and no browser, there's no computer.",
       });
   } else if (!LEVELS.includes(values.access as string))
     wrong.push({ field: "access", message: "Choose what it reaches." });
-  const workspace = fromHome(values.workspace);
-  if (values.service === LOCAL && workspace !== undefined) {
-    if (!isAbsolute(workspace))
+  // Where this computer's work happens: made with it if it's missing.
+  const folder = fromHome(values.workspace);
+  if (values.kind === THIS && folder !== undefined) {
+    if (!isAbsolute(folder))
       wrong.push({
         field: "workspace",
         message: "Give the folder's full path, or one that starts with ~/.",
       });
-    else if (!makeable(workspace))
-      wrong.push({ field: "workspace", message: cantBeMade(workspace) });
+    else if (!makeable(folder)) wrong.push({ field: "workspace", message: cantBeMade(folder) });
   }
   return wrong;
 }
@@ -323,41 +377,20 @@ export async function startComputerProvider(
     }
     return undefined;
   };
-  type Isolation = NonNullable<Found>["isolation"];
-  const isolationPath = join(dir, ISOLATION_FILE);
   /**
-   * How the service here was isolated when it last answered, so it starts again so: AgentComputer
-   * gives a computer recorded with no isolation the service's. `none` until one answers.
+   * The service on this machine, if it answers now, and what it can make. One older than this
+   * build, which says nothing of what it makes, answers as none does, with the steps to update.
    */
-  let lastIsolation: Isolation = "none";
-  try {
-    if (JSON.parse(readFileSync(isolationPath, "utf8")).isolation === "container")
-      lastIsolation = "container";
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT")
-      log.warn(`How the service here was last isolated can't be read: ${messageOf(error)}`);
-  }
-  /** What the file holds, so a write that failed is tried again at the next answer. */
-  let keptIsolation = lastIsolation;
-  /** How the service on this machine isolates, if it answers now. A change is kept. */
   const answering = async () => {
     const reached = localService();
     const info = reached && (await within(SERVICE_ANSWERS_MS, Computer.serviceInfo(reached)));
-    const isolation = info?.isolation;
-    if (!reached || (isolation !== "none" && isolation !== "container")) return undefined;
-    lastIsolation = isolation;
-    if (isolation !== keptIsolation)
-      try {
-        keep(isolationPath, { isolation });
-        keptIsolation = isolation;
-      } catch (error) {
-        log.warn(`How the service here is isolated wasn't kept: ${messageOf(error)}`);
-      }
-    return { reached, isolation };
+    if (!reached || !info) return undefined;
+    if (!Array.isArray(info.made)) throw new Refused("unavailable", UPDATE_STEPS);
+    return { reached, found: { thisComputer: info.thisComputer, made: info.made } };
   };
   /**
-   * The service on this machine. When none answers, `agentcomputer up` starts one, isolated as
-   * the one here last was, or finds one that answers after all. Calls made while it runs share it.
+   * The service on this machine. When none answers, `agentcomputer up` starts one, or finds one
+   * that answers after all. Calls made while it runs share it.
    */
   let starting: Promise<Reached> | undefined;
   const startedLocal = (): Promise<Reached> =>
@@ -367,14 +400,13 @@ export async function startComputerProvider(
       const command = onPath();
       if (!command) throw new Refused("invalid", INSTALL_STEPS);
       const data = options.dataFolder ?? defaultDataFolder();
-      const args = ["up", "--data", data, "--isolation", lastIsolation];
-      await promisify(execFile)(command, args, { timeout: UP_MS }).catch(
+      await promisify(execFile)(command, ["up", "--data", data], { timeout: UP_MS }).catch(
         (error: { killed?: boolean; stderr?: unknown }) => {
           const said = String(error.stderr ?? "").trim();
           throw new Refused(
             "unavailable",
             error.killed
-              ? `AgentComputer didn't answer within ${UP_MS / 1000} seconds of being started. It may still be starting${lastIsolation === "container" ? ": the first start in containers after an update fetches their image" : ""}. Try again in a moment.`
+              ? `AgentComputer didn't answer within ${UP_MS / 1000} seconds of being started. It may still be starting. Try again in a moment.`
               : `AgentComputer couldn't be started on this computer. ${said.slice(0, 1000) || messageOf(error)}`,
           );
         },
@@ -387,11 +419,58 @@ export async function startComputerProvider(
     })().finally(() => {
       starting = undefined;
     }));
-  /** The service on this machine as the form says it: how it isolates, or that it will start. */
-  const findLocal = async (): Promise<Found> =>
-    (await answering()) ?? (onPath() ? { isolation: lastIsolation, starts: true } : undefined);
+  /** What the service on this machine can make, or that one will be started to make it. */
+  const findLocal = async (): Promise<Found> => {
+    try {
+      return (await answering())?.found ?? (onPath() ? { made: [], starts: true } : undefined);
+    } catch (error) {
+      return { made: [], why: messageOf(error) };
+    }
+  };
 
   const running = new Map<string, Connection[]>();
+  /**
+   * Computers an earlier version made here with no isolation, by instance: no longer made or
+   * started, with the folder the service keeps and what they reached, for the ways on.
+   */
+  const before = new Map<string, Before>();
+  /** Find them on the service here, as it says of each: no isolation, and not attached. */
+  const findBefore = async (reached: Reached) => {
+    for (const [instance, entry] of Object.entries(stored)) {
+      if (!entry.computer || !("local" in entry.computer.service)) continue;
+      const info = await within(SERVICE_ANSWERS_MS, Computer.getInfo(entry.computer.id, reached));
+      if (info && fromBefore(info)) before.set(instance, beforeOf(info));
+    }
+  };
+  /**
+   * One the service says is from before, found as its record is read after the start, as when the
+   * service here was updated meanwhile: what of it was opened ends, and its capability says so.
+   */
+  const seenBefore = (computer: NonNullable<Instance["computer"]>, info: ComputerDetail) => {
+    const instance = Object.keys(stored).find((key) => stored[key]?.computer?.id === computer.id);
+    if (!instance || before.has(instance) || !("local" in computer.service)) return;
+    before.set(instance, beforeOf(info));
+    const ended = running.get(instance) ?? [];
+    running.set(instance, []);
+    void Promise.all(ended.map((server) => server.end()));
+    capabilities.get(instance)?.exports.capability.emit("changed", {});
+  };
+  const keepEarlier = () => {
+    try {
+      keep(earlierPath, earlier);
+    } catch (error) {
+      log.warn(`The folders kept from before weren't written: ${messageOf(error)}`);
+    }
+  };
+  /** Folders an earlier version's computers kept, by agent: its next computer starts with one. */
+  const earlierPath = join(dir, EARLIER_FILE);
+  const earlier: Record<string, string> = (() => {
+    try {
+      return z.record(z.string(), z.string()).parse(JSON.parse(readFileSync(earlierPath, "utf8")));
+    } catch {
+      return {};
+    }
+  })();
   /** Connect a link. A service on this machine may have moved to another port since. */
   const open = async (
     { slot, url, actor, credential }: Linked,
@@ -471,6 +550,7 @@ export async function startComputerProvider(
   const askSurfaces = async (computer: NonNullable<Instance["computer"]>) => {
     const reached = reachOf(computer.service);
     const info = reached && (await within(SURFACES_MS, Computer.getInfo(computer.id, reached)));
+    if (info && fromBefore(info)) seenBefore(computer, info);
     return info?.surfaces.map(({ surface, protocol, operate, unavailable }) => ({
       surface,
       protocol,
@@ -479,7 +559,10 @@ export async function startComputerProvider(
     }));
   };
 
-  /** Make the computer, and say what each of its endpoints is and the rows fixed for its views. */
+  /**
+   * Attach this computer, or make one, and say what each of its endpoints is and the rows fixed
+   * for its views.
+   */
   const makeComputer = async (
     values: Record<string, unknown>,
     secrets: Record<string, string>,
@@ -487,44 +570,49 @@ export async function startComputerProvider(
     agent: string,
     agentName?: string,
   ) => {
-    const local = values.service === LOCAL;
-    const reached = local
+    const whole = values.kind === THIS;
+    const here = onThisMachine(values);
+    const reached = here
       ? await startedLocal()
       : { apiUrl: String(values.address).replace(/\/$/, ""), apiKey: secrets.token as string };
-    // Named, so the computer has the isolation its targets and rows below say.
-    const { isolation } = await Computer.serviceInfo(reached);
     const access = values.access as Access | "none";
-    const workspace = (
-      local
-        ? (fromHome(values.workspace) ?? (agentName ? agentFolder(agentName) : undefined))
-        : values.path
-    ) as string | undefined;
-    // On this machine the folder is made if it's missing, typed or default. On another, only
-    // its service can say whether the path will do.
-    if (local && workspace !== undefined)
+    const browser = !whole && values.browser === true;
+    const metadata = { agent };
+    // The folder said to it on this computer, made if it's missing; or a path on the provider's
+    // machine. A container here has a workspace of its own, which starts with what is in the
+    // folder an earlier computer of the agent's kept, if it had one.
+    const folder = whole
+      ? (fromHome(values.workspace) ?? agentFolder(agentName ?? name))
+      : here
+        ? undefined
+        : (values.path as string | undefined);
+    if (whole && folder)
       try {
-        mkdirSync(workspace, { recursive: true });
+        mkdirSync(folder, { recursive: true });
       } catch {
-        throw new Refused("invalid", cantBeMade(workspace));
+        throw new Refused("invalid", cantBeMade(folder));
       }
-    const computer = await Computer.create({
-      ...reached,
-      isolation,
-      access,
-      browser: values.browser === true,
-      name,
-      metadata: { agent },
-      ...(workspace ? { workspace } : {}),
-    });
-    // The folder, so the person can find it: the service says where one it made is.
-    const folder =
-      workspace ??
-      (await computer.getInfo().then(
-        (info) => info.workspace,
-        () => null,
-      ));
-    const where = local ? "this computer" : new URL(reached.apiUrl).host;
-    const on = isolation === "container" ? `${where}, in a container` : `${where}, no isolation`;
+    let copyFrom = here && !whole && access !== "none" ? earlier[agent] : undefined;
+    // One no longer there would have the container refused: it is forgotten instead.
+    if (copyFrom !== undefined && !statSync(copyFrom, { throwIfNoEntry: false })?.isDirectory()) {
+      delete earlier[agent];
+      keepEarlier();
+      copyFrom = undefined;
+    }
+    const computer = whole
+      ? await Computer.attach({ ...reached, access, workspace: folder as string, name, metadata })
+      : await Computer.create({
+          ...reached,
+          ...(here ? { isolation: CONTAINER } : {}),
+          access,
+          browser,
+          name,
+          metadata,
+          ...(folder ? { workspace: folder } : {}),
+          ...(copyFrom ? { copyFrom } : {}),
+        });
+    const host = here ? undefined : new URL(reached.apiUrl).host;
+    const on = whole ? "This computer, as you" : (host ?? "A container on this machine");
     const servers = [];
     if (access !== "none") {
       // A folder too long for a connection's target is left out of it.
@@ -536,7 +624,7 @@ export async function startComputerProvider(
         target: folder && inFolder.length <= TARGET_MAX ? inFolder : says,
       });
     }
-    if (values.browser === true)
+    if (browser)
       servers.push({
         slot: BROWSER_SLOT,
         url: at(reached.apiUrl, computer.getMcpUrl("browser")),
@@ -545,26 +633,29 @@ export async function startComputerProvider(
     const held: NonNullable<Instance["computer"]> = {
       id: computer.computerID,
       token: computer.getMcpToken(),
-      service: local ? { local: true } : reached,
+      service: here ? { local: true } : reached,
     };
-    // What the person reads of it beside its windows, fixed now: where it is, its folder, and
-    // what it reaches. In a container the agent finds the folder elsewhere, so the row says both
-    // and is no path to follow.
-    const reaches = [
-      ...(access === "none" ? [] : [REACHES[access]]),
-      ...(values.browser === true ? ["Browser"] : []),
-    ].join(", ");
-    const folderRow: FactRow | undefined = !folder
-      ? undefined
-      : isolation === "container"
-        ? { label: "Folder", value: `${folder} on the machine, mounted at /workspace in it` }
-        : { label: "Folder", value: folder, path: true };
+    // What the person reads of it beside its windows, fixed now: which computer it is, what it
+    // acts as and where its work happens, what it reaches, and its browser.
     const rows: Record<string, FactRow[]> = {
-      [WHERE]: [{ label: "Where", value: local ? "This computer" : new URL(reached.apiUrl).host }],
+      [WHERE]: [
+        {
+          label: "Computer",
+          value: whole ? "This computer" : (host ?? "A container on this machine"),
+        },
+      ],
       [WORKSPACE]: [
-        // A folder too long for a row is left out of it, rather than shown cut.
-        ...(folderRow && folderRow.value.length <= ROW_VALUE_MAX ? [folderRow] : []),
-        { label: "Reaches", value: reaches },
+        ...(whole
+          ? [
+              { label: "Acts as", value: "You, with all you can reach", caution: true as const },
+              // A folder too long for a row is left out of it, rather than shown cut.
+              ...(folder && folder.length <= ROW_VALUE_MAX
+                ? [{ label: "Its work happens in", value: folder, path: true as const }]
+                : []),
+            ]
+          : []),
+        ...(access === "none" ? [] : [{ label: "Reaches", value: REACHES[access] }]),
+        { label: "Browser", value: browser ? "Its own browser" : "None" },
       ],
     };
     return { servers, computer: held, rows };
@@ -573,6 +664,25 @@ export async function startComputerProvider(
   /** How an instance stands: its connections' states as one, and what of it can be opened. */
   const stateOf = async (instance: string) => {
     const { found, servers } = held(instance);
+    /** One from before: down, with nothing of it opened. */
+    const fromEarlier = () => {
+      const earlier = before.get(instance);
+      if (!earlier) return undefined;
+      const detail = beforeDetail(earlier.folder);
+      return {
+        state: "down" as const,
+        detail,
+        connections: found.links.map(({ actor }) => ({
+          connection: actor,
+          state: "down" as const,
+          detail,
+          tools: [],
+        })),
+        surfaces: [],
+      };
+    };
+    const earlier = fromEarlier();
+    if (earlier) return earlier;
     const each = servers.map((server, i) => ({
       connection: (found.links[i] as Linked).actor,
       ...server.status(),
@@ -580,6 +690,9 @@ export async function startComputerProvider(
     const down = each.find((one) => one.state === "down");
     const waiting = each.some((one) => one.state === "connecting");
     const surfaces = found.computer ? await surfacesOf(found.computer) : undefined;
+    // Its record, read just now, may have said it is from before.
+    const seen = fromEarlier();
+    if (seen) return seen;
     return {
       state: down ? ("down" as const) : waiting ? ("connecting" as const) : ("connected" as const),
       ...(down?.detail ? { detail: down.detail } : {}),
@@ -590,6 +703,8 @@ export async function startComputerProvider(
   /** A one-time way to open something of an instance's computer live. */
   const ticket = async (instance: string, surface: string, mode: "watch" | "operate") => {
     const { found } = held(instance);
+    const earlierOne = before.get(instance);
+    if (earlierOne) throw new Refused("state", beforeDetail(earlierOne.folder));
     const reached = found.computer && reachOf(found.computer.service);
     if (!found.computer || !reached)
       throw new Refused("unknown", "Nothing of this can be opened live.");
@@ -635,7 +750,13 @@ export async function startComputerProvider(
         ctx.exports.capability.implement({
           async state() {
             const { state, detail, surfaces } = await stateOf(instance);
-            return { state, ...(detail ? { detail } : {}), surfaces: surfaces ?? [] };
+            const earlier = before.get(instance);
+            return {
+              state,
+              ...(detail ? { detail } : {}),
+              surfaces: surfaces ?? [],
+              ...(earlier ? { ways: waysOn(earlier) } : {}),
+            };
           },
           live: ({ surface, mode }) => ticket(instance, surface, mode),
         });
@@ -652,10 +773,18 @@ export async function startComputerProvider(
     onPath() &&
     Object.values(stored).some((entry) => entry.computer && "local" in entry.computer.service)
   )
-    await startedLocal().catch((error) => log.error(messageOf(error)));
+    await startedLocal()
+      .then(findBefore)
+      .catch((error) => log.error(messageOf(error)));
   for (const [instance, entry] of Object.entries(stored)) {
     const servers: Connection[] = [];
     try {
+      // One made with no isolation is no longer started: its capability says the ways on.
+      if (before.has(instance)) {
+        running.set(instance, servers);
+        if (entry.capability) await joinCapability(instance, entry.capability, servers);
+        continue;
+      }
       for (const link of entry.links) servers.push(await open(link, entry.computer));
       running.set(instance, servers);
       if (entry.capability) await joinCapability(instance, entry.capability, servers);
@@ -744,6 +873,11 @@ export async function startComputerProvider(
             running.set(instance, made);
             stored[instance] = entry;
             save();
+            // The agent's next computer is this one: a folder kept from before is used up.
+            if (computer && earlier[agent] !== undefined) {
+              delete earlier[agent];
+              keepEarlier();
+            }
             for (const server of made) server.run();
           } catch (error) {
             running.delete(instance);
@@ -777,11 +911,18 @@ export async function startComputerProvider(
           const { found, servers } = held(instance);
           // First: if the service refuses, the rest is still here to be tried again.
           if (found.computer) await killComputer(found.computer);
+          // One from before: the agent's next computer, as a container, starts with its folder.
+          const earlierOne = before.get(instance);
+          if (earlierOne?.folder && earlierOne.access !== "none") {
+            earlier[found.agent] = earlierOne.folder;
+            keepEarlier();
+          }
           for (const { actor } of [...found.links, ...(found.capability ? [found.capability] : [])])
             await ctx.slots.actors.call.close({ actorId: actor });
           capabilities.get(instance)?.close();
           capabilities.delete(instance);
           running.delete(instance);
+          before.delete(instance);
           delete stored[instance];
           try {
             save();

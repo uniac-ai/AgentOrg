@@ -19,8 +19,8 @@ export const REACHES: Record<Access, string> = {
 };
 
 // What the computer gives the person's side: its live surfaces, by the service's names, and its
-// views, in the order they are drawn. A computer with files has the `computer` connection, and so
-// the `about` tool, which says how it is isolated; one with a browser alone has neither.
+// views, in the order they are drawn. Their rows are given when it is made: what it is, and what
+// it reaches.
 const LOAD = { surface: "load", protocol: "metrics@1" };
 const FILES = { surface: "files", protocol: "files@1" };
 const TERMINAL = { surface: "terminal", protocol: "terminal@1" };
@@ -28,71 +28,112 @@ const SCREEN = { surface: "browser", protocol: "screencast@1" };
 /** The ids of the views whose rows `apply` gives. */
 export const WHERE = "where";
 export const WORKSPACE = "workspace";
-const ISOLATION = {
-  id: "isolation",
-  place: "column",
-  kind: "facts",
-  when: "reachable" as const,
-  operation: "about",
-  slot: COMPUTER,
-  rows: ["Isolation"],
-};
 const WITH_FILES = {
   slots: [{ name: COMPUTER }],
   skills: [skill("files"), skill("computer")],
   surfaces: [FILES],
-  views: [ISOLATION],
 };
 
-export const LOCAL = "local";
-export const ANOTHER = "another";
+/** Which computer: this one, whole, or one made for the agent. */
+export const THIS = "this";
+export const NEW = "new";
+/** How a new one is made: a container here, or by a service at another address. */
+export const CONTAINER = "container";
+export const REMOTE = "remote";
 /** What to do when AgentComputer isn't installed here: the app doesn't include it. */
 export const INSTALL_STEPS =
   "AgentComputer isn't installed on this computer. Install it with npm install -g @agentorg/computer and try again. AgentOrg starts it for you.";
 
 /**
- * How the service here isolates. With `starts`, none runs yet, and one with this isolation is
- * started when a computer is added. Undefined when none runs and AgentComputer isn't installed.
+ * What the service here can make now, each kind ready or with why not, as it says. With `starts`,
+ * none runs yet: one is started when a computer is added, and what it can make is found then.
+ * With `why`, nothing of this machine can be had, and that says why. Undefined when none runs and
+ * AgentComputer isn't installed.
  */
-export type Found = { isolation: "none" | "container"; starts?: true } | undefined;
-/** What a computer here reaches is said in one place, for how the service here isolates. */
-const localLine = (found: Found) =>
-  !found
-    ? INSTALL_STEPS
-    : `On this computer, by AgentComputer${found.starts ? ", started when you add this computer" : ""}. ${
-        found.isolation === "container"
-          ? "Each agent's computer is a container of its own, and the only folder of yours in it is its workspace directory."
-          : "No isolation: it acts as you, and with a terminal it reaches everything you can."
-      }`;
+export type Found =
+  | {
+      thisComputer?: { ready: boolean; reason?: string };
+      made: { isolation: string; ready: boolean; reason?: string }[];
+      starts?: true;
+      why?: string;
+    }
+  | undefined;
+/** Why a computer on this machine can't be had now, if it can't. */
+const notHere = (found: Found, kind: typeof THIS | typeof CONTAINER) => {
+  if (!found) return INSTALL_STEPS;
+  if (found.why) return found.why;
+  if (found.starts) return undefined;
+  if (kind === THIS)
+    return found.thisComputer?.ready === false
+      ? (found.thisComputer.reason ?? "The provider here can't attach this computer now.")
+      : undefined;
+  const container = found.made.find((one) => one.isolation === CONTAINER);
+  return !container
+    ? "The provider here can't make containers."
+    : container.ready
+      ? undefined
+      : (container.reason ?? "The provider here can't make a container now.");
+};
+const unavailable = (why: string | undefined) => (why ? { unavailable: why } : {});
 
 /** The form as it stands now, with what was found on this machine. */
 export const computerUnit = (found: Found): z.input<typeof Unit> => ({
   id: COMPUTER,
   title: "Computer",
-  description: "A place for the agent to work: a folder, how far it can act on it, and a browser.",
+  description: "Where it runs commands and keeps files: this computer, or one made for it.",
   capability: { id: COMPUTER, title: "Computer" },
   once: true,
   form: [
     {
-      id: "service",
+      id: "kind",
       type: "choice",
       value: "string",
-      title: "Where it resides",
-      description: "Where its computer runs, and how that's kept apart from everything else.",
-      // Not required: with none found, `check` says what to do, which is more than "fill this in".
-      ...(found ? { default: LOCAL } : {}),
+      title: "Which computer",
+      required: true,
       options: [
         {
-          value: LOCAL,
+          value: THIS,
           title: "This computer",
-          description: localLine(found),
-          // The line warns of no isolation whenever it says so: not with a container or none installed.
-          ...(found && found.isolation !== "container" ? { caution: true as const } : {}),
+          description:
+            "The whole machine: your files and apps. It acts as you, with everything you can reach.",
+          caution: true,
+          ...unavailable(notHere(found, THIS)),
         },
         {
-          value: ANOTHER,
-          title: "Another address",
-          description: "A service elsewhere. What a computer can reach depends on how it isolates.",
+          value: NEW,
+          title: "A new computer",
+          description: "Made for this agent and kept apart from yours.",
+        },
+      ],
+    },
+    {
+      id: "workspace",
+      type: "directory",
+      value: "string",
+      title: "Where its work happens",
+      description: "It's told to work here. Not a wall: the rest of your computer is open to it.",
+      placeholder: "~/Agents/{name}",
+      visible: { field: "kind", in: [THIS] },
+    },
+    {
+      id: "made",
+      type: "choice",
+      value: "string",
+      title: "Made as",
+      required: true,
+      default: CONTAINER,
+      visible: { field: "kind", in: [NEW] },
+      options: [
+        {
+          value: CONTAINER,
+          title: "A container on this machine",
+          description: "Commands and files, apart from yours.",
+          ...unavailable(notHere(found, CONTAINER)),
+        },
+        {
+          value: REMOTE,
+          title: "At another address",
+          description: "A computer provider there makes it.",
         },
       ],
     },
@@ -100,10 +141,10 @@ export const computerUnit = (found: Found): z.input<typeof Unit> => ({
       id: "address",
       type: "text",
       value: "string",
-      title: "Address",
-      description: "The service's address, over https unless it's on this computer.",
+      title: "Provider's address",
+      description: "Over https unless it's on this computer.",
       required: true,
-      visible: { field: "service", in: [ANOTHER] },
+      visible: { field: "made", in: [REMOTE] },
     },
     {
       id: "token",
@@ -111,27 +152,17 @@ export const computerUnit = (found: Found): z.input<typeof Unit> => ({
       value: "secret",
       title: "Token",
       description:
-        "The service's control token. It's asked each time and never saved in a template.",
+        "The provider's control token. It's asked each time and never saved in a template.",
       required: true,
-      visible: { field: "service", in: [ANOTHER] },
-    },
-    {
-      id: "workspace",
-      type: "directory",
-      value: "string",
-      title: "Workspace directory",
-      description:
-        "The folder it works in, made if it's missing. Left empty, it's a folder with the agent's name in ~/Agents. Its file tools stay inside it. Removing the agent leaves it.",
-      placeholder: "~/Agents/{name}",
-      visible: { field: "service", in: [LOCAL] },
+      visible: { field: "made", in: [REMOTE] },
     },
     {
       id: "path",
       type: "text",
       value: "string",
       title: "Workspace directory",
-      description: "A path on the service's machine. Removing the agent leaves it.",
-      visible: { field: "service", in: [ANOTHER] },
+      description: "A path on the provider's machine. Removing the agent leaves it.",
+      visible: { field: "made", in: [REMOTE] },
     },
     {
       id: "access",
@@ -140,36 +171,34 @@ export const computerUnit = (found: Found): z.input<typeof Unit> => ({
       value: "string",
       title: "What it reaches",
       required: true,
+      default: "terminal",
       options: [
-        {
-          value: "none",
-          title: "No files or terminal",
-          description: "It has no files and can't run anything.",
-        },
-        {
-          value: "read",
-          title: REACHES.read,
-          description:
-            "It can read files in its workspace directory, but can't change them or run anything.",
-          adds: WITH_FILES,
-        },
-        {
-          value: "files",
-          title: REACHES.files,
-          description:
-            "It can read and change files in its workspace directory, but can't run anything.",
-          adds: WITH_FILES,
-        },
         {
           value: "terminal",
           title: REACHES.terminal,
-          description: "It can run any command. What that reaches depends on where it resides.",
+          description: "It can run any command.",
           adds: {
             slots: [{ name: COMPUTER }],
             skills: [skill("terminal"), skill("files"), skill("computer")],
             surfaces: [TERMINAL, FILES],
-            views: [ISOLATION],
           },
+        },
+        {
+          value: "files",
+          title: REACHES.files,
+          description: "It can read and change files, but can't run anything.",
+          adds: WITH_FILES,
+        },
+        {
+          value: "read",
+          title: REACHES.read,
+          description: "It can read files, but can't change them or run anything.",
+          adds: WITH_FILES,
+        },
+        {
+          value: "none",
+          title: "No files or terminal",
+          description: "It has no files and can't run anything.",
         },
       ],
     },
@@ -180,7 +209,8 @@ export const computerUnit = (found: Found): z.input<typeof Unit> => ({
       value: "boolean",
       title: "With a browser",
       description: "It can open web pages and act on them, in a browser of its own.",
-      default: false,
+      default: true,
+      visible: { field: "kind", in: [NEW] },
       adds: { slots: [{ name: BROWSER_SLOT }], skills: [skill("browser")], surfaces: [SCREEN] },
     },
   ],
