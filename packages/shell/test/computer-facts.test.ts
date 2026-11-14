@@ -292,3 +292,82 @@ test(
     await page.close();
   }),
 );
+
+/** Read until it reads as expected, a few seconds at most. */
+async function until<T>(read: () => Promise<T>, expected: T) {
+  for (let tries = 0; ; tries++) {
+    const now = await read();
+    try {
+      assert.deepEqual(now, expected);
+      return;
+    } catch (error) {
+      if (tries > 100) throw error;
+      await new Promise((done) => setTimeout(done, 40));
+    }
+  }
+}
+
+/** The In use section's lines under its heading: each window and who, or that no one is. */
+const inUse = (page: Page) =>
+  page
+    .getByRole("main")
+    .getByRole("region", { name: "In use" })
+    .evaluate((section) =>
+      [...section.children].slice(1).map((line) => (line as HTMLElement).innerText.split("\n")),
+    );
+
+test(
+  "In use says who acted on each window in the last few seconds, the agent first and you last, and no one when no one has",
+  withGateway(async (gateway) => {
+    sampleAgents(gateway);
+    const page = await open(gateway, "#/a/a-research");
+    await page.getByRole("main").getByRole("region", { name: "In use" }).waitFor();
+    assert.deepEqual(await inUse(page), [["No one, in the last few seconds"]]);
+    // As the service sends it, the most recent first: its terminals are one window, and the screen,
+    // which this computer has no window for here, has no line.
+    gateway.presence([
+      { who: "person", capability: "files" },
+      { who: "agent", name: "Inbox", capability: "browser" },
+      { who: "agent", name: "Research", capability: "terminal", terminal: "t-2" },
+      { who: "agent", name: "Research", capability: "browser" },
+      { who: "agent", name: "Research", capability: "terminal", terminal: "t-1" },
+      { who: "agent", name: "Research", capability: "screen" },
+      { who: "person", capability: "browser" },
+    ]);
+    await until(
+      () => inUse(page),
+      [
+        ["Browser", "Research, Inbox, You"],
+        ["Terminal", "Research"],
+        ["Files", "You"],
+      ],
+    );
+    gateway.presence([]);
+    await until(() => inUse(page), [["No one, in the last few seconds"]]);
+    await page.close();
+  }),
+);
+
+test(
+  "In use isn't shown while the computer is down, nor where its service doesn't say who is acting",
+  withGateway(async (gateway) => {
+    sampleAgents(gateway);
+    const page = await open(gateway, "#/a/a-research");
+    const section = page.getByRole("main").getByRole("region", { name: "In use" });
+    await section.waitFor();
+    gateway.setHeld("a-research", [
+      computer({ state: "down", detail: "its service here is gone" }),
+    ]);
+    await section.waitFor({ state: "detached" });
+    // Back, on a service that lists no presence surface.
+    live(gateway, [
+      { surface: "browser", protocol: "screencast@1", operate: true },
+      { surface: "terminal", protocol: "terminal@1", operate: true },
+    ]);
+    gateway.setHeld("a-research", [computer()]);
+    await page.getByRole("main").getByRole("navigation", { name: "Dock" }).waitFor();
+    await page.getByRole("main").getByText("Its work happens in").waitFor();
+    assert.equal(await section.count(), 0);
+    await page.close();
+  }),
+);

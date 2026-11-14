@@ -196,7 +196,9 @@ export function AgentPage({
               {/* What it is, in its own views, with its load under where it runs while it says. */}
               {columnOf(detail).length > 0 ? (
                 <ComputerFacts
+                  agent={{ id, name: entry.name }}
                   detail={detail}
+                  surfaces={surfaces}
                   reachable={!watched.held?.windows}
                   load={load && !stopped && !watched.held ? targetOf(id, load) : undefined}
                 />

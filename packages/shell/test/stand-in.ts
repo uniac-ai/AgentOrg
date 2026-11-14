@@ -508,6 +508,11 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
     },
     /** `metrics@1`: the sockets watching, and the latest reading, which one that opens later gets at once. */
     load: { sockets: new Set<WebSocket>(), reading: undefined as string | undefined },
+    /** `presence@1`: the sockets watching, and who is acting now, which each gets as it opens. */
+    presence: {
+      sockets: new Set<WebSocket>(),
+      event: JSON.stringify({ type: "presence", acting: [] }),
+    },
     /** `files@1`: the workspace's files by path, and every request made of it. */
     files: {
       held: new Map<string, { bytes: Buffer; modifiedAt: string }>(),
@@ -1178,6 +1183,11 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
         socket.on("close", () => live.load.sockets.delete(socket));
         if (live.load.reading) socket.send(live.load.reading);
       }
+      if (surface.protocol === "presence@1") {
+        live.presence.sockets.add(socket);
+        socket.on("close", () => live.presence.sockets.delete(socket));
+        socket.send(live.presence.event);
+      }
     });
   });
   /** A `files@1` socket: each request answered by its id, a file's bytes right after their answer. */
@@ -1516,6 +1526,19 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
         bytes: Buffer.from(content),
         modifiedAt: new Date(Date.now() - minutesAgo * 60_000).toISOString(),
       });
+    },
+    /**
+     * Who is acting now, the most recent first, as `presence@1` says it: to every socket watching
+     * and to those that come later.
+     */
+    presence(
+      acting: { who: "person" | "agent"; name?: string; capability: string; terminal?: string }[],
+    ) {
+      live.presence.event = JSON.stringify({
+        type: "presence",
+        acting: acting.map((one) => ({ ...one, at: new Date().toISOString() })),
+      });
+      for (const ws of live.presence.sockets) ws.send(live.presence.event);
     },
     /** A `metrics@1` reading, to every socket watching and to those that come later. */
     reading(reading: Record<string, unknown>) {
