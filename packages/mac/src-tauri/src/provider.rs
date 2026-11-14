@@ -5,7 +5,7 @@
 //! driver is started again, since it reads its grants once. What it does goes to the app's log.
 
 use crate::log::{log, rotate};
-use crate::{macos, places};
+use crate::{grant, macos, places};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::VecDeque;
@@ -38,6 +38,9 @@ pub enum AppState {
     Running,
     #[serde(rename = "starting again")]
     StartingAgain,
+    /// No provider runs, as macOS doesn't allow the background item: the window says so.
+    #[serde(rename = "turned off")]
+    TurnedOff,
 }
 
 impl AppState {
@@ -46,6 +49,7 @@ impl AppState {
             AppState::Starting => "starting",
             AppState::Running => "running",
             AppState::StartingAgain => "starting again",
+            AppState::TurnedOff => "turned off",
         }
     }
 }
@@ -100,6 +104,12 @@ pub struct Places {
     pub state: PathBuf,
 }
 
+/// How often the provider reads the screen's grants while one is missing.
+const WATCH: Duration = Duration::from_secs(5);
+
+/// The screen's two grants, Accessibility and Screen Recording, as a fresh process reads them.
+pub type Grants = (bool, bool);
+
 static STOP: AtomicBool = AtomicBool::new(false);
 static REGRANT: AtomicBool = AtomicBool::new(false);
 
@@ -130,7 +140,8 @@ pub fn run_as_background_item() {
         state: places::provider_state(),
     };
     let identifier = macos::identifier().unwrap_or_default();
-    provide(&Programs::in_bundle(&app), &places, &identifier, &STOP, &REGRANT);
+    let grants = || (grant::granted("accessibility"), grant::granted("screen-recording"));
+    provide(&Programs::in_bundle(&app), &places, &identifier, &STOP, &REGRANT, &grants, WATCH);
 }
 
 /// Holds a lock for as long as what it returns is kept, waiting for it first.
@@ -140,12 +151,13 @@ fn hold(lock: &Path) -> Option<fs::File> {
     (unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } == 0).then_some(file)
 }
 
-/// Tells the provider a grant has changed, so that it starts its driver again.
+/// Tells the provider a grant may have changed, so that it reads them, and starts its driver again
+/// where they differ from what the driver read.
 pub fn grants_changed() {
     match provider_now() {
         Some(said) => {
             unsafe { libc::kill(said.pid, libc::SIGUSR1) };
-            log("grant", "the provider starts its driver again, to read the grants");
+            log("grant", "the provider reads the grants again");
         }
         None => log("grant", "no provider is running to start its driver again"),
     }
@@ -378,13 +390,18 @@ fn write_state(places: &Places, said: &Said) {
     }
 }
 
-/// Keeps the driver and the service running until asked to stop.
+/// Keeps the driver and the service running until asked to stop. The driver reads the grants
+/// once, at its start: so where they differ from what it read, it is started again. They are read
+/// when `regrant` is set, and every `every` while one is missing, as the person may switch one in
+/// System Settings at any time.
 pub fn provide(
     programs: &Programs,
     places: &Places,
     identifier: &str,
     stop_now: &AtomicBool,
     regrant: &AtomicBool,
+    grants: &dyn Fn() -> Grants,
+    every: Duration,
 ) {
     for folder in [&places.data, &places.driver_home] {
         let _ = fs::create_dir_all(folder);
@@ -401,14 +418,22 @@ pub fn provide(
     stop_left(places, programs);
     let (mut driver, mut service) = (Kept::new("driver"), Kept::new("service"));
     let (mut said, mut ran, mut rotated) = (None, false, Instant::now());
+    // What the running driver read at its start, and when the grants were last read since.
+    let (mut read_by_driver, mut read_at): (Option<Grants>, _) = (None, Instant::now());
     while !stop_now.load(Ordering::Relaxed) {
-        if regrant.swap(false, Ordering::Relaxed) {
-            log("provider", "a grant changed: the driver starts again, to read it");
-            stop(&mut [&mut driver]);
+        let missing_one = read_by_driver.is_some_and(|read| read != (true, true));
+        if regrant.swap(false, Ordering::Relaxed) || missing_one && read_at.elapsed() >= every {
+            read_at = Instant::now();
+            if read_by_driver.is_some_and(|read| read != grants()) {
+                log("provider", "a grant changed: the driver starts again, to read it");
+                stop(&mut [&mut driver]);
+            }
         }
         driver.reap();
         service.reap();
         if missing.is_empty() && driver.due() {
+            read_by_driver = Some(grants());
+            read_at = Instant::now();
             let _ = fs::remove_file(&places.socket);
             driver.start(driver_command(programs, places, identifier));
         }
@@ -508,6 +533,13 @@ mod tests {
         program(&programs.service, "");
         let places = places_in(&root);
         let (stop_now, regrant) = (AtomicBool::new(false), AtomicBool::new(false));
+        // The grants, as the test sets them, and how often they are read.
+        let (accessibility, screen_recording) = (AtomicBool::new(false), AtomicBool::new(false));
+        let reads = std::sync::atomic::AtomicUsize::new(0);
+        let grants = || {
+            reads.fetch_add(1, Ordering::Relaxed);
+            (accessibility.load(Ordering::Relaxed), screen_recording.load(Ordering::Relaxed))
+        };
         let said = |name: &str| fs::read_to_string(heard.join(name)).unwrap_or_default();
         let now = || read::<Said>(&places.state);
         let state = || now().map(|said| said.state);
@@ -516,7 +548,10 @@ mod tests {
         };
         thread::scope(|scope| {
             let _stops = Stops(&stop_now);
-            scope.spawn(|| provide(&programs, &places, "test.id", &stop_now, &regrant));
+            scope.spawn(|| {
+                let every = Duration::from_millis(200);
+                provide(&programs, &places, "test.id", &stop_now, &regrant, &grants, every)
+            });
             until("both running", || state() == Some(AppState::Running));
             // The app's folder is its owner's alone.
             assert_eq!(fs::metadata(&root).unwrap().permissions().mode() & 0o777, 0o700);
@@ -561,9 +596,25 @@ mod tests {
             let service = pid("service").unwrap();
             unsafe { libc::kill(service, libc::SIGKILL) };
             until("the service again", || again("service", service));
+            // Told of a change where there is none, the driver is left as it is.
             let driver = pid("driver").unwrap();
             regrant.store(true, Ordering::Relaxed);
+            until("the grants read", || !regrant.load(Ordering::Relaxed));
+            sleep(Duration::from_millis(500));
+            assert_eq!(pid("driver"), Some(driver));
+            // Told of a grant given, it starts the driver again, to read it.
+            accessibility.store(true, Ordering::Relaxed);
+            regrant.store(true, Ordering::Relaxed);
             until("the driver again", || again("driver", driver));
+            // One still missing, the grants are read every so often: a grant given in System
+            // Settings, with nothing told, starts the driver again too.
+            let driver = pid("driver").unwrap();
+            screen_recording.store(true, Ordering::Relaxed);
+            until("the driver again, unasked", || again("driver", driver));
+            // Both given, they are no longer read unasked.
+            let read = reads.load(Ordering::Relaxed);
+            sleep(Duration::from_millis(1_000));
+            assert_eq!(reads.load(Ordering::Relaxed), read);
 
             // Stopped, it stops both, and says nothing more of itself.
             let (driver, service) = (pid("driver").unwrap(), pid("service").unwrap());
@@ -620,7 +671,8 @@ mod tests {
         let written = serde_json::to_value(&said).unwrap();
         assert_eq!(written["state"], "starting again");
         assert_eq!(serde_json::from_value::<Said>(written).unwrap(), said);
-        for state in [AppState::Starting, AppState::Running, AppState::StartingAgain] {
+        use AppState::*;
+        for state in [Starting, Running, StartingAgain, TurnedOff] {
             assert_eq!(serde_json::to_value(state).unwrap(), state.name());
         }
     }

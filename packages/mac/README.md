@@ -18,14 +18,16 @@ The page calls the app's commands through what Tauri gives it (`withGlobalTauri`
 | `setup`                       | the service's `GET /v1/setup`                                                           |
 | `set_switch {capability, on}` | `PUT /v1/setup/{capability}`                                                            |
 | `ask {capability, need?}`     | `POST /v1/setup/{capability}/ask`                                                       |
+| `open_settings {need}`        | `POST /v1/setup/screen/settings`: that grant's pane, on the person's click              |
+| `open_login_items`            | opens Login Items in System Settings, on the person's click                             |
 | `connection`                  | `GET /v1/connection`                                                                    |
 | `computers`                   | `GET /v1/computers`, those running or starting, as one being brought back is still lent |
 | `acting`                      | `GET /v1/acting`                                                                        |
 | `app_state`                   | the provider's state while one runs; without one, as the service answers (below)        |
 | `fit {height}`                | sets the window's height to the page's, its top edge where it is, 460 wide              |
 
-- **The app's state** is `starting` until the service is first up, `running` while it is, and `starting again` while the provider brings the driver or the service back. The provider counts the service up once its record names it, which is what the window and AgentOrg's core read. Without a provider, the window counts the service up while it answers, and `starting again` once it has stopped answering.
-- **`changed`** is sent to the page when the provider's state changes; the window looks each second.
+- **The app's state** is `starting` until the service is first up, `running` while it is, and `starting again` while the provider brings the driver or the service back. With no provider, it is `turned off` while macOS doesn't allow the background item: switched off in Login Items, or not allowed yet. The provider counts the service up once its record names it, which is what the window and AgentOrg's core read. Without a provider, the window counts the service up while it answers, and `starting again` once it has stopped answering.
+- **`changed`** is sent to the page when the provider's state changes, or whether macOS allows the background item; the window looks each second.
 - **A refusal** rejects with `{ code, message }`: the service's own where it gives its words, as its 409s do; 503 while there is no service to answer; 400 for a capability that isn't a single lowercase word.
 - **The token goes only to this Mac.** The whole request's address is read with the parser the request itself uses, and must be plain http, with no user information, and a host of 127.0.0.1, ::1 or localhost. A record naming any other is no service.
 
@@ -39,7 +41,7 @@ The background item is `Contents/Library/LaunchAgents/dev.agentorg.mac.provider.
 - **The service,** once the driver's socket is there: `node agentcomputer/dist/agentcomputer.js serve --lend --listen 127.0.0.1:0`, with its data folder, the driver and its socket.
 - **Each gets a small environment,** never the app's own: `HOME`, `USER`, `LOGNAME`, `SHELL` (the account's login shell), `TMPDIR`, `LANG`, `PATH=/usr/bin:/bin:/usr/sbin:/sbin` and `DO_NOT_TRACK=1`.
 - **One that ends** is started again: at once, then after 1, 2, 4, 8, 16 and 30 s while it keeps ending within a minute.
-- **A grant's change** starts the driver again, since the driver reads its grants once. That ends the screen's connections of computers using it, as AgentComputer says.
+- **A grant's change** starts the driver again, since the driver reads its grants once. That ends the screen's connections of computers using it, as AgentComputer says. The provider reads both grants, by a fresh process of the app's own, when it starts the driver, when a grant step tells it to, and every 5 s while one is missing, as the person may switch one in System Settings at any time. Where they differ from what the driver read, it starts the driver again.
 - **Its state** is in `~/Library/Application Support/AgentOrg/provider.json`: its process, its state, and its two programs' processes. The window believes it only while that process is alive and runs the app's own program.
 - **One at a time:** it holds `provider.lock` in the same folder while it runs, and another copy's provider waits for it.
 - **The app's folder,** `~/Library/Application Support/AgentOrg`, is kept to its owner (0700), so that no other account can reach what is in it, the driver's socket among it.
@@ -48,7 +50,7 @@ The background item is `Contents/Library/LaunchAgents/dev.agentorg.mac.provider.
 
 ## A grant
 
-The service opens the app through the system, `open -n -g -a AgentOrg.app --args grant accessibility screen-recording`. Each grant missing is asked for in turn: macOS's own request, then its pane in System Settings, then up to 3 minutes for the person to answer. macOS keeps each process's answer, so each grant is read by a fresh process of the app's own (`granted <need>`, which answers by its exit code). Once the grants asked for are given, or were already, the provider starts its driver again.
+The service opens the app through the system, `open -n -g -a AgentOrg.app --args grant accessibility screen-recording`. Each grant missing is asked for in turn: macOS's own request, then up to 3 minutes for the person to answer. No pane of System Settings opens: the window's "Open Settings" opens one, on the person's click. macOS shows each request once, so once it has been answered, asking again shows nothing. macOS keeps each process's answer, so each grant is read by a fresh process of the app's own (`granted <need>`, which answers by its exit code). As each grant asked for is given, or was already, it tells the provider, which reads the grants again.
 
 ## The log
 

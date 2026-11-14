@@ -147,6 +147,20 @@ async fn ask(capability: String, need: Option<String>) -> Result<Value, Refusal>
     read("ask", "POST", path, Some(body)).await
 }
 
+/// A grant's pane of System Settings, on the person's click, opened by the service.
+#[tauri::command]
+async fn open_settings(need: String) -> Result<Value, Refusal> {
+    read("open_settings", "POST", "/v1/setup/screen/settings".into(), Some(json!({ "need": need })))
+        .await
+}
+
+/// Login Items in System Settings, on the person's click, where they allow the background item.
+#[tauri::command]
+fn open_login_items() {
+    macos::open_login_items();
+    noted("open_login_items", "asked".into());
+}
+
 #[tauri::command]
 async fn connection() -> Result<Value, Refusal> {
     read("connection", "GET", "/v1/connection".into(), None).await
@@ -173,12 +187,16 @@ async fn acting() -> Result<Value, Refusal> {
 /// Whether the service has answered since the app opened.
 static ANSWERED: AtomicBool = AtomicBool::new(false);
 
-/// The provider's state while one runs. Without one: running while the service answers, starting
-/// until it first does, and starting again once it has stopped answering.
+/// The provider's state while one runs. Without one: turned off where macOS doesn't allow the
+/// background item, and otherwise running while the service answers, starting until it first does,
+/// and starting again once it has stopped answering.
 #[tauri::command]
 async fn app_state() -> &'static str {
     if let Some(state) = provider::state_now() {
         return state.name();
+    }
+    if macos::background_item_status() == Some(2) {
+        return AppState::TurnedOff.name();
     }
     let state = match read("app_state", "GET", "/v1/connection".into(), None).await {
         Ok(_) => AppState::Running,
@@ -210,21 +228,32 @@ fn noted(what: &'static str, outcome: String) {
 }
 
 /// The window. Opening it registers the app's background item, and while it shows, a change of
-/// the provider's state is sent to the page as `changed`.
+/// the provider's state, or of whether macOS allows the background item, is sent to the page as
+/// `changed`.
 pub fn window() {
     log("window", "opened");
     log("window", &macos::register_background_item());
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
-            setup, set_switch, ask, connection, computers, acting, app_state, fit
+            setup,
+            set_switch,
+            ask,
+            open_settings,
+            open_login_items,
+            connection,
+            computers,
+            acting,
+            app_state,
+            fit
         ])
         .setup(|app| {
             let app = app.handle().clone();
             thread::spawn(move || {
-                let mut said = provider::state_now();
+                let state = || (provider::state_now(), macos::background_item_status());
+                let mut said = state();
                 loop {
                     thread::sleep(Duration::from_secs(1));
-                    let now = provider::state_now();
+                    let now = state();
                     if now != said {
                         said = now;
                         let _ = app.emit("changed", ());
