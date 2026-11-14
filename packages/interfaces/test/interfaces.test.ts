@@ -12,6 +12,7 @@ import {
   capability,
   chat,
   connections,
+  FactRow,
   Field,
   hubActors,
   hubAudit,
@@ -135,6 +136,35 @@ test("a connection's status can't carry extra fields, and a base holds only what
   };
   assert.ok(creatables({ creatables: [creatable] }));
   assert.equal(creatables({ creatables: [{ ...creatable, mcp: [] }] }), false);
+});
+
+test("a unit's status may restate an instance made under older words: its answers and its rows", () => {
+  const status = compiled(unitProvider)["status.output"];
+  assert.ok(status);
+  const now = {
+    values: { kind: "new", made: "container", access: "terminal", browser: true },
+    rows: {
+      where: [{ label: "Computer", value: "A container", note: "Made for it on this machine" }],
+    },
+  };
+  assert.ok(status({ state: "connected", connections: [], now }));
+  assert.ok(status({ state: "connected", connections: [] }), "none said: as it was built");
+  assert.ok(status({ state: "connected", connections: [], now: { values: now.values } }));
+  assert.equal(status({ state: "connected", connections: [], now: { ...now, more: 1 } }), false);
+  assert.equal(status({ state: "connected", connections: [], now: { rows: now.rows } }), false);
+});
+
+test("a fact may carry a note under its value, short and never empty", () => {
+  const row = {
+    label: "Its work happens in",
+    value: "~/Agents/Research",
+    path: true,
+    note: "Said to it, not a wall",
+  } as const;
+  assert.equal(FactRow.parse(row).note, "Said to it, not a wall");
+  assert.equal(FactRow.safeParse({ ...row, note: "" }).success, false);
+  assert.equal(FactRow.safeParse({ ...row, note: "x".repeat(257) }).success, false);
+  assert.equal(FactRow.parse({ label: "Reaches", value: "Files" }).note, undefined);
 });
 
 test("a choice's option may say why it can't be chosen now", () => {
