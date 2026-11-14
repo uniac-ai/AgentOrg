@@ -53,8 +53,10 @@ export interface Computer {
   metadata?: { agent?: string };
 }
 
-/** The app's own state: starting, running, or bringing the driver or the service back. */
-export type AppState = "starting" | "running" | "starting again";
+/** The app's own state: starting, running, bringing the driver or the service back, or turned off:
+ * macOS doesn't allow it in the background (switched off in Login Items, or waiting for the
+ * person's approval), so nothing of it runs. */
+export type AppState = "starting" | "running" | "starting again" | "turned off";
 
 /** The service's `Error`, as a part rejects with it: 409 where it refuses, with words for the
  * person; 503 while the service isn't there to answer. */
@@ -72,10 +74,17 @@ export const isRefusal = (error: unknown): error is Refusal =>
 export interface Mac {
   /** Each part, read afresh. */
   setup(): Promise<Setup>;
-  /** A card's switch. Turning it on also asks for what it is missing; a 409 rejects with a Refusal. */
+  /** A card's switch. Turning it on also asks for what it is missing, for the screen macOS's own
+   * requests alone; a 409 rejects with a Refusal. */
   setSwitch(capability: Capability, on: boolean): Promise<Setup>;
-  /** A row's Grant or Set up: ask for one need, or with none for all it misses. 409: a Refusal. */
+  /** A browser's Set up: ask for one need, or with none for all it misses. 409: a Refusal. */
   ask(capability: Capability, need?: NeedName): Promise<Setup>;
+  /** A missing grant's Open Settings, on the person's click: that grant's pane in System Settings,
+   * and nothing more. It answers with each part; 409: a Refusal. */
+  openSettings(need: NeedName): Promise<Setup>;
+  /** Open Login Items, on the person's click while the app is turned off; macOS starts the app
+   * once the person allows it there. */
+  openLoginItems(): Promise<void>;
   connection(): Promise<Connection>;
   /** The computers this Mac is lent to now. */
   computers(): Promise<Computer[]>;

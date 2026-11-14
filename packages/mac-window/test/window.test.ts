@@ -52,35 +52,42 @@ test("with reduced motion, waiting doesn't pulse", async () => {
   assert.equal(still, "none 0");
 });
 
-test("turning Screen on lists what it needs until macOS has granted it", async () => {
+test("turning Screen on lists what it needs, each missing grant with Open Settings", async () => {
   const tab = await open("first-open");
   await tab.getByRole("switch", { name: "Screen" }).click();
   await until(
     () => rows(tab, "What Screen needs"),
     [
-      ["Screen Recording", "Not granted", "Grant"],
-      ["Accessibility", "Not granted", "Grant"],
+      ["Screen Recording", "Not granted", "Open Settings"],
+      ["Accessibility", "Not granted", "Open Settings"],
     ],
   );
   assert.equal(await card(tab, "Screen").getByText("AgentOrg", { exact: true }).count(), 1);
-  // Allowed, the app starts the driver again for a moment, and the card closes.
+  // Switched on in its pane, the app starts the driver again for a moment.
+  await tab.getByRole("button", { name: "Open Settings" }).first().click();
   await until(() => title(tab), "Starting again");
   assert.equal(await tab.getByRole("switch", { name: "Terminal" }).isDisabled(), true);
   assert.deepEqual(await circle(tab), { ring: false, pulse: false });
   await until(() => title(tab), "Waiting for AgentOrg to connect");
-  assert.equal(await tab.getByRole("table").count(), 0);
+  assert.deepEqual(await rows(tab, "What Screen needs"), [
+    ["Screen Recording", "Granted"],
+    ["Accessibility", "Not granted", "Open Settings"],
+  ]);
+  // With both granted, the card closes.
+  await tab.getByRole("button", { name: "Open Settings" }).click();
+  await until(() => tab.getByRole("table").count(), 0);
   assert.deepEqual(await line(tab, "Screen"), { words: "Sees and controls it", warn: false });
 });
 
-test("Grant asks for that one need", async () => {
+test("Open Settings is for that one grant", async () => {
   const tab = await open("screen-needs-more");
   assert.deepEqual(await rows(tab, "What Screen needs"), [
-    ["Screen Recording", "Not granted", "Grant"],
+    ["Screen Recording", "Not granted", "Open Settings"],
     ["Accessibility", "Granted"],
   ]);
   // Never granted before, it doesn't read as turned off.
   assert.deepEqual(await line(tab, "Screen"), { words: "Sees and controls it", warn: false });
-  await tab.getByRole("button", { name: "Grant" }).click();
+  await tab.getByRole("button", { name: "Open Settings" }).click();
   await until(() => tab.getByRole("table", { name: "What Screen needs" }).count(), 0);
 });
 
@@ -88,7 +95,7 @@ test("a grant turned off after it was granted says so", async () => {
   const tab = await open("permission-withdrawn");
   await until(() => line(tab, "Screen"), { words: "Screen Recording turned off", warn: true });
   assert.deepEqual(await rows(tab, "What Screen needs"), [
-    ["Screen Recording", "Not granted", "Grant"],
+    ["Screen Recording", "Not granted", "Open Settings"],
     ["Accessibility", "Granted"],
   ]);
 });
@@ -174,6 +181,22 @@ test("starting again greys the cards and keeps their last reading", async () => 
   // The service reads the grants as unknown meanwhile; the card keeps them as they were.
   assert.deepEqual(await switched(again), ["true", "true", "true", "true"]);
   assert.equal(await again.getByRole("table").count(), 0);
+});
+
+test("not allowed in the background, it says so and opens Login Items", async () => {
+  const tab = await open("not-allowed-in-the-background");
+  await until(() => title(tab), "Not allowed in the background");
+  assert.deepEqual(await circle(tab), { ring: false, pulse: false });
+  // Nothing of the app runs: the cards keep their last reading, greyed.
+  assert.deepEqual(await switched(tab), ["true", "true", "true", "true"]);
+  for (const name of ["Terminal", "Files", "Screen", "Your browser"])
+    assert.equal(await tab.getByRole("switch", { name }).isDisabled(), true);
+  // Allowed there, macOS starts the app: starting again, then as before.
+  await tab.getByRole("button", { name: "Open Login Items" }).click();
+  await until(() => title(tab), "Starting again");
+  assert.equal(await tab.getByRole("button", { name: "Open Login Items" }).count(), 0);
+  await until(() => title(tab), "Waiting for AgentOrg to connect");
+  assert.equal(await tab.getByRole("switch", { name: "Screen" }).isDisabled(), false);
 });
 
 test("the window fits the page, as its height changes", async () => {

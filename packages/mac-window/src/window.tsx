@@ -1,7 +1,9 @@
 // The AgentOrg app's window, as the design draws it: whether AgentOrg has connected, then "Agent
 // Control", each part of this Mac a card of its own with the person's switch. Screen lists its two
-// grants, each with its own Grant, while one is missing. Your browser opens and closes, listing
-// Chrome and Edge, each with its own Set up. macOS's own requests, its System Settings and the
+// grants while one is missing: turning Screen on makes macOS's own requests, and a grant still
+// missing has Open Settings, which opens its pane on the person's click. Your browser opens and
+// closes, listing Chrome and Edge, each with its own Set up. Not allowed in the background, the
+// window says so, with Open Login Items. macOS's own requests, its System Settings and the
 // browser's inspect page are the system's: the page asks for them through the app, and reads again.
 import { ChevronDownIcon, FolderIcon, GlobeIcon, MonitorIcon, TerminalIcon } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
@@ -29,21 +31,25 @@ interface Reading {
   computers: Computer[];
   acting: Acting[];
 }
-type Phase = "starting" | "waiting" | "connected" | "restarting";
+type Phase = "starting" | "waiting" | "connected" | "restarting" | "off";
 /**
  * Until the first reading, the window shows only its title bar; if none has come after a while,
  * it says it is starting again, as when the app brings the service back, so it is never blank.
+ * Turned off, it says so at once. Starting with a reading already shown is the app coming back
+ * once allowed in the background, which reads as starting again too.
  */
 const phaseOf = (reading: Reading, late: boolean): Phase =>
-  !reading.setup
-    ? late
-      ? "restarting"
-      : "starting"
-    : reading.app === "starting again"
-      ? "restarting"
-      : reading.connection?.connected
-        ? "connected"
-        : "waiting";
+  reading.app === "turned off"
+    ? "off"
+    : !reading.setup
+      ? late
+        ? "restarting"
+        : "starting"
+      : reading.app !== "running"
+        ? "restarting"
+        : reading.connection?.connected
+          ? "connected"
+          : "waiting";
 
 const GRANTS: NeedName[] = ["screen-recording", "accessibility"];
 const NAMES: Partial<Record<NeedName, string>> = {
@@ -404,7 +410,8 @@ export function Window({ mac }: { mac: Mac }) {
   const browserShort = !!browser?.on && !browser.ready;
   const open = browserOpen ?? browserShort;
   const withdrawn = grants.find((n) => n.state === "not-granted" && granted.has(n.need));
-  const restarting = phase === "restarting";
+  // Turned off, nothing of the app runs: the cards are greyed, as while it starts again.
+  const greyed = phase === "restarting" || phase === "off";
 
   /** Who is acting on a part now: "You" for the person, each agent by name, once each. */
   const now = (capability: Capability): Actor[] | undefined => {
@@ -441,9 +448,11 @@ export function Window({ mac }: { mac: Mac }) {
   const title =
     phase === "connected"
       ? "Connected to AgentOrg"
-      : restarting
-        ? "Starting again"
-        : "Waiting for AgentOrg to connect";
+      : phase === "off"
+        ? "Not allowed in the background"
+        : phase === "restarting"
+          ? "Starting again"
+          : "Waiting for AgentOrg to connect";
   const holder = grants.find((n) => n.holder)?.holder;
 
   return (
@@ -471,6 +480,16 @@ export function Window({ mac }: { mac: Mac }) {
           </span>
           <h1 className="relative text-[17px] font-semibold">{title}</h1>
           {says && <p className="relative text-[13px] text-muted-foreground">{says}</p>}
+          {phase === "off" && (
+            <Button
+              variant="secondary"
+              className={`${small} mt-1.5`}
+              // macOS opens its pane; once the person allows AgentOrg there, the app's state changes.
+              onClick={() => void mac.openLoginItems().catch(() => undefined)}
+            >
+              Open Login Items
+            </Button>
+          )}
         </div>
         <div className="flex flex-col gap-2.5">
           <h2 className="text-[14px] font-medium">Agent Control</h2>
@@ -481,7 +500,7 @@ export function Window({ mac }: { mac: Mac }) {
             warn
             acting={now("terminal")}
             on={!!part("terminal")?.on}
-            disabled={restarting}
+            disabled={greyed}
             onSwitch={(on) => void onSwitch("terminal", on)}
           />
           <Card
@@ -491,7 +510,7 @@ export function Window({ mac }: { mac: Mac }) {
             warn
             acting={now("files")}
             on={!!part("files")?.on}
-            disabled={restarting}
+            disabled={greyed}
             onSwitch={(on) => void onSwitch("files", on)}
           />
           <Card
@@ -504,7 +523,7 @@ export function Window({ mac }: { mac: Mac }) {
             warn={!!refused.screen || !!withdrawn}
             acting={now("screen")}
             on={!!screen?.on}
-            disabled={restarting}
+            disabled={greyed}
             onSwitch={(on) => void onSwitch("screen", on)}
           >
             {screenShort && grants.length > 0 && (
@@ -515,12 +534,13 @@ export function Window({ mac }: { mac: Mac }) {
                   rows={grants.map((n) => ({
                     name: nameOf(n),
                     state: n.state,
+                    // Turning Screen on made macOS's request; a grant still missing opens its pane.
                     button:
                       n.state === "granted"
                         ? undefined
                         : {
-                            title: "Grant",
-                            press: () => void act("screen", () => mac.ask("screen", n.need)),
+                            title: "Open Settings",
+                            press: () => void act("screen", () => mac.openSettings(n.need)),
                           },
                   }))}
                 />
@@ -541,7 +561,7 @@ export function Window({ mac }: { mac: Mac }) {
             warn={!!refused.browser || browserShort}
             acting={now("browser")}
             on={!!browser?.on}
-            disabled={restarting}
+            disabled={greyed}
             onSwitch={(on) => void onSwitch("browser", on)}
             chevron={{ open, toggle: () => setBrowserOpen(!open) }}
           >

@@ -21,6 +21,8 @@ export function tauriMac(): Mac {
     setSwitch: (capability: Capability, on: boolean) =>
       core.invoke("set_switch", { capability, on }),
     ask: (capability: Capability, need?: NeedName) => core.invoke("ask", { capability, need }),
+    openSettings: (need: NeedName) => core.invoke("open_settings", { need }),
+    openLoginItems: () => core.invoke("open_login_items"),
     connection: () => core.invoke("connection"),
     computers: () => core.invoke("computers"),
     acting: () => core.invoke("acting"),
