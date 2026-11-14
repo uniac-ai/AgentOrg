@@ -6,18 +6,20 @@ import { useState } from "react";
 import { type AgentTab, api, go } from "../data.ts";
 import { Button } from "../ui/button.tsx";
 import { useAllChats } from "./all-chats.tsx";
+import { useBuilding } from "./building.tsx";
 import { ChatRow } from "./chat-parts.tsx";
 import { useChats } from "./chats.tsx";
 import { Computer, surfacesOf, targetOf, windowsOf } from "./computer.tsx";
 import { ComputerFacts, columnOf } from "./computer-facts.tsx";
 import { ComputerLoad, LOAD } from "./computer-load.tsx";
 import { More } from "./controls.tsx";
-import { useAct, useCreatables } from "./data.ts";
+import { named, useAct, useCreatables, type Way } from "./data.ts";
 import { Face, MARK } from "./face.tsx";
 import { needsOf, useLogin } from "./login.tsx";
 import { Overview } from "./overview.tsx";
 import { Section } from "./parts.tsx";
 import { Setup } from "./setup.tsx";
+import { replaceUnit, UnitWindow } from "./unit-window.tsx";
 import { useAgents } from "./watch.tsx";
 
 const big = "h-10 rounded-full px-4 text-[15px]";
@@ -39,6 +41,9 @@ export function AgentPage({
   const [setup, setSetup] = useState(false);
   const act = useAct(setFailed);
   const login = useLogin();
+  const { catalog } = useBuilding();
+  /** The way forward being looked at, in its unit's form. */
+  const [taking, setTaking] = useState<Way>();
   const watched = byId.get(id);
   // An agent the list read since doesn't have: one deleted elsewhere, or a wrong address. A list
   // that couldn't be read says nothing of it.
@@ -57,6 +62,21 @@ export function AgentPage({
   const computer = windowsOf(surfaces).length > 0 || !!watched.held?.windows;
   const load = surfaces.find((s) => s.protocol === LOAD && !s.unavailable);
   const start = () => act.run(() => api.call("agents", "start", { agent: id }));
+  // Down, the ways to mend what it holds: each its provider's unit, opened with the way's answers in
+  // place of the unit it was built from. One whose unit isn't offered here now isn't shown.
+  const held = watched.held;
+  const from = held?.from ? detail.units.find((u) => u.instance === held.from) : undefined;
+  const unitOf = (way: Way) =>
+    from && catalog.units.find((u) => u.provider === from.provider && u.id === way.unit);
+  const ways = (held?.ways ?? []).filter((way) => unitOf(way));
+  const mend =
+    held && ways.length > 0
+      ? {
+          heading: `Its ${named(held.title)} isn't started`,
+          ways: ways.map((way) => ({ title: way.title, take: () => setTaking(way) })),
+        }
+      : undefined;
+  const taken = taking && unitOf(taking);
   // Overview comes last, so the page opens as it did.
   const tabs: { id: AgentTab; title: string }[] = [
     ...(computer ? [{ id: "computer" as const, title: "Computer" }] : []),
@@ -171,7 +191,7 @@ export function AgentPage({
                 agent={{ id, name: entry.name, tone: now.tone }}
                 surfaces={surfaces}
                 onStart={() => api.call("agents", "start", { agent: id })}
-                {...(watched.held?.windows ? { down: watched.held.detail ?? "" } : {})}
+                {...(watched.held?.windows ? { down: watched.held.detail ?? "", mend } : {})}
               />
               {/* What it is, in its own views, with its load under where it runs while it says. */}
               {columnOf(detail).length > 0 ? (
@@ -228,6 +248,19 @@ export function AgentPage({
         </div>
       </div>
       <Setup agent={entry} open={setup} onClose={() => setSetup(false)} />
+      {taking && from && taken && (
+        <UnitWindow
+          agentName={entry.name}
+          unit={taken}
+          values={taking.values}
+          note={taking.description}
+          onClose={() => setTaking(undefined)}
+          onSave={(values, secrets) => {
+            setTaking(undefined);
+            act.run(() => replaceUnit(id, from, taken, values, secrets));
+          }}
+        />
+      )}
     </div>
   );
 }

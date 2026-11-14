@@ -53,6 +53,14 @@ export interface Held {
       : never
     : never;
   about?: { label: string; value: string; caution?: true }[];
+  /** Down, the ways forward its state offers, and the unit it was built from. */
+  ways?: {
+    title: string;
+    description?: string;
+    unit: string;
+    values: Record<string, string | number | boolean | string[]>;
+  }[];
+  from?: string;
 }
 /** One change in the control log, as `agents.activity` says it. */
 export type Change = z.output<typeof agentsInterface.methods.activity.output>["entries"][number];
@@ -642,6 +650,7 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
             ...(agent.held ?? []).map((held, n) => ({
               id: `held-${n}`,
               title: held.title,
+              ...(held.from ? { from: held.from } : {}),
               slots: held.slots,
               surfaces: Array.from({ length: held.surfaces }, (_, i) => ({
                 surface: `s${i}`,
@@ -1059,6 +1068,7 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
         state: held.state,
         ...(held.detail ? { detail: held.detail } : {}),
         surfaces: [],
+        ...(held.ways ? { ways: held.ways } : {}),
       };
     }
     if (slot.startsWith("work_")) {

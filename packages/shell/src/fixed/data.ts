@@ -1,5 +1,12 @@
 // What the fixed pages read: management's three slots and each agent's own chat.
-import type { agents, chat, connections, hubBindings, skills } from "@agentorg/interfaces";
+import type {
+  agents,
+  chat,
+  connections,
+  hubBindings,
+  skills,
+  WayForward,
+} from "@agentorg/interfaces";
 import { NotConnected, Refused } from "@agentorg/sdk";
 import { useEffect, useState } from "react";
 import type { z } from "zod";
@@ -110,15 +117,18 @@ export function useHeldDown(detail: AgentDetail | undefined): DownCapability | u
     setDown(undefined);
     if (connection !== "open" || held.length === 0) return;
     let live = true;
-    const states = new Map<string, { state: string; detail?: string }>();
+    const states = new Map<string, Stands>();
     const say = () => {
       const first = held.find((c) => states.get(c.person.capability)?.state === "down");
+      const stands = first && states.get(first.person.capability);
       setDown(
         first && {
           title: first.title,
           windows: first.surfaces.length > 0,
           tools: first.slots.length > 0,
-          detail: states.get(first.person.capability)?.detail,
+          detail: stands?.detail,
+          // The ways on with it, and the unit it was built from, which a way builds another way.
+          ...(stands?.ways?.length && first.from ? { ways: stands.ways, from: first.from } : {}),
         },
       );
     };
@@ -128,12 +138,12 @@ export function useHeldDown(detail: AgentDetail | undefined): DownCapability | u
       const read = () => {
         const mine = (asked.get(person.capability) ?? 0) + 1;
         asked.set(person.capability, mine);
-        const told = (now: { state: string; detail?: string }) => {
+        const told = (now: Stands) => {
           if (!live || asked.get(person.capability) !== mine) return;
           states.set(person.capability, now);
           say();
         };
-        return api.call<{ state: string; detail?: string }>(person.capability, "state", {}).then(
+        return api.call<Stands>(person.capability, "state", {}).then(
           told,
           // One that can't be reached is down, with nothing to say why; one that refused keeps
           // what it last said.
@@ -184,13 +194,23 @@ export interface DownCapability {
   windows: boolean;
   tools: boolean;
   detail?: string | undefined;
+  /** What the person can do to mend it, in the order to offer them, with the unit it came from. */
+  ways?: Way[];
+  from?: string;
+}
+export type Way = z.output<typeof WayForward>;
+/** How a capability stands, as its `state` says. */
+interface Stands {
+  state: string;
+  detail?: string;
+  ways?: Way[];
 }
 
 /** Why, after what is down and what that leaves out, when it says: set inside the sentence. */
 const why = (detail: string | undefined) => (detail ? `: ${within(detail)}` : "");
 
 /** A capability's title inside a sentence: lower case at its start, unless it has capitals after. */
-const named = (title: string) =>
+export const named = (title: string) =>
   title.slice(1) === title.slice(1).toLowerCase()
     ? title.charAt(0).toLowerCase() + title.slice(1)
     : title;
@@ -211,7 +231,10 @@ export function nowOf(
     const out = [held.windows && "windows", held.tools && "tools"].filter(Boolean).join(" and ");
     return {
       tone: "trouble",
-      text: `Its ${named(held.title)} is down${out ? `, so its ${out} are left out` : ""}${why(held.detail)}`,
+      // With ways to mend it, the page shows them and why: the line says to choose one.
+      text: held.ways?.length
+        ? `Its ${named(held.title)} isn't started: choose a way forward`
+        : `Its ${named(held.title)} is down${out ? `, so its ${out} are left out` : ""}${why(held.detail)}`,
     };
   }
   const down = mcp.find((m) => m.status.state === "down");

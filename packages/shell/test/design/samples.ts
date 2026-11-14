@@ -59,6 +59,37 @@ export const docsAgent = (gateway: Gateway) => {
     "a-docs",
   );
 };
+/**
+ * Support, whose computer an earlier version made with no isolation, as the design's sample has
+ * it: not started, with the ways on that the computer's provider gives.
+ */
+export function supportBefore(gateway: Gateway) {
+  likeAgent(gateway, "a-support", "Support", "Answers the support inbox from the docs");
+  computer(gateway, [], "a-support");
+  gateway.setHeld("a-support", [
+    heldComputer({
+      state: "down",
+      detail:
+        "A computer with no isolation is no longer made. Its folder is kept at ~/Agents/Support. Either way, its own browser and what it was signed in to aren't kept.",
+      from: "i-computer",
+      ways: [
+        {
+          title: "Attach this computer",
+          description:
+            "Its work happens in ~/Agents/Support, as before. Unlike before, it reaches the whole machine, as you.",
+          unit: "computer",
+          values: { where: "local", workspace: "~/Agents/Support", access: "terminal" },
+        },
+        {
+          title: "Make a container",
+          description: "Its workspace starts with what's in ~/Agents/Support.",
+          unit: "computer",
+          values: { where: "container", access: "terminal" },
+        },
+      ],
+    }),
+  ]);
+}
 /** Release notes, with a reply you haven't read, as the design's sample has it. */
 export function releaseNotes(gateway: Gateway) {
   if (!gateway.agents.has("a-release"))

@@ -111,3 +111,80 @@ test(
     await page.close();
   }),
 );
+
+test(
+  "a computer that can't be reached offers its provider's ways forward; one taken opens its unit's form with the way's answers, and saved takes the old unit's place",
+  withGateway(async (gateway) => {
+    sampleAgents(gateway);
+    // It holds the computer its computer unit built.
+    gateway.setHeld("a-research", [computer({ from: "i-computer" })]);
+    const page = await open(gateway, "#/a/a-research");
+    const frame = page.getByRole("main").getByRole("region", { name: "Research's computer" });
+    await frame.getByRole("navigation", { name: "Dock" }).waitFor();
+    gateway.setHeld("a-research", [
+      computer({
+        state: "down",
+        detail:
+          "A computer with no isolation is no longer made. Its folder is kept at /work/research.",
+        from: "i-computer",
+        ways: [
+          {
+            title: "Attach this computer",
+            description:
+              "Its work happens in /work/research, as before. It reaches the whole machine.",
+            unit: "computer",
+            values: { where: "local", workspace: "/work/research", access: "terminal" },
+          },
+          {
+            title: "Make a container",
+            unit: "computer",
+            values: { where: "container", access: "terminal" },
+          },
+        ],
+      }),
+    ]);
+    await frame.getByText("Its computer isn't started").waitFor();
+    // Its line says to choose one, not the whole of why: the frame says that.
+    await page
+      .getByRole("main")
+      .getByRole("status", { name: "State" })
+      .getByText("Its computer isn't started: choose a way forward", { exact: true })
+      .waitFor();
+    await frame.getByText(/^A computer with no isolation is no longer made/).waitFor();
+    const attach = frame.getByRole("button", { name: "Attach this computer" });
+    const container = frame.getByRole("button", { name: "Make a container" });
+    // The first way is the one to take, first in the row.
+    const xOf = async (button: typeof attach) => (await button.boundingBox())?.x ?? 0;
+    assert.ok((await xOf(attach)) < (await xOf(container)));
+    const changes = () => gateway.calls.filter((c) => /^(add|remove)Unit$/.test(c.method));
+    // Looked at and left, nothing changes.
+    await container.click();
+    const window = page.getByRole("dialog", { name: "Research's computer" });
+    await window.waitFor();
+    assert.equal(
+      (await window.getByRole("combobox", { name: "Where it resides" }).innerText()).trim(),
+      "Its own container",
+    );
+    await window.getByRole("button", { name: "Cancel" }).click();
+    await window.waitFor({ state: "detached" });
+    assert.equal(changes().length, 0);
+    // Taken: its form with the way's answers and what taking it does; saved, in the old one's place.
+    await attach.click();
+    await window.getByText(/^Its work happens in \/work\/research, as before/).waitFor();
+    assert.equal(
+      await window.getByLabel("Workspace directory", { exact: true }).inputValue(),
+      "/work/research",
+    );
+    await window.getByRole("button", { name: "Save" }).click();
+    for (let i = 0; i < 40 && changes().length < 2; i++) await page.waitForTimeout(100);
+    const [out, put] = changes();
+    assert.deepEqual(out?.input, { agent: "a-research", instance: "i-computer" });
+    assert.equal(put?.method, "addUnit");
+    assert.deepEqual((put?.input as { unit: { values: unknown } }).unit.values, {
+      where: "local",
+      workspace: "/work/research",
+      access: "terminal",
+    });
+    await page.close();
+  }),
+);

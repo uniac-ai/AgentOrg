@@ -54,6 +54,7 @@ import {
   signInState,
   startTerminals,
   stopAgent,
+  supportBefore,
   unreadReply,
 } from "./samples.ts";
 
@@ -585,6 +586,16 @@ const probe = (what: Part): Parts => {
     parts["tabs.second"] = of(tabs[1]);
     const under = rule?.nextElementSibling;
     parts.under = of(under, "h");
+    // A computer that isn't started, with the ways on: what it is, why, and a button for each.
+    const way = [...(under?.querySelectorAll("button") ?? [])].find(
+      (b) => b.textContent === "Attach this computer",
+    );
+    const ways = way?.parentElement?.parentElement;
+    parts.ways = of(ways);
+    parts["ways.heading"] = of(ways?.children[0]);
+    parts["ways.words"] = of(ways?.children[1], "w");
+    parts["ways.first"] = of(way);
+    parts["ways.second"] = of(way?.nextElementSibling);
     // Its computer's column: how loaded it is, and in the design what it is too. It is as tall
     // as the computer beside it, or under it where the page is narrow, the page's own gap away.
     // The meters are measured from the first one's top left: what the design has above them
@@ -1769,6 +1780,7 @@ const AGENT_PAGES = [
   { state: "held", size: "wide", id: "a-research", name: "Research" },
   { state: "never", size: "wide", id: "a-docs", name: "Docs" },
   { state: "others", size: "wide", id: "a-release", name: "Release notes" },
+  { state: "ways", size: "wide", id: "a-support", name: "Support" },
 ] as const;
 if (wants("agent"))
   for (const { state, size, id, name } of AGENT_PAGES)
@@ -1786,6 +1798,7 @@ if (wants("agent"))
           docsAgent(gateway);
           between(gateway);
           downTriage(gateway);
+          if (state === "ways") supportBefore(gateway);
           if (state === "held")
             gateway.setHeld("a-research", [
               {
@@ -1819,7 +1832,9 @@ if (wants("agent"))
         if (state === "computer") {
           if (gateway) gateway.reading(sampleLoad(cpu));
           cpu = await cpuOf(page);
-        } else
+        } else if (state === "ways")
+          await main.getByRole("button", { name: "Attach this computer" }).waitFor();
+        else
           await main
             .getByRole("list", { name: `Chats with ${name}` })
             .waitFor({ state: "attached" });
