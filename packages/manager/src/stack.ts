@@ -3,6 +3,7 @@
  * instances, removing them last first, and the templates that prefill one.
  */
 import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import {
   AgentCapability,
   type agentProvider,
@@ -105,6 +106,26 @@ const known = (kept: z.output<typeof CapabilityRecord>) => ({
     ...(fixed ? { fixed: fixed.map((row) => knownTo(FactRow, row)) } : {}),
   })),
 });
+type Rows = Record<string, z.infer<typeof FactRow>[]>;
+/**
+ * What is wrong with the rows a unit gave: a view with neither an operation nor a surface has its
+ * rows fixed when the unit is applied, and only such a one.
+ */
+const rowsProblem = (title: string, worked: Worked, rows: Rows) => {
+  const fixed = worked.views.filter((view) => !view.operation && !view.surface);
+  const missing = fixed.find((view) => !rows[view.id]);
+  if (missing) return `${title} gave no rows for its view "${missing.id}".`;
+  const extra = Object.keys(rows).find((view) => !fixed.some((one) => one.id === view));
+  if (extra)
+    return `${title} gave rows for "${extra}", which is not a view of its whose rows are fixed.`;
+  return undefined;
+};
+/** Its views as the agent holds them: each whose rows are fixed, with them. */
+const withRows = (worked: Worked, rows: Rows) =>
+  worked.views.map((view) => {
+    const given = rows[view.id];
+    return given ? { ...view, fixed: given } : view;
+  });
 /** What only management knows of an agent: where it came from, what it is told, and its skills. */
 export const AgentRecord = z.object({
   provider: z.string(),
@@ -371,6 +392,8 @@ export function createStacks(parts: StackParts) {
   const { self, hub, records, save, library, creating, log, changed, recordOf } = parts;
 
   const queues = new Map<string, Promise<void>>();
+  /** A hash of the `now` each instance last said that was weighed: each is weighed once. */
+  const weighed = new Map<string, string>();
   /** One change to an agent at a time, in the order they came: each spans many calls. */
   const serial = <T>(agent: string, work: () => T | Promise<T>): Promise<T> => {
     const running = (queues.get(agent) ?? Promise.resolve()).then(work);
@@ -1011,18 +1034,9 @@ export function createStacks(parts: StackParts) {
     const { record, undo } = work;
     if (!built)
       throw new Refused("failed", `${unit.title} didn't build the ${title} it said it would.`);
-    // A view with neither an operation nor a surface has its rows fixed now, and only such a one.
-    const fixed = worked.views.filter((view) => !view.operation && !view.surface);
     const rows = built.rows ?? {};
-    const missing = fixed.find((view) => !rows[view.id]);
-    if (missing)
-      throw new Refused("failed", `${unit.title} gave no rows for its view "${missing.id}".`);
-    const extra = Object.keys(rows).find((view) => !fixed.some((one) => one.id === view));
-    if (extra)
-      throw new Refused(
-        "failed",
-        `${unit.title} gave rows for "${extra}", which is not a view of its whose rows are fixed.`,
-      );
+    const wrong = rowsProblem(unit.title, worked, rows);
+    if (wrong) throw new Refused("failed", wrong);
     const reach = async (provider: string, exported: string) => {
       const slot = await parts.reachPerson(provider, exported);
       undo.push(() => parts.unreachPerson(slot, provider));
@@ -1041,10 +1055,7 @@ export function createStacks(parts: StackParts) {
       actor: built.actor,
       slots: connections.map(({ slot }) => slot),
       surfaces: worked.surfaces,
-      views: worked.views.map((view) => {
-        const given = rows[view.id];
-        return given ? { ...view, fixed: given } : view;
-      }),
+      views: withRows(worked, rows),
       person,
     });
     undo.push(() => {
@@ -1295,6 +1306,7 @@ export function createStacks(parts: StackParts) {
   };
   /** Remove a unit and what it made; a provider that has lost it leaves only the connections. */
   const dropUnit = async (agent: string, record: TheAgent, unit: TheUnitRecord) => {
+    weighed.delete(unit.instance);
     if (unit.provider === self) {
       await hub.grants.unexpose({ to: agent, slot: AGENTS_SLOT }).catch((error) => {
         if (!alreadyGone(error)) throw error;
@@ -1403,6 +1415,88 @@ export function createStacks(parts: StackParts) {
           ?.call.status({ instance: unit.providerInstance });
   const DOWN = { state: "down" as const, detail: "Its provider can't be reached." };
 
+  /**
+   * Keep what a unit says one of its instances is in today's words, for one made under older ones:
+   * its answers, and what the agent holds of it, built again from the unit as it is declared today
+   * as when it was applied. One that doesn't fit today's form, or would change the agent's slots,
+   * skills or capability, on which its connections and the person's slots hang, is logged and left.
+   * One is weighed again once it, or management, changes; and not while the agent's stack changes.
+   */
+  const keepNow = async (
+    agent: string,
+    unit: TheUnitRecord,
+    now: NonNullable<Awaited<ReturnType<Units["status"]>>["now"]>,
+  ) => {
+    const said = createHash("sha256").update(JSON.stringify(now)).digest("hex");
+    if (weighed.get(unit.instance) === said || queues.has(agent)) return;
+    const provider = parts.unitProviders().find((one) => one.actor === unit.provider);
+    const declared =
+      provider && (await provider.call.units({})).units.find((one) => one.id === unit.unit);
+    if (!declared || queues.has(agent)) return;
+    // An instance there already is what it is, whatever its provider can make now.
+    const form = declared.form.map((field) =>
+      field.options
+        ? { ...field, options: field.options.map(({ unavailable: _, ...option }) => option) }
+        : field,
+    );
+    const settled = settle(
+      form,
+      now.values,
+      form.filter((field) => field.value === "secret").map((field) => field.id),
+    );
+    const worked = workedOut(declared, settled.values);
+    const rows = now.rows ?? {};
+    const sorted = (names: string[]) => [...names].sort();
+    const held = records.agents[agent]?.capabilities.find((one) => one.from === unit.instance);
+    const problems = [
+      ...formProblems(declared.form),
+      ...givesProblems(declared),
+      ...settled.problems.map((problem) => problem.message),
+      ...(declared.capability ? heldProblems(declared, worked) : []),
+      ...(isDeepStrictEqual(sorted(worked.slots), sorted(unit.connections.map(({ slot }) => slot)))
+        ? []
+        : ["Its connections would change."]),
+      ...(isDeepStrictEqual(sorted(worked.skills.map(({ name }) => name)), sorted(unit.skills))
+        ? []
+        : ["Its skills would change."]),
+      ...(held?.id === declared.capability?.id ? [] : ["What it builds would change."]),
+      ...[rowsProblem(declared.title, worked, rows) ?? []].flat(),
+    ];
+    weighed.set(unit.instance, said);
+    if (problems.length > 0) {
+      log.warn("A unit said what its instance is today, which doesn't fit: it is left.", {
+        agent,
+        instance: unit.instance,
+        problems,
+      });
+      return;
+    }
+    // Checked again as it is kept: it may have gone meanwhile.
+    const kept = records.agents[agent]?.units.find((one) => one.instance === unit.instance);
+    if (!kept) return;
+    const views = withRows(worked, rows);
+    const as = held && known(held);
+    if (
+      isDeepStrictEqual(kept.values, settled.values) &&
+      (!as ||
+        (as.title === declared.capability?.title &&
+          isDeepStrictEqual(as.views, views) &&
+          isDeepStrictEqual(as.surfaces, worked.surfaces)))
+    )
+      return;
+    kept.values = settled.values;
+    if (held && declared.capability) {
+      held.title = declared.capability.title;
+      held.views = views;
+      held.surfaces = worked.surfaces;
+    }
+    save();
+    log.info("An instance made under older words is kept in today's.", {
+      agent,
+      instance: unit.instance,
+    });
+  };
+
   const fromUnit = (record: TheAgent, given: { slot: string } | { skill: string }) =>
     record.units.some((unit) =>
       "slot" in given
@@ -1460,6 +1554,14 @@ export function createStacks(parts: StackParts) {
           } = DOWN;
           try {
             const answer = await statusOf(unit);
+            if (answer && "now" in answer && answer.now)
+              await keepNow(agent, unit, answer.now).catch((error) => {
+                weighed.delete(unit.instance);
+                log.warn(`What a unit's instance is today wasn't kept: ${messageOf(error)}`, {
+                  agent,
+                  instance: unit.instance,
+                });
+              });
             if (answer)
               status = {
                 state: answer.state,
