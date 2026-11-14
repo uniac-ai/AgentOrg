@@ -21,7 +21,7 @@ import { Refused } from "@agentorg/sdk";
 import { connect } from "@agentorg/sdk/client";
 import { McpServer, WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/server";
 import { z } from "zod";
-import type { Timing } from "../src/connection.ts";
+import { Connection, type Timing } from "../src/connection.ts";
 import { startMcpProvider } from "../src/index.ts";
 
 const fixture = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "server.js");
@@ -439,18 +439,25 @@ async function httpServer(t: test.TestContext, token: string) {
     response.end();
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address() as AddressInfo;
   const stop = () => {
     server.closeAllConnections();
     server.close();
   };
   t.after(stop);
+  const restart = async () => {
+    sessions = new Map();
+    newest = undefined;
+    fresh = await serve();
+  };
   return {
-    url: `http://127.0.0.1:${(server.address() as AddressInfo).port}/mcp`,
+    url: `http://127.0.0.1:${port}/mcp`,
     stop,
-    async restart() {
-      sessions = new Map();
-      newest = undefined;
-      fresh = await serve();
+    restart,
+    /** Back at the same address after `stop`, as a service started again is. */
+    async listenAgain() {
+      await restart();
+      await new Promise<void>((resolve) => server.listen(port, "127.0.0.1", resolve));
     },
   };
 }
@@ -527,6 +534,131 @@ test("a url connection sends its token, and is seen to go when its server dies",
   const refusedBy = await mcp.status({ connection: wrong });
   assert.doesNotMatch(refusedBy.detail ?? "", /ended/, "it says why, not just that it ended");
   assert.equal(heard.changed, 1, "a connection that never came up changes nothing");
+});
+
+test("a connection down for its server being gone is tried again at once when told, and is told from one its server refuses", async (t) => {
+  const quiet = { info() {}, warn() {}, error() {} };
+  const server = await httpServer(t, "the-token");
+  // A wait far longer than the test: only being told makes it try again in time.
+  const timing = { firstDelayMs: 60_000, pingEveryMs: 100 };
+  const connection = new Connection(
+    { kind: "url", url: server.url },
+    { token: "the-token" },
+    quiet,
+    timing,
+  );
+  t.after(() => connection.end());
+  connection.run();
+  await until(() => connection.status().state === "connected");
+  assert.equal(connection.unreached, false);
+  // Its server goes: down, for not reaching it.
+  server.stop();
+  await until(() => connection.status().state === "down");
+  assert.equal(connection.unreached, true);
+  // Back, it is waiting a minute; told, it tries now.
+  await server.listenAgain();
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.equal(connection.status().state, "down", "it waits until it is told");
+  connection.retry();
+  await until(() => connection.status().state === "connected", 5000);
+  assert.equal(connection.unreached, false);
+  // One its server refuses is down in the server's words, and isn't taken for one gone.
+  const other = await httpServer(t, "another-token");
+  const refused = new Connection(
+    { kind: "url", url: other.url },
+    { token: "the-token" },
+    quiet,
+    timing,
+  );
+  t.after(() => refused.end());
+  refused.run();
+  await until(() => refused.status().state === "down");
+  assert.equal(refused.unreached, false);
+});
+
+test("a connection told to try again waits the first wait again after a try that fails, and finds its server where it is now", async (t) => {
+  const quiet = { info() {}, warn() {}, error() {} };
+  const server = await httpServer(t, "the-token");
+  // Where its server is: a test moves it.
+  const at = server.url;
+  const connection = new Connection(
+    { kind: "url", url: at },
+    { token: "the-token" },
+    quiet,
+    { firstDelayMs: 200, pingEveryMs: 100 },
+    [],
+    undefined,
+    () => at,
+  );
+  t.after(() => connection.end());
+  connection.run();
+  await until(() => connection.status().state === "connected");
+  // Gone for long enough that its wait has grown to seconds: 0.2, 0.4, 0.8, 1.6, then 3.2 s.
+  server.stop();
+  await new Promise((resolve) => setTimeout(resolve, 3500));
+  // Told while its server is still gone, the try fails, and its next wait is the first again.
+  connection.retry();
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  await server.listenAgain();
+  const back = Date.now();
+  await until(() => connection.status().state === "connected", 5000);
+  assert.ok(Date.now() - back < 1500, `connected ${Date.now() - back} ms after`);
+});
+
+test("a connection still taken for connected, whose server moved, finds it where it is now when told, and one with nowhere to go sends nothing", async (t) => {
+  const quiet = { info() {}, warn() {}, error() {} };
+  const server = await httpServer(t, "the-token");
+  let at: string | undefined = server.url;
+  // Its own ping is a minute away: only being told can find its server gone.
+  const connection = new Connection(
+    { kind: "url", url: server.url },
+    { token: "the-token" },
+    quiet,
+    { firstDelayMs: 60_000, pingEveryMs: 60_000 },
+    [],
+    undefined,
+    () => at,
+  );
+  t.after(() => connection.end());
+  const states: string[] = [];
+  connection.onState(() => states.push(connection.status().state));
+  connection.run();
+  await until(() => connection.status().state === "connected");
+  // Its server moves, as a service started again on another port does.
+  const moved = await httpServer(t, "the-token");
+  at = moved.url;
+  server.stop();
+  states.length = 0;
+  assert.equal(connection.status().state, "connected", "nothing has noticed yet");
+  connection.retry();
+  // Asked, its server is gone; tried again at once, it is where it is now.
+  await until(() => states.join(" ") === "down connected", 5000);
+  // Gone, with nowhere it is now: nothing is tried, so its token goes to no other address.
+  const asked: string[] = [];
+  const listening = createServer((request, response) => {
+    asked.push(String(request.headers.authorization));
+    response.writeHead(500).end();
+  });
+  await new Promise<void>((resolve) => listening.listen(0, "127.0.0.1", resolve));
+  t.after(() => {
+    listening.closeAllConnections();
+    listening.close();
+  });
+  const nowhere = new Connection(
+    { kind: "url", url: `http://127.0.0.1:${(listening.address() as AddressInfo).port}/mcp` },
+    { token: "the-token" },
+    quiet,
+    { firstDelayMs: 50, pingEveryMs: 60_000 },
+    [],
+    undefined,
+    () => undefined,
+  );
+  t.after(() => nowhere.end());
+  nowhere.run();
+  await until(() => nowhere.status().state === "down");
+  assert.equal(nowhere.status().detail, "Its server isn't anywhere it can be reached now.");
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.deepEqual(asked, []);
 });
 
 test("a url connection a server refuses says the server's own words", async (t) => {

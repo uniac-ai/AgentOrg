@@ -179,12 +179,17 @@ export class Connection {
   #hub: HubClient<Record<never, never>, { tools: typeof tools }> | undefined;
   #ended = false;
   #wake: (() => void) | undefined;
+  /** Whether the server answered the last try in its own words, as a refusal does. */
+  #answered = false;
+  /** Asked to try again now: the waits after start over. */
+  #again = false;
   /** Ends the current session at once, whatever its transport is still waiting for. */
   #lose: (() => void) | undefined;
   #running: Promise<void> | undefined;
   readonly #spec: Spec;
   readonly #hide: ReadonlySet<string>;
   readonly #groups: Groups | undefined;
+  readonly #where: (() => string | undefined) | undefined;
   readonly #secrets: Secrets;
   readonly #log: Log;
   readonly #scrub: (text: string) => string;
@@ -204,9 +209,12 @@ export class Connection {
     timing: Timing = {},
     hide: readonly string[] = [],
     groups?: Groups,
+    /** For a url: where its server is now, looked at again at each try, for one that moves. */
+    where?: () => string | undefined,
   ) {
     this.#hide = new Set(hide);
     this.#groups = groups;
+    this.#where = where;
     this.#spec = spec;
     this.#secrets = secrets;
     this.#pingEveryMs = timing.pingEveryMs ?? PING_EVERY_MS;
@@ -263,6 +271,31 @@ export class Connection {
         ...(tool.description ? { description: cut(tool.description, STATUS_DESCRIPTION_MAX) } : {}),
       })),
     };
+  }
+
+  /**
+   * Try again now, as when its server is known to be back: if it is down and waiting to, at once,
+   * waiting the first wait again after a try that fails; if it is connected, by asking its server
+   * now, as its next ping would, and trying again at once if it has gone.
+   */
+  retry() {
+    if (this.#state === "connected") {
+      const mcp = this.#mcp;
+      mcp?.ping({ timeout: PING_TIMEOUT_MS }).catch((error) => {
+        if (error instanceof ProtocolError || this.#mcp !== mcp) return;
+        this.#again = true;
+        this.#lose?.();
+      });
+      return;
+    }
+    if (this.#state !== "down") return;
+    this.#again = true;
+    this.#wake?.();
+  }
+
+  /** Whether it is down for its server not answering, or its connection ending, not a refusal. */
+  get unreached() {
+    return this.#state === "down" && !this.#answered;
   }
 
   /** End it: the server is let go and the Actor leaves the Hub. */
@@ -381,20 +414,30 @@ export class Connection {
       if (this.#ended) return;
       this.#set("down", why);
       if (Date.now() - began >= STEADY_MS) delay = this.#firstDelayMs;
-      await new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, delay);
-        this.#wake = () => {
-          clearTimeout(timer);
-          resolve();
-        };
-      });
-      delay = Math.min(delay * 2, MAX_DELAY_MS);
+      // Told to try again while it was trying: no wait.
+      if (!this.#again)
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, delay);
+          this.#wake = () => {
+            clearTimeout(timer);
+            resolve();
+          };
+        });
+      this.#wake = undefined;
+      delay = this.#again ? this.#firstDelayMs : Math.min(delay * 2, MAX_DELAY_MS);
+      this.#again = false;
     }
   }
 
   /** One connection to the server, for as long as it lasts; it resolves with why it ended. */
   async #session(): Promise<string> {
     const log = this.#log;
+    // With nowhere it is now, nothing is tried: its token goes to no other address.
+    const spec = this.#now();
+    if (!spec) {
+      this.#answered = false;
+      return "Its server isn't anywhere it can be reached now.";
+    }
     const mcp: Client = new Client(
       { name: "agentorg", version: "0" },
       {
@@ -412,6 +455,9 @@ export class Connection {
       },
     );
     this.#mcp = mcp;
+    // Whether the server refused it, in its own words: kept once the try is over, so a try under
+    // way doesn't change what the last one said.
+    let answered = false;
     let over = false;
     const closed = new Promise<void>((resolve) => {
       const done = () => {
@@ -425,7 +471,7 @@ export class Connection {
     try {
       // A failed start closes before it rejects: what it rejects with is the reason to give.
       for (const step of [
-        () => mcp.connect(transportOf(this.#spec, this.#secrets, log)),
+        () => mcp.connect(transportOf(spec, this.#secrets, log)),
         () => this.#refresh(mcp),
       ]) {
         const going = step();
@@ -446,13 +492,23 @@ export class Connection {
       await closed;
       return "The connection to the server ended.";
     } catch (error) {
+      answered = error instanceof SdkHttpError;
       return messageOf(error);
     } finally {
+      this.#answered = answered;
       clearInterval(pinging);
       this.#mcp = undefined;
       this.#lose = undefined;
       await mcp.close().catch(() => {});
     }
+  }
+
+  /** What it connects to now: a url where its server is now, or nothing if it is nowhere now. */
+  #now(): Spec | undefined {
+    const spec = this.#spec;
+    if (spec.kind !== "url" || !this.#where) return spec;
+    const url = this.#where();
+    return url ? { ...spec, url } : undefined;
   }
 
   async #refresh(mcp: Client) {
