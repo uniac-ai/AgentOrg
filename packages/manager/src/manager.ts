@@ -106,6 +106,39 @@ const alreadyGone = (error: unknown) => error instanceof Refused && error.code =
 const withInstance = (instance: string | undefined) => (instance ? { instance } : {});
 
 /**
+ * The records as this version reads them. What an agent holds keeps the members a later version
+ * added (`CapabilityRecord`). A member this version doesn't know anywhere else, such as in a saved
+ * template, whose members say how an agent is built, is left out, and is gone after this version
+ * next saves; the rest is still read, where before all of it was set aside. What was left out is
+ * given back, to be said once. This relies on zod reporting `unrecognized_keys` at the object's
+ * path, which it does for the records' strict shapes: they hold no union of objects, where it
+ * could read a record as another of its kinds.
+ */
+function withoutLater(parsed: unknown) {
+  const left: string[] = [];
+  for (;;) {
+    const read = Records.safeParse(parsed);
+    if (read.success) return { read: read.data, left };
+    const { issues } = read.error;
+    if (!issues.every((issue) => issue.code === "unrecognized_keys")) throw read.error;
+    let dropped = false;
+    for (const issue of issues) {
+      const at = issue.path.reduce<unknown>(
+        (value, key) => (value as Record<PropertyKey, unknown> | undefined)?.[key],
+        parsed,
+      ) as Record<string, unknown> | undefined;
+      for (const key of issue.keys)
+        if (at && key in at) {
+          delete at[key];
+          left.push([...issue.path, key].join("."));
+          dropped = true;
+        }
+    }
+    if (!dropped) throw read.error;
+  }
+}
+
+/**
  * Run management as an Actor exporting `agents@1`, `connections@1`, `skills@1` and, as `settings`,
  * `agent.settings@1`. It keeps only what the Hub can't know. A provider is connected by exposing
  * its export to this Actor: the Hub's slots are the list of them, and what is exposed to an agent
@@ -136,7 +169,9 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
     }
     try {
       const parsed = JSON.parse(raw);
-      const read = Records.parse(parsed);
+      const { read, left } = withoutLater(parsed);
+      if (left.length > 0)
+        log.warn("Management's records hold what a later version wrote: left out.", { left });
       // From before copies were kept: its units' skills are still to be taken as copies, each
       // when its text is one its provider shipped.
       if (parsed && typeof parsed === "object" && !("copies" in parsed))

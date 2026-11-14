@@ -329,15 +329,20 @@ async function setup(t: test.TestContext) {
       export: slot,
     })),
   });
-  /** What management logged as information. */
+  /** What management logged as information, and as warnings. */
   const logged: string[] = [];
+  const warned: { line: string; fields?: unknown }[] = [];
   const startManagement = () =>
     startManager({
       hubUrl: server.url,
       actorId: management.actorId,
       credential: management.credential as string,
       dir,
-      log: { info: (line) => logged.push(line), warn: () => {}, error: () => {} },
+      log: {
+        info: (line) => logged.push(line),
+        warn: (line, fields) => warned.push({ line, fields }),
+        error: () => {},
+      },
     });
   let manager = await startManagement();
   leaving.push(() => manager.close());
@@ -846,6 +851,7 @@ async function setup(t: test.TestContext) {
     dir,
     script,
     logged,
+    warned,
     given,
     heard,
     agentActor,
@@ -1825,6 +1831,89 @@ test("a connection the Connection unit gives stands as the connection does", asy
     assert.ok(i < 300, "it never read as down");
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
+});
+
+test("records a later version wrote are read: what an agent holds keeps the members this version doesn't know, and answers without them", async (t) => {
+  const s = await setup(t);
+  const { agent } = await s.calls.agents.create({
+    stack: { base: s.base, units: [s.unit("desk")] },
+    name: "Holder",
+  });
+  await s.calls.agents.saveTemplate({
+    id: "kept",
+    title: "Kept",
+    description: "",
+    base: { provider: "Agents", creatable: "plain" },
+    units: [{ provider: "Units", unit: "badge" }],
+  });
+  const before = await s.calls.agents.get({ agent });
+  // As a later version might keep them: a member of a row, of a view, of what it holds and of a
+  // template.
+  await s.restart((kept) => {
+    const records = kept as unknown as {
+      agents: Record<string, { capabilities: { views: { fixed?: object[] }[] }[] }>;
+      templates: Record<string, object>;
+    };
+    const held = records.agents[agent]?.capabilities[0] as {
+      surfaces: object[];
+      views: { fixed: object[] }[];
+    };
+    Object.assign(held.surfaces[0] as object, { later: "s" });
+    Object.assign(held.views[0]?.fixed[0] as object, { note: "A line under it" });
+    Object.assign(held.views[0] as object, { later: true });
+    Object.assign(held, { later: 1 });
+    Object.assign(records.templates.kept as object, { later: "x" });
+  });
+  const after = await s.calls.agents.get({ agent });
+  assert.deepEqual(after.capabilities, before.capabilities, "answered as this version knows them");
+  assert.deepEqual(
+    (await s.calls.agents.templates({})).templates.map((one) => one.id),
+    ["kept"],
+  );
+  // Saved again, what it holds still has them, for a later version to read; a template, whose
+  // members say how an agent is built, is kept as this version knows it.
+  await s.calls.agents.saveTemplate({
+    id: "another",
+    title: "Another",
+    description: "",
+    base: { provider: "Agents", creatable: "plain" },
+    units: [],
+  });
+  const saved = JSON.parse(readFileSync(join(s.dir, "manager.json"), "utf8")) as {
+    agents: Record<string, { capabilities: Record<string, unknown>[] }>;
+    templates: Record<string, Record<string, unknown>>;
+  };
+  assert.equal(saved.templates.kept?.later, undefined);
+  const held = saved.agents[agent]?.capabilities[0] as {
+    later?: number;
+    surfaces: { later?: string }[];
+    views: { later?: true; fixed?: { note?: string }[] }[];
+  };
+  assert.equal(held.later, 1);
+  assert.equal(held.surfaces[0]?.later, "s");
+  assert.equal(held.views[0]?.later, true);
+  assert.equal(held.views[0]?.fixed?.[0]?.note, "A line under it");
+  // What it left out is said once.
+  assert.deepEqual(
+    s.warned.filter(({ line }) => line.includes("what a later version wrote")),
+    [
+      {
+        line: "Management's records hold what a later version wrote: left out.",
+        fields: { left: ["templates.kept.later"] },
+      },
+    ],
+  );
+  // What this version can't read for another reason still sets them aside, a member it doesn't
+  // know where it reads strictly beside it too.
+  await s.restart((kept) => {
+    const records = kept as unknown as {
+      agents: Record<string, { capabilities: { person: object; views: { fixed: object[] }[] }[] }>;
+    };
+    const held = records.agents[agent]?.capabilities[0];
+    Object.assign(held?.views[0]?.fixed[0] as object, { value: 5 });
+    Object.assign(held?.person as object, { later: 1 });
+  });
+  assert.deepEqual((await s.calls.agents.list({})).agents, []);
 });
 
 test("an agent from before units reads and goes as it did", async (t) => {

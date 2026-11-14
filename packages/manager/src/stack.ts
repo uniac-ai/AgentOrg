@@ -10,6 +10,7 @@ import {
   ConnectionOrigin,
   type ConnectionStatus,
   type Creatable,
+  FactRow,
   FieldValues,
   type LiveSurface,
   type OwnCapability,
@@ -17,10 +18,12 @@ import {
   ResultKind,
   SkillName,
   SlotName,
+  Surface,
   Template,
   type Unit,
   UnitResult,
   type unitProvider,
+  View,
 } from "@agentorg/interfaces";
 import { type Log, Refused, type Slot } from "@agentorg/sdk";
 import { z } from "zod";
@@ -72,7 +75,36 @@ const UnitRecord = z.object({
  * An agent's own capability, the one its creatable gives it, is kept with the agent itself as its
  * `from`: no unit is, and a manager from before own capabilities still reads the record.
  */
-const CapabilityRecord = AgentCapability.extend({ actor: z.string() });
+/**
+ * What an agent holds, kept as written: its surfaces, its views and their rows keep members a
+ * later version added, which this version doesn't know, so going back and forth loses none of
+ * them. Only what this version knows is answered (`known`).
+ */
+const CapabilityRecord = z.looseObject(AgentCapability.shape).extend({
+  actor: z.string(),
+  surfaces: z.array(z.looseObject(Surface.shape)).max(16),
+  views: z
+    .array(
+      z
+        .looseObject(View.shape)
+        .extend({ fixed: z.array(z.looseObject(FactRow.shape)).max(32).optional() }),
+    )
+    .max(32),
+});
+/** Of a kept object, the members `schema` knows. */
+const knownTo = <T extends z.ZodObject>(schema: T, kept: object) =>
+  Object.fromEntries(
+    Object.entries(kept).filter(([key]) => Object.hasOwn(schema.shape, key)),
+  ) as z.output<T>;
+/** What a kept capability is, as this version answers it. */
+const known = (kept: z.output<typeof CapabilityRecord>) => ({
+  ...knownTo(AgentCapability, kept),
+  surfaces: kept.surfaces.map((one) => knownTo(Surface, one)),
+  views: kept.views.map(({ fixed, ...view }) => ({
+    ...knownTo(View, view),
+    ...(fixed ? { fixed: fixed.map((row) => knownTo(FactRow, row)) } : {}),
+  })),
+});
 /** What only management knows of an agent: where it came from, what it is told, and its skills. */
 export const AgentRecord = z.object({
   provider: z.string(),
@@ -1460,9 +1492,10 @@ export function createStacks(parts: StackParts) {
       // What it holds, from the record alone: no unit is asked, and nothing of how it stands.
       // Without its Actor's id: a page reaches it by the person's slots, which are in it.
       // Its own has no `from` for a page: no unit made it.
-      const capabilities = record.capabilities.map(({ actor: _, from, ...held }) =>
-        from === agent ? held : { ...held, from },
-      );
+      const capabilities = record.capabilities.map((kept) => {
+        const { from, ...held } = known(kept);
+        return from === agent ? held : { ...held, from };
+      });
       return { units, tools, instanceOfSkill, instanceOfSlot, capabilities };
     },
 
