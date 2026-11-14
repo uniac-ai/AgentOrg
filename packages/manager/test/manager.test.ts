@@ -376,6 +376,8 @@ async function setup(t: test.TestContext) {
     noCapability?: boolean;
     /** The fixed rows a unit gives, by view, instead of those it declared. */
     rows?: Record<string, { label: string; value: string }[]>;
+    /** What each instance's status says it is in today's words. */
+    now?: { values: Record<string, unknown>; rows?: Record<string, object[]> };
   } = {};
   const given: {
     secrets: unknown[];
@@ -661,6 +663,7 @@ async function setup(t: test.TestContext) {
           return {
             state: "connected" as const,
             surfaces: [{ surface: "screen", protocol: "stand-in@1", operate: true }],
+            ...(script.now ? { now: script.now as never } : {}),
             connections: made
               .filter(({ slot }) => slot !== "")
               .map(({ connection }) => ({
@@ -3425,6 +3428,52 @@ test("an agent that can't be made leaves nothing, and its unit goes alone", asyn
   const after = await s.calls.agents.get({ agent: parent });
   assert.deepEqual([after.units, after.mcp, after.skills], [[], [], []]);
   assert.ok((await s.openActors()).includes(s.management.actorId), "management stays");
+});
+
+test("what a unit says its instance is in today's words is kept, as if applied today; what doesn't fit is left, said once", async (t) => {
+  const s = await setup(t);
+  const { agent } = await s.calls.agents.create({
+    stack: { base: s.base, units: [s.unit("desk", { lamp: true })] },
+    name: "Holder",
+  });
+  const held = async () => {
+    const got = await s.calls.agents.get({ agent });
+    const [{ person: _, ...one }] = got.capabilities as [
+      NonNullable<typeof got.capabilities>[number],
+    ];
+    return { values: got.units.find((unit) => unit.unit === "desk")?.values, ...one };
+  };
+  // As made under older words: today it has no lamp, and its place reads otherwise.
+  const where = [{ label: "Where", value: "By the door", note: "Moved here" }];
+  s.script.now = { values: { lamp: false }, rows: { where } };
+  const now = await held();
+  assert.deepEqual(now.values, { lamp: false });
+  assert.deepEqual(now.surfaces, [{ surface: "top", protocol: "stand-in@1" }]);
+  assert.deepEqual(
+    now.views.map((view) => [view.id, view.fixed]),
+    [
+      ["where", where],
+      ["about", undefined],
+      ["status", undefined],
+    ],
+  );
+  // Kept: the records have it after a restart, with nothing said again.
+  s.script.now = undefined;
+  await s.restart(() => {});
+  assert.deepEqual(await held(), now);
+
+  // One that doesn't fit today's form, or gives rows for no view of its, is left and said once.
+  const misfits: { values: Record<string, unknown>; rows: Record<string, object[]> }[] = [
+    { values: { lamp: "bright" }, rows: { where } },
+    { values: { lamp: true }, rows: { where, glow: where } },
+  ];
+  for (const misfit of misfits) {
+    s.script.now = misfit;
+    await held();
+    assert.deepEqual(await held(), now);
+  }
+  const left = s.warned.filter(({ line }) => line.includes("which doesn't fit"));
+  assert.equal(left.length, 2);
 });
 
 test("an agent holds the capability its unit builds, and the person reaches it by slots of their own", async (t) => {
