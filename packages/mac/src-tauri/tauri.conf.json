@@ -3,7 +3,7 @@
   "productName": "AgentOrg",
   "mainBinaryName": "AgentOrg",
   "version": "../package.json",
-  "identifier": "ai.uniac.agentorg",
+  "identifier": "dev.agentorg.mac",
   "build": {
     "frontendDist": "../../mac-window/dist",
     "devUrl": "http://localhost:5180",

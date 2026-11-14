@@ -2,6 +2,8 @@
 
 The AgentOrg Mac app, `AgentOrg.app`, built with Tauri: its window, showing the page from [`@agentorg/mac-window`](../mac-window), built in, and the commands that page's seam calls.
 
+Its identifier, `dev.agentorg.mac`, is provisional until the app has its signing identity.
+
 ## The seam
 
 The page calls the app's commands through what Tauri gives it (`withGlobalTauri`), in [`../mac-window/src/tauri.ts`](../mac-window/src/tauri.ts). Each command reads the service on this Mac from the record the service leaves while it runs, in its data folder, `~/Library/Application Support/AgentOrg/computer`. Its address is in `server.json`, and its control token in `control-token`. The token stays in the app; the page never sees it.
@@ -28,7 +30,7 @@ With no record in the data folder, or one left by a service that has stopped, th
 What it does write:
 
 - **Its log,** `~/Library/Logs/AgentOrg/AgentOrg.log`: a line when it opens, then a line each time a command goes from answered to refused or back, or from one refusal to another, and each time the window's height changes, each with its time. At 10 MB it moves to `AgentOrg.1.log`.
-- **What macOS and WebKit keep for any app,** under its identifier, `ai.uniac.agentorg`, in the user's Library: the page's own storage among them, where it keeps the grants it last saw, to tell a grant taken away from one never given.
+- **What macOS and WebKit keep for any app,** under its identifier, `dev.agentorg.mac`, in the user's Library: the page's own storage among them, where it keeps the grants it last saw, to tell a grant taken away from one never given.
 
 ## Building it
 

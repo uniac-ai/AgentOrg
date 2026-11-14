@@ -41,15 +41,26 @@ fn data() -> PathBuf {
 }
 
 /// The service's address and control token. Nothing is written here: with no record, or one it
-/// left when it stopped, there is no service to answer.
+/// left when it stopped, or one naming an address off this Mac, there is no service to answer.
 fn service() -> Result<(String, String), Refusal> {
     let none = || Refusal { code: 503, message: "AgentOrg's service isn't running.".into() };
     let record: Value =
         serde_json::from_slice(&fs::read(data().join("server.json")).map_err(|_| none())?)
             .map_err(|_| none())?;
-    let url = record["url"].as_str().ok_or_else(none)?.to_owned();
+    let url = record["url"].as_str().filter(|url| here(url)).ok_or_else(none)?.to_owned();
     let token = fs::read_to_string(data().join("control-token")).map_err(|_| none())?;
     Ok((url, token.trim().to_owned()))
+}
+
+/// Whether an address is on this Mac, over plain http: the token goes nowhere else.
+fn here(url: &str) -> bool {
+    let Some(rest) = url.strip_prefix("http://") else { return false };
+    let authority = rest.split('/').next().unwrap_or_default();
+    let host = match authority.strip_prefix('[') {
+        Some(bracketed) => bracketed.split(']').next().unwrap_or_default(),
+        None => authority.split(':').next().unwrap_or_default(),
+    };
+    matches!(host, "127.0.0.1" | "localhost" | "::1")
 }
 
 /// One call to the service, answered with its JSON, or refused with its words.
@@ -332,6 +343,10 @@ mod tests {
             assert!(sent.starts_with(first) && sent.ends_with(last), "{sent}");
         }
 
+        // A record naming an address off this Mac is no service: the token isn't sent there.
+        record("http://192.0.2.1:7878");
+        assert_eq!(run(setup()).unwrap_err().code, 503);
+
         // A part that isn't one is refused before anything is sent.
         assert_eq!(run(set_switch("../computers".into(), true)).unwrap_err().code, 400);
 
@@ -341,6 +356,23 @@ mod tests {
         assert_eq!(run(app_state()), "starting again");
 
         let _ = fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn the_token_goes_only_to_this_mac() {
+        for here_ in ["http://127.0.0.1:7878", "http://localhost:7878", "http://[::1]:7878"] {
+            assert!(here(here_), "{here_}");
+        }
+        for elsewhere in [
+            "http://192.0.2.1:7878",
+            "https://127.0.0.1:7878",
+            "http://localhost.example.com:7878",
+            "http://127.0.0.1@example.com/",
+            "http://example.com/127.0.0.1:7878",
+            "",
+        ] {
+            assert!(!here(elsewhere), "{elsewhere}");
+        }
     }
 
     #[test]
