@@ -505,6 +505,8 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
       input: [] as Record<string, unknown>[],
       /** As many are running as may. */
       full: false,
+      /** Its service has gone, as while it restarts: a socket to it is ended before it opens. */
+      away: false,
     },
     /** `metrics@1`: the sockets watching, and the latest reading, which one that opens later gets at once. */
     load: { sockets: new Set<WebSocket>(), reading: undefined as string | undefined },
@@ -1174,6 +1176,7 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
       const surface = unit?.status.surfaces?.find((one) => one.surface === target.surface);
       if (!surface) return socket.close(4404, "No such surface.");
       live.opened.push(target);
+      if (surface.protocol === "terminal@1" && live.terminal.away) return socket.terminate();
       socket.send(JSON.stringify({ op: "live", protocol: surface.protocol }));
       if (surface.protocol === "screencast@1") screencast(socket, target.mode);
       if (surface.protocol === "terminal@1") terminalSocket(socket, target.mode);
