@@ -17,6 +17,19 @@ export const WayForward = z.strictObject({
 });
 
 /**
+ * Something long a capability does before it can be reached, such as fetching what it is made
+ * from: the provider's words for it, such as "Downloading its image", how far it has come and the
+ * whole when that is known, in bytes, and when it last moved (ISO 8601). A host draws a meter and
+ * says how long nothing has moved, from `moved`, and adds no meaning of its own.
+ */
+export const Progress = z.strictObject({
+  title: z.string().min(1).max(128),
+  done: z.number().int().min(0),
+  total: z.number().int().min(0).optional(),
+  moved: z.string().max(64),
+});
+
+/**
  * `capability@1`: something an agent holds, as it stands now. One Actor per capability exports
  * it; the person is connected to it when the agent is built, as to the agent's chats, and the
  * page asks it through that binding. No unit is asked: this is the built agent's side.
@@ -40,6 +53,8 @@ export const capability = defineInterface({
         surfaces: z.array(LiveSurface).max(16),
         /** With `down`, the ways forward the person can take, in the order to offer them. */
         ways: z.array(WayForward).max(4).optional(),
+        /** While it can't be reached yet, something long it is doing first. */
+        progress: Progress.optional(),
       }),
     }),
     live: method({
