@@ -83,6 +83,12 @@ async function standIn(t: test.TestContext, records: Record<string, Record<strin
     body?: Record<string, unknown>;
   }[] = [];
   const computers = new Map<string, Record<string, unknown>>(Object.entries(records));
+  /** What it says of this computer, which a test may change: each part ready, or why not. */
+  const thisComputer = {
+    ready: true,
+    capabilities: [] as { capability: string; ready: boolean; reason?: string }[],
+    browsers: [],
+  };
   // Its address as it listens: a request that comes as it closes is still answered.
   let base = "";
   const server = createServer(async (request, response) => {
@@ -107,7 +113,7 @@ async function standIn(t: test.TestContext, records: Record<string, Record<strin
     if (request.method === "GET" && path === "/v1/info")
       return send(200, {
         version: "0.0.19",
-        thisComputer: { ready: true, capabilities: [], browsers: [] },
+        thisComputer,
         made: [{ isolation: "container", ready: true, capabilities: [], browsers: [] }],
       });
     if (request.method === "POST" && path === "/v1/computers") {
@@ -212,7 +218,7 @@ async function standIn(t: test.TestContext, records: Record<string, Record<strin
     server.closeAllConnections();
     return new Promise((resolve) => server.close(resolve));
   });
-  return { apiUrl: base, apiKey: token, asked, computers, held };
+  return { apiUrl: base, apiKey: token, asked, computers, held, thisComputer };
 }
 
 interface Service {
@@ -1114,6 +1120,51 @@ test("on a Mac with AgentOrg Mac not open, this computer says to open it, and no
   );
   await assert.rejects(apply(local("files")), /The AgentOrg app isn't open on this Mac/);
   assert.equal(command.ran(), false, "nothing of AgentComputer was started");
+});
+
+test("this computer with its files switched off can't be chosen, in the AgentOrg app's words on a Mac and its service's elsewhere; its terminal off is its service's to refuse", async (t) => {
+  for (const mac of [true, false])
+    await t.test(mac ? "AgentOrg Mac" : "the service this machine runs", async (t) => {
+      const command = onPathThatSays(t);
+      const { units, apply, local, macRecord, data } = await setup(t, {
+        service: false,
+        path: command.bin,
+        mac,
+      });
+      const app = await standIn(t);
+      recordIn(t, mac ? macRecord : data, app);
+      const where = mac ? "this Mac" : "this machine";
+      const off = (part: string) => ({
+        capability: part,
+        ready: false,
+        reason: `The person turned off the ${part} for agents on ${where}.`,
+      });
+      const thisOne = async () =>
+        form(
+          (await units.units({})).units.find((one) => one.id === "computer"),
+          "kind",
+        )?.options?.find((one) => one.value === "this")?.unavailable;
+      // All off, as a Mac lending itself starts: this computer can't be chosen, and says why.
+      app.thisComputer.capabilities = [
+        { capability: "about", ready: true },
+        off("terminal"),
+        off("files"),
+        off("screen"),
+      ];
+      assert.equal(
+        await thisOne(),
+        mac
+          ? "Files are turned off in the AgentOrg app. Turn them on there to use this computer."
+          : "The person turned off the files for agents on this machine.",
+      );
+      // Its files on and its terminal still off: chosen with its terminal, which its service
+      // refuses the agent until the person turns it on.
+      app.thisComputer.capabilities[2] = { capability: "files", ready: true };
+      assert.equal(await thisOne(), undefined);
+      const made = await apply(local("terminal"));
+      assert.equal(command.ran(), false);
+      await units.remove({ instance: made.instance });
+    });
 });
 
 test("on a Mac with AgentOrg Mac, this computer attached through the service you run gets the one way on; that service is never started", async (t) => {

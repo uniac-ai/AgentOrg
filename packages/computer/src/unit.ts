@@ -56,6 +56,8 @@ const MacApp = MAC_APP.charAt(0).toUpperCase() + MAC_APP.slice(1);
 export const OPEN_MAC = `${MacApp} isn't open on this Mac. Open it to use this computer.`;
 /** What to do when AgentOrg Mac's service is older than this build. */
 export const UPDATE_MAC = `${MacApp} on this Mac is older than this AgentOrg. Update it, and open it again.`;
+/** Why this computer can't be chosen while its files are off in AgentOrg Mac. */
+const FILES_OFF_MAC = `Files are turned off in ${MAC_APP}. Turn them on there to use this computer.`;
 /** Why no container is made here, where AgentOrg Mac makes none. */
 export const NO_CONTAINER_MAC = `${MacApp} makes no container. To use a computer you run yourself, give its address.`;
 /** What to do when AgentComputer isn't installed here: the app doesn't include it. */
@@ -71,7 +73,12 @@ export const INSTALL_STEPS =
  */
 export type Found =
   | {
-      thisComputer?: { ready: boolean; reason?: string };
+      thisComputer?: {
+        ready: boolean;
+        reason?: string;
+        /** Each part of it, ready or not: one the person switched off isn't, and says so. */
+        capabilities?: { capability: string; ready: boolean; reason?: string }[];
+      };
       made: { isolation: string; ready: boolean; reason?: string }[];
       starts?: true;
       why?: string;
@@ -83,10 +90,14 @@ const notHere = (found: Found, kind: typeof THIS | typeof CONTAINER) => {
   if (!found) return INSTALL_STEPS;
   if (found.why) return found.why;
   if (found.starts) return undefined;
-  if (kind === THIS)
-    return found.thisComputer?.ready === false
-      ? (found.thisComputer.reason ?? "The provider here can't attach this computer now.")
-      : undefined;
+  if (kind === THIS) {
+    if (found.thisComputer?.ready === false)
+      return found.thisComputer.reason ?? "The provider here can't attach this computer now.";
+    // Every reach it is offered with works in its files: with those off, none does. On a Mac, the
+    // person turns them on in AgentOrg Mac, which is said in its words.
+    const files = filesOff(found);
+    return files && found.mac ? FILES_OFF_MAC : files;
+  }
   const container = found.made.find((one) => one.isolation === CONTAINER);
   return !container
     ? "The provider here can't make containers."
@@ -95,6 +106,17 @@ const notHere = (found: Found, kind: typeof THIS | typeof CONTAINER) => {
       : (container.reason ?? "The provider here can't make a container now.");
 };
 const unavailable = (why: string | undefined) => (why ? { unavailable: why } : {});
+/**
+ * Why this computer's files can't be used now, as its service says: the person can switch them
+ * off. Nothing where it says nothing of them, as an older service doesn't. Its other parts are its
+ * service's to refuse to the agent while they are off: the person may turn them on later.
+ */
+const filesOff = (found: Found) => {
+  const files = found?.thisComputer?.capabilities?.find((one) => one.capability === "files");
+  return files && !files.ready
+    ? (files.reason ?? "This computer's files can't be used now.")
+    : undefined;
+};
 
 /** The form as it stands now, with what was found on this machine. */
 export const computerUnit = (found: Found): z.input<typeof Unit> => ({
