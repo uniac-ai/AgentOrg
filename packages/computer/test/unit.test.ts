@@ -147,7 +147,7 @@ test("the computer's form is titled and ordered: which computer, where, how it's
   assert.deepEqual(titles("ownBrowser"), ["Your browser", "No browser"]);
 });
 
-test("this computer's screen and the person's browser: on while they can be had, greyed with why while not, in the AgentOrg app's words for a switch", () => {
+test("this computer's screen and the person's browser: off unless chosen, greyed with why while they can't be had, in the AgentOrg app's words for a switch", () => {
   const field = (found: Found, id: string) => computerUnit(found).form.find((one) => one.id === id);
   const here = (
     screen: { ready: boolean; reason?: string },
@@ -165,10 +165,10 @@ test("this computer's screen and the person's browser: on while they can be had,
     },
     ...more,
   });
-  // Ready: on, and what each gives.
+  // Ready: offered, off unless chosen until it has been checked on a real Mac, and what each gives.
   const ready = here({ ready: true }, { ready: true });
-  assert.equal(field(ready, "screen")?.default, "on");
-  assert.equal(field(ready, "ownBrowser")?.default, "yours");
+  assert.equal(field(ready, "screen")?.default, "off");
+  assert.equal(field(ready, "ownBrowser")?.default, "none");
   assert.equal(option(ready, "screen", "on")?.unavailable, undefined);
   assert.equal(option(ready, "ownBrowser", "yours")?.caution, true);
   assert.deepEqual(option(ready, "screen", "on")?.adds, {

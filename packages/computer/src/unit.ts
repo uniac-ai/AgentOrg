@@ -288,8 +288,9 @@ export const computerUnit = (found: Found): z.input<typeof Unit> => {
         value: "string",
         title: "Screen",
         required: true,
-        // On while it can be had: one greyed isn't left chosen.
-        default: screenOff || !found?.thisComputer ? "off" : "on",
+        // Off unless chosen, until it has been checked through AgentOrg on a real Mac. The draft's
+        // default returns then: on while it can be had, so one greyed isn't left chosen.
+        default: "off",
         visible: { field: "kind", in: [THIS] },
         options: [
           {
@@ -309,7 +310,9 @@ export const computerUnit = (found: Found): z.input<typeof Unit> => {
         value: "string",
         title: "Browser",
         required: true,
-        default: ownOff || !found?.thisComputer ? "none" : "yours",
+        // Off unless chosen, until it has been checked through AgentOrg in the person's own browser.
+        // The draft's default returns then, as the screen's does.
+        default: "none",
         visible: { field: "kind", in: [THIS] },
         options: [
           {
