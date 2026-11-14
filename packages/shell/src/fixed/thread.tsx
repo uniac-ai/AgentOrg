@@ -244,7 +244,9 @@ function Composer({
         ref={words}
         aria-label="Message"
         placeholder={`Message ${name}`}
-        className="min-h-14 px-4 pt-3.5 text-[15px]"
+        // It grows with what is written, to about two fifths of the chat; past that it scrolls, so
+        // the thread, and what went wrong above it, stay in view.
+        className="max-h-[40dvh] min-h-14 overflow-y-auto px-4 pt-3.5 text-[15px]"
         value={text}
         onChange={(event) => setText(event.target.value)}
         onPaste={(event) => {

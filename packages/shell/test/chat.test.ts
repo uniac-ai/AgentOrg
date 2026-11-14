@@ -142,6 +142,15 @@ test(
       .waitFor();
     assert.equal(gateway.calls.filter((c) => c.method === "send").length, 0, "nothing sent");
     assert.equal(await input(page).inputValue(), long);
+    // The box is as tall as two fifths of the chat at most, scrolling inside, so the line is seen.
+    const box = await input(page).boundingBox();
+    assert.ok(box && box.height <= 900 * 0.4 + 1, `the box is ${box?.height} tall`);
+    assert.equal(await panel(page).getByRole("alert").isVisible(), true);
+    const line = await panel(page).getByRole("alert").boundingBox();
+    assert.ok(
+      line && line.y >= 0 && line.y + line.height <= (box?.y ?? 0),
+      "the line is above the box, in view",
+    );
     assert.deepEqual(
       await input(page).evaluate((box: HTMLTextAreaElement) => [
         box.selectionStart,
