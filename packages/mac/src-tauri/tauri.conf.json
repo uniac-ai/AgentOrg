@@ -1,0 +1,39 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "AgentOrg",
+  "mainBinaryName": "AgentOrg",
+  "version": "../package.json",
+  "identifier": "dev.agentorg.mac",
+  "build": {
+    "frontendDist": "../../mac-window/dist",
+    "devUrl": "http://localhost:5180",
+    "beforeBuildCommand": "npm run build --workspace @agentorg/mac-window",
+    "beforeDevCommand": "npm run dev --workspace @agentorg/mac-window"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "AgentOrg",
+        "width": 460,
+        "height": 480,
+        "resizable": false,
+        "maximizable": false,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "trafficLightPosition": { "x": 12, "y": 12 },
+        "backgroundColor": "#191919",
+        "theme": "Dark"
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost; style-src 'self' 'unsafe-inline'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["app"],
+    "macOS": { "signingIdentity": "-", "minimumSystemVersion": "13.0" }
+  }
+}

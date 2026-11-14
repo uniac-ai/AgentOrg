@@ -44,14 +44,19 @@ export function withBrowser() {
   });
 }
 
-/** The window in one of the stand-in's states, at the design's width. */
-export async function open(state: string, options: { reducedMotion?: "reduce" } = {}) {
+/** The window in one of the stand-in's states, at the design's width, with `init` run before the
+ * page's own scripts. */
+export async function open(
+  state: string,
+  options: { reducedMotion?: "reduce"; init?: () => void } = {},
+) {
   const context = await launched.newContext({
     viewport: { width: 460, height: 700 },
     reducedMotion: options.reducedMotion ?? "no-preference",
   });
   const tab: Page = await context.newPage();
   tab.setDefaultTimeout(8000);
+  if (options.init) await tab.addInitScript(options.init);
   await tab.goto(`${page.url}/?state=${state}`);
   return tab;
 }

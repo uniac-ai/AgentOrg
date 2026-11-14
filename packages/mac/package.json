@@ -1,0 +1,14 @@
+{
+  "name": "@agentorg/mac",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The AgentOrg Mac app: its window, showing the page from @agentorg/mac-window, and the seam to the service on this Mac.",
+  "license": "MIT",
+  "scripts": {
+    "app": "tauri build --bundles app",
+    "dev": "tauri dev"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.12.4"
+  }
+}

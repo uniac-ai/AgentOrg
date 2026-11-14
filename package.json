@@ -19,6 +19,7 @@
     "packages/assistant",
     "packages/shell",
     "packages/mac-window",
+    "packages/mac",
     "packages/app"
   ],
   "scripts": {

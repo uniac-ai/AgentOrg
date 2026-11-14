@@ -1,0 +1,17 @@
+[package]
+name = "agentorg"
+version = "0.0.0"
+description = "The AgentOrg Mac app: its window, and the seam to the service on this Mac."
+license = "MIT"
+edition = "2021"
+publish = false
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ureq = { version = "2", default-features = false, features = ["json"] }
+url = "2"
