@@ -1,0 +1,10 @@
+{
+  "identifier": "default",
+  "description": "The window's page: listening for the app's changed event, and dragging the window by its header.",
+  "windows": ["main"],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "core:window:allow-start-dragging"
+  ]
+}

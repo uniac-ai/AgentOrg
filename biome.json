@@ -7,6 +7,8 @@
       "!**/node_modules",
       "!**/agentorg-build",
       "!**/.test-fixtures",
+      "!packages/mac/src-tauri/target",
+      "!packages/mac/src-tauri/gen",
       "!packages/shell/src/ui",
       "!packages/mac-window/src/ui",
       "!packages/computer/skills",

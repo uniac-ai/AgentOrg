@@ -9,4 +9,6 @@ dist/
 .vscode/
 .DS_Store
 agentorg-build/
+packages/mac/src-tauri/target/
+packages/mac/src-tauri/gen/
 .test-fixtures/
