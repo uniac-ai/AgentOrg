@@ -18,6 +18,7 @@
     "packages/looper",
     "packages/assistant",
     "packages/shell",
+    "packages/mac-window",
     "packages/app"
   ],
   "scripts": {
