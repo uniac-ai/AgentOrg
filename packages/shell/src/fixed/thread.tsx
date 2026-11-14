@@ -308,8 +308,8 @@ const ProblemLine = ({
 );
 
 /**
- * The head of your conversation with an agent: back to the list, its face to its page, its name;
- * and, once it has begun, its computer. One between two agents is named by both, and says it is
+ * The head of your conversation with an agent: back to the list, its face to its page, its name,
+ * and its computer, begun or not. One between two agents is named by both, and says it is
  * there to be read.
  */
 function Head({
@@ -345,7 +345,7 @@ function Head({
       >
         <Face agent={agent} size={36} />
       </button>
-      {/* One not begun is headed by the agent alone, as the design draws it. */}
+      {/* One not begun is headed by the agent alone, as the design draws it, on the same line. */}
       {begun ? (
         <div className="ml-1.5 min-w-0 flex-1">
           <h2 className="truncate text-[15px] leading-5 font-semibold">
@@ -358,9 +358,11 @@ function Head({
           )}
         </div>
       ) : (
-        <h2 className="ml-1.5 min-w-0 flex-1 truncate text-[15px] font-semibold">{agent.name}</h2>
+        <h2 className="ml-1.5 min-w-0 flex-1 truncate text-[15px] leading-5 font-semibold">
+          {agent.name}
+        </h2>
       )}
-      {begun && children}
+      {children}
       <CloseChats />
     </header>
   );

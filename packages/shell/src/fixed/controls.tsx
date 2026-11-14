@@ -10,9 +10,13 @@ import {
 } from "../ui/dropdown-menu.tsx";
 import { type AgentEntry, useAct } from "./data.ts";
 
-/** What's rarely wanted of an agent, one step away: stopping it. */
+/**
+ * What's rarely wanted of an agent, one step away: stopping it, or, while it isn't running,
+ * starting it in Stop's place.
+ */
 export function More({ agent, onFailed }: { agent: AgentEntry; onFailed(why?: string): void }) {
-  const stop = useAct(onFailed);
+  const act = useAct(onFailed);
+  const off = agent.status.state === "stopped" || agent.status.state === "down";
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -25,12 +29,21 @@ export function More({ agent, onFailed }: { agent: AgentEntry; onFailed(why?: st
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
-        <DropdownMenuItem
-          disabled={agent.status.state !== "running"}
-          onSelect={() => stop.run(() => api.call("agents", "stop", { agent: agent.agent }))}
-        >
-          Stop
-        </DropdownMenuItem>
+        {off ? (
+          <DropdownMenuItem
+            disabled={act.busy}
+            onSelect={() => act.run(() => api.call("agents", "start", { agent: agent.agent }))}
+          >
+            Start
+          </DropdownMenuItem>
+        ) : (
+          <DropdownMenuItem
+            disabled={agent.status.state !== "running"}
+            onSelect={() => act.run(() => api.call("agents", "stop", { agent: agent.agent }))}
+          >
+            Stop
+          </DropdownMenuItem>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   );

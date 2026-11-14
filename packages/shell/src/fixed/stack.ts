@@ -263,14 +263,49 @@ export function toTemplate(
   };
 }
 
-/** A unit's answers in words: each choice's title, each toggle that's on, and any folder. */
-export function partsOf(values: Values, form: readonly Field[]): string[] {
+/** One of a unit's answers, with the question it answers. */
+export interface Answer {
+  id: string;
+  question: string;
+  answer: string;
+  /** A folder, written as a path is. */
+  path?: true;
+}
+
+/**
+ * A unit's answers in words, each with its question: a choice's title, a toggle's on or off, a
+ * number with its unit, a folder, a connection by its name. A secret is never read back.
+ */
+export function answersOf(
+  values: Values,
+  form: readonly Field[],
+  nameOf: (connection: string) => string | undefined = () => undefined,
+): Answer[] {
   return form.flatMap((field) => {
-    if (!isShown(field, form, values)) return [];
+    if (field.value === "secret" || !isShown(field, form, values)) return [];
     const value = fieldValue(field, values);
-    if (field.value === "boolean") return value === true ? [field.title] : [];
-    if (field.type === "directory" && typeof value === "string" && value) return [value];
-    const title = field.options?.find((o) => o.value === value)?.title;
-    return title ? [title] : [];
+    if (blank(value)) return [];
+    const titled = (v: string) =>
+      (field.type === "connection" ? nameOf(v) : undefined) ??
+      field.options?.find((o) => o.value === v)?.title ??
+      v;
+    const answer =
+      typeof value === "boolean"
+        ? value
+          ? "On"
+          : "Off"
+        : typeof value === "number"
+          ? `${value}${field.unit ? ` ${field.unit}` : ""}`
+          : Array.isArray(value)
+            ? value.map(titled).join(", ")
+            : titled(value as string);
+    return [
+      {
+        id: field.id,
+        question: field.title,
+        answer,
+        ...(field.type === "directory" ? { path: true as const } : {}),
+      },
+    ];
   });
 }

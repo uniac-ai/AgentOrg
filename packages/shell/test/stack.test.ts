@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  answersOf,
   type CatalogUnit,
   type Draft,
   type Field,
@@ -144,4 +145,63 @@ test("an agent is offered the first of the names that no agent has, and none onc
   assert.equal(offeredName(["Scout", "Wren"]), "Juniper");
   assert.equal(offeredName(["scout"]), "Wren", "a name in another case is the same name");
   assert.equal(offeredName(["Scout", "Wren", "Juniper", "Cedar", "Maple", "Sage"]), "");
+});
+
+test("a unit's answers are read with their questions, and a secret or a hidden field is never read back", () => {
+  const asked: Field[] = [
+    {
+      id: "where",
+      type: "choice",
+      value: "string",
+      title: "Where it resides",
+      options: [{ value: "local", title: "This computer" }],
+    },
+    { id: "folder", type: "directory", value: "string", title: "Workspace directory" },
+    { id: "browser", type: "toggle", value: "boolean", title: "With a browser", default: false },
+    { id: "limit", type: "number", value: "number", title: "How many at once", unit: "agents" },
+    {
+      id: "places",
+      type: "choices",
+      value: "strings",
+      title: "Where new agents go",
+      options: [{ value: "own", title: "Its own computer" }],
+    },
+    { id: "via", type: "connection", value: "string", title: "Connection" },
+    { id: "token", type: "secret", value: "secret", title: "Token" },
+    {
+      id: "address",
+      type: "text",
+      value: "string",
+      title: "Address",
+      visible: { field: "where", in: ["remote"] },
+    },
+  ];
+  const values = {
+    where: "local",
+    folder: "/work/scout",
+    limit: 3,
+    places: ["own", "remote"],
+    via: "c-github",
+    token: "kept apart",
+    address: "build.example.com",
+  };
+  const named = (id: string) => (id === "c-github" ? "GitHub acme" : undefined);
+  assert.deepEqual(
+    answersOf(values, asked, named).map(({ question, answer }) => [question, answer]),
+    [
+      ["Where it resides", "This computer"],
+      ["Workspace directory", "/work/scout"],
+      ["With a browser", "Off"],
+      ["How many at once", "3 agents"],
+      ["Where new agents go", "Its own computer, remote"],
+      ["Connection", "GitHub acme"],
+    ],
+  );
+  assert.deepEqual(
+    answersOf(values, asked)
+      .filter((a) => a.path)
+      .map((a) => a.id),
+    ["folder"],
+  );
+  assert.equal(answersOf(values, asked).find((a) => a.id === "via")?.answer, "c-github");
 });

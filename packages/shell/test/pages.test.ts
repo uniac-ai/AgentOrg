@@ -292,15 +292,22 @@ test(
     const page = await open(gateway, "#/a/a-reviewer");
     const menu = page.getByRole("button", { name: "More for Reviewer" });
     const stop = page.getByRole("menuitem", { name: "Stop" });
+    const start = page.getByRole("menuitem", { name: "Start" });
     await menu.click();
     await stop.click();
-    // Stopped, it is started where it says so, and there is nothing to stop or to message.
+    // Stopped, it is started where it says so, or from its menu in Stop's place, and there is
+    // nothing to message.
     await state(page).getByText("Stopped", { exact: true }).waitFor();
     const message = page.getByRole("main").getByRole("button", { name: "Message", exact: true });
     assert.equal(await message.isDisabled(), true);
     await menu.click();
-    assert.equal(await stop.getAttribute("aria-disabled"), "true");
-    await page.keyboard.press("Escape");
+    await start.waitFor();
+    assert.equal(await stop.count(), 0);
+    await start.click();
+    await state(page).getByText("Idle", { exact: true }).waitFor();
+    await menu.click();
+    await stop.click();
+    await state(page).getByText("Stopped", { exact: true }).waitFor();
     await state(page).getByRole("button", { name: "Start" }).click();
     await state(page).getByText("Idle", { exact: true }).waitFor();
     assert.equal(await state(page).getByRole("button").count(), 0);

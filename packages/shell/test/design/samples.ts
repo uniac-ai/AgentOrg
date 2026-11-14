@@ -46,8 +46,19 @@ export function likeAgent(gateway: Gateway, agent: string, name: string, purpose
   });
 }
 /** An agent you have never messaged, as the design's sample has Docs. */
-export const docsAgent = (gateway: Gateway) =>
+export const docsAgent = (gateway: Gateway) => {
   likeAgent(gateway, "a-docs", "Docs", "Keeps the product docs in step with what ships");
+  // A computer made for it, with its own browser, as the design's sample has it.
+  computer(
+    gateway,
+    [
+      { surface: "browser", protocol: "screencast@1", operate: true },
+      { surface: "terminal", protocol: "terminal@1", operate: true },
+      { surface: "files", protocol: "files@1", operate: true },
+    ],
+    "a-docs",
+  );
+};
 /** Release notes, with a reply you haven't read, as the design's sample has it. */
 export function releaseNotes(gateway: Gateway) {
   if (!gateway.agents.has("a-release"))

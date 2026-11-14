@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { type Browser, chromium, type Page } from "@playwright/test";
+import { computerWith } from "./design/samples.ts";
 import { SESSION, standIn } from "./stand-in.ts";
 
 let browser: Browser;
@@ -429,6 +430,32 @@ test(
     const listed = panel(page).getByRole("list", { name: "Chats" }).getByRole("button");
     await listed.filter({ hasText: "Triage" }).waitFor();
     assert.equal(await listed.filter({ hasText: "Triage" }).count(), 1);
+    await page.close();
+  }),
+);
+
+test(
+  "a conversation not yet begun has its agent's computer in its head, its name on the line a begun one has",
+  withGateway(async (gateway) => {
+    gateway.noChats();
+    computerWith(gateway, "terminal");
+    const page = await visit(gateway, "a-research");
+    await page.getByRole("main").getByRole("button", { name: "Message", exact: true }).click();
+    // Not begun, the name is the head's own heading; begun, it heads a block of its own. Each is
+    // read once it is there, since beginning replaces the one with the other.
+    const lineOf = async (selector: string) => {
+      const head = panel(page).locator(selector, { hasText: "Research" });
+      await head.waitFor();
+      return head.evaluate((h) => getComputedStyle(h).lineHeight);
+    };
+    assert.equal(await lineOf("header > h2"), "20px");
+    const computer = panel(page).getByRole("button", { name: "Research's computer" });
+    await computer.click();
+    assert.equal(await computer.getAttribute("aria-pressed"), "true");
+    await input(page).fill("Why are checkouts failing?");
+    await input(page).press("Enter");
+    await mine(page, "Why are checkouts failing?").waitFor();
+    assert.equal(await lineOf("header > div > h2"), "20px");
     await page.close();
   }),
 );
