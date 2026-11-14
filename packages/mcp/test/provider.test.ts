@@ -462,6 +462,33 @@ test("a url connection sends its token, and is seen to go when its server dies",
   assert.equal(heard.changed, 1, "a connection that never came up changes nothing");
 });
 
+test("a url connection a server refuses says the server's own words", async (t) => {
+  const { mcp } = await setup(t, { firstDelayMs: 100 });
+  // A server that answers every request with `body`, as a service does whose computer has stopped.
+  const refusing = async (status: number, body: string) => {
+    const server = createServer((_, response) => void response.writeHead(status).end(body));
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    t.after(() => {
+      server.closeAllConnections();
+      server.close();
+    });
+    const { connection } = await mcp.create({
+      kind: "url",
+      params: { url: `http://127.0.0.1:${(server.address() as AddressInfo).port}/mcp` },
+      secrets: {},
+      name: "Refusing",
+    });
+    await until(async () => (await mcp.status({ connection })).state === "down");
+    return (await mcp.status({ connection })).detail;
+  };
+  assert.equal(
+    await refusing(409, JSON.stringify({ code: 409, message: "It has stopped." })),
+    "It has stopped.",
+  );
+  // One whose words aren't JSON with a message is said as the transport says it, its words in it.
+  assert.match((await refusing(503, "Busy now")) ?? "", /Busy now/);
+});
+
 test("a secret reaches its server and the provider's file, and nothing that is read back", async (t) => {
   const { hub, person, mcp, dir, logged, connected } = await setup(t, { firstDelayMs: 100 });
   const secret = `secret-${randomUUID()}\nsecond-line-${randomUUID()}`;
