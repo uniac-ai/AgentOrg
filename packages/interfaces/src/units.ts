@@ -44,13 +44,16 @@ export const Surface = z.strictObject({
 });
 /**
  * One row of a `facts` view: a label and a value. `path` is on a value that is a path, which a
- * host may draw as one; `caution` is on a value the person should heed, which a host draws apart.
+ * host may draw as one; `caution` is on a value the person should heed, which a host draws apart;
+ * `note` is a short line under the value that says what to make of it, which a host draws
+ * quieter. A host that doesn't know `note` shows the value alone.
  */
 export const FactRow = z.strictObject({
   label: z.string().min(1).max(64),
   value: z.string().max(1024),
   path: z.literal(true).optional(),
   caution: z.literal(true).optional(),
+  note: z.string().min(1).max(256).optional(),
 });
 /**
  * What a `facts` view shows. An operation that feeds one answers this, as JSON text in its
@@ -362,6 +365,18 @@ export const unitProvider = defineInterface({
         connections: z.array(ConnectionStatus.extend({ connection: Id })).max(32),
         /** What of it can be opened live now. */
         surfaces: z.array(LiveSurface).max(16).optional(),
+        /**
+         * The instance in today's words, for one made under older ones: its answers as today's
+         * form asks them and, as `apply` gives them, the rows of exactly the views of today's whose
+         * rows are fixed. Management rebuilds what the agent holds from them and the unit as it
+         * is declared today, as when it was applied; a `now` that doesn't fit is logged and left.
+         */
+        now: z
+          .strictObject({
+            values: FieldValues,
+            rows: z.record(Slug, z.array(FactRow).max(32)).optional(),
+          })
+          .optional(),
       }),
     }),
     /**

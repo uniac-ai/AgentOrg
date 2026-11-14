@@ -636,7 +636,9 @@ async function setup(t: test.TestContext) {
               ? {
                   capability: {
                     actor: desk,
-                    rows: script.rows ?? { where: [{ label: "Where", value: "By the window" }] },
+                    rows: script.rows ?? {
+                      where: [{ label: "Where", value: "By the window", note: "Where it stands" }],
+                    },
                   },
                 }
               : {}),
@@ -1859,7 +1861,7 @@ test("records a later version wrote are read: what an agent holds keeps the memb
       views: { fixed: object[] }[];
     };
     Object.assign(held.surfaces[0] as object, { later: "s" });
-    Object.assign(held.views[0]?.fixed[0] as object, { note: "A line under it" });
+    Object.assign(held.views[0]?.fixed[0] as object, { later: "r" });
     Object.assign(held.views[0] as object, { later: true });
     Object.assign(held, { later: 1 });
     Object.assign(records.templates.kept as object, { later: "x" });
@@ -1887,12 +1889,12 @@ test("records a later version wrote are read: what an agent holds keeps the memb
   const held = saved.agents[agent]?.capabilities[0] as {
     later?: number;
     surfaces: { later?: string }[];
-    views: { later?: true; fixed?: { note?: string }[] }[];
+    views: { later?: true; fixed?: { later?: string }[] }[];
   };
   assert.equal(held.later, 1);
   assert.equal(held.surfaces[0]?.later, "s");
   assert.equal(held.views[0]?.later, true);
-  assert.equal(held.views[0]?.fixed?.[0]?.note, "A line under it");
+  assert.equal(held.views[0]?.fixed?.[0]?.later, "r");
   // What it left out is said once.
   assert.deepEqual(
     s.warned.filter(({ line }) => line.includes("what a later version wrote")),
@@ -3451,7 +3453,7 @@ test("an agent holds the capability its unit builds, and the person reaches it b
         id: "where",
         place: "column",
         kind: "facts",
-        fixed: [{ label: "Where", value: "By the window" }],
+        fixed: [{ label: "Where", value: "By the window", note: "Where it stands" }],
       },
       {
         id: "about",
