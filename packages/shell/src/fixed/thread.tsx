@@ -2,7 +2,7 @@
 // started. The record is the chat's and whether it works is the agent's. A chat has no Stop and
 // no model to choose: its work is stopped by saying so in it, and the model is the agent's, in
 // its setup.
-import { PICTURES_MAX } from "@agentorg/interfaces";
+import { MESSAGE_TEXT_MAX, PICTURES_MAX } from "@agentorg/interfaces";
 import { NotConnected } from "@agentorg/sdk";
 import {
   ArrowUpIcon,
@@ -132,12 +132,15 @@ function Composer({
   name,
   draft,
   onSend,
+  onRefused,
 }: {
   name: string;
   /** Whose half-typed text this is: a chat's, or a chat about to be started with an agent. */
   draft: string;
   /** Sends it; false when it wasn't taken, and the text and pictures stay. */
   onSend(text: string, images: Sent[]): Promise<boolean>;
+  /** It can't be sent as it is: why, in a person's words. */
+  onRefused(why: string): void;
 }) {
   const { drafts } = useChats();
   const needs = needsOf(useLogin());
@@ -173,6 +176,11 @@ function Composer({
   const submit = async () => {
     const body = text.trim();
     if (!ready) return;
+    // Longer than a message's text can be, nothing is sent, and the box stays just as it is.
+    if (body.length > MESSAGE_TEXT_MAX)
+      return onRefused(
+        `That's too long to send: a message can be at most ${MESSAGE_TEXT_MAX.toLocaleString()} characters. This one has ${body.length.toLocaleString()}.`,
+      );
     const put = box.pictures;
     setText("");
     changeBox(draft, () => EMPTY);
@@ -700,7 +708,12 @@ export function Thread({
       {/* One between two agents is read here, never written in. */}
       {!off && !other && (
         <div className="mx-auto w-full max-w-[720px] shrink-0 px-3 pb-3">
-          <Composer name={agent.name} draft={agent.id} onSend={send} />
+          <Composer
+            name={agent.name}
+            draft={agent.id}
+            onSend={send}
+            onRefused={(said) => setFailure({ said })}
+          />
         </div>
       )}
     </div>
