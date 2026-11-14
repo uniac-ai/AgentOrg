@@ -251,6 +251,8 @@ async function setup(
   mkdirSync(workspace);
   writeFileSync(join(workspace, "seen.txt"), "the person's file\n");
   const leaving: (() => void | Promise<void>)[] = [];
+  /** What the connector logs as an error, as the app's log keeps it. */
+  const logged: string[] = [];
   const hub = Hub.open(join(root, "home"));
   const server = await listen(hub);
   t.after(async () => {
@@ -283,6 +285,7 @@ async function setup(
       timing: { firstDelayMs: 50, pingEveryMs: 200 },
       mendFirstMs,
       macRecord: mac ? macRecord : null,
+      log: { info() {}, warn() {}, error: (line: string) => void logged.push(line) },
     });
   const provider = { current: await start() };
   leaving.push(() => provider.current.close());
@@ -368,6 +371,7 @@ async function setup(
     root,
     data,
     macRecord,
+    logged,
   };
 }
 
@@ -825,7 +829,10 @@ test("a computer's connections that are down say why in words: the service's own
 });
 
 test("a computer its service says failed is stopped and started again by itself, after a restart too, until it runs", async (t) => {
-  const { apply, units, dir, restart } = await setup(t, { service: false, mendFirstMs: 60_000 });
+  const { apply, units, dir, restart, logged } = await setup(t, {
+    service: false,
+    mendFirstMs: 60_000,
+  });
   const there = await standIn(t);
   const away = { kind: "new", made: "remote", address: there.apiUrl, access: "terminal" };
   const { instance } = await apply(away, { token: there.apiKey });
@@ -852,6 +859,15 @@ test("a computer its service says failed is stopped and started again by itself,
   await restart();
   await until(() => record.state === "running");
   assert.deepEqual(asked(), ["stop", "start", "start"]);
+  // Each try is in the app's log, with the one that didn't start and why, naming the instance.
+  assert.deepEqual(
+    logged.filter((line) => line.startsWith(`${instance}: `)),
+    [
+      `${instance}: its computer failed, and is stopped and started again.`,
+      `${instance}: its computer didn't start again: A container needs Docker, which isn't answering.`,
+      `${instance}: its computer failed, and is stopped and started again.`,
+    ],
+  );
   await until(() => kept().restarting === undefined);
   // Running, it says what its service says, and isn't tried again.
   await until(

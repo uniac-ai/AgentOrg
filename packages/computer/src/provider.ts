@@ -874,7 +874,10 @@ export async function startComputerProvider(
           ? Math.min(last.wait * 2, MEND_MOST_MS)
           : first;
       tried.set(instance, { at: now, wait });
-      log.warn("Its computer failed: it is stopped and started again.", { instance });
+      // In the app's log, which keeps errors only, and their words alone: who did it, and to which.
+      log.error(`${instance}: its computer failed, and is stopped and started again.`, {
+        instance,
+      });
       mine.trying = true;
       asked.delete(computer.id);
       changed();
@@ -888,7 +891,9 @@ export async function startComputerProvider(
         restarting(entry, false);
         started = true;
       } catch (error) {
-        log.warn(`Its computer didn't start again: ${messageOf(error)}`, { instance });
+        log.error(`${instance}: its computer didn't start again: ${messageOf(error)}`, {
+          instance,
+        });
       }
       mine.trying = false;
       asked.delete(computer.id);
