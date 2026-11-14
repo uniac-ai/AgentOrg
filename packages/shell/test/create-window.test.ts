@@ -27,6 +27,17 @@ const boxOf = async (locator: Locator) => {
   return box;
 };
 
+/** The Create window has finished opening: its own animations, as it grows to its size, are over. */
+const opened = (page: Page) =>
+  panel(page).evaluate((el) =>
+    Promise.all(
+      el
+        .getAnimations({ subtree: true })
+        .filter((a) => a.effect?.getTiming().iterations !== Number.POSITIVE_INFINITY)
+        .map((a) => a.finished),
+    ).then(() => undefined),
+  );
+
 test(
   "Create is one window, open on an empty stack: what to start from on the left, the stack beside it, clean each time",
   withGateway(async (gateway) => {
@@ -337,7 +348,9 @@ test(
     const page = await open(gateway);
     await fromTemplate(page, "Assistant");
     const where = panel(page).getByRole("combobox", { name: "Where it resides" });
-    // Measured before it opens: open, all but its list is hidden from the page's roles.
+    // Measured once the window has finished opening, as it grows to its size, and before the list
+    // opens: open, all but its list is hidden from the page's roles.
+    await opened(page);
     const [field, dialog] = await Promise.all([where.boundingBox(), panel(page).boundingBox()]);
     await where.click();
     const list = page.getByRole("listbox");
@@ -382,6 +395,25 @@ test(
     const greyed = page.getByRole("option", { name: /^Its own container/ });
     assert.equal(await greyed.innerText(), "Its own container\nDocker isn't running.");
     assert.equal(await greyed.getAttribute("aria-disabled"), "true");
+    await page.close();
+  }),
+);
+test(
+  "a template chosen while Create's units are still being read is the one its stack is drawn from",
+  withGateway(async (gateway) => {
+    const page = await open(gateway);
+    await agentsRead(page);
+    const release = gateway.hold("agents.units");
+    await plus(page).click();
+    await panel(page)
+      .getByRole("button", { name: /^Assistant/ })
+      .click();
+    // No stack until its units are read, so none is drawn from what was read before.
+    await page.waitForTimeout(300);
+    assert.equal(await card(page, "Computer").count(), 0);
+    release();
+    await card(page, "Computer").waitFor();
+    await card(page, "Web").waitFor();
     await page.close();
   }),
 );

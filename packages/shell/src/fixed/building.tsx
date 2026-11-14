@@ -63,10 +63,12 @@ function useBuildingState() {
    * for an agent; opening the window starts clean, whatever a closed one was left holding.
    */
   const start = (template?: Template, mode: Draft["mode"] = "agent") => {
-    if (!open) {
+    // Opening, or opened with its units still being read: the template chosen now is the one the
+    // stack is drawn from when they are.
+    if (!open || opening) {
       setDraft(undefined);
-      setOpening({ template, mode, was: read.value });
-      reread();
+      setOpening({ template, mode, was: opening ? opening.was : read.value });
+      if (!open) reread();
       setOpen(true);
       return;
     }
