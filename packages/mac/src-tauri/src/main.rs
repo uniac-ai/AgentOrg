@@ -7,11 +7,13 @@ use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
+use std::net::{Ipv4Addr, Ipv6Addr};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{LogicalSize, WebviewWindow};
+use url::{Host, Url};
 
 /// The window's width, as the design draws it; its height fits the page.
 const WIDTH: f64 = 460.0;
@@ -40,33 +42,45 @@ fn data() -> PathBuf {
     home().join("Library/Application Support/AgentOrg/computer")
 }
 
+fn no_service() -> Refusal {
+    Refusal { code: 503, message: "AgentOrg's service isn't running.".into() }
+}
+
 /// The service's address and control token. Nothing is written here: with no record, or one it
-/// left when it stopped, or one naming an address off this Mac, there is no service to answer.
+/// left when it stopped, there is no service to answer.
 fn service() -> Result<(String, String), Refusal> {
-    let none = || Refusal { code: 503, message: "AgentOrg's service isn't running.".into() };
     let record: Value =
-        serde_json::from_slice(&fs::read(data().join("server.json")).map_err(|_| none())?)
-            .map_err(|_| none())?;
-    let url = record["url"].as_str().filter(|url| here(url)).ok_or_else(none)?.to_owned();
-    let token = fs::read_to_string(data().join("control-token")).map_err(|_| none())?;
+        serde_json::from_slice(&fs::read(data().join("server.json")).map_err(|_| no_service())?)
+            .map_err(|_| no_service())?;
+    let url = record["url"].as_str().ok_or_else(no_service)?.to_owned();
+    let token = fs::read_to_string(data().join("control-token")).map_err(|_| no_service())?;
     Ok((url, token.trim().to_owned()))
 }
 
-/// Whether an address is on this Mac, over plain http: the token goes nowhere else.
-fn here(url: &str) -> bool {
-    let Some(rest) = url.strip_prefix("http://") else { return false };
-    let authority = rest.split('/').next().unwrap_or_default();
-    let host = match authority.strip_prefix('[') {
-        Some(bracketed) => bracketed.split(']').next().unwrap_or_default(),
-        None => authority.split(':').next().unwrap_or_default(),
-    };
-    matches!(host, "127.0.0.1" | "localhost" | "::1")
+/// Whether an address is on this Mac over plain http, read with the parser the request itself
+/// uses: no user information, and a host of 127.0.0.1, ::1 or localhost.
+fn here(address: &str) -> bool {
+    let Ok(url) = Url::parse(address) else { return false };
+    url.scheme() == "http"
+        && url.username().is_empty()
+        && url.password().is_none()
+        && match url.host() {
+            Some(Host::Ipv4(ip)) => ip == Ipv4Addr::LOCALHOST,
+            Some(Host::Ipv6(ip)) => ip == Ipv6Addr::LOCALHOST,
+            Some(Host::Domain(name)) => name == "localhost",
+            None => false,
+        }
 }
 
-/// One call to the service, answered with its JSON, or refused with its words.
+/// One call to the service, answered with its JSON, or refused with its words. The token goes
+/// only to an address on this Mac: a record naming any other is no service.
 fn call(method: &str, path: &str, body: Option<Value>) -> Result<Value, Refusal> {
     let (url, token) = service()?;
-    let request = ureq::request(method, &format!("{url}{path}"))
+    let address = format!("{url}{path}");
+    if !here(&address) {
+        return Err(no_service());
+    }
+    let request = ureq::request(method, &address)
         .set("Authorization", &format!("Bearer {token}"))
         .timeout(Duration::from_secs(20));
     let answer = match body {
@@ -85,7 +99,7 @@ fn call(method: &str, path: &str, body: Option<Value>) -> Result<Value, Refusal>
                 message: message.map_or(format!("The service answered {code}."), str::to_owned),
             })
         }
-        Err(_) => Err(Refusal { code: 503, message: "AgentOrg's service isn't running.".into() }),
+        Err(_) => Err(no_service()),
     }
 }
 
@@ -368,6 +382,8 @@ mod tests {
             "https://127.0.0.1:7878",
             "http://localhost.example.com:7878",
             "http://127.0.0.1@example.com/",
+            "http://127.0.0.1:7878@example.com/",
+            "http://localhost:1@example.com:7878",
             "http://example.com/127.0.0.1:7878",
             "",
         ] {
