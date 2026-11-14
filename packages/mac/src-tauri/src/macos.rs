@@ -65,9 +65,12 @@ pub fn unregister_background_item() -> Result<String, String> {
 
 /// The background item's status, as macOS gives it: 0 not registered, 1 on, 2 waiting for the
 /// person's approval (switched off in Login Items, or not allowed yet), 3 not in this build.
+/// The window reads it every second off the main thread, so in a pool of its own.
 pub fn background_item_status() -> Option<isize> {
-    let item = background_item()?;
-    Some(unsafe { msg_send![&*item, status] })
+    objc2::rc::autoreleasepool(|_| {
+        let item = background_item()?;
+        Some(unsafe { msg_send![&*item, status] })
+    })
 }
 
 /// Opens Login Items in System Settings, where the person allows the background item.

@@ -104,7 +104,9 @@ pub struct Places {
     pub state: PathBuf,
 }
 
-/// How often the provider reads the screen's grants while one is missing.
+/// How soon the provider reads the screen's grants again while one is missing, at first: the wait
+/// doubles at each read that finds no change, to at most 60 times this, and starts over when a
+/// grant step or the window tells it to read them.
 const WATCH: Duration = Duration::from_secs(5);
 
 /// The screen's two grants, Accessibility and Screen Recording, as a fresh process reads them.
@@ -391,9 +393,9 @@ fn write_state(places: &Places, said: &Said) {
 }
 
 /// Keeps the driver and the service running until asked to stop. The driver reads the grants
-/// once, at its start: so where they differ from what it read, it is started again. They are read
-/// when `regrant` is set, and every `every` while one is missing, as the person may switch one in
-/// System Settings at any time.
+/// once, at its start: so where they differ from what it read, it is started again. While it runs
+/// they are read when `regrant` is set, and, while one is missing, again after `every`, doubling to
+/// at most 60 times that, as the person may switch one in System Settings at any time.
 pub fn provide(
     programs: &Programs,
     places: &Places,
@@ -418,11 +420,16 @@ pub fn provide(
     stop_left(places, programs);
     let (mut driver, mut service) = (Kept::new("driver"), Kept::new("service"));
     let (mut said, mut ran, mut rotated) = (None, false, Instant::now());
-    // What the running driver read at its start, and when the grants were last read since.
-    let (mut read_by_driver, mut read_at): (Option<Grants>, _) = (None, Instant::now());
+    // What the running driver read at its start, when the grants were last read since, and how
+    // long until they are read again.
+    let (mut read_by_driver, mut read_at, mut wait): (Option<Grants>, _, _) =
+        (None, Instant::now(), every);
     while !stop_now.load(Ordering::Relaxed) {
+        let told = regrant.swap(false, Ordering::Relaxed);
         let missing_one = read_by_driver.is_some_and(|read| read != (true, true));
-        if regrant.swap(false, Ordering::Relaxed) || missing_one && read_at.elapsed() >= every {
+        let due = missing_one && read_at.elapsed() >= wait;
+        if driver.pid().is_some() && (told || due) {
+            wait = if told { every } else { (wait * 2).min(every * 60) };
             read_at = Instant::now();
             if read_by_driver.is_some_and(|read| read != grants()) {
                 log("provider", "a grant changed: the driver starts again, to read it");
@@ -433,7 +440,7 @@ pub fn provide(
         service.reap();
         if missing.is_empty() && driver.due() {
             read_by_driver = Some(grants());
-            read_at = Instant::now();
+            (read_at, wait) = (Instant::now(), every);
             let _ = fs::remove_file(&places.socket);
             driver.start(driver_command(programs, places, identifier));
         }
@@ -533,13 +540,6 @@ mod tests {
         program(&programs.service, "");
         let places = places_in(&root);
         let (stop_now, regrant) = (AtomicBool::new(false), AtomicBool::new(false));
-        // The grants, as the test sets them, and how often they are read.
-        let (accessibility, screen_recording) = (AtomicBool::new(false), AtomicBool::new(false));
-        let reads = std::sync::atomic::AtomicUsize::new(0);
-        let grants = || {
-            reads.fetch_add(1, Ordering::Relaxed);
-            (accessibility.load(Ordering::Relaxed), screen_recording.load(Ordering::Relaxed))
-        };
         let said = |name: &str| fs::read_to_string(heard.join(name)).unwrap_or_default();
         let now = || read::<Said>(&places.state);
         let state = || now().map(|said| said.state);
@@ -549,7 +549,7 @@ mod tests {
         thread::scope(|scope| {
             let _stops = Stops(&stop_now);
             scope.spawn(|| {
-                let every = Duration::from_millis(200);
+                let (grants, every) = (|| (true, true), Duration::from_secs(5));
                 provide(&programs, &places, "test.id", &stop_now, &regrant, &grants, every)
             });
             until("both running", || state() == Some(AppState::Running));
@@ -589,32 +589,13 @@ mod tests {
             assert!(env.lines().any(|kept| kept == home), "{env}");
             assert!(!env.contains("CARGO") && !env.contains("CUA_DRIVER"), "{env}");
 
-            // A service that ends is started again; a grant's change starts the driver again.
+            // A service that ends is started again.
             let again = |key: &str, was: i32| {
                 pid(key).is_some_and(|now| now != was) && state() == Some(AppState::Running)
             };
             let service = pid("service").unwrap();
             unsafe { libc::kill(service, libc::SIGKILL) };
             until("the service again", || again("service", service));
-            // Told of a change where there is none, the driver is left as it is.
-            let driver = pid("driver").unwrap();
-            regrant.store(true, Ordering::Relaxed);
-            until("the grants read", || !regrant.load(Ordering::Relaxed));
-            sleep(Duration::from_millis(500));
-            assert_eq!(pid("driver"), Some(driver));
-            // Told of a grant given, it starts the driver again, to read it.
-            accessibility.store(true, Ordering::Relaxed);
-            regrant.store(true, Ordering::Relaxed);
-            until("the driver again", || again("driver", driver));
-            // One still missing, the grants are read every so often: a grant given in System
-            // Settings, with nothing told, starts the driver again too.
-            let driver = pid("driver").unwrap();
-            screen_recording.store(true, Ordering::Relaxed);
-            until("the driver again, unasked", || again("driver", driver));
-            // Both given, they are no longer read unasked.
-            let read = reads.load(Ordering::Relaxed);
-            sleep(Duration::from_millis(1_000));
-            assert_eq!(reads.load(Ordering::Relaxed), read);
 
             // Stopped, it stops both, and says nothing more of itself.
             let (driver, service) = (pid("driver").unwrap(), pid("service").unwrap());
@@ -663,6 +644,71 @@ mod tests {
         let _ = other.kill();
         let _ = other.wait();
         assert!(!runs(other.id() as i32, Path::new("/bin/sleep")));
+    }
+
+    #[test]
+    fn the_driver_starts_again_when_the_grants_it_read_change() {
+        crate::test_home();
+        let root = std::env::temp_dir().join(format!("agentorg-grants-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let programs = Programs {
+            node: root.join("app/node"),
+            service: root.join("app/agentcomputer/agentcomputer.js"),
+            driver: root.join("app/cua-driver"),
+        };
+        program(&programs.driver, ": > \"$5\"\nexec sleep 600");
+        let record = r#"echo "{\"url\":\"http://127.0.0.1:1\",\"pid\":$$}" > "$7/server.json""#;
+        program(&programs.node, &format!("{record}\nexec sleep 600"));
+        program(&programs.service, "");
+        let places = places_in(&root);
+        // The grants, as the test sets them, and how often they are read.
+        let (accessibility, screen_recording) = (AtomicBool::new(false), AtomicBool::new(false));
+        let reads = std::sync::atomic::AtomicUsize::new(0);
+        let grants = || {
+            reads.fetch_add(1, Ordering::Relaxed);
+            (accessibility.load(Ordering::Relaxed), screen_recording.load(Ordering::Relaxed))
+        };
+        let driver = || read::<Said>(&places.state).and_then(|said| said.driver);
+        let again = |was: i32| driver().is_some_and(|now| now != was);
+        // Each run: started, then this, then stopped.
+        let run = |every: Duration, check: &dyn Fn(&AtomicBool)| {
+            let (stop_now, regrant) = (AtomicBool::new(false), AtomicBool::new(false));
+            thread::scope(|scope| {
+                let _stops = Stops(&stop_now);
+                scope.spawn(|| {
+                    provide(&programs, &places, "test.id", &stop_now, &regrant, &grants, every)
+                });
+                until("the driver", || driver().is_some());
+                check(&regrant);
+                stop_now.store(true, Ordering::Relaxed);
+                until("it stopped", || !places.state.exists());
+            });
+        };
+        // Told, it reads them: with no change the driver is left as it is, and with a grant given
+        // it starts again. Nothing is read unasked here, as the wait is an hour.
+        run(Duration::from_secs(3600), &|regrant| {
+            let was = driver().unwrap();
+            regrant.store(true, Ordering::Relaxed);
+            until("the grants read", || !regrant.load(Ordering::Relaxed));
+            sleep(Duration::from_millis(500));
+            assert_eq!(driver(), Some(was));
+            accessibility.store(true, Ordering::Relaxed);
+            regrant.store(true, Ordering::Relaxed);
+            until("the driver again", || again(was));
+        });
+        // Unasked, while one is missing: a grant given in System Settings, with nothing told,
+        // starts the driver again too. Both given, they are no longer read unasked.
+        accessibility.store(false, Ordering::Relaxed);
+        run(Duration::from_millis(100), &|_| {
+            let was = driver().unwrap();
+            accessibility.store(true, Ordering::Relaxed);
+            screen_recording.store(true, Ordering::Relaxed);
+            until("the driver again, unasked", || again(was));
+            let read = reads.load(Ordering::Relaxed);
+            sleep(Duration::from_millis(1_000));
+            assert_eq!(reads.load(Ordering::Relaxed), read);
+        });
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

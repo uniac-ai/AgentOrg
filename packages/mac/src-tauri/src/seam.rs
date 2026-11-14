@@ -147,11 +147,16 @@ async fn ask(capability: String, need: Option<String>) -> Result<Value, Refusal>
     read("ask", "POST", path, Some(body)).await
 }
 
-/// A grant's pane of System Settings, on the person's click, opened by the service.
+/// A grant's pane of System Settings, on the person's click, opened by the service. The provider
+/// is told to read the grants again, and soon after, as the person may switch one there.
 #[tauri::command]
 async fn open_settings(need: String) -> Result<Value, Refusal> {
-    read("open_settings", "POST", "/v1/setup/screen/settings".into(), Some(json!({ "need": need })))
-        .await
+    let body = Some(json!({ "need": need }));
+    let answer = read("open_settings", "POST", "/v1/setup/screen/settings".into(), body).await;
+    if answer.is_ok() {
+        provider::grants_changed();
+    }
+    answer
 }
 
 /// Login Items in System Settings, on the person's click, where they allow the background item.
