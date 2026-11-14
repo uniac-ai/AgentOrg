@@ -1,6 +1,20 @@
 import { defineInterface, event, method } from "@agentorg/sdk";
 import { z } from "zod";
-import { LiveMode, LiveSurface, LiveTicket } from "./units.js";
+import { FieldValues, LiveMode, LiveSurface, LiveTicket, UnitId } from "./units.js";
+
+/**
+ * A way to go on with a capability that can't be reached, when building it another way would mend
+ * it: what to call it, what taking it does, and a unit of the provider that built the capability,
+ * with the values to open that unit's form with. `values` holds no secret field's: the form asks
+ * for those again. Offering it does nothing: the person looks at the form, prefilled, and saves it
+ * in place of what the capability was built from, or doesn't.
+ */
+export const WayForward = z.strictObject({
+  title: z.string().min(1).max(128),
+  description: z.string().max(2000).optional(),
+  unit: UnitId,
+  values: FieldValues,
+});
 
 /**
  * `capability@1`: something an agent holds, as it stands now. One Actor per capability exports
@@ -24,6 +38,8 @@ export const capability = defineInterface({
         /** Why it can't be reached, when it can't. */
         detail: z.string().max(2000).optional(),
         surfaces: z.array(LiveSurface).max(16),
+        /** With `down`, the ways forward the person can take, in the order to offer them. */
+        ways: z.array(WayForward).max(4).optional(),
       }),
     }),
     live: method({

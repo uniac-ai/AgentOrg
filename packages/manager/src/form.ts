@@ -166,6 +166,11 @@ export function settle(
       const offered = new Set(field.options.map((option) => option.value));
       if (![value].flat().every((one) => offered.has(String(one))))
         problems.push({ field: field.id, message: `${field.title} isn't one of its options.` });
+      // One its provider can't give now is refused with the provider's reason.
+      else
+        for (const option of field.options)
+          if (option.unavailable && [value].flat().some((one) => String(one) === option.value))
+            problems.push({ field: field.id, message: `${field.title}: ${option.unavailable}` });
     }
     if (
       typeof value === "number" &&
@@ -251,6 +256,11 @@ export function schemaOf(form: TheForm): Record<string, unknown> {
       field.description,
       ...(field.options ?? []).map((option) =>
         option.description ? `${option.value}: ${option.description}` : undefined,
+      ),
+      ...(field.options ?? []).map((option) =>
+        option.unavailable
+          ? `${option.value} can't be chosen now: ${option.unavailable}`
+          : undefined,
       ),
       field.visible
         ? `Only when ${field.visible.field} is ${field.visible.in.join(" or ")}.`
