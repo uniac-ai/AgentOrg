@@ -32,6 +32,13 @@ fn main() {
         Some("grant") => grant::ask(&args[1..]),
         Some("unregister") => match macos::unregister_background_item() {
             Ok(said) => {
+                // What the app keeps outside its folders: the driver's default.
+                let removed = if macos::driver_restores_windows(true) {
+                    "the driver's default removed"
+                } else {
+                    "the driver's default couldn't be reached"
+                };
+                let said = format!("{said}; {removed}");
                 log::log("unregister", &said);
                 println!("{said}");
             }

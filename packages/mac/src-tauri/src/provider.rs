@@ -142,6 +142,8 @@ pub fn run_as_background_item() {
         state: places::provider_state(),
     };
     let identifier = macos::identifier().unwrap_or_default();
+    // Restoring no windows, the driver reaches no file kept for Full Disk Access as it starts.
+    macos::driver_restores_windows(false);
     let grants = || (grant::granted("accessibility"), grant::granted("screen-recording"));
     provide(&Programs::in_bundle(&app), &places, &identifier, &STOP, &REGRANT, &grants, WATCH);
 }
@@ -734,6 +736,14 @@ mod tests {
             assert!(carried, "{} isn't in the bundle's files", inside.display());
         }
         assert!(!programs.driver.starts_with("/A.app/Contents/MacOS"));
+    }
+
+    #[test]
+    fn the_app_is_an_agent() {
+        // What the Info.plist Tauri merges sets; what the window shows of it only a run shows.
+        let plist = include_str!("../Info.plist");
+        let value = plist.split("<key>LSUIElement</key>").nth(1).map(str::trim_start);
+        assert!(value.is_some_and(|value| value.starts_with("<true/>")), "{plist}");
     }
 
     #[test]

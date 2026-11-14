@@ -232,9 +232,11 @@ fn noted(what: &'static str, outcome: String) {
     }
 }
 
-/// The window. Opening it registers the app's background item, and while it shows, a change of
-/// the provider's state, or of whether macOS allows the background item, is sent to the page as
-/// `changed`.
+/// The window. The app is an agent (LSUIElement, in its Info.plist), so that what else of it macOS
+/// opens has no Dock tile; Tauri makes the window's process a regular app as it starts, with its
+/// Dock icon and menu, in front. Opening it registers the app's background item, and while it
+/// shows, a change of the provider's state, or of whether macOS allows the background item, is sent
+/// to the page as `changed`.
 pub fn window() {
     log("window", "opened");
     log("window", &macos::register_background_item());

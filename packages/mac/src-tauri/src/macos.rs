@@ -3,8 +3,8 @@
 
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject};
-use objc2::msg_send;
-use objc2_foundation::{NSBundle, NSDictionary, NSError, NSNumber, NSString};
+use objc2::{msg_send, AllocAnyThread};
+use objc2_foundation::{NSBundle, NSDictionary, NSError, NSNumber, NSString, NSUserDefaults};
 use std::ffi::{c_void, CStr};
 use std::path::PathBuf;
 
@@ -71,6 +71,28 @@ pub fn background_item_status() -> Option<isize> {
         let item = background_item()?;
         Some(unsafe { msg_send![&*item, status] })
     })
+}
+
+/// The driver's defaults domain: a program outside a bundle has its name for one. It is the
+/// person's, in `~/Library/Preferences/cua-driver.plist`.
+const DRIVER_DEFAULTS: &str = "cua-driver";
+
+/// Turns AppKit's window restoration off for the driver, or back to its default, and says whether
+/// its defaults could be reached: restoring windows as it starts, the driver reached a file macOS
+/// keeps for Full Disk Access.
+pub fn driver_restores_windows(restores: bool) -> bool {
+    let suite = NSString::from_str(DRIVER_DEFAULTS);
+    let Some(defaults) = NSUserDefaults::initWithSuiteName(NSUserDefaults::alloc(), Some(&suite))
+    else {
+        return false;
+    };
+    let key = NSString::from_str("ApplePersistenceIgnoreState");
+    if restores {
+        defaults.removeObjectForKey(&key);
+    } else {
+        defaults.setBool_forKey(true, &key);
+    }
+    defaults.synchronize()
 }
 
 /// Opens Login Items in System Settings, where the person allows the background item.
