@@ -128,7 +128,8 @@ async function standIn(t: test.TestContext, records: Record<string, Record<strin
         isolation: asks.isolation ?? "container",
         attached: false,
         browser: asks.browser ?? false,
-        workspace: asks.workspace ?? (asks.access === "none" ? null : `/service/computers/${id}`),
+        workspace:
+          asks.workspace ?? (asks.access === "none" ? null : `/service/computers/${id}/workspace`),
         metadata: asks.metadata ?? {},
         surfaces: [],
         endpoints: {
@@ -885,6 +886,96 @@ test("a computer that keeps failing waits longer each time, and one being made i
   await units.remove({ instance });
 });
 
+test("a computer made before today's words says in its status what it is in them; one made now doesn't", async (t) => {
+  const { apply, units, dir, restart } = await setup(t, { service: false });
+  const there = await standIn(t);
+  const away = { kind: "new", made: "remote", address: there.apiUrl, access: "files" };
+  const { instance, capability } = await apply(away, { token: there.apiKey });
+  assert.equal((await units.status({ instance })).now, undefined, "made in today's words");
+  assert.deepEqual(capability?.rows?.where, [
+    { label: "Computer", value: new URL(there.apiUrl).host, note: "At another address" },
+  ]);
+  // As kept by a version before: with no words.
+  const file = JSON.parse(readFileSync(join(dir, "instances.json"), "utf8"));
+  delete file[instance].words;
+  writeFileSync(join(dir, "instances.json"), JSON.stringify(file));
+  await restart();
+  // Its folder the service made, which goes with it, isn't an answer.
+  assert.deepEqual((await units.status({ instance })).now, {
+    values: { kind: "new", made: "remote", address: there.apiUrl, access: "files", browser: false },
+    rows: {
+      where: [{ label: "Computer", value: new URL(there.apiUrl).host, note: "At another address" }],
+      workspace: [
+        { label: "Reaches", value: "Files" },
+        { label: "Browser", value: "None" },
+      ],
+    },
+  });
+  await units.remove({ instance });
+});
+
+test("a container from before with a folder of yours says so in today's words", async (t) => {
+  const { units, dir, data, root, hub, restart } = await setup(t, { service: false });
+  const kept = join(root, "Agents", "Scout");
+  mkdirSync(kept, { recursive: true });
+  // As 0.0.13 made it, and as the service says of it now: a container, with that folder mounted.
+  const here = await standIn(t, {
+    old: {
+      computerID: "old",
+      name: "Scout's computer",
+      state: "running",
+      access: "files",
+      isolation: "container",
+      attached: false,
+      browser: true,
+      workspace: kept,
+      metadata: { agent: "act_scout" },
+      surfaces: [],
+      endpoints: { computer: "http://127.0.0.1:9/mcp" },
+    },
+  });
+  const alive = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60_000)"]);
+  t.after(() => alive.kill());
+  mkdirSync(data, { recursive: true });
+  writeFileSync(join(data, "server.json"), JSON.stringify({ url: here.apiUrl, pid: alive.pid }));
+  writeFileSync(join(data, "control-token"), here.apiKey);
+  const link = hub.state.createActor(PERSON, { name: "Scout's computer" });
+  writeFileSync(
+    join(dir, "instances.json"),
+    JSON.stringify({
+      computer_old: {
+        agent: "act_scout",
+        links: [
+          {
+            slot: "computer",
+            actor: link.actorId,
+            credential: link.credential,
+            url: "http://127.0.0.1:9/mcp",
+          },
+        ],
+        computer: { id: "old", token: "its-own-token", service: { local: true } },
+      },
+    }),
+  );
+  await restart();
+  assert.deepEqual((await units.status({ instance: "computer_old" })).now, {
+    values: { kind: "new", made: "container", access: "files", browser: true },
+    rows: {
+      where: [{ label: "Computer", value: "A container", note: "Made for it on this machine" }],
+      workspace: [
+        {
+          label: "Its work happens in",
+          value: kept,
+          path: true,
+          note: "A folder of yours, kept from before",
+        },
+        { label: "Reaches", value: "Files" },
+        { label: "Browser", value: "Its own browser" },
+      ],
+    },
+  });
+});
+
 test("a new computer here is a container with a workspace of its own, and no folder of yours", async (t) => {
   const { units, dir, data } = await setup(t, { service: false });
   // The service here, as the stand-in, recorded where the connector looks for it.
@@ -915,7 +1006,7 @@ test("a new computer here is a container with a workspace of its own, and no fol
     ],
   );
   assert.deepEqual(made.capability?.rows, {
-    where: [{ label: "Computer", value: "A container on this machine" }],
+    where: [{ label: "Computer", value: "A container", note: "Made for it on this machine" }],
     workspace: [
       { label: "Reaches", value: "Files" },
       { label: "Browser", value: "Its own browser" },
@@ -1255,7 +1346,12 @@ test("a computer's capability is an Actor of its own: its fixed rows, how it sta
     where: [{ label: "Computer", value: "This computer" }],
     workspace: [
       { label: "Acts as", value: "You, with all you can reach", caution: true },
-      { label: "Its work happens in", value: workspace, path: true },
+      {
+        label: "Its work happens in",
+        value: workspace,
+        path: true,
+        note: "Said to it, not a wall",
+      },
       { label: "Reaches", value: "Files and terminal" },
       { label: "Browser", value: "None" },
     ],
