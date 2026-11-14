@@ -140,6 +140,25 @@ async function standIn(t: test.TestContext, records: Record<string, Record<strin
       computers.set(id, made);
       return send(201, { ...made, accessToken: "its-own-token" });
     }
+    if (request.method === "POST" && path === "/v1/computers/attach") {
+      const asks = JSON.parse(raw) as Record<string, unknown>;
+      const id = `paper${computers.size + 1}`;
+      const made = {
+        computerID: id,
+        name: asks.name,
+        state: "running",
+        access: asks.access,
+        isolation: "none",
+        attached: true,
+        browser: false,
+        workspace: asks.workspace,
+        metadata: asks.metadata ?? {},
+        surfaces: [],
+        endpoints: { computer: `${base}/v1/computers/${id}/mcp` },
+      };
+      computers.set(id, made);
+      return send(201, { ...made, accessToken: "its-own-token" });
+    }
     const [, id, more] = path.match(/^\/v1\/computers\/([^/]+)(\/live|\/stop|\/start)?$/) ?? [];
     const found = id ? computers.get(id) : undefined;
     if (!found || !id) return send(404, { code: 404, message: "There's no computer by that id." });
@@ -221,9 +240,11 @@ async function startService(data: string): Promise<Service> {
 
 async function setup(
   t: test.TestContext,
-  { service = true, webUrl = "", path = "", mendFirstMs = 200 } = {},
+  { service = true, webUrl = "", path = "", mendFirstMs = 200, mac = false } = {},
 ) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "agentorg-computer-")));
+  // Where AgentOrg Mac keeps its record, for a test that has it; none looked for otherwise.
+  const macRecord = join(root, "AgentOrg Mac");
   const dir = join(root, "provider");
   const data = join(root, "service");
   const workspace = join(root, "workspace");
@@ -261,6 +282,7 @@ async function setup(
       ...(webUrl ? { webUrl } : {}),
       timing: { firstDelayMs: 50, pingEveryMs: 200 },
       mendFirstMs,
+      macRecord: mac ? macRecord : null,
     });
   const provider = { current: await start() };
   leaving.push(() => provider.current.close());
@@ -345,6 +367,7 @@ async function setup(
     running,
     root,
     data,
+    macRecord,
   };
 }
 
@@ -353,6 +376,7 @@ const form = (unit: { form: { id: string }[] } | undefined, id: string) =>
     | {
         id: string;
         value: string;
+        default?: unknown;
         required?: true;
         visible?: { field: string; in: unknown[] };
         options?: {
@@ -974,6 +998,208 @@ test("a container from before with a folder of yours says so in today's words", 
       ],
     },
   });
+});
+
+/** An `agentcomputer` on the path that only says it was run, and AgentComputer's record. */
+function onPathThatSays(t: test.TestContext) {
+  const bin = realpathSync(mkdtempSync(join(tmpdir(), "agentorg-bin-")));
+  t.after(() => rmSync(bin, { recursive: true, force: true }));
+  writeFileSync(join(bin, "agentcomputer"), `#!/bin/sh\ntouch "${join(bin, "ran")}"\nexit 1\n`, {
+    mode: 0o755,
+  });
+  return { bin, ran: () => existsSync(join(bin, "ran")) };
+}
+/** A service's record in `folder`, as a running one writes it, for a stand-in. */
+function recordIn(
+  t: test.TestContext,
+  folder: string,
+  service: { apiUrl: string; apiKey: string },
+) {
+  const alive = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60_000)"]);
+  t.after(() => alive.kill());
+  mkdirSync(folder, { recursive: true });
+  writeFileSync(
+    join(folder, "server.json"),
+    JSON.stringify({ url: service.apiUrl, pid: alive.pid }),
+  );
+  writeFileSync(join(folder, "control-token"), service.apiKey);
+}
+
+test("on a Mac with AgentOrg Mac open, this computer is attached through it, nothing is started, and no container is offered", async (t) => {
+  const command = onPathThatSays(t);
+  const { units, dir, root, macRecord } = await setup(t, {
+    service: false,
+    path: command.bin,
+    mac: true,
+  });
+  const app = await standIn(t);
+  recordIn(t, macRecord, app);
+  const unit = (await units.units({})).units.find((one) => one.id === "computer");
+  const kind = form(unit, "kind")?.options?.find((one) => one.value === "this");
+  assert.equal(kind?.unavailable, undefined);
+  assert.deepEqual(
+    form(unit, "made")?.options?.map((one) => one.value),
+    ["remote"],
+  );
+  assert.equal(form(unit, "made")?.default, "remote");
+  const workspace = join(root, "work");
+  const made = await units.apply({
+    unit: "computer",
+    values: { kind: "this", access: "files", workspace },
+    secrets: {},
+    needs: {},
+    agent: "act_agent",
+    name: "Mine",
+  });
+  assert.ok(app.asked.some((one) => one.method === "POST" && one.path === "/v1/computers/attach"));
+  const kept = JSON.parse(readFileSync(join(dir, "instances.json"), "utf8"));
+  assert.deepEqual(kept[made.instance].computer.service, { local: true, mac: true });
+  const { problems } = await units.check({
+    unit: "computer",
+    values: { kind: "new", made: "container", access: "files" },
+    secrets: [],
+  });
+  assert.deepEqual(
+    problems.map((one) => one.field),
+    ["made"],
+  );
+  assert.equal(command.ran(), false, "nothing of AgentComputer was started");
+  await units.remove({ instance: made.instance });
+});
+
+test("on a Mac with AgentOrg Mac not open, this computer says to open it, and nothing is started", async (t) => {
+  const command = onPathThatSays(t);
+  const { units, apply, local, macRecord } = await setup(t, {
+    service: false,
+    path: command.bin,
+    mac: true,
+  });
+  // It has been opened once: its folder is there, with no service running.
+  mkdirSync(macRecord, { recursive: true });
+  const unit = (await units.units({})).units.find((one) => one.id === "computer");
+  assert.equal(
+    form(unit, "kind")?.options?.find((one) => one.value === "this")?.unavailable,
+    "The AgentOrg app isn't open on this Mac. Open it to use this computer.",
+  );
+  await assert.rejects(apply(local("files")), /The AgentOrg app isn't open on this Mac/);
+  assert.equal(command.ran(), false, "nothing of AgentComputer was started");
+});
+
+test("on a Mac with AgentOrg Mac, this computer attached through the service you run gets the one way on; that service is never started", async (t) => {
+  const command = onPathThatSays(t);
+  const { units, dir, data, root, hub, restart, macRecord, asPerson } = await setup(t, {
+    service: false,
+    path: command.bin,
+    mac: true,
+  });
+  mkdirSync(macRecord, { recursive: true });
+  const kept = join(root, "Agents", "Kept");
+  mkdirSync(kept, { recursive: true });
+  const link = hub.state.createActor(PERSON, { name: "Kept's computer" });
+  const windows = hub.state.createActor(PERSON, { name: "Kept's computer (windows)" });
+  writeFileSync(
+    join(dir, "instances.json"),
+    JSON.stringify({
+      computer_old: {
+        agent: "act_kept",
+        links: [
+          {
+            slot: "computer",
+            actor: link.actorId,
+            credential: link.credential,
+            url: "http://127.0.0.1:9/mcp",
+          },
+        ],
+        capability: { actor: windows.actorId, credential: windows.credential },
+        computer: { id: "old", token: "its-own-token", service: { local: true } },
+      },
+    }),
+  );
+  // That service not running: it says so, with how to start it.
+  await restart();
+  await until(async () => (await units.status({ instance: "computer_old" })).state === "down");
+  assert.equal(
+    (await units.status({ instance: "computer_old" })).detail,
+    "The AgentComputer you run yourself isn't running. Start it with agentcomputer up.",
+  );
+  assert.equal(command.ran(), false, "nothing of AgentComputer was started");
+  // Running: this computer is offered again, through AgentOrg Mac, with its folder.
+  const own = await standIn(t, {
+    old: {
+      computerID: "old",
+      name: "Kept's computer",
+      state: "running",
+      access: "files",
+      isolation: "none",
+      attached: true,
+      browser: false,
+      workspace: kept,
+      metadata: { agent: "act_kept" },
+      surfaces: [],
+      endpoints: { computer: "http://127.0.0.1:9/mcp" },
+    },
+  });
+  recordIn(t, data, own);
+  await restart();
+  const state = await (await asPerson(windows.actorId)).call.state({});
+  assert.equal(state.state, "down");
+  assert.equal(
+    state.detail,
+    `This computer was attached through the AgentComputer you run yourself. Attach it again through the AgentOrg app. Its folder stays ${kept}.`,
+  );
+  assert.deepEqual(state.ways, [
+    {
+      title: "Attach this computer",
+      description: `Its work happens in ${kept}, as before.`,
+      unit: "computer",
+      values: { kind: "this", access: "files", workspace: kept },
+    },
+  ]);
+});
+
+test("on a Mac with AgentOrg Mac open, a container on the service you run is still reached at that service", async (t) => {
+  const { dir, data, hub, restart, macRecord } = await setup(t, { service: false, mac: true });
+  const app = await standIn(t);
+  recordIn(t, macRecord, app);
+  const own = await standIn(t, {
+    c1: {
+      computerID: "c1",
+      name: "Its container",
+      state: "running",
+      access: "files",
+      isolation: "container",
+      attached: false,
+      browser: false,
+      workspace: "/service/computers/c1/workspace",
+      metadata: {},
+      surfaces: [],
+      endpoints: { computer: "http://127.0.0.1:9/v1/computers/c1/mcp" },
+    },
+  });
+  recordIn(t, data, own);
+  const link = hub.state.createActor(PERSON, { name: "Its container" });
+  writeFileSync(
+    join(dir, "instances.json"),
+    JSON.stringify({
+      computer_c1: {
+        agent: "act_one",
+        links: [
+          {
+            slot: "computer",
+            actor: link.actorId,
+            credential: link.credential,
+            url: "http://127.0.0.1:9/v1/computers/c1/mcp",
+          },
+        ],
+        computer: { id: "c1", token: "its-own-token", service: { local: true } },
+      },
+    }),
+  );
+  await restart();
+  const dialled = (service: { asked: { path: string }[] }) =>
+    service.asked.some((one) => one.path === "/v1/computers/c1/mcp");
+  await until(() => dialled(own));
+  assert.equal(dialled(app), false);
 });
 
 test("a new computer here is a container with a workspace of its own, and no folder of yours", async (t) => {
