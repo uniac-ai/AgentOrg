@@ -74,7 +74,9 @@ export const Entry = z.object({
   /**
    * The pieces of work it was given to, each with its own hold on it, in place of `work`,
    * `place` and `joined`: for a user message given to several, or handed back. One with no
-   * `place` is still to be taken by that work. For what the main loop said in a thread that work
+   * `place` is still to be taken by that work. Empty for a user message said in a thread that
+   * several pieces of work follow, none of them in a turn: the main loop decides whose it is, as
+   * for one every piece of work handed back. For what the main loop said in a thread that work
    * follows, none: it is no work's.
    */
   to: z.array(Given).optional(),
@@ -677,8 +679,7 @@ export function createThread(
     return held.records.flatMap(({ seq, entry }) =>
       entry.role === "user" &&
       !answered.has(entry.id) &&
-      entry.to?.length &&
-      entry.to.every((one) => one.back !== undefined)
+      entry.to?.every((one) => one.back !== undefined)
         ? [
             {
               id: entry.id,

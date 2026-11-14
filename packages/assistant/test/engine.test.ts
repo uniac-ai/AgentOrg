@@ -164,10 +164,16 @@ async function setup(values = new Map<string, unknown>(), rest?: (actor: Actor) 
         const content = `## Goal\n- Summary ${summaries.length}.`;
         return { output: [{ type: "message", role: "assistant", content }] } as never;
       }
-      // The main loop is answered at once, with new work; `requests` and `script` are the workers'.
+      // The main loop is answered at once, with new work, or, told which work was last active
+      // where none was in a turn, with that work, as a follow-up is; `requests` and `script` are
+      // the workers'.
       if (request.tools?.some((tool) => tool.name === "route")) {
         routed.push(request as Request);
-        const call = routing.to ? { ...NEW_WORK, arguments: routing.to } : undefined;
+        const last = /The one last active here: (.+)\.$/.exec(
+          String((request as Request).input.at(-1)?.content),
+        )?.[1];
+        const to = routing.to ?? (last ? JSON.stringify({ work: last }) : undefined);
+        const call = to ? { ...NEW_WORK, arguments: to } : undefined;
         if (routing.says !== undefined)
           return {
             output: [
@@ -1785,10 +1791,11 @@ test("a message its conversation's work hands back is taken up by new work in th
     (await shownIn(s, PERSON)).map((m) => m.text),
     ["Write the report.", "Report done.", "What is the weather?", "Sunny."],
   );
-  // The conversation's next message goes to the work last active there, the new one; the first
-  // starts no turn.
+  // The conversation's next message goes to the main loop, told which work was last active there,
+  // the new one, which it gives this follow-up to; the first starts no turn.
   await sendAs(s, "Thanks.");
   await s.host.settled();
+  assert.match(String(s.routed.at(-1)?.input.at(-1)?.content), /The one last active here: /);
   assert.equal(s.requests.length, 4);
   assert.deepEqual(s.whole[3]?.input[0]?.content, "[1] What is the weather?");
 });
@@ -2056,8 +2063,8 @@ test("on upgrade the person's chat last written in becomes their conversation, a
   const again = await setup(values);
   assert.equal((await listed(again)).conversations.length, 1);
   assert.deepEqual(values, kept);
-  // And it goes on in it: of the two pieces of work that follow it, the one last active takes
-  // the message, and the other starts no turn.
+  // And it goes on in it: of the two pieces of work that follow it, the main loop gives the
+  // message to the one last active, and the other starts no turn.
   await exchange(again, "Add a chart.");
   await again.host.settled();
   assert.equal(again.requests.length, 1);

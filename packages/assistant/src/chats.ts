@@ -451,7 +451,8 @@ export function createChats(options: {
      * the conversation stays no work's, and its next message is put to the main loop too. When it
      * gives it to new work or to work there is, that work follows the conversation from then on,
      * beside any that already does. A message there goes to each piece of work in a turn, at its
-     * next model request, or, with none in a turn, to the one last active, which starts a turn.
+     * next model request, or, with none in a turn, to the one that follows it if only one does, or
+     * else to the work the main loop gives it to, told which was last active; that one starts a turn.
      */
     async send(
       { text = "", images }: Input<"send">,
