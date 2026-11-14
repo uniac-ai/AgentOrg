@@ -387,25 +387,44 @@ test("changed fires when the server's tools change, and when it goes and comes b
   });
 });
 
-/** A real MCP server over HTTP that takes only one bearer token. */
+/**
+ * A real MCP server over HTTP that takes only one bearer token, with a session for each client.
+ * `restart` starts it again at the same address, knowing no session it had: a request in one it
+ * doesn't know goes to the newest it began, or to a new one if it has none yet, which say so in
+ * the MCP SDK's own words.
+ */
 async function httpServer(t: test.TestContext, token: string) {
-  const mcp = new McpServer({ name: "http-fixture", version: "1.0.0" });
-  mcp.registerTool(
-    "ping",
-    { description: "Answers.", inputSchema: { n: z.number() } },
-    ({ n }) => ({
-      content: [{ type: "text", text: `pong ${n}` }],
-    }),
-  );
-  const transport = new WebStandardStreamableHTTPServerTransport({
-    sessionIdGenerator: () => randomUUID(),
-  });
-  await mcp.connect(transport);
+  type Transport = WebStandardStreamableHTTPServerTransport;
+  let sessions = new Map<string, Transport>();
+  let newest: Transport | undefined;
+  /** A server for the next client that begins a session. */
+  const serve = async () => {
+    const mcp = new McpServer({ name: "http-fixture", version: "1.0.0" });
+    mcp.registerTool(
+      "ping",
+      { description: "Answers.", inputSchema: { n: z.number() } },
+      ({ n }) => ({
+        content: [{ type: "text", text: `pong ${n}` }],
+      }),
+    );
+    const transport: Transport = new WebStandardStreamableHTTPServerTransport({
+      sessionIdGenerator: () => randomUUID(),
+      onsessioninitialized: (id) => {
+        sessions.set(id, transport);
+        newest = transport;
+      },
+    });
+    await mcp.connect(transport);
+    return transport;
+  };
+  let fresh = await serve();
   const server = createServer(async (request, response) => {
     if (request.headers.authorization !== `Bearer ${token}`)
       return void response.writeHead(401).end();
     const chunks: Buffer[] = [];
     for await (const chunk of request) chunks.push(chunk as Buffer);
+    const id = request.headers["mcp-session-id"];
+    const transport = typeof id !== "string" ? fresh : (sessions.get(id) ?? newest ?? fresh);
     const reply = await transport.handleRequest(
       new Request(`http://127.0.0.1${request.url}`, {
         method: request.method as string,
@@ -413,6 +432,8 @@ async function httpServer(t: test.TestContext, token: string) {
         ...(chunks.length ? { body: Buffer.concat(chunks) } : {}),
       }),
     );
+    // Once it has begun a session, the next client gets a server of its own.
+    if (transport === fresh && newest === fresh) fresh = await serve();
     response.writeHead(reply.status, Object.fromEntries(reply.headers));
     if (reply.body) for await (const chunk of reply.body) response.write(chunk);
     response.end();
@@ -423,8 +444,54 @@ async function httpServer(t: test.TestContext, token: string) {
     server.close();
   };
   t.after(stop);
-  return { url: `http://127.0.0.1:${(server.address() as AddressInfo).port}/mcp`, stop };
+  return {
+    url: `http://127.0.0.1:${(server.address() as AddressInfo).port}/mcp`,
+    stop,
+    async restart() {
+      sessions = new Map();
+      newest = undefined;
+      fresh = await serve();
+    },
+  };
 }
+
+test("a url connection whose server forgot its session, as after starting again, is made again at the call that finds it", async (t) => {
+  // Its next ping is far off: only the call can find it.
+  const { mcp, consumerOf, connected } = await setup(t, { pingEveryMs: 60_000, firstDelayMs: 50 });
+  const token = randomUUID();
+  const server = await httpServer(t, token);
+  const { connection } = await mcp.create({
+    kind: "url",
+    params: { url: server.url },
+    secrets: { token },
+    name: "Restarting",
+  });
+  await connected(connection);
+  const { call } = await consumerOf(connection);
+  assert.deepEqual(await call.call({ name: "ping", arguments: { n: 1 } }), { output: "pong 1" });
+  const madeAgain = (n: number) =>
+    until(
+      async () =>
+        (await call.call({ name: "ping", arguments: { n } }).catch(() => undefined))?.output ===
+        `pong ${n}`,
+      5_000,
+    );
+  // Started again with no session yet: it says it isn't initialized.
+  await server.restart();
+  await assert.rejects(call.call({ name: "ping", arguments: { n: 2 } }), refused("not_connected"));
+  await madeAgain(3);
+  // Started again, and another client's session begun first: it says 404.
+  await server.restart();
+  const { connection: other } = await mcp.create({
+    kind: "url",
+    params: { url: server.url },
+    secrets: { token },
+    name: "Another",
+  });
+  await connected(other);
+  await assert.rejects(call.call({ name: "ping", arguments: { n: 4 } }), refused("not_connected"));
+  await madeAgain(5);
+});
 
 test("a url connection sends its token, and is seen to go when its server dies", async (t) => {
   const { mcp, consumerOf, connected } = await setup(t, { pingEveryMs: 100, firstDelayMs: 200 });
