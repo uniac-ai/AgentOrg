@@ -73,9 +73,16 @@ const IMAGE = process.env.AGENTCOMPUTER_TEST_IMAGE;
  */
 async function standIn(t: test.TestContext, records: Record<string, Record<string, unknown>> = {}) {
   const token = "the-service-token";
-  const asked: { method: string; path: string; token?: string; body?: Record<string, unknown> }[] =
-    [];
+  const asked: {
+    method: string;
+    path: string;
+    at: number;
+    token?: string;
+    body?: Record<string, unknown>;
+  }[] = [];
   const computers = new Map<string, Record<string, unknown>>(Object.entries(records));
+  // Its address as it listens: a request that comes as it closes is still answered.
+  let base = "";
   const server = createServer(async (request, response) => {
     let raw = "";
     for await (const chunk of request) raw += chunk;
@@ -84,6 +91,7 @@ async function standIn(t: test.TestContext, records: Record<string, Record<strin
     asked.push({
       method: request.method ?? "",
       path,
+      at: Date.now(),
       ...(given ? { token: given } : {}),
       ...(raw ? { body: JSON.parse(raw) } : {}),
     });
@@ -94,7 +102,6 @@ async function standIn(t: test.TestContext, records: Record<string, Record<strin
     };
     if (given !== token)
       return send(401, { code: 401, message: "That isn't this service's token." });
-    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
     if (request.method === "GET" && path === "/v1/info")
       return send(200, {
         version: "0.0.19",
@@ -132,10 +139,24 @@ async function standIn(t: test.TestContext, records: Record<string, Record<strin
       computers.set(id, made);
       return send(201, { ...made, accessToken: "its-own-token" });
     }
-    const [, id, more] = path.match(/^\/v1\/computers\/([^/]+)(\/live)?$/) ?? [];
+    const [, id, more] = path.match(/^\/v1\/computers\/([^/]+)(\/live|\/stop|\/start)?$/) ?? [];
     const found = id ? computers.get(id) : undefined;
     if (!found || !id) return send(404, { code: 404, message: "There's no computer by that id." });
-    if (more && request.method === "POST")
+    if (more === "/stop" && request.method === "POST") {
+      found.state = "stopped";
+      return send(200, found);
+    }
+    // It fails as many starts as `failStarts` says, as when Docker isn't answering, and is left
+    // stopped.
+    if (more === "/start" && request.method === "POST") {
+      const failing = Number(found.failStarts ?? 0);
+      found.failStarts = Math.max(failing - 1, 0);
+      found.state = failing > 0 ? "stopped" : "running";
+      return failing > 0
+        ? send(409, { code: 409, message: "A container needs Docker, which isn't answering." })
+        : send(200, found);
+    }
+    if (more === "/live" && request.method === "POST")
       return send(201, {
         url: `${base.replace("http", "ws")}/v1/live/once`,
         protocol: "terminal@1",
@@ -151,9 +172,12 @@ async function standIn(t: test.TestContext, records: Record<string, Record<strin
     send(405, { code: 405, message: "Not here." });
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  t.after(() => new Promise((resolve) => server.close(resolve)));
-  const apiUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-  return { apiUrl, apiKey: token, asked, computers };
+  base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  t.after(() => {
+    server.closeAllConnections();
+    return new Promise((resolve) => server.close(resolve));
+  });
+  return { apiUrl: base, apiKey: token, asked, computers };
 }
 
 interface Service {
@@ -194,7 +218,10 @@ async function startService(data: string): Promise<Service> {
   };
 }
 
-async function setup(t: test.TestContext, { service = true, webUrl = "", path = "" } = {}) {
+async function setup(
+  t: test.TestContext,
+  { service = true, webUrl = "", path = "", mendFirstMs = 200 } = {},
+) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "agentorg-computer-")));
   const dir = join(root, "provider");
   const data = join(root, "service");
@@ -232,6 +259,7 @@ async function setup(t: test.TestContext, { service = true, webUrl = "", path = 
       path,
       ...(webUrl ? { webUrl } : {}),
       timing: { firstDelayMs: 50, pingEveryMs: 200 },
+      mendFirstMs,
     });
   const provider = { current: await start() };
   leaving.push(() => provider.current.close());
@@ -741,6 +769,119 @@ test("endpoints are at the address given, whatever the service calls itself", as
   // So is a live session's socket.
   const ticket = await units.live({ instance, surface: "terminal", mode: "watch" });
   assert.match(ticket.url, new RegExp(`^ws://localhost:${port}/`));
+  await units.remove({ instance });
+});
+
+test("a computer's connections that are down say why in words: the service's own, or that it isn't running", async (t) => {
+  const { apply, units } = await setup(t, { service: false });
+  const there = await standIn(t);
+  const away = { kind: "new", made: "remote", address: there.apiUrl, access: "terminal" };
+  const downOf = async (instance: string) => {
+    await until(async () => (await units.status({ instance })).state === "down");
+    const { detail, connections } = await units.status({ instance });
+    return [detail, ...connections.map((one) => one.detail)];
+  };
+  // Running, its tools refuse the computer's own token here: the service's message, as it says it.
+  const running = await apply(away, { token: there.apiKey });
+  assert.deepEqual(await downOf(running.instance), [
+    "That isn't this service's token.",
+    "That isn't this service's token.",
+  ]);
+  // One the service says has stopped says so, for it and each of its connections.
+  const stopped = await apply(away, { token: there.apiKey });
+  const record = [...there.computers.values()].at(-1) as Record<string, unknown>;
+  record.state = "stopped";
+  assert.deepEqual(await downOf(stopped.instance), [
+    "Its computer has stopped.",
+    "Its computer has stopped.",
+  ]);
+  await units.remove({ instance: running.instance });
+  await units.remove({ instance: stopped.instance });
+});
+
+test("a computer its service says failed is stopped and started again by itself, after a restart too, until it runs", async (t) => {
+  const { apply, units, dir, restart } = await setup(t, { service: false, mendFirstMs: 60_000 });
+  const there = await standIn(t);
+  const away = { kind: "new", made: "remote", address: there.apiUrl, access: "terminal" };
+  const { instance } = await apply(away, { token: there.apiKey });
+  const record = [...there.computers.values()].at(-1) as Record<string, unknown>;
+  const asked = () =>
+    there.asked
+      .filter((one) => one.method === "POST" && /\/(stop|start)$/.test(one.path))
+      .map((one) => one.path.split("/").at(-1));
+  const kept = () => JSON.parse(readFileSync(join(dir, "instances.json"), "utf8"))[instance];
+  // It fails, and so does the start it is given at once, which leaves it stopped.
+  record.state = "failed";
+  record.failStarts = 1;
+  await until(async () => (await units.status({ instance })).state === "down");
+  await until(() => asked().length === 2);
+  await until(
+    async () =>
+      (await units.status({ instance })).detail ===
+      "Its computer failed, and is started again by itself.",
+  );
+  const between = await units.status({ instance });
+  assert.ok(between.connections.every((one) => one.detail === between.detail));
+  assert.equal(kept().restarting, true, "stopped here, it is kept to be started again");
+  // The next try would be a minute on; a restart meanwhile starts it again at once.
+  await restart();
+  await until(() => record.state === "running");
+  assert.deepEqual(asked(), ["stop", "start", "start"]);
+  await until(() => kept().restarting === undefined);
+  // Running, it says what its service says, and isn't tried again.
+  await until(
+    async () => (await units.status({ instance })).detail === "That isn't this service's token.",
+  );
+  // A mark left on one that runs, as when the app went down before clearing it, is cleared when
+  // it is looked at, and nothing is started.
+  const file = JSON.parse(readFileSync(join(dir, "instances.json"), "utf8"));
+  file[instance].restarting = true;
+  writeFileSync(join(dir, "instances.json"), JSON.stringify(file));
+  await restart();
+  await units.status({ instance });
+  await until(() => kept().restarting === undefined);
+  assert.equal(asked().length, 3);
+  // Stopped by someone else, it is left so, a restart and its connections going down included.
+  record.state = "stopped";
+  await restart();
+  await until(
+    async () => (await units.status({ instance })).detail === "Its computer has stopped.",
+  );
+  await new Promise((resolve) => setTimeout(resolve, 1000));
+  assert.equal(asked().length, 3);
+  await units.remove({ instance });
+});
+
+test("a computer that keeps failing waits longer each time, and one being made is left to be made", async (t) => {
+  const { apply, units, restart } = await setup(t, { service: false, mendFirstMs: 400 });
+  const there = await standIn(t);
+  const away = { kind: "new", made: "remote", address: there.apiUrl, access: "terminal" };
+  const { instance } = await apply(away, { token: there.apiKey });
+  const record = [...there.computers.values()].at(-1) as Record<string, unknown>;
+  const tries = () =>
+    there.asked.filter((one) => one.method === "POST" && /\/(stop|start)$/.test(one.path));
+  const starts = () => tries().filter((one) => one.path.endsWith("/start"));
+  record.state = "failed";
+  record.failStarts = 3;
+  await until(async () => (await units.status({ instance })).state === "down");
+  await until(() => record.state === "running", 10_000);
+  // At once, then after 400 ms, 800 ms and 1.6 s: each wait twice the last.
+  const at = starts().map((one) => one.at);
+  assert.equal(at.length, 4);
+  const waits = at.slice(1).map((time, i) => time - (at[i] as number));
+  assert.ok(
+    waits.every((wait, i) => wait >= 400 * 2 ** i && wait < 400 * 2 ** i + 1000),
+    String(waits),
+  );
+  // Being made, as a later service says, it is neither stopped nor started when its connections
+  // go down, as at a restart.
+  const before = tries().length;
+  const looked = there.asked.length;
+  record.state = "starting";
+  await restart();
+  await until(() => there.asked.slice(looked).some((one) => one.method === "GET"));
+  await new Promise((resolve) => setTimeout(resolve, 1000));
+  assert.equal(tries().length, before);
   await units.remove({ instance });
 });
 

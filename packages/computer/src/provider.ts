@@ -79,6 +79,11 @@ const Stored = z.object({
       ]),
     })
     .optional(),
+  /**
+   * Its computer failed and is stopped here to be started again: it is started until it runs,
+   * after a restart too, since the service itself starts no stopped computer again.
+   */
+  restarting: z.literal(true).optional(),
 });
 type Instance = z.infer<typeof Stored>;
 type Linked = z.infer<typeof Link>;
@@ -142,6 +147,8 @@ export interface ComputerProviderOptions {
   webUrl?: string;
   log?: Log;
   timing?: Timing;
+  /** The first wait before a failed computer is tried again; a minute by default. For tests. */
+  mendFirstMs?: number;
 }
 
 export interface ComputerProvider {
@@ -171,6 +178,12 @@ const socketAt = (apiUrl: string, socket: string) => {
 const SURFACES_MS = 2000;
 /** How long what they said is used again: a status is asked for often. */
 const SURFACES_FRESH_MS = 10_000;
+/**
+ * A computer its service says failed is stopped and started again, as the service says to: at
+ * once, then after a wait that doubles each time up to the most, until it runs or its unit goes.
+ */
+const MEND_FIRST_MS = 60_000;
+const MEND_MOST_MS = 30 * 60_000;
 
 /** The same folders the service looks in itself. */
 const defaultDataFolder = () =>
@@ -207,6 +220,20 @@ interface Before {
   folder: string | null;
   access: string;
   browser: boolean;
+}
+/** A computer that isn't running, as the person reads it. */
+const NOT_RUNNING: Record<Exclude<ComputerDetail["state"], "running">, string> = {
+  stopped: "Its computer has stopped.",
+  failed: "Its computer failed, and is started again by itself.",
+};
+/** While a failed computer is being stopped and started again. */
+const TRYING = "Its computer is being started again.";
+/** A failed computer being mended, as `mend` keeps it. */
+interface Mending {
+  timer?: NodeJS.Timeout;
+  trying: boolean;
+  /** The look or try under way, which a removal waits for. */
+  going?: Promise<void>;
 }
 /** Whether the service says a computer is one an earlier version made with no isolation. */
 const fromBefore = (info: ComputerDetail) => info.isolation === "none" && info.attached === false;
@@ -429,6 +456,11 @@ export async function startComputerProvider(
   };
 
   const running = new Map<string, Connection[]>();
+  /** Failed computers being mended, by instance: `trying` while one is stopped and started. */
+  const mending = new Map<string, Mending>();
+  /** The last try to start each failed computer again, and the wait after it. */
+  const tried = new Map<string, { at: number; wait: number }>();
+  let ending = false;
   /**
    * Computers an earlier version made here with no isolation, by instance: no longer made or
    * started, with the folder the service keeps and what they reached, for the ways on.
@@ -497,6 +529,9 @@ export async function startComputerProvider(
     Client<Record<never, never>, { capability: typeof capability }>
   >();
   const endAll = async () => {
+    ending = true;
+    for (const { timer } of mending.values()) clearTimeout(timer);
+    mending.clear();
     for (const client of capabilities.values()) client.close();
     await Promise.all([...running.values()].flat().map((server) => server.end()));
   };
@@ -537,26 +572,33 @@ export async function startComputerProvider(
     return join(options.agentsFolder ?? join(homedir(), "Agents"), safe);
   };
 
-  /** What of a computer can be opened live, as its service says; none if it can't say now. */
-  const asked = new Map<string, { at: number; answer: ReturnType<typeof askSurfaces> }>();
+  /**
+   * How a computer stands and what of it can be opened live, as its service says; nothing if it
+   * can't say now.
+   */
+  const asked = new Map<string, { at: number; answer: ReturnType<typeof askInfo> }>();
   /** One question at a time per computer, and its answer kept a little while. */
-  const surfacesOf = (computer: NonNullable<Instance["computer"]>) => {
+  const infoOf = (computer: NonNullable<Instance["computer"]>) => {
     const kept = asked.get(computer.id);
     if (kept && Date.now() - kept.at < SURFACES_FRESH_MS) return kept.answer;
-    const answer = askSurfaces(computer);
+    const answer = askInfo(computer);
     asked.set(computer.id, { at: Date.now(), answer });
     return answer;
   };
-  const askSurfaces = async (computer: NonNullable<Instance["computer"]>) => {
+  const askInfo = async (computer: NonNullable<Instance["computer"]>) => {
     const reached = reachOf(computer.service);
     const info = reached && (await within(SURFACES_MS, Computer.getInfo(computer.id, reached)));
-    if (info && fromBefore(info)) seenBefore(computer, info);
-    return info?.surfaces.map(({ surface, protocol, operate, unavailable }) => ({
-      surface,
-      protocol,
-      operate,
-      ...(unavailable ? { unavailable } : {}),
-    }));
+    if (!info) return undefined;
+    if (fromBefore(info)) seenBefore(computer, info);
+    return {
+      state: info.state,
+      surfaces: info.surfaces.map(({ surface, protocol, operate, unavailable }) => ({
+        surface,
+        protocol,
+        operate,
+        ...(unavailable ? { unavailable } : {}),
+      })),
+    };
   };
 
   /**
@@ -661,6 +703,85 @@ export async function startComputerProvider(
     return { servers, computer: held, rows };
   };
 
+  /**
+   * Mend an instance's computer if its service says it failed: stop it and start it again, as the
+   * service says to, and look again after a wait if it didn't start. One that keeps failing waits
+   * twice as long each time, up to the most, until it has stayed up that long. It ends once the
+   * computer runs, is stopped by someone else, or its unit goes. Only a failed one is started: one
+   * being made is left to be made, and one made earlier with no isolation is left as it is.
+   */
+  const mend = (instance: string) => {
+    if (ending || mending.has(instance)) return;
+    const mine: Mending = { trying: false };
+    mending.set(instance, mine);
+    const first = options.mendFirstMs ?? MEND_FIRST_MS;
+    const later = (ms: number) => {
+      mine.timer = setTimeout(() => {
+        mine.going = attempt();
+      }, ms);
+    };
+    const restarting = (entry: Instance, now: boolean) => {
+      if (Boolean(entry.restarting) === now || mending.get(instance) !== mine) return;
+      if (now) entry.restarting = true;
+      else delete entry.restarting;
+      try {
+        save();
+      } catch (error) {
+        log.warn(`Whether its computer is to be started again wasn't written: ${messageOf(error)}`);
+      }
+    };
+    const changed = () => capabilities.get(instance)?.exports.capability.emit("changed", {});
+    const attempt = async () => {
+      const entry = stored[instance];
+      const computer = entry?.computer;
+      const reached = computer && reachOf(computer.service);
+      const info =
+        reached && (await within(SERVICE_ANSWERS_MS, Computer.getInfo(computer.id, reached)));
+      if (mending.get(instance) !== mine) return;
+      if (!entry || !computer || before.has(instance) || (info && fromBefore(info))) {
+        mending.delete(instance);
+        return;
+      }
+      if (info?.state === "running" || (info?.state === "stopped" && !entry.restarting)) {
+        if (info.state === "running") restarting(entry, false);
+        mending.delete(instance);
+        return;
+      }
+      const last = tried.get(instance);
+      // Being made, or its service can't say now: look again soon, with no try counted.
+      if (!reached || !(info?.state === "failed" || info?.state === "stopped")) return later(first);
+      const now = Date.now();
+      if (last && now < last.at + last.wait) return later(last.at + last.wait - now);
+      const wait =
+        last && now - last.at < last.wait + MEND_MOST_MS
+          ? Math.min(last.wait * 2, MEND_MOST_MS)
+          : first;
+      tried.set(instance, { at: now, wait });
+      log.warn("Its computer failed: it is stopped and started again.", { instance });
+      mine.trying = true;
+      asked.delete(computer.id);
+      changed();
+      let started = false;
+      try {
+        if (info.state === "failed") {
+          restarting(entry, true);
+          await Computer.stop(computer.id, reached);
+        }
+        await Computer.start(computer.id, reached);
+        restarting(entry, false);
+        started = true;
+      } catch (error) {
+        log.warn(`Its computer didn't start again: ${messageOf(error)}`, { instance });
+      }
+      mine.trying = false;
+      asked.delete(computer.id);
+      changed();
+      if (mending.get(instance) !== mine) return;
+      if (started) mending.delete(instance);
+      else later(wait);
+    };
+    mine.going = attempt();
+  };
   /** How an instance stands: its connections' states as one, and what of it can be opened. */
   const stateOf = async (instance: string) => {
     const { found, servers } = held(instance);
@@ -683,13 +804,26 @@ export async function startComputerProvider(
     };
     const earlier = fromEarlier();
     if (earlier) return earlier;
-    const each = servers.map((server, i) => ({
-      connection: (found.links[i] as Linked).actor,
-      ...server.status(),
-    }));
+    const info = found.computer ? await infoOf(found.computer) : undefined;
+    // Failed, or marked to be started again: a mark left on a running one is cleared by the look.
+    if (info?.state === "failed" || found.restarting) mend(instance);
+    // A computer that isn't running is why its connections are down: they say so in its words.
+    const why = mending.get(instance)?.trying
+      ? TRYING
+      : info && info.state !== "running"
+        ? NOT_RUNNING[found.restarting ? "failed" : info.state]
+        : undefined;
+    const each = servers.map((server, i) => {
+      const status = server.status();
+      return {
+        connection: (found.links[i] as Linked).actor,
+        ...status,
+        ...(why && status.state === "down" ? { detail: why } : {}),
+      };
+    });
     const down = each.find((one) => one.state === "down");
     const waiting = each.some((one) => one.state === "connecting");
-    const surfaces = found.computer ? await surfacesOf(found.computer) : undefined;
+    const surfaces = info?.surfaces;
     // Its record, read just now, may have said it is from before.
     const seen = fromEarlier();
     if (seen) return seen;
@@ -764,7 +898,11 @@ export async function startComputerProvider(
     });
     capabilities.set(instance, client);
     for (const server of servers)
-      server.onState(() => client.exports.capability.emit("changed", {}));
+      server.onState(() => {
+        client.exports.capability.emit("changed", {});
+        // Down, it may be because its computer failed: that is mended.
+        if (server.status().state === "down") mend(instance);
+      });
   };
 
   // Computers kept here come back with their service, started first if none runs, so their
@@ -909,8 +1047,18 @@ export async function startComputerProvider(
         live: ({ instance, surface, mode }) => ticket(instance, surface, mode),
         async remove({ instance }) {
           const { found, servers } = held(instance);
-          // First: if the service refuses, the rest is still here to be tried again.
-          if (found.computer) await killComputer(found.computer);
+          // Nothing more is tried on its computer, which goes: a try under way ends first.
+          const under = mending.get(instance);
+          clearTimeout(under?.timer);
+          mending.set(instance, { trying: false });
+          tried.delete(instance);
+          try {
+            await under?.going;
+            // First: if the service refuses, the rest is still here to be tried again.
+            if (found.computer) await killComputer(found.computer);
+          } finally {
+            mending.delete(instance);
+          }
           // One from before: the agent's next computer, as a container, starts with its folder.
           const earlierOne = before.get(instance);
           if (earlierOne?.folder && earlierOne.access !== "none") {

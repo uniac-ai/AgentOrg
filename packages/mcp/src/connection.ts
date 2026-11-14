@@ -14,6 +14,7 @@ import {
   ProtocolErrorCode,
   SdkError,
   SdkErrorCode,
+  SdkHttpError,
   StreamableHTTPClientTransport,
 } from "@modelcontextprotocol/client";
 import { getDefaultEnvironment, StdioClientTransport } from "@modelcontextprotocol/client/stdio";
@@ -46,7 +47,21 @@ const LIST_ROOM = 900 * 1024;
 
 const cut = (text: string, max: number) =>
   text.length <= max ? text : `${text.slice(0, max - 40)}… [cut: ${text.length} characters]`;
-const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
+/**
+ * What an error says. A server's HTTP answer whose body is JSON with a `message`, such as
+ * `{"code":409,"message":"It has stopped."}`, says that message alone.
+ */
+const messageOf = (error: unknown) => {
+  if (error instanceof SdkHttpError && typeof error.data.text === "string") {
+    try {
+      const { message } = JSON.parse(error.data.text) as { message?: unknown };
+      if (typeof message === "string" && message.trim() !== "") return message;
+    } catch {
+      // Not JSON: the transport's own words, with the body as it came.
+    }
+  }
+  return error instanceof Error ? error.message : String(error);
+};
 
 /** The tools a server lists, fitted to what `tools@1` can carry; what can't be is logged. */
 function fit(listed: Awaited<ReturnType<Client["listTools"]>>["tools"], log: Log): Tool[] {
