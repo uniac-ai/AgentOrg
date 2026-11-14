@@ -180,7 +180,8 @@ test(
     const [out, put] = changes();
     assert.deepEqual(out?.input, { agent: "a-research", instance: "i-computer" });
     assert.equal(put?.method, "addUnit");
-    const added = put?.input as { unit: { values: unknown } } | undefined;
+    const added = put?.input as { unit: { values: unknown }; at?: number } | undefined;
+    assert.equal(added?.at, 0, "in the place of the unit it was built from");
     assert.deepEqual(added?.unit.values, {
       where: "local",
       workspace: "/work/research",

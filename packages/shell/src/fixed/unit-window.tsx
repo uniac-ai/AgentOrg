@@ -20,22 +20,29 @@ import { type CatalogUnit, isComplete, type Secrets, unitInput, type Values } fr
 export type Applied = AgentDetail["units"][number];
 
 /**
- * One unit taken out and another put in its place, as answered now. Refused, the one it was goes
- * back as it was built, all but its secrets, and the refusal is passed on.
+ * One unit taken out and another put in its place, as answered now: at `at`, its index among the
+ * agent's units, so it stays where it was. Refused, the one it was goes back there as it was built,
+ * all but its secrets, and the refusal is passed on.
  */
 export async function replaceUnit(
   agent: string,
   applied: Applied,
+  at: number,
   unit: CatalogUnit,
   values: Values,
   secrets: Secrets,
 ) {
+  const place = at >= 0 ? { at } : {};
   await api.call("agents", "removeUnit", { agent, instance: applied.instance });
   try {
-    await api.call("agents", "addUnit", { agent, unit: unitInput(unit, values, secrets) });
+    await api.call("agents", "addUnit", {
+      agent,
+      unit: unitInput(unit, values, secrets),
+      ...place,
+    });
   } catch (refused) {
     const was = { provider: applied.provider, unit: applied.unit, values: applied.values };
-    await api.call("agents", "addUnit", { agent, unit: was }).catch(() => {});
+    await api.call("agents", "addUnit", { agent, unit: was, ...place }).catch(() => {});
     throw refused;
   }
 }

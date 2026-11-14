@@ -257,7 +257,8 @@ export function AgentPage({
           onClose={() => setTaking(undefined)}
           onSave={(values, secrets) => {
             setTaking(undefined);
-            act.run(() => replaceUnit(id, from, taken, values, secrets));
+            const at = detail.units.findIndex((one) => one.instance === from.instance);
+            act.run(() => replaceUnit(id, from, at, taken, values, secrets));
           }}
         />
       )}

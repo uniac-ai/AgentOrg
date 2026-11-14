@@ -116,7 +116,8 @@ function Made({ agent: entry }: { agent: AgentEntry }) {
   const rebuild = (applied: Applied, unit: CatalogUnit, values: Values, secrets: Secrets) =>
     act.run(async () => {
       try {
-        await replaceUnit(id, applied, unit, values, secrets);
+        const at = agent.units.findIndex((one) => one.instance === applied.instance);
+        await replaceUnit(id, applied, at, unit, values, secrets);
       } finally {
         setChanged((was) => was + 1);
       }

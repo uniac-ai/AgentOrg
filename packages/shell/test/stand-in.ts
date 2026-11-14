@@ -740,7 +740,7 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
         return {};
       },
       // A unit added to a living agent goes below those it has; one removed goes, as management does.
-      addUnit: ({ agent, unit: given }) => {
+      addUnit: ({ agent, unit: given, at }) => {
         const unit = given as unknown as {
           provider: string;
           unit: string;
@@ -748,18 +748,18 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
         };
         const held = agentOf(agent);
         const instance = `i-added-${++added}`;
-        held.units = [
-          ...(held.units ?? []),
-          {
-            instance,
-            provider: unit.provider,
-            unit: unit.unit,
-            title: UNITS.find((c) => c.id === unit.unit)?.title ?? unit.unit,
-            values: unit.values ?? {},
-            needs: {},
-            status: { state: "connected" as const },
-          },
-        ];
+        // At `at`, its place from the top, or below the rest.
+        const units = [...(held.units ?? [])];
+        units.splice(typeof at === "number" ? at : units.length, 0, {
+          instance,
+          provider: unit.provider,
+          unit: unit.unit,
+          title: UNITS.find((c) => c.id === unit.unit)?.title ?? unit.unit,
+          values: unit.values ?? {},
+          needs: {},
+          status: { state: "connected" as const },
+        });
+        held.units = units;
         changed();
         return { instance };
       },
