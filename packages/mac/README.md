@@ -32,10 +32,10 @@ Opening the window registers the background item unless it is already on or wait
 
 ## The provider
 
-The background item is `Contents/Library/LaunchAgents/dev.agentorg.mac.provider.plist`. macOS starts it at login and keeps it running. The provider runs two programs from the bundle's `Contents/Resources`, which this build doesn't carry yet. Without them, it logs what is missing and runs nothing.
+The background item is `Contents/Library/LaunchAgents/dev.agentorg.mac.provider.plist`. macOS starts it at login and keeps it running. The provider runs two programs the bundle carries beside its own, in `Contents/MacOS`, and the service among its resources, `Contents/Resources/agentcomputer`. A build without them, such as `npm run dev`'s, logs what is missing and runs nothing.
 
 - **Cua Driver,** embedded, as its embedding guide has a host run it: `cua-driver serve --embedded --socket` on a socket in `~/Library/Application Support/AgentOrg/driver`. Its home is that folder, so what it keeps stays in the app's. It's told it is embedded and whose (`CUA_DRIVER_EMBEDDED`, `CUA_DRIVER_HOST_BUNDLE_ID`), and checks for no updates (`CUA_DRIVER_RS_UPDATE_CHECK=false`).
-- **The service,** once the driver's socket is there: `node agentcomputer/agentcomputer.js serve --lend --listen 127.0.0.1:0`, with its data folder, the driver and its socket.
+- **The service,** once the driver's socket is there: `node agentcomputer/dist/agentcomputer.js serve --lend --listen 127.0.0.1:0`, with its data folder, the driver and its socket.
 - **Each gets a small environment,** never the app's own: `HOME`, `USER`, `LOGNAME`, `SHELL` (the account's login shell), `TMPDIR`, `LANG`, `PATH=/usr/bin:/bin:/usr/sbin:/sbin` and `DO_NOT_TRACK=1`.
 - **One that ends** is started again: at once, then after 1, 2, 4, 8, 16 and 30 s while it keeps ending within a minute.
 - **A grant's change** starts the driver again, since the driver reads its grants once. That ends the screen's connections of computers using it, as AgentComputer says.
@@ -60,8 +60,19 @@ Each line is one write, so the three don't mix. At 10 MB the provider moves it t
 
 ## Building it
 
-It needs Xcode and Rust. `npm run app --workspace @agentorg/mac` builds the page, then `src-tauri/target/release/bundle/macos/AgentOrg.app`, signed ad hoc. `npm run dev --workspace @agentorg/mac` runs the window against the page's dev server. Cargo's downloads and build output can stay in this folder: set `CARGO_HOME` to `src-tauri/target/cargo-home`. Neither is checked in.
+It needs Xcode and Rust. `npm run app --workspace @agentorg/mac` assembles what the app carries, builds the page, then builds `src-tauri/target/release/bundle/macos/AgentOrg.app`, signed ad hoc. `npm run dev --workspace @agentorg/mac` runs the window against the page's dev server, without the assembly. Cargo's downloads and build output can stay in this folder: set `CARGO_HOME` to `src-tauri/target/cargo-home`. Neither is checked in.
+
+**The assembly,** `scripts/assemble.mjs`, makes `src-tauri/target/assembly/bundle`, which the bundle takes its files from (`bundle.macOS.files`). They aren't Tauri's sidecars, though `node` and `cua-driver` sit where sidecars do: Tauri copies sidecars when the Rust is compiled, so every `cargo build` and `cargo test` would need the fetched files. The bundle copies these as they are and signs none of them, so the assembly signs them.
+
+- **Node** and **Cua Driver,** as [`assembly.json`](assembly.json) pins them: Node 24.22.1 for Apple silicon from nodejs.org, and Cua Driver 0.49.7's release from its GitHub, which is MIT. Never its AGPL perception extension.
+  - Each is fetched into a new, empty folder of its own, in `src-tauri/target/assembly/downloads`.
+  - Nothing of it is used until its sha256 matches the pin and the release's own sums, and, for the driver, GitHub's digest too, checked on every build, so a build needs the network. On a mismatch, the build stops, saying which.
+  - Of each, only the files `assembly.json` names, by their path in the release, each a file of its own: `node` and its `LICENSE`; the bare `cua-driver`, its `LICENSE` and its `THIRD_PARTY_NOTICES.md`. Not the program inside its `CuaDriver.app`, whose entitlements are tied to its makers' Team ID, and which macOS refuses once it is signed as ours.
+  - `fetched.json` beside them says what was fetched: each file's name, address, size and sha256.
+- **The service,** `@agentorg/computer` at the version this package depends on, from the workspace's install, which its lockfile checked. Its `package.json`, `LICENSE`, `NOTICE`, `dist/agentcomputer.js` and `dist/THIRD_PARTY_LICENSES.txt`; its own `playwright-core`, whole; and `node-pty`'s `package.json`, `LICENSE`, `lib` and native files for Apple silicon. Each package must be the version the service names, or the build stops.
+- **Signed:** `node`, `cua-driver` and `node-pty`'s two native files are marked executable where they are programs, and signed with the app's identity before the bundle around them. Their entitlements are those in `entitlements/`: for `node`, JIT and its own unsigned native code; for `cua-driver`, Apple Events and screen capture. That identity is `APPLE_SIGNING_IDENTITY` where it's set, otherwise `tauri.conf.json`'s.
+- **In the bundle:** `node` and `cua-driver` in `Contents/MacOS`. The service in `Contents/Resources/agentcomputer`, with its own licences (`LICENSE`, `NOTICE`, `dist/THIRD_PARTY_LICENSES.txt`). Node's and the driver's licences in `Contents/Resources/licenses`.
 
 The app has no icon of its own yet. `src-tauri/icons/icon.png` is a transparent stand-in that Tauri needs to build, so the built app shows the Mac's generic app icon; under `npm run dev` its Dock icon is blank.
 
-`cargo test` in `src-tauri` runs the app's own tests: the provider is run there against stand-ins for the driver and the service. CI runs on Linux and neither builds nor tests the app: this package has no `build` or `test` script for the workspace's scripts to run. The page's test of the commands it calls, in `@agentorg/mac-window`, runs there.
+`cargo test` in `src-tauri` runs the app's own tests: the provider is run there against stand-ins for the driver and the service. `npm test` runs the assembly's tests, over stand-ins for both releases and the workspace, with nothing fetched. CI runs on Linux: it runs the assembly's tests and the page's test of the commands it calls, in `@agentorg/mac-window`. It doesn't build the app or run `cargo test`, as this package has no `build` script.

@@ -67,12 +67,14 @@ pub struct Programs {
 }
 
 impl Programs {
+    /// Where the bundle puts them (tauri.conf.json's `bundle.macOS.files`): the two programs
+    /// beside the app's own, and the service among its resources.
     fn in_bundle(app: &Path) -> Self {
-        let resources = app.join("Contents/Resources");
+        let contents = app.join("Contents");
         Programs {
-            node: resources.join("node"),
-            service: resources.join("agentcomputer/agentcomputer.js"),
-            driver: resources.join("cua-driver"),
+            node: contents.join("MacOS/node"),
+            service: contents.join("Resources/agentcomputer/dist/agentcomputer.js"),
+            driver: contents.join("MacOS/cua-driver"),
         }
     }
 
@@ -607,6 +609,18 @@ mod tests {
         assert_eq!(serde_json::from_value::<Said>(written).unwrap(), said);
         for state in [AppState::Starting, AppState::Running, AppState::StartingAgain] {
             assert_eq!(serde_json::to_value(state).unwrap(), state.name());
+        }
+    }
+
+    #[test]
+    fn the_provider_finds_its_three_programs_where_the_bundle_puts_them() {
+        let config: Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let files = config["bundle"]["macOS"]["files"].as_object().unwrap();
+        let programs = Programs::in_bundle(Path::new("/A.app"));
+        for program in [&programs.node, &programs.driver, &programs.service] {
+            let inside = program.strip_prefix("/A.app/Contents").unwrap();
+            let carried = files.keys().any(|key| inside.starts_with(key));
+            assert!(carried, "{} isn't in the bundle's files", inside.display());
         }
     }
 

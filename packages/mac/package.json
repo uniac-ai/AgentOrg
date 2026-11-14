@@ -5,8 +5,12 @@
   "description": "The AgentOrg Mac app: its window, showing the page from @agentorg/mac-window, and the seam to the service on this Mac.",
   "license": "MIT",
   "scripts": {
-    "app": "tauri build --bundles app",
-    "dev": "tauri dev"
+    "app": "node scripts/assemble.mjs && tauri build --bundles app",
+    "dev": "tauri dev",
+    "test": "node --test \"test/**/*.test.mjs\""
+  },
+  "dependencies": {
+    "@agentorg/computer": "0.0.20"
   },
   "devDependencies": {
     "@tauri-apps/cli": "2.12.4"
