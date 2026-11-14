@@ -2,6 +2,7 @@ import {
   createLooper,
   Entry,
   type FilesOf,
+  type Item,
   type Json,
   type OutputItem,
   type Picture,
@@ -9,6 +10,7 @@ import {
   type Tool,
   textOf,
 } from "../src/index.ts";
+import { LAST_ACTIVE } from "../src/main.ts";
 
 /**
  * A looper whose model answers a worker's request only when the test says so, naming the request by
@@ -40,6 +42,12 @@ export function looperWith(
     voice?: string;
     /** What the main loop answers when put `text`: by default, new work. */
     routing?: (text: string) => OutputItem[] | Promise<OutputItem[]> | undefined;
+    /**
+     * How the main loop places a message no work in a turn took, given that message and what it
+     * is told of which work was last active: by default, it gives it to that work, as a follow-up
+     * is.
+     */
+    idle?: (said: string, text: string) => OutputItem[] | Promise<OutputItem[]> | undefined;
     /** Who a message said in a thread is from, when not the person. */
     speaker?: (thread: string) => string | undefined;
     /**
@@ -166,10 +174,11 @@ export function looperWith(
               answer: () => {},
               fail: () => fail(gone()),
             });
-            Promise.resolve(options.routing?.(text) ?? newWork()).then(
-              (output) => answer({ output }),
-              fail,
-            );
+            Promise.resolve(
+              (text.startsWith(IDLE)
+                ? (options.idle?.(saidBefore(input), text) ?? followUp(text))
+                : options.routing?.(text)) ?? newWork(),
+            ).then((output) => answer({ output }), fail);
             return;
           }
           const tail = input.at(-1);
@@ -356,6 +365,17 @@ export const route = (said: { work?: string; title?: string; stop?: string }): O
 /** The main loop placing what came in: new work with a title, or a piece of work there is by its id. */
 export const newWork = (title = "Work") => route({ title });
 export const routeTo = (work: string) => route({ work });
+/** The message a main-loop request is about: the person's newest, before what it is told of it. */
+const saidBefore = (input: Item[]) => {
+  for (const item of [...input].reverse())
+    if (item.type === "message" && item.role === "user" && !item.content.startsWith(IDLE))
+      return item.content;
+  return "";
+};
+/** What the main loop is told of a message no work in a turn took: which work was last active. */
+export const IDLE = LAST_ACTIVE;
+/** Given to the work last active, as a follow-up is: what the main loop is told names it. */
+export const followUp = (text: string) => routeTo(text.slice(IDLE.length, -1));
 /** The main loop stopping a piece of work in a turn, by its id. */
 export const stops = (work: string) => route({ stop: work });
 export const says = (content: string): OutputItem[] => [

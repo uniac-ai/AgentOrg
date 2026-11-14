@@ -25,6 +25,8 @@ Whatever you write is said as the reply, in that conversation. So when you give 
 
 A message may also come to you from a conversation that work follows, when every piece of work it was given to handed it back: you are then told which did, and why. Decide it the same way. The work that handed it back is not listed, and is never given it again.
 
+A message may also come to you from a conversation that several pieces of work follow, none of them in a turn: you are then told which of them was last active there. A message that goes on from what that work last said here, such as a further question on the same thing, an answer to its question, a next step or a correction, points at that work, though it names nothing: give it to it. A question about what a piece of work did or decided is that work's, though it says "you": give it to the one whose title or what it last said shows it did that, when exactly one does. Otherwise decide it the same way.
+
 A wrong match stays, and a promise starts nothing: when in doubt whose it is, it is new work.`;
 /**
  * What the main loop is told when a message joined turns of work: the workers have it, and the
@@ -33,6 +35,9 @@ A wrong match stays, and a promise starts nothing: when in doubt whose it is, it
 export const HEARD_INSTRUCTIONS = `You are the front desk. You are given the pieces of work that are in a turn, each by its id and title, and then a message that was just said in a conversation those pieces of work follow. Their workers have the message and will read it: you don't answer it, and you give it to nobody.
 
 Act only if the message asks to stop work. If exactly one of those pieces of work fits, call \`route\` with only \`stop\`, set to its id, and say in a few words that you stopped it. If it asks to stop and more than one fits, call nothing and say which are in a turn, so whoever said it can say which: that is said to them. Otherwise call nothing and write nothing.`;
+/** What the main loop is told of a message no work in a turn took, before the id of the work last active. */
+export const LAST_ACTIVE =
+  "None of the work that follows this conversation is in a turn. The one last active here: ";
 /** What is said where the main loop called to stop work and wrote nothing: whether a turn was cut. */
 export const stopWord = (cut: boolean) => (cut ? "Stopped." : "Nothing was stopped.");
 /** How who it speaks as is told after that. */
@@ -102,7 +107,7 @@ export const titled = (text: string) =>
  * start of each, the latest pieces of work with the start of what each last said, and the start
  * of who it speaks as.
  */
-export const TOLD = { messages: 8, each: 4000, works: 12, last: 200, voice: 100_000 };
+export const TOLD = { messages: 8, each: 4000, works: 12, last: 1000, voice: 100_000 };
 /** The work there is, as the main loop is told of it. */
 const listing = (works: Listed[]) =>
   works.length === 0
@@ -123,9 +128,10 @@ export interface Returned {
 }
 /**
  * What the main loop's request holds: the work there is, then the thread as a conversation, and
- * for a message that came back, which work handed it back and why.
+ * for a message that came back, which work handed it back and why, or for one no work in a turn
+ * took, which work was last active there.
  */
-const put = (said: Said[], works: Listed[], back: Returned[] = []): Item[] => [
+const put = (said: Said[], works: Listed[], back: Returned[] = [], last?: string): Item[] => [
   { type: "message", role: "user", content: listing(works) },
   ...(withPictures(
     [
@@ -151,7 +157,15 @@ const put = (said: Said[], works: Listed[], back: Returned[] = []): Item[] => [
           ].join("\n"),
         },
       ]
-    : []),
+    : last
+      ? [
+          {
+            type: "message" as const,
+            role: "user" as const,
+            content: `${LAST_ACTIVE}${last}.`,
+          },
+        ]
+      : []),
 ];
 
 export function createMain(options: {
@@ -232,16 +246,18 @@ export function createMain(options: {
   return {
     /**
      * Decide on a thread, given what was said in it and the work there is. `written` is given its
-     * text as the model writes it. Nothing is said for a decision that is dropped. A request the
-     * model refuses rejects, as it refused.
+     * text as the model writes it. `last` is the work last active there, for a message no work in
+     * a turn took. Nothing is said for a decision that is dropped. A request the model refuses
+     * rejects, as it refused.
      */
     async decide(
       said: Said[],
       works: Listed[],
       written: (text: string) => void,
       back: Returned[],
+      last?: string,
     ): Promise<Decided | undefined> {
-      const asked = await ask(MAIN_INSTRUCTIONS, true, put(said, works, back), written);
+      const asked = await ask(MAIN_INSTRUCTIONS, true, put(said, works, back, last), written);
       if (!asked) return undefined;
       const { text, routed } = asked;
       const answered: Decided = text === undefined ? {} : { answer: text };
