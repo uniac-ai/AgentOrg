@@ -52,7 +52,7 @@ export interface Held {
       ? V
       : never
     : never;
-  about?: { label: string; value: string; caution?: true }[];
+  about?: { label: string; value: string; caution?: true; note?: string }[];
   /** Down, the ways forward its state offers, and the unit it was built from. */
   ways?: {
     title: string;

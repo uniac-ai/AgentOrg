@@ -68,6 +68,21 @@ export function supportBefore(gateway: Gateway) {
   computer(gateway, [], "a-support");
   gateway.setHeld("a-support", [
     heldComputer({
+      // What it was, and the folder kept, as the design's sample says them.
+      views: [
+        {
+          id: "where",
+          place: "column",
+          kind: "facts",
+          fixed: [{ label: "Computer", value: "No isolation", note: "No longer made" }],
+        },
+        {
+          id: "workspace",
+          place: "column",
+          kind: "facts",
+          fixed: [{ label: "Its folder, kept", value: "~/Agents/Support", path: true }],
+        },
+      ],
       state: "down",
       detail:
         "A computer with no isolation is no longer made. Its folder is kept at ~/Agents/Support. Either way, its own browser and what it was signed in to aren't kept.",
@@ -538,35 +553,43 @@ export const heldComputer = (over: Partial<Held> = {}): Held => ({
   state: "connected",
   surfaces: 2,
   slots: ["computer"],
+  // As the design's sample has it: this computer, what it acts as (asked of it while it can be
+  // reached), where its work happens, what it reaches and its browser.
   views: [
     {
       id: "where",
       place: "column",
       kind: "facts",
-      fixed: [{ label: "Where", value: "This computer" }],
+      fixed: [{ label: "Computer", value: "This computer" }],
     },
     { id: "load", place: "column", kind: "meters", when: "reachable", surface: "load" },
     {
-      id: "workspace",
-      place: "column",
-      kind: "facts",
-      fixed: [
-        { label: "Folder", value: "~/Agents/Research", path: true },
-        { label: "Reaches", value: "Files and terminal, Browser" },
-      ],
-    },
-    {
-      id: "isolation",
+      id: "acts",
       place: "column",
       kind: "facts",
       when: "reachable",
       operation: "about",
       slot: "computer",
-      rows: ["Isolation"],
+      rows: ["Acts as"],
+    },
+    {
+      id: "workspace",
+      place: "column",
+      kind: "facts",
+      fixed: [
+        {
+          label: "Its work happens in",
+          value: "~/Agents/Research",
+          path: true,
+          note: "Said to it, not a wall",
+        },
+        { label: "Reaches", value: "Files and terminal, your screen" },
+        { label: "Browser", value: "Your browser", note: "Signed in as you" },
+      ],
     },
   ],
   about: [
-    { label: "Isolation", value: "None: it acts as you", caution: true },
+    { label: "Acts as", value: "You, with all you can reach", caution: true },
     { label: "Not shown", value: "not one the view names" },
   ],
   ...over,
