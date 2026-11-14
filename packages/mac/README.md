@@ -23,7 +23,7 @@ The page calls the app's commands through what Tauri gives it (`withGlobalTauri`
 | `connection`                  | `GET /v1/connection`                                                                    |
 | `computers`                   | `GET /v1/computers`, those running or starting, as one being brought back is still lent |
 | `acting`                      | `GET /v1/acting`                                                                        |
-| `app_state`                   | the provider's state while one runs; without one, as the service answers (below)        |
+| `app_state`                   | the provider's state while one runs; without one, as below                              |
 | `fit {height}`                | sets the window's height to the page's, its top edge where it is, 460 wide              |
 
 - **The app's state** is `starting` until the service is first up, `running` while it is, and `starting again` while the provider brings the driver or the service back. With no provider, it is `turned off` while macOS doesn't allow the background item: switched off in Login Items, or not allowed yet. The provider counts the service up once its record names it, which is what the window and AgentOrg's core read. Without a provider, the window counts the service up while it answers, and `starting again` once it has stopped answering.
@@ -31,7 +31,7 @@ The page calls the app's commands through what Tauri gives it (`withGlobalTauri`
 - **A refusal** rejects with `{ code, message }`: the service's own where it gives its words, as its 409s do; 503 while there is no service to answer; 400 for a capability that isn't a single lowercase word.
 - **The token goes only to this Mac.** The whole request's address is read with the parser the request itself uses, and must be plain http, with no user information, and a host of 127.0.0.1, ::1 or localhost. A record naming any other is no service.
 
-Opening the window registers the background item unless it is already on or waiting for the person's approval, so that a person's choice in Login Items stands. Login Items then lists AgentOrg, and the log says where it stands. With no service, the window starts nothing and writes nothing in the service's folder; the page shows its title bar, then "Starting again".
+Opening the window registers the background item unless it is already on or waiting for the person's approval, so that a person's choice in Login Items stands. Login Items then lists AgentOrg, and the log says where it stands. With no service, the window starts nothing and writes nothing in the service's folder; the page shows its title bar, then "Starting again", or "Not allowed in the background" while macOS doesn't allow the background item.
 
 ## The provider
 
@@ -50,7 +50,7 @@ The background item is `Contents/Library/LaunchAgents/dev.agentorg.mac.provider.
 
 ## A grant
 
-The service opens the app through the system, `open -n -g -a AgentOrg.app --args grant accessibility screen-recording`. Each grant missing is asked for in turn: macOS's own request, then up to 3 minutes for the person to answer. No pane of System Settings opens: the window's "Open Settings" opens one, on the person's click. macOS shows each request once, so once it has been answered, asking again shows nothing. macOS keeps each process's answer, so each grant is read by a fresh process of the app's own (`granted <need>`, which answers by its exit code). As each grant asked for is given, or was already, it tells the provider, which reads the grants again.
+The service opens the app through the system, `open -n -g -a AgentOrg.app --args grant` with the grants missing. It makes macOS's request for each, Accessibility first, as its request draws macOS's alert, where Screen Recording's often draws nothing and only lists the app in its pane. Then it waits up to 3 minutes for the person. No pane of System Settings opens: the window's "Open Settings" opens one, on the person's click. macOS shows each request once, so once it has been answered, asking again shows nothing. macOS keeps each process's answer, so each grant is read by a fresh process of the app's own (`granted <need>`, which answers by its exit code). As each grant is given, or was already, it tells the provider at once, which reads the grants again.
 
 ## The log
 
