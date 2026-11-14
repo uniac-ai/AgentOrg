@@ -1,5 +1,6 @@
 // One field of a unit's form, drawn from its description. A type this host doesn't know gets the
 // plain control for the kind of value it holds.
+import { useRef, useState } from "react";
 import { useLoad } from "../data.ts";
 import { Checkbox } from "../ui/checkbox.tsx";
 import { Field as FieldBox, FieldDescription, FieldError, FieldLabel } from "../ui/field.tsx";
@@ -55,12 +56,20 @@ function OneOf({
   onChange(value: string): void;
 }) {
   const chosen = options.find((o) => o.value === value);
+  // The list is as wide as its field: what an answer means, or why it can't be given, wraps within
+  // it, however long, rather than widening the list past the form.
+  const box = useRef<HTMLButtonElement>(null);
+  const [width, setWidth] = useState<number>();
   return (
-    <Select value={value} onValueChange={onChange}>
-      <SelectTrigger id={id} aria-label={field.title} className="w-full">
+    <Select
+      value={value}
+      onValueChange={onChange}
+      onOpenChange={(open) => open && setWidth(box.current?.offsetWidth)}
+    >
+      <SelectTrigger ref={box} id={id} aria-label={field.title} className="w-full">
         <SelectValue placeholder={hint ?? "Choose"}>{chosen?.title}</SelectValue>
       </SelectTrigger>
-      <SelectContent>
+      <SelectContent style={{ width }}>
         {/* Each answer says what it means before it is chosen; one its provider can't give now is
             greyed, with the provider's reason in its place. */}
         {options.map((o) => (
