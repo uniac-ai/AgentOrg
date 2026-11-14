@@ -244,6 +244,29 @@ async function within<T>(ms: number, promise: Promise<T>): Promise<T | undefined
   }
 }
 
+/**
+ * Whether a service's record names this machine: http or https on loopback, with no user
+ * information. No other gets a token.
+ */
+const namesThisMachine = (url: unknown) => {
+  try {
+    const at = new URL(String(url));
+    return (
+      (at.protocol === "http:" || at.protocol === "https:") &&
+      !at.username &&
+      !at.password &&
+      ["127.0.0.1", "[::1]", "localhost"].includes(at.hostname)
+    );
+  } catch {
+    return false;
+  }
+};
+/** Why a service whose record names somewhere else isn't used: what the person reads. */
+const elsewhereWords = (url: unknown) => {
+  const host = URL.canParse(String(url)) ? new URL(String(url)).host : "";
+  return `The AgentComputer here gives its address as ${host || "something that isn't an address"}. AgentOrg sends its tokens only to this machine, at 127.0.0.1, ::1 or localhost: its computers can be added at that address instead.`;
+};
+
 /** A folder as a person writes one: `~/` for one in their home, as `fromHome` reads it. */
 const toHome = (folder: string) =>
   folder.startsWith(`${homedir()}/`) ? `~/${folder.slice(homedir().length + 1)}` : folder;
@@ -536,20 +559,51 @@ export async function startComputerProvider(
   const selfRun = () => serviceAt(options.dataFolder ?? defaultDataFolder());
   /** The service on this machine: AgentOrg Mac's where it is here, else the one the person runs. */
   const localService = () => (macHere() ? serviceAt(macFolder as string) : selfRun());
-  /** A service by the record it keeps in `data`, if it is running. */
-  const serviceAt = (data: string): Reached | undefined => {
+  /** The record a service keeps in `data`, if one is there, and whether its process runs. */
+  const recordAt = (data: string) => {
     try {
       const { url, pid } = JSON.parse(readFileSync(join(data, "server.json"), "utf8")) as {
-        url: string;
+        url: unknown;
         pid: number;
       };
       // A service that crashed leaves this behind: nothing else on its port gets the token.
       process.kill(pid, 0);
-      return { apiUrl: url, apiKey: readFileSync(join(data, "control-token"), "utf8").trim() };
+      return { url };
     } catch {
       return undefined;
     }
   };
+  /**
+   * A service by the record it keeps in `data`, if it is running. A record on this machine names
+   * this machine, or it is no service, and nothing of its gets a token: neither the control token
+   * nor a computer's.
+   */
+  const serviceAt = (data: string): Reached | undefined => {
+    const record = recordAt(data);
+    if (!record || !namesThisMachine(record.url)) return undefined;
+    try {
+      const apiKey = readFileSync(join(data, "control-token"), "utf8").trim();
+      return { apiUrl: String(record.url), apiKey };
+    } catch {
+      return undefined;
+    }
+  };
+  /** Each address a record named elsewhere, said once in the log. */
+  const elsewhereSaid = new Set<string>();
+  /** What a running service whose record in `data` names somewhere else is said to be, if one is. */
+  const elsewhereAt = (data: string | undefined) => {
+    const record = data === undefined ? undefined : recordAt(data);
+    if (!record || namesThisMachine(record.url)) return undefined;
+    const words = elsewhereWords(record.url);
+    if (!elsewhereSaid.has(words)) {
+      elsewhereSaid.add(words);
+      log.warn(`${words} (its record is in ${data})`);
+    }
+    return words;
+  };
+  /** The same, for the service on this machine. */
+  const elsewhereHere = () =>
+    elsewhereAt(macHere() ? macFolder : (options.dataFolder ?? defaultDataFolder()));
   /** The `agentcomputer` command on the path, if AgentComputer is installed here. */
   const onPath = () => {
     for (const folder of (options.path ?? process.env.PATH ?? "").split(delimiter)) {
@@ -602,6 +656,9 @@ export async function startComputerProvider(
     (starting ??= (async () => {
       const here = await answering();
       if (here) return here.reached;
+      // One running that names somewhere else is never used, nor started again.
+      const away = elsewhereHere();
+      if (away) throw new Refused("unavailable", away);
       // AgentOrg Mac is started by the person alone.
       if (macHere()) throw new Refused("unavailable", OPEN_MAC);
       const command = onPath();
@@ -632,6 +689,8 @@ export async function startComputerProvider(
     try {
       const found = (await answering())?.found;
       if (found) return { ...found, ...mac };
+      const away = elsewhereHere();
+      if (away) return { made: [], why: away, ...mac };
       if (macHere()) return { made: [], why: OPEN_MAC, mac: true };
       return onPath() ? { made: [], starts: true } : undefined;
     } catch (error) {
@@ -756,7 +815,7 @@ export async function startComputerProvider(
       url.searchParams.set("name", "AgentOrg");
       socket = new WebSocket(url, { headers: { Authorization: `Bearer ${reached.apiKey}` } });
     } catch (error) {
-      // A record that names no address: looked at again later.
+      // An address that can't be opened as a socket: looked at again later.
       log.warn(`The service here can't be connected to: ${messageOf(error)}`);
       return holdLater();
     }
@@ -1100,11 +1159,8 @@ export async function startComputerProvider(
         : info && info.state !== "running"
           ? NOT_RUNNING[found.restarting ? "failed" : info.state]
           : !info && service && "local" in service && !reachOf(service)
-            ? service.mac
-              ? OPEN_MAC
-              : macHere()
-                ? SELF_RUN_DOWN
-                : LOCAL_DOWN
+            ? (elsewhereAt(service.mac ? macFolder : (options.dataFolder ?? defaultDataFolder())) ??
+              (service.mac ? OPEN_MAC : macHere() ? SELF_RUN_DOWN : LOCAL_DOWN))
             : undefined;
     // Its service says it runs, or is here again and hasn't said yet: a connection down for not
     // reaching it, as when the service came back, is tried again now and says so in its words,

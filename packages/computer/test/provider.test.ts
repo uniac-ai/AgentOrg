@@ -2062,6 +2062,72 @@ test("an agent with no folder named works in one with its name, which stays", as
   await assert.rejects(make("taken"), refused("invalid"));
 });
 
+test("a service's record that names anywhere but this machine is no service, says so, and gets no token", async (t) => {
+  const { units, apply, local, data } = await setup(t, { service: false });
+  const app = await standIn(t);
+  const { port } = new URL(app.apiUrl);
+  const thisOne = async () =>
+    form(
+      (await units.units({})).units.find((one) => one.id === "computer"),
+      "kind",
+    )?.options?.find((one) => one.value === "this")?.unavailable;
+  const words = (host: string) =>
+    `The AgentComputer here gives its address as ${host}. AgentOrg sends its tokens only to this machine, at 127.0.0.1, ::1 or localhost: its computers can be added at that address instead.`;
+  for (const [apiUrl, host] of [
+    [`http://someone:secret@127.0.0.1:${port}`, `127.0.0.1:${port}`],
+    [`http://127.0.0.2:${port}`, `127.0.0.2:${port}`],
+    [`http://example.invalid:${port}`, `example.invalid:${port}`],
+    // Each of these reaches this machine all the same, but isn't named as it.
+    [`http://localhost.:${port}`, `localhost.:${port}`],
+    [`http://0.0.0.0:${port}`, `0.0.0.0:${port}`],
+    ["not an address", "something that isn't an address"],
+  ] as const) {
+    recordIn(t, data, { apiUrl, apiKey: app.apiKey });
+    assert.equal(await thisOne(), words(host), apiUrl);
+    await assert.rejects(apply(local("files")), (error: Error) =>
+      error.message.includes(words(host)),
+    );
+  }
+  assert.equal(app.asked.length, 0, "nothing reached the service, its token least of all");
+  // https on this machine is this machine: not refused as somewhere else.
+  recordIn(t, data, { apiUrl: `https://127.0.0.1:${port}`, apiKey: app.apiKey });
+  assert.notEqual(await thisOne(), words(`127.0.0.1:${port}`));
+  // Named as this machine, it is the service here; one made on it, whose record then names
+  // somewhere else, says so on its page.
+  recordIn(t, data, { apiUrl: `http://localhost:${port}`, apiKey: app.apiKey });
+  assert.equal(await thisOne(), undefined);
+  assert.ok(app.asked.some((one) => one.path === "/v1/info" && one.token === app.apiKey));
+  const made = await apply(local("files"));
+  recordIn(t, data, { apiUrl: `http://example.invalid:${port}`, apiKey: app.apiKey });
+  await until(
+    async () =>
+      (await units.status({ instance: made.instance })).detail === words(`example.invalid:${port}`),
+    3000,
+  );
+});
+
+test("at a start, a service here whose record names somewhere else isn't started again", async (t) => {
+  const command = onPathThatSays(t);
+  const { apply, local, data, restart, units } = await setup(t, {
+    service: false,
+    path: command.bin,
+  });
+  const app = await standIn(t);
+  recordIn(t, data, app);
+  const made = await apply(local("files"));
+  // Its record now names elsewhere, its service still running: a start doesn't start another.
+  recordIn(t, data, { apiUrl: "http://example.invalid:7878", apiKey: app.apiKey });
+  await restart();
+  await until(
+    async () =>
+      ((await units.status({ instance: made.instance })).detail ?? "").startsWith(
+        "The AgentComputer here gives its address as example.invalid:7878.",
+      ),
+    3000,
+  );
+  assert.equal(command.ran(), false, "agentcomputer wasn't run");
+});
+
 test("a service that crashed isn't found, and its port gets no token", async (t) => {
   const { units, root } = await setup(t, { service: false });
   mkdirSync(join(root, "service"), { recursive: true });
