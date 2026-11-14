@@ -3,9 +3,14 @@ import { z } from "zod";
 import { Pictures } from "./picture.js";
 
 const MessageId = z.string().min(1).max(128);
+/**
+ * The most characters a message's text has, counted as a string's length counts them. A page says
+ * so before it sends one longer, keeping the text; past it, `send` is refused `invalid`.
+ */
+export const MESSAGE_TEXT_MAX = 100_000;
 /** What a message may hold: `send` takes it with words, or with a picture at least. */
 const Sent = z.object({
-  text: z.string().max(100_000).optional(),
+  text: z.string().max(MESSAGE_TEXT_MAX).optional(),
   images: Pictures.optional(),
 });
 /**
@@ -21,7 +26,7 @@ export const LATEST_TEXT_MAX = 200;
 export const ChatMessage = z.object({
   id: MessageId,
   role: z.enum(["user", "assistant"]),
-  text: z.string().max(100_000),
+  text: z.string().max(MESSAGE_TEXT_MAX),
   /** An ISO 8601 time. */
   at: z.string().max(64),
   /** The pictures the party sent with it. */
@@ -75,7 +80,7 @@ export const chat = defineInterface({
      */
     send: method({
       input: z.union([
-        Sent.extend({ text: z.string().min(1).max(100_000).regex(/\S/) }),
+        Sent.extend({ text: z.string().min(1).max(MESSAGE_TEXT_MAX).regex(/\S/) }),
         // Or one picture at least, with any words or none.
         Sent.extend({ images: Pictures.min(1) }),
       ]),

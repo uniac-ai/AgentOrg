@@ -21,6 +21,7 @@ import {
   hubGrants,
   kv,
   llmSession,
+  MESSAGE_TEXT_MAX,
   skills,
   tools,
   unitProvider,
@@ -413,6 +414,10 @@ test("the Hub's schemas hold the rules that matter on the wire", () => {
   assert.equal(compiled(chat)["send.input"]?.({ images: [picture] }), true);
   assert.equal(compiled(chat)["send.input"]?.({ text: " ", images: [] }), false);
   assert.equal(compiled(chat)["send.input"]?.({}), false);
+  // The most a message's text has, which a page says before sending, is the wire's own limit.
+  const send = compiled(chat)["send.input"];
+  assert.equal(send?.({ text: "x".repeat(MESSAGE_TEXT_MAX) }), true);
+  assert.equal(send?.({ text: "x".repeat(MESSAGE_TEXT_MAX + 1) }), false);
   assert.equal(
     compiled(llmSession)["respond.output"]?.({
       output: [{ type: "message", role: "user", content: "x" }],

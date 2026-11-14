@@ -15,7 +15,14 @@ export {
   SkillPath,
 } from "./agent-settings.js";
 export { capability, WayForward } from "./capability.js";
-export { ChatMessage, ChatStatus, Conversation, chat, LATEST_TEXT_MAX } from "./chat.js";
+export {
+  ChatMessage,
+  ChatStatus,
+  Conversation,
+  chat,
+  LATEST_TEXT_MAX,
+  MESSAGE_TEXT_MAX,
+} from "./chat.js";
 export {
   ConnectionKind,
   ConnectionParams,
