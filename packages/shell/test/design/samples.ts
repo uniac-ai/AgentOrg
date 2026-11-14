@@ -551,7 +551,9 @@ export function sampleWork(gateway: Gateway, stopped = false) {
 export const heldComputer = (over: Partial<Held> = {}): Held => ({
   title: "Computer",
   state: "connected",
-  surfaces: 2,
+  // Its browser, terminal, files and load, as the computer's capability declares them.
+  surfaces: 4,
+  protocols: ["screencast@1", "terminal@1", "files@1", "metrics@1"],
   slots: ["computer"],
   // As the design's sample has it: this computer, what it acts as (asked of it while it can be
   // reached), where its work happens, what it reaches and its browser.

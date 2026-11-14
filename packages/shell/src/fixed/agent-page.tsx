@@ -9,7 +9,7 @@ import { useAllChats } from "./all-chats.tsx";
 import { useBuilding } from "./building.tsx";
 import { ChatRow } from "./chat-parts.tsx";
 import { useChats } from "./chats.tsx";
-import { Computer, surfacesOf, targetOf, windowsOf } from "./computer.tsx";
+import { Computer, hasComputer, surfacesOf, targetOf } from "./computer.tsx";
 import { ComputerFacts, columnOf } from "./computer-facts.tsx";
 import { ComputerLoad, LOAD } from "./computer-load.tsx";
 import { More } from "./controls.tsx";
@@ -58,8 +58,8 @@ export function AgentPage({
   const off = stopped || entry.status.state === "down";
   // Its computer is what its units can show live: its windows, and its own word on how busy it is.
   const surfaces = surfacesOf(detail);
-  // A computer that is down keeps its place, to say so.
-  const computer = windowsOf(surfaces).length > 0 || !!watched.held?.windows;
+  // A computer that is down keeps its place, to say so, and one coming back keeps it too.
+  const computer = hasComputer(detail, !!watched.held?.windows);
   const load = surfaces.find((s) => s.protocol === LOAD && !s.unavailable);
   const start = () => act.run(() => api.call("agents", "start", { agent: id }));
   // Down, the ways to mend what it holds: each its provider's unit, opened with the way's answers in

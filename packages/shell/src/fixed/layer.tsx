@@ -9,7 +9,7 @@ import { ActivityWindow } from "./activity.tsx";
 import { useAllChats } from "./all-chats.tsx";
 import { ChatRow, CloseChats } from "./chat-parts.tsx";
 import { useChats } from "./chats.tsx";
-import { Computer, surfacesOf, windowsOf } from "./computer.tsx";
+import { Computer, hasComputer, surfacesOf } from "./computer.tsx";
 import { useComputers } from "./computers.tsx";
 import { useEvery } from "./data.ts";
 import { Face } from "./face.tsx";
@@ -204,7 +204,7 @@ export function Layer() {
   const room = `${ROOM[open ? "panel" : "pill"]} ${onTop === "window" ? "narrow:z-[60]" : ""}`;
   return (
     <>
-      {computer && owner && (windowsOf(surfaces).length > 0 || owner.held?.windows) && (
+      {computer && owner && hasComputer(owner.detail, !!owner.held?.windows) && (
         <Window key={shown} className={room}>
           <Computer
             agent={{ id: computer, name: owner.entry.name, tone: owner.now.tone }}
