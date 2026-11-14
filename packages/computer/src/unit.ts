@@ -40,6 +40,24 @@ export const NEW = "new";
 /** How a new one is made: a container here, or by a service at another address. */
 export const CONTAINER = "container";
 export const REMOTE = "remote";
+/**
+ * Where AgentOrg Mac keeps its computer service's record on a Mac, under the person's home: the
+ * service's own `server.json` and `control-token`. The folder is made when the app first opens.
+ */
+export const MAC_RECORD = ["Library", "Application Support", "AgentOrg", "computer"];
+/**
+ * AgentOrg Mac as the person reads it: the app is AgentOrg.app, called "the AgentOrg app" so it
+ * isn't taken for the AgentOrg they are using. Its name changes here alone.
+ */
+export const MAC_APP = "the AgentOrg app";
+/** `MAC_APP` at the start of a sentence. */
+const MacApp = MAC_APP.charAt(0).toUpperCase() + MAC_APP.slice(1);
+/** What to do when AgentOrg Mac is on this Mac but isn't running: nothing starts it but the person. */
+export const OPEN_MAC = `${MacApp} isn't open on this Mac. Open it to use this computer.`;
+/** What to do when AgentOrg Mac's service is older than this build. */
+export const UPDATE_MAC = `${MacApp} on this Mac is older than this AgentOrg. Update it, and open it again.`;
+/** Why no container is made here, where AgentOrg Mac makes none. */
+export const NO_CONTAINER_MAC = `${MacApp} makes no container. To use a computer you run yourself, give its address.`;
 /** What to do when AgentComputer isn't installed here: the app doesn't include it. */
 export const INSTALL_STEPS =
   "AgentComputer isn't installed on this computer. Install it with npm install -g @agentorg/computer and try again. AgentOrg starts it for you.";
@@ -47,8 +65,9 @@ export const INSTALL_STEPS =
 /**
  * What the service here can make now, each kind ready or with why not, as it says. With `starts`,
  * none runs yet: one is started when a computer is added, and what it can make is found then.
- * With `why`, nothing of this machine can be had, and that says why. Undefined when none runs and
- * AgentComputer isn't installed.
+ * With `why`, nothing of this machine can be had, and that says why. With `mac`, AgentOrg Mac is
+ * this machine's provider: it lends this computer and makes nothing here. Undefined when none runs
+ * and AgentComputer isn't installed.
  */
 export type Found =
   | {
@@ -56,6 +75,7 @@ export type Found =
       made: { isolation: string; ready: boolean; reason?: string }[];
       starts?: true;
       why?: string;
+      mac?: true;
     }
   | undefined;
 /** Why a computer on this machine can't be had now, if it can't. */
@@ -121,15 +141,20 @@ export const computerUnit = (found: Found): z.input<typeof Unit> => ({
       value: "string",
       title: "Made as",
       required: true,
-      default: CONTAINER,
+      // AgentOrg Mac makes nothing: a service you run is reached at its address, this Mac's too.
+      default: found?.mac ? REMOTE : CONTAINER,
       visible: { field: "kind", in: [NEW] },
       options: [
-        {
-          value: CONTAINER,
-          title: "A container on this machine",
-          description: "Commands and files, apart from yours.",
-          ...unavailable(notHere(found, CONTAINER)),
-        },
+        ...(found?.mac
+          ? []
+          : [
+              {
+                value: CONTAINER,
+                title: "A container on this machine",
+                description: "Commands and files, apart from yours.",
+                ...unavailable(notHere(found, CONTAINER)),
+              },
+            ]),
         {
           value: REMOTE,
           title: "At another address",

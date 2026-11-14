@@ -13,6 +13,7 @@ import {
   accessSync,
   chmodSync,
   constants,
+  existsSync,
   lstatSync,
   mkdirSync,
   readFileSync,
@@ -46,11 +47,16 @@ import {
   computerUnit,
   type Found,
   INSTALL_STEPS,
+  MAC_APP,
+  MAC_RECORD,
   NEW,
+  NO_CONTAINER_MAC,
+  OPEN_MAC,
   REACHES,
   REMOTE,
   SKILLS,
   THIS,
+  UPDATE_MAC,
   WEB,
   WEB_UNIT,
   WHERE,
@@ -74,7 +80,8 @@ const Stored = z.object({
       id: z.string(),
       token: z.string(),
       service: z.union([
-        z.object({ local: z.literal(true) }),
+        // On this machine: AgentOrg Mac's service with `mac`, else the one the person runs.
+        z.object({ local: z.literal(true), mac: z.literal(true).optional() }),
         z.object({ apiUrl: z.string(), apiKey: z.string() }),
       ]),
     })
@@ -156,6 +163,11 @@ export interface ComputerProviderOptions {
   timing?: Timing;
   /** The first wait before a failed computer is tried again; a minute by default. For tests. */
   mendFirstMs?: number;
+  /**
+   * Where AgentOrg Mac keeps its service's record: `MAC_RECORD` in the home on a Mac, and none
+   * elsewhere. With null, none is looked for. For tests.
+   */
+  macRecord?: string | null;
 }
 
 export interface ComputerProvider {
@@ -227,6 +239,8 @@ const fromHome = (folder: unknown) =>
 
 /** A computer an earlier version made here with no isolation: the folder kept, and its reach. */
 interface Before {
+  /** This computer, attached through the service the person runs, before AgentOrg Mac. */
+  attached?: true;
   folder: string | null;
   access: string;
   browser: boolean;
@@ -238,6 +252,9 @@ const NOT_RUNNING: Record<Exclude<ComputerDetail["state"], "running">, string> =
 };
 /** While a failed computer is being stopped and started again. */
 const TRYING = "Its computer is being started again.";
+/** One the person's own service has, which isn't running, where AgentOrg Mac starts nothing. */
+const SELF_RUN_DOWN =
+  "The AgentComputer you run yourself isn't running. Start it with agentcomputer up.";
 /**
  * What the person reads of a computer beside its windows, fixed when it is made: which computer it
  * is, what it acts as and where its work happens, what it reaches, and its browser.
@@ -309,34 +326,46 @@ const beforeOf = (info: ComputerDetail): Before => ({
   browser: info.browser,
 });
 /** What the person reads of one, in the words the service uses, and what goes either way. */
-const beforeDetail = (folder: string | null) =>
-  `A computer with no isolation is no longer made.${folder ? ` Its folder is kept at ${folder}.` : ""} Either way, its own browser and what it was signed in to aren't kept.`;
+const beforeDetail = ({ folder, attached }: Pick<Before, "folder" | "attached">) =>
+  attached
+    ? `This computer was attached through the AgentComputer you run yourself. Attach it again through ${MAC_APP}.${folder ? ` Its folder stays ${folder}.` : ""}`
+    : `A computer with no isolation is no longer made.${folder ? ` Its folder is kept at ${folder}.` : ""} Either way, its own browser and what it was signed in to aren't kept.`;
 /**
  * The ways on from one: this computer with its folder, or a container whose workspace starts with
  * what is in it. One with no files has only the container, as this computer has no browser yet.
  */
-const waysOn = ({ folder, access, browser }: Before): z.input<typeof WayForward>[] => [
+const waysOn = (
+  { folder, access, browser, attached }: Before,
+  mac: boolean,
+): z.input<typeof WayForward>[] => [
   ...(access === "none"
     ? []
     : [
         {
           title: "Attach this computer",
           description: folder
-            ? `Its work happens in ${folder}, as before. Unlike before, it reaches the whole machine, as you.`
-            : "Unlike before, it reaches the whole machine, as you.",
+            ? `Its work happens in ${folder}, as before.${attached ? "" : " Unlike before, it reaches the whole machine, as you."}`
+            : attached
+              ? "As before, it reaches the whole machine, as you."
+              : "Unlike before, it reaches the whole machine, as you.",
           unit: COMPUTER,
           values: { kind: THIS, access, ...(folder ? { workspace: folder } : {}) },
         },
       ]),
-  {
-    title: "Make a container",
-    description:
-      folder && access !== "none"
-        ? `Its workspace starts with what's in ${folder}.`
-        : "Made for it on this machine, apart from yours.",
-    unit: COMPUTER,
-    values: { kind: NEW, made: CONTAINER, access, browser },
-  },
+  // AgentOrg Mac makes no container, and one attached is this computer already.
+  ...(mac || attached
+    ? []
+    : [
+        {
+          title: "Make a container",
+          description:
+            folder && access !== "none"
+              ? `Its workspace starts with what's in ${folder}.`
+              : "Made for it on this machine, apart from yours.",
+          unit: COMPUTER,
+          values: { kind: NEW, made: CONTAINER, access, browser },
+        },
+      ]),
 ];
 
 /** Whether what was filled in is a computer on this machine: this one, or a container here. */
@@ -364,6 +393,11 @@ function problems(
     if (why) wrong.push({ field: "address", message: `That address won't do. ${why}` });
   } else if (values.kind === NEW && (values.made ?? CONTAINER) !== CONTAINER)
     wrong.push({ field: "made", message: "Choose how it's made." });
+  else if (values.kind === NEW && found?.mac)
+    wrong.push({
+      field: "made",
+      message: NO_CONTAINER_MAC,
+    });
   if (values.access === "none") {
     // A browser of its own is a made computer's: this one has none yet.
     if (!(values.kind === NEW && values.browser === true))
@@ -443,9 +477,21 @@ export async function startComputerProvider(
   const stored = read();
   const save = () => keep(path, stored);
 
-  /** A service on this machine, by what it wrote; it needn't be running. */
-  const localService = (): Reached | undefined => {
-    const data = options.dataFolder ?? defaultDataFolder();
+  /** Where AgentOrg Mac keeps its service's record, if this is a Mac. */
+  const macFolder =
+    options.macRecord === undefined
+      ? process.platform === "darwin"
+        ? join(homedir(), ...MAC_RECORD)
+        : undefined
+      : (options.macRecord ?? undefined);
+  /** Whether AgentOrg Mac is this machine's provider: its folder is made when it first opens. */
+  const macHere = () => macFolder !== undefined && existsSync(macFolder);
+  /** The service the person runs, by its record; it needn't be running. */
+  const selfRun = () => serviceAt(options.dataFolder ?? defaultDataFolder());
+  /** The service on this machine: AgentOrg Mac's where it is here, else the one the person runs. */
+  const localService = () => (macHere() ? serviceAt(macFolder as string) : selfRun());
+  /** A service by the record it keeps in `data`, if it is running. */
+  const serviceAt = (data: string): Reached | undefined => {
     try {
       const { url, pid } = JSON.parse(readFileSync(join(data, "server.json"), "utf8")) as {
         url: string;
@@ -478,7 +524,8 @@ export async function startComputerProvider(
     const reached = localService();
     const info = reached && (await within(SERVICE_ANSWERS_MS, Computer.serviceInfo(reached)));
     if (!reached || !info) return undefined;
-    if (!Array.isArray(info.made)) throw new Refused("unavailable", UPDATE_STEPS);
+    if (!Array.isArray(info.made))
+      throw new Refused("unavailable", macHere() ? UPDATE_MAC : UPDATE_STEPS);
     return { reached, found: { thisComputer: info.thisComputer, made: info.made } };
   };
   /**
@@ -490,6 +537,8 @@ export async function startComputerProvider(
     (starting ??= (async () => {
       const here = await answering();
       if (here) return here.reached;
+      // AgentOrg Mac is started by the person alone.
+      if (macHere()) throw new Refused("unavailable", OPEN_MAC);
       const command = onPath();
       if (!command) throw new Refused("invalid", INSTALL_STEPS);
       const data = options.dataFolder ?? defaultDataFolder();
@@ -514,10 +563,14 @@ export async function startComputerProvider(
     }));
   /** What the service on this machine can make, or that one will be started to make it. */
   const findLocal = async (): Promise<Found> => {
+    const mac = macHere() ? { mac: true as const } : {};
     try {
-      return (await answering())?.found ?? (onPath() ? { made: [], starts: true } : undefined);
+      const found = (await answering())?.found;
+      if (found) return { ...found, ...mac };
+      if (macHere()) return { made: [], why: OPEN_MAC, mac: true };
+      return onPath() ? { made: [], starts: true } : undefined;
     } catch (error) {
-      return { made: [], why: messageOf(error) };
+      return { made: [], why: messageOf(error), ...mac };
     }
   };
 
@@ -532,14 +585,24 @@ export async function startComputerProvider(
    * started, with the folder the service keeps and what they reached, for the ways on.
    */
   const before = new Map<string, Before>();
-  /** Find them on the service here, as it says of each: no isolation, and not attached. */
-  const findBefore = async (reached: Reached) => {
+  /**
+   * Find them on the services here, as each says: no isolation, and not attached. On a Mac with
+   * AgentOrg Mac, this computer attached through the service the person runs is one too.
+   */
+  const findBefore = async () => {
     for (const [instance, entry] of Object.entries(stored)) {
       if (!entry.computer || !("local" in entry.computer.service)) continue;
-      const info = await within(SERVICE_ANSWERS_MS, Computer.getInfo(entry.computer.id, reached));
+      const reached = reachOf(entry.computer.service);
+      const info =
+        reached && (await within(SERVICE_ANSWERS_MS, Computer.getInfo(entry.computer.id, reached)));
       if (info && fromBefore(info)) before.set(instance, beforeOf(info));
+      else if (info && attachedBefore(entry.computer, info))
+        before.set(instance, { ...beforeOf(info), attached: true });
     }
   };
+  /** This computer, attached through the service the person runs, on a Mac with AgentOrg Mac. */
+  const attachedBefore = (computer: NonNullable<Instance["computer"]>, info: ComputerDetail) =>
+    info.attached && macHere() && "local" in computer.service && !computer.service.mac;
   /**
    * One the service says is from before, found as its record is read after the start, as when the
    * service here was updated meanwhile: what of it was opened ends, and its capability says so.
@@ -547,7 +610,7 @@ export async function startComputerProvider(
   const seenBefore = (computer: NonNullable<Instance["computer"]>, info: ComputerDetail) => {
     const instance = Object.keys(stored).find((key) => stored[key]?.computer?.id === computer.id);
     if (!instance || before.has(instance) || !("local" in computer.service)) return;
-    before.set(instance, beforeOf(info));
+    before.set(instance, { ...beforeOf(info), ...(fromBefore(info) ? {} : { attached: true }) });
     const ended = running.get(instance) ?? [];
     running.set(instance, []);
     void Promise.all(ended.map((server) => server.end()));
@@ -574,7 +637,9 @@ export async function startComputerProvider(
     { slot, url, actor, credential }: Linked,
     computer?: Instance["computer"],
   ) => {
-    const moved = computer && "local" in computer.service ? localService()?.apiUrl : undefined;
+    // Each on this machine at its own service's address: AgentOrg Mac's, or the person's own.
+    const moved =
+      computer && "local" in computer.service ? reachOf(computer.service)?.apiUrl : undefined;
     const token = computer?.token;
     const server = new Connection(
       { kind: "url", url: moved ? at(moved, url) : url },
@@ -609,8 +674,15 @@ export async function startComputerProvider(
     return { found, servers };
   };
 
+  /** Where a computer's service is reached now: each on this machine by its own record. */
   const reachOf = (service: NonNullable<Instance["computer"]>["service"]) =>
-    "local" in service ? localService() : service;
+    !("local" in service)
+      ? service
+      : !service.mac
+        ? selfRun()
+        : macFolder === undefined
+          ? undefined
+          : serviceAt(macFolder);
   /**
    * The computer goes. Only a service having trouble is worth another try: one that can't be
    * reached, or no longer takes this token, mustn't keep the agent from going.
@@ -655,7 +727,7 @@ export async function startComputerProvider(
     const reached = reachOf(computer.service);
     const info = reached && (await within(SURFACES_MS, Computer.getInfo(computer.id, reached)));
     if (!info) return undefined;
-    if (fromBefore(info)) seenBefore(computer, info);
+    if (fromBefore(info) || attachedBefore(computer, info)) seenBefore(computer, info);
     return {
       info,
       state: info.state,
@@ -742,7 +814,7 @@ export async function startComputerProvider(
     const held: NonNullable<Instance["computer"]> = {
       id: computer.computerID,
       token: computer.getMcpToken(),
-      service: here ? { local: true } : reached,
+      service: here ? { local: true, ...(macHere() ? { mac: true as const } : {}) } : reached,
     };
     const rows = rowsOf({ whole, host, folder, access, browser });
     return { servers, computer: held, rows };
@@ -834,7 +906,7 @@ export async function startComputerProvider(
     const fromEarlier = () => {
       const earlier = before.get(instance);
       if (!earlier) return undefined;
-      const detail = beforeDetail(earlier.folder);
+      const detail = beforeDetail(earlier);
       return {
         state: "down" as const,
         detail,
@@ -853,11 +925,14 @@ export async function startComputerProvider(
     // Failed, or marked to be started again: a mark left on a running one is cleared by the look.
     if (info?.state === "failed" || found.restarting) mend(instance);
     // A computer that isn't running is why its connections are down: they say so in its words.
+    const service = found.computer?.service;
     const why = mending.get(instance)?.trying
       ? TRYING
       : info && info.state !== "running"
         ? NOT_RUNNING[found.restarting ? "failed" : info.state]
-        : undefined;
+        : !info && service && "local" in service && !service.mac && macHere() && !selfRun()
+          ? SELF_RUN_DOWN
+          : undefined;
     const each = servers.map((server, i) => {
       const status = server.status();
       return {
@@ -918,7 +993,7 @@ export async function startComputerProvider(
   const ticket = async (instance: string, surface: string, mode: "watch" | "operate") => {
     const { found } = held(instance);
     const earlierOne = before.get(instance);
-    if (earlierOne) throw new Refused("state", beforeDetail(earlierOne.folder));
+    if (earlierOne) throw new Refused("state", beforeDetail(earlierOne));
     const reached = found.computer && reachOf(found.computer.service);
     if (!found.computer || !reached)
       throw new Refused("unknown", "Nothing of this can be opened live.");
@@ -969,7 +1044,7 @@ export async function startComputerProvider(
               state,
               ...(detail ? { detail } : {}),
               surfaces: surfaces ?? [],
-              ...(earlier ? { ways: waysOn(earlier) } : {}),
+              ...(earlier ? { ways: waysOn(earlier, macHere()) } : {}),
             };
           },
           live: ({ surface, mode }) => ticket(instance, surface, mode),
@@ -986,12 +1061,10 @@ export async function startComputerProvider(
   };
 
   // Computers kept here come back with their service, started first if none runs, so their
-  // connections find it where it is.
-  if (
-    onPath() &&
-    Object.values(stored).some((entry) => entry.computer && "local" in entry.computer.service)
-  )
-    await startedLocal()
+  // connections find it where it is. With AgentOrg Mac, nothing is started: each is found on
+  // the service that has it, if that one runs.
+  if (Object.values(stored).some((entry) => entry.computer && "local" in entry.computer.service))
+    await (macHere() || !onPath() ? Promise.resolve() : startedLocal())
       .then(findBefore)
       .catch((error) => log.error(messageOf(error)));
   for (const [instance, entry] of Object.entries(stored)) {
