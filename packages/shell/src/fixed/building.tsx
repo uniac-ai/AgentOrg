@@ -82,6 +82,13 @@ function useBuildingState() {
 
   return {
     catalog,
+    /**
+     * The template the window starts from, and what it makes: drawn or still being read, so the
+     * window says which from the start.
+     */
+    choosing: opening
+      ? { from: opening.template, mode: opening.mode }
+      : draft && { from: draft.from, mode: draft.mode },
     /** Whether the catalog has been read, or couldn't be. */
     catalogRead: { loaded: read.loaded, ...(read.error ? { error: read.error } : {}) },
     draft,

@@ -76,23 +76,23 @@ export function BuildDialog() {
 }
 
 function Choose() {
-  const { catalog, draft, start } = useBuilding();
+  const { catalog, choosing, start } = useBuilding();
   const row = (on: boolean) =>
     `flex min-h-[52px] w-full shrink-0 flex-col justify-center rounded-xl px-3 text-left max-sm:w-auto ${on ? "bg-[var(--selected)]" : "hover:bg-[var(--hover)]"}`;
-  const isEmpty = !!draft && !draft.from;
+  const isEmpty = !!choosing && !choosing.from;
   return (
     <nav
       aria-label="Start from"
       className="no-bar flex w-[250px] shrink-0 flex-col gap-0.5 overflow-y-auto bg-[var(--canvas)] p-2 max-sm:w-full max-sm:flex-row max-sm:overflow-x-auto max-sm:pr-12"
     >
       <DialogTitle className="flex h-12 shrink-0 items-center px-3 text-[17px] font-semibold">
-        {draft?.mode === "template" ? "New template" : "Create"}
+        {choosing?.mode === "template" ? "New template" : "Create"}
       </DialogTitle>
       <button
         type="button"
         aria-current={isEmpty ? "true" : undefined}
         className={row(isEmpty)}
-        onClick={() => start(undefined, draft?.mode)}
+        onClick={() => start(undefined, choosing?.mode)}
       >
         <span className="text-[15px] font-medium">Empty</span>
       </button>
@@ -100,9 +100,9 @@ function Choose() {
         <button
           key={t.id}
           type="button"
-          aria-current={draft?.from?.id === t.id ? "true" : undefined}
-          className={row(draft?.from?.id === t.id)}
-          onClick={() => start(t, draft?.mode)}
+          aria-current={choosing?.from?.id === t.id ? "true" : undefined}
+          className={row(choosing?.from?.id === t.id)}
+          onClick={() => start(t, choosing?.mode)}
         >
           <span className="truncate text-[15px] font-medium">{t.title}</span>
           <span className="truncate text-[13px] text-muted-foreground max-sm:hidden">
