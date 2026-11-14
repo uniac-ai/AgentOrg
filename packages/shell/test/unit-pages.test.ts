@@ -209,7 +209,8 @@ test(
     };
     const made = () => gateway.calls.filter((c) => /^(add|remove)Unit$/.test(c.method));
 
-    // Changed, it is taken out and put back as answered now, with what it was answered before.
+    // Changed, it is taken out and put back as answered now, with what it was answered before, in
+    // the place it had: the top.
     await change();
     assert.equal(
       await dialog.getByLabel("Workspace directory", { exact: true }).inputValue(),
@@ -223,8 +224,12 @@ test(
       made().map((c) => c.method),
       ["removeUnit", "addUnit"],
     );
-    const added = made()[1]?.input as { unit: { values: Record<string, unknown> } } | undefined;
+    const added = made()[1]?.input as
+      | { unit: { values: Record<string, unknown> }; at?: number }
+      | undefined;
     assert.equal(added?.unit.values.workspace, "/work/foreman");
+    assert.equal(added?.at, 0);
+    assert.match(await units.first().innerText(), /^Computer\n/);
 
     // Refused, what it was built from goes back, and the sheet says why.
     gateway.refuseNext("agents.addUnit", "invalid", "That folder can't be used.");
@@ -232,6 +237,9 @@ test(
     await dialog.getByLabel("Workspace directory", { exact: true }).fill("/nowhere");
     await dialog.getByRole("button", { name: "Save" }).click();
     await sheet.getByRole("alert").getByText("That folder can't be used.").waitFor();
+    // Put back where it was, too.
+    const back = made().at(-1)?.input as { unit: { unit: string }; at?: number } | undefined;
+    assert.deepEqual([back?.unit.unit, back?.at], ["computer", 0]);
     await units.filter({ hasText: "/work/foreman" }).waitFor();
     assert.equal(await units.filter({ hasText: "/nowhere" }).count(), 0);
     assert.equal(await units.filter({ hasText: "Read-only files" }).count(), 1);

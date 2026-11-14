@@ -114,6 +114,7 @@ export function Computer({
   surfaces,
   onStart,
   down,
+  mend,
   overlay = false,
 }: {
   agent: { id: string; name: string; tone: Tone };
@@ -122,6 +123,8 @@ export function Computer({
   onStart(): Promise<unknown>;
   /** Down, why, as the computer says it: its windows can't be opened until it is back. */
   down?: string | undefined;
+  /** Down, the ways to mend it its provider offers, under what to call it. */
+  mend?: { heading: string; ways: { title: string; take(): void }[] } | undefined;
   overlay?: boolean;
 }) {
   const { picked, pick, close, draw, erase } = useComputers();
@@ -200,11 +203,36 @@ export function Computer({
             key="down"
             className="window relative grid h-full place-items-center rounded-xl bg-background"
           >
-            <span className="max-w-[440px] px-6 text-center text-[15px] text-muted-foreground">
-              {down
-                ? `${down.charAt(0).toUpperCase()}${down.slice(1)}`
-                : `${agent.name}'s computer is down`}
-            </span>
+            {mend ? (
+              // With ways to mend it: what it is, the provider's words, and a button for each way,
+              // the first as the one to take.
+              <div className="flex w-[min(420px,86%)] flex-col gap-3 text-[15px]">
+                <span>{mend.heading}</span>
+                {down && (
+                  <p className="text-[13px] leading-5 text-muted-foreground">
+                    {`${down.charAt(0).toUpperCase()}${down.slice(1)}`}
+                  </p>
+                )}
+                <div className="flex flex-wrap gap-2">
+                  {mend.ways.map((way, i) => (
+                    <Button
+                      key={way.title}
+                      variant={i === 0 ? "default" : "secondary"}
+                      className="h-9 rounded-full px-4"
+                      onClick={way.take}
+                    >
+                      {way.title}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <span className="max-w-[440px] px-6 text-center text-[15px] text-muted-foreground">
+                {down
+                  ? `${down.charAt(0).toUpperCase()}${down.slice(1)}`
+                  : `${agent.name}'s computer is down`}
+              </span>
+            )}
           </div>
         ) : (
           // biome-ignore lint/a11y/useSemanticElements: a window of the frame, not a form.

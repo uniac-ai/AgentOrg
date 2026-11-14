@@ -53,6 +53,14 @@ export interface Held {
       : never
     : never;
   about?: { label: string; value: string; caution?: true }[];
+  /** Down, the ways forward its state offers, and the unit it was built from. */
+  ways?: {
+    title: string;
+    description?: string;
+    unit: string;
+    values: Record<string, string | number | boolean | string[]>;
+  }[];
+  from?: string;
 }
 /** One change in the control log, as `agents.activity` says it. */
 export type Change = z.output<typeof agentsInterface.methods.activity.output>["entries"][number];
@@ -642,6 +650,7 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
             ...(agent.held ?? []).map((held, n) => ({
               id: `held-${n}`,
               title: held.title,
+              ...(held.from ? { from: held.from } : {}),
               slots: held.slots,
               surfaces: Array.from({ length: held.surfaces }, (_, i) => ({
                 surface: `s${i}`,
@@ -731,7 +740,7 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
         return {};
       },
       // A unit added to a living agent goes below those it has; one removed goes, as management does.
-      addUnit: ({ agent, unit: given }) => {
+      addUnit: ({ agent, unit: given, at }) => {
         const unit = given as unknown as {
           provider: string;
           unit: string;
@@ -739,18 +748,18 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
         };
         const held = agentOf(agent);
         const instance = `i-added-${++added}`;
-        held.units = [
-          ...(held.units ?? []),
-          {
-            instance,
-            provider: unit.provider,
-            unit: unit.unit,
-            title: UNITS.find((c) => c.id === unit.unit)?.title ?? unit.unit,
-            values: unit.values ?? {},
-            needs: {},
-            status: { state: "connected" as const },
-          },
-        ];
+        // At `at`, its place from the top, or below the rest.
+        const units = [...(held.units ?? [])];
+        units.splice(typeof at === "number" ? at : units.length, 0, {
+          instance,
+          provider: unit.provider,
+          unit: unit.unit,
+          title: UNITS.find((c) => c.id === unit.unit)?.title ?? unit.unit,
+          values: unit.values ?? {},
+          needs: {},
+          status: { state: "connected" as const },
+        });
+        held.units = units;
         changed();
         return { instance };
       },
@@ -1059,6 +1068,7 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
         state: held.state,
         ...(held.detail ? { detail: held.detail } : {}),
         surfaces: [],
+        ...(held.ways ? { ways: held.ways } : {}),
       };
     }
     if (slot.startsWith("work_")) {
