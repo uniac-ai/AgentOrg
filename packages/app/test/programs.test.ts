@@ -82,6 +82,8 @@ async function until(condition: () => boolean | Promise<boolean>, what: string) 
   }
   assert.fail(`timed out waiting for ${what}`);
 }
+/** This machine's screen and the person's own browser are never a test's: off, whatever is ready. */
+const NEITHER = { screen: "off", ownBrowser: "none" };
 const refused = (code: string) => (error: unknown) => (error as { code?: string }).code === code;
 /** The browser Playwright installed for the tests. */
 function headlessShell(): string {
@@ -548,7 +550,7 @@ test("the bundled Assistant is a computer and the web, and its computer goes wit
 
   const { agent } = await person.call<{ agent: string }>("agents", "create", {
     template: "assistant",
-    fill: [{ values: { kind: "this", workspace } }],
+    fill: [{ values: { kind: "this", workspace, ...NEITHER } }],
     name: "Helper",
   });
   const read = await person.call<{
@@ -574,7 +576,7 @@ test("the bundled Assistant is a computer and the web, and its computer goes wit
   // With no folder named, its work happens in one named for the agent.
   const { agent: untouched } = await person.call<{ agent: string }>("agents", "create", {
     template: "assistant",
-    fill: [{ values: { kind: "this" } }],
+    fill: [{ values: { kind: "this", ...NEITHER } }],
     name: "Right away",
   });
   const folder = join(agentsFolder, "Right away");
@@ -609,7 +611,7 @@ test("a socket from the person reaches a computer's surfaces live, with no token
   const { app, person } = await s.start();
   const { agent } = await person.call<{ agent: string }>("agents", "create", {
     template: "assistant",
-    fill: [{ values: { kind: "this", workspace } }],
+    fill: [{ values: { kind: "this", workspace, ...NEITHER } }],
     name: "Watched",
   });
   type Surfaces = { surface: string; protocol: string }[];

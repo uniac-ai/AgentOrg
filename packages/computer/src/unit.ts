@@ -7,6 +7,8 @@ import type { z } from "zod";
 export const COMPUTER = "computer";
 export const WEB = "web";
 export const BROWSER_SLOT = "browser";
+/** The slot of this computer's screen, through its own endpoint. */
+export const SCREEN_SLOT = "screen";
 const SKILL = "SKILL.md";
 const skill = (name: string) => ({ name, files: [SKILL] });
 
@@ -24,7 +26,9 @@ export const REACHES: Record<Access, string> = {
 const LOAD = { surface: "load", protocol: "metrics@1" };
 const FILES = { surface: "files", protocol: "files@1" };
 const TERMINAL = { surface: "terminal", protocol: "terminal@1" };
-const SCREEN = { surface: "browser", protocol: "screencast@1" };
+const SCREENCAST = { surface: "browser", protocol: "screencast@1" };
+/** This computer's screen, live. */
+const SCREEN = { surface: "screen", protocol: "screen@1" };
 /** Who is acting on it now, the person and agents, by what: from a service that says. */
 const PRESENCE = { surface: "presence", protocol: "presence@1" };
 /** The ids of the views whose rows `apply` gives. */
@@ -58,8 +62,12 @@ const MacApp = MAC_APP.charAt(0).toUpperCase() + MAC_APP.slice(1);
 export const OPEN_MAC = `${MacApp} isn't open on this Mac. Open it to use this computer.`;
 /** What to do when AgentOrg Mac's service is older than this build. */
 export const UPDATE_MAC = `${MacApp} on this Mac is older than this AgentOrg. Update it, and open it again.`;
-/** Why this computer can't be chosen while its files are off in AgentOrg Mac. */
-const FILES_OFF_MAC = `Files are turned off in ${MAC_APP}. Turn them on there to use this computer.`;
+/** Why a part of this computer can't be had while the person has it off in AgentOrg Mac. */
+const OFF_MAC = {
+  files: `Files are turned off in ${MAC_APP}. Turn them on there to use this computer.`,
+  screen: `Screen is turned off in ${MAC_APP}. Turn it on there to choose it.`,
+  browser: `Your browser is turned off in ${MAC_APP}. Turn it on there to choose it.`,
+};
 /** Why no container is made here, where AgentOrg Mac makes none. */
 export const NO_CONTAINER_MAC = `${MacApp} makes no container. To use a computer you run yourself, give its address.`;
 /** What to do when AgentComputer isn't installed here: the app doesn't include it. */
@@ -80,7 +88,11 @@ export type Found =
         reason?: string;
         /** Each part of it, ready or not: one the person switched off isn't, and says so. */
         capabilities?: { capability: string; ready: boolean; reason?: string }[];
+        /** The browsers that can go with it, the person's own (`own`) among them. */
+        browsers?: { kind: string; ready: boolean; reason?: string }[];
       };
+      /** On a Mac with AgentOrg Mac, the parts of this machine the person has switched off. */
+      off?: string[];
       made: { isolation: string; ready: boolean; reason?: string }[];
       starts?: true;
       why?: string;
@@ -95,10 +107,8 @@ const notHere = (found: Found, kind: typeof THIS | typeof CONTAINER) => {
   if (kind === THIS) {
     if (found.thisComputer?.ready === false)
       return found.thisComputer.reason ?? "The provider here can't attach this computer now.";
-    // Every reach it is offered with works in its files: with those off, none does. On a Mac, the
-    // person turns them on in AgentOrg Mac, which is said in its words.
-    const files = filesOff(found);
-    return files && found.mac ? FILES_OFF_MAC : files;
+    // Every reach it is offered with works in its files: with those off, none does.
+    return partOff(found, "files");
   }
   const container = found.made.find((one) => one.isolation === CONTAINER);
   return !container
@@ -109,174 +119,248 @@ const notHere = (found: Found, kind: typeof THIS | typeof CONTAINER) => {
 };
 const unavailable = (why: string | undefined) => (why ? { unavailable: why } : {});
 /**
- * Why this computer's files can't be used now, as its service says: the person can switch them
- * off. Nothing where it says nothing of them, as an older service doesn't. Its other parts are its
- * service's to refuse to the agent while they are off: the person may turn them on later.
+ * Why a part of this computer can't be had now: switched off in AgentOrg Mac, in its words; else
+ * as its service says, such as what to install or allow. Nothing where the service says nothing of
+ * the part's readiness, as an older one doesn't of a switch. Its terminal is its service's to
+ * refuse to the agent while it is off: the person may turn it on later.
  */
-const filesOff = (found: Found) => {
-  const files = found?.thisComputer?.capabilities?.find((one) => one.capability === "files");
-  return files && !files.ready
-    ? (files.reason ?? "This computer's files can't be used now.")
-    : undefined;
+const partOff = (found: Found, part: keyof typeof OFF_MAC) => {
+  const offered = found?.thisComputer;
+  if (!offered) return undefined;
+  const one =
+    part === "browser"
+      ? offered.browsers?.find((each) => each.kind === "own")
+      : offered.capabilities?.find((each) => each.capability === part);
+  // A service that says what it offers, and doesn't offer this, is older than this AgentOrg.
+  if (!one) {
+    const listed = part === "browser" ? offered.browsers : offered.capabilities;
+    if (!listed || part === "files") return undefined;
+    return found?.mac
+      ? UPDATE_MAC
+      : part === "browser"
+        ? "The provider here can't reach your own browser."
+        : "The provider here can't give its screen.";
+  }
+  if (one.ready) return undefined;
+  return found?.mac && found.off?.includes(part)
+    ? OFF_MAC[part]
+    : (one.reason ?? `This computer's ${part} can't be used now.`);
 };
 
 /** The form as it stands now, with what was found on this machine. */
-export const computerUnit = (found: Found): z.input<typeof Unit> => ({
-  id: COMPUTER,
-  title: "Computer",
-  description: "Where it runs commands and keeps files: this computer, or one made for it.",
-  capability: { id: COMPUTER, title: "Computer" },
-  once: true,
-  form: [
-    {
-      id: "kind",
-      type: "choice",
-      value: "string",
-      title: "Which computer",
-      required: true,
-      options: [
-        {
-          value: THIS,
-          title: "This computer",
-          description:
-            "The whole machine: your files and apps. It acts as you, with everything you can reach.",
-          caution: true,
-          ...unavailable(notHere(found, THIS)),
-        },
-        {
-          value: NEW,
-          title: "A new computer",
-          description: "Made for this agent and kept apart from yours.",
-        },
-      ],
-    },
-    {
-      id: "workspace",
-      type: "directory",
-      value: "string",
-      title: "Where its work happens",
-      description: "It's told to work here. Not a wall: the rest of your computer is open to it.",
-      placeholder: "~/Agents/{name}",
-      visible: { field: "kind", in: [THIS] },
-    },
-    {
-      id: "made",
-      type: "choice",
-      value: "string",
-      title: "Made as",
-      required: true,
-      // AgentOrg Mac makes nothing: a service you run is reached at its address, this Mac's too.
-      default: found?.mac ? REMOTE : CONTAINER,
-      visible: { field: "kind", in: [NEW] },
-      options: [
-        ...(found?.mac
-          ? []
-          : [
-              {
-                value: CONTAINER,
-                title: "A container on this machine",
-                description: "Commands and files, apart from yours.",
-                ...unavailable(notHere(found, CONTAINER)),
-              },
-            ]),
-        {
-          value: REMOTE,
-          title: "At another address",
-          description: "A computer provider there makes it.",
-        },
-      ],
-    },
-    {
-      id: "address",
-      type: "text",
-      value: "string",
-      title: "Provider's address",
-      description: "Over https unless it's on this computer.",
-      required: true,
-      visible: { field: "made", in: [REMOTE] },
-    },
-    {
-      id: "token",
-      type: "secret",
-      value: "secret",
-      title: "Token",
-      description:
-        "The provider's control token. It's asked each time and never saved in a template.",
-      required: true,
-      visible: { field: "made", in: [REMOTE] },
-    },
-    {
-      id: "path",
-      type: "text",
-      value: "string",
-      title: "Workspace directory",
-      description: "A path on the provider's machine. Removing the agent leaves it.",
-      visible: { field: "made", in: [REMOTE] },
-    },
-    {
-      id: "access",
-      authority: "setting",
-      type: "choice",
-      value: "string",
-      title: "What it reaches",
-      required: true,
-      default: "terminal",
-      options: [
-        {
-          value: "terminal",
-          title: REACHES.terminal,
-          description: "It can run any command.",
-          adds: {
-            slots: [{ name: COMPUTER }],
-            skills: [skill("terminal"), skill("files"), skill("computer")],
-            surfaces: [TERMINAL, FILES],
+export const computerUnit = (found: Found): z.input<typeof Unit> => {
+  const screenOff = partOff(found, "screen");
+  const ownOff = partOff(found, "browser");
+  return {
+    id: COMPUTER,
+    title: "Computer",
+    description: "Where it runs commands, keeps files and acts on a screen.",
+    capability: { id: COMPUTER, title: "Computer" },
+    once: true,
+    form: [
+      {
+        id: "kind",
+        type: "choice",
+        value: "string",
+        title: "Which computer",
+        required: true,
+        options: [
+          {
+            value: THIS,
+            title: "This computer",
+            description:
+              "The whole machine: your files, apps, screen and signed-in browser. It acts as you, with everything you can reach.",
+            caution: true,
+            ...unavailable(notHere(found, THIS)),
           },
+          {
+            value: NEW,
+            title: "A new computer",
+            description: "Made for this agent and kept apart from yours.",
+          },
+        ],
+      },
+      {
+        id: "workspace",
+        type: "directory",
+        value: "string",
+        title: "Where its work happens",
+        description: "It's told to work here. Not a wall: the rest of your computer is open to it.",
+        placeholder: "~/Agents/{name}",
+        visible: { field: "kind", in: [THIS] },
+      },
+      {
+        id: "made",
+        type: "choice",
+        value: "string",
+        title: "Made as",
+        required: true,
+        // AgentOrg Mac makes nothing: a service you run is reached at its address, this Mac's too.
+        default: found?.mac ? REMOTE : CONTAINER,
+        visible: { field: "kind", in: [NEW] },
+        options: [
+          ...(found?.mac
+            ? []
+            : [
+                {
+                  value: CONTAINER,
+                  title: "A container on this machine",
+                  description: "Commands and files, apart from yours.",
+                  ...unavailable(notHere(found, CONTAINER)),
+                },
+              ]),
+          {
+            value: REMOTE,
+            title: "At another address",
+            description: "A computer provider there makes it.",
+          },
+        ],
+      },
+      {
+        id: "address",
+        type: "text",
+        value: "string",
+        title: "Provider's address",
+        description: "Over https unless it's on this computer.",
+        required: true,
+        visible: { field: "made", in: [REMOTE] },
+      },
+      {
+        id: "token",
+        type: "secret",
+        value: "secret",
+        title: "Token",
+        description:
+          "The provider's control token. It's asked each time and never saved in a template.",
+        required: true,
+        visible: { field: "made", in: [REMOTE] },
+      },
+      {
+        id: "path",
+        type: "text",
+        value: "string",
+        title: "Workspace directory",
+        description: "A path on the provider's machine. Removing the agent leaves it.",
+        visible: { field: "made", in: [REMOTE] },
+      },
+      {
+        id: "access",
+        authority: "setting",
+        type: "choice",
+        value: "string",
+        title: "What it reaches",
+        required: true,
+        default: "terminal",
+        options: [
+          {
+            value: "terminal",
+            title: REACHES.terminal,
+            description: "It can run any command.",
+            adds: {
+              slots: [{ name: COMPUTER }],
+              skills: [skill("terminal"), skill("files"), skill("computer")],
+              surfaces: [TERMINAL, FILES],
+            },
+          },
+          {
+            value: "files",
+            title: REACHES.files,
+            description: "It can read and change files, but can't run anything.",
+            adds: WITH_FILES,
+          },
+          {
+            value: "read",
+            title: REACHES.read,
+            description: "It can read files, but can't change them or run anything.",
+            adds: WITH_FILES,
+          },
+          {
+            value: "none",
+            title: "No files or terminal",
+            description: "It has no files and can't run anything.",
+          },
+        ],
+      },
+      {
+        id: "screen",
+        authority: "setting",
+        type: "choice",
+        value: "string",
+        title: "Screen",
+        required: true,
+        // Off unless chosen, until it has been checked through AgentOrg on a real Mac. The draft's
+        // default returns then: on while it can be had, so one greyed isn't left chosen.
+        default: "off",
+        visible: { field: "kind", in: [THIS] },
+        options: [
+          {
+            value: "on",
+            title: "Your screen",
+            description: "It sees your screen and acts on it, as you would.",
+            ...unavailable(screenOff),
+            adds: { slots: [{ name: SCREEN_SLOT }], skills: [skill("screen")], surfaces: [SCREEN] },
+          },
+          { value: "off", title: "No screen" },
+        ],
+      },
+      {
+        id: "ownBrowser",
+        authority: "setting",
+        type: "choice",
+        value: "string",
+        title: "Browser",
+        required: true,
+        // Off unless chosen, until it has been checked through AgentOrg in the person's own browser.
+        // The draft's default returns then, as the screen's does.
+        default: "none",
+        visible: { field: "kind", in: [THIS] },
+        options: [
+          {
+            value: "yours",
+            title: "Your browser",
+            description: "Signed in as you: it acts as you on every site you're signed in to.",
+            caution: true,
+            ...unavailable(ownOff),
+            adds: {
+              slots: [{ name: BROWSER_SLOT }],
+              skills: [skill("browser")],
+              surfaces: [SCREENCAST],
+            },
+          },
+          { value: "none", title: "No browser" },
+        ],
+      },
+      {
+        id: "browser",
+        authority: "setting",
+        type: "toggle",
+        value: "boolean",
+        title: "With a browser",
+        description: "It can open web pages and act on them, in a browser of its own.",
+        default: true,
+        visible: { field: "kind", in: [NEW] },
+        adds: {
+          slots: [{ name: BROWSER_SLOT }],
+          skills: [skill("browser")],
+          surfaces: [SCREENCAST],
         },
-        {
-          value: "files",
-          title: REACHES.files,
-          description: "It can read and change files, but can't run anything.",
-          adds: WITH_FILES,
-        },
-        {
-          value: "read",
-          title: REACHES.read,
-          description: "It can read files, but can't change them or run anything.",
-          adds: WITH_FILES,
-        },
-        {
-          value: "none",
-          title: "No files or terminal",
-          description: "It has no files and can't run anything.",
-        },
+      },
+    ],
+    needs: [],
+    gives: {
+      slots: [],
+      skills: [],
+      results: [],
+      surfaces: [LOAD, PRESENCE],
+      views: [
+        { id: WHERE, place: "column", kind: "facts" },
+        { id: "load", place: "column", kind: "meters", when: "reachable", surface: "load" },
+        { id: WORKSPACE, place: "column", kind: "facts" },
+        { id: "in-use", place: "column", kind: "presence", when: "reachable", surface: "presence" },
       ],
     },
-    {
-      id: "browser",
-      authority: "setting",
-      type: "toggle",
-      value: "boolean",
-      title: "With a browser",
-      description: "It can open web pages and act on them, in a browser of its own.",
-      default: true,
-      visible: { field: "kind", in: [NEW] },
-      adds: { slots: [{ name: BROWSER_SLOT }], skills: [skill("browser")], surfaces: [SCREEN] },
-    },
-  ],
-  needs: [],
-  gives: {
-    slots: [],
-    skills: [],
-    results: [],
-    surfaces: [LOAD, PRESENCE],
-    views: [
-      { id: WHERE, place: "column", kind: "facts" },
-      { id: "load", place: "column", kind: "meters", when: "reachable", surface: "load" },
-      { id: WORKSPACE, place: "column", kind: "facts" },
-      { id: "in-use", place: "column", kind: "presence", when: "reachable", surface: "presence" },
-    ],
-  },
-});
+  };
+};
 
 export const WEB_UNIT: z.input<typeof Unit> = {
   id: WEB,
@@ -307,6 +391,6 @@ export const WEB_UNIT: z.input<typeof Unit> = {
 
 /** The skills each unit can give, by name. */
 export const SKILLS: Record<string, string[]> = {
-  [COMPUTER]: ["terminal", "files", "computer", "browser"],
+  [COMPUTER]: ["terminal", "files", "computer", "browser", "screen"],
   [WEB]: ["web-research"],
 };

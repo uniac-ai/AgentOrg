@@ -55,7 +55,7 @@ There is one create tool per template you may use. Read its description and fiel
 If a template you expected has no create tool, or you have none, tell the person why, using the titles in bold and quotes. In your AgentOrg control unit, in your Setup:
 - **Agents** is "None".
 - **Templates** doesn't tick it.
-- **Places**, for a template with a computer: nothing you can use is ticked. "Its own computer" needs the computer you hold now, **Most a computer can do** at least what it reaches, and **A computer can have a browser** on if it has one. "A new computer on this machine" needs your computer to be on this machine: this computer, or a container here. A computer the person connected, ticked there, can always be used.
+- **Places**, for a template with a computer: nothing you can use is ticked. "Its own computer" needs the computer you hold now, **Most a computer can do** at least what it reaches, and **A computer can have a browser** on if it has one; and never if it has the person's screen or their own browser. "A new computer on this machine" needs your computer to be on this machine: this computer, or a container here. A computer the person connected, ticked there, can always be used.
 - **Levels below it** is 1, for a template whose agents get an AgentOrg control unit.
 
 Otherwise it is the template: a unit's provider isn't connected, or a unit lacks an answer you can't give. The person fills that in on the template. A token can't be kept in a template, so the person creates that agent themselves.
@@ -91,6 +91,7 @@ export const SKILL_SHIPPED = [
   "c8398d20782eae4c52bb043f03385d8b219883a572c8aade8b53c82e8ca7272b",
   "dc702fb7e319e148a0ec617af453f29d70b3717654f10096f87f9e623b20cfb4",
   "6971b805763a0aec8d900c0cd099c9d6e278af0a4138bdd398c4cd935aaed5e1",
+  "34441ae86491bf1e266d3398daa7c3b1ced0ec5cd2af0631f71e08186085b71e",
 ];
 /** The sha256 of each earlier text of a file of the skill, so a copy of one is told from an edit. */
 export const skillShipped = (path: string) => {
@@ -268,6 +269,8 @@ export interface Reach {
    * a computer of its own: elsewhere needs a token no agent may pass on.
    */
   here?: true;
+  /** Whether it acts on the person's own screen or browser, signed in: no child shares those. */
+  person?: true;
 }
 const NOWHERE: Reach = { access: "none", browser: false, connections: [], skills: [] };
 
@@ -289,12 +292,14 @@ export function reachOf(record: TheAgent): Reach {
     const { service, ...shared } = record.computer;
     return { ...shared, ...(service === "local" || shared.here ? { here: true as const } : {}) };
   }
+  const person = unit.values.screen === "on" || unit.values.ownBrowser === "yours";
   return {
     access: String(unit.values.access ?? "none"),
-    browser: unit.values.browser === true,
+    browser: unit.values.browser === true || unit.values.ownBrowser === "yours",
     connections: unit.connections,
     skills: unit.skills,
     ...(onThisMachine(unit.values) ? { here: true as const } : {}),
+    ...(person ? { person: true as const } : {}),
   };
 }
 
@@ -430,9 +435,11 @@ function shapeOf(
     });
   }
   if (!computer) return { units };
-  // Sharing its own computer gives the child exactly its reach, so the bound must allow that.
+  // Sharing its own computer gives the child exactly its reach, so the bound must allow that; and
+  // never the person's own screen or browser.
   const own =
     reach.connections.length > 0 &&
+    !reach.person &&
     rank(reach.access) <= rank(bound.access) &&
     (!reach.browser || bound.browser);
   // A new one is made within the bounds, as a container here, where its parent's computer is.
@@ -546,10 +553,14 @@ const withinReach = (bound: Bound, reach: Reach): Bound => ({
  * isn't asked, so nothing it sets shows only after that.
  */
 function newComputerForm(computer: NonNullable<Shape["computer"]>, bound: Bound) {
-  return computer.offer.unit.form
-    .filter(settable)
-    .map(({ visible: _, ...field }) => field)
-    .flatMap((field) => cutToLimit(field, limitOf(reachLimits(bound), field)));
+  return (
+    computer.offer.unit.form
+      .filter(settable)
+      // One shown only for another kind of computer, such as this computer's screen, isn't asked.
+      .filter(({ visible }) => visible?.field !== "kind" || visible.in.includes("new"))
+      .map(({ visible: _, ...field }) => field)
+      .flatMap((field) => cutToLimit(field, limitOf(reachLimits(bound), field)))
+  );
 }
 
 /** A new computer's values: the template's, within the bounds, as a container on this machine. */
