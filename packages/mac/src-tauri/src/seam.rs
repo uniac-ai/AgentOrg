@@ -140,11 +140,19 @@ async fn set_switch(capability: String, on: bool) -> Result<Value, Refusal> {
     read("set_switch", "PUT", path, Some(json!({ "on": on }))).await
 }
 
+/// A need's own setup control, on the person's click, through the service: for a screen grant,
+/// macOS's request and that grant's pane, but for the first request of one whose request may draw
+/// macOS's alert. Then the provider is told to read the grants again, and soon after, as the person
+/// may switch one there.
 #[tauri::command]
 async fn ask(capability: String, need: Option<String>) -> Result<Value, Refusal> {
     let path = format!("/v1/setup/{}/ask", part(&capability)?);
     let body = need.map_or(json!({}), |need| json!({ "need": need }));
-    read("ask", "POST", path, Some(body)).await
+    let answer = read("ask", "POST", path, Some(body)).await;
+    if capability == "screen" && answer.is_ok() {
+        provider::grants_changed();
+    }
+    answer
 }
 
 /// A grant's pane of System Settings, on the person's click, opened by the service. The provider
