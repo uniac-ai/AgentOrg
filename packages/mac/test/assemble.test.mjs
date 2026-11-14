@@ -151,7 +151,6 @@ test("the bundle carries Node, the driver and the service, and their licences, e
   const bundle = join(target, "bundle");
   const pty = "Resources/agentcomputer/node_modules/node-pty";
   assert.deepEqual(listed(bundle), [
-    "MacOS/cua-driver",
     "MacOS/node",
     "Resources/agentcomputer/LICENSE",
     "Resources/agentcomputer/NOTICE",
@@ -165,6 +164,7 @@ test("the bundle carries Node, the driver and the service, and their licences, e
     "Resources/agentcomputer/node_modules/playwright-core/index.js",
     "Resources/agentcomputer/node_modules/playwright-core/package.json",
     "Resources/agentcomputer/package.json",
+    "Resources/cua-driver",
     "Resources/licenses/cua-driver/LICENSE",
     "Resources/licenses/cua-driver/THIRD_PARTY_NOTICES.md",
     "Resources/licenses/node/LICENSE",
@@ -173,16 +173,16 @@ test("the bundle carries Node, the driver and the service, and their licences, e
   // can't be signed as ours.
   const read = (path) => readFileSync(join(bundle, path), "utf8");
   assert.equal(read("Resources/licenses/node/LICENSE"), "Node's licence");
-  assert.equal(read("MacOS/cua-driver"), "the bare driver");
+  assert.equal(read("Resources/cua-driver"), "the bare driver");
   // Each program can run, node-pty's helper too, which it ships unmarked.
   const helper = `${pty}/prebuilds/darwin-arm64/spawn-helper`;
-  for (const program of ["MacOS/node", "MacOS/cua-driver", helper])
+  for (const program of ["MacOS/node", "Resources/cua-driver", helper])
     assert.equal(statSync(join(bundle, program)).mode & 0o111, 0o111, program);
   assert.deepEqual(
     signed.map(([path, entitlements]) => [path.slice(bundle.length + 1), entitlements]),
     [
       ["MacOS/node", "node.plist"],
-      ["MacOS/cua-driver", "cua-driver.plist"],
+      ["Resources/cua-driver", "cua-driver.plist"],
       [`${pty}/prebuilds/darwin-arm64/pty.node`, undefined],
       [helper, undefined],
     ],
