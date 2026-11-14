@@ -278,6 +278,22 @@ const UNITS = [
     needs: [],
     gives: { slots: [{ name: "vault" }], skills: [], results: [] },
   },
+  {
+    id: "paused",
+    title: "Paused",
+    description: "Its one way can't be had now.",
+    form: [
+      {
+        id: "where",
+        type: "choice",
+        value: "string",
+        title: "Where",
+        options: [{ value: "here", title: "Here", unavailable: "Here is down for now." }],
+      },
+    ],
+    needs: [],
+    gives: { slots: [], skills: [], results: [] },
+  },
 ] as const;
 
 /** A real Hub, management on it, one who calls it, and stand-in providers that can fail on cue. */
@@ -1362,6 +1378,7 @@ test("every unit on offer is listed, management's own among them", async (t) => 
       ["runner", "Units"],
       ["closed", "Units"],
       ["vault", "Units"],
+      ["paused", "Units"],
     ],
   );
   // What a host reads to leave a unit out of a stack that has it.
@@ -2455,6 +2472,25 @@ test("a field no one declared is closed to an agent, and its template's value st
   assert.equal(tried.failed, true);
   const child = await s.made(tools, "create_sealed", { name: "Y", purpose: "P." });
   assert.deepEqual(s.given.applied.find((one) => one.agent === child)?.values, { mode: "fixed" });
+});
+
+test("a template whose option can't be had now stays offered, and creating from it says why", async (t) => {
+  const s = await delegating(t);
+  await s.calls.agents.saveTemplate({
+    id: "paused",
+    title: "Paused",
+    description: "",
+    base: { provider: "Agents", creatable: "plain" },
+    units: [{ provider: "Units", unit: "paused", values: { where: "here" } }],
+  });
+  const { tools } = await s.parent({ templates: ["paused"] });
+  assert.ok((await tools.list({})).tools.some((one) => one.name === "create_paused"));
+  const tried = await tools.call({
+    name: "create_paused",
+    arguments: { name: "X", purpose: "P." },
+  });
+  assert.equal(tried.failed, true);
+  assert.match(tried.output, /Where: Here is down for now\./);
 });
 
 test("a place means nothing on a template with no computer", async (t) => {

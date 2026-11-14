@@ -361,6 +361,12 @@ const isAgentsUnit = (self: string, offer: Offer) =>
  * template's: one that can't be applied as it stands rules out the template, not just the unit. A
  * computer isn't applied: the child goes to one of the places allowed.
  */
+/** A field as it is with every option available, so what a template offers doesn't come and go. */
+const asIfAvailable = <F extends { options?: { unavailable?: string }[] }>(field: F): F =>
+  field.options
+    ? { ...field, options: field.options.map((option) => ({ ...option, unavailable: undefined })) }
+    : field;
+
 function shapeOf(
   self: string,
   template: TheTemplate,
@@ -382,9 +388,10 @@ function shapeOf(
       continue;
     }
     if (isAgentsUnit(self, offer) && bound.depth <= 1) return undefined;
-    // What an agent can't set must already be there. That includes any secret it would need.
+    // What an agent can't set must already be there. That includes any secret it would need. An
+    // option its provider can't give now still counts: creating says why, and the template stays.
     const { form } = offer.unit;
-    const settled = settle(form, unit.values ?? {}, []);
+    const settled = settle(form.map(asIfAvailable), unit.values ?? {}, []);
     if (settled.problems.some((one) => !form.find((f) => f.id === one.field && settable(f))))
       return undefined;
     for (const needed of Object.values(unit.needs ?? {}))
