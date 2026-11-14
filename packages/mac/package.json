@@ -10,7 +10,7 @@
     "test": "node --test \"test/**/*.test.mjs\""
   },
   "dependencies": {
-    "@agentorg/computer": "0.0.20"
+    "@agentorg/computer": "0.0.21"
   },
   "devDependencies": {
     "@tauri-apps/cli": "2.12.4"
