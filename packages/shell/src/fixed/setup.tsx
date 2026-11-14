@@ -35,7 +35,7 @@ import {
 } from "./data.ts";
 import { ConfirmDelete } from "./delete-dialog.tsx";
 import { Nothing, Section, TroubleDot, WhereIcon } from "./parts.tsx";
-import { partsOf } from "./stack.ts";
+import { answersOf } from "./stack.ts";
 import { useAgents } from "./watch.tsx";
 
 /** The picker's value for no model chosen: the provider's default. */
@@ -121,7 +121,10 @@ function Made({ agent: entry }: { agent: AgentEntry }) {
         </p>
       )}
       <Section title={template ? `Built from ${template}` : "Built from"}>
-        <BuiltFrom units={agent.units} />
+        <BuiltFrom
+          units={agent.units}
+          nameOf={(id) => connections?.find((c) => c.connection === id)?.name}
+        />
       </Section>
       <Section title="Model">
         <ModelPicker {...(agent.status.state === "running" ? { agent: id } : {})} />
@@ -199,8 +202,14 @@ function Made({ agent: entry }: { agent: AgentEntry }) {
   );
 }
 
-/** The stack it came from, as it was filled in: each unit with its answers in words. */
-function BuiltFrom({ units }: { units: AgentDetail["units"] }) {
+/** The stack it came from, as it was filled in: each unit with its questions and their answers. */
+function BuiltFrom({
+  units,
+  nameOf,
+}: {
+  units: AgentDetail["units"];
+  nameOf(connection: string): string | undefined;
+}) {
   const { catalog } = useBuilding();
   if (units.length === 0) return <Nothing>Just the base</Nothing>;
   return (
@@ -212,9 +221,12 @@ function BuiltFrom({ units }: { units: AgentDetail["units"] }) {
         return (
           <li key={applied.instance} className="rounded-xl bg-card px-3 py-2.5 text-sm">
             <div className="font-medium">{applied.title}</div>
-            {partsOf(applied.values, form).map((line) => (
-              <div key={line} className="truncate text-[13px] text-muted-foreground">
-                {line}
+            {answersOf(applied.values, form, nameOf).map((line) => (
+              <div key={line.id} className="flex min-w-0 gap-1.5 text-[13px]">
+                <span className="shrink-0 text-muted-foreground">{line.question}</span>
+                <span className={`truncate ${line.path ? "font-mono text-xs leading-5" : ""}`}>
+                  {line.answer}
+                </span>
               </div>
             ))}
           </li>

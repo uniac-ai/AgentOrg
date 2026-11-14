@@ -167,11 +167,16 @@ test(
     await panel(page).getByRole("button", { name: "Create", exact: true }).click();
     const sheet = await openSetup(page, "Foreman");
     const built = sheet.getByRole("region", { name: "Built from Assistant" });
+    // Each answer is read with the question it answers.
     assert.deepEqual((await built.getByRole("listitem").first().innerText()).split("\n"), [
       "Computer",
+      "Where it resides",
       "This computer",
+      "What it reaches",
       "Files and terminal",
       "With a browser",
+      "On",
+      "Workspace directory",
       "/work/foreman",
     ]);
     await sheet
