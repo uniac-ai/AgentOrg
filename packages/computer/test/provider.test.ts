@@ -95,8 +95,10 @@ async function standIn(
   const thisComputer = {
     ready: true,
     capabilities: [] as { capability: string; ready: boolean; reason?: string }[],
-    browsers: [],
+    browsers: [] as { kind: string; ready: boolean; reason?: string }[],
   };
+  /** The person's switches, as its setup says them, which a test may set. */
+  const setup: { capability: string; on: boolean }[] = [];
   // Its address as it listens: a request that comes as it closes is still answered.
   let base = "";
   const server = createServer(async (request, response) => {
@@ -116,7 +118,7 @@ async function standIn(
       response.setHeader("content-type", "application/json");
       response.end(value === undefined ? undefined : JSON.stringify(value));
     };
-    const endpoint = /^\/v1\/computers\/[^/]+\/(mcp|browser)$/.test(path);
+    const endpoint = /^\/v1\/computers\/[^/]+\/(mcp|browser|screen)$/.test(path);
     if (mcp && endpoint && given === "its-own-token") {
       if (request.method !== "POST") return send(405);
       const message = JSON.parse(raw) as {
@@ -142,6 +144,10 @@ async function standIn(
     }
     if (given !== token)
       return send(401, { code: 401, message: "That isn't this service's token." });
+    if (request.method === "GET" && path === "/v1/setup")
+      return send(200, {
+        capabilities: setup.map((one) => ({ ...one, ready: one.on, needs: [] })),
+      });
     if (request.method === "GET" && path === "/v1/info")
       return send(200, {
         version: "0.0.20",
@@ -190,11 +196,16 @@ async function standIn(
         access: asks.access,
         isolation: "none",
         attached: true,
-        browser: false,
+        browser: asks.browser ?? false,
+        screen: asks.screen ?? false,
         workspace: asks.workspace,
         metadata: asks.metadata ?? {},
         surfaces: [],
-        endpoints: { computer: `${base}/v1/computers/${id}/mcp` },
+        endpoints: {
+          computer: asks.access === "none" ? null : `${base}/v1/computers/${id}/mcp`,
+          browser: asks.browser ? `${base}/v1/computers/${id}/browser` : null,
+          screen: asks.screen ? `${base}/v1/computers/${id}/screen` : null,
+        },
       };
       computers.set(id, made);
       return send(201, { ...made, accessToken: "its-own-token" });
@@ -253,7 +264,7 @@ async function standIn(
     server.closeAllConnections();
     return new Promise((resolve) => server.close(resolve));
   });
-  return { apiUrl: base, apiKey: token, asked, computers, held, thisComputer };
+  return { apiUrl: base, apiKey: token, asked, computers, held, thisComputer, setup };
 }
 
 interface Service {
@@ -1400,6 +1411,12 @@ test("this computer with its files switched off can't be chosen, in the AgentOrg
           "kind",
         )?.options?.find((one) => one.value === "this")?.unavailable;
       // All off, as a Mac lending itself starts: this computer can't be chosen, and says why.
+      app.setup.push(
+        ...["terminal", "files", "screen", "browser"].map((part) => ({
+          capability: part,
+          on: false,
+        })),
+      );
       app.thisComputer.capabilities = [
         { capability: "about", ready: true },
         off("terminal"),
@@ -1420,6 +1437,91 @@ test("this computer with its files switched off can't be chosen, in the AgentOrg
       assert.equal(command.ran(), false);
       await units.remove({ instance: made.instance });
     });
+});
+
+test("this computer with its screen and the person's browser: attached with both, each its own connection, and its row says whose browser it is", async (t) => {
+  const command = onPathThatSays(t);
+  const { units, macRecord, root } = await setup(t, {
+    service: false,
+    path: command.bin,
+    mac: true,
+  });
+  const app = await standIn(t, {}, { mcp: true });
+  recordIn(t, macRecord, app);
+  app.thisComputer.capabilities = [
+    { capability: "files", ready: true },
+    { capability: "screen", ready: true },
+  ];
+  app.thisComputer.browsers = [{ kind: "own", ready: true }];
+  const values = {
+    kind: "this",
+    access: "none",
+    workspace: join(root, "work"),
+    screen: "on",
+    ownBrowser: "yours",
+  };
+  // With no files or terminal, its screen and browser are its computer.
+  assert.deepEqual(
+    (await units.check({ unit: "computer", values: values as never, secrets: [] })).problems,
+    [],
+  );
+  const made = await units.apply({
+    unit: "computer",
+    values: values as never,
+    secrets: {},
+    needs: {},
+    agent: "act_agent",
+    name: "Mine",
+  });
+  const attached = app.asked.find(
+    (one) => one.method === "POST" && one.path === "/v1/computers/attach",
+  );
+  assert.equal(attached?.body?.screen, true);
+  assert.equal(attached?.body?.browser, "own");
+  assert.deepEqual(
+    made.connections.map((one) => [one.slot, one.target]),
+    [
+      ["browser", "This computer, as you: your browser"],
+      ["screen", "This computer, as you: your screen"],
+    ],
+  );
+  // It reaches the screen, and its browser is the person's, as the rows say.
+  assert.deepEqual(made.capability?.rows?.workspace?.slice(-2), [
+    { label: "Reaches", value: "Your screen" },
+    { label: "Browser", value: "Your browser", note: "Signed in as you" },
+  ]);
+  // With neither, and no files or terminal, there's no computer.
+  const none = await units.check({
+    unit: "computer",
+    values: { ...values, screen: "off", ownBrowser: "none" } as never,
+    secrets: [],
+  });
+  assert.deepEqual(
+    none.problems.map((one) => one.message),
+    ["With no files, no commands, no screen and no browser, there's no computer."],
+  );
+  // On a Mac with AgentOrg Mac, what the person switched off was read from its setup.
+  assert.ok(app.asked.some((one) => one.method === "GET" && one.path === "/v1/setup"));
+  assert.equal(command.ran(), false);
+  await units.remove({ instance: made.instance });
+});
+
+test("this computer made before it had a screen or the person's browser to answer for says it has neither, in today's words", async (t) => {
+  const { apply, local, units, dir, data, restart } = await setup(t, { service: false });
+  const app = await standIn(t);
+  recordIn(t, data, app);
+  const { instance } = await apply(local("files"));
+  assert.equal((await units.status({ instance })).now, undefined, "made in today's words");
+  const file = JSON.parse(readFileSync(join(dir, "instances.json"), "utf8"));
+  file[instance].words = 2;
+  writeFileSync(join(dir, "instances.json"), JSON.stringify(file));
+  await restart();
+  const { now } = await units.status({ instance });
+  assert.equal(now?.values.screen, "off");
+  assert.equal(now?.values.ownBrowser, "none");
+  // The service here was never asked for its setup: this isn't a Mac with AgentOrg Mac.
+  assert.ok(!app.asked.some((one) => one.path === "/v1/setup"));
+  await units.remove({ instance });
 });
 
 test("on a Mac with AgentOrg Mac, this computer attached through the service you run gets the one way on; that service is never started", async (t) => {

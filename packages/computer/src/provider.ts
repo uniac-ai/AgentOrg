@@ -55,6 +55,7 @@ import {
   OPEN_MAC,
   REACHES,
   REMOTE,
+  SCREEN_SLOT,
   SKILLS,
   THIS,
   UPDATE_MAC,
@@ -101,9 +102,9 @@ const Stored = z.object({
 type Instance = z.infer<typeof Stored>;
 /**
  * The words of today's form, which an instance made now is kept with: 2 since its page shows who
- * is acting on it.
+ * is acting on it, 3 since this computer has a screen and the person's browser to answer for.
  */
-const WORDS = 2;
+const WORDS = 3;
 type Linked = z.infer<typeof Link>;
 type TheProblem = z.input<typeof Problem>;
 interface Reached {
@@ -284,6 +285,7 @@ const rowsOf = ({
   folder,
   access,
   browser,
+  screen = false,
 }: {
   whole: boolean;
   /** The address of a computer at another one. */
@@ -291,7 +293,10 @@ const rowsOf = ({
   /** Where its work happens: said to this computer; or a folder of yours a container from before has. */
   folder: string | undefined;
   access: Access | "none";
-  browser: boolean;
+  /** Its own, or `own`: the person's, signed in. */
+  browser: boolean | "own";
+  /** This computer's screen. */
+  screen?: boolean;
 }): Record<string, FactRow[]> => ({
   [WHERE]: [
     whole
@@ -326,8 +331,21 @@ const rowsOf = ({
             },
           ]
         : []),
-    ...(access === "none" ? [] : [{ label: "Reaches", value: REACHES[access] }]),
-    { label: "Browser", value: browser ? "Its own browser" : "None" },
+    // What it reaches, and this computer's screen with it.
+    ...(access === "none" && !screen
+      ? []
+      : [
+          {
+            label: "Reaches",
+            value:
+              access === "none"
+                ? "Your screen"
+                : `${REACHES[access]}${screen ? ", your screen" : ""}`,
+          },
+        ]),
+    browser === "own"
+      ? { label: "Browser", value: "Your browser", note: "Signed in as you" }
+      : { label: "Browser", value: browser ? "Its own browser" : "None" },
   ],
 });
 /** A failed computer being mended, as `mend` keeps it. */
@@ -418,11 +436,18 @@ function problems(
       message: NO_CONTAINER_MAC,
     });
   if (values.access === "none") {
-    // A browser of its own is a made computer's: this one has none yet.
-    if (!(values.kind === NEW && values.browser === true))
+    // With no files or terminal, it is its browser, or this computer's screen.
+    const has =
+      values.kind === THIS
+        ? values.screen === "on" || values.ownBrowser === "yours"
+        : values.kind === NEW && values.browser === true;
+    if (!has)
       wrong.push({
         field: "access",
-        message: "With no files, no commands and no browser, there's no computer.",
+        message:
+          values.kind === THIS
+            ? "With no files, no commands, no screen and no browser, there's no computer."
+            : "With no files, no commands and no browser, there's no computer.",
       });
   } else if (!LEVELS.includes(values.access as string))
     wrong.push({ field: "access", message: "Choose what it reaches." });
@@ -545,7 +570,26 @@ export async function startComputerProvider(
     if (!reached || !info) return undefined;
     if (!Array.isArray(info.made))
       throw new Refused("unavailable", macHere() ? UPDATE_MAC : UPDATE_STEPS);
-    return { reached, found: { thisComputer: info.thisComputer, made: info.made } };
+    // On a Mac with AgentOrg Mac, a part the person switched off is said in its words.
+    const off = macHere() ? await within(SERVICE_ANSWERS_MS, switchedOff(reached)) : undefined;
+    return {
+      reached,
+      found: { thisComputer: info.thisComputer, made: info.made, ...(off ? { off } : {}) },
+    };
+  };
+  /**
+   * The parts of this machine the person has switched off, as its service's setup says. Read
+   * directly: the SDK doesn't wrap this read.
+   */
+  const switchedOff = async ({ apiUrl, apiKey }: Reached) => {
+    const response = await fetch(`${apiUrl}/v1/setup`, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+    });
+    if (!response.ok) return undefined;
+    const { capabilities } = (await response.json()) as {
+      capabilities?: { capability: string; on: boolean }[];
+    };
+    return capabilities?.filter((one) => one.on === false).map((one) => one.capability);
   };
   /**
    * The service on this machine. When none answers, `agentcomputer up` starts one, or finds one
@@ -824,6 +868,9 @@ export async function startComputerProvider(
       : { apiUrl: String(values.address).replace(/\/$/, ""), apiKey: secrets.token as string };
     const access = values.access as Access | "none";
     const browser = !whole && values.browser === true;
+    // This computer's screen, and the person's own browser, signed in.
+    const screen = whole && values.screen === "on";
+    const own = whole && values.ownBrowser === "yours";
     const metadata = { agent };
     // The folder said to it on this computer, made if it's missing; or a path on the provider's
     // machine. A container here has a workspace of its own, which starts with what is in the
@@ -855,6 +902,8 @@ export async function startComputerProvider(
           workspace: folder as string,
           name: called,
           metadata,
+          ...(screen ? { screen: true } : {}),
+          ...(own ? { browser: "own" as const } : {}),
         })
       : await Computer.create({
           ...reached,
@@ -879,18 +928,25 @@ export async function startComputerProvider(
         target: folder && inFolder.length <= TARGET_MAX ? inFolder : says,
       });
     }
-    if (browser)
+    if (browser || own)
       servers.push({
         slot: BROWSER_SLOT,
         url: at(reached.apiUrl, computer.getMcpUrl("browser")),
-        target: `A browser, ${on}`,
+        target: own ? `${on}: your browser` : `A browser, ${on}`,
+      });
+    if (screen)
+      servers.push({
+        slot: SCREEN_SLOT,
+        // The SDK's type names two endpoints; what it was given has the screen's too.
+        url: at(reached.apiUrl, computer.getMcpUrl("screen" as "computer")),
+        target: `${on}: your screen`,
       });
     const held: NonNullable<Instance["computer"]> = {
       id: computer.computerID,
       token: computer.getMcpToken(),
       service: here ? { local: true, ...(macHere() ? { mac: true as const } : {}) } : reached,
     };
-    const rows = rowsOf({ whole, host, folder, access, browser });
+    const rows = rowsOf({ whole, host, folder, access, browser: own ? "own" : browser, screen });
     return { servers, computer: held, rows };
   };
 
@@ -1066,10 +1122,17 @@ export async function startComputerProvider(
       info.workspace && !info.workspace.endsWith(`/computers/${info.computerID}/workspace`)
         ? info.workspace
         : undefined;
-    const browser = !whole && Boolean(info.browser);
+    // This computer has the person's browser or none; a made one, its own or none.
+    const browser = whole ? info.browser === "own" && ("own" as const) : Boolean(info.browser);
     return {
       values: whole
-        ? { kind: THIS, access: info.access, ...(folder ? { workspace: toHome(folder) } : {}) }
+        ? {
+            kind: THIS,
+            access: info.access,
+            ...(folder ? { workspace: toHome(folder) } : {}),
+            screen: info.screen ? "on" : "off",
+            ownBrowser: browser ? "yours" : "none",
+          }
         : {
             kind: NEW,
             made: away ? REMOTE : CONTAINER,
@@ -1083,6 +1146,7 @@ export async function startComputerProvider(
         folder,
         access: info.access,
         browser,
+        screen: whole && info.screen,
       }),
     };
   };

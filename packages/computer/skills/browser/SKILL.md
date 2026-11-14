@@ -7,6 +7,8 @@ description: Open web pages and act on them in a real browser. Use when a task n
 
 The browser's tools are named `browser__browser_…`. It reads pages as text, as a list of what's on them, so you don't need to see them to act on them.
 
+It may be the person's own browser, signed in as them. Then you work only in the tabs you open, and their own tabs are left as they are.
+
 ## The loop
 
 1. `browser__browser_navigate` opens an address.
