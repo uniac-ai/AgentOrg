@@ -309,6 +309,7 @@ export function sampleAgents(gateway: Gateway) {
     { surface: "terminal", protocol: "terminal@1", operate: true },
     { surface: "files", protocol: "files@1", operate: true },
     { surface: "load", protocol: "metrics@1", operate: false },
+    { surface: "presence", protocol: "presence@1", operate: false },
   ]);
   // Its workspace, as the design's sample has it.
   const weeks = 3 * 7 * 24 * 60;
@@ -587,6 +588,8 @@ export const heldComputer = (over: Partial<Held> = {}): Held => ({
         { label: "Browser", value: "Your browser", note: "Signed in as you" },
       ],
     },
+    // Who is acting on it now, after what it is.
+    { id: "in-use", place: "column", kind: "presence", when: "reachable", surface: "presence" },
   ],
   about: [
     { label: "Acts as", value: "You, with all you can reach", caution: true },
