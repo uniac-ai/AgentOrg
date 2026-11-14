@@ -165,6 +165,9 @@
   --line-strong: #ffffff24;
   --edge: rgb(255 255 255 / 0.1);
   --unread: rgb(10 132 255);
+  /* The names a secondary button's hover mixes; without them it has no colour while hovered. */
+  --secondary: var(--raised);
+  --foreground: var(--fg);
 }
 :root[data-theme="light"] {
   --line-strong: #00000024;
