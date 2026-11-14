@@ -38,8 +38,8 @@ function inTheApp() {
         : "running",
     open_login_items: null,
   };
-  // The service refuses to open a pane, with its words.
-  const refused = { code: 409, message: "The pane couldn't be opened." };
+  // The service refuses a grant's Set up, with its words.
+  const refused = { code: 409, message: "Screen Recording couldn't be set up." };
   const calls: unknown[] = [];
   Object.assign(window, {
     calls,
@@ -47,7 +47,7 @@ function inTheApp() {
       core: {
         invoke: async (command: string, args?: unknown) => {
           calls.push(args === undefined ? [command] : [command, args]);
-          if (command === "open_settings") throw refused;
+          if (command === "ask") throw refused;
           return answers[command];
         },
       },
@@ -64,15 +64,18 @@ test("in the app, the page calls the app's commands with the arguments they take
     );
   await tab.getByRole("switch", { name: "Terminal" }).click();
   await until(() => called("set_switch"), [["set_switch", { capability: "terminal", on: true }]]);
-  // The pane opens only on the person's click.
-  assert.deepEqual(await called("open_settings"), []);
+  // A grant is set up only on the person's click, through the service's ask.
+  assert.deepEqual(await called("ask"), []);
   await tab
     .getByRole("table", { name: "What Screen needs" })
-    .getByRole("button", { name: "Open Settings" })
+    .getByRole("button", { name: "Set up" })
     .click();
-  await until(() => called("open_settings"), [["open_settings", { need: "screen-recording" }]]);
-  await until(() => line(tab, "Screen"), { words: "The pane couldn't be opened.", warn: true });
-  assert.deepEqual(await called("ask"), []);
+  await until(() => called("ask"), [["ask", { capability: "screen", need: "screen-recording" }]]);
+  await until(() => line(tab, "Screen"), {
+    words: "Screen Recording couldn't be set up.",
+    warn: true,
+  });
+  assert.deepEqual(await called("open_settings"), []);
   for (const read of ["setup", "connection", "computers", "acting", "app_state"])
     assert.deepEqual((await called(read))[0], [read], read);
   const [fit] = await called("fit");
