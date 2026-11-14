@@ -84,8 +84,15 @@ const Stored = z.object({
    * after a restart too, since the service itself starts no stopped computer again.
    */
   restarting: z.literal(true).optional(),
+  /**
+   * The words of the form its computer was made under: none for one made before 0.0.15, whose
+   * status restates it in today's.
+   */
+  words: z.number().optional(),
 });
 type Instance = z.infer<typeof Stored>;
+/** The words of today's form, which an instance made now is kept with. */
+const WORDS = 1;
 type Linked = z.infer<typeof Link>;
 type TheProblem = z.input<typeof Problem>;
 interface Reached {
@@ -209,6 +216,9 @@ async function within<T>(ms: number, promise: Promise<T>): Promise<T | undefined
   }
 }
 
+/** A folder as a person writes one: `~/` for one in their home, as `fromHome` reads it. */
+const toHome = (folder: string) =>
+  folder.startsWith(`${homedir()}/`) ? `~/${folder.slice(homedir().length + 1)}` : folder;
 /** A folder as a person writes it: `~/` is their home. */
 const fromHome = (folder: unknown) =>
   typeof folder === "string" && folder.startsWith("~/")
@@ -228,6 +238,62 @@ const NOT_RUNNING: Record<Exclude<ComputerDetail["state"], "running">, string> =
 };
 /** While a failed computer is being stopped and started again. */
 const TRYING = "Its computer is being started again.";
+/**
+ * What the person reads of a computer beside its windows, fixed when it is made: which computer it
+ * is, what it acts as and where its work happens, what it reaches, and its browser.
+ */
+const rowsOf = ({
+  whole,
+  host,
+  folder,
+  access,
+  browser,
+}: {
+  whole: boolean;
+  /** The address of a computer at another one. */
+  host: string | undefined;
+  /** Where its work happens: said to this computer; or a folder of yours a container from before has. */
+  folder: string | undefined;
+  access: Access | "none";
+  browser: boolean;
+}): Record<string, FactRow[]> => ({
+  [WHERE]: [
+    whole
+      ? { label: "Computer", value: "This computer" }
+      : host
+        ? { label: "Computer", value: host, note: "At another address" }
+        : { label: "Computer", value: "A container", note: "Made for it on this machine" },
+  ],
+  [WORKSPACE]: [
+    ...(whole
+      ? [
+          { label: "Acts as", value: "You, with all you can reach", caution: true as const },
+          // A folder too long for a row is left out of it, rather than shown cut.
+          ...(folder && folder.length <= ROW_VALUE_MAX
+            ? [
+                {
+                  label: "Its work happens in",
+                  value: folder,
+                  path: true as const,
+                  note: "Said to it, not a wall",
+                },
+              ]
+            : []),
+        ]
+      : !host && folder && folder.length <= ROW_VALUE_MAX
+        ? [
+            {
+              label: "Its work happens in",
+              value: folder,
+              path: true as const,
+              note: "A folder of yours, kept from before",
+            },
+          ]
+        : []),
+    ...(access === "none" ? [] : [{ label: "Reaches", value: REACHES[access] }]),
+    { label: "Browser", value: browser ? "Its own browser" : "None" },
+  ],
+});
 /** A failed computer being mended, as `mend` keeps it. */
 interface Mending {
   timer?: NodeJS.Timeout;
@@ -591,6 +657,7 @@ export async function startComputerProvider(
     if (!info) return undefined;
     if (fromBefore(info)) seenBefore(computer, info);
     return {
+      info,
       state: info.state,
       surfaces: info.surfaces.map(({ surface, protocol, operate, unavailable }) => ({
         surface,
@@ -677,29 +744,7 @@ export async function startComputerProvider(
       token: computer.getMcpToken(),
       service: here ? { local: true } : reached,
     };
-    // What the person reads of it beside its windows, fixed now: which computer it is, what it
-    // acts as and where its work happens, what it reaches, and its browser.
-    const rows: Record<string, FactRow[]> = {
-      [WHERE]: [
-        {
-          label: "Computer",
-          value: whole ? "This computer" : (host ?? "A container on this machine"),
-        },
-      ],
-      [WORKSPACE]: [
-        ...(whole
-          ? [
-              { label: "Acts as", value: "You, with all you can reach", caution: true as const },
-              // A folder too long for a row is left out of it, rather than shown cut.
-              ...(folder && folder.length <= ROW_VALUE_MAX
-                ? [{ label: "Its work happens in", value: folder, path: true as const }]
-                : []),
-            ]
-          : []),
-        ...(access === "none" ? [] : [{ label: "Reaches", value: REACHES[access] }]),
-        { label: "Browser", value: browser ? "Its own browser" : "None" },
-      ],
-    };
+    const rows = rowsOf({ whole, host, folder, access, browser });
     return { servers, computer: held, rows };
   };
 
@@ -827,11 +872,46 @@ export async function startComputerProvider(
     // Its record, read just now, may have said it is from before.
     const seen = fromEarlier();
     if (seen) return seen;
+    const now =
+      found.words === undefined && found.computer && info && nowOf(found.computer, info.info);
     return {
       state: down ? ("down" as const) : waiting ? ("connecting" as const) : ("connected" as const),
       ...(down?.detail ? { detail: down.detail } : {}),
       connections: each,
       ...(surfaces ? { surfaces } : {}),
+      ...(now ? { now } : {}),
+    };
+  };
+  /**
+   * A computer made under older words, in today's: the answers today's form would have for it, and
+   * the rows it would be made with now, from what its service says of it.
+   */
+  const nowOf = (computer: NonNullable<Instance["computer"]>, info: ComputerDetail) => {
+    const whole = info.attached;
+    const away = "local" in computer.service ? undefined : computer.service;
+    // A folder its service made is its own, and goes with it: only one someone named is said.
+    const folder =
+      info.workspace && !info.workspace.endsWith(`/computers/${info.computerID}/workspace`)
+        ? info.workspace
+        : undefined;
+    const browser = !whole && info.browser;
+    return {
+      values: whole
+        ? { kind: THIS, access: info.access, ...(folder ? { workspace: toHome(folder) } : {}) }
+        : {
+            kind: NEW,
+            made: away ? REMOTE : CONTAINER,
+            ...(away ? { address: away.apiUrl, ...(folder ? { path: folder } : {}) } : {}),
+            access: info.access,
+            browser,
+          },
+      rows: rowsOf({
+        whole,
+        host: away && new URL(away.apiUrl).host,
+        folder,
+        access: info.access,
+        browser,
+      }),
     };
   };
   /** A one-time way to open something of an instance's computer live. */
@@ -984,7 +1064,11 @@ export async function startComputerProvider(
                   rows: undefined,
                 }
               : await makeComputer(values, secrets, name, agent, agentName);
-          const entry: Instance = { agent, links: [], ...(computer ? { computer } : {}) };
+          const entry: Instance = {
+            agent,
+            links: [],
+            ...(computer ? { computer, words: WORDS } : {}),
+          };
           const made: Connection[] = [];
           const connections: { slot: string; connection: string; target: string }[] = [];
           try {
