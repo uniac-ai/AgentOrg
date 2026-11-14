@@ -261,10 +261,12 @@ interface Before {
   browser: boolean;
 }
 /** A computer that isn't running, as the person reads it. */
-const NOT_RUNNING: Record<Exclude<ComputerDetail["state"], "running">, string> = {
+const NOT_RUNNING = {
   stopped: "Its computer has stopped.",
   failed: "Its computer failed, and is started again by itself.",
 };
+/** One being made or started, where its service says no more; it says why in its own words. */
+const STARTING = "Its computer is being started.";
 /** While a failed computer is being stopped and started again. */
 const TRYING = "Its computer is being started again.";
 /** One the person's own service has, which isn't running, where AgentOrg Mac starts nothing. */
@@ -340,7 +342,7 @@ const fromBefore = (info: ComputerDetail) => info.isolation === "none" && info.a
 const beforeOf = (info: ComputerDetail): Before => ({
   folder: info.workspace ?? null,
   access: info.access,
-  browser: info.browser,
+  browser: Boolean(info.browser),
 });
 /** What the person reads of one, in the words the service uses, and what goes either way. */
 const beforeDetail = ({ folder, attached }: Pick<Before, "folder" | "attached">) =>
@@ -1006,15 +1008,17 @@ export async function startComputerProvider(
     const service = found.computer?.service;
     const why = mending.get(instance)?.trying
       ? TRYING
-      : info && info.state !== "running"
-        ? NOT_RUNNING[found.restarting ? "failed" : info.state]
-        : !info && service && "local" in service && !reachOf(service)
-          ? service.mac
-            ? OPEN_MAC
-            : macHere()
-              ? SELF_RUN_DOWN
-              : LOCAL_DOWN
-          : undefined;
+      : info?.state === "starting"
+        ? (info.info.reason ?? STARTING)
+        : info && info.state !== "running"
+          ? NOT_RUNNING[found.restarting ? "failed" : info.state]
+          : !info && service && "local" in service && !reachOf(service)
+            ? service.mac
+              ? OPEN_MAC
+              : macHere()
+                ? SELF_RUN_DOWN
+                : LOCAL_DOWN
+            : undefined;
     const each = servers.map((server, i) => ({
       connection: (found.links[i] as Linked).actor,
       ...server.status(),
@@ -1062,7 +1066,7 @@ export async function startComputerProvider(
       info.workspace && !info.workspace.endsWith(`/computers/${info.computerID}/workspace`)
         ? info.workspace
         : undefined;
-    const browser = !whole && info.browser;
+    const browser = !whole && Boolean(info.browser);
     return {
       values: whole
         ? { kind: THIS, access: info.access, ...(folder ? { workspace: toHome(folder) } : {}) }

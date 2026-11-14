@@ -144,7 +144,7 @@ async function standIn(
       return send(401, { code: 401, message: "That isn't this service's token." });
     if (request.method === "GET" && path === "/v1/info")
       return send(200, {
-        version: "0.0.19",
+        version: "0.0.20",
         thisComputer,
         made: [{ isolation: "container", ready: true, capabilities: [], browsers: [] }],
       });
@@ -698,6 +698,44 @@ test("on a real service, an agent runs a command, lists it and edits a file, thr
   await units.remove({ instance });
 });
 
+test("on a real service, this computer with its files switched off can't be chosen, and its terminal switched off is the service's to refuse its agent", async (t) => {
+  const { apply, local, asAgent, connected, units, running } = await setup(t);
+  const service = running as Service;
+  // The person's switch, as the AgentOrg app sets it: only the files and the terminal, which
+  // need nothing to be asked for.
+  const set = async (part: "files" | "terminal", on: boolean) => {
+    const response = await fetch(`${service.apiUrl}/v1/setup/${part}`, {
+      method: "PUT",
+      headers: { Authorization: `Bearer ${service.apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ on }),
+    });
+    assert.equal(response.status, 200);
+  };
+  const thisOne = async () =>
+    form(
+      (await units.units({})).units.find((one) => one.id === "computer"),
+      "kind",
+    )?.options?.find((one) => one.value === "this")?.unavailable;
+  await set("files", false);
+  assert.match(
+    (await thisOne()) ?? "",
+    /^The person turned off the files for agents on this \w+\.$/,
+  );
+  await set("files", true);
+  await set("terminal", false);
+  assert.equal(await thisOne(), undefined);
+  const { instance, connections } = await apply(local("terminal"));
+  await connected(instance);
+  const computer = await asAgent(connections[0]?.connection as string);
+  const ran = await computer.call({ name: "exec_command", arguments: { cmd: "echo ran" } });
+  assert.match(ran.output, /^The person turned off the terminal for agents on this \w+\.$/m);
+  assert.doesNotMatch(ran.output, /^ran$/m);
+  await set("terminal", true);
+  const again = await computer.call({ name: "exec_command", arguments: { cmd: "echo ran" } });
+  assert.match(again.output, /^ran$/m);
+  await units.remove({ instance });
+});
+
 test("access goes to the service: a read-only computer can't change or run anything", async (t) => {
   const { apply, local, asAgent, connected, workspace, units } = await setup(t);
   const { instance, connections } = await apply(local("read"));
@@ -902,6 +940,24 @@ test("a computer's connections that are down say why in words: the service's own
     "Its computer has stopped.",
     "Its computer has stopped.",
   ]);
+  // One being made or started says why in its service's words, or that it is being started.
+  record.state = "starting";
+  record.reason = "Its image is being fetched.";
+  await until(
+    async () =>
+      (await units.status({ instance: stopped.instance })).detail === "Its image is being fetched.",
+  );
+  assert.ok(
+    (await units.status({ instance: stopped.instance })).connections.every(
+      (one) => one.detail === "Its image is being fetched.",
+    ),
+  );
+  delete record.reason;
+  await until(
+    async () =>
+      (await units.status({ instance: stopped.instance })).detail ===
+      "Its computer is being started.",
+  );
   await units.remove({ instance: running.instance });
   await units.remove({ instance: stopped.instance });
 });
@@ -1898,6 +1954,7 @@ test("a computer's capability is an Actor of its own: its fixed rows, how it sta
   assert.deepEqual(state.surfaces.map((one) => `${one.surface} ${one.protocol}`).sort(), [
     "files files@1",
     "load metrics@1",
+    "presence presence@1",
     "terminal terminal@1",
   ]);
   const ticket = await held.call.live({ surface: "terminal", mode: "watch" });
