@@ -208,6 +208,30 @@ test("a capability that can't be reached may say ways forward: a unit, and the v
   );
 });
 
+test("a capability not reached yet may say what long thing it does first: its words, bytes, and when it last moved", () => {
+  const state = compiled(capability)["state.output"];
+  assert.ok(state);
+  const progress = {
+    title: "Downloading its image",
+    done: 312_000_000,
+    total: 780_000_000,
+    moved: "2026-11-14T03:01:56.000Z",
+  };
+  const down = { state: "down", detail: "Its image is being fetched.", surfaces: [] };
+  assert.ok(state({ ...down, progress }));
+  assert.ok(
+    state({ ...down, progress: { ...progress, total: undefined } }),
+    "its whole not known yet",
+  );
+  assert.equal(state({ ...down, progress: { ...progress, done: -1 } }), false);
+  assert.equal(state({ ...down, progress: { ...progress, done: 1.5 } }), false);
+  assert.equal(state({ ...down, progress: { ...progress, title: "" } }), false);
+  assert.equal(state({ ...down, progress: { ...progress, percent: 40 } }), false);
+  // The whole as far as known can be less than what came, while it grows; when it moved is said.
+  assert.ok(state({ ...down, progress: { ...progress, total: 1_000 } }));
+  assert.equal(state({ ...down, progress: { ...progress, moved: undefined } }), false);
+});
+
 test("an agent's status tells stopped by the person from down", () => {
   const status = compiled(agentProvider)["status.output"];
   assert.ok(status);
