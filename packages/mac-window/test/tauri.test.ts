@@ -2,11 +2,12 @@
 // takes: a fake of what Tauri gives the page keeps each call, in a real browser.
 import assert from "node:assert/strict";
 import test from "node:test";
-import { open, until, withBrowser } from "./kit.ts";
+import { line, open, until, withBrowser } from "./kit.ts";
 
 withBrowser();
 
-/** What Tauri gives the page in the app, answering as the service would and keeping each call. */
+/** What Tauri gives the page in the app, answering as the service would and keeping each call;
+ * opened at the state not allowed in the background, the app is turned off. */
 function inTheApp() {
   const setup = {
     capabilities: [
@@ -31,8 +32,14 @@ function inTheApp() {
     connection: { connected: false, clients: [] },
     computers: [],
     acting: [],
-    app_state: "running",
+    app_state:
+      new URLSearchParams(location.search).get("state") === "not-allowed-in-the-background"
+        ? "turned off"
+        : "running",
+    open_login_items: null,
   };
+  // The service refuses to open a pane, with its words.
+  const refused = { code: 409, message: "The pane couldn't be opened." };
   const calls: unknown[] = [];
   Object.assign(window, {
     calls,
@@ -40,6 +47,7 @@ function inTheApp() {
       core: {
         invoke: async (command: string, args?: unknown) => {
           calls.push(args === undefined ? [command] : [command, args]);
+          if (command === "open_settings") throw refused;
           return answers[command];
         },
       },
@@ -55,16 +63,33 @@ test("in the app, the page calls the app's commands with the arguments they take
       ([command]) => command === name,
     );
   await tab.getByRole("switch", { name: "Terminal" }).click();
+  await until(() => called("set_switch"), [["set_switch", { capability: "terminal", on: true }]]);
+  // The pane opens only on the person's click.
+  assert.deepEqual(await called("open_settings"), []);
   await tab
     .getByRole("table", { name: "What Screen needs" })
-    .getByRole("button", { name: "Grant" })
+    .getByRole("button", { name: "Open Settings" })
     .click();
-  await until(() => called("set_switch"), [["set_switch", { capability: "terminal", on: true }]]);
-  await until(() => called("ask"), [["ask", { capability: "screen", need: "screen-recording" }]]);
+  await until(() => called("open_settings"), [["open_settings", { need: "screen-recording" }]]);
+  await until(() => line(tab, "Screen"), { words: "The pane couldn't be opened.", warn: true });
+  assert.deepEqual(await called("ask"), []);
   for (const read of ["setup", "connection", "computers", "acting", "app_state"])
     assert.deepEqual((await called(read))[0], [read], read);
   const [fit] = await called("fit");
   const height = (fit?.[1] as { height?: number } | undefined)?.height ?? 0;
   assert.ok(height > 0, JSON.stringify(fit));
+  await tab.context().close();
+});
+
+test("turned off, the page asks the app to open Login Items", async () => {
+  const tab = await open("not-allowed-in-the-background", { init: inTheApp });
+  await tab.getByRole("button", { name: "Open Login Items" }).click();
+  await until(
+    async () =>
+      (await tab.evaluate(() => (window as unknown as { calls: unknown[][] }).calls)).filter(
+        ([command]) => command === "open_login_items",
+      ),
+    [["open_login_items"]],
+  );
   await tab.context().close();
 });

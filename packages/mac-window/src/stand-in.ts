@@ -1,7 +1,9 @@
 // A stand-in for the app, for the page in a browser: one canned answer per state of the design, in
-// the service's own shapes, chosen by `?state=` (the first open when none). Asking acts as if the
-// person allowed it: a moment later the need reads granted or on, and after a grant the app starts
-// the driver again for a moment, while the service reads both grants as unknown.
+// the service's own shapes, chosen by `?state=` (the first open when none). Asking for a browser
+// acts as if the person allowed it: a moment later it reads on. Asking for the screen is macOS's
+// request alone; Open Settings acts as if the person switched the grant on in its pane: a moment
+// later it reads granted, and the app starts the driver again for a moment, while the service reads
+// both grants as unknown. Open Login Items acts as if the person allowed AgentOrg there.
 import type {
   Acting,
   AppState,
@@ -101,6 +103,12 @@ export const STATES: Record<string, Canned> = {
     setup: ALL_ON,
     connection: WAITING,
   },
+  "not-allowed-in-the-background": {
+    app: "turned off",
+    before: { app: "running" },
+    setup: ALL_ON,
+    connection: WAITING,
+  },
 };
 
 /** How long the person takes to allow what was asked, and the app to start the driver again. */
@@ -134,7 +142,7 @@ export function standIn(name: string): Mac {
             ? c.needs.some((n) => n.state === "on")
             : true;
   };
-  /** The person allows what was asked: a grant is granted, and the driver starts again. */
+  /** The person allows it: a grant is granted, and the driver starts again; a browser is on. */
   const allow = (capability: Capability, need?: NeedName) =>
     setTimeout(() => {
       const needs = part(capability).needs;
@@ -166,14 +174,15 @@ export function standIn(name: string): Mac {
       message: browser ? `${browser} isn't installed on this machine.` : NO_BROWSER_WORDS,
     };
   };
-  /** The service's answer; while the app starts, it isn't there to answer yet. */
-  const answer = <T>(value: T): T => {
-    if (app === "starting") throw { code: 503, message: "The service isn't running yet." };
+  /** The service's answer; while the app starts, or isn't allowed to run, it isn't there to answer. */
+  const answer = <T>(value: T, state = app): T => {
+    if (state === "starting" || state === "turned off")
+      throw { code: 503, message: "The service isn't running." };
     return copy(value);
   };
   /** The setup as the service reads it: while the driver starts again, its grants can't be read. */
   const read = (state = app): Setup => {
-    const now = answer(setup);
+    const now = answer(setup, state);
     if (state !== "starting again") return now;
     const screen = now.capabilities.find((c) => c.capability === "screen");
     if (screen) {
@@ -185,7 +194,8 @@ export function standIn(name: string): Mac {
   const ask = async (capability: Capability, need?: NeedName) => {
     const refused = refusal(capability, need);
     if (refused) throw refused;
-    if (!part(capability).ready) allow(capability, need);
+    // For the screen, macOS's request alone: the person allows it in the grant's pane.
+    if (!part(capability).ready && capability !== "screen") allow(capability, need);
     return read();
   };
   return {
@@ -212,6 +222,24 @@ export function standIn(name: string): Mac {
       }
     },
     ask,
+    openSettings: async (need) => {
+      answer(setup);
+      if (part("screen").needs.some((n) => n.need === need && n.state !== "granted"))
+        allow("screen", need);
+      return read();
+    },
+    openLoginItems: async () => {
+      if (app !== "turned off") return;
+      // Allowed there, macOS starts the app, which starts the service.
+      setTimeout(() => {
+        app = "starting";
+        changed();
+        setTimeout(() => {
+          app = "running";
+          changed();
+        }, RESTART);
+      }, ALLOW);
+    },
     connection: async () => answer(canned.connection),
     computers: async () => answer(canned.computers ?? []),
     acting: async () => answer(canned.acting ?? []),
