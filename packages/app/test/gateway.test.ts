@@ -426,6 +426,55 @@ test("a call to a slot the person doesn't have is refused `invalid`, and the soc
   assert.ok((await cli.call("actors", "list")).result);
 });
 
+test("a message too large is refused in words and its socket goes on; one too large to read closes its own socket only", async (t) => {
+  const { app, token } = await setup(t);
+  const headers = { Authorization: `Bearer ${token}` };
+  const cli = api(app, headers);
+  t.after(cli.close);
+  await cli.opened;
+  // A long paste, as a page sends one: over the most a message carries, so nothing of it is done.
+  const pasted = await new Promise<{ error?: { code?: string; message?: string } }>((done) => {
+    const socket = new WebSocket(`${app.url.replace("http", "ws")}/api`, { headers });
+    t.after(() => socket.close());
+    socket.once("open", () =>
+      socket.send(
+        JSON.stringify({
+          id: 7,
+          op: "call",
+          slot: "actors",
+          method: "list",
+          input: { text: "x".repeat(2_250_000) },
+        }),
+      ),
+    );
+    socket.on("message", (data) => done(JSON.parse(String(data))));
+  });
+  assert.deepEqual(pasted, {
+    id: 7,
+    error: {
+      name: "Refused",
+      code: "invalid",
+      message: "That's too large to send: one message to AgentOrg can be at most 1 MB.",
+    },
+  });
+  // Too large even to read: that socket is closed, as a message too big, and no other.
+  const huge = api(app, headers);
+  await huge.opened;
+  huge.send("x".repeat(17 * 1024 * 1024));
+  assert.equal(await huge.closedWith, 1009);
+  // Before it says its session, a tab's socket is read no further than one message carries.
+  const tab = api(app, { Origin: app.url });
+  await tab.opened;
+  tab.send("x".repeat(2 * 1024 * 1024));
+  assert.equal(await tab.closedWith, 4401);
+  // The app, and the socket that was open beside it, go on answering.
+  assert.ok((await cli.call("actors", "list")).result);
+  const after = api(app, headers);
+  t.after(after.close);
+  await after.opened;
+  assert.ok((await after.call("actors", "list")).result);
+});
+
 test("an upgrade that resets before it's refused doesn't stop the app", async (t) => {
   const { app } = await setup(t);
   const { port } = new URL(app.url);
