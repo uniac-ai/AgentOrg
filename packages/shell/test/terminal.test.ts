@@ -77,8 +77,8 @@ const says = (page: Page, text: string) =>
   );
 const front = (page: Page, name: string) =>
   pane(page).getByRole("tab", { name, selected: true }).waitFor();
-const until = async (check: () => boolean, what: string) => {
-  for (let n = 0; n < 80 && !check(); n++) await new Promise((r) => setTimeout(r, 50));
+const until = async (check: () => boolean, what: string, ms = 4000) => {
+  for (let n = 0; n < ms / 50 && !check(); n++) await new Promise((r) => setTimeout(r, 50));
   assert.ok(check(), what);
 };
 const sent = (gateway: Gateway, type: string) =>
@@ -374,6 +374,45 @@ test(
 );
 
 test(
+  "while its service has gone, as while it restarts, the window is opened again every few seconds, and shows every terminal when it is back",
+  withGateway(async (gateway) => {
+    withTerminals(gateway);
+    const page = await open(gateway);
+    await front(page, "npm run dev");
+    const opened = () => gateway.live.opened.filter((o) => o.surface === "terminal").length;
+    // The service goes: its socket is dropped, and the one opened again at once can't open.
+    gateway.live.terminal.away = true;
+    for (const ws of gateway.live.terminal.sockets) ws.terminate();
+    await pane(page).getByText("It closed.").waitFor();
+    await pane(page).getByRole("button", { name: "Open again" }).waitFor();
+    assert.equal(opened(), 2);
+    // Still gone a few seconds on, it is tried again by itself.
+    await until(() => opened() === 3, "tried again", 7000);
+    // Back, with a command the agent started meanwhile: the next try opens, and every terminal is
+    // there, with nothing pressed.
+    gateway.live.terminal.away = false;
+    gateway.terminal({
+      type: "start",
+      id: "c3",
+      by: "agent",
+      cmd: "npm test",
+      workdir: "/work/app",
+      tty: false,
+      at: AT,
+    });
+    await until(() => opened() === 4 && gateway.live.terminal.sockets.size === 1, "opened", 7000);
+    await front(page, "npm test");
+    assert.deepEqual(await pane(page).getByRole("tab").allInnerTexts(), [
+      "npm ci",
+      "npm run dev",
+      "npm test",
+    ]);
+    assert.equal(await pane(page).getByRole("button", { name: "Open again" }).count(), 0);
+    await page.close();
+  }),
+);
+
+test(
   "the plus isn't dimmed on a view that has closed: pressed there, it opens the view again",
   withGateway(async (gateway) => {
     withTerminals(gateway);
@@ -395,7 +434,7 @@ test(
 );
 
 test(
-  "a socket ended on purpose says why and waits to be opened again",
+  "a socket ended on purpose says why, and Open again opens it at once",
   withGateway(async (gateway) => {
     withTerminals(gateway);
     const page = await open(gateway);

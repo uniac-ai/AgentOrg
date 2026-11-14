@@ -6,6 +6,7 @@ import { LoaderCircleIcon, PlusIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "../ui/button.tsx";
 import type { ViewerProps } from "./computer.tsx";
+import { REFRESH_MS } from "./data.ts";
 import { useLive } from "./live-socket.ts";
 import { Closed, Xterm } from "./xterm.tsx";
 
@@ -114,8 +115,10 @@ export function TerminalsView({ target, corner }: ViewerProps) {
   );
   const phase = live.state.phase;
   // A socket the service dropped, as it does one that has fallen far behind a flood of output, is
-  // opened again by itself, unless the last one was dropped as soon as it opened. One that was
-  // ended on purpose, or never opened, says why instead.
+  // opened again at once, unless the last one was dropped as soon as it opened: that one waits for
+  // you. One that was ended on purpose, or never opened, says why, and is opened again every few
+  // seconds as its files and its meters are, so terminals come back by themselves when the
+  // service does, as after a restart.
   const dropped = live.state.phase === "closed" && live.state.dropped;
   // biome-ignore lint/correctness/useExhaustiveDependencies: once for each drop.
   useEffect(() => {
@@ -124,6 +127,13 @@ export function TerminalsView({ target, corner }: ViewerProps) {
     reopened.current = Date.now();
     live.again();
   }, [dropped]);
+  const closed = phase === "closed";
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `again` is this socket's own.
+  useEffect(() => {
+    if (!closed || dropped || gaveUp) return;
+    const timer = setTimeout(live.again, REFRESH_MS);
+    return () => clearTimeout(timer);
+  }, [closed, dropped, gaveUp]);
 
   const all = [...terms.values()];
   // In front: the one you picked here, else the newest.
