@@ -29,6 +29,8 @@ import { Hub, listen, PERSON } from "@agentorg/hub";
 import { capability, tools, Unit, unitProvider } from "@agentorg/interfaces";
 import { Refused } from "@agentorg/sdk";
 import { connect } from "@agentorg/sdk/client";
+import type WebSocket from "ws";
+import { WebSocketServer } from "ws";
 import { startComputerProvider } from "../src/index.ts";
 
 const refused = (code: string) => (error: unknown) =>
@@ -193,11 +195,24 @@ async function standIn(t: test.TestContext, records: Record<string, Record<strin
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  // The connection a core holds open, by the name it gives, with the service's own token only.
+  const held: { name: string | null; socket: WebSocket }[] = [];
+  const sockets = new WebSocketServer({ noServer: true });
+  server.on("upgrade", (request, socket, head) => {
+    const url = new URL(request.url ?? "/", "http://here");
+    if (url.pathname !== "/v1/connection" || request.headers.authorization !== `Bearer ${token}`)
+      return void socket.end("HTTP/1.1 401 Unauthorized\r\n\r\n");
+    sockets.handleUpgrade(request, socket, head, (ws) =>
+      held.push({ name: url.searchParams.get("name"), socket: ws }),
+    );
+  });
   t.after(() => {
+    for (const { socket } of held) socket.terminate();
+    sockets.close();
     server.closeAllConnections();
     return new Promise((resolve) => server.close(resolve));
   });
-  return { apiUrl: base, apiKey: token, asked, computers };
+  return { apiUrl: base, apiKey: token, asked, computers, held };
 }
 
 interface Service {
@@ -1200,6 +1215,26 @@ test("on a Mac with AgentOrg Mac open, a container on the service you run is sti
     service.asked.some((one) => one.path === "/v1/computers/c1/mcp");
   await until(() => dialled(own));
   assert.equal(dialled(app), false);
+});
+
+test("a connection is held open to the service here, made again when it ends, and closed when the connector stops", async (t) => {
+  const { macRecord, restart } = await setup(t, { service: false, mac: true });
+  const app = await standIn(t);
+  recordIn(t, macRecord, app);
+  await restart();
+  await until(() => app.held.length === 1);
+  assert.equal(app.held[0]?.name, "AgentOrg");
+  // Ended by the service, as when the connector stops answering it: made again.
+  app.held[0]?.socket.terminate();
+  await until(() => app.held.length === 2);
+  // The connector stopping closes it, and makes no more: the next one opens with the next start.
+  const second = app.held[1]?.socket as WebSocket;
+  const closed = once(second, "close");
+  await restart();
+  await closed;
+  await until(() => app.held.length === 3);
+  await new Promise((resolve) => setTimeout(resolve, 2_500));
+  assert.equal(app.held.length, 3, "none from the connector that stopped");
 });
 
 test("a new computer here is a container with a workspace of its own, and no folder of yours", async (t) => {
