@@ -34,13 +34,14 @@ Opening the window registers the background item unless it is already on or wait
 
 The background item is `Contents/Library/LaunchAgents/dev.agentorg.mac.provider.plist`. macOS starts it at login and keeps it running. The provider runs two programs the bundle carries beside its own, in `Contents/MacOS`, and the service among its resources, `Contents/Resources/agentcomputer`. A build without them, such as `npm run dev`'s, logs what is missing and runs nothing.
 
-- **Cua Driver,** embedded, as its embedding guide has a host run it: `cua-driver serve --embedded --socket` on a socket in `~/Library/Application Support/AgentOrg/driver`. Its home is that folder, so what it keeps stays in the app's. It's told it is embedded and whose (`CUA_DRIVER_EMBEDDED`, `CUA_DRIVER_HOST_BUNDLE_ID`), and checks for no updates (`CUA_DRIVER_RS_UPDATE_CHECK=false`).
+- **Cua Driver,** embedded, as its embedding guide has a host run it: `cua-driver serve --embedded --no-automation-prompts --socket` on a socket in `~/Library/Application Support/AgentOrg/driver`. Its home is that folder, so what it keeps stays in the app's. It's told it is embedded and whose (`CUA_DRIVER_EMBEDDED`, `CUA_DRIVER_HOST_BUNDLE_ID`), and checks for no updates (`CUA_DRIVER_RS_UPDATE_CHECK=false`). It raises no Automation prompt: an action that needs an app's Automation consent, not yet given, is refused with `automation_consent_required`, naming the app.
 - **The service,** once the driver's socket is there: `node agentcomputer/dist/agentcomputer.js serve --lend --listen 127.0.0.1:0`, with its data folder, the driver and its socket.
 - **Each gets a small environment,** never the app's own: `HOME`, `USER`, `LOGNAME`, `SHELL` (the account's login shell), `TMPDIR`, `LANG`, `PATH=/usr/bin:/bin:/usr/sbin:/sbin` and `DO_NOT_TRACK=1`.
 - **One that ends** is started again: at once, then after 1, 2, 4, 8, 16 and 30 s while it keeps ending within a minute.
 - **A grant's change** starts the driver again, since the driver reads its grants once. That ends the screen's connections of computers using it, as AgentComputer says.
 - **Its state** is in `~/Library/Application Support/AgentOrg/provider.json`: its process, its state, and its two programs' processes. The window believes it only while that process is alive and runs the app's own program.
 - **One at a time:** it holds `provider.lock` in the same folder while it runs, and another copy's provider waits for it.
+- **The app's folder,** `~/Library/Application Support/AgentOrg`, is kept to its owner (0700), so that no other account can reach what is in it, the driver's socket among it.
 - **What an earlier run left** is stopped when it starts: a process its state file or the service's record names, where that runs the app's own program.
 - **Stopped,** it asks both to end at once, ends either after 25 s, and removes its state. The background item gives it 40 s.
 
@@ -58,6 +59,15 @@ The service opens the app through the system, `open -n -g -a AgentOrg.app --args
 
 Each line is one write, so the three don't mix. At 10 MB the provider moves it to `AgentOrg.1.log`, replacing the one before. macOS and WebKit also keep what they keep for any app, under `dev.agentorg.mac`, in the person's Library. The page's own storage is among it: the page keeps there the grants it last saw, to tell a grant taken away from one never given.
 
+## Removing it
+
+1. `AgentOrg.app/Contents/MacOS/AgentOrg unregister` takes the background item away: macOS stops the provider, which stops the driver and the service.
+2. `tccutil reset Accessibility dev.agentorg.mac` and `tccutil reset ScreenCapture dev.agentorg.mac` remove its grants, while the app still exists.
+3. Remove `~/Library/Application Support/AgentOrg`, `~/Library/Logs/AgentOrg`, and what macOS and WebKit keep under `dev.agentorg.mac` in the person's Library (its WebKit, Caches, HTTPStorages and Saved Application State folders). `defaults delete dev.agentorg.mac` removes its preferences where there are any.
+4. Before deleting the app, `lsregister -u` with its path makes Launch Services forget it.
+
+Login Items may still list an "AgentOrg" entry, switched off. macOS offers no way to remove one alone.
+
 ## Building it
 
 It needs Xcode and Rust. `npm run app --workspace @agentorg/mac` assembles what the app carries, builds the page, then builds `src-tauri/target/release/bundle/macos/AgentOrg.app`, signed ad hoc. `npm run dev --workspace @agentorg/mac` runs the window against the page's dev server, without the assembly. Cargo's downloads and build output can stay in this folder: set `CARGO_HOME` to `src-tauri/target/cargo-home`. Neither is checked in.
@@ -70,7 +80,7 @@ It needs Xcode and Rust. `npm run app --workspace @agentorg/mac` assembles what 
   - Of each, only the files `assembly.json` names, by their path in the release, each a file of its own: `node` and its `LICENSE`; the bare `cua-driver`, its `LICENSE` and its `THIRD_PARTY_NOTICES.md`. Not the program inside its `CuaDriver.app`, whose entitlements are tied to its makers' Team ID, and which macOS refuses once it is signed as ours.
   - `fetched.json` beside them says what was fetched: each file's name, address, size and sha256.
 - **The service,** `@agentorg/computer` at the version this package depends on, from the workspace's install, which its lockfile checked. Its `package.json`, `LICENSE`, `NOTICE`, `dist/agentcomputer.js` and `dist/THIRD_PARTY_LICENSES.txt`; its own `playwright-core`, whole; and `node-pty`'s `package.json`, `LICENSE`, `lib` and native files for Apple silicon. Each package must be the version the service names, or the build stops.
-- **Signed:** `node`, `cua-driver` and `node-pty`'s two native files are marked executable where they are programs, and signed with the app's identity before the bundle around them. Their entitlements are those in `entitlements/`: for `node`, JIT and its own unsigned native code; for `cua-driver`, Apple Events and screen capture. That identity is `APPLE_SIGNING_IDENTITY` where it's set, otherwise `tauri.conf.json`'s.
+- **Signed:** `node`, `cua-driver` and `node-pty`'s two native files are marked executable where they are programs, and signed with the app's identity before the bundle around them. Their entitlements are those in `entitlements/`: for `node`, JIT and its own unsigned native code; for `cua-driver`, Apple Events only, which it needs to run a menu item through a background app's scripting interface. The driver's own signature also asks for `com.apple.security.device.screen-capture`, which isn't an entitlement macOS defines for the hardened runtime: Screen Recording is a grant. So it is left out. That identity is `APPLE_SIGNING_IDENTITY` where it's set, otherwise `tauri.conf.json`'s.
 - **In the bundle:** `node` and `cua-driver` in `Contents/MacOS`. The service in `Contents/Resources/agentcomputer`, with its own licences (`LICENSE`, `NOTICE`, `dist/THIRD_PARTY_LICENSES.txt`). Node's and the driver's licences in `Contents/Resources/licenses`.
 
 The app has no icon of its own yet. `src-tauri/icons/icon.png` is a transparent stand-in that Tauri needs to build, so the built app shows the Mac's generic app icon; under `npm run dev` its Dock icon is blank.

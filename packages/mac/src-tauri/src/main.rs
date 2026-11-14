@@ -1,7 +1,8 @@
 //! AgentOrg.app's one program, which runs three ways: the window, as a person opens the app; the
 //! provider, as macOS starts its background item (`--provider`); and asking for the screen's
 //! grants, as the service opens the app to (`grant <need>...`). A grant's instance reads each grant
-//! through a fresh one of itself (`granted <need>`), which answers by its exit code.
+//! through a fresh one of itself (`granted <need>`), which answers by its exit code. `unregister`
+//! takes the background item away, for a person removing the app.
 
 mod grant;
 mod log;
@@ -29,6 +30,11 @@ fn main() {
     match args.first().map(String::as_str) {
         Some("--provider") => provider::run_as_background_item(),
         Some("grant") => grant::ask(&args[1..]),
+        Some("unregister") => {
+            let said = macos::unregister_background_item();
+            log::log("unregister", &said);
+            println!("{said}");
+        }
         Some("granted") => std::process::exit(match args.get(1) {
             Some(need) if macos::granted(need) => 0,
             _ => 1,

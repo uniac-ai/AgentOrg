@@ -29,12 +29,32 @@ pub fn identifier() -> Option<String> {
     NSBundle::mainBundle().bundleIdentifier().map(|id| id.to_string())
 }
 
-/// The background item the bundle carries:
-/// `Contents/Library/LaunchAgents/<identifier>.provider.plist`.
+/// The name of the background item's plist, which the bundle carries in
+/// `Contents/Library/LaunchAgents`.
+pub fn provider_plist(identifier: &str) -> String {
+    format!("{identifier}.provider.plist")
+}
+
+/// The background item the bundle carries.
 fn background_item() -> Option<Retained<AnyObject>> {
     let class = AnyClass::get(c"SMAppService")?;
-    let plist = NSString::from_str(&format!("{}.provider.plist", identifier()?));
+    let plist = NSString::from_str(&provider_plist(&identifier()?));
     unsafe { msg_send![class, agentServiceWithPlistName: &*plist] }
+}
+
+/// Unregisters the background item: macOS stops the provider, which stops what it runs. Says
+/// where it then stands, as the log reads it.
+pub fn unregister_background_item() -> String {
+    let Some(item) = background_item() else { return "no background item in this build".into() };
+    let done: Result<(), Retained<NSError>> =
+        unsafe { msg_send![&*item, unregisterAndReturnError: _] };
+    match done {
+        Ok(()) => "the background item is unregistered".into(),
+        Err(error) => {
+            let why = error.localizedDescription();
+            format!("the background item couldn't be unregistered: {why}")
+        }
+    }
 }
 
 /// Registers the background item unless it is on or waiting for the person's approval, so that a
