@@ -188,6 +188,75 @@ test(
 );
 
 test(
+  "a unit is changed, removed or added from the agent's setup, and a change that is refused puts back what it was built from",
+  withGateway(async (gateway) => {
+    const page = await open(gateway);
+    await fromTemplate(page, "Assistant");
+    await panel(page).getByLabel("Name").fill("Foreman");
+    await choose(page, "Where it resides", /^This computer/);
+    await card(page, "Computer")
+      .getByLabel("Workspace directory", { exact: true })
+      .fill("/work/foreman");
+    await panel(page).getByRole("button", { name: "Create", exact: true }).click();
+    const sheet = await openSetup(page, "Foreman");
+    const built = sheet.getByRole("region", { name: "Built from Assistant" });
+    const units = built.getByRole("listitem");
+    const dialog = page.getByRole("dialog", { name: "Foreman's computer" });
+    const change = async () => {
+      await built.getByRole("button", { name: "Computer options" }).click();
+      await page.getByRole("menuitem", { name: "Change…" }).click();
+      await dialog.waitFor();
+    };
+    const made = () => gateway.calls.filter((c) => /^(add|remove)Unit$/.test(c.method));
+
+    // Changed, it is taken out and put back as answered now, with what it was answered before.
+    await change();
+    assert.equal(
+      await dialog.getByLabel("Workspace directory", { exact: true }).inputValue(),
+      "/work/foreman",
+    );
+    await dialog.getByRole("combobox", { name: "What it reaches" }).click();
+    await page.getByRole("option", { name: /^Read-only files/ }).click();
+    await dialog.getByRole("button", { name: "Save" }).click();
+    await units.filter({ hasText: "Read-only files" }).waitFor();
+    assert.deepEqual(
+      made().map((c) => c.method),
+      ["removeUnit", "addUnit"],
+    );
+    const added = made()[1]?.input as { unit: { values: Record<string, unknown> } } | undefined;
+    assert.equal(added?.unit.values.workspace, "/work/foreman");
+
+    // Refused, what it was built from goes back, and the sheet says why.
+    gateway.refuseNext("agents.addUnit", "invalid", "That folder can't be used.");
+    await change();
+    await dialog.getByLabel("Workspace directory", { exact: true }).fill("/nowhere");
+    await dialog.getByRole("button", { name: "Save" }).click();
+    await sheet.getByRole("alert").getByText("That folder can't be used.").waitFor();
+    await units.filter({ hasText: "/work/foreman" }).waitFor();
+    assert.equal(await units.filter({ hasText: "/nowhere" }).count(), 0);
+    assert.equal(await units.filter({ hasText: "Read-only files" }).count(), 1);
+
+    // Removed, it goes; added, it comes back below the rest. One held at most once isn't offered
+    // while there is one.
+    await built.getByRole("button", { name: "Web options" }).click();
+    await page.getByRole("menuitem", { name: "Remove" }).click();
+    // While a menu is open the sheet is hidden from the accessibility tree: it is read once it's shut.
+    await page.getByRole("menu").waitFor({ state: "detached" });
+    await units.filter({ hasText: "Search service" }).waitFor({ state: "detached" });
+    assert.equal(await units.count(), 1);
+    await built.getByRole("button", { name: "Add a unit" }).click();
+    const offered = await page.getByRole("menuitem").allInnerTexts();
+    assert.ok(offered.includes("Web") && !offered.includes("Computer"), offered.join(", "));
+    await page.getByRole("menuitem", { name: "Web" }).click();
+    const web = page.getByRole("dialog", { name: "Foreman's web" });
+    await web.getByRole("button", { name: "Save" }).click();
+    await units.last().getByText("Search service").waitFor();
+    assert.equal(await units.last().innerText(), "Web\nSearch service\nExa");
+    await page.close();
+  }),
+);
+
+test(
   "a connection you made is told by where it is, not by a unit that only exposes it",
   withGateway(async (gateway) => {
     const triage = gateway.agents.get("a-triage");

@@ -144,7 +144,7 @@ export function isReady(draft: Draft, offered = ""): boolean {
 }
 
 /** Only what's shown and filled in goes; secrets go apart. */
-function filled(unit: DraftUnit) {
+function filled(unit: Pick<DraftUnit, "unit" | "values" | "secrets">) {
   const form = unit.unit?.form ?? [];
   const values: Values = {};
   const secrets: Secrets = {};
@@ -161,6 +161,21 @@ function filled(unit: DraftUnit) {
   return { values, secrets };
 }
 
+/** One unit as management takes it, in a stack or added to a living agent. */
+export function unitInput(unit: CatalogUnit, values: Values, secrets: Secrets = {}) {
+  const filledIn = filled({ unit, values, secrets });
+  return {
+    provider: unit.provider,
+    unit: unit.id,
+    values: filledIn.values,
+    ...(Object.keys(filledIn.secrets).length > 0 ? { secrets: filledIn.secrets } : {}),
+  };
+}
+
+/** Whether every field a unit asks for that is shown has an answer. */
+export const isComplete = (unit: CatalogUnit, values: Values, secrets: Secrets = {}) =>
+  !unit.form.some((field) => isUnfilled(field, { key: 0, unit, id: unit.id, values, secrets }));
+
 const given = (answers: Record<string, string>) =>
   Object.fromEntries(Object.entries(answers).filter(([, value]) => value.trim()));
 
@@ -174,15 +189,7 @@ export function toStack(draft: Draft) {
       creatable: base.id,
       ...(Object.keys(answers).length > 0 ? { answers } : {}),
     },
-    units: draft.units.map((u) => {
-      const { values, secrets } = filled(u);
-      return {
-        provider: (u.unit as CatalogUnit).provider,
-        unit: u.id,
-        values,
-        ...(Object.keys(secrets).length > 0 ? { secrets } : {}),
-      };
-    }),
+    units: draft.units.map((u) => unitInput(u.unit as CatalogUnit, u.values, u.secrets)),
     ...(draft.from ? { template: draft.from.id } : {}),
   };
 }

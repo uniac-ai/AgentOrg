@@ -1,5 +1,5 @@
 // What an agent is made of, and the way to delete it: a sheet from the side of its page.
-import { ChevronRightIcon, PlusIcon, XIcon } from "lucide-react";
+import { ChevronRightIcon, CpuIcon, MoreHorizontalIcon, PlusIcon, XIcon } from "lucide-react";
 import { useRef, useState } from "react";
 import { api, go, useLoad } from "../data.ts";
 import { Button } from "../ui/button.tsx";
@@ -8,6 +8,7 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "../ui/dialog.tsx";
@@ -19,6 +20,7 @@ import {
   DropdownMenuTrigger,
 } from "../ui/dropdown-menu.tsx";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select.tsx";
+import { UnitForm } from "./build.tsx";
 import { useBuilding } from "./building.tsx";
 import { shortUrl } from "./calls.ts";
 import {
@@ -35,7 +37,14 @@ import {
 } from "./data.ts";
 import { ConfirmDelete } from "./delete-dialog.tsx";
 import { Nothing, Section, TroubleDot, WhereIcon } from "./parts.tsx";
-import { answersOf } from "./stack.ts";
+import {
+  answersOf,
+  type CatalogUnit,
+  isComplete,
+  type Secrets,
+  unitInput,
+  type Values,
+} from "./stack.ts";
 import { useAgents } from "./watch.tsx";
 
 /** The picker's value for no model chosen: the provider's default. */
@@ -99,6 +108,12 @@ function Made({ agent: entry }: { agent: AgentEntry }) {
   const skills = useLoad(listSkills, [], [changed]).value;
   const connections = useLoad(listConnections, ["actors", "bindings"], [changed]).value;
   const act = useAct();
+  /** The unit being added, or changed with what it was built from. */
+  const [editing, setEditing] = useState<{
+    unit: CatalogUnit;
+    values: Values;
+    applied?: Applied;
+  }>();
   if (!agent) return <div className="flex-1" />;
 
   const change = (method: string, input: Record<string, unknown>) =>
@@ -106,6 +121,27 @@ function Made({ agent: entry }: { agent: AgentEntry }) {
       () => api.call("agents", method, { agent: id, ...input }),
       () => setChanged((was) => was + 1),
     );
+  // A unit changed is taken out and put back as answered now. Refused, what it was built from
+  // goes back, all but its secrets, and the page says why.
+  const rebuild = (applied: Applied, unit: CatalogUnit, values: Values, secrets: Secrets) =>
+    act.run(async () => {
+      try {
+        await api.call("agents", "removeUnit", { agent: id, instance: applied.instance });
+        try {
+          await api.call("agents", "addUnit", {
+            agent: id,
+            unit: unitInput(unit, values, secrets),
+          });
+        } catch (refused) {
+          await api
+            .call("agents", "addUnit", { agent: id, unit: unitInput(unit, applied.values) })
+            .catch(() => {});
+          throw refused;
+        }
+      } finally {
+        setChanged((was) => was + 1);
+      }
+    });
   const exposed = new Set(agent.mcp.map((m) => m.connection));
   const offered = (connections ?? []).filter(
     (c) => !c.origin?.madeFor && !exposed.has(c.connection),
@@ -113,6 +149,11 @@ function Made({ agent: entry }: { agent: AgentEntry }) {
   const has = new Set(agent.skills.map((s) => s.name));
   const spare = (skills ?? []).filter((s) => !has.has(s.name));
   const template = catalog.templates.find((t) => t.id === entry.template)?.title;
+  // What can be added: any unit, but one an agent holds at most once only while it has none.
+  const addable = catalog.units.filter(
+    (unit) =>
+      !unit.once || !agent.units.some((a) => a.provider === unit.provider && a.unit === unit.id),
+  );
   return (
     <div className="no-bar flex min-h-0 flex-1 flex-col gap-7 overflow-y-auto px-5 pb-5">
       {act.failed && (
@@ -120,12 +161,41 @@ function Made({ agent: entry }: { agent: AgentEntry }) {
           {act.failed}
         </p>
       )}
-      <Section title={template ? `Built from ${template}` : "Built from"}>
+      <Section
+        title={template ? `Built from ${template}` : "Built from"}
+        action={
+          <AddMenu
+            label="Add a unit"
+            items={addable.map((unit) => ({ id: keyOf(unit), name: unit.title }))}
+            onPick={(key) => {
+              const unit = addable.find((one) => keyOf(one) === key);
+              if (unit) setEditing({ unit, values: {} });
+            }}
+          />
+        }
+      >
         <BuiltFrom
           units={agent.units}
           nameOf={(id) => connections?.find((c) => c.connection === id)?.name}
+          onChange={(applied, unit) => setEditing({ unit, values: applied.values, applied })}
+          onRemove={(applied) => change("removeUnit", { instance: applied.instance })}
         />
       </Section>
+      {editing && (
+        <UnitDialog
+          key={editing.applied?.instance ?? keyOf(editing.unit)}
+          agentName={agent.name}
+          unit={editing.unit}
+          values={editing.values}
+          onClose={() => setEditing(undefined)}
+          onSave={(values, secrets) => {
+            const { applied, unit } = editing;
+            setEditing(undefined);
+            if (applied) rebuild(applied, unit, values, secrets);
+            else change("addUnit", { unit: unitInput(unit, values, secrets) });
+          }}
+        />
+      )}
       <Section title="Model">
         <ModelPicker {...(agent.status.state === "running" ? { agent: id } : {})} />
       </Section>
@@ -202,26 +272,55 @@ function Made({ agent: entry }: { agent: AgentEntry }) {
   );
 }
 
-/** The stack it came from, as it was filled in: each unit with its questions and their answers. */
+type Applied = AgentDetail["units"][number];
+const keyOf = (unit: CatalogUnit) => `${unit.provider} ${unit.id}`;
+
+/**
+ * The stack it came from, as it was filled in: each unit with its questions and their answers,
+ * and its "…" to change or remove it. One whose provider isn't offering it now can only be removed.
+ */
 function BuiltFrom({
   units,
   nameOf,
+  onChange,
+  onRemove,
 }: {
-  units: AgentDetail["units"];
+  units: Applied[];
   nameOf(connection: string): string | undefined;
+  onChange(applied: Applied, unit: CatalogUnit): void;
+  onRemove(applied: Applied): void;
 }) {
   const { catalog } = useBuilding();
   if (units.length === 0) return <Nothing>Just the base</Nothing>;
   return (
     <ol className="flex flex-col gap-1.5">
       {units.map((applied) => {
-        const form =
-          catalog.units.find((u) => u.provider === applied.provider && u.id === applied.unit)
-            ?.form ?? [];
+        const unit = catalog.units.find(
+          (u) => u.provider === applied.provider && u.id === applied.unit,
+        );
         return (
           <li key={applied.instance} className="rounded-xl bg-card px-3 py-2.5 text-sm">
-            <div className="font-medium">{applied.title}</div>
-            {answersOf(applied.values, form, nameOf).map((line) => (
+            <div className="flex items-center gap-2">
+              <span className="min-w-0 flex-1 font-medium">{applied.title}</span>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon-xs" aria-label={`${applied.title} options`}>
+                    <MoreHorizontalIcon />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  {/* The dialog opens once the menu has closed, so the keyboard goes to it. */}
+                  <DropdownMenuItem
+                    disabled={!unit}
+                    onSelect={() => unit && setTimeout(() => onChange(applied, unit), 0)}
+                  >
+                    Change…
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => onRemove(applied)}>Remove</DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+            {answersOf(applied.values, unit?.form ?? [], nameOf).map((line) => (
               <div key={line.id} className="flex min-w-0 gap-1.5 text-[13px]">
                 <span className="shrink-0 text-muted-foreground">{line.question}</span>
                 <span className={`truncate ${line.path ? "font-mono text-xs leading-5" : ""}`}>
@@ -236,7 +335,70 @@ function BuiltFrom({
   );
 }
 
-/** What can be added, and last the way to one that isn't made yet: it is made in Settings. */
+/**
+ * One unit's form in a window of its own, as Create draws it: empty to add one, or with what a
+ * unit was built from to change it. A secret is asked again, as it is never read back.
+ */
+function UnitDialog({
+  agentName,
+  unit,
+  values: given,
+  onClose,
+  onSave,
+}: {
+  agentName: string;
+  unit: CatalogUnit;
+  values: Values;
+  onClose(): void;
+  onSave(values: Values, secrets: Secrets): void;
+}) {
+  const [values, setValues] = useState<Values>(given);
+  const [secrets, setSecrets] = useState<Secrets>({});
+  const title = `${agentName}'s ${unit.title.toLowerCase()}`;
+  return (
+    <Dialog open onOpenChange={(next) => !next && onClose()}>
+      <DialogContent className="window ring-0 sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>{title}</DialogTitle>
+          <DialogDescription className="sr-only">What {title} is</DialogDescription>
+        </DialogHeader>
+        <div className="no-bar flex max-h-[60vh] flex-col overflow-y-auto rounded-xl bg-card">
+          <div className="flex h-10 shrink-0 items-center gap-1.5 px-3">
+            <CpuIcon className="size-3.5 shrink-0 text-muted-foreground" />
+            <span className="min-w-0 flex-1 truncate text-[13px] font-semibold">{unit.title}</span>
+          </div>
+          <div className="flex flex-col gap-3 px-3 pb-3">
+            <UnitForm
+              unit={unit}
+              id="setup-unit"
+              agentName={agentName}
+              values={values}
+              secrets={secrets}
+              onValue={(field, value) => setValues((was) => ({ ...was, [field]: value }))}
+              onSecret={(field, value) => setSecrets((was) => ({ ...was, [field]: value }))}
+            />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            disabled={!isComplete(unit, values, secrets)}
+            onClick={() => onSave(values, secrets)}
+          >
+            Save
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/**
+ * What can be added and, where there is one, last the way to one that isn't made yet: it is made
+ * in Settings.
+ */
 function AddMenu({
   label,
   items,
@@ -246,7 +408,7 @@ function AddMenu({
   label: string;
   items: { id: string; name: string }[];
   onPick(id: string, name: string): void;
-  more: { words: string; screen: "mcps" | "skills" };
+  more?: { words: string; screen: "mcps" | "skills" };
 }) {
   return (
     <DropdownMenu>
@@ -262,10 +424,14 @@ function AddMenu({
           </DropdownMenuItem>
         ))}
         {items.length === 0 && <DropdownMenuItem disabled>Nothing else to add</DropdownMenuItem>}
-        <DropdownMenuSeparator />
-        <DropdownMenuItem onSelect={() => go({ screen: more.screen })}>
-          {more.words}
-        </DropdownMenuItem>
+        {more && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={() => go({ screen: more.screen })}>
+              {more.words}
+            </DropdownMenuItem>
+          </>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   );
