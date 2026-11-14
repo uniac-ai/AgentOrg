@@ -508,6 +508,11 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
       /** Its service has gone, as while it restarts: a socket to it is ended before it opens. */
       away: false,
     },
+    /** `screen@1`: the sockets watching, and the latest frame with its size, which one that opens gets at once. */
+    screen: {
+      sockets: new Set<WebSocket>(),
+      frame: undefined as { png: Buffer; width: number; height: number } | undefined,
+    },
     /** `metrics@1`: the sockets watching, and the latest reading, which one that opens later gets at once. */
     load: { sockets: new Set<WebSocket>(), reading: undefined as string | undefined },
     /** `presence@1`: the sockets watching, and who is acting now, which each gets as it opens. */
@@ -1181,6 +1186,15 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
       if (surface.protocol === "screencast@1") screencast(socket, target.mode);
       if (surface.protocol === "terminal@1") terminalSocket(socket, target.mode);
       if (surface.protocol === "files@1") filesSocket(socket);
+      if (surface.protocol === "screen@1") {
+        live.screen.sockets.add(socket);
+        socket.on("close", () => live.screen.sockets.delete(socket));
+        const { frame } = live.screen;
+        if (frame) {
+          socket.send(JSON.stringify({ type: "size", width: frame.width, height: frame.height }));
+          socket.send(frame.png);
+        }
+      }
       if (surface.protocol === "metrics@1") {
         live.load.sockets.add(socket);
         socket.on("close", () => live.load.sockets.delete(socket));
@@ -1542,6 +1556,14 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
         acting: acting.map((one) => ({ ...one, at: new Date().toISOString() })),
       });
       for (const ws of live.presence.sockets) ws.send(live.presence.event);
+    },
+    /** The screen comes to show this PNG, as `screen@1` sends it: its size, then the frame. */
+    screenFrame(png: Buffer, width: number, height: number) {
+      live.screen.frame = { png, width, height };
+      for (const ws of live.screen.sockets) {
+        ws.send(JSON.stringify({ type: "size", width, height }));
+        ws.send(png);
+      }
     },
     /** A `metrics@1` reading, to every socket watching and to those that come later. */
     reading(reading: Record<string, unknown>) {

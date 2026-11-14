@@ -8,7 +8,14 @@
 // opened in the layer, and only one view of a surface is ever open. A window with something of
 // its own to lose (the folder it was in, where it was scrolled to, a file on its way, the
 // terminal in front) also keeps it while another is in front: it stays under that one, unseen.
-import { FolderIcon, GlobeIcon, Maximize2Icon, TerminalIcon, XIcon } from "lucide-react";
+import {
+  FolderIcon,
+  GlobeIcon,
+  Maximize2Icon,
+  MonitorIcon,
+  TerminalIcon,
+  XIcon,
+} from "lucide-react";
 import {
   type ComponentType,
   type ReactNode,
@@ -26,6 +33,7 @@ import { Face, tintOf } from "./face.tsx";
 import { FilesView } from "./files-view.tsx";
 import type { LiveTarget } from "./live-socket.ts";
 import { Refusal } from "./parts.tsx";
+import { ScreenView } from "./screen-view.tsx";
 import { TerminalsView } from "./terminals.tsx";
 import { clause } from "./words.ts";
 
@@ -72,6 +80,13 @@ const WINDOWS: {
     icon: GlobeIcon,
     protocol: "screencast@1",
     View: ScreencastView,
+  },
+  {
+    kind: "screen",
+    title: "Screen",
+    icon: MonitorIcon,
+    protocol: "screen@1",
+    View: ScreenView,
   },
   {
     kind: "terminal",
