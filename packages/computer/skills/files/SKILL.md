@@ -14,7 +14,7 @@ Use only the tools you have. You may be able to read and not change.
 | `computer__read`   | A file as numbered lines, or a picture (PNG, JPEG, GIF, WebP) as itself. Use `offset` and `limit` for part of a long one |
 | `computer__edit`   | Replaces exact text and answers with a diff                                                                            |
 
-Paths are relative to your workspace. A path outside it is refused.
+Paths are relative to your workspace. On a computer made for you, a path outside it is refused. On the person's own computer it isn't, so go outside it only when the task needs to.
 
 ## Finding your way
 

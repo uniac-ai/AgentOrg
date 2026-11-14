@@ -47,7 +47,7 @@
     "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@agentorg/computer": "0.0.18",
+    "@agentorg/computer": "0.0.19",
     "@playwright/test": "1.64.1",
     "@types/ws": "^8.18.2"
   },

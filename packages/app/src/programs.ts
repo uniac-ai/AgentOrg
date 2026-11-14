@@ -53,11 +53,11 @@ export function closePackageActors(home: string) {
   }
 }
 
-/** The bundled Assistant: the base, a computer on a service the person chooses, and the web. */
+/** The bundled Assistant: the base, the computer the person chooses, and the web. */
 const ASSISTANT_TEMPLATE: NonNullable<ManagerOptions["templates"]>[number] = {
   id: "assistant",
   title: "Assistant",
-  description: "An agent with a computer of its own and the web.",
+  description: "Works on a computer and on the web.",
   base: { provider: "AgentOrg", creatable: "assistant" },
   units: [
     { provider: "Computers", unit: "computer", values: { access: "terminal", browser: true } },

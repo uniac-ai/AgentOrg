@@ -530,16 +530,16 @@ test("the bundled Assistant is a computer and the web, and its computer goes wit
   const unit = {
     provider: computers,
     unit: "computer",
-    values: { service: "local", access: "read" },
+    values: { kind: "this", access: "read" },
   };
   const { problems } = await person.call<{ problems: { message: string }[] }>("agents", "check", {
     stack: { base, units: [unit] },
   });
   assert.match(problems[0]?.message ?? "", /npm install -g @agentorg\/computer/);
-  // An untouched Assistant is refused the same way, and nothing is made.
+  // An untouched Assistant is refused: which computer is the person's to choose.
   await assert.rejects(
     person.call("agents", "create", { template: "assistant", name: "Too soon" }),
-    /npm install -g @agentorg\/computer/,
+    /Which computer must be filled in/,
   );
   assert.deepEqual((await person.call<{ agents: unknown[] }>("agents", "list")).agents, []);
   assert.equal(existsSync(join(data, "server.json")), false);
@@ -548,7 +548,7 @@ test("the bundled Assistant is a computer and the web, and its computer goes wit
 
   const { agent } = await person.call<{ agent: string }>("agents", "create", {
     template: "assistant",
-    fill: [{ values: { service: "local", workspace } }],
+    fill: [{ values: { kind: "this", workspace } }],
     name: "Helper",
   });
   const read = await person.call<{
@@ -557,9 +557,9 @@ test("the bundled Assistant is a computer and the web, and its computer goes wit
     skills: { name: string }[];
   }>("agents", "get", { agent });
   assert.equal(read.template, "assistant");
-  assert.deepEqual(read.mcp.map((one) => one.slot).sort(), ["browser", "computer", "web"]);
+  // This computer has no browser of its own: the template's answer is a made computer's.
+  assert.deepEqual(read.mcp.map((one) => one.slot).sort(), ["computer", "web"]);
   assert.deepEqual(read.skills.map((one) => one.name).sort(), [
-    "browser",
     "computer",
     "files",
     "terminal",
@@ -571,15 +571,16 @@ test("the bundled Assistant is a computer and the web, and its computer goes wit
   assert.equal((await Computer.list(reached)).length, 0);
   assert.ok(existsSync(workspace), "the named folder stays");
 
-  // Touched by nobody: preselected on the service here, in a folder named for the agent.
+  // With no folder named, its work happens in one named for the agent.
   const { agent: untouched } = await person.call<{ agent: string }>("agents", "create", {
     template: "assistant",
+    fill: [{ values: { kind: "this" } }],
     name: "Right away",
   });
   const folder = join(agentsFolder, "Right away");
   const [computer] = await Computer.list(reached);
   assert.equal(computer?.access, "terminal");
-  assert.equal(computer?.browser, true);
+  assert.equal(computer?.attached, true);
   assert.equal(computer?.workspace, folder);
   assert.ok(existsSync(folder));
   const shown = await person.call<{
@@ -608,7 +609,7 @@ test("a socket from the person reaches a computer's surfaces live, with no token
   const { app, person } = await s.start();
   const { agent } = await person.call<{ agent: string }>("agents", "create", {
     template: "assistant",
-    fill: [{ values: { service: "local", workspace } }],
+    fill: [{ values: { kind: "this", workspace } }],
     name: "Watched",
   });
   type Surfaces = { surface: string; protocol: string }[];
@@ -624,7 +625,6 @@ test("a socket from the person reaches a computer's surfaces live, with no token
     [
       ["terminal", "terminal@1"],
       ["files", "files@1"],
-      ["browser", "screencast@1"],
       ["load", "metrics@1"],
     ],
   );
