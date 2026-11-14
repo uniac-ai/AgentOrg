@@ -47,11 +47,39 @@ const LIST_ROOM = 900 * 1024;
 
 const cut = (text: string, max: number) =>
   text.length <= max ? text : `${text.slice(0, max - 40)}… [cut: ${text.length} characters]`;
+/** What a server that can't be reached is said to be, in place of the transport's words. */
+const UNREACHED = "The server can't be reached.";
+/** What a fetch that failed for its server not being reached gives as its cause's code. */
+const NOT_REACHED = new Set([
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "ETIMEDOUT",
+  "EHOSTUNREACH",
+  "EHOSTDOWN",
+  "ENETUNREACH",
+  "ENETDOWN",
+  "ECONNABORTED",
+  "EADDRNOTAVAIL",
+  "EPIPE",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_SOCKET",
+]);
+
 /**
  * What an error says. A server's HTTP answer whose body is JSON with a `message`, such as
- * `{"code":409,"message":"It has stopped."}`, says that message alone.
+ * `{"code":409,"message":"It has stopped."}`, says that message alone. A fetch that failed says
+ * plainly that the server can't be reached when that is why, and its cause's own words when it
+ * was reached but something else failed, such as a certificate it doesn't trust.
  */
 const messageOf = (error: unknown) => {
+  if (error instanceof TypeError && error.message === "fetch failed") {
+    const cause = error.cause as { code?: unknown; message?: unknown } | undefined;
+    if (!cause || NOT_REACHED.has(String(cause.code))) return UNREACHED;
+    if (typeof cause.message === "string" && cause.message.trim() !== "") return cause.message;
+    return UNREACHED;
+  }
   if (error instanceof SdkHttpError && typeof error.data.text === "string") {
     try {
       const { message } = JSON.parse(error.data.text) as { message?: unknown };
