@@ -1,0 +1,26 @@
+{
+  "node": {
+    "version": "24.22.1",
+    "file": "node-v24.22.1-darwin-arm64.tar.xz",
+    "url": "https://nodejs.org/dist/v24.22.1/node-v24.22.1-darwin-arm64.tar.xz",
+    "sums": "https://nodejs.org/dist/v24.22.1/SHASUMS256.txt",
+    "sha256": "654ba79de6155647e22321932b45f2a1ccb705976cc337c9b8e278beb085a628",
+    "take": {
+      "node-v24.22.1-darwin-arm64/bin/node": "MacOS/node",
+      "node-v24.22.1-darwin-arm64/LICENSE": "Resources/licenses/node/LICENSE"
+    }
+  },
+  "driver": {
+    "version": "0.49.7",
+    "file": "cua-driver-rs-0.49.7-darwin-universal.tar.gz",
+    "url": "https://github.com/trycua/cua/releases/download/cua-driver-rs-v0.49.7/cua-driver-rs-0.49.7-darwin-universal.tar.gz",
+    "sums": "https://github.com/trycua/cua/releases/download/cua-driver-rs-v0.49.7/SHA256SUMS",
+    "release": "https://api.github.com/repos/trycua/cua/releases/tags/cua-driver-rs-v0.49.7",
+    "sha256": "269571f4a456340dae33c946f9986334113621794ac8d6212376ca6555410f95",
+    "take": {
+      "cua-driver-rs-0.49.7-darwin-universal/cua-driver": "MacOS/cua-driver",
+      "cua-driver-rs-0.49.7-darwin-universal/LICENSE": "Resources/licenses/cua-driver/LICENSE",
+      "cua-driver-rs-0.49.7-darwin-universal/THIRD_PARTY_NOTICES.md": "Resources/licenses/cua-driver/THIRD_PARTY_NOTICES.md"
+    }
+  }
+}

@@ -37,7 +37,13 @@
     "macOS": {
       "signingIdentity": "-",
       "minimumSystemVersion": "13.0",
-      "files": { "Library/LaunchAgents/dev.agentorg.mac.provider.plist": "provider.plist" }
+      "files": {
+        "Library/LaunchAgents/dev.agentorg.mac.provider.plist": "provider.plist",
+        "MacOS/node": "target/assembly/bundle/MacOS/node",
+        "MacOS/cua-driver": "target/assembly/bundle/MacOS/cua-driver",
+        "Resources/agentcomputer": "target/assembly/bundle/Resources/agentcomputer",
+        "Resources/licenses": "target/assembly/bundle/Resources/licenses"
+      }
     }
   }
 }
