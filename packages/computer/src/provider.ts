@@ -196,8 +196,11 @@ const socketAt = (apiUrl: string, socket: string) => {
 };
 /** How long a computer's own surfaces may take to say what they are, in a status. */
 const SURFACES_MS = 2000;
-/** How long what they said is used again: a status is asked for often. */
-const SURFACES_FRESH_MS = 10_000;
+/**
+ * How long what they said is used again: a status is asked for often, and a computer that stops
+ * is said at the first read after this.
+ */
+const SURFACES_FRESH_MS = 1000;
 /**
  * A computer its service says failed is stopped and started again, as the service says to: at
  * once, then after a wait that doubles each time up to the most, until it runs or its unit goes.
@@ -264,6 +267,8 @@ const TRYING = "Its computer is being started again.";
 /** One the person's own service has, which isn't running, where AgentOrg Mac starts nothing. */
 const SELF_RUN_DOWN =
   "The AgentComputer you run yourself isn't running. Start it with agentcomputer up.";
+/** The service this machine runs, where it has gone: the page's own words, with the command. */
+const LOCAL_DOWN = "No AgentComputer is running on this machine. Start it with agentcomputer up.";
 /**
  * What the person reads of a computer beside its windows, fixed when it is made: which computer it
  * is, what it acts as and where its work happens, what it reaches, and its browser.
@@ -588,6 +593,8 @@ export async function startComputerProvider(
   const mending = new Map<string, Mending>();
   /** The last try to start each failed computer again, and the wait after it. */
   const tried = new Map<string, { at: number; wait: number }>();
+  /** How each instance last said it stands, by its state and why. */
+  const stood = new Map<string, string>();
   let ending = false;
   /**
    * Computers an earlier version made here with no isolation, by instance: no longer made or
@@ -983,23 +990,25 @@ export async function startComputerProvider(
     const info = found.computer ? await infoOf(found.computer) : undefined;
     // Failed, or marked to be started again: a mark left on a running one is cleared by the look.
     if (info?.state === "failed" || found.restarting) mend(instance);
-    // A computer that isn't running is why its connections are down: they say so in its words.
+    // A computer that isn't running, or whose service here has gone, has its connections down,
+    // though they may not have found it yet: they and the capability say so at once, in its words.
     const service = found.computer?.service;
     const why = mending.get(instance)?.trying
       ? TRYING
       : info && info.state !== "running"
         ? NOT_RUNNING[found.restarting ? "failed" : info.state]
-        : !info && service && "local" in service && !service.mac && macHere() && !selfRun()
-          ? SELF_RUN_DOWN
+        : !info && service && "local" in service && !reachOf(service)
+          ? service.mac
+            ? OPEN_MAC
+            : macHere()
+              ? SELF_RUN_DOWN
+              : LOCAL_DOWN
           : undefined;
-    const each = servers.map((server, i) => {
-      const status = server.status();
-      return {
-        connection: (found.links[i] as Linked).actor,
-        ...status,
-        ...(why && status.state === "down" ? { detail: why } : {}),
-      };
-    });
+    const each = servers.map((server, i) => ({
+      connection: (found.links[i] as Linked).actor,
+      ...server.status(),
+      ...(why ? { state: "down" as const, detail: why, tools: [] } : {}),
+    }));
     const down = each.find((one) => one.state === "down");
     const waiting = each.some((one) => one.state === "connecting");
     const surfaces = info?.surfaces;
@@ -1008,8 +1017,22 @@ export async function startComputerProvider(
     if (seen) return seen;
     const now =
       found.words === undefined && found.computer && info && nowOf(found.computer, info.info);
+    const state = down
+      ? ("down" as const)
+      : waiting
+        ? ("connecting" as const)
+        : ("connected" as const);
+    // Read for its unit's status too, it says it changed when it did, so the person's page asks
+    // its capability again: a computer found stopped, or back, is said at once.
+    const said = `${state} ${down?.detail ?? ""}`;
+    // One removed while this was read keeps nothing.
+    if (stored[instance] === found) {
+      if (stood.has(instance) && stood.get(instance) !== said)
+        capabilities.get(instance)?.exports.capability.emit("changed", {});
+      stood.set(instance, said);
+    }
     return {
-      state: down ? ("down" as const) : waiting ? ("connecting" as const) : ("connected" as const),
+      state,
       ...(down?.detail ? { detail: down.detail } : {}),
       connections: each,
       ...(surfaces ? { surfaces } : {}),
@@ -1289,6 +1312,7 @@ export async function startComputerProvider(
           capabilities.delete(instance);
           running.delete(instance);
           before.delete(instance);
+          stood.delete(instance);
           delete stored[instance];
           try {
             save();

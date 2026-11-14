@@ -73,7 +73,15 @@ const IMAGE = process.env.AGENTCOMPUTER_TEST_IMAGE;
  * AgentComputer would, and keeps each request with the token it came with. Its computers' tools
  * can't be reached.
  */
-async function standIn(t: test.TestContext, records: Record<string, Record<string, unknown>> = {}) {
+async function standIn(
+  t: test.TestContext,
+  records: Record<string, Record<string, unknown>> = {},
+  /**
+   * `mcp`: each computer's endpoints answer as an MCP server with no tools, whatever its state, as
+   * one whose connection hasn't found it down yet does. `startMs`: how long a start takes.
+   */
+  { mcp = false, startMs = 0 } = {},
+) {
   const token = "the-service-token";
   const asked: {
     method: string;
@@ -102,6 +110,30 @@ async function standIn(t: test.TestContext, records: Record<string, Record<strin
       response.setHeader("content-type", "application/json");
       response.end(value === undefined ? undefined : JSON.stringify(value));
     };
+    const endpoint = /^\/v1\/computers\/[^/]+\/(mcp|browser)$/.test(path);
+    if (mcp && endpoint && given === "its-own-token") {
+      if (request.method !== "POST") return send(405);
+      const message = JSON.parse(raw) as {
+        id?: number;
+        method: string;
+        params?: { protocolVersion?: string };
+      };
+      if (message.id === undefined) {
+        response.statusCode = 202;
+        return response.end();
+      }
+      const result =
+        message.method === "initialize"
+          ? {
+              protocolVersion: message.params?.protocolVersion,
+              capabilities: { tools: {} },
+              serverInfo: { name: "stand-in", version: "0.0.0" },
+            }
+          : message.method === "tools/list"
+            ? { tools: [] }
+            : {};
+      return send(200, { jsonrpc: "2.0", id: message.id, result });
+    }
     if (given !== token)
       return send(401, { code: 401, message: "That isn't this service's token." });
     if (request.method === "GET" && path === "/v1/info")
@@ -171,6 +203,7 @@ async function standIn(t: test.TestContext, records: Record<string, Record<strin
     // It fails as many starts as `failStarts` says, as when Docker isn't answering, and is left
     // stopped.
     if (more === "/start" && request.method === "POST") {
+      await new Promise((resolve) => setTimeout(resolve, startMs));
       const failing = Number(found.failStarts ?? 0);
       found.failStarts = Math.max(failing - 1, 0);
       found.state = failing > 0 ? "stopped" : "running";
@@ -186,7 +219,9 @@ async function standIn(t: test.TestContext, records: Record<string, Record<strin
         mode: "watch",
         expiresAt: new Date(Date.now() + 60_000).toISOString(),
       });
-    if (request.method === "GET") return send(200, found);
+    // What of it can be opened live is there while it runs.
+    if (request.method === "GET")
+      return send(200, { ...found, surfaces: found.state === "running" ? found.surfaces : [] });
     if (request.method === "DELETE") {
       computers.delete(id);
       return send(204);
@@ -941,6 +976,136 @@ test("a computer that keeps failing waits longer each time, and one being made i
   await units.remove({ instance });
 });
 
+test("a computer that isn't running says so at once and keeps its windows' place, sampled as a page reads it through a failure, a start again and a stop", async (t) => {
+  const { apply, units, asPerson, connected } = await setup(t, {
+    service: false,
+    mendFirstMs: 60_000,
+  });
+  // Its connections stay up throughout, as they did for 18 s in a real run before one found out.
+  const there = await standIn(t, {}, { mcp: true, startMs: 500 });
+  const away = { kind: "new", made: "remote", address: there.apiUrl, access: "terminal" };
+  const made = await apply(away, { token: there.apiKey });
+  const { instance } = made;
+  const record = [...there.computers.values()].at(-1) as Record<string, unknown>;
+  record.surfaces = [{ surface: "terminal", protocol: "terminal@1", operate: true }];
+  await connected(instance);
+  const held = await asPerson(made.capability?.actor as string);
+  let changes = 0;
+  held.on("changed", () => void changes++);
+  const starts = () =>
+    there.asked.filter((one) => one.method === "POST" && one.path.endsWith("/start")).length;
+  /**
+   * What a page is told at each read, every 100 ms until `done`: its unit's status, as the page's
+   * own refresh reads it, then its capability's state, as the page reads it when it changes.
+   */
+  const sampled = async (done: () => boolean) => {
+    const seen: { at: number; down: boolean; detail?: string; windows: boolean }[] = [];
+    while (!done()) {
+      for (const read of [() => units.status({ instance }), () => held.call.state({})]) {
+        const stands = await read();
+        seen.push({
+          at: Date.now(),
+          down: stands.state === "down",
+          ...(stands.detail ? { detail: stands.detail } : {}),
+          windows: (stands.surfaces?.length ?? 0) > 0,
+        });
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    return seen;
+  };
+  const FAILED = "Its computer failed, and is started again by itself.";
+  const TRYING = "Its computer is being started again.";
+  const STOPPED = "Its computer has stopped.";
+
+  // It fails, as a container killed does, and is stopped and started again, which takes a while.
+  let back = false;
+  const failedAt = Date.now();
+  record.state = "failed";
+  const failing = sampled(() => back);
+  await until(() => record.state === "running");
+  await until(async () => (await held.call.state({})).state === "connected");
+  back = true;
+  const seen = await failing;
+  // Each read has its windows, or says it is down: the page keeps its Computer tab throughout.
+  assert.ok(
+    seen.every((one) => one.windows || one.down),
+    JSON.stringify(seen),
+  );
+  // Down from the first read after it failed, saying what is happening, until it runs again.
+  const first = seen.find((one) => one.down);
+  assert.ok(first && first.at - failedAt < 2500, JSON.stringify(seen));
+  const said = new Set(seen.filter((one) => one.down).map((one) => one.detail));
+  assert.ok(said.has(TRYING), [...said].join(" | "));
+  assert.ok(
+    [...said].every((one) => one === FAILED || one === TRYING),
+    [...said].join(" | "),
+  );
+  // Running again, with its windows.
+  assert.ok((await held.call.state({})).surfaces.length > 0);
+  assert.equal(starts(), 1);
+
+  // Stopped by someone else: down at once in its words, and a page told so, though nothing is
+  // tried on it; and told again when it runs again.
+  const before = changes;
+  back = false;
+  const stoppedAt = Date.now();
+  record.state = "stopped";
+  const stopping = sampled(() => back);
+  await until(async () => (await held.call.state({})).detail === STOPPED);
+  await until(() => changes > before);
+  record.state = "running";
+  await until(async () => (await held.call.state({})).state === "connected");
+  await until(() => changes > before + 1);
+  back = true;
+  const stopped = await stopping;
+  assert.ok(
+    stopped.every((one) => one.windows || one.down),
+    JSON.stringify(stopped),
+  );
+  const down = stopped.filter((one) => one.down);
+  assert.ok((down[0]?.at ?? Number.POSITIVE_INFINITY) - stoppedAt < 2500, JSON.stringify(stopped));
+  assert.ok(
+    down.every((one) => one.detail === STOPPED),
+    JSON.stringify(down),
+  );
+  assert.equal(starts(), 1, "one stopped by someone else isn't started");
+  await units.remove({ instance });
+});
+
+test("this computer whose service here has gone says so at once: AgentOrg Mac's, or the one this machine runs", async (t) => {
+  for (const mac of [true, false])
+    await t.test(mac ? "AgentOrg Mac" : "the service this machine runs", async (t) => {
+      const command = onPathThatSays(t);
+      const { units, apply, local, asPerson, connected, macRecord, data } = await setup(t, {
+        service: false,
+        path: command.bin,
+        mac,
+      });
+      const app = await standIn(t, {}, { mcp: true });
+      const folder = mac ? macRecord : data;
+      const alive = recordIn(t, folder, app);
+      const made = await apply(local("terminal"));
+      await connected(made.instance);
+      const held = await asPerson(made.capability?.actor as string);
+      // It quits: its record stays, naming a process that has gone.
+      alive.kill();
+      await once(alive, "exit");
+      const words = mac
+        ? "The AgentOrg app isn't open on this Mac. Open it to use this computer."
+        : "No AgentComputer is running on this machine. Start it with agentcomputer up.";
+      await until(async () => (await held.call.state({})).detail === words, 3000);
+      const status = await units.status({ instance: made.instance });
+      assert.equal(status.state, "down");
+      assert.ok(status.connections.every((one) => one.state === "down" && one.detail === words));
+      // Open again, it is connected again; nothing of AgentComputer was started meanwhile.
+      recordIn(t, folder, app);
+      await until(async () => (await held.call.state({})).state === "connected", 3000);
+      assert.equal(command.ran(), false);
+      await units.remove({ instance: made.instance });
+    });
+});
+
 test("a computer made before today's words says in its status what it is in them; one made now doesn't", async (t) => {
   const { apply, units, dir, restart } = await setup(t, { service: false });
   const there = await standIn(t);
@@ -1054,6 +1219,7 @@ function recordIn(
     JSON.stringify({ url: service.apiUrl, pid: alive.pid }),
   );
   writeFileSync(join(folder, "control-token"), service.apiKey);
+  return alive;
 }
 
 test("on a Mac with AgentOrg Mac open, this computer is attached through it, nothing is started, and no container is offered", async (t) => {
