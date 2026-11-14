@@ -326,6 +326,45 @@ test(
   }),
 );
 test(
+  "a choice's list is as wide as its field, and a long reason wraps within it, inside the dialog",
+  withGateway(async (gateway) => {
+    const long =
+      "Edge's remote debugging is off, or Edge isn't open. On this machine, open Edge, version 144 or later, go to its inspect page, edge://inspect/#remote-debugging, and switch on remote debugging. Edge then asks you to allow each connection.";
+    gateway.changeForm("computer", (field) => {
+      const own = field.options?.find((o) => o.value === "container");
+      if (own) own.unavailable = long;
+    });
+    const page = await open(gateway);
+    await fromTemplate(page, "Assistant");
+    const where = panel(page).getByRole("combobox", { name: "Where it resides" });
+    // Measured before it opens: open, all but its list is hidden from the page's roles.
+    const [field, dialog] = await Promise.all([where.boundingBox(), panel(page).boundingBox()]);
+    await where.click();
+    const list = page.getByRole("listbox");
+    await list.waitFor();
+    const box = await list.boundingBox();
+    assert.ok(field && box && dialog);
+    assert.ok(
+      Math.abs(box.width - field.width) <= 1,
+      `the list is ${box.width}, its field ${field.width}`,
+    );
+    assert.ok(
+      box.x >= dialog.x && box.x + box.width <= dialog.x + dialog.width,
+      "inside the dialog",
+    );
+    // The reason is all there, on several lines.
+    const greyed = page.getByRole("option", { name: /^Its own container/ });
+    assert.equal(await greyed.innerText(), `Its own container\n${long}`);
+    const reason = greyed.getByText(long);
+    const lines = await reason.evaluate(
+      (el) =>
+        el.getBoundingClientRect().height / Number.parseFloat(getComputedStyle(el).lineHeight),
+    );
+    assert.ok(lines > 2, `${lines} lines`);
+    await page.close();
+  }),
+);
+test(
   "a unit's card starts open whoever brought it, folds to its head alone, and opens again on asking",
   withGateway(async (gateway) => {
     const page = await open(gateway);
