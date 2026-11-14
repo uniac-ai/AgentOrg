@@ -12,6 +12,7 @@ use std::collections::VecDeque;
 use std::fs;
 use std::io::{BufRead, BufReader, Read};
 use std::os::fd::AsRawFd;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -87,8 +88,9 @@ impl Programs {
     }
 }
 
-/// Where the provider keeps what it keeps.
+/// Where the provider keeps what it keeps: all in the app's folder, but for the person's home.
 pub struct Places {
+    pub folder: PathBuf,
     pub home: PathBuf,
     pub data: PathBuf,
     pub driver_home: PathBuf,
@@ -118,6 +120,7 @@ pub fn run_as_background_item() {
     // One provider at a time: another copy of the app's waits here until this one has ended.
     let _held = hold(&places::provider_lock());
     let places = Places {
+        folder: places::agentorg(),
         home: places::home(),
         data: places::data(),
         driver_home: places::driver_home(),
@@ -312,8 +315,9 @@ fn small_env(home: &Path) -> Vec<(String, String)> {
 
 fn driver_command(programs: &Programs, places: &Places, identifier: &str) -> Command {
     let mut command = Command::new(&programs.driver);
+    // No Automation prompt: where an app's consent isn't given, the agent is refused instead.
     command
-        .args(["serve", "--embedded", "--socket"])
+        .args(["serve", "--embedded", "--no-automation-prompts", "--socket"])
         .arg(&places.socket)
         .env_clear()
         .envs(small_env(&places.driver_home))
@@ -383,6 +387,9 @@ pub fn provide(
     for folder in [&places.data, &places.driver_home] {
         let _ = fs::create_dir_all(folder);
     }
+    // The app's folder is its owner's alone, the driver's socket in it among what no other account
+    // can reach.
+    let _ = fs::set_permissions(&places.folder, fs::Permissions::from_mode(0o700));
     let missing = programs.missing();
     if !missing.is_empty() {
         let names: Vec<String> = missing.iter().map(|at| at.display().to_string()).collect();
@@ -460,6 +467,7 @@ mod tests {
 
     fn places_in(root: &Path) -> Places {
         Places {
+            folder: root.to_path_buf(),
             home: root.join("home"),
             data: root.join("data"),
             driver_home: root.join("driver"),
@@ -492,7 +500,7 @@ mod tests {
         // Stand-ins: the driver makes its socket, and the service writes its record, as each does;
         // each says what it was given.
         let says = |name: &str| format!("env > '{h}/{name}.env'\necho \"$@\" > '{h}/{name}.args'");
-        program(&programs.driver, &format!("{}\n: > \"$4\"\nexec sleep 600", says("driver")));
+        program(&programs.driver, &format!("{}\n: > \"$5\"\nexec sleep 600", says("driver")));
         let record = r#"echo "{\"url\":\"http://127.0.0.1:1\",\"pid\":$$}" > "$7/server.json""#;
         program(&programs.node, &format!("{}\n{record}\nexec sleep 600", says("service")));
         program(&programs.service, "");
@@ -508,11 +516,14 @@ mod tests {
             let _stops = Stops(&stop_now);
             scope.spawn(|| provide(&programs, &places, "test.id", &stop_now, &regrant));
             until("both running", || state() == Some(AppState::Running));
+            // The app's folder is its owner's alone.
+            assert_eq!(fs::metadata(&root).unwrap().permissions().mode() & 0o777, 0o700);
 
             // The driver: embedded on its socket, as its host's, with no update check, in a small
             // environment of the provider's own, its home in the app's folder.
             let socket = places.socket.display().to_string();
-            assert_eq!(said("driver.args").trim(), format!("serve --embedded --socket {socket}"));
+            let serve = "serve --embedded --no-automation-prompts --socket";
+            assert_eq!(said("driver.args").trim(), format!("{serve} {socket}"));
             let env = said("driver.env");
             for line in [
                 "CUA_DRIVER_EMBEDDED=1",
@@ -636,7 +647,8 @@ mod tests {
         // The background item gives the provider longer to stop than it gives what it runs.
         assert!(plist.contains("<key>ExitTimeOut</key><integer>40</integer>"));
         let files = &config["bundle"]["macOS"]["files"];
-        let item = format!("Library/LaunchAgents/{identifier}.provider.plist");
+        // Registering and unregistering both reach the item the bundle carries.
+        let item = format!("Library/LaunchAgents/{}", macos::provider_plist(identifier));
         assert_eq!(files[item], "provider.plist");
     }
 }
