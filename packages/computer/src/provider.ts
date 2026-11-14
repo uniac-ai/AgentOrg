@@ -93,14 +93,17 @@ const Stored = z.object({
    */
   restarting: z.literal(true).optional(),
   /**
-   * The words of the form its computer was made under: none for one made before 0.0.15, whose
-   * status restates it in today's.
+   * The words of the form its computer was made under: none for one made before 0.0.15. One made
+   * under earlier words than today's has its status restate it in today's.
    */
   words: z.number().optional(),
 });
 type Instance = z.infer<typeof Stored>;
-/** The words of today's form, which an instance made now is kept with. */
-const WORDS = 1;
+/**
+ * The words of today's form, which an instance made now is kept with: 2 since its page shows who
+ * is acting on it.
+ */
+const WORDS = 2;
 type Linked = z.infer<typeof Link>;
 type TheProblem = z.input<typeof Problem>;
 interface Reached {
@@ -841,14 +844,22 @@ export async function startComputerProvider(
       keepEarlier();
       copyFrom = undefined;
     }
+    // Named as its agent: the service says who acts on a computer by its name.
+    const called = agentName ?? name;
     const computer = whole
-      ? await Computer.attach({ ...reached, access, workspace: folder as string, name, metadata })
+      ? await Computer.attach({
+          ...reached,
+          access,
+          workspace: folder as string,
+          name: called,
+          metadata,
+        })
       : await Computer.create({
           ...reached,
           ...(here ? { isolation: CONTAINER } : {}),
           access,
           browser,
-          name,
+          name: called,
           metadata,
           ...(folder ? { workspace: folder } : {}),
           ...(copyFrom ? { copyFrom } : {}),
@@ -1016,7 +1027,7 @@ export async function startComputerProvider(
     const seen = fromEarlier();
     if (seen) return seen;
     const now =
-      found.words === undefined && found.computer && info && nowOf(found.computer, info.info);
+      (found.words ?? 0) < WORDS && found.computer && info && nowOf(found.computer, info.info);
     const state = down
       ? ("down" as const)
       : waiting

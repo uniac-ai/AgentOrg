@@ -841,6 +841,28 @@ test("a computer at another address is made there with its token, which stays in
   assert.equal(hub.state.actors().length, actors);
 });
 
+test("a computer is named as its agent on its service, which says who acts on it by that name, and its presence opens live", async (t) => {
+  const { units, asPerson } = await setup(t, { service: false });
+  const there = await standIn(t);
+  const made = await units.apply({
+    unit: "computer",
+    values: { kind: "new", made: "remote", address: there.apiUrl, access: "terminal" },
+    secrets: { token: there.apiKey },
+    needs: {},
+    agent: "act_agent",
+    name: "Scout: Computer",
+    agentName: "Scout",
+  });
+  const asked = there.asked.find((one) => one.method === "POST" && one.path === "/v1/computers");
+  assert.equal(asked?.body?.name, "Scout");
+  // Who acts on it is a live surface of its own, opened as any other.
+  const held = await asPerson(made.capability?.actor as string);
+  await held.call.live({ surface: "presence", mode: "watch" });
+  const live = there.asked.find((one) => one.method === "POST" && one.path.endsWith("/live"));
+  assert.deepEqual(live?.body, { surface: "presence", mode: "watch" });
+  await units.remove({ instance: made.instance });
+});
+
 test("endpoints are at the address given, whatever the service calls itself", async (t) => {
   const { apply, dir, units } = await setup(t, { service: false });
   const there = await standIn(t);
@@ -1121,22 +1143,33 @@ test("a computer made before today's words says in its status what it is in them
   assert.deepEqual(capability?.rows?.where, [
     { label: "Computer", value: new URL(there.apiUrl).host, note: "At another address" },
   ]);
-  // As kept by a version before: with no words.
-  const file = JSON.parse(readFileSync(join(dir, "instances.json"), "utf8"));
-  delete file[instance].words;
-  writeFileSync(join(dir, "instances.json"), JSON.stringify(file));
-  await restart();
-  // Its folder the service made, which goes with it, isn't an answer.
-  assert.deepEqual((await units.status({ instance })).now, {
-    values: { kind: "new", made: "remote", address: there.apiUrl, access: "files", browser: false },
-    rows: {
-      where: [{ label: "Computer", value: new URL(there.apiUrl).host, note: "At another address" }],
-      workspace: [
-        { label: "Reaches", value: "Files" },
-        { label: "Browser", value: "None" },
-      ],
-    },
-  });
+  // As kept by a version before: with no words, or with the words before its page showed who is
+  // acting on it, the answers it was made with.
+  for (const words of [undefined, 1]) {
+    const file = JSON.parse(readFileSync(join(dir, "instances.json"), "utf8"));
+    file[instance].words = words;
+    writeFileSync(join(dir, "instances.json"), JSON.stringify(file));
+    await restart();
+    // Its folder the service made, which goes with it, isn't an answer.
+    assert.deepEqual((await units.status({ instance })).now, {
+      values: {
+        kind: "new",
+        made: "remote",
+        address: there.apiUrl,
+        access: "files",
+        browser: false,
+      },
+      rows: {
+        where: [
+          { label: "Computer", value: new URL(there.apiUrl).host, note: "At another address" },
+        ],
+        workspace: [
+          { label: "Reaches", value: "Files" },
+          { label: "Browser", value: "None" },
+        ],
+      },
+    });
+  }
   await units.remove({ instance });
 });
 

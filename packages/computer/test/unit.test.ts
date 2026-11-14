@@ -68,8 +68,12 @@ test("what this machine can't give now is greyed with the service's reason", () 
 test("the computer says what an agent built from it will hold: a capability, its surfaces and its views, by the answers", () => {
   const unit = computerUnit(READY);
   assert.deepEqual(unit.capability, { id: "computer", title: "Computer" });
-  // Whatever the answers: the load surface, and the computer, meters and workspace views.
-  assert.deepEqual(unit.gives.surfaces, [{ surface: "load", protocol: "metrics@1" }]);
+  // Whatever the answers: the load and presence surfaces, and the computer, meters, workspace and
+  // in-use views.
+  assert.deepEqual(unit.gives.surfaces, [
+    { surface: "load", protocol: "metrics@1" },
+    { surface: "presence", protocol: "presence@1" },
+  ]);
   assert.deepEqual(
     unit.gives.views?.map((view) => [
       view.id,
@@ -81,6 +85,7 @@ test("the computer says what an agent built from it will hold: a capability, its
       ["where", "column", "facts", undefined],
       ["load", "column", "meters", "load"],
       ["workspace", "column", "facts", undefined],
+      ["in-use", "column", "presence", "presence"],
     ],
   );
   const adds = (field: string, value?: string) => {

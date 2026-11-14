@@ -25,6 +25,8 @@ const LOAD = { surface: "load", protocol: "metrics@1" };
 const FILES = { surface: "files", protocol: "files@1" };
 const TERMINAL = { surface: "terminal", protocol: "terminal@1" };
 const SCREEN = { surface: "browser", protocol: "screencast@1" };
+/** Who is acting on it now, the person and agents, by what: from a service that says. */
+const PRESENCE = { surface: "presence", protocol: "presence@1" };
 /** The ids of the views whose rows `apply` gives. */
 export const WHERE = "where";
 export const WORKSPACE = "workspace";
@@ -266,11 +268,12 @@ export const computerUnit = (found: Found): z.input<typeof Unit> => ({
     slots: [],
     skills: [],
     results: [],
-    surfaces: [LOAD],
+    surfaces: [LOAD, PRESENCE],
     views: [
       { id: WHERE, place: "column", kind: "facts" },
       { id: "load", place: "column", kind: "meters", when: "reachable", surface: "load" },
       { id: WORKSPACE, place: "column", kind: "facts" },
+      { id: "in-use", place: "column", kind: "presence", when: "reachable", surface: "presence" },
     ],
   },
 });
