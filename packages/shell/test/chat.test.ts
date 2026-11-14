@@ -126,6 +126,53 @@ test(
 );
 
 test(
+  "a message longer than a message's text may be isn't sent: the box keeps it as it is, the line says why, and the next send clears it",
+  withGateway(async (gateway) => {
+    const page = await open(gateway);
+    // Its words are counted once trimmed, as the chat counts them.
+    const long = `  ${"a".repeat(100_001)}\n`;
+    await input(page).fill(long);
+    await input(page).evaluate((box: HTMLTextAreaElement) => box.setSelectionRange(7, 7));
+    await input(page).press("Enter");
+    await panel(page)
+      .getByRole("alert")
+      .getByText(
+        "That's too long to send: a message can be at most 100,000 characters. This one has 100,001.",
+      )
+      .waitFor();
+    assert.equal(gateway.calls.filter((c) => c.method === "send").length, 0, "nothing sent");
+    assert.equal(await input(page).inputValue(), long);
+    // The box is as tall as two fifths of the chat at most, scrolling inside, so the line is seen.
+    const box = await input(page).boundingBox();
+    assert.ok(box && box.height <= 900 * 0.4 + 1, `the box is ${box?.height} tall`);
+    assert.equal(await panel(page).getByRole("alert").isVisible(), true);
+    // One line, cut where the chat is narrow; pointing at it shows the whole of it.
+    assert.equal(
+      await panel(page).getByRole("alert").locator("span").first().getAttribute("title"),
+      "That's too long to send: a message can be at most 100,000 characters. This one has 100,001.",
+    );
+    const line = await panel(page).getByRole("alert").boundingBox();
+    assert.ok(
+      line && line.y >= 0 && line.y + line.height <= (box?.y ?? 0),
+      "the line is above the box, in view",
+    );
+    assert.deepEqual(
+      await input(page).evaluate((box: HTMLTextAreaElement) => [
+        box.selectionStart,
+        box.selectionEnd,
+      ]),
+      [7, 7],
+    );
+    // Shortened and sent, the line goes.
+    await input(page).fill("a".repeat(100_000));
+    await input(page).press("Enter");
+    await panel(page).getByRole("alert").waitFor({ state: "detached" });
+    await until(() => gateway.calls.some((c) => c.method === "send"));
+    await page.close();
+  }),
+);
+
+test(
   "a reply reveals word by word, then settles as one message with no spans",
   withGateway(async (gateway) => {
     const page = await open(gateway);
