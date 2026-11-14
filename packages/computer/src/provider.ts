@@ -38,6 +38,7 @@ import {
 import { Connection, type Groups, parseConnection, type Timing } from "@agentorg/mcp";
 import { type Log, Refused } from "@agentorg/sdk";
 import { type Client, connect } from "@agentorg/sdk/client";
+import WebSocket from "ws";
 import { z } from "zod";
 import {
   type Access,
@@ -203,6 +204,14 @@ const SURFACES_FRESH_MS = 10_000;
  */
 const MEND_FIRST_MS = 60_000;
 const MEND_MOST_MS = 30 * 60_000;
+/**
+ * The connection held open to the service on this machine is made again this long after it ends,
+ * the wait doubling up to the most while none can be made.
+ */
+const HOLD_FIRST_MS = 1_000;
+const HOLD_MOST_MS = 60_000;
+/** One open this long has held: the next wait starts over. */
+const HOLD_STEADY_MS = 10_000;
 
 /** The same folders the service looks in itself. */
 const defaultDataFolder = () =>
@@ -659,8 +668,53 @@ export async function startComputerProvider(
     string,
     Client<Record<never, never>, { capability: typeof capability }>
   >();
+  /**
+   * A connection held open to the service on this machine, AgentOrg Mac's where it is here, that
+   * carries nothing: its window shows AgentOrg as connected while it is open. The service drops one
+   * that stops answering. Whenever it ends, it is made again, at whichever service is here then.
+   */
+  let holding: { socket?: WebSocket; timer?: NodeJS.Timeout; wait: number } = {
+    wait: HOLD_FIRST_MS,
+  };
+  const hold = () => {
+    if (ending) return;
+    const reached = localService();
+    if (!reached) return holdLater();
+    let socket: WebSocket;
+    try {
+      const url = new URL("/v1/connection", reached.apiUrl.replace(/^http/, "ws"));
+      url.searchParams.set("name", "AgentOrg");
+      socket = new WebSocket(url, { headers: { Authorization: `Bearer ${reached.apiKey}` } });
+    } catch (error) {
+      // A record that names no address: looked at again later.
+      log.warn(`The service here can't be connected to: ${messageOf(error)}`);
+      return holdLater();
+    }
+    holding.socket = socket;
+    let opened: number | undefined;
+    socket.on("open", () => {
+      opened = Date.now();
+    });
+    // Its close follows, and says the same.
+    socket.on("error", () => {});
+    socket.on("close", () => {
+      if (holding.socket !== socket) return;
+      holding.socket = undefined;
+      if (opened !== undefined && Date.now() - opened >= HOLD_STEADY_MS)
+        holding.wait = HOLD_FIRST_MS;
+      holdLater();
+    });
+  };
+  const holdLater = () => {
+    if (ending) return;
+    holding.timer = setTimeout(hold, holding.wait);
+    holding.wait = Math.min(holding.wait * 2, HOLD_MOST_MS);
+  };
   const endAll = async () => {
     ending = true;
+    clearTimeout(holding.timer);
+    holding.socket?.terminate();
+    holding = { wait: HOLD_FIRST_MS };
     for (const { timer } of mending.values()) clearTimeout(timer);
     mending.clear();
     for (const client of capabilities.values()) client.close();
@@ -1095,6 +1149,8 @@ export async function startComputerProvider(
     }
   }
 
+  // Held open from now on, so the service here knows AgentOrg is there.
+  hold();
   let closing = false;
   const provider = await connect({
     hubUrl,
