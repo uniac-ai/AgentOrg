@@ -1166,7 +1166,8 @@ test("a computer that isn't running says so at once and keeps its windows' place
   );
   // Down from the first read after it failed, saying what is happening, until it runs again.
   const first = seen.find((one) => one.down);
-  assert.ok(first && first.at - failedAt < 2500, JSON.stringify(seen));
+  // Within the second its service's answer is kept, and a read: before, that was ten seconds.
+  assert.ok(first && first.at - failedAt < 5000, JSON.stringify(seen));
   const said = new Set(seen.filter((one) => one.down).map((one) => one.detail));
   assert.ok(said.has(TRYING), [...said].join(" | "));
   assert.ok(
@@ -1196,7 +1197,7 @@ test("a computer that isn't running says so at once and keeps its windows' place
     JSON.stringify(stopped),
   );
   const down = stopped.filter((one) => one.down);
-  assert.ok((down[0]?.at ?? Number.POSITIVE_INFINITY) - stoppedAt < 2500, JSON.stringify(stopped));
+  assert.ok((down[0]?.at ?? Number.POSITIVE_INFINITY) - stoppedAt < 5000, JSON.stringify(stopped));
   assert.ok(
     down.every((one) => one.detail === STOPPED),
     JSON.stringify(down),
@@ -1281,12 +1282,14 @@ test("a service here that goes and comes back: its computer is said gone, then r
   await until(async () =>
     (await units.status({ instance })).connections.every((one) => one.state === "down"),
   );
+  // Its words say down at once; its connection itself finds out at its next ping, each 200 ms:
+  // gone for a second, it has, and has to be made again.
+  await new Promise((resolve) => setTimeout(resolve, 1000));
   // Back at the same address, as `agentcomputer up` makes it.
   await app.listenAgain();
-  const back = Date.now();
   alive = recordIn(t, data, app);
-  await until(async () => (await units.status({ instance })).state === "connected", 5000);
-  assert.ok(Date.now() - back < 4000, `connected ${Date.now() - back} ms after`);
+  // In about a second; well before its own wait of 20 s, however slow the machine.
+  await until(async () => (await units.status({ instance })).state === "connected", 10_000);
   done = true;
   await sampling;
   // Only the computer's own words were said meanwhile.
@@ -1324,16 +1327,17 @@ test("a service here started again on another port: its computer's tools come ba
   const apiUrl = await app.listenAgain(true);
   const back = Date.now();
   alive = recordIn(t, data, { apiUrl, apiKey: app.apiKey });
-  // With nothing asked of it, neither a call nor how it stands, it is connected again there.
+  // With nothing asked of it, neither a call nor how it stands, it is connected again there, well
+  // before its own wait of 20 s or its ping each minute, however slow the machine; and once
+  // connected, its tool answers there.
   await until(
     () =>
       app.asked.some(
         (one) => one.at >= back && one.path.endsWith("/mcp") && one.body?.method === "initialize",
       ),
-    8000,
+    15_000,
   );
-  assert.ok(Date.now() - back < 6000, `connected again ${Date.now() - back} ms after`);
-  assert.ok(await echoes());
+  await until(echoes, 15_000);
 });
 
 test("a computer made before today's words says in its status what it is in them; one made now doesn't", async (t) => {

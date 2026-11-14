@@ -593,16 +593,16 @@ test("a connection told to try again waits the first wait again after a try that
   t.after(() => connection.end());
   connection.run();
   await until(() => connection.status().state === "connected");
-  // Gone for long enough that its wait has grown to seconds: 0.2, 0.4, 0.8, 1.6, then 3.2 s.
+  // Gone for long enough that its wait has grown to 6.4 s: 0.2, 0.4, 0.8, 1.6, 3.2, then 6.4, from
+  // 6.2 s to 12.6 s; told at 9 s, in the middle of it.
   server.stop();
-  await new Promise((resolve) => setTimeout(resolve, 3500));
-  // Told while its server is still gone, the try fails, and its next wait is the first again.
+  await new Promise((resolve) => setTimeout(resolve, 9000));
+  // Told while its server is still gone, the try fails, and its next wait is the first again,
+  // 0.2 s; not twice the last, 12.8 s, which would put its next try past the 8 s waited for here.
   connection.retry();
   await new Promise((resolve) => setTimeout(resolve, 100));
   await server.listenAgain();
-  const back = Date.now();
-  await until(() => connection.status().state === "connected", 5000);
-  assert.ok(Date.now() - back < 1500, `connected ${Date.now() - back} ms after`);
+  await until(() => connection.status().state === "connected", 8000);
 });
 
 test("a connection still taken for connected, whose server moved, finds it where it is now when told, and one with nowhere to go sends nothing", async (t) => {
