@@ -52,6 +52,7 @@
     "@types/ws": "^8.18.2"
   },
   "publishConfig": {
-    "access": "public"
+    "access": "public",
+    "tag": "next"
   }
 }
