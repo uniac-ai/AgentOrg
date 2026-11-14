@@ -688,6 +688,23 @@ test("a url connection a server refuses says the server's own words", async (t) 
   assert.match((await refusing(503, "Busy now")) ?? "", /Busy now/);
 });
 
+test("a url connection to a server that can't be reached says so plainly, not in the transport's words", async (t) => {
+  const { mcp } = await setup(t, { firstDelayMs: 100 });
+  // An address where nothing listens: a port taken and let go again.
+  const taken = createServer();
+  await new Promise<void>((resolve) => taken.listen(0, "127.0.0.1", resolve));
+  const { port } = taken.address() as AddressInfo;
+  await new Promise<void>((resolve) => taken.close(() => resolve()));
+  const { connection } = await mcp.create({
+    kind: "url",
+    params: { url: `http://127.0.0.1:${port}/mcp` },
+    secrets: {},
+    name: "Nowhere",
+  });
+  await until(async () => (await mcp.status({ connection })).state === "down");
+  assert.equal((await mcp.status({ connection })).detail, "The server can't be reached.");
+});
+
 test("a secret reaches its server and the provider's file, and nothing that is read back", async (t) => {
   const { hub, person, mcp, dir, logged, connected } = await setup(t, { firstDelayMs: 100 });
   const secret = `secret-${randomUUID()}\nsecond-line-${randomUUID()}`;
