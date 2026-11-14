@@ -270,6 +270,8 @@ const NOT_RUNNING = {
 const STARTING = "Its computer is being started.";
 /** While a failed computer is being stopped and started again. */
 const TRYING = "Its computer is being started again.";
+/** While its service says it runs, and its connection is to be made again, as after an update. */
+const AGAIN = "Its computer is being reached again.";
 /** One the person's own service has, which isn't running, where AgentOrg Mac starts nothing. */
 const SELF_RUN_DOWN =
   "The AgentComputer you run yourself isn't running. Start it with agentcomputer up.";
@@ -644,6 +646,8 @@ export async function startComputerProvider(
   const tried = new Map<string, { at: number; wait: number }>();
   /** How each instance last said it stands, by its state and why. */
   const stood = new Map<string, string>();
+  /** Each instance's computer's state as its service last said it. */
+  const was = new Map<string, string>();
   let ending = false;
   /**
    * Computers an earlier version made here with no isolation, by instance: no longer made or
@@ -702,12 +706,19 @@ export async function startComputerProvider(
     { slot, url, actor, credential }: Linked,
     computer?: Instance["computer"],
   ) => {
-    // Each on this machine at its own service's address: AgentOrg Mac's, or the person's own.
-    const moved =
-      computer && "local" in computer.service ? reachOf(computer.service)?.apiUrl : undefined;
+    // Each on this machine at its own service's address, AgentOrg Mac's or the person's own,
+    // as it is at each try: a service started again may be on another port.
+    const service = computer?.service;
+    const here = service && "local" in service ? service : undefined;
+    const where =
+      here &&
+      (() => {
+        const now = reachOf(here)?.apiUrl;
+        return now ? at(now, url) : undefined;
+      });
     const token = computer?.token;
     const server = new Connection(
-      { kind: "url", url: moved ? at(moved, url) : url },
+      { kind: "url", url: where?.() ?? url },
       token ? { token } : {},
       log,
       options.timing,
@@ -715,6 +726,7 @@ export async function startComputerProvider(
       // The computer's own commands can be put in a group and stopped together, as AgentExec
       // names it.
       slot === COMPUTER ? AGENTEXEC_GROUPS : undefined,
+      where,
     );
     await server.join({ hubUrl, actorId: actor, credential });
     return server;
@@ -735,7 +747,9 @@ export async function startComputerProvider(
   const hold = () => {
     if (ending) return;
     const reached = localService();
-    if (!reached) return holdLater();
+    // With none here, its record is looked for again in a second, a file read, while a computer
+    // is on a service of this machine; else after the usual wait.
+    if (!reached) return holdLater(onServiceHere() ? HOLD_FIRST_MS : undefined);
     let socket: WebSocket;
     try {
       const url = new URL("/v1/connection", reached.apiUrl.replace(/^http/, "ws"));
@@ -750,6 +764,7 @@ export async function startComputerProvider(
     let opened: number | undefined;
     socket.on("open", () => {
       opened = Date.now();
+      againHere();
     });
     // Its close follows, and says the same.
     socket.on("error", () => {});
@@ -758,14 +773,30 @@ export async function startComputerProvider(
       holding.socket = undefined;
       if (opened !== undefined && Date.now() - opened >= HOLD_STEADY_MS)
         holding.wait = HOLD_FIRST_MS;
-      holdLater();
+      holdLater(onServiceHere() ? HOLD_FIRST_MS : undefined);
     });
   };
-  const holdLater = () => {
+  const holdLater = (fixed?: number) => {
     if (ending) return;
-    holding.timer = setTimeout(hold, holding.wait);
-    holding.wait = Math.min(holding.wait * 2, HOLD_MOST_MS);
+    holding.timer = setTimeout(hold, fixed ?? holding.wait);
+    if (fixed === undefined) holding.wait = Math.min(holding.wait * 2, HOLD_MOST_MS);
   };
+  /**
+   * The service here answers again: each connection to a computer on a service of this machine
+   * that is down is tried again now, not after its wait, which can be a minute.
+   */
+  const againHere = () => {
+    for (const [instance, servers] of running) {
+      const service = stored[instance]?.computer?.service;
+      if (!service || !("local" in service)) continue;
+      for (const server of servers) server.retry();
+      // A page reading how it stands reads it again: the service is here.
+      capabilities.get(instance)?.exports.capability.emit("changed", {});
+    }
+  };
+  /** Whether a computer kept here is on a service of this machine. */
+  const onServiceHere = () =>
+    Object.values(stored).some((one) => one.computer && "local" in one.computer.service);
   const endAll = async () => {
     ending = true;
     clearTimeout(holding.timer);
@@ -1075,11 +1106,27 @@ export async function startComputerProvider(
                 ? SELF_RUN_DOWN
                 : LOCAL_DOWN
             : undefined;
-    const each = servers.map((server, i) => ({
-      connection: (found.links[i] as Linked).actor,
-      ...server.status(),
-      ...(why ? { state: "down" as const, detail: why, tools: [] } : {}),
-    }));
+    // Its service says it runs, or is here again and hasn't said yet: a connection down for not
+    // reaching it, as when the service came back, is tried again now and says so in its words,
+    // still down, so one that never comes back is seen; and each down one is tried again when its
+    // computer has just come to run. One its server refuses keeps the server's words and its wait.
+    const runs = info?.state === "running";
+    const ran = runs && was.get(instance) !== "running";
+    if (info) was.set(instance, info.state);
+    const here = !info && service !== undefined && "local" in service;
+    const each = servers.map((server, i) => {
+      const behind = !why && (runs || here) && server.unreached;
+      if (behind || (!why && ran)) server.retry();
+      return {
+        connection: (found.links[i] as Linked).actor,
+        ...server.status(),
+        ...(why
+          ? { state: "down" as const, detail: why, tools: [] }
+          : behind
+            ? { detail: AGAIN }
+            : {}),
+      };
+    });
     const down = each.find((one) => one.state === "down");
     const waiting = each.some((one) => one.state === "connecting");
     const surfaces = info?.surfaces;
@@ -1392,6 +1439,7 @@ export async function startComputerProvider(
           running.delete(instance);
           before.delete(instance);
           stood.delete(instance);
+          was.delete(instance);
           delete stored[instance];
           try {
             save();

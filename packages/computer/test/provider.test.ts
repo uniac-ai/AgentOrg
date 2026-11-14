@@ -138,8 +138,10 @@ async function standIn(
               serverInfo: { name: "stand-in", version: "0.0.0" },
             }
           : message.method === "tools/list"
-            ? { tools: [] }
-            : {};
+            ? { tools: [{ name: "echo", inputSchema: { type: "object" } }] }
+            : message.method === "tools/call"
+              ? { content: [{ type: "text", text: "echoed" }] }
+              : {};
       return send(200, { jsonrpc: "2.0", id: message.id, result });
     }
     if (given !== token)
@@ -264,7 +266,33 @@ async function standIn(
     server.closeAllConnections();
     return new Promise((resolve) => server.close(resolve));
   });
-  return { apiUrl: base, apiKey: token, asked, computers, held, thisComputer, setup };
+  const { port } = server.address() as AddressInfo;
+  return {
+    apiUrl: base,
+    apiKey: token,
+    asked,
+    computers,
+    held,
+    thisComputer,
+    setup,
+    /** Gone, as a service stopped is: nothing answers at its address. */
+    stop() {
+      for (const { socket } of held.splice(0)) socket.terminate();
+      server.closeAllConnections();
+      server.close();
+    },
+    /**
+     * Back at the same address, as a service started again is; or, `elsewhere`, on another port,
+     * as the AgentOrg app starts its service again. Its address, then.
+     */
+    listenAgain: async (elsewhere = false) => {
+      await new Promise<void>((resolve) =>
+        server.listen(elsewhere ? 0 : port, "127.0.0.1", resolve),
+      );
+      base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+      return base;
+    },
+  };
 }
 
 interface Service {
@@ -307,7 +335,16 @@ async function startService(data: string): Promise<Service> {
 
 async function setup(
   t: test.TestContext,
-  { service = true, webUrl = "", path = "", mendFirstMs = 200, mac = false } = {},
+  {
+    service = true,
+    webUrl = "",
+    path = "",
+    mendFirstMs = 200,
+    mac = false,
+    // A connection's first wait before it tries again, and how often it asks its server.
+    firstDelayMs = 50,
+    pingEveryMs = 200,
+  } = {},
 ) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "agentorg-computer-")));
   // Where AgentOrg Mac keeps its record, for a test that has it; none looked for otherwise.
@@ -349,7 +386,7 @@ async function setup(
       // No `agentcomputer` to start unless a test gives one.
       path,
       ...(webUrl ? { webUrl } : {}),
-      timing: { firstDelayMs: 50, pingEveryMs: 200 },
+      timing: { firstDelayMs, pingEveryMs },
       mendFirstMs,
       macRecord: mac ? macRecord : null,
       log: { info() {}, warn() {}, error: (line: string) => void logged.push(line) },
@@ -1199,6 +1236,104 @@ test("this computer whose service here has gone says so at once: AgentOrg Mac's,
       assert.equal(command.ran(), false);
       await units.remove({ instance: made.instance });
     });
+});
+
+test("a service here that goes and comes back: its computer is said gone, then reached again at once, never in a connection's own words", async (t) => {
+  // A connection waits 20 s before it tries again: only being told makes it in time.
+  const { units, apply, local, asPerson, connected, data } = await setup(t, {
+    service: false,
+    firstDelayMs: 20_000,
+  });
+  const app = await standIn(t, {}, { mcp: true });
+  let alive = recordIn(t, data, app);
+  const made = await apply(local("terminal"));
+  const { instance } = made;
+  await connected(instance);
+  const held = await asPerson(made.capability?.actor as string);
+  /** Every word the capability and the unit's status said, read every 100 ms until `done`. */
+  const said = new Set<string>();
+  let done = false;
+  t.after(() => {
+    done = true;
+  });
+  const sampling = (async () => {
+    while (!done) {
+      const read = await Promise.all([held.call.state({}), units.status({ instance })]).catch(
+        () => undefined,
+      );
+      const [stands, status] = read ?? [];
+      for (const one of [
+        stands?.detail,
+        status?.detail,
+        ...(status?.connections ?? []).map((c) => c.detail),
+      ])
+        if (one) said.add(one);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  })();
+  // It goes, as `agentcomputer down` makes it: its record names a process gone, and nothing
+  // answers at its address.
+  alive.kill();
+  await once(alive, "exit");
+  app.stop();
+  const GONE = "No AgentComputer is running on this machine. Start it with agentcomputer up.";
+  await until(async () => (await held.call.state({})).detail === GONE);
+  await until(async () =>
+    (await units.status({ instance })).connections.every((one) => one.state === "down"),
+  );
+  // Back at the same address, as `agentcomputer up` makes it.
+  await app.listenAgain();
+  const back = Date.now();
+  alive = recordIn(t, data, app);
+  await until(async () => (await units.status({ instance })).state === "connected", 5000);
+  assert.ok(Date.now() - back < 4000, `connected ${Date.now() - back} ms after`);
+  done = true;
+  await sampling;
+  // Only the computer's own words were said meanwhile.
+  assert.ok(
+    [...said].every((one) => one === GONE || one === "Its computer is being reached again."),
+    [...said].join(" | "),
+  );
+  await units.remove({ instance });
+});
+
+test("a service here started again on another port: its computer's tools come back within seconds, with nothing reading how it stands", async (t) => {
+  // A connection waits 20 s before it tries again, and asks its server only each minute: only the
+  // service coming back makes it in time.
+  const { apply, local, asAgent, connected, data } = await setup(t, {
+    service: false,
+    firstDelayMs: 20_000,
+    pingEveryMs: 60_000,
+  });
+  const app = await standIn(t, {}, { mcp: true });
+  let alive = recordIn(t, data, app);
+  const made = await apply(local("terminal"));
+  await connected(made.instance);
+  const tools = await asAgent(made.connections[0]?.connection as string);
+  const echoes = () =>
+    tools.call({ name: "echo", arguments: {} }).then(
+      (answer) => !answer.failed && answer.output.includes("echoed"),
+      () => false,
+    );
+  assert.ok(await echoes());
+  // It goes, and comes back on another port, as the AgentOrg app starts its service again: its
+  // connection hasn't noticed, and is still taken for connected.
+  alive.kill();
+  await once(alive, "exit");
+  app.stop();
+  const apiUrl = await app.listenAgain(true);
+  const back = Date.now();
+  alive = recordIn(t, data, { apiUrl, apiKey: app.apiKey });
+  // With nothing asked of it, neither a call nor how it stands, it is connected again there.
+  await until(
+    () =>
+      app.asked.some(
+        (one) => one.at >= back && one.path.endsWith("/mcp") && one.body?.method === "initialize",
+      ),
+    8000,
+  );
+  assert.ok(Date.now() - back < 6000, `connected again ${Date.now() - back} ms after`);
+  assert.ok(await echoes());
 });
 
 test("a computer made before today's words says in its status what it is in them; one made now doesn't", async (t) => {
