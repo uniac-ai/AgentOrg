@@ -17,8 +17,8 @@ The page calls the app's commands through what Tauri gives it (`withGlobalTauri`
 | ----------------------------- | --------------------------------------------------------------------------------------- |
 | `setup`                       | the service's `GET /v1/setup`                                                           |
 | `set_switch {capability, on}` | `PUT /v1/setup/{capability}`                                                            |
-| `ask {capability, need?}`     | `POST /v1/setup/{capability}/ask`                                                       |
-| `open_settings {need}`        | `POST /v1/setup/screen/settings`: that grant's pane, on the person's click              |
+| `ask {capability, need?}`     | `POST /v1/setup/{capability}/ask`: a need's setup, on the person's click                |
+| `open_settings {need}`        | `POST /v1/setup/screen/settings`: that grant's pane; the window's rows use `ask` now    |
 | `open_login_items`            | opens Login Items in System Settings, on the person's click                             |
 | `connection`                  | `GET /v1/connection`                                                                    |
 | `computers`                   | `GET /v1/computers`, those running or starting, as one being brought back is still lent |
@@ -43,7 +43,7 @@ The background item is `Contents/Library/LaunchAgents/dev.agentorg.mac.provider.
 - **The service,** once the driver's socket is there: `node agentcomputer/dist/agentcomputer.js serve --lend --listen 127.0.0.1:0`, with its data folder, the driver and its socket.
 - **Each gets a small environment,** never the app's own: `HOME`, `USER`, `LOGNAME`, `SHELL` (the account's login shell), `TMPDIR`, `LANG`, `PATH=/usr/bin:/bin:/usr/sbin:/sbin` and `DO_NOT_TRACK=1`.
 - **One that ends** is started again: at once, then after 1, 2, 4, 8, 16 and 30 s while it keeps ending within a minute.
-- **A grant's change** starts the driver again, since the driver reads its grants once. That ends the screen's connections of computers using it, as AgentComputer says. The provider reads both grants, by a fresh process of the app's own, when it starts the driver, when a grant step or the window's "Open Settings" tells it to, and, while one is missing, 5 s later, the wait doubling to 5 minutes, as the person may switch one in System Settings at any time. Where they differ from what the driver read, it starts the driver again. A grant taken away needs no restart: the service reads the driver's grants afresh, and shows it.
+- **A grant's change** starts the driver again, since the driver reads its grants once. That ends the screen's connections of computers using it, as AgentComputer says. The provider reads both grants, by a fresh process of the app's own, when it starts the driver, when a grant step or the window's setup of a screen grant tells it to, and, while one is missing, 5 s later, the wait doubling to 5 minutes, as the person may switch one in System Settings at any time. Where they differ from what the driver read, it starts the driver again. A grant taken away needs no restart: the service reads the driver's grants afresh, and shows it.
 - **Its state** is in `~/Library/Application Support/AgentOrg/provider.json`: its process, its state, and its two programs' processes. The window believes it only while that process is alive and runs the app's own program.
 - **One at a time:** it holds `provider.lock` in the same folder while it runs, and another copy's provider waits for it.
 - **The app's folder,** `~/Library/Application Support/AgentOrg`, is kept to its owner (0700), so that no other account can reach what is in it, the driver's socket among it.
@@ -52,7 +52,7 @@ The background item is `Contents/Library/LaunchAgents/dev.agentorg.mac.provider.
 
 ## A grant
 
-The service opens the app through the system, `open -n -g -a AgentOrg.app --args grant` with the grants missing. It makes macOS's request for each, Accessibility first, as its request draws macOS's alert, where Screen Recording's often draws nothing and only lists the app in its pane. Then it waits up to 3 minutes for the person. No pane of System Settings opens: the window's "Open Settings" opens one, on the person's click. macOS shows each request once, so once it has been answered, asking again shows nothing. macOS keeps each process's answer, so each grant is read by a fresh process of the app's own (`granted <need>`, which answers by its exit code). As each grant is given, or was already, it tells the provider at once, which reads the grants again.
+The service opens the app through the system, `open -n -g -a AgentOrg.app --args grant` and one grant: Screen Recording at the switch from macOS 26, where its request draws nothing and only lists the app in its pane, and either one when the person clicks its "Set up". It makes macOS's request for each named, Screen Recording's first, 1 s before Accessibility's: a Screen Recording request made while Accessibility's alert waits isn't listed until the alert is answered. Then it waits up to 3 minutes for the person. The app opens no pane of System Settings. On a click, after the request, the service opens the grant's pane, except at the first request it has made of one whose request may draw macOS's alert, whose own button opens it. macOS keeps each process's answer, so each grant is read by a fresh process of the app's own (`granted <need>`, which answers by its exit code). As each grant is given, or was already, it tells the provider at once, which reads the grants again.
 
 ## The log
 

@@ -1,11 +1,13 @@
 //! `AgentOrg grant <need>...`: the app asking for the screen's grants itself, as the service opens
-//! it through the system, `open -n -g -a AgentOrg.app --args grant <need>...` with the grants
-//! missing, so that what macOS asks names AgentOrg whatever started the service. It makes macOS's
-//! request for each, Accessibility first, as its request draws macOS's alert where Screen
-//! Recording's often draws nothing and only lists the app in its pane. Then it waits up to 3
-//! minutes for the person, telling the provider as each is given. No pane of System Settings opens:
-//! the person opens one from the window, on their own click. macOS keeps each process's answer, so
-//! each grant is read by a fresh process of the app's own.
+//! it through the system, `open -n -g -a AgentOrg.app --args grant <need>`, so that what macOS asks
+//! names AgentOrg whatever started the service. The service names one grant at a time: Screen
+//! Recording at the switch from macOS 26, where its request draws nothing and only lists the app in
+//! its pane, and either one on the person's click. It makes macOS's request for each named, Screen Recording's
+//! first: one made while Accessibility's alert waits for the person isn't listed until the alert is
+//! answered. Then it waits up to 3 minutes for the person, telling the provider as each is given.
+//! It opens no pane of System Settings: the service opens one after the request, on the person's
+//! click. macOS keeps each process's answer, so each grant is read by a fresh process of the app's
+//! own.
 
 use crate::log::log;
 use crate::{macos, provider};
@@ -14,7 +16,10 @@ use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 /// The screen's two grants, in the order they are asked for.
-const NEEDS: [&str; 2] = ["accessibility", "screen-recording"];
+const NEEDS: [&str; 2] = ["screen-recording", "accessibility"];
+/// How long after one request the next is made, where both are asked for at once: macOS lists the
+/// app for Screen Recording some 40 ms after its request, unless Accessibility's alert waits by then.
+const GAP: Duration = Duration::from_secs(1);
 
 pub fn ask(needs: &[String]) {
     for need in needs.iter().filter(|need| !NEEDS.contains(&need.as_str())) {
@@ -27,6 +32,9 @@ pub fn ask(needs: &[String]) {
             log("grant", &format!("{need}: already granted"));
             provider::grants_changed();
         } else {
+            if !waiting.is_empty() {
+                sleep(GAP);
+            }
             log("grant", &format!("{need}: asking"));
             macos::request(need);
             waiting.push(need);
