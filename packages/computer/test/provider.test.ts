@@ -1579,6 +1579,15 @@ test("this computer with its files switched off can't be chosen, in the AgentOrg
     });
 });
 
+/**
+ * A screen lacking Accessibility, in AgentComputer's words: where AgentOrg Mac runs Cua Driver, and
+ * where Cua Driver runs on its own.
+ */
+const lacksAccessibility = (mac: boolean) =>
+  mac
+    ? "Screen Recording and Accessibility are needed, and AgentOrg is missing Accessibility. Set it up in AgentOrg."
+    : "Screen Recording and Accessibility are needed, and Cua Driver is missing Accessibility. Grant it in System Settings, under Privacy & Security.";
+
 test("this computer's screen lacking a grant can't be chosen, in the AgentOrg app's words on a Mac and its service's elsewhere", async (t) => {
   for (const mac of [true, false])
     await t.test(mac ? "AgentOrg Mac" : "the service this machine runs", async (t) => {
@@ -1586,8 +1595,7 @@ test("this computer's screen lacking a grant can't be chosen, in the AgentOrg ap
       const { units, macRecord, data } = await setup(t, { service: false, path: command.bin, mac });
       const app = await standIn(t);
       recordIn(t, mac ? macRecord : data, app);
-      const needs =
-        "Screen Recording and Accessibility are needed, and AgentOrg is missing Accessibility. Grant it in System Settings, under Privacy & Security.";
+      const needs = lacksAccessibility(mac);
       app.setup.push(
         ...["terminal", "files"].map((part) => ({ capability: part, on: true })),
         {
@@ -1648,8 +1656,7 @@ test("this computer's screen that has lost a grant can't be opened live, in the 
         name: "Mine",
       });
       // Then macOS takes Accessibility away: the computer runs on, and its screen says why not.
-      const needs =
-        "Screen Recording and Accessibility are needed, and the app running Cua Driver is missing Accessibility. Grant it in System Settings, under Privacy & Security.";
+      const needs = lacksAccessibility(mac);
       app.setup.push({
         capability: "screen",
         on: true,

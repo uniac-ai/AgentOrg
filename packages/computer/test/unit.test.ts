@@ -201,7 +201,7 @@ test("this computer's screen and the person's browser: off unless chosen, greyed
   );
   // On in the AgentOrg app, with a grant macOS hasn't given it: set up there, in its words.
   const needs =
-    "Screen Recording and Accessibility are needed, and AgentOrg is missing Accessibility. Grant it in System Settings, under Privacy & Security.";
+    "Screen Recording and Accessibility are needed, and AgentOrg is missing Accessibility. Set it up in AgentOrg.";
   const grants = (ungranted: string[], more: Partial<NonNullable<Found>> = {}) =>
     option(
       here(
