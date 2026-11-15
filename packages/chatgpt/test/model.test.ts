@@ -786,14 +786,25 @@ test("a cut connection is tried for about three minutes: one back in twenty seco
     });
   };
   const responses = () => s.fake.requests.filter((r) => r.url.endsWith("/v1/responses")).length;
-  const ask = () =>
-    s.call("session", "respond", {
-      requestId: crypto.randomUUID(),
-      model: "gpt-test",
-      instructions: "",
-      input: [],
-    });
+  const ask = (requestId = crypto.randomUUID()) =>
+    s.call("session", "respond", { requestId, model: "gpt-test", instructions: "", input: [] });
   const waited = () => s.waits.reduce((sum, wait) => sum + wait, 0);
+  /**
+   * What its caller, the module itself here, was told before each wait of request `requestId`:
+   * which retry begins when, by the clock the waits move on, of ten at most.
+   */
+  const told = (requestId: string, from: number) => {
+    let at = from;
+    return s.waits.map((wait, i) => {
+      at += wait;
+      return [
+        "chatgpt",
+        { requestId, attempt: i + 1, of: RETRIES, at: new Date(at).toISOString() },
+      ];
+    });
+  };
+  const retries = () =>
+    s.actor.emitted.filter((e) => e.event === "retrying").map((e) => [e.to, e.payload]);
   const about = (wait: number, i: number) => {
     const doubling = Math.min(1000 * 2 ** i, 30_000);
     return wait >= doubling * 0.9 && wait <= doubling * 1.1;
@@ -807,22 +818,30 @@ test("a cut connection is tried for about three minutes: one back in twenty seco
   };
   s.fake.script({ events: [completed([text("Back")])] });
   const before = responses();
-  const reply = await ask();
+  const back = crypto.randomUUID();
+  const reply = await ask(back);
   assert.deepEqual(reply.output, [{ type: "message", role: "assistant", content: "Back" }]);
   assert.equal(responses() - before, 1);
   assert.equal(s.waits.length, 5);
   assert.ok(s.waits.every(about), JSON.stringify(s.waits));
+  // Before each wait its caller was told: the first wait is retry 1 of 10.
+  assert.deepEqual(retries(), told(back, 0));
+  const clock = waited();
 
   // Cut for good: ten more tries after waits that double up to half a minute, about three
   // minutes in all, and the failure is said in the words it had before.
   cutOff();
   s.held.wait = undefined;
   s.waits.length = 0;
-  await assert.rejects(ask(), {
+  const heard = retries().length;
+  const lost = crypto.randomUUID();
+  await assert.rejects(ask(lost), {
     code: "unavailable",
     message: "OpenAI couldn't be reached. Try again later.",
   });
   assert.equal(s.waits.length, RETRIES);
+  // Ten told, the last 10 of 10; after it, the failure is the answer, and nothing more is told.
+  assert.deepEqual(retries().slice(heard), told(lost, clock));
   assert.ok(s.waits.every(about), JSON.stringify(s.waits));
   assert.ok(waited() >= 181_000 * 0.9 && waited() <= 181_000 * 1.1, String(waited()));
   assert.equal(responses() - before, 1);

@@ -50,6 +50,8 @@ export function serveChatGPT(
     // Each consumer's text goes to that consumer alone.
     delta: (caller, requestId, text, call) =>
       exports.session.emit("delta", { requestId, text, ...(call ? { call } : {}) }, { to: caller }),
+    retrying: (caller, requestId, retry) =>
+      exports.session.emit("retrying", { requestId, ...retry }, { to: caller }),
   });
   session = started;
   exports.login.implement({

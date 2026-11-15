@@ -19,6 +19,7 @@ import {
   type Store as LooperStore,
   type Model,
   Refusal,
+  type Retry,
   type Tool,
   textOf,
 } from "@agentorg/looper";
@@ -550,6 +551,12 @@ export function createChats(options: {
     delta(requestId: string, text: string, call?: Call) {
       looper.delta(requestId, text, call);
     },
+    /** The model request `requestId` is being tried again: which retry begins when. */
+    retrying(requestId: string, retry: Retry) {
+      looper.retrying(requestId, retry);
+    },
+    /** While the main loop's model request is being tried again: which retry begins when. */
+    mainRetrying: () => looper.mainRetrying(),
     /**
      * The agent's pieces of work, most recently active first, those last active before `before`
      * when it is given, each with its latest entries.

@@ -120,6 +120,9 @@ export function startEngine(
     log: ctx.log,
   });
   ctx.slots.model.on("delta", ({ requestId, text, call }) => chats.delta(requestId, text, call));
+  ctx.slots.model.on("retrying", ({ requestId, attempt, of, at }) =>
+    chats.retrying(requestId, { attempt, of, at }),
+  );
   /**
    * The turns that were cut off when the agent last ran go on once the model is bound, the
    * settings answer, and no tools slot is away. As the agent starts, what it is bound to may not

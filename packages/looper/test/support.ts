@@ -91,6 +91,8 @@ export function looperWith(
    */
   const inputs: string[][] = [];
   const numbered: string[][] = [];
+  /** Each worker's request's id, in the order they were made. */
+  const askedIds: string[] = [];
   /** Each worker's request's items, as the model got them. */
   const raw: unknown[][] = [];
   const told: { instructions: string; tools: string[] }[] = [];
@@ -199,6 +201,7 @@ export function looperWith(
             return;
           }
           asked.push(text);
+          askedIds.push(requestId);
           const lines = (plain: boolean) =>
             input.flatMap((item) =>
               item.type === "message"
@@ -267,7 +270,8 @@ export function looperWith(
       delta: (thread, id, text) => void deltas.push({ thread, id, text }),
       working: (on) => void working.push(on),
       failed: (thread, { code }) => void failures.push(`${thread}: ${code}`),
-      worked: (work) => void worked.push(work),
+      // None for the main loop: its model request being tried again, or no longer.
+      worked: (work) => void worked.push(work ?? ""),
     },
     ...(options.stopped === undefined ? {} : { stopped: options.stopped }),
     ...(options.stopGroup === undefined ? {} : { stopGroup: options.stopGroup }),
@@ -300,6 +304,7 @@ export function looperWith(
     values,
     said,
     asked,
+    askedIds,
     inputs,
     numbered,
     raw,
