@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import test from "node:test";
 import { accountLogin, llmSession } from "@agentorg/interfaces";
 import { defineActor } from "@agentorg/sdk";
@@ -739,6 +741,93 @@ test("a response that fails for a passing reason is asked for again, after a wai
   assert.equal(s.waits.length, RETRIES);
 });
 
+test("a cut connection is tried for about three minutes: one back in twenty seconds is answered, and one that stays cut is said as before", async (t) => {
+  const s = await setup(t);
+  await signIn(s);
+  // OpenAI's responses, on a port of this machine. While cut, each connection is dropped as it
+  // comes, and those open are dropped when the cut begins: the port is kept for when it is back.
+  let cut = false;
+  const server = createServer(async (request, response) => {
+    const body: Buffer[] = [];
+    for await (const chunk of request) body.push(chunk as Buffer);
+    const answer = await s.fake.handle(
+      new Request(`https://api.openai.com${request.url}`, {
+        method: request.method,
+        headers: { authorization: request.headers.authorization ?? "" },
+        body: Buffer.concat(body),
+      }),
+    );
+    response.writeHead(answer.status, Object.fromEntries(answer.headers));
+    if (answer.body) for await (const chunk of answer.body) response.write(chunk);
+    response.end();
+  });
+  server.on("connection", (socket) => {
+    if (cut) socket.destroy();
+  });
+  const port = await new Promise<number>((resolve) =>
+    server.listen(0, "127.0.0.1", () => resolve((server.address() as AddressInfo).port)),
+  );
+  t.after(() => {
+    server.close();
+    server.closeAllConnections();
+  });
+  const cutOff = () => {
+    cut = true;
+    server.closeAllConnections();
+  };
+  s.web.fetch = async (request) => {
+    const url = new URL(request.url);
+    if (url.origin !== "https://api.openai.com") return s.fake.handle(request);
+    return fetch(`http://127.0.0.1:${port}${url.pathname}`, {
+      method: request.method,
+      headers: request.headers,
+      body: await request.text(),
+      signal: request.signal,
+    });
+  };
+  const responses = () => s.fake.requests.filter((r) => r.url.endsWith("/v1/responses")).length;
+  const ask = () =>
+    s.call("session", "respond", {
+      requestId: crypto.randomUUID(),
+      model: "gpt-test",
+      instructions: "",
+      input: [],
+    });
+  const waited = () => s.waits.reduce((sum, wait) => sum + wait, 0);
+  const about = (wait: number, i: number) => {
+    const doubling = Math.min(1000 * 2 ** i, 30_000);
+    return wait >= doubling * 0.9 && wait <= doubling * 1.1;
+  };
+
+  // Cut for twenty seconds: tried after waits of about 1, 2, 4, 8 and 16 seconds, the last of
+  // which ends after the connection is back, and that try is answered.
+  cutOff();
+  s.held.wait = async () => {
+    if (waited() >= 20_000) cut = false;
+  };
+  s.fake.script({ events: [completed([text("Back")])] });
+  const before = responses();
+  const reply = await ask();
+  assert.deepEqual(reply.output, [{ type: "message", role: "assistant", content: "Back" }]);
+  assert.equal(responses() - before, 1);
+  assert.equal(s.waits.length, 5);
+  assert.ok(s.waits.every(about), JSON.stringify(s.waits));
+
+  // Cut for good: ten more tries after waits that double up to half a minute, about three
+  // minutes in all, and the failure is said in the words it had before.
+  cutOff();
+  s.held.wait = undefined;
+  s.waits.length = 0;
+  await assert.rejects(ask(), {
+    code: "unavailable",
+    message: "OpenAI couldn't be reached. Try again later.",
+  });
+  assert.equal(s.waits.length, RETRIES);
+  assert.ok(s.waits.every(about), JSON.stringify(s.waits));
+  assert.ok(waited() >= 181_000 * 0.9 && waited() <= 181_000 * 1.1, String(waited()));
+  assert.equal(responses() - before, 1);
+});
+
 test("the wait OpenAI asks for is taken when it is the longer; one past a minute is the answer", async (t) => {
   const s = await setup(t);
   await signIn(s);
@@ -781,12 +870,15 @@ test("the wait OpenAI asks for is taken when it is the longer; one past a minute
   const before = responses();
   await assert.rejects(ask(), { code: "unavailable", message: /limiting how often/ });
   assert.equal(responses() - before, 1);
-  // Nor is a wait that would begin a try more than two minutes after the first: the third
-  // failure is the answer, though a fourth try was left.
-  s.fake.script(...Array.from({ length: 3 }, () => ({ status: 503, retryAfter: "50" })));
+  // Nor is a wait that would begin a try more than five minutes after the first: the sixth
+  // failure is the answer, though more tries were left.
+  s.fake.script(...Array.from({ length: 6 }, () => ({ status: 503, retryAfter: "60" })));
   await assert.rejects(ask(), { code: "unavailable" });
-  assert.equal(responses() - before, 1 + 3);
-  assert.deepEqual(s.waits, [50_000, 50_000]);
+  assert.equal(responses() - before, 1 + 6);
+  assert.deepEqual(
+    s.waits,
+    Array.from({ length: 5 }, () => 60_000),
+  );
   s.waits.length = 0;
   // A 429 with no code of its own is the plan's limit, as before: never asked again.
   const then = responses();
@@ -1314,15 +1406,17 @@ test("a request that had reasoning put back and fails before any text, in a way 
   turn = await kept("c6");
   s.waits.length = 0;
   s.fake.script(
-    { status: 503, retryAfter: "50" },
+    { status: 503, retryAfter: "60" },
     { status: 400 },
-    { status: 503, retryAfter: "50" },
-    { status: 503, retryAfter: "50" },
+    ...Array.from({ length: 5 }, () => ({ status: 503, retryAfter: "60" })),
   );
   before = latest(s).count;
   await assert.rejects(ask(turn), { code: "unavailable" });
-  assert.equal(latest(s).count - before, 4);
-  assert.deepEqual(s.waits, [50_000, 50_000]);
+  assert.equal(latest(s).count - before, 7);
+  assert.deepEqual(
+    s.waits,
+    Array.from({ length: 5 }, () => 60_000),
+  );
   assert.deepEqual(latest(s).kinds, bare);
   // An error in the stream with no code: once without the reasoning, at once, and then the
   // tries a passing failure gets.
