@@ -5,6 +5,7 @@ import { MessageCircleIcon, SlidersHorizontalIcon } from "lucide-react";
 import { useState } from "react";
 import { type AgentTab, api, go } from "../data.ts";
 import { Button } from "../ui/button.tsx";
+import { Retry, useRetrying } from "./activity.tsx";
 import { useAllChats } from "./all-chats.tsx";
 import { useBuilding } from "./building.tsx";
 import { ChatRow } from "./chat-parts.tsx";
@@ -45,6 +46,8 @@ export function AgentPage({
   /** The way forward being looked at, in its unit's form. */
   const [taking, setTaking] = useState<Way>();
   const watched = byId.get(id);
+  // While it works, its own model request may be tried again: the line says so in "Working"'s place.
+  const retrying = useRetrying(watched?.detail, watched?.now.tone === "working");
   // An agent the list read since doesn't have: one deleted elsewhere, or a wrong address. A list
   // that couldn't be read says nothing of it.
   if (reads > opened && !unread && !list.some((entry) => entry.agent === id)) return <Missing />;
@@ -143,7 +146,9 @@ export function AgentPage({
           <span
             className={`min-w-0 truncate ${!needs && tone === "trouble" ? "text-[var(--bad)]" : ""}`}
           >
-            {needs ?? failed ?? now.text}
+            {needs ??
+              failed ??
+              (now.tone === "working" && retrying ? <Retry retrying={retrying} /> : now.text)}
           </span>
           {/* The way in is on Home, where everything left to set up is. */}
           {needs && (

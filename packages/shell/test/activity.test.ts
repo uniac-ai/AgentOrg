@@ -2,7 +2,7 @@
 // in a real browser over the stand-in gateway, with calls in the formats the tools really answer.
 import assert from "node:assert/strict";
 import test from "node:test";
-import { type Browser, chromium, type Page } from "@playwright/test";
+import { type Browser, chromium, type Locator, type Page } from "@playwright/test";
 import { computerWith } from "./design/samples.ts";
 import { SESSION, standIn, type Work } from "./stand-in.ts";
 
@@ -98,9 +98,11 @@ const three = (minutes: number): Entry[] => [
   call("github__list_files", { n: 2 }, undefined, minutes, "running"),
 ];
 
-async function open(gateway: Gateway, hash: string, width = 1440): Promise<Page> {
+/** The page at `hash`; with `time`, its clock says that time until the test moves it. */
+async function open(gateway: Gateway, hash: string, width = 1440, time?: number): Promise<Page> {
   const page = await browser.newPage({ viewport: { width, height: 900 } });
   page.setDefaultTimeout(8000);
+  if (time !== undefined) await page.clock.setFixedTime(time);
   await page.addInitScript((session) => localStorage.setItem("agentorg.session", session), SESSION);
   await page.goto(`${gateway.url}/${hash}`);
   return page;
@@ -437,6 +439,111 @@ test(
       Array.from({ length: 14 }, (_, n) => `Piece ${n + 1}`),
     );
     assert.equal(pieces(), 2, "two pages of pieces after the first");
+    await page.close();
+  }),
+);
+
+/** An ISO 8601 time so many seconds after `from`. */
+const after = (from: number, seconds: number) => new Date(from + seconds * 1000).toISOString();
+/** Waits until `where` says exactly `words`. */
+const says = (where: Locator, words: string) => {
+  const escaped = words.replace(/[.*+?^$(){}|[\]\\]/g, "\\$&");
+  return where.filter({ hasText: new RegExp(`^${escaped}$`) }).waitFor();
+};
+/** How a piece of work stands, beside its title. */
+const head = (where: Locator, title: string) =>
+  where.getByRole("region", { name: title }).locator("h3 + span");
+
+test(
+  "a piece of work whose request is tried again says so in Working's place, counting down to now, in the box and the window, until it isn't",
+  withGateway(async (gateway) => {
+    const start = Date.now();
+    const reviewer = gateway.agents.get("a-reviewer");
+    assert.ok(reviewer);
+    const retrying = { attempt: 3, of: 10, at: after(start, 12) };
+    const triage = {
+      id: "w2",
+      title: "Triage",
+      state: "working" as const,
+      at: ago(0),
+      entries: three(2),
+    };
+    reviewer.works = [
+      {
+        id: "w1",
+        title: "Review #482",
+        state: "working",
+        at: ago(0),
+        entries: three(1),
+        retrying,
+      },
+      triage,
+    ];
+    const page = await open(gateway, "#/a/a-reviewer/overview", 1440, start);
+    await says(head(box(page), "Review #482"), "Retrying in 12 s · attempt 3 of 10");
+    // The same dot, and a piece not tried again says Working.
+    await head(box(page), "Review #482").getByRole("img", { name: "Working" }).waitFor();
+    await says(head(box(page), "Triage"), "Working");
+    // It counts down by itself, and says "now" once the time has come.
+    await page.clock.setFixedTime(start + 5_000);
+    await says(head(box(page), "Review #482"), "Retrying in 7 s · attempt 3 of 10");
+    await page.clock.setFixedTime(start + 12_000);
+    await says(head(box(page), "Review #482"), "Retrying now · attempt 3 of 10");
+    // The window says it on the same head.
+    await box(page).getByRole("button", { name: "Expand" }).click();
+    const window = page.getByRole("region", { name: "Reviewer's activity" });
+    await says(head(window, "Review #482"), "Retrying now · attempt 3 of 10");
+    await says(head(window, "Triage"), "Working");
+    // No longer tried again: Working, in both.
+    gateway.setWorks("a-reviewer", [
+      { id: "w1", title: "Review #482", state: "working", at: ago(0), entries: three(1) },
+      triage,
+    ]);
+    await says(head(box(page), "Review #482"), "Working");
+    await says(head(window, "Review #482"), "Working");
+    await page.close();
+  }),
+);
+
+test(
+  "the agent's own request tried again is said on its line, in Working's place, and a piece's on the piece; neither in its conversation",
+  withGateway(async (gateway) => {
+    const start = Date.now();
+    const page = await open(gateway, "#/a/a-research", 1440, start);
+    const line = page.getByRole("status", { name: "State" });
+    // An Activity that says nothing of it, as an older one doesn't: Working, as it was.
+    await says(line, "Working");
+    gateway.setRetrying("a-research", { attempt: 1, of: 10, at: after(start, 12) });
+    await says(line, "Retrying in 12 s · attempt 1 of 10");
+    assert.match(
+      (await line.locator("span").first().getAttribute("class")) ?? "",
+      /bg-\[var\(--ok\)\] pulse/,
+    );
+    await page.clock.setFixedTime(start + 12_000);
+    await says(line, "Retrying now · attempt 1 of 10");
+    // Its conversation holds what was said, and nothing of this.
+    await page.getByRole("button", { name: "Message" }).click();
+    const chats = page.getByRole("complementary", { name: "Chats" });
+    await chats.getByText("Why are checkouts failing?").waitFor();
+    assert.equal(await chats.getByText(/Retrying/).count(), 0);
+    // With a piece's too, each says its own.
+    gateway.setWorks("a-research", [
+      {
+        id: "w1",
+        title: "Checkouts",
+        state: "working",
+        at: ago(0),
+        entries: three(1),
+        retrying: { attempt: 3, of: 10, at: after(start, 20) },
+      },
+    ]);
+    await page.getByRole("main").getByRole("tab", { name: "Overview" }).click();
+    await says(head(box(page), "Checkouts"), "Retrying in 8 s · attempt 3 of 10");
+    await says(line, "Retrying now · attempt 1 of 10");
+    // Its own no longer tried again: Working on its line, and the piece keeps its own.
+    gateway.setRetrying("a-research");
+    await says(line, "Working");
+    await says(head(box(page), "Checkouts"), "Retrying in 8 s · attempt 3 of 10");
     await page.close();
   }),
 );

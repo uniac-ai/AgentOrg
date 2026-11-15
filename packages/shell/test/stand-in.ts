@@ -99,6 +99,8 @@ export interface Agent {
   model?: string;
   /** Its pieces of work, newest first, as its Work capability holds them. None by default. */
   works?: Work[];
+  /** Its own model request being tried again, as its Work says it with its latest pieces. */
+  retrying?: Work["retrying"];
   /** What it holds besides its Work, each with how it stands, as `capability@1` says it. */
   held?: Held[];
   /**
@@ -600,6 +602,7 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
             more: one.entries.length > 3,
           })),
           more: works.length > from + 6,
+          ...(from === 0 && agent.retrying ? { retrying: agent.retrying } : {}),
         }),
       };
     }
@@ -1493,6 +1496,13 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
     /** An agent's pieces of work come to be these, and its Work says its view changed. */
     setWorks(agent: string, works: Work[]) {
       agentOf(agent).works = works;
+      emit(workSlot(agent), "changed", { view: "activity" });
+    },
+    /** An agent's own model request comes to be tried again, or not, and its Work says so. */
+    setRetrying(agent: string, retrying?: Work["retrying"]) {
+      const one = agentOf(agent);
+      if (retrying) one.retrying = retrying;
+      else delete one.retrying;
       emit(workSlot(agent), "changed", { view: "activity" });
     },
     /** What an agent can be built from comes to be this: its bases, units and templates. */
