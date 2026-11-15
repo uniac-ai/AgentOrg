@@ -1,8 +1,8 @@
 // The pointer the agents are drawn with on the screen: Cua Driver's cursor theme, made here as its
 // source, a dotLottie archive. The driver draws it, for each agent, in place of its own dart; the
-// app draws nothing of it. It is the window's own pointer, v20's path, black with a white outline,
-// at about its size: the path ×3.3 on the theme's 128-unit canvas, which the driver shows at 42
-// points. A theme can't blur, so the shadow is the path again, lower, filled faintly, under twelve
+// app draws nothing of it. It is the pointer AgentOrg's design draws for an agent, an arrow, black
+// with a white outline, at about its size: its path ×3.3 on the theme's 128-unit canvas, which the
+// driver shows at 42 points, the tip moved under a unit to a whole point, as the hotspot must be. A theme can't blur, so the shadow is the path again, lower, filled faintly, under twelve
 // faint strokes of falling width.
 //
 // The driver paints only a theme's `idle` animation, but a full theme names an animation for each
@@ -16,7 +16,7 @@ export const THEME = "ai.uniac.agentorg.pointer";
 
 const CANVAS = 128;
 const FPS = 30;
-/** v20's pointer, in its own units, the tip first. */
+/** The design's pointer, in its own units, the tip first. */
 const V20 = [
   [3.5, 2.8],
   [3.5, 18.6],

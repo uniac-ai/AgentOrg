@@ -14,7 +14,7 @@ const theme = files["cua/theme.json"];
 const frame = files["a/pointer.json"];
 const paints = (layer) => layer.shapes.filter((shape) => shape.ty === "fl" || shape.ty === "st");
 
-test("the pointer is v20's path at 3.3 times, its tip on a whole hotspot, in every action", () => {
+test("the pointer is the design's path at 3.3 times, its tip on a whole hotspot, in every action", () => {
   assert.equal(theme.id, THEME);
   assert.deepEqual(theme.canvas, { width: 128, height: 128, fps: 30 });
   assert.deepEqual(theme.hotspot, { x: 12, y: 10 });

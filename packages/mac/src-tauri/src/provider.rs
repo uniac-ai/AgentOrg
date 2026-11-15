@@ -748,7 +748,10 @@ mod tests {
             driver: root.join("app/cua-driver"),
             themes: root.join("app/cursor-themes"),
         };
-        program(&programs.driver, ": > \"$5\"\nexec sleep 600");
+        // The stand-in keeps the pointer's settings as it found them when it started.
+        let seen = root.join("seen.json");
+        let keeps = format!("cp \"$HOME/.cua-driver/config.json\" '{}'", seen.display());
+        program(&programs.driver, &format!("{keeps}\n: > \"$5\"\nexec sleep 600"));
         let record = r#"echo "{\"url\":\"http://127.0.0.1:1\",\"pid\":$$}" > "$7/server.json""#;
         program(&programs.node, &format!("{record}\nexec sleep 600"));
         program(&programs.service, "");
@@ -785,9 +788,16 @@ mod tests {
             until("the grants read", || !regrant.load(Ordering::Relaxed));
             sleep(Duration::from_millis(500));
             assert_eq!(driver(), Some(was));
+            // Whatever changed the settings meanwhile, the driver started again has them as set.
+            let config = places.driver_home.join(".cua-driver/config.json");
+            fs::write(&config, r#"{"cursor":{"halo":true,"badges":"minimal"}}"#).unwrap();
+            fs::remove_file(&seen).unwrap();
             accessibility.store(true, Ordering::Relaxed);
             regrant.store(true, Ordering::Relaxed);
             until("the driver again", || again(was));
+            let found: Value = serde_json::from_str(&fs::read_to_string(&seen).unwrap()).unwrap();
+            assert_eq!(found["cursor"]["halo"], false);
+            assert_eq!(found["cursor"]["badges"], "off");
         });
         // Unasked, while one is missing: a grant given in System Settings, with nothing told,
         // starts the driver again too. Both given, they are no longer read unasked.
