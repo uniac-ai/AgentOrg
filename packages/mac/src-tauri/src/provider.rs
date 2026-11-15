@@ -124,6 +124,8 @@ extern "C" fn on_signal(signal: libc::c_int) {
 }
 
 pub fn run_as_background_item() {
+    let mut starts = crate::menu_bar::Starts::default();
+    let mut checked: Option<Instant> = None;
     unsafe {
         for signal in [libc::SIGTERM, libc::SIGINT, libc::SIGUSR1] {
             libc::signal(signal, on_signal as extern "C" fn(libc::c_int) as libc::sighandler_t);
@@ -145,7 +147,24 @@ pub fn run_as_background_item() {
     // Restoring no windows, the driver reaches no file kept for Full Disk Access as it starts.
     macos::driver_restores_windows(false);
     let grants = || (grant::granted("accessibility"), grant::granted("screen-recording"));
-    provide(&Programs::in_bundle(&app), &places, &identifier, &STOP, &REGRANT, &grants, WATCH);
+    // The menu-bar item, which the window's process holds: started with no window where none runs,
+    // as after a login. Looked for every 2 s, and only while macOS allows the background item, so
+    // that one quitting with the item unregistered isn't started again.
+    let mut menu_bar = || {
+        if checked.is_some_and(|at| at.elapsed() < Duration::from_secs(2)) {
+            return;
+        }
+        checked = Some(Instant::now());
+        let running = crate::menu_bar::running(&crate::menu_bar::state()).is_some();
+        let allowed = || macos::background_item_status() == Some(1);
+        if !running && starts.due(running, allowed(), Instant::now()) {
+            crate::menu_bar::start(&app);
+        } else if running {
+            starts.due(true, true, Instant::now());
+        }
+    };
+    let programs = Programs::in_bundle(&app);
+    provide(&programs, &places, &identifier, &STOP, &REGRANT, &grants, WATCH, &mut menu_bar);
 }
 
 /// Holds a lock for as long as what it returns is kept, waiting for it first.
@@ -406,6 +425,7 @@ pub fn provide(
     regrant: &AtomicBool,
     grants: &dyn Fn() -> Grants,
     every: Duration,
+    menu_bar: &mut dyn FnMut(),
 ) {
     for folder in [&places.data, &places.driver_home] {
         let _ = fs::create_dir_all(folder);
@@ -471,6 +491,7 @@ pub fn provide(
             write_state(places, &now);
             said = Some(now);
         }
+        menu_bar();
         if rotated.elapsed() >= Duration::from_secs(60) {
             rotate();
             rotated = Instant::now();
@@ -512,6 +533,9 @@ mod tests {
         }
     }
 
+    /// No menu-bar item in these tests: the provider's start decision is `menu_bar`'s.
+    fn no_menu_bar() {}
+
     /// Stops the provider when a test ends, so that one that fails ends too.
     struct Stops<'a>(&'a AtomicBool);
     impl Drop for Stops<'_> {
@@ -552,7 +576,8 @@ mod tests {
             let _stops = Stops(&stop_now);
             scope.spawn(|| {
                 let (grants, every) = (|| (true, true), Duration::from_secs(5));
-                provide(&programs, &places, "test.id", &stop_now, &regrant, &grants, every)
+                let (stop, menu_bar) = (&stop_now, &mut no_menu_bar);
+                provide(&programs, &places, "test.id", stop, &regrant, &grants, every, menu_bar)
             });
             until("both running", || state() == Some(AppState::Running));
             // The app's folder is its owner's alone.
@@ -678,7 +703,8 @@ mod tests {
             thread::scope(|scope| {
                 let _stops = Stops(&stop_now);
                 scope.spawn(|| {
-                    provide(&programs, &places, "test.id", &stop_now, &regrant, &grants, every)
+                    let (stop, menu_bar) = (&stop_now, &mut no_menu_bar);
+                    provide(&programs, &places, "test.id", stop, &regrant, &grants, every, menu_bar)
                 });
                 until("the driver", || driver().is_some());
                 check(&regrant);

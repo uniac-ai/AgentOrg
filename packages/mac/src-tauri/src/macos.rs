@@ -148,6 +148,36 @@ pub fn request(need: &str) {
     }
 }
 
+/// Whether macOS draws in its dark appearance: for the menu-bar item's glyph, where its menu bar
+/// can't be read.
+pub fn dark_appearance() -> bool {
+    objc2::rc::autoreleasepool(|_| {
+        let key = NSString::from_str("AppleInterfaceStyle");
+        let style = NSUserDefaults::standardUserDefaults().stringForKey(&key);
+        style.is_some_and(|style| style.to_string() == "Dark")
+    })
+}
+
+/// Whether a status item is drawn on a dark menu bar, from its button's appearance, which follows
+/// the menu bar, its wallpaper included. On the main thread.
+pub fn status_item_dark(item: &AnyObject) -> Option<bool> {
+    let button: Option<Retained<AnyObject>> = unsafe { msg_send![item, button] };
+    let appearance: Option<Retained<AnyObject>> =
+        unsafe { msg_send![&*button?, effectiveAppearance] };
+    let name: Option<Retained<NSString>> = unsafe { msg_send![&*appearance?, name] };
+    Some(name?.to_string().contains("Dark"))
+}
+
+/// Draws a window in macOS's dark appearance, and only that window.
+pub fn dark_window(ns_window: *mut c_void) {
+    let Some(class) = AnyClass::get(c"NSAppearance") else { return };
+    let name = NSString::from_str("NSAppearanceNameDarkAqua");
+    let dark: Option<Retained<AnyObject>> = unsafe { msg_send![class, appearanceNamed: &*name] };
+    if let (Some(dark), Some(window)) = (dark, unsafe { (ns_window as *mut AnyObject).as_ref() }) {
+        let _: () = unsafe { msg_send![window, setAppearance: &*dark] };
+    }
+}
+
 /// The account's login shell, from its user record.
 pub fn login_shell() -> Option<String> {
     let user = unsafe { libc::getpwuid(libc::getuid()) };

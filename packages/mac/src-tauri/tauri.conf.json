@@ -15,6 +15,7 @@
     "windows": [
       {
         "label": "main",
+        "create": false,
         "title": "AgentOrg",
         "width": 460,
         "height": 480,
@@ -23,8 +24,7 @@
         "titleBarStyle": "Overlay",
         "hiddenTitle": true,
         "trafficLightPosition": { "x": 12, "y": 16.5 },
-        "backgroundColor": "#191919",
-        "theme": "Dark"
+        "backgroundColor": "#191919"
       }
     ],
     "security": {
