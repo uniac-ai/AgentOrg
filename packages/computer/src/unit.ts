@@ -75,7 +75,7 @@ const GRANT_NAMES: Record<string, string> = {
 };
 export const GRANTS = Object.keys(GRANT_NAMES);
 /** Why the screen can't be had while macOS hasn't given AgentOrg Mac one of its grants. */
-const ungrantedMac = (grants: string[]) =>
+export const ungrantedMac = (grants: string[]) =>
   `${MacApp} doesn't have ${grants.map((one) => GRANT_NAMES[one] ?? one).join(" or ")}, which your screen needs. Set ${grants.length > 1 ? "them" : "it"} up there, under Screen.`;
 /** Why no container is made here, where AgentOrg Mac makes none. */
 export const NO_CONTAINER_MAC = `${MacApp} makes no container. To use a computer you run yourself, give its address.`;

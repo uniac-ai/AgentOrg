@@ -60,6 +60,7 @@ import {
   SKILLS,
   THIS,
   UPDATE_MAC,
+  ungrantedMac,
   WEB,
   WEB_UNIT,
   WHERE,
@@ -206,6 +207,11 @@ const SURFACES_MS = 2000;
  * is said at the first read after this.
  */
 const SURFACES_FRESH_MS = 1000;
+/**
+ * How long AgentOrg Mac's setup, read for a screen that can't be opened, is used again: each read
+ * checks the screen afresh, which its service otherwise does once in this long.
+ */
+const SETUP_FRESH_MS = 10_000;
 /**
  * A computer its service says failed is stopped and started again, as the service says to: at
  * once, then after a wait that doubles each time up to the most, until it runs or its unit goes.
@@ -937,11 +943,24 @@ export async function startComputerProvider(
     asked.set(computer.id, { at: Date.now(), answer });
     return answer;
   };
+  /** AgentOrg Mac's setup as read for its screen, one read at a time, kept a while. */
+  let setupKept: { at: number; answer: ReturnType<typeof setupOf> } | undefined;
+  const setupFor = (reached: Reached) => {
+    if (!setupKept || Date.now() - setupKept.at >= SETUP_FRESH_MS)
+      setupKept = { at: Date.now(), answer: setupOf(reached) };
+    return setupKept.answer;
+  };
   const askInfo = async (computer: NonNullable<Instance["computer"]>) => {
     const reached = reachOf(computer.service);
     const info = reached && (await within(SURFACES_MS, Computer.getInfo(computer.id, reached)));
     if (!info) return undefined;
     if (fromBefore(info) || attachedBefore(computer, info)) seenBefore(computer, info);
+    // On AgentOrg Mac's service, a screen lacking a grant is said in the app's words, as in Create.
+    const screenOut = info.surfaces.some((one) => one.surface === "screen" && one.unavailable);
+    const ungranted =
+      screenOut && "local" in computer.service && computer.service.mac
+        ? (await within(SURFACES_MS, setupFor(reached)))?.ungranted
+        : undefined;
     return {
       info,
       state: info.state,
@@ -949,7 +968,12 @@ export async function startComputerProvider(
         surface,
         protocol,
         operate,
-        ...(unavailable ? { unavailable } : {}),
+        ...(unavailable
+          ? {
+              unavailable:
+                surface === "screen" && ungranted ? ungrantedMac(ungranted) : unavailable,
+            }
+          : {}),
       })),
     };
   };

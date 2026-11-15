@@ -1618,6 +1618,70 @@ test("this computer's screen lacking a grant can't be chosen, in the AgentOrg ap
     });
 });
 
+test("this computer's screen that has lost a grant can't be opened live, in the AgentOrg app's words on a Mac and its service's elsewhere", async (t) => {
+  for (const mac of [true, false])
+    await t.test(mac ? "AgentOrg Mac" : "the service this machine runs", async (t) => {
+      const command = onPathThatSays(t);
+      const { units, macRecord, data, root } = await setup(t, {
+        service: false,
+        path: command.bin,
+        mac,
+      });
+      const app = await standIn(t, {}, { mcp: true });
+      recordIn(t, mac ? macRecord : data, app);
+      app.thisComputer.capabilities = [
+        { capability: "files", ready: true },
+        { capability: "screen", ready: true },
+      ];
+      const made = await units.apply({
+        unit: "computer",
+        values: {
+          kind: "this",
+          access: "files",
+          workspace: join(root, "work"),
+          screen: "on",
+          ownBrowser: "none",
+        } as never,
+        secrets: {},
+        needs: {},
+        agent: "act_agent",
+        name: "Mine",
+      });
+      // Then macOS takes Accessibility away: the computer runs on, and its screen says why not.
+      const needs =
+        "Screen Recording and Accessibility are needed, and the app running Cua Driver is missing Accessibility. Grant it in System Settings, under Privacy & Security.";
+      app.setup.push({
+        capability: "screen",
+        on: true,
+        needs: [
+          { need: "screen-recording", state: "granted" },
+          { need: "accessibility", state: "not-granted" },
+        ],
+      });
+      const record = [...app.computers.values()][0] as Record<string, unknown>;
+      record.surfaces = [
+        { surface: "screen", protocol: "screen@1", operate: true, unavailable: needs },
+      ];
+      const setupReads = () => app.asked.filter((one) => one.path === "/v1/setup").length;
+      const before = setupReads();
+      const said = async () =>
+        (await units.status({ instance: made.instance })).surfaces?.find(
+          (one) => one.surface === "screen",
+        )?.unavailable;
+      const words = mac
+        ? "The AgentOrg app doesn't have Accessibility, which your screen needs. Set it up there, under Screen."
+        : needs;
+      assert.equal(await said(), words);
+      // Read again once the computer is asked afresh: the app's setup, which checks the screen
+      // each time, isn't asked again so soon. Elsewhere, it is never asked.
+      await new Promise((resolve) => setTimeout(resolve, 1100));
+      assert.equal(await said(), words);
+      assert.equal(setupReads() - before, mac ? 1 : 0);
+      assert.equal(command.ran(), false);
+      await units.remove({ instance: made.instance });
+    });
+});
+
 test("this computer with its screen and the person's browser: attached with both, each its own connection, and its row says whose browser it is", async (t) => {
   const command = onPathThatSays(t);
   const { units, macRecord, root } = await setup(t, {
