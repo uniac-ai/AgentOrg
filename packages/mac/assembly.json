@@ -17,6 +17,7 @@
     "sums": "https://github.com/trycua/cua/releases/download/cua-driver-rs-v0.49.7/SHA256SUMS",
     "release": "https://api.github.com/repos/trycua/cua/releases/tags/cua-driver-rs-v0.49.7",
     "sha256": "269571f4a456340dae33c946f9986334113621794ac8d6212376ca6555410f95",
+    "compiler": "cua-driver-rs-0.49.7-darwin-universal/cua-cursor-theme",
     "take": {
       "cua-driver-rs-0.49.7-darwin-universal/cua-driver": "Resources/cua-driver",
       "cua-driver-rs-0.49.7-darwin-universal/LICENSE": "Resources/licenses/cua-driver/LICENSE",

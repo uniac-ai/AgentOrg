@@ -3,6 +3,8 @@
 //   new, empty folder of its own and checked before anything of it is used, and of each only the
 //   files assembly.json names;
 // - the service, `@agentorg/computer`, from this workspace's install, which its lockfile checked;
+// - the agents' pointer, a cursor theme the driver draws (./cursor-theme.mjs), compiled by the
+//   compiler of the driver's own release, which only builds it and goes nowhere;
 // - their licences.
 // The bundle takes them from `src-tauri/target/assembly/bundle`, through tauri.conf.json's
 // `bundle.macOS.files`: `node` into Contents/MacOS; `cua-driver`, the service and the licences into
@@ -27,6 +29,7 @@ import {
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { dotLottie, THEME } from "./cursor-theme.mjs";
 
 const here = dirname(dirname(fileURLToPath(import.meta.url)));
 
@@ -91,7 +94,10 @@ export async function fetched(pin, downloads, get) {
   return { name: pin.file, url: pin.url, size: statSync(file).size, sha256: sum, at: file };
 }
 
-/** Of a checked release, the files its pin names, each a file of its own, into the bundle. */
+/**
+ * Of a checked release, the files its pin names, each a file of its own, into the bundle. Answers
+ * the folder it was unpacked into.
+ */
 function took(release, pin, bundle) {
   const into = fresh(join(dirname(release.at), "unpacked"));
   execFileSync("tar", ["-xf", release.at, "-C", into]);
@@ -101,6 +107,24 @@ function took(release, pin, bundle) {
       throw new Error(`${pin.file} has no file ${from}.`);
     copy(path, join(bundle, to));
   }
+  return into;
+}
+
+/**
+ * The agents' pointer, compiled from its source by the compiler of the driver's own release, as
+ * that driver reads it: `Resources/cursor-themes/<id>.cua-theme`, where the provider points the
+ * driver.
+ */
+function pointer(unpacked, pin, target, bundle, compiling) {
+  const compiler = join(unpacked, pin.compiler);
+  if (!existsSync(compiler) || !lstatSync(compiler).isFile())
+    throw new Error(`${pin.file} has no file ${pin.compiler}.`);
+  const source = join(fresh(join(target, "cursor")), `${THEME}.lottie`);
+  writeFileSync(source, dotLottie());
+  const theme = join(bundle, "Resources/cursor-themes", `${THEME}.cua-theme`);
+  mkdirSync(dirname(theme), { recursive: true });
+  compiling(compiler, source, theme);
+  if (!existsSync(theme)) throw new Error(`The cursor's theme wasn't made: ${theme} is missing.`);
 }
 
 /** A package's folder, as Node would find it from another's, at the version wanted. */
@@ -164,7 +188,15 @@ const PROGRAMS = [
 ];
 
 /** Makes `bundle` what the app carries, and says what was fetched. */
-export async function assemble({ pins, target, workspace, service: wanted, get, signing }) {
+export async function assemble({
+  pins,
+  target,
+  workspace,
+  service: wanted,
+  get,
+  signing,
+  compiling,
+}) {
   const downloads = join(target, "downloads");
   const node = await fetched(pins.node, downloads, get);
   const driver = await fetched(pins.driver, downloads, get);
@@ -173,7 +205,8 @@ export async function assemble({ pins, target, workspace, service: wanted, get, 
   // Of the driver's release, never its perception extension, nor the program inside its
   // CuaDriver.app, whose entitlements are tied to its makers' Team ID: macOS refuses it once it is
   // signed as ours.
-  took(driver, pins.driver, bundle);
+  const unpacked = took(driver, pins.driver, bundle);
+  pointer(unpacked, pins.driver, target, bundle, compiling);
   const version = service(workspace, wanted, join(bundle, "Resources/agentcomputer"));
   // Each program can run however the bundle is installed: node-pty ships its helper unmarked.
   for (const program of PROGRAMS) chmodSync(join(bundle, program), 0o755);
@@ -206,6 +239,10 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
         }),
       signing: (path, entitlements) =>
         sign(path, identity, entitlements && join(here, "entitlements", entitlements)),
+      // The compiler checks the source in full as it builds: every action, the canvas, the
+      // hotspot, and what its painter can draw.
+      compiling: (compiler, source, theme) =>
+        execFileSync(compiler, ["build", source, "--output", theme], { stdio: "inherit" }),
     });
     for (const one of said.fetched)
       console.log(`${basename(one.at)}: ${one.size} bytes, sha256 ${one.sha256}, from ${one.url}`);
