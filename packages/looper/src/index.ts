@@ -21,6 +21,7 @@ export {
   type OutputItem,
   type Picture,
   Refusal,
+  type Retry,
   type Shown,
   type Status,
   type Store,

@@ -78,6 +78,7 @@ export {
   LiveTicket,
   Problem,
   ResultKind,
+  Retrying,
   Surface,
   Unit,
   UnitId,

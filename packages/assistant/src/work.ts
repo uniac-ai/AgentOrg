@@ -4,7 +4,7 @@
  * changed. It answers while the agent is stopped too: what its work did is still there to read.
  */
 import type { Activity, ActivityPage, capability, tools } from "@agentorg/interfaces";
-import { cut, cutInside, type WorkEntry } from "@agentorg/looper";
+import { cut, cutInside, type Retry, type WorkEntry } from "@agentorg/looper";
 import { type Export, Refused } from "@agentorg/sdk";
 import type { z } from "zod";
 
@@ -47,6 +47,8 @@ interface Source {
     before: string | undefined,
     limit: number,
   ): Promise<{ entries: WorkEntry[]; more: boolean }>;
+  /** While the main loop's model request is being tried again: which retry begins when. */
+  mainRetrying(): Retry | undefined;
 }
 
 /**
@@ -78,10 +80,15 @@ export const fits = (answer: object) => JSON.stringify(answer).length <= BUDGET;
 
 /**
  * The answer with no `work`: its oldest entries go first, then its least recently active pieces
- * of work. `more` says whether pieces of work remain after those it gives.
+ * of work. `more` says whether pieces of work remain after those it gives, and `retrying` is the
+ * main loop's, while its model request is being tried again.
  */
-function activity(all: Works, more: boolean): z.input<typeof Activity> {
-  const answer = { works: all.map((one) => ({ ...one, entries: one.entries.map(shown) })), more };
+function activity(all: Works, more: boolean, retrying?: Retry): z.input<typeof Activity> {
+  const answer = {
+    works: all.map((one) => ({ ...one, entries: one.entries.map(shown) })),
+    more,
+    ...(retrying ? { retrying } : {}),
+  };
   while (!fits(answer)) {
     const fullest = answer.works.reduce((most, one) =>
       one.entries.length > most.entries.length ? one : most,
@@ -139,9 +146,12 @@ export function serveWork(
         if (work === undefined) {
           // One more than it gives, to know whether more remain.
           const found = await source.works(WORKS + 1, LATEST, before);
-          return {
-            output: JSON.stringify(activity(found.slice(0, WORKS), found.length > WORKS)),
-          };
+          const answer = activity(
+            found.slice(0, WORKS),
+            found.length > WORKS,
+            source.mainRetrying(),
+          );
+          return { output: JSON.stringify(answer) };
         }
         return { output: JSON.stringify(page(work, await source.entries(work, before, most))) };
       } catch (error) {

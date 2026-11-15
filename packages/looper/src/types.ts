@@ -118,6 +118,17 @@ export interface Shown {
   images?: Picture[];
 }
 
+/**
+ * A model request being tried again, from before its first wait until it writes, answers or ends:
+ * `attempt` is the number of the retry that begins at `at` (ISO 8601), from 1, and `of` the most
+ * retries there will be. While a retry runs, `at` is past.
+ */
+export interface Retry {
+  attempt: number;
+  of: number;
+  at: string;
+}
+
 /** What a loop is doing. On `error`, `detail.code` is the refusal's code. */
 export type Status =
   | { state: "idle" | "thinking" | "tool" }

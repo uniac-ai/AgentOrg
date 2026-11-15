@@ -194,3 +194,60 @@ test("a call in flight as its turn is stopped stays listed, as running, in a sto
   const [after] = await looper.works(6, 3);
   assert.deepEqual(after?.entries.map(shown), ["hold done"]);
 });
+
+test("a model request being tried again is on its piece of work, or the main loop's, until it writes, answers or ends", async () => {
+  const retry = { attempt: 1, of: 10, at: "2026-11-15T00:00:01.000Z" };
+  const later = { attempt: 2, of: 10, at: "2026-11-15T00:00:03.000Z" };
+  // The main loop's request, held: it is said, as the main loop's, until it answers.
+  let route: (output: OutputItem[]) => void = () => {};
+  const { tool, finish } = held();
+  const { looper, asked, askedIds, mainIds, worked, answer, fail } = looperWith({
+    tools: [tool],
+    routing: () =>
+      new Promise((resolve) => {
+        route = resolve;
+      }),
+  });
+  await looper.send("a", "Write it.");
+  await until(() => mainIds.length === 1, "the main loop's request");
+  const main = mainIds[0] as string;
+  looper.retrying(main, retry);
+  assert.deepEqual(looper.mainRetrying(), retry);
+  assert.equal(worked.at(-1), "", "the main loop's change is said");
+  // Another request's is nobody's here.
+  looper.retrying("elsewhere", later);
+  assert.deepEqual(looper.mainRetrying(), retry);
+  const before = worked.length;
+  route(newWork("Report"));
+  await until(() => asked.length === 1, "the work's request");
+  assert.equal(looper.mainRetrying(), undefined);
+  assert.ok(worked.slice(before).includes(""), "its end is said");
+  assert.equal((await looper.works(6, 0))[0]?.retrying, undefined);
+
+  // The work's request: on that piece of work, until text is streamed for it.
+  const id = (await looper.works(6, 0))[0]?.id as string;
+  const first = askedIds[0] as string;
+  looper.retrying(first, retry);
+  assert.deepEqual((await looper.works(6, 0))[0]?.retrying, retry);
+  assert.equal(worked.at(-1), id);
+  assert.equal(looper.mainRetrying(), undefined, "not the main loop's");
+  looper.delta(first, "Writ");
+  assert.equal((await looper.works(6, 0))[0]?.retrying, undefined);
+  assert.equal(worked.at(-1), id, "and that is said");
+  // Again, and then it answers with a call: gone with the request, while its turn runs on.
+  looper.retrying(first, later);
+  assert.deepEqual((await looper.works(6, 0))[0]?.retrying, later);
+  answer("Write it.", [{ type: "function_call", callId: "c1", name: "hold", arguments: "{}" }]);
+  await until(() => looper.state(id).state === "tool", "its call to run");
+  assert.equal((await looper.works(6, 0))[0]?.state, "working");
+  assert.equal((await looper.works(6, 0))[0]?.retrying, undefined);
+  finish();
+  await until(() => asked.length === 2, "the request after its call");
+
+  // A request that fails, after being tried again: gone with it too.
+  looper.retrying(askedIds[1] as string, retry);
+  assert.deepEqual((await looper.works(6, 0))[0]?.retrying, retry);
+  fail("Write it.");
+  await looper.settled();
+  assert.equal((await looper.works(6, 0))[0]?.retrying, undefined);
+});

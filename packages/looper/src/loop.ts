@@ -41,6 +41,7 @@ import {
   type Outcome,
   type Picture,
   Refusal,
+  type Retry,
   type Shown,
   type Status,
   type Tool,
@@ -147,6 +148,8 @@ interface Turn {
   closed?: boolean;
   /** The model request running now. */
   requestId?: string | undefined;
+  /** While that request is being tried again: which retry begins when, of how many at most. */
+  retrying?: Retry | undefined;
   /** Settles when the turn's loop has ended. */
   ended?: Promise<void>;
   /** Its place among the turns running, or in the line for one. */
@@ -458,6 +461,10 @@ export function createLoop(options: {
       return (await model.respond({ requestId, ...request })).output;
     } finally {
       current.requestId = undefined;
+      if (current.retrying) {
+        current.retrying = undefined;
+        out.worked();
+      }
     }
   };
   /**
@@ -825,6 +832,18 @@ export function createLoop(options: {
     resumed: () => turn?.resumed === true,
     /** The status now. */
     state: () => latest,
+    /** While the model request of the turn running now is being tried again: which retry, when. */
+    retrying: () => turn?.retrying,
+    /**
+     * The model request `requestId` is being tried again, as `retry` says, or with none, it has
+     * written since: kept on the turn whose request it is, and said when that changes.
+     */
+    retry(requestId: string, retry: Retry | undefined) {
+      if (!turn || turn.requestId !== requestId || turn.retrying === retry) return;
+      if (!turn.retrying && !retry) return;
+      turn.retrying = retry;
+      out.worked();
+    },
     /**
      * A piece of a function call's arguments, as the model writes them for `requestId`: what a
      * `send` of the request running now says streams into the thread of the message it names.

@@ -53,6 +53,7 @@ import {
   type Model,
   type Picture,
   Refusal,
+  type Retry,
   type Shown,
   type Status,
   type Store,
@@ -98,6 +99,8 @@ const KEPT_BEFORE = 200;
 /** Where what is kept of a piece of work is kept. */
 const WORKS = "work/";
 const running = (status: Status) => status.state === "thinking" || status.state === "tool";
+/** A retry as an answer carries it: none when there is none. */
+const retryingOf = (retry: Retry | undefined) => (retry ? { retrying: retry } : {});
 
 /** The store's keys under `prefix`, as a store of its own. */
 function under(store: Store, prefix: string): Store {
@@ -129,8 +132,12 @@ export interface LooperOut {
   working(on: boolean): void;
   /** A message in `thread` got no answer, and why. */
   failed(thread: string, problem: { code: string; message: string }): void;
-  /** What the piece of work `work` did, or whether it is at work, changed: ask `entries` again. */
-  worked(work: string): void;
+  /**
+   * What the piece of work `work` did, whether it is at work, or whether its model request is being
+   * tried again, changed: ask `entries` again. With none, whether the main loop's model request is
+   * being tried again changed.
+   */
+  worked(work?: string): void;
 }
 
 /**
@@ -584,7 +591,12 @@ export function createLooper(options: {
     return taken;
   };
 
-  const main = createMain({ model: options.model, request: options.request, log });
+  const main = createMain({
+    model: options.model,
+    request: options.request,
+    retried: () => out.worked(),
+    log,
+  });
   /**
    * The work there is, as the main loop is told of it for a message in `thread`: in a turn first,
    * then the latest at rest. In a thread of anyone but the person, only the work that follows it:
@@ -1353,6 +1365,7 @@ export function createLooper(options: {
           ...(at ? { at } : {}),
           ...(work.failed ? { failed: true as const } : {}),
           ...(await entriesOf(id, undefined, entries)),
+          ...retryingOf(works.get(id)?.loop.retrying()),
         })),
       );
     },
@@ -1434,9 +1447,20 @@ export function createLooper(options: {
      * the message it names. What a worker writes without sending says nothing.
      */
     delta(requestId: string, text: string, call?: Call) {
+      for (const { loop } of works.values()) loop.retry(requestId, undefined);
       if (!call) main.delta(requestId, text);
       else for (const { loop } of works.values()) loop.stream(requestId, call, text);
     },
+    /**
+     * The model request `requestId` is being tried again, as `retry` says: kept on the main loop's
+     * request or on the turn of the piece of work that made it, until it writes, answers or ends.
+     */
+    retrying(requestId: string, retry: Retry) {
+      main.retry(requestId, retry);
+      for (const { loop } of works.values()) loop.retry(requestId, retry);
+    },
+    /** While the main loop's model request is being tried again: which retry begins when. */
+    mainRetrying: () => main.retrying(),
   };
 }
 export type Looper = ReturnType<typeof createLooper>;

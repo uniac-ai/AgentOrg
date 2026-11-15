@@ -9,7 +9,15 @@
  * those before it but what it is given.
  */
 import { PICTURES_BUDGET, withPictures } from "./record.js";
-import { head, type Item, type Log, type Model, type Picture, type ToolSpec } from "./types.js";
+import {
+  head,
+  type Item,
+  type Log,
+  type Model,
+  type Picture,
+  type Retry,
+  type ToolSpec,
+} from "./types.js";
 
 /** What the main loop is told, before who it speaks as. */
 export const MAIN_INSTRUCTIONS = `You are the front desk. You do none of the work: you say whose a message is, answer it yourself when it needs no work, or stop a piece of work it asks to stop.
@@ -175,12 +183,29 @@ export function createMain(options: {
    * main loop speaks as when it answers itself.
    */
   request(): Promise<{ model?: string | undefined; voice?: string | undefined }>;
+  /** Whether its request out now is being tried again changed. */
+  retried(): void;
   log: Log;
 }) {
-  /** The request out now, whether it was dropped, and where its text goes as it is written. */
+  /**
+   * The request out now, whether it was dropped, where its text goes as it is written, and while it
+   * is being tried again, which retry begins when.
+   */
   let asking:
-    | { requestId?: string; dropped?: true; drop(): void; written(text: string): void }
+    | {
+        requestId?: string;
+        dropped?: true;
+        drop(): void;
+        written(text: string): void;
+        retrying?: Retry | undefined;
+      }
     | undefined;
+  /** Its request out now is being tried again as `retry` says, or with none, no longer. */
+  const retry = (requestId: string, retry: Retry | undefined) => {
+    if (asking?.requestId !== requestId || (!asking.retrying && !retry)) return;
+    asking.retrying = retry;
+    options.retried();
+  };
 
   /**
    * Make one request of the model: what it wrote, and what it called `route` with. `voiced` is
@@ -238,6 +263,10 @@ export function createMain(options: {
       return { ...(text.trim() ? { text } : {}), routed };
     } finally {
       if (asking === mine) asking = undefined;
+      if (mine.retrying) {
+        mine.retrying = undefined;
+        options.retried();
+      }
     }
   };
   /** The turn of the work that `stop` names, if it was told of as in a turn. */
@@ -308,8 +337,14 @@ export function createMain(options: {
     },
     /** Text the model writes while it answers `requestId`, if that is the request out now. */
     delta(requestId: string, text: string) {
-      if (asking?.requestId === requestId) asking.written(text);
+      if (asking?.requestId !== requestId) return;
+      retry(requestId, undefined);
+      asking.written(text);
     },
+    /** The model request `requestId` is being tried again, if it is the one out now. */
+    retry,
+    /** While the request out now is being tried again: which retry begins when. */
+    retrying: () => asking?.retrying,
     /** Drop the request out now: it is cancelled, and it says nothing. */
     async cancel() {
       const cut = asking;

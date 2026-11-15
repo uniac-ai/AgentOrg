@@ -1,6 +1,7 @@
 import { defineInterface, event, method } from "@agentorg/sdk";
 import { z } from "zod";
 import { Pictures } from "./picture.js";
+import { Retrying } from "./units.js";
 
 const RequestId = z.string().min(1).max(128);
 /** A model's id, as whoever offers the model names it. */
@@ -55,7 +56,8 @@ export const Tool = z.object({
 /**
  * `llm.session@1`: model inference. Each `respond` is one stateless request: the caller sends the
  * whole conversation every time, and keeps it. Text, and the arguments of a call of a `streamed`
- * function, stream as `delta` events for the request.
+ * function, stream as `delta` events for the request; a provider that tries a request again says
+ * so before each wait, as `retrying`.
  * The request is one frame on the wire (at most 1 MiB), so a caller trims what it sends. A
  * caller carries nothing of a model's reasoning; a provider may keep it and put it back itself.
  *
@@ -120,5 +122,15 @@ export const llmSession = defineInterface({
         call: z.object({ id: CallId, name: FunctionCall.shape.name }).optional(),
       }),
     ),
+    /**
+     * A request that failed for a passing reason is tried again: sent before each wait, to the
+     * consumer whose request it is only. `attempt` is the number of the retry that begins at `at`,
+     * from 1 (the first try isn't one), and `of` the most retries there will be: the first wait
+     * says 1 of `of`. Fewer come when a try answers, or when a failure is the answer: one that
+     * doesn't pass, one after text was streamed, a cancel, or one whose wait would be too long or
+     * end too late. It says nothing of why: a failure that is the answer is `respond`'s refusal. A
+     * provider that doesn't try requests again sends none, and a consumer may leave it unheard.
+     */
+    retrying: event(z.object({ requestId: RequestId, ...Retrying.shape })),
   },
 });

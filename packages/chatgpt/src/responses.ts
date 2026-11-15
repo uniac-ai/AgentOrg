@@ -368,6 +368,15 @@ export function createSession(options: {
    * that function call's arguments.
    */
   delta(caller: string, requestId: string, text: string, call?: { id: string; name: string }): void;
+  /**
+   * A request about to be tried again, for the one Actor whose request it is: the number of that
+   * retry, from 1, the most there will be, and when it begins (ISO 8601).
+   */
+  retrying?(
+    caller: string,
+    requestId: string,
+    retry: { attempt: number; of: number; at: string },
+  ): void;
   /** How a wait between two tries is spent, and the time: a timer and the clock, unless a test gives its own. */
   wait?: (ms: number, signal: AbortSignal) => Promise<void>;
   now?: () => number;
@@ -646,7 +655,8 @@ export function createSession(options: {
    * `RETRY_WITHIN_MS` after the first: the failure is the answer. Not once text of it, or a
    * streamed function's arguments, have been streamed, since those words may be with their reader
    * and a new try would write them again; a call of any other function streams nothing and
-   * doesn't stop a try. Nor once it is cancelled, which also ends a wait.
+   * doesn't stop a try. Nor once it is cancelled, which also ends a wait. Before each wait, its
+   * caller is told which retry begins when, and of how many at most.
    *
    * A try that had reasoning put back, and that OpenAI may not have taken as it is (`notTaken`),
    * with no words of its own (`failed`), before any text, is made once more without it, at once
@@ -685,6 +695,11 @@ export function createSession(options: {
           Math.min(BACKOFF_MS * 2 ** failed, BACKOFF_MAX_MS) * (0.9 + Math.random() * 0.2);
         const wait = Math.max(again.waitMs ?? 0, doubling);
         if (wait > WAIT_MAX_MS || now() - began + wait > RETRY_WITHIN_MS) throw error;
+        options.retrying?.(caller, input.requestId, {
+          attempt: failed + 1,
+          of: RETRIES,
+          at: new Date(now() + wait).toISOString(),
+        });
         await (options.wait ?? sleep)(wait, signal);
         if (signal.aborted) throw cancelled();
         failed++;

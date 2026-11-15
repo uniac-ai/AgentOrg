@@ -14,14 +14,16 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
+import { createServer } from "node:http";
 import { createRequire } from "node:module";
+import type { AddressInfo } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test, { after } from "node:test";
 import { Computer } from "@agentorg/computer";
 import { HubState } from "@agentorg/hub";
-import { completed, fakeOpenAI } from "chatgpt/fake-openai";
+import { completed, fakeOpenAI, type Script, text } from "chatgpt/fake-openai";
 import WebSocket from "ws";
 import { type App, startApp } from "../src/index.ts";
 
@@ -401,6 +403,207 @@ test("a turn cut off as the app stops goes on when it is started again, with the
   );
   // Asked as it went on, and once more after it had sent, before its turn ended.
   assert.equal(asked.length, 3);
+});
+
+test("a model request being tried again is on the agent's Activity: the main loop's at its top, a piece of work's on it, gone at the answer and at giving up", async (t) => {
+  // OpenAI's responses on a port of this machine. A request of the main loop, or of a piece of
+  // work, is dropped while it is cut, as a connection that breaks; else each is answered with the
+  // next of its own answers.
+  const fake = await fakeOpenAI();
+  const cut = { main: false, work: false };
+  type Answer = Script | ((number: number) => Script);
+  const answers: { main: Answer[]; work: Answer[] } = { main: [], work: [] };
+  /** The number the newest message a request reads starts with, as a worker is shown it. */
+  const numberOf = (input: { role?: string; content?: unknown }[]) => {
+    const said = input.findLast((item) => item.role === "user")?.content;
+    const words = typeof said === "string" ? said : JSON.stringify(said ?? "");
+    return Number(/\[(\d+)\]/.exec(words)?.[1] ?? 0);
+  };
+  const server = createServer(async (request, response) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(chunk as Buffer);
+    const body = Buffer.concat(chunks);
+    const asked = JSON.parse(String(body)) as {
+      tools?: { name: string }[];
+      input: { role?: string; content?: unknown }[];
+    };
+    const whose = (asked.tools ?? []).some((tool) => tool.name === "route") ? "main" : "work";
+    if (cut[whose]) {
+      request.socket.destroy();
+      return;
+    }
+    const next = answers[whose].shift() ?? { events: [completed([])] };
+    fake.script(typeof next === "function" ? next(numberOf(asked.input)) : next);
+    const answer = await fake.handle(
+      new Request(`https://api.openai.com${request.url}`, {
+        method: request.method,
+        headers: { authorization: request.headers.authorization ?? "" },
+        body,
+      }),
+    );
+    response.writeHead(answer.status, Object.fromEntries(answer.headers));
+    if (answer.body) for await (const chunk of answer.body) response.write(chunk);
+    response.end();
+  });
+  const port = await new Promise<number>((resolve) =>
+    server.listen(0, "127.0.0.1", () => resolve((server.address() as AddressInfo).port)),
+  );
+  t.after(() => {
+    server.close();
+    server.closeAllConnections();
+  });
+  const s = await open(t, undefined, async (request) => {
+    const url = new URL(request.url);
+    if (!url.pathname.endsWith("/responses")) return fake.handle(request);
+    return fetch(`http://127.0.0.1:${port}${url.pathname}`, {
+      method: request.method,
+      headers: request.headers,
+      body: await request.text(),
+      signal: request.signal,
+    });
+  });
+  const { person } = await s.start();
+  const { authorizeUrl } = await person.call<{ authorizeUrl: string }>("login", "start", {
+    redirectUri: "http://127.0.0.1:4321/oauth/chatgpt",
+  });
+  await person.call("login", "complete", { callbackUrl: await fake.authorize(authorizeUrl) });
+  const agent = await createAssistant(person, "Scout");
+  const slot = await chatSlot(person, agent);
+  await until(
+    () =>
+      person.call(slot, "list").then(
+        () => true,
+        () => false,
+      ),
+    "the chat to be exposed",
+  );
+  // Its Activity, read as a page reads it: the view's operation, through the person's own slot.
+  type Retry = { attempt: number; of: number; at: string };
+  type Read = {
+    works: { id: string; state: string; failed?: true; retrying?: Retry }[];
+    retrying?: Retry;
+  };
+  const { capabilities } = await person.call<{
+    capabilities: {
+      views: { kind: string; operation?: string; slot?: string }[];
+      person: { operations: Record<string, string> };
+    }[];
+  }>("agents", "get", { agent });
+  const held = capabilities.find((one) => one.views.some((view) => view.kind === "activity"));
+  const view = held?.views.find((one) => one.kind === "activity");
+  const tools = view?.slot ? held?.person.operations[view.slot] : undefined;
+  assert.ok(tools && view?.operation, "the agent's Activity is read through the person's slot");
+  const activity = async () =>
+    JSON.parse(
+      (
+        await person.call<{ output: string }>(tools, "call", {
+          name: view.operation,
+          arguments: {},
+        })
+      ).output,
+    ) as Read;
+  const texts = async () =>
+    (await person.call<{ messages: { text: string }[] }>(slot, "history", {})).messages.map(
+      (message) => message.text,
+    );
+  const idle = () =>
+    until(
+      async () => (await person.call<{ state: string }>(slot, "state")).state === "idle",
+      "the agent to be idle",
+    );
+  /** Each retry Activity said, in the order it changed, read from `read` until `done`. */
+  const watch = async (
+    read: () => Promise<Retry | undefined>,
+    done: (seen: Retry[]) => boolean,
+  ) => {
+    const seen: Retry[] = [];
+    await until(async () => {
+      const now = await read();
+      if (now && now.attempt !== seen.at(-1)?.attempt) seen.push(now);
+      return done(seen);
+    }, "the retries to be said");
+    return seen;
+  };
+  /**
+   * The retries as they were said: each one later than the one before, of ten at most, beginning
+   * after it was asked for, and soon. A slow read may miss one, as a page would; not the order.
+   */
+  const sane = (seen: Retry[], asked: number) => {
+    for (const [i, retry] of seen.entries()) {
+      if (i > 0) assert.ok(retry.attempt > (seen[i - 1] as Retry).attempt, JSON.stringify(seen));
+      assert.equal(retry.of, 10);
+      const at = Date.parse(retry.at);
+      assert.ok(at > asked && at <= Date.now() + 2 ** retry.attempt * 1100, retry.at);
+    }
+  };
+
+  // A message to a conversation that follows no work: the main loop's request, cut, is tried
+  // again, said at Activity's top, and goes when it answers once the connection is back.
+  cut.main = true;
+  answers.main.push({ events: [completed([text("Here.")])] });
+  let asked = Date.now();
+  await person.call(slot, "send", { text: "Are you there?" });
+  const main = await watch(
+    async () => (await activity()).retrying,
+    (seen) => (seen.at(-1)?.attempt ?? 0) >= 2,
+  );
+  sane(main, asked);
+  cut.main = false;
+  await until(async () => (await texts()).at(-1) === "Here.", "the main loop to answer");
+  await idle();
+  assert.equal((await activity()).retrying, undefined);
+
+  // New work: its request, cut, is tried again, said on the piece of work, and goes when it
+  // answers.
+  answers.main.push({
+    events: [
+      completed([
+        { type: "function_call", call_id: "r1", name: "route", arguments: '{"title":"Report"}' },
+      ]),
+    ],
+  });
+  const sent = { type: "function_call", call_id: "s1", name: "send" };
+  answers.work.push(
+    (number) => ({
+      events: [
+        completed([{ ...sent, arguments: JSON.stringify({ message: number, text: "Done." }) }]),
+      ],
+    }),
+    { events: [completed([])] },
+  );
+  cut.work = true;
+  asked = Date.now();
+  await person.call(slot, "send", { text: "Write the report." });
+  const piece = async () => (await activity()).works[0];
+  const work = await watch(
+    async () => (await piece())?.retrying,
+    (seen) => seen.length === 1,
+  );
+  sane(work, asked);
+  assert.equal((await piece())?.state, "working");
+  assert.equal((await activity()).retrying, undefined, "the main loop isn't trying again");
+  cut.work = false;
+  await until(async () => (await texts()).at(-1) === "Done.", "the work to answer");
+  await idle();
+  assert.equal((await piece())?.retrying, undefined);
+
+  // Given up: the piece of work that follows the conversation, at rest, takes the next message
+  // itself. The try after a retry asks for a wait longer than a minute, so its failure is the
+  // answer, and the retry goes with it.
+  answers.work.push({ status: 429, code: "rate_limit_exceeded", retryAfterMs: "61000" });
+  cut.work = true;
+  asked = Date.now();
+  await person.call(slot, "send", { text: "Once more." });
+  const again = await watch(
+    async () => (await piece())?.retrying,
+    (seen) => seen.length === 1,
+  );
+  sane(again, asked);
+  cut.work = false;
+  await until(async () => (await piece())?.failed === true, "the work to fail");
+  await idle();
+  assert.equal((await piece())?.retrying, undefined);
+  assert.equal((await activity()).retrying, undefined);
 });
 
 test("a slot not bound to the person is refused, and an exposure's name reaches nothing once gone", async (t) => {

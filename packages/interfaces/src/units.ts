@@ -82,11 +82,25 @@ export const WorkEntry = z.union([
   z.strictObject({ id: z.string(), at: z.string(), line: z.string() }),
 ]);
 /**
+ * A model request that is being tried again after it failed for a passing reason, from before its
+ * first wait until it writes, answers or ends: `attempt` is the number of the retry that begins at
+ * `at` (an ISO 8601 time), from 1, the first try not being one, and `of` the most retries there
+ * will be, though fewer may come. The first wait says 1 of `of`; while a retry runs, `at` is past.
+ * Nothing says why: the words are the host's.
+ */
+export const Retrying = z.strictObject({
+  attempt: z.number().int().min(1),
+  of: z.number().int().min(1),
+  at: z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,9})?Z$/),
+});
+/**
  * What an `activity` view shows, as its operation answers with no `work`, given `{ before? }`: an
  * agent's pieces of work, most recently active first, those last active before the piece of work
  * `before` when it is given, each with whether it is working, idle or stopped, when it was last
- * active, whether its last turn failed, and its latest entries, oldest first, with `more` when
- * older ones remain. Its own `more` says whether pieces of work last active before those remain.
+ * active, whether its last turn failed, its latest entries, oldest first, with `more` when older
+ * ones remain, and `retrying` while its model request is being tried again. Its own `more` says
+ * whether pieces of work last active before those remain, and its own `retrying` is set while the
+ * agent's main loop, which no piece of work is, has its model request tried again.
  */
 export const Activity = z.strictObject({
   works: z.array(
@@ -98,9 +112,11 @@ export const Activity = z.strictObject({
       failed: z.literal(true).optional(),
       entries: z.array(WorkEntry),
       more: z.boolean(),
+      retrying: Retrying.optional(),
     }),
   ),
   more: z.boolean().optional(),
+  retrying: Retrying.optional(),
 });
 /**
  * One piece of work's entries, oldest first, as the operation of an `activity` view answers when
