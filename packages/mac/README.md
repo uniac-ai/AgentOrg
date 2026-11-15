@@ -74,7 +74,7 @@ The service opens the app through the system, `open -n -g -a AgentOrg.app --args
 
 `~/Library/Logs/AgentOrg/AgentOrg.log`, each line with its time and which of them wrote it:
 
-- **The window:** when it starts, opens and closes, the background item's standing, each change of the menu-bar item's status line, and each time a command goes from answered to refused or back, or from one refusal to another, or the window's height changes.
+- **The window:** when it starts, opens and closes, the background item's standing, each change of the menu-bar item's status line, each switch the person sets, with its part, which way and the service's answer, and each time another command goes from answered to refused or back, or from one refusal to another, or the window's height changes.
 - **The menu bar:** "Quit AgentOrg (stops lending)", and where the background item then stands; a second one started while one runs, and which process holds the item.
 - **The provider:** each program it starts, stops, or finds ended, with that program's last lines and the wait before it starts again, and each change of its state.
 - **A grant:** each grant asked for, and its answer.
