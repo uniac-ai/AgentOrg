@@ -829,7 +829,10 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
                 title: "A server at an address",
                 params: {
                   type: "object",
-                  properties: { url: { type: "string", format: "uri", title: "Address" } },
+                  properties: {
+                    url: { type: "string", format: "uri", title: "Address" },
+                    public: { type: "boolean", title: "Public addresses only" },
+                  },
                   required: ["url"],
                   additionalProperties: false,
                 },

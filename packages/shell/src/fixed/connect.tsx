@@ -7,6 +7,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { Field, FieldGroup, FieldLabel } from "../ui/field.tsx";
 import { Input } from "../ui/input.tsx";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select.tsx";
+import { Switch } from "../ui/switch.tsx";
 import { Textarea } from "../ui/textarea.tsx";
 import { listMcpProviders, type McpProvider, useAct } from "./data.ts";
 import { Nothing } from "./parts.tsx";
@@ -28,6 +29,7 @@ const labelOf = (key: string, property: Property) =>
   property.title ??
   (key.length <= 3 ? key.toUpperCase() : `${key.charAt(0).toUpperCase()}${key.slice(1)}`);
 const isList = (property: Property) => property.type === "array";
+const isFlag = (property: Property) => property.type === "boolean";
 
 export function ConnectDialog({
   open,
@@ -96,6 +98,8 @@ function KindForm({
   const secrets = kind.secrets as Schema;
   const [name, setName] = useState("");
   const [values, setValues] = useState<Record<string, string>>({});
+  /** A yes-or-no field's value: off until switched on. */
+  const [flags, setFlags] = useState<Record<string, boolean>>({});
   const [hidden, setHidden] = useState<Record<string, string>>({});
   /** Secrets a server takes by a name the person gives, when its kind leaves the names open. */
   const [named, setNamed] = useState<{ name: string; value: string }[]>([]);
@@ -112,7 +116,8 @@ function KindForm({
   const submit = () => {
     if (!ready) return;
     const given = Object.fromEntries(
-      fields.flatMap(([field, property]) => {
+      fields.flatMap(([field, property]): [string, string | string[] | boolean][] => {
+        if (isFlag(property)) return [[field, flags[field] === true]];
         const value = values[field]?.trim();
         if (!value) return [];
         return [
@@ -174,27 +179,44 @@ function KindForm({
             <FieldLabel htmlFor="connect-name">Name</FieldLabel>
             <Input id="connect-name" value={name} onChange={(e) => setName(e.target.value)} />
           </Field>
-          {fields.map(([field, property]) => (
-            <Field key={field}>
-              <FieldLabel htmlFor={`connect-${field}`}>{labelOf(field, property)}</FieldLabel>
-              {isList(property) ? (
-                <Textarea
-                  id={`connect-${field}`}
-                  placeholder="One per line"
-                  className="font-mono text-xs"
-                  value={values[field] ?? ""}
-                  onChange={(e) => setValues({ ...values, [field]: e.target.value })}
-                />
-              ) : (
-                <Input
-                  id={`connect-${field}`}
-                  className="font-mono text-xs"
-                  value={values[field] ?? ""}
-                  onChange={(e) => setValues({ ...values, [field]: e.target.value })}
-                />
-              )}
-            </Field>
-          ))}
+          {fields.map(([field, property]) =>
+            isFlag(property) ? (
+              // A yes-or-no field: the switch the unit form gives a toggle, off at first.
+              <Field key={field}>
+                <div className="flex items-center gap-1.5">
+                  <FieldLabel htmlFor={`connect-${field}`} className="w-fit">
+                    {labelOf(field, property)}
+                  </FieldLabel>
+                  <span className="flex-1" />
+                  <Switch
+                    id={`connect-${field}`}
+                    checked={flags[field] === true}
+                    onCheckedChange={(on) => setFlags({ ...flags, [field]: on })}
+                  />
+                </div>
+              </Field>
+            ) : (
+              <Field key={field}>
+                <FieldLabel htmlFor={`connect-${field}`}>{labelOf(field, property)}</FieldLabel>
+                {isList(property) ? (
+                  <Textarea
+                    id={`connect-${field}`}
+                    placeholder="One per line"
+                    className="font-mono text-xs"
+                    value={values[field] ?? ""}
+                    onChange={(e) => setValues({ ...values, [field]: e.target.value })}
+                  />
+                ) : (
+                  <Input
+                    id={`connect-${field}`}
+                    className="font-mono text-xs"
+                    value={values[field] ?? ""}
+                    onChange={(e) => setValues({ ...values, [field]: e.target.value })}
+                  />
+                )}
+              </Field>
+            ),
+          )}
           {secretFields.map(([field, property]) => (
             <Field key={field}>
               <FieldLabel htmlFor={`connect-secret-${field}`}>

@@ -116,7 +116,7 @@ test(
     await page.waitForTimeout(250);
     const size = await dialog.boundingBox();
     assert.equal(size?.height, 460, "as tall as the design has it");
-    assert.deepEqual(await labels(page), ["Name", "Address", "Token"]);
+    assert.deepEqual(await labels(page), ["Name", "Address", "Public addresses only", "Token"]);
     const connect = dialog.getByRole("button", { name: "Connect" });
     assert.equal(await connect.isDisabled(), true);
     await dialog.getByRole("combobox", { name: "Kind" }).click();
@@ -127,7 +127,7 @@ test(
     await dialog.getByRole("combobox", { name: "Kind" }).click();
     await page.getByRole("option", { name: /address/ }).click();
     await dialog.getByLabel("Name").fill("Notion");
-    await dialog.getByLabel("Address").fill("https://mcp.notion.com/mcp");
+    await dialog.getByLabel("Address", { exact: true }).fill("https://mcp.notion.com/mcp");
     await dialog.getByLabel("Token").fill("secret-value");
     await connect.click();
     await dialog.waitFor({ state: "detached" });
@@ -135,11 +135,35 @@ test(
     assert.deepEqual(gateway.calls.findLast((c) => c.method === "create")?.input, {
       provider: "local",
       kind: "url",
-      params: { url: "https://mcp.notion.com/mcp" },
+      params: { url: "https://mcp.notion.com/mcp", public: false },
       name: "Notion",
       secrets: { token: "secret-value" },
     });
     assert.ok(!(await page.content()).includes("secret-value"), "never shown again");
+    await page.close();
+  }),
+);
+
+test(
+  "a yes-or-no field is a switch, off at first, and goes as true or false",
+  withGateway(async (gateway) => {
+    const page = await open(gateway, "#/mcps/add");
+    const dialog = page.getByRole("dialog");
+    const only = dialog.getByRole("switch", { name: "Public addresses only" });
+    assert.equal(await only.getAttribute("aria-checked"), "false");
+    assert.equal(await dialog.getByRole("textbox", { name: "Public addresses only" }).count(), 0);
+    await dialog.getByLabel("Name").fill("Search");
+    await dialog.getByLabel("Address", { exact: true }).fill("https://mcp.example.com/mcp");
+    await only.click();
+    assert.equal(await only.getAttribute("aria-checked"), "true");
+    await dialog.getByRole("button", { name: "Connect" }).click();
+    await dialog.waitFor({ state: "detached" });
+    assert.deepEqual(gateway.calls.findLast((c) => c.method === "create")?.input, {
+      provider: "local",
+      kind: "url",
+      params: { url: "https://mcp.example.com/mcp", public: true },
+      name: "Search",
+    });
     await page.close();
   }),
 );
@@ -179,10 +203,10 @@ test(
     const page = await open(gateway, "#/mcps/add");
     const dialog = page.getByRole("dialog");
     await dialog.getByLabel("Name").fill("Bad");
-    await dialog.getByLabel("Address").fill("nope");
+    await dialog.getByLabel("Address", { exact: true }).fill("nope");
     await dialog.getByRole("button", { name: "Connect" }).click();
     await dialog.getByRole("alert").getByText("url: its parameters don't fit.").waitFor();
-    assert.equal(await dialog.getByLabel("Address").inputValue(), "nope");
+    assert.equal(await dialog.getByLabel("Address", { exact: true }).inputValue(), "nope");
     await page.close();
   }),
 );
