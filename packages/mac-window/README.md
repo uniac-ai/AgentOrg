@@ -24,7 +24,7 @@ The page knows the app only through one interface, `Mac` in [src/mac.ts](src/mac
 
 The page reads every part every 2 seconds while the window shows, at once on focus, and at once when the app says something changed. What doesn't answer keeps its last reading, and while the app starts the driver again, the cards keep theirs. Until the first reading, the window shows only its title bar; with none after 5 seconds, it shows "Starting again", with the cards greyed. Turned off, it shows "Not allowed in the background" at once, with the cards greyed and "Open Login Items".
 
-A switch brings nothing from macOS or a browser: turning Screen on opens its list of what is missing, and turning Your browser on opens its list of browsers. Only a row's "Set up" does, through `ask` with that row's need. For a screen grant the service decides what comes: macOS's request the first time, the grant's pane after that. For a browser, its inspect page.
+A switch brings nothing from macOS or a browser: turning Screen on opens its list of what is missing, and turning Your browser on opens its list of browsers. Only a row's "Set up" does, through `ask` with that row's need. For a screen grant the service decides what comes: Accessibility's first Set up brings macOS's request, and later ones its pane; Screen Recording's brings its pane each time, since the switch made its request, which shows nothing. For a browser, its inspect page.
 
 The page draws its own header, "AgentOrg", under macOS's window buttons, and the window is dragged by it (`data-tauri-drag-region`).
 

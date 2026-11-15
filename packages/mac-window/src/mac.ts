@@ -77,9 +77,10 @@ export interface Mac {
   /** A card's switch. Turning it on makes only the requests that show nothing: for the screen,
    * Screen Recording's, which lists the app in its pane; for a browser, none. 409: a Refusal. */
   setSwitch(capability: Capability, on: boolean): Promise<Setup>;
-  /** A row's Set up, on the person's click. A browser: its inspect page. A screen grant: macOS's
-   * request the first time, its pane after that; the service decides. With no need, what the
-   * switch does. 409: a Refusal. */
+  /** A row's Set up, on the person's click; the service decides what it brings. A browser: its
+   * inspect page. Accessibility: macOS's request the first time, its pane after that. Screen
+   * Recording: its pane each time, since the switch made its request, which shows nothing. With
+   * no need, what the switch does. 409: a Refusal. */
   ask(capability: Capability, need?: NeedName): Promise<Setup>;
   /** One grant's pane in System Settings, and nothing more. The window doesn't call it: a grant's
    * Set up is `ask`. It answers with each part; 409: a Refusal. */

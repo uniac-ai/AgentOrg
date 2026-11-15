@@ -1,8 +1,8 @@
 // The AgentOrg app's window, as the design draws it: whether AgentOrg has connected, then "Agent
-// Control", each part of this Mac a card of its own with the person's switch. Screen lists its two
-// grants while one is missing: turning Screen on makes macOS's own requests, and a grant still
-// missing has Open Settings, which opens its pane on the person's click. Your browser opens and
-// closes, listing Chrome and Edge, each with its own Set up. Not allowed in the background, the
+// Control", each part of this Mac a card of its own with the person's switch. A switch brings
+// nothing from macOS or a browser. Screen lists its two grants while one is missing, each with Set
+// up; Your browser opens and closes, listing Chrome and Edge, each with its own Set up. Only that
+// click brings macOS's request, its pane or the inspect page. Not allowed in the background, the
 // window says so, with Open Login Items. macOS's own requests, its System Settings and the
 // browser's inspect page are the system's: the page asks for them through the app, and reads again.
 import { ChevronDownIcon, FolderIcon, GlobeIcon, MonitorIcon, TerminalIcon } from "lucide-react";
