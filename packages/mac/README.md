@@ -2,7 +2,7 @@
 
 The AgentOrg Mac app, `AgentOrg.app`, built with Tauri. Its one program runs four ways:
 
-- **The window,** as a person opens the app: the page from [`@agentorg/mac-window`](../mac-window), built in, and the commands that page's seam calls.
+- **The window and the menu-bar item,** as a person opens the app: the page from [`@agentorg/mac-window`](../mac-window), built in, and the commands that page's seam calls. After a login the provider starts it with the item alone (`menu-bar`).
 - **The provider** (`--provider`), as macOS starts the app's background item: it runs Cua Driver and the service, and starts either one again when it ends.
 - **A grant** (`grant <need>...`), as the service opens the app to ask for the screen's grants, so that what macOS asks names AgentOrg.
 - **Unregister** (`unregister`), as a person removing the app runs it: see [Removing it](#removing-it).
@@ -31,9 +31,23 @@ The page calls the app's commands through what Tauri gives it (`withGlobalTauri`
 - **A refusal** rejects with `{ code, message }`: the service's own where it gives its words, as its 409s do; 503 while there is no service to answer; 400 for a capability that isn't a single lowercase word.
 - **The token goes only to this Mac.** The whole request's address is read with the parser the request itself uses, and must be plain http, with no user information, and a host of 127.0.0.1, ::1 or localhost. A record naming any other is no service.
 
-**The app is an agent, and its window a regular app.** The app's Info.plist (`src-tauri/Info.plist`, which Tauri merges) sets `LSUIElement`, so that what else of it macOS opens has no Dock tile: the copy that asks for a grant would otherwise bounce in the Dock while it waits. As the window starts, Tauri makes its process a regular app: its Dock icon and its menu appear, and it comes to the front. Cmd-Q, or closing the window, quits it and its Dock icon goes; the provider runs on. Opening AgentOrg while only the provider runs opens the window.
+**The app is an agent, and its window a regular app.** The app's Info.plist (`src-tauri/Info.plist`, which Tauri merges) sets `LSUIElement`, so that what else of it macOS opens has no Dock tile: the copy that asks for a grant would otherwise bounce in the Dock while it waits. While its window shows, the window's process is a regular app: its Dock icon and its menu appear, and it comes to the front. Cmd-Q, the app menu's "Quit AgentOrg", or closing the window closes the window: the Dock icon goes, the process stays as an agent with the menu-bar item, and the provider runs on, lending. Opening AgentOrg again, from Finder or the Dock, or the item's "Open AgentOrg", opens the window. One such process runs at a time: it names itself in `~/Library/Application Support/AgentOrg/menu-bar.json`.
 
-Opening the window registers the background item unless it is already on or waiting for the person's approval, so that a person's choice in Login Items stands. Login Items then lists AgentOrg, and the log says where it stands. With no service, the window starts nothing and writes nothing in the service's folder; the page shows its title bar, then "Starting again", or "Not allowed in the background" while macOS doesn't allow the background item.
+**The menu-bar item** is the draft's: a monitor glyph with a dot, and a menu with the heading "AgentOrg", a status line, "Open AgentOrg" and "Quit AgentOrg (stops lending)". The menu is macOS's own, so the heading is greyed as the status line is.
+
+| Dot                                 | Status line, first match winning                                                                                                                                                        |
+| ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| amber                               | "Starting again", also when the first reading is 5 s late, as the window says; "Not allowed in the background"; "Something to set up", where Screen or Your browser is on and not ready |
+| green                               | "Connected to AgentOrg"                                                                                                                                                                 |
+| white, or black on a light menu bar | "Waiting for AgentOrg to connect", the first 5 s included                                                                                                                               |
+
+- **Its reads** are the window's own, and kept as the page keeps them, a failed read leaving the last answer: the provider's state and whether macOS allows the background item, the service's `GET /v1/connection` each second, and its `GET /v1/setup` every 5 s, but not while starting again.
+- **Its picture** is drawn in code, 36 pixels tall as the menu bar shows it, when the process starts and when the state or the menu bar's appearance changes. The glyph takes the menu bar's text colour, white at 90% or black at 85%, from the item's own appearance, which follows the menu bar and its wallpaper.
+- **The window** is drawn dark, as the draft draws it, and only the window: the item's menu follows macOS's appearance.
+- **"Quit AgentOrg (stops lending)"** unregisters the background item, as `unregister` does, and quits. macOS stops the provider, which stops the driver and the service, and nothing starts at the next login. Opening AgentOrg registers the item again. Where the item couldn't be unregistered, nothing changes and the item stays.
+- **After a login,** macOS starts the provider, which starts the item's process with no window, taking no one's focus (`open -g -a AgentOrg.app --args menu-bar`), where none runs and macOS allows the background item. It looks every 2 s. While none comes up it starts one again after 10 s, then 30 s, up to 5 minutes, since asking the system again would bring one just starting forward with its window. One that was running and has gone, as at a logout or a Dock "Quit", which ends the whole process, is started again 10 s after it was last seen.
+
+Opening the app, the window or the item's "Open AgentOrg", registers the background item unless it is already on or waiting for the person's approval, so that a person's choice in Login Items stands. Login Items then lists AgentOrg, and the log says where it stands. With no service, the window starts nothing and writes nothing in the service's folder; the page shows its title bar, then "Starting again", or "Not allowed in the background" while macOS doesn't allow the background item.
 
 ## The provider
 
@@ -58,7 +72,8 @@ The service opens the app through the system, `open -n -g -a AgentOrg.app --args
 
 `~/Library/Logs/AgentOrg/AgentOrg.log`, each line with its time and which of them wrote it:
 
-- **The window:** when it opens, the background item's standing, and each time a command goes from answered to refused or back, or from one refusal to another, or the window's height changes.
+- **The window:** when it starts, opens and closes, the background item's standing, each change of the menu-bar item's status line, and each time a command goes from answered to refused or back, or from one refusal to another, or the window's height changes.
+- **The menu bar:** "Quit AgentOrg (stops lending)", and where the background item then stands; a second one started while one runs, and which process holds the item.
 - **The provider:** each program it starts, stops, or finds ended, with that program's last lines and the wait before it starts again, and each change of its state.
 - **A grant:** each grant asked for, and its answer.
 - **Unregister:** where the background item then stands, or why it couldn't be unregistered.
@@ -67,7 +82,7 @@ Each line is one write, so they don't mix. At 10 MB the provider moves it to `Ag
 
 ## Removing it
 
-1. Quit the window. Then `AgentOrg.app/Contents/MacOS/AgentOrg unregister` takes the background item away: macOS stops the provider, which stops the driver and the service. It exits 1 where it couldn't, saying why. Where it unregisters the item, it also removes the driver's default, `ApplePersistenceIgnoreState` in `~/Library/Preferences/cua-driver.plist`, and says so (by hand: `defaults delete cua-driver ApplePersistenceIgnoreState`). macOS may leave that file behind empty; it can be removed. It doesn't wait for the provider, which can take up to 40 s to stop: the provider's last line in the log is then "stopped".
+1. "Quit AgentOrg (stops lending)" in the menu bar unregisters the background item and quits. Or, from a terminal, `AgentOrg.app/Contents/MacOS/AgentOrg unregister` takes the background item away, and ends the menu-bar item's process where one runs: macOS stops the provider, which stops the driver and the service. It exits 1 where it couldn't, saying why. Where it unregisters the item, it also removes the driver's default, `ApplePersistenceIgnoreState` in `~/Library/Preferences/cua-driver.plist`, and says so (by hand: `defaults delete cua-driver ApplePersistenceIgnoreState`). macOS may leave that file behind empty; it can be removed. It doesn't wait for the provider, which can take up to 40 s to stop: the provider's last line in the log is then "stopped".
 2. `tccutil reset Accessibility dev.agentorg.mac` and `tccutil reset ScreenCapture dev.agentorg.mac` remove its grants, while the app still exists.
 3. Remove `~/Library/Application Support/AgentOrg`, `~/Library/Logs/AgentOrg`, and what macOS and WebKit keep under `dev.agentorg.mac` in the person's Library (its WebKit, Caches, HTTPStorages and Saved Application State folders). `defaults delete dev.agentorg.mac` removes its preferences where there are any.
 4. Before deleting the app, `/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -u` with its path makes Launch Services forget it.

@@ -1,12 +1,14 @@
-//! AgentOrg.app's one program, which runs four ways: the window, as a person opens the app; the
-//! provider, as macOS starts its background item (`--provider`); asking for the screen's grants,
-//! as the service opens the app to (`grant <need>...`); and `unregister`, which takes the
-//! background item away, for a person removing the app. A grant's instance reads each grant
-//! through a fresh one of itself (`granted <need>`), which answers by its exit code.
+//! AgentOrg.app's one program, which runs four ways: the window and the menu-bar item, as a person
+//! opens the app, or with the item alone as the provider starts it after a login (`menu-bar`); the
+//! provider, as macOS starts its background item (`--provider`); asking for the screen's grants, as
+//! the service opens the app to (`grant <need>...`); and `unregister`, which takes the background
+//! item away, for a person removing the app. A grant's instance reads each grant through a fresh
+//! one of itself (`granted <need>`), which answers by its exit code.
 
 mod grant;
 mod log;
 mod macos;
+mod menu_bar;
 mod places;
 mod provider;
 mod seam;
@@ -38,7 +40,10 @@ fn main() {
                 } else {
                     "the driver's default couldn't be reached"
                 };
-                let said = format!("{said}; {removed}");
+                let mut said = format!("{said}; {removed}");
+                if let Some(pid) = menu_bar::end_running(&menu_bar::state()) {
+                    said.push_str(&format!("; the menu bar item, process {pid}, ended"));
+                }
                 log::log("unregister", &said);
                 println!("{said}");
             }
@@ -52,6 +57,7 @@ fn main() {
             Some(need) if macos::granted(need) => 0,
             _ => 1,
         }),
-        _ => seam::window(),
+        Some("menu-bar") => seam::window(false),
+        _ => seam::window(true),
     }
 }

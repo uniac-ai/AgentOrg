@@ -32,6 +32,11 @@ pub fn provider_state() -> PathBuf {
     agentorg().join("provider.json")
 }
 
+/// What the menu-bar process says of itself: its process.
+pub fn menu_bar_state() -> PathBuf {
+    agentorg().join("menu-bar.json")
+}
+
 /// Held by the provider while it runs, so that one runs at a time.
 pub fn provider_lock() -> PathBuf {
     agentorg().join("provider.lock")

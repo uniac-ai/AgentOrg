@@ -12,10 +12,16 @@ use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
 use crate::log::log;
+use crate::menu_bar::{self, Dot};
 use crate::places::data;
 use crate::provider::AppState;
 use crate::{macos, provider};
-use tauri::{Emitter, LogicalSize, WebviewWindow};
+use std::time::Instant;
+use tauri::image::Image;
+use tauri::menu::{Menu, MenuItem, MenuItemKind, PredefinedMenuItem};
+use tauri::tray::TrayIconBuilder;
+use tauri::{ActivationPolicy, AppHandle, Emitter, LogicalSize, Manager, RunEvent, WebviewWindow};
+use tauri::{WebviewWindowBuilder, WindowEvent};
 use url::{Host, Url};
 
 /// The window's width, as the design draws it; its height fits the page.
@@ -213,10 +219,51 @@ async fn app_state() -> &'static str {
     }
     let state = match read("app_state", "GET", "/v1/connection".into(), None).await {
         Ok(_) => AppState::Running,
-        Err(_) if ANSWERED.load(Ordering::Relaxed) => AppState::StartingAgain,
-        Err(_) => AppState::Starting,
+        Err(_) => without_provider(),
     };
     state.name()
+}
+
+/// With no provider and the service not answering: starting until it first answered, and starting
+/// again once it has stopped.
+fn without_provider() -> AppState {
+    if ANSWERED.load(Ordering::Relaxed) {
+        AppState::StartingAgain
+    } else {
+        AppState::Starting
+    }
+}
+
+/// What the menu-bar item last read, kept as the window's page keeps its readings: a read that
+/// fails leaves the last answer.
+struct Read {
+    short: Option<bool>,
+    connected: bool,
+    setup_at: Option<Instant>,
+}
+
+/// The menu-bar item's state now, from the reads the window makes: the app's state, the setup,
+/// read every 5 s and not while starting again (as the page skips it then), and the connection.
+/// Blocking, off the main thread.
+fn dot_now(read: &mut Read, started: Instant) -> Dot {
+    let connection = call("GET", "/v1/connection", None);
+    if let Ok(said) = &connection {
+        ANSWERED.store(true, Ordering::Relaxed);
+        read.connected = said["connected"] == true;
+    }
+    let app = match provider::state_now() {
+        Some(state) => state,
+        None if macos::background_item_status() == Some(2) => AppState::TurnedOff,
+        None if connection.is_ok() => AppState::Running,
+        None => without_provider(),
+    };
+    let due = read.setup_at.is_none_or(|at| at.elapsed() >= Duration::from_secs(5));
+    if connection.is_ok() && app != AppState::StartingAgain && due {
+        if let Ok(said) = call("GET", "/v1/setup", None) {
+            (read.short, read.setup_at) = (Some(menu_bar::short(&said)), Some(Instant::now()));
+        }
+    }
+    menu_bar::dot(app, read.short, read.connected, started.elapsed() >= menu_bar::FIRST)
 }
 
 /// The window's height to the page's, its top edge where it is.
@@ -240,15 +287,78 @@ fn noted(what: &'static str, outcome: String) {
     }
 }
 
-/// The window. The app is an agent (LSUIElement, in its Info.plist), so that what else of it macOS
-/// opens has no Dock tile; Tauri makes the window's process a regular app as it starts, with its
-/// Dock icon and menu, in front. Opening it registers the app's background item, and while it
-/// shows, a change of the provider's state, or of whether macOS allows the background item, is sent
-/// to the page as `changed`.
-pub fn window() {
-    log("window", "opened");
+/// The window, the label tauri.conf.json gives it.
+const MAIN: &str = "main";
+
+/// Shows the window, making it where it was closed, and the app with it: a regular app, with its
+/// Dock icon and menu, in front.
+fn show_window(app: &AppHandle) {
+    // As every open of the app has: a background item not yet registered, or refused before, is
+    // registered now.
     log("window", &macos::register_background_item());
-    tauri::Builder::default()
+    let _ = app.set_activation_policy(ActivationPolicy::Regular);
+    let window = match app.get_webview_window(MAIN) {
+        Some(window) => Some(window),
+        None => {
+            let config = app.config().app.windows.iter().find(|config| config.label == MAIN);
+            let made = config.and_then(|config| {
+                WebviewWindowBuilder::from_config(app, config).ok()?.visible(false).build().ok()
+            });
+            // The window is drawn dark, as v9 draws it, but only the window: the app's other
+            // parts, its menu-bar item's menu among them, follow macOS's appearance.
+            if let Some(ns_window) = made.as_ref().and_then(|window| window.ns_window().ok()) {
+                macos::dark_window(ns_window);
+            }
+            made
+        }
+    };
+    match window {
+        Some(window) => {
+            let _ = window.show();
+            let _ = window.set_focus();
+            log("window", "opened");
+        }
+        None => log("window", "couldn't be made"),
+    }
+}
+
+/// The app's menu: Tauri's own, but for its Quit, which here closes the window as Cmd-Q always has,
+/// and lending goes on. Stopping lending is the menu-bar item's own.
+fn app_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
+    let menu = Menu::default(app)?;
+    if let Some(MenuItemKind::Submenu(own)) = menu.items()?.into_iter().next() {
+        for item in own.items()? {
+            if let MenuItemKind::Predefined(quit) = &item {
+                if quit.text()?.starts_with("Quit") {
+                    own.remove(quit)?;
+                }
+            }
+        }
+        let keys = Some("CmdOrCtrl+Q");
+        let quit = MenuItem::with_id(app, "quit-window", "Quit AgentOrg", true, keys)?;
+        own.append(&quit)?;
+    }
+    Ok(menu)
+}
+
+/// The app's window and its menu-bar item. The app is an agent (LSUIElement, in its Info.plist), so
+/// that what else of it macOS opens has no Dock tile; with its window shown it is a regular app,
+/// with its Dock icon and menu, and with the window closed an agent again, the item staying. Opened
+/// by a person, it shows the window; started by the provider after a login (`with_window` false),
+/// only the item. One runs at a time. Opening it registers the app's background item, and while it
+/// runs, a change of the provider's state, or of whether macOS allows the background item, is sent
+/// to the page as `changed`, and the item's dot and words follow the app's state.
+pub fn window(with_window: bool) {
+    let state = menu_bar::state();
+    if let Some(pid) = menu_bar::running(&state).filter(|&pid| pid != std::process::id() as i32) {
+        return log("menu bar", &format!("already held by process {pid}"));
+    }
+    menu_bar::say_running(&state);
+    log("window", if with_window { "started" } else { "started for the menu bar item alone" });
+    let built = tauri::Builder::default()
+        // Started for the item alone, it takes no one's focus as it starts.
+        .activate_ignoring_other_apps(with_window)
+        .menu(app_menu)
         .invoke_handler(tauri::generate_handler![
             setup,
             set_switch,
@@ -261,24 +371,116 @@ pub fn window() {
             app_state,
             fit
         ])
-        .setup(|app| {
-            let app = app.handle().clone();
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            "open" => show_window(app),
+            "quit-window" => {
+                if let Some(window) = app.get_webview_window(MAIN) {
+                    let _ = window.close();
+                }
+            }
+            "quit-lending" => {
+                let state = menu_bar::state();
+                let unregister = macos::unregister_background_item;
+                let restore = || macos::driver_restores_windows(true);
+                if menu_bar::quit_lending(unregister, restore, &state) {
+                    app.exit(0);
+                }
+            }
+            _ => {}
+        })
+        .setup(move |app| {
+            let handle = app.handle().clone();
+            let none = None::<&str>;
+            let heading = MenuItem::with_id(app, "heading", "AgentOrg", false, none)?;
+            let status = MenuItem::with_id(app, "status", Dot::Waiting.words(), false, none)?;
+            let open = MenuItem::with_id(app, "open", "Open AgentOrg", true, none)?;
+            let quit_words = "Quit AgentOrg (stops lending)";
+            let quit = MenuItem::with_id(app, "quit-lending", quit_words, true, none)?;
+            let menu = Menu::with_items(
+                app,
+                &[
+                    &heading,
+                    &status,
+                    &PredefinedMenuItem::separator(app)?,
+                    &open,
+                    &PredefinedMenuItem::separator(app)?,
+                    &quit,
+                ],
+            )?;
+            let (width, height) = (menu_bar::WIDTH, menu_bar::HEIGHT);
+            let picture = move |dot: Dot, dark: bool| {
+                Image::new_owned(menu_bar::icon(dot, dark), width, height)
+            };
+            let tray = TrayIconBuilder::with_id("menu-bar")
+                .icon(picture(Dot::Waiting, macos::dark_appearance()))
+                .icon_as_template(false)
+                .menu(&menu)
+                .show_menu_on_left_click(true)
+                .build(app)?;
+            if with_window {
+                show_window(&handle);
+            }
+            let started = Instant::now();
             thread::spawn(move || {
                 let state = || (provider::state_now(), macos::background_item_status());
                 let mut said = state();
+                let mut read = Read { short: None, connected: false, setup_at: None };
+                let mut shown = None;
+                // Light or dark as the menu bar itself is drawn, read on the main thread from the
+                // item; macOS's own appearance where it can't be.
+                let menu_bar_dark = |tray: &tauri::tray::TrayIcon| {
+                    let item = tray.with_inner_tray_icon(|inner| {
+                        inner.ns_status_item().and_then(|item| macos::status_item_dark(&item))
+                    });
+                    item.ok().flatten().unwrap_or_else(macos::dark_appearance)
+                };
                 loop {
-                    thread::sleep(Duration::from_secs(1));
                     let now = state();
                     if now != said {
                         said = now;
-                        let _ = app.emit("changed", ());
+                        let _ = handle.emit("changed", ());
                     }
+                    let dot = dot_now(&mut read, started);
+                    let dark = menu_bar_dark(&tray);
+                    if shown != Some((dot, dark)) {
+                        let _ = tray.set_icon(Some(picture(dot, dark)));
+                        let _ = status.set_text(dot.words());
+                        if shown.is_none_or(|(was, _)| was != dot) {
+                            noted("menu bar", dot.words().into());
+                        }
+                        shown = Some((dot, dark));
+                    }
+                    thread::sleep(Duration::from_secs(1));
                 }
             });
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("AgentOrg's window couldn't start");
+        .build(tauri::generate_context!());
+    let mut app = match built {
+        Ok(app) => app,
+        Err(error) => {
+            menu_bar::say_gone(&state);
+            return log("window", &format!("couldn't start: {error}"));
+        }
+    };
+    // Started for the item alone, an agent from its launch: no Dock icon or menu shows as it
+    // starts. Set before it runs, so that it holds from the start.
+    if !with_window {
+        app.set_activation_policy(ActivationPolicy::Accessory);
+    }
+    app.run(move |app, event| match event {
+        // The window closed: the app turns back into an agent, and the item stays.
+        RunEvent::WindowEvent { label, event: WindowEvent::Destroyed, .. } if label == MAIN => {
+            let _ = app.set_activation_policy(ActivationPolicy::Accessory);
+            log("window", "closed; the menu bar item stays");
+        }
+        // Closing the last window ends nothing: only the item's Quit does.
+        RunEvent::ExitRequested { code: None, api, .. } => api.prevent_exit(),
+        // Opening the app while it runs, from Finder or the Dock: the window.
+        RunEvent::Reopen { has_visible_windows: false, .. } => show_window(app),
+        RunEvent::Exit => menu_bar::say_gone(&menu_bar::state()),
+        _ => {}
+    });
 }
 
 #[cfg(test)]
