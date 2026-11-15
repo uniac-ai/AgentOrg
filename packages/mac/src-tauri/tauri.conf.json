@@ -43,7 +43,8 @@
         "MacOS/node": "target/assembly/bundle/MacOS/node",
         "Resources/cua-driver": "target/assembly/bundle/Resources/cua-driver",
         "Resources/agentcomputer": "target/assembly/bundle/Resources/agentcomputer",
-        "Resources/licenses": "target/assembly/bundle/Resources/licenses"
+        "Resources/licenses": "target/assembly/bundle/Resources/licenses",
+        "Resources/cursor-themes": "target/assembly/bundle/Resources/cursor-themes"
       }
     }
   }

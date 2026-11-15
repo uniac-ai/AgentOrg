@@ -1,6 +1,6 @@
 // The app's assembly, over stand-ins for the two releases, in their real layouts, and the
-// workspace: what it fetches and checks, what it takes of each, and what it refuses. No network,
-// and nothing of macOS's own.
+// workspace: what it fetches and checks, what it takes of each, what it compiles, and what it
+// refuses. No network, and nothing of macOS's own.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -18,6 +18,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { assemble } from "../scripts/assemble.mjs";
+import { dotLottie, THEME } from "../scripts/cursor-theme.mjs";
 
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const config = JSON.parse(
@@ -53,6 +54,7 @@ function standIns(t) {
   const driver = tarball(root, "driver", {
     "cua-driver-rs-0.49.7-darwin-universal/CuaDriver.app/Contents/MacOS/cua-driver": "the app's",
     "cua-driver-rs-0.49.7-darwin-universal/cua-driver": "the bare driver",
+    "cua-driver-rs-0.49.7-darwin-universal/cua-cursor-theme": "the theme compiler",
     "cua-driver-rs-0.49.7-darwin-universal/LICENSE": "the driver's licence",
     "cua-driver-rs-0.49.7-darwin-universal/THIRD_PARTY_NOTICES.md": "what the driver bundles",
     "cua-driver-rs-0.49.7-darwin-universal/perception/cua-perception": "the AGPL extension",
@@ -126,6 +128,7 @@ function standIns(t) {
     "node_modules/node-pty/src/unix/pty.cc": "source",
   });
   const signed = [];
+  const compiled = [];
   const target = join(root, "target");
   const run = (service = "0.0.20") =>
     assemble({
@@ -135,8 +138,13 @@ function standIns(t) {
       service,
       get,
       signing: (path, entitlements) => signed.push([path, entitlements]),
+      // As the compiler does: the source read, the theme written.
+      compiling: (compiler, source, theme) => {
+        compiled.push([readFileSync(compiler, "utf8"), readFileSync(source), theme]);
+        writeFileSync(theme, "the compiled theme");
+      },
     });
-  return { pins, served, asked, signed, target, run };
+  return { pins, served, asked, signed, compiled, target, run };
 }
 
 const listed = (folder) =>
@@ -165,6 +173,7 @@ test("the bundle carries Node, the driver and the service, and their licences, e
     "Resources/agentcomputer/node_modules/playwright-core/package.json",
     "Resources/agentcomputer/package.json",
     "Resources/cua-driver",
+    `Resources/cursor-themes/${THEME}.cua-theme`,
     "Resources/licenses/cua-driver/LICENSE",
     "Resources/licenses/cua-driver/THIRD_PARTY_NOTICES.md",
     "Resources/licenses/node/LICENSE",
@@ -202,6 +211,24 @@ test("the bundle carries Node, the driver and the service, and their licences, e
   assert.ok(said.fetched.every((one) => one.size > 0 && existsSync(one.at)));
   assert.equal(said.service, "0.0.20");
   assert.deepEqual(JSON.parse(readFileSync(join(target, "fetched.json"), "utf8")), said);
+});
+
+test("the agents' pointer is compiled from its source by the compiler of the driver's own release", async (t) => {
+  const { pins, compiled, target, run } = standIns(t);
+  await run();
+  // The release's compiler, never carried in the bundle; the source as made here; the theme where
+  // the provider points the driver.
+  assert.deepEqual(compiled, [
+    [
+      "the theme compiler",
+      dotLottie(),
+      join(target, `bundle/Resources/cursor-themes/${THEME}.cua-theme`),
+    ],
+  ]);
+  assert.ok(!existsSync(join(target, "bundle/Resources/cua-cursor-theme")));
+  // A release without its compiler is refused, in words.
+  pins.driver.compiler = "cua-driver-rs-0.49.7-darwin-universal/no-compiler";
+  await assert.rejects(run(), /darwin-universal\.tar\.gz has no file \S+\/no-compiler\./);
 });
 
 test("a download that checks isn't fetched again, and is checked again", async (t) => {

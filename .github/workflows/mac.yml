@@ -86,6 +86,9 @@ jobs:
           test "$(node -p "require('./$app/Contents/Resources/agentcomputer/package.json').version")" = "$(pinned package.json ".dependencies['@agentorg/computer']")"
           test "$("$app/Contents/MacOS/node" --version)" = "v$(pinned assembly.json .node.version)"
           test "$("$app/Contents/Resources/cua-driver" --version)" = "cua-driver $(pinned assembly.json .driver.version)"
+          # The agents' pointer: the one theme, in the driver's compiled format.
+          test "$(ls "$app/Contents/Resources/cursor-themes")" = ai.uniac.agentorg.pointer.cua-theme
+          test "$(head -c 8 "$app/Contents/Resources/cursor-themes/ai.uniac.agentorg.pointer.cua-theme")" = CUATHEM3
           # The bundled Node runs JavaScript, and loads the terminal's native module, under its
           # hardened runtime and entitlements.
           "$app/Contents/MacOS/node" -e 'require(process.argv[1])' "$PWD/$app/Contents/Resources/agentcomputer/node_modules/node-pty"

@@ -7,7 +7,7 @@
 use crate::log::{log, rotate};
 use crate::{grant, macos, places};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value};
 use std::collections::VecDeque;
 use std::fs;
 use std::io::{BufRead, BufReader, Read};
@@ -69,7 +69,12 @@ pub struct Programs {
     pub node: PathBuf,
     pub service: PathBuf,
     pub driver: PathBuf,
+    /// The folder of the agents' pointer, the cursor theme the driver draws in place of its own.
+    pub themes: PathBuf,
 }
+
+/// The agents' pointer: its theme's id, and its file's name in `themes`, `<id>.cua-theme`.
+pub const CURSOR_THEME: &str = "ai.uniac.agentorg.pointer";
 
 impl Programs {
     /// Where the bundle puts them (tauri.conf.json's `bundle.macOS.files`): Node beside the app's
@@ -82,7 +87,13 @@ impl Programs {
             node: contents.join("MacOS/node"),
             service: contents.join("Resources/agentcomputer/dist/agentcomputer.js"),
             driver: contents.join("Resources/cua-driver"),
+            themes: contents.join("Resources/cursor-themes"),
         }
+    }
+
+    /// The agents' pointer, where the bundle carries it.
+    fn pointer(&self) -> Option<PathBuf> {
+        Some(self.themes.join(format!("{CURSOR_THEME}.cua-theme"))).filter(|at| at.is_file())
     }
 
     fn missing(&self) -> Vec<&Path> {
@@ -363,7 +374,48 @@ fn driver_command(programs: &Programs, places: &Places, identifier: &str) -> Com
             ("CUA_DRIVER_HOST_BUNDLE_ID", identifier),
             ("CUA_DRIVER_RS_UPDATE_CHECK", "false"),
         ]);
+    // Each agent drawn with the app's pointer, from where the bundle carries it. A build without it
+    // leaves the driver's own.
+    if programs.pointer().is_some() {
+        command
+            .args(["--cursor-theme", CURSOR_THEME])
+            .env("CUA_DRIVER_CURSOR_THEME_DIR", &programs.themes);
+    }
     command
+}
+
+/// The object at `key` in `map`, made one where there is none or something else.
+fn object<'a>(map: &'a mut Map<String, Value>, key: &str) -> &'a mut Map<String, Value> {
+    let entry = map.entry(key).or_insert_with(|| Value::Object(Map::new()));
+    if !entry.is_object() {
+        *entry = Value::Object(Map::new());
+    }
+    entry.as_object_mut().expect("an object")
+}
+
+/// The driver's cursor settings, written into its config before each start, keeping all else it
+/// holds: the pointer drawn alone, upright, with no halo, badge, or effect when it moves or clicks.
+/// The driver reads them at its start; the size, the glide, and the 15 s before an idle pointer
+/// fades are its own.
+pub fn cursor_settings(driver_home: &Path) -> std::io::Result<()> {
+    let path = driver_home.join(".cua-driver/config.json");
+    let mut config: Map<String, Value> = fs::read_to_string(&path)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default();
+    let cursor = object(&mut config, "cursor");
+    cursor.insert("halo".into(), false.into());
+    cursor.insert("float".into(), false.into());
+    cursor.insert("rotate".into(), "off".into());
+    cursor.insert("badges".into(), "off".into());
+    let effects = object(object(cursor, "motion"), "effects");
+    for effect in ["trail", "glow", "magnet", "ripple", "squish"] {
+        effects.insert(effect.into(), false.into());
+    }
+    fs::create_dir_all(path.parent().expect("a folder"))?;
+    let written = path.with_extension("json.new");
+    fs::write(&written, format!("{:#}\n", Value::Object(config)))?;
+    fs::rename(&written, &path)
 }
 
 fn service_command(programs: &Programs, places: &Places) -> Command {
@@ -439,6 +491,9 @@ pub fn provide(
         let names = names.join(", ");
         log("provider", &format!("this build carries no service to run: {names} missing"));
     }
+    if missing.is_empty() && programs.pointer().is_none() {
+        log("provider", "this build carries no pointer for the agents: Cua Driver draws its own");
+    }
     stop_left(places, programs);
     let (mut driver, mut service) = (Kept::new("driver"), Kept::new("service"));
     let (mut said, mut ran, mut rotated) = (None, false, Instant::now());
@@ -464,6 +519,9 @@ pub fn provide(
             read_by_driver = Some(grants());
             (read_at, wait) = (Instant::now(), every);
             let _ = fs::remove_file(&places.socket);
+            if let Err(error) = cursor_settings(&places.driver_home) {
+                log("provider", &format!("the pointer's settings couldn't be written: {error}"));
+            }
             driver.start(driver_command(programs, places, identifier));
         }
         let socket = driver.pid().is_some() && places.socket.exists();
@@ -555,6 +613,7 @@ mod tests {
             node: root.join("app/node"),
             service: root.join("app/agentcomputer/agentcomputer.js"),
             driver: root.join("app/cua-driver"),
+            themes: root.join("app/cursor-themes"),
         };
         let h = heard.display();
         // Stand-ins: the driver makes its socket, and the service writes its record, as each does;
@@ -600,6 +659,10 @@ mod tests {
                 assert!(env.lines().any(|kept| kept == line), "{line} in {env}");
             }
             assert!(!env.contains("CARGO"), "{env}");
+            // Its settings for the pointer, in its home's config, before it started.
+            let config = fs::read_to_string(places.driver_home.join(".cua-driver/config.json"));
+            let config: Value = serde_json::from_str(&config.unwrap()).unwrap();
+            assert_eq!(config["cursor"]["halo"], false);
 
             // The service: lending only, reaching the driver on its socket, its home the person's.
             let (service, data) = (programs.service.display(), places.data.display());
@@ -653,7 +716,8 @@ mod tests {
         let said = serde_json::json!({ "pid": 1, "driver": driver, "service": someone_elses });
         fs::write(&places.state, said.to_string()).unwrap();
         let (node, service) = (root.join("node"), root.join("service.js"));
-        let programs = Programs { node, service, driver: ours };
+        let themes = root.join("cursor-themes");
+        let programs = Programs { node, service, driver: ours, themes };
         stop_left(&places, &programs);
         until("ours stopped", || !macos::alive(driver));
         assert!(macos::alive(someone_elses));
@@ -682,6 +746,7 @@ mod tests {
             node: root.join("app/node"),
             service: root.join("app/agentcomputer/agentcomputer.js"),
             driver: root.join("app/cua-driver"),
+            themes: root.join("app/cursor-themes"),
         };
         program(&programs.driver, ": > \"$5\"\nexec sleep 600");
         let record = r#"echo "{\"url\":\"http://127.0.0.1:1\",\"pid\":$$}" > "$7/server.json""#;
@@ -756,12 +821,84 @@ mod tests {
         let config: Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
         let files = config["bundle"]["macOS"]["files"].as_object().unwrap();
         let programs = Programs::in_bundle(Path::new("/A.app"));
-        for program in [&programs.node, &programs.driver, &programs.service] {
+        for program in [&programs.node, &programs.driver, &programs.service, &programs.themes] {
             let inside = program.strip_prefix("/A.app/Contents").unwrap();
             let carried = files.keys().any(|key| inside.starts_with(key));
             assert!(carried, "{} isn't in the bundle's files", inside.display());
         }
         assert!(!programs.driver.starts_with("/A.app/Contents/MacOS"));
+    }
+
+    #[test]
+    fn the_driver_draws_the_apps_pointer_where_the_bundle_carries_it() {
+        let root = std::env::temp_dir().join(format!("agentorg-pointer-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let programs = Programs::in_bundle(&root.join("A.app"));
+        let places = places_in(&root);
+        let started = |programs: &Programs| {
+            let command = driver_command(programs, &places, "test.id");
+            let args: Vec<String> =
+                command.get_args().map(|arg| arg.to_string_lossy().into()).collect();
+            let dir = command
+                .get_envs()
+                .find(|(key, _)| *key == "CUA_DRIVER_CURSOR_THEME_DIR")
+                .and_then(|(_, value)| value.map(PathBuf::from));
+            (args.join(" "), dir)
+        };
+        // Without it, the driver's own.
+        let (args, dir) = started(&programs);
+        assert!(!args.contains("--cursor-theme"), "{args}");
+        assert_eq!(dir, None);
+        // With it, by its id, from its folder in the bundle.
+        fs::create_dir_all(&programs.themes).unwrap();
+        fs::write(programs.themes.join(format!("{CURSOR_THEME}.cua-theme")), "a theme").unwrap();
+        let (args, dir) = started(&programs);
+        assert!(args.ends_with(&format!("--cursor-theme {CURSOR_THEME}")), "{args}");
+        let themes = root.join("A.app/Contents/Resources/cursor-themes");
+        assert_eq!(dir.as_deref(), Some(themes.as_path()));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_pointers_settings_turn_every_extra_off_and_keep_the_rest_of_the_config() {
+        let home = std::env::temp_dir().join(format!("agentorg-settings-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&home);
+        let path = home.join(".cua-driver/config.json");
+        let read = || serde_json::from_str::<Value>(&fs::read_to_string(&path).unwrap()).unwrap();
+        // None yet: made.
+        cursor_settings(&home).unwrap();
+        let off = serde_json::json!({
+            "halo": false,
+            "float": false,
+            "rotate": "off",
+            "badges": "off",
+            "motion": { "effects": {
+                "trail": false, "glow": false, "magnet": false, "ripple": false, "squish": false
+            } }
+        });
+        assert_eq!(read(), serde_json::json!({ "cursor": off }));
+        // What the driver keeps, and what an agent turned back on, as the driver writes them.
+        fs::write(
+            &path,
+            r#"{"max_image_dimension":1280,"cursor":{"halo":true,"rotate":"heading",
+               "motion":{"style":"magnetic","effects":{"ripple":true}}}}"#,
+        )
+        .unwrap();
+        cursor_settings(&home).unwrap();
+        let config = read();
+        assert_eq!(config["max_image_dimension"], 1280);
+        assert_eq!(config["cursor"]["motion"]["style"], "magnetic");
+        let mut cursor = config["cursor"].clone();
+        cursor["motion"].as_object_mut().unwrap().remove("style");
+        assert_eq!(cursor, off);
+        // Something else where an object goes, or no JSON at all: made afresh.
+        fs::write(&path, r#"{"cursor":5}"#).unwrap();
+        cursor_settings(&home).unwrap();
+        assert_eq!(read()["cursor"], off);
+        fs::write(&path, "not JSON").unwrap();
+        cursor_settings(&home).unwrap();
+        assert_eq!(read(), serde_json::json!({ "cursor": off }));
+        let _ = fs::remove_dir_all(&home);
     }
 
     #[test]
