@@ -1,7 +1,7 @@
 // Skills, MCP connections and Settings in a real browser, over the stand-in gateway.
 import assert from "node:assert/strict";
 import test from "node:test";
-import { type Browser, chromium, type Page } from "@playwright/test";
+import { type Browser, chromium, type Locator, type Page } from "@playwright/test";
 import { openSetup, sampleAgents } from "./design/samples.ts";
 import { SESSION, standIn } from "./stand-in.ts";
 
@@ -30,6 +30,16 @@ const withGateway = (run: (gateway: Gateway) => Promise<void>) => async () => {
 };
 const row = (page: Page, name: string) =>
   page.getByRole("main").getByRole("listitem").filter({ hasText: name });
+/** A dialog has finished opening: its own animations, as it grows to its size, are over. */
+const opened = (dialog: Locator) =>
+  dialog.evaluate((el) =>
+    Promise.all(
+      el
+        .getAnimations({ subtree: true })
+        .filter((a) => a.effect?.getTiming().iterations !== Number.POSITIVE_INFINITY)
+        .map((a) => a.finished),
+    ).then(() => undefined),
+  );
 const labels = (page: Page) =>
   page.getByRole("dialog").locator('[data-slot="field-label"]').allInnerTexts();
 
@@ -131,7 +141,7 @@ test(
     await page.getByRole("button", { name: "Connect", exact: true }).click();
     const dialog = page.getByRole("dialog");
     await dialog.getByLabel("Name").waitFor();
-    await page.waitForTimeout(250);
+    await opened(dialog);
     const size = await dialog.boundingBox();
     assert.equal(size?.height, 460, "as tall as the design has it");
     assert.deepEqual(await labels(page), ["Name", "Address", "Public addresses only", "Token"]);
@@ -196,6 +206,7 @@ test(
       { exact: true },
     );
     await about.waitFor();
+    await opened(dialog);
     const label = await dialog.getByText("Public addresses only", { exact: true }).boundingBox();
     const said = await about.boundingBox();
     assert.ok(label && said && said.y > label.y + label.height && said.x === label.x, "under it");
