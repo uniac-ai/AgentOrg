@@ -12,16 +12,20 @@ type RespondInput = z.output<typeof llmSession.methods.respond.input>;
 type Output = z.output<typeof OutputItem>;
 
 /** How often a request that failed for a passing reason is made again. */
-export const RETRIES = 3;
-/** The wait before the first of those; each next one is twice as long, a tenth more or less. */
+export const RETRIES = 10;
+/**
+ * The wait before the first of those; each next one is twice as long, up to `BACKOFF_MAX_MS`, and
+ * then a tenth more or less: about three minutes of waits in all.
+ */
 const BACKOFF_MS = 1000;
+const BACKOFF_MAX_MS = 30_000;
 /** The longest wait OpenAI can ask for that is taken: past it the failure is the answer. */
 const WAIT_MAX_MS = 60_000;
 /**
  * A try begins within this long of the first, or not at all: its caller has a limit of its own
- * on one call, and a person is waiting.
+ * on one call, ten minutes in the app, and the last try needs time to answer.
  */
-const RETRY_WITHIN_MS = 120_000;
+const RETRY_WITHIN_MS = 300_000;
 /** OpenAI's codes for a server that failed or is overloaded, in a reply or inside a stream. */
 const SERVER_CODES = new Set(["server_error", "server_is_overloaded"]);
 
@@ -636,13 +640,13 @@ export function createSession(options: {
    * A response, tried again when its failure is marked as passing: OpenAI couldn't be reached,
    * said to try again later, its server failed or was overloaded, it ended the stream with an
    * error that has no code, or the stream broke off.
-   * `RETRIES` times at most, each after a wait that doubles from `BACKOFF_MS`, a tenth more or
-   * less, or after the wait OpenAI asked for when that is longer. A wait past `WAIT_MAX_MS` isn't
-   * taken, nor one that would begin a try more than `RETRY_WITHIN_MS` after the first: the
-   * failure is the answer. Not once text of it, or a streamed function's arguments, have been
-   * streamed, since those words may be with their reader and a new try would write them again; a
-   * call of any other function streams nothing and doesn't stop a try. Nor once it is cancelled,
-   * which also ends a wait.
+   * `RETRIES` times at most, each after a wait that doubles from `BACKOFF_MS` up to
+   * `BACKOFF_MAX_MS`, a tenth more or less, or after the wait OpenAI asked for when that is
+   * longer. A wait past `WAIT_MAX_MS` isn't taken, nor one that would begin a try more than
+   * `RETRY_WITHIN_MS` after the first: the failure is the answer. Not once text of it, or a
+   * streamed function's arguments, have been streamed, since those words may be with their reader
+   * and a new try would write them again; a call of any other function streams nothing and
+   * doesn't stop a try. Nor once it is cancelled, which also ends a wait.
    *
    * A try that had reasoning put back, and that OpenAI may not have taken as it is (`notTaken`),
    * with no words of its own (`failed`), before any text, is made once more without it, at once
@@ -677,7 +681,8 @@ export function createSession(options: {
           continue;
         }
         if (!again || written || failed >= RETRIES || signal.aborted) throw error;
-        const doubling = BACKOFF_MS * 2 ** failed * (0.9 + Math.random() * 0.2);
+        const doubling =
+          Math.min(BACKOFF_MS * 2 ** failed, BACKOFF_MAX_MS) * (0.9 + Math.random() * 0.2);
         const wait = Math.max(again.waitMs ?? 0, doubling);
         if (wait > WAIT_MAX_MS || now() - began + wait > RETRY_WITHIN_MS) throw error;
         await (options.wait ?? sleep)(wait, signal);
