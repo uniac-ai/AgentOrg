@@ -64,16 +64,16 @@ jobs:
           set -euxo pipefail
           app=packages/mac/src-tauri/target/release/bundle/macos/AgentOrg.app
           plist="$app/Contents/Info.plist"
-          agent="$app/Contents/Library/LaunchAgents/dev.agentorg.mac.provider.plist"
+          agent="$app/Contents/Library/LaunchAgents/ai.uniac.agentorg.provider.plist"
           read_key() { plutil -extract "$2" raw "$1"; }
           pinned() { node -p "require('./packages/mac/$1')$2"; }
           codesign --verify --deep --strict "$app"
-          test "$(read_key "$plist" CFBundleIdentifier)" = dev.agentorg.mac
+          test "$(read_key "$plist" CFBundleIdentifier)" = ai.uniac.agentorg
           test "$(read_key "$plist" LSUIElement)" = true
           test "$(read_key "$plist" CFBundleIconFile)" = icon.icns
           cmp "$app/Contents/Resources/icon.icns" packages/mac/src-tauri/icons/icon.icns
           # The background item: the one plist, as kept, naming the app's own program.
-          test "$(ls "$app/Contents/Library/LaunchAgents")" = dev.agentorg.mac.provider.plist
+          test "$(ls "$app/Contents/Library/LaunchAgents")" = ai.uniac.agentorg.provider.plist
           cmp "$agent" packages/mac/src-tauri/provider.plist
           test -x "$app/$(read_key "$agent" BundleProgram)"
           # Only the app's own program and Node in Contents/MacOS: the driver stays a resource.

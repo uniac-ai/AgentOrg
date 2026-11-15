@@ -7,7 +7,7 @@ The AgentOrg Mac app, `AgentOrg.app`, built with Tauri. Its one program runs fou
 - **A grant** (`grant <need>...`), as the service opens the app to ask for the screen's grants, so that what macOS asks names AgentOrg.
 - **Unregister** (`unregister`), as a person removing the app runs it: see [Removing it](#removing-it).
 
-Its identifier, `dev.agentorg.mac`, is provisional until the app has its signing identity.
+Its identifier is `ai.uniac.agentorg`, and its background item's label `ai.uniac.agentorg.provider`. An identifier isn't changed once the app is out: macOS keeps the app's grants, its background item and what it keeps for the app under it.
 
 ## The window
 
@@ -51,7 +51,7 @@ Opening the app, the window or the item's "Open AgentOrg", registers the backgro
 
 ## The provider
 
-The background item is `Contents/Library/LaunchAgents/dev.agentorg.mac.provider.plist`. macOS starts it at login and keeps it running. The provider runs what the bundle carries: Node beside its own program, in `Contents/MacOS`, and Cua Driver and the service among its resources, `Contents/Resources/cua-driver` and `Contents/Resources/agentcomputer`. The driver is kept out of `Contents/MacOS`: it draws windows, and macOS takes a program there that does for the app itself, so opening AgentOrg would only bring the driver forward. A build without them, such as `npm run dev`'s, logs what is missing and runs nothing.
+The background item is `Contents/Library/LaunchAgents/ai.uniac.agentorg.provider.plist`. macOS starts it at login and keeps it running. The provider runs what the bundle carries: Node beside its own program, in `Contents/MacOS`, and Cua Driver and the service among its resources, `Contents/Resources/cua-driver` and `Contents/Resources/agentcomputer`. The driver is kept out of `Contents/MacOS`: it draws windows, and macOS takes a program there that does for the app itself, so opening AgentOrg would only bring the driver forward. A build without them, such as `npm run dev`'s, logs what is missing and runs nothing.
 
 - **Cua Driver,** embedded, as its embedding guide has a host run it: `cua-driver serve --embedded --no-automation-prompts --socket` on a socket in `~/Library/Application Support/AgentOrg/driver`. Its home is that folder, so what it keeps stays in the app's. Before starting it, the provider turns off AppKit's window restoration for it, `ApplePersistenceIgnoreState` in its defaults domain, `cua-driver`: restoring windows as it started, the driver reached a file macOS keeps for Full Disk Access, which listed AgentOrg there, off. That one default is the person's, in `~/Library/Preferences/cua-driver.plist`, outside the app's folders. It's told it is embedded and whose (`CUA_DRIVER_EMBEDDED`, `CUA_DRIVER_HOST_BUNDLE_ID`), and checks for no updates (`CUA_DRIVER_RS_UPDATE_CHECK=false`). It raises no Automation prompt: an action that needs an app's Automation consent, not yet given, is refused with `automation_consent_required`, naming the app. macOS lists an app under Automation only once it has asked, so there is no way yet to give that consent.
 - **The service,** once the driver's socket is there: `node agentcomputer/dist/agentcomputer.js serve --lend --listen 127.0.0.1:0`, with its data folder, the driver and its socket.
@@ -78,13 +78,13 @@ The service opens the app through the system, `open -n -g -a AgentOrg.app --args
 - **A grant:** each grant asked for, and its answer.
 - **Unregister:** where the background item then stands, or why it couldn't be unregistered.
 
-Each line is one write, so they don't mix. At 10 MB the provider moves it to `AgentOrg.1.log`, replacing the one before. macOS and WebKit also keep what they keep for any app, under `dev.agentorg.mac`, in the person's Library. The page's own storage is among it: the page keeps there the grants it last saw, to tell a grant taken away from one never given.
+Each line is one write, so they don't mix. At 10 MB the provider moves it to `AgentOrg.1.log`, replacing the one before. macOS and WebKit also keep what they keep for any app, under `ai.uniac.agentorg`, in the person's Library. The page's own storage is among it: the page keeps there the grants it last saw, to tell a grant taken away from one never given.
 
 ## Removing it
 
 1. "Quit AgentOrg (stops lending)" in the menu bar unregisters the background item and quits. Or, from a terminal, `AgentOrg.app/Contents/MacOS/AgentOrg unregister` takes the background item away, and ends the menu-bar item's process where one runs: macOS stops the provider, which stops the driver and the service. It exits 1 where it couldn't, saying why. Where it unregisters the item, it also removes the driver's default, `ApplePersistenceIgnoreState` in `~/Library/Preferences/cua-driver.plist`, and says so (by hand: `defaults delete cua-driver ApplePersistenceIgnoreState`). macOS may leave that file behind empty; it can be removed. It doesn't wait for the provider, which can take up to 40 s to stop: the provider's last line in the log is then "stopped".
-2. `tccutil reset Accessibility dev.agentorg.mac` and `tccutil reset ScreenCapture dev.agentorg.mac` remove its grants, while the app still exists.
-3. Remove `~/Library/Application Support/AgentOrg`, `~/Library/Logs/AgentOrg`, and what macOS and WebKit keep under `dev.agentorg.mac` in the person's Library (its WebKit, Caches, HTTPStorages and Saved Application State folders). `defaults delete dev.agentorg.mac` removes its preferences where there are any.
+2. `tccutil reset Accessibility ai.uniac.agentorg` and `tccutil reset ScreenCapture ai.uniac.agentorg` remove its grants, while the app still exists.
+3. Remove `~/Library/Application Support/AgentOrg`, `~/Library/Logs/AgentOrg`, and what macOS and WebKit keep under `ai.uniac.agentorg` in the person's Library (its WebKit, Caches, HTTPStorages and Saved Application State folders). `defaults delete ai.uniac.agentorg` removes its preferences where there are any.
 4. Before deleting the app, `/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -u` with its path makes Launch Services forget it.
 
 Login Items may still list an "AgentOrg" entry, switched off. macOS offers no way to remove one alone.
