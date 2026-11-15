@@ -194,7 +194,16 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
       target: join(here, "src-tauri/target/assembly"),
       workspace: here,
       service: own.dependencies["@agentorg/computer"],
-      get: (url) => fetch(url, { signal: AbortSignal.timeout(10 * 60_000) }),
+      // GitHub's API answers few asks from one address without a token: CI's own token, where it
+      // is set, goes there and nowhere else.
+      get: (url) =>
+        fetch(url, {
+          signal: AbortSignal.timeout(10 * 60_000),
+          headers:
+            process.env.GITHUB_TOKEN && new URL(url).origin === "https://api.github.com"
+              ? { Authorization: `Bearer ${process.env.GITHUB_TOKEN}` }
+              : {},
+        }),
       signing: (path, entitlements) =>
         sign(path, identity, entitlements && join(here, "entitlements", entitlements)),
     });
