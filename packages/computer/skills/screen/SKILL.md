@@ -16,6 +16,10 @@ The screen's tools are `screen__see`, `screen__act` and `screen__apps`. The scre
 
 A window's bounds from `screen__apps` are in the screen's points, not the pixels `screen__act` aims in: to aim at a window, see it and use its picture.
 
+## When it refuses
+
+When a screen tool refuses because the screen can't be used now (it is turned off, a grant is missing, or Cua Driver is missing or out of date), that is the person's to fix, not yours. Tell them, and carry on with the terminal and files where you can. On a machine lent through the AgentOrg app, point them to the app, under Screen.
+
 ## A machine the person lends
 
 On a machine the person lends, as through the AgentOrg app, you act only in the background: their pointer and focus stay where they are, and no window is brought forward. Where an element can't be pressed, click its point in the window's picture.
