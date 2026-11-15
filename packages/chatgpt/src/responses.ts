@@ -375,17 +375,23 @@ export const sleep = (ms: number, signal: AbortSignal) =>
 /**
  * The signal for one try of a response: it aborts when `signal` does, or once nothing came for
  * `ms` since `heard` last said something did, the first `heard` starting the wait. `stop` ends it.
+ * Once it has aborted, for either reason, nothing more is waited for: a try whose fetch doesn't
+ * end when it is told to leaves no wait behind to hold the process.
  */
 function stalls(signal: AbortSignal, ms: number) {
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const follow = () => controller.abort(signal.reason);
+  const follow = () => {
+    clearTimeout(timer);
+    controller.abort(signal.reason);
+  };
   if (signal.aborted) follow();
   else signal.addEventListener("abort", follow, { once: true });
   return {
     signal: controller.signal,
     heard() {
       clearTimeout(timer);
+      if (controller.signal.aborted) return;
       timer = setTimeout(() => controller.abort(new Error("Nothing came for too long.")), ms);
     },
     stop() {

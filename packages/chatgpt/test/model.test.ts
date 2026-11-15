@@ -27,11 +27,12 @@ const modelOf = (
   wait: (ms: number, signal: AbortSignal) => Promise<void>,
   now: () => number,
   stallMs?: number,
+  held?: { session?: ReturnType<typeof serveChatGPT> },
 ) =>
   defineActor({
     exports: { login: accountLogin, session: llmSession },
     start(ctx) {
-      serveChatGPT(ctx.exports, {
+      const session = serveChatGPT(ctx.exports, {
         fetch: (request) => web.fetch(request),
         store,
         log: ctx.log,
@@ -39,6 +40,7 @@ const modelOf = (
         now,
         ...(stallMs ? { stallMs } : {}),
       });
+      if (held) held.session = session;
     },
   });
 type Definition = ReturnType<typeof modelOf>;
@@ -70,6 +72,8 @@ async function setup(t: test.TestContext, openai?: FakeOpenAI, stallMs?: number)
   const waits: number[] = [];
   const held: { wait?: (signal: AbortSignal) => Promise<void> } = {};
   const clock = { now: 0 };
+  /** The session as it runs, so a test can stop it as its program's closing does. */
+  const running: { session?: ReturnType<typeof serveChatGPT> } = {};
   const actor = createTestContext(
     modelOf(
       web,
@@ -81,6 +85,7 @@ async function setup(t: test.TestContext, openai?: FakeOpenAI, stallMs?: number)
       },
       () => clock.now,
       stallMs,
+      running,
     ),
     { actorId: "chatgpt", module: "model" },
   );
@@ -98,7 +103,7 @@ async function setup(t: test.TestContext, openai?: FakeOpenAI, stallMs?: number)
       throw error;
     }
   };
-  return { actor, fake, values, call, web, waits, held, clock };
+  return { actor, fake, values, call, web, waits, held, clock, running };
 }
 
 function assertNoSecrets(fake: FakeOpenAI, outside: unknown[]) {
@@ -935,6 +940,41 @@ test("a try that gets nothing for too long, before its first byte or between two
   // A try that answers in time is not given up.
   s.fake.script({ events: [completed([text("Back")])] });
   assert.deepEqual((await ask()).output, [{ type: "message", role: "assistant", content: "Back" }]);
+});
+
+test("a try's watch for silence is gone once its request ends: answered, refused, cancelled, or with its program closing", async (t) => {
+  const s = await setup(t, undefined, 600_000);
+  await signIn(s);
+  /** The timers this process keeps: a try's watch is one while its request is out. */
+  const timers = () => process.getActiveResourcesInfo().filter((one) => one === "Timeout").length;
+  const ask = (requestId = crypto.randomUUID()) =>
+    s.call("session", "respond", { requestId, model: "gpt-test", instructions: "", input: [] });
+  const before = timers();
+  s.fake.script({ events: [completed([text("ok")])] });
+  await ask();
+  assert.equal(timers(), before, "answered");
+  s.fake.script({ status: 400 });
+  await assert.rejects(ask());
+  assert.equal(timers(), before, "refused");
+
+  // A request whose fetch never ends, not even when it is told to: its watch goes when it is
+  // cancelled, or when its program closes, though nothing ever answers it.
+  let out = 0;
+  s.web.fetch = (request) => {
+    if (!request.url.endsWith("/v1/responses")) return s.fake.handle(request);
+    out++;
+    return new Promise<Response>(() => {});
+  };
+  for (const end of ["cancelled", "closing"] as const) {
+    const requestId = crypto.randomUUID();
+    const asked = out;
+    void ask(requestId).catch(() => {});
+    while (out === asked) await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.equal(timers(), before + 1, `its watch waits while it is out (${end})`);
+    if (end === "cancelled") await s.call("session", "cancel", { requestId });
+    else s.running.session?.stop();
+    assert.equal(timers(), before, end);
+  }
 });
 
 test("the wait OpenAI asks for is taken when it is the longer; one past a minute is the answer", async (t) => {
