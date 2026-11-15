@@ -147,7 +147,7 @@ test("the computer's form is titled and ordered: which computer, where, how it's
   assert.deepEqual(titles("ownBrowser"), ["Your browser", "No browser"]);
 });
 
-test("this computer's screen and the person's browser: off unless chosen, greyed with why while they can't be had, in the AgentOrg app's words for a switch", () => {
+test("this computer's screen and the person's browser: off unless chosen, greyed with why while they can't be had, in the AgentOrg app's words for a switch or a screen grant", () => {
   const field = (found: Found, id: string) => computerUnit(found).form.find((one) => one.id === id);
   const here = (
     screen: { ready: boolean; reason?: string },
@@ -199,6 +199,34 @@ test("this computer's screen and the person's browser: off unless chosen, greyed
     option(off, "ownBrowser", "yours")?.unavailable,
     "Your browser is turned off in the AgentOrg app. Turn it on there to choose it.",
   );
+  // On in the AgentOrg app, with a grant macOS hasn't given it: set up there, in its words.
+  const needs =
+    "Screen Recording and Accessibility are needed, and AgentOrg is missing Accessibility. Grant it in System Settings, under Privacy & Security.";
+  const grants = (ungranted: string[], more: Partial<NonNullable<Found>> = {}) =>
+    option(
+      here(
+        { ready: false, reason: needs },
+        { ready: true },
+        { mac: true, off: [], ungranted, ...more },
+      ),
+      "screen",
+      "on",
+    )?.unavailable;
+  assert.equal(
+    grants(["accessibility"]),
+    "The AgentOrg app doesn't have Accessibility, which your screen needs. Set it up there, under Screen.",
+  );
+  assert.equal(
+    grants(["screen-recording", "accessibility"]),
+    "The AgentOrg app doesn't have Screen Recording or Accessibility, which your screen needs. Set them up there, under Screen.",
+  );
+  // The switch off is said first; and with no app, or no grant missing, the service's words.
+  assert.equal(
+    grants(["accessibility"], { off: ["screen"] }),
+    "Screen is turned off in the AgentOrg app. Turn it on there to choose it.",
+  );
+  assert.equal(grants(["accessibility"], { mac: undefined }), needs);
+  assert.equal(grants([]), needs);
   // A service that offers no browser of the person's says so; one that says nothing of the
   // machine yet, as before it starts, leaves both off and nothing greyed.
   assert.equal(

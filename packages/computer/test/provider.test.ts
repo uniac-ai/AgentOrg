@@ -97,8 +97,9 @@ async function standIn(
     capabilities: [] as { capability: string; ready: boolean; reason?: string }[],
     browsers: [] as { kind: string; ready: boolean; reason?: string }[],
   };
-  /** The person's switches, as its setup says them, which a test may set. */
-  const setup: { capability: string; on: boolean }[] = [];
+  /** The person's switches, and what each part needs, as its setup says them: a test may set them. */
+  const setup: { capability: string; on: boolean; needs?: { need: string; state: string }[] }[] =
+    [];
   // Its address as it listens: a request that comes as it closes is still answered.
   let base = "";
   const server = createServer(async (request, response) => {
@@ -148,7 +149,7 @@ async function standIn(
       return send(401, { code: 401, message: "That isn't this service's token." });
     if (request.method === "GET" && path === "/v1/setup")
       return send(200, {
-        capabilities: setup.map((one) => ({ ...one, ready: one.on, needs: [] })),
+        capabilities: setup.map((one) => ({ ...one, ready: one.on, needs: one.needs ?? [] })),
       });
     if (request.method === "GET" && path === "/v1/info")
       return send(200, {
@@ -1575,6 +1576,45 @@ test("this computer with its files switched off can't be chosen, in the AgentOrg
       const made = await apply(local("terminal"));
       assert.equal(command.ran(), false);
       await units.remove({ instance: made.instance });
+    });
+});
+
+test("this computer's screen lacking a grant can't be chosen, in the AgentOrg app's words on a Mac and its service's elsewhere", async (t) => {
+  for (const mac of [true, false])
+    await t.test(mac ? "AgentOrg Mac" : "the service this machine runs", async (t) => {
+      const command = onPathThatSays(t);
+      const { units, macRecord, data } = await setup(t, { service: false, path: command.bin, mac });
+      const app = await standIn(t);
+      recordIn(t, mac ? macRecord : data, app);
+      const needs =
+        "Screen Recording and Accessibility are needed, and AgentOrg is missing Accessibility. Grant it in System Settings, under Privacy & Security.";
+      app.setup.push(
+        ...["terminal", "files"].map((part) => ({ capability: part, on: true })),
+        {
+          capability: "screen",
+          on: true,
+          needs: [
+            { need: "screen-recording", state: "granted" },
+            { need: "accessibility", state: "not-granted" },
+          ],
+        },
+        { capability: "browser", on: false },
+      );
+      app.thisComputer.capabilities = [
+        { capability: "files", ready: true },
+        { capability: "screen", ready: false, reason: needs },
+      ];
+      const screen = form(
+        (await units.units({})).units.find((one) => one.id === "computer"),
+        "screen",
+      )?.options?.find((one) => one.value === "on")?.unavailable;
+      assert.equal(
+        screen,
+        mac
+          ? "The AgentOrg app doesn't have Accessibility, which your screen needs. Set it up there, under Screen."
+          : needs,
+      );
+      assert.equal(command.ran(), false);
     });
 });
 

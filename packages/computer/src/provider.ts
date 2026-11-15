@@ -47,6 +47,7 @@ import {
   CONTAINER,
   computerUnit,
   type Found,
+  GRANTS,
   INSTALL_STEPS,
   MAC_APP,
   MAC_RECORD,
@@ -626,26 +627,39 @@ export async function startComputerProvider(
     if (!reached || !info) return undefined;
     if (!Array.isArray(info.made))
       throw new Refused("unavailable", macHere() ? UPDATE_MAC : UPDATE_STEPS);
-    // On a Mac with AgentOrg Mac, a part the person switched off is said in its words.
-    const off = macHere() ? await within(SERVICE_ANSWERS_MS, switchedOff(reached)) : undefined;
+    // On a Mac with AgentOrg Mac, a part the person switched off, or a screen grant it lacks, is
+    // said in its words.
+    const setup = macHere() ? await within(SERVICE_ANSWERS_MS, setupOf(reached)) : undefined;
     return {
       reached,
-      found: { thisComputer: info.thisComputer, made: info.made, ...(off ? { off } : {}) },
+      found: { thisComputer: info.thisComputer, made: info.made, ...setup },
     };
   };
   /**
-   * The parts of this machine the person has switched off, as its service's setup says. Read
-   * directly: the SDK doesn't wrap this read.
+   * The parts of this machine the person has switched off, and the screen's grants macOS hasn't
+   * given, as its service's setup says. Read directly: the SDK doesn't wrap this read.
    */
-  const switchedOff = async ({ apiUrl, apiKey }: Reached) => {
+  const setupOf = async ({ apiUrl, apiKey }: Reached) => {
     const response = await fetch(`${apiUrl}/v1/setup`, {
       headers: { Authorization: `Bearer ${apiKey}` },
     });
     if (!response.ok) return undefined;
     const { capabilities } = (await response.json()) as {
-      capabilities?: { capability: string; on: boolean }[];
+      capabilities?: {
+        capability: string;
+        on: boolean;
+        needs?: { need: string; state: string }[];
+      }[];
     };
-    return capabilities?.filter((one) => one.on === false).map((one) => one.capability);
+    if (!capabilities) return undefined;
+    const ungranted = capabilities
+      .find((one) => one.capability === "screen")
+      ?.needs?.filter((one) => GRANTS.includes(one.need) && one.state === "not-granted")
+      .map((one) => one.need);
+    return {
+      off: capabilities.filter((one) => one.on === false).map((one) => one.capability),
+      ...(ungranted?.length ? { ungranted } : {}),
+    };
   };
   /**
    * The service on this machine. When none answers, `agentcomputer up` starts one, or finds one
