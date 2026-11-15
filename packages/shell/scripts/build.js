@@ -20,6 +20,9 @@ await build({
   logLevel: "warning",
 });
 copyFileSync(at("static/index.html"), at("dist/index.html"));
+// The tab's icon: AgentOrg's icon, scaled down to 16 and 32 pixels (`sips -Z`).
+for (const icon of ["icon-16.png", "icon-32.png"])
+  copyFileSync(at(`static/${icon}`), at(`dist/${icon}`));
 // One stylesheet: the tokens, the sign-in page's styles, and Tailwind's classes as the components
 // use them.
 const tailwind = dirname(createRequire(import.meta.url).resolve("@tailwindcss/cli/package.json"));

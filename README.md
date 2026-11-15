@@ -90,7 +90,7 @@ The core and its frontend are built apart: the core serves the frontend it is gi
   - With no frontend at all, the core starts and `/` says how to give one.
 - **Served from the core's one origin, `GET` or `HEAD` only:**
   - `/` is `index.html`, and any other path is the folder's file. A missing file is a 404; nothing falls back to `index.html`.
-  - Only `.html`, `.js`, `.css` and `.svg` files are served as what they are. Anything else goes as `application/octet-stream`, with `nosniff`.
+  - Only `.html`, `.js`, `.css`, `.svg` and `.png` files are served as what they are. Anything else goes as `application/octet-stream`, with `nosniff`.
   - The core's own paths come first: `/api`, `/api/session`, `/api/code` (the CLI's), `/live`, `/signin`, `/signin.js` and `/oauth/chatgpt`.
   - The frontend's files and the sign-in pages carry the app's policy: `default-src 'self'`, `script-src 'self'`, `style-src 'self' 'unsafe-inline'`, `img-src 'self' data:`, `connect-src 'self'`, `frame-src 'none'`, `object-src 'none'`, `base-uri 'none'`, `form-action 'self'` and `frame-ancestors 'none'`. The frontend loads nothing from elsewhere.
 - **`/api`,** as above: one socket per tab, from the core's own `Origin` and `Host`; another is refused with HTTP 401 before it opens.
