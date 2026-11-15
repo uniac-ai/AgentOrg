@@ -94,6 +94,24 @@ test(
 );
 
 test(
+  "a connection that is down says why under its name, and one that isn't says nothing there",
+  withGateway(async (gateway) => {
+    const page = await open(gateway, "#/mcps");
+    const linear = row(page, "Linear");
+    const why = linear.getByText("The server didn't answer.", { exact: true });
+    await why.waitFor();
+    const name = await linear.getByText("Linear", { exact: true }).boundingBox();
+    const said = await why.boundingBox();
+    assert.ok(name && said && said.y > name.y + name.height && said.x === name.x, "under the name");
+    const found = gateway.connections.get("c-linear");
+    assert.ok(found);
+    found.status = { state: "connected", tools: [] };
+    await why.waitFor({ state: "detached", timeout: 7000 });
+    await page.close();
+  }),
+);
+
+test(
   "a connection stands down on its own page as soon as it's read again",
   withGateway(async (gateway) => {
     const page = await open(gateway, "#/mcps");
@@ -164,6 +182,25 @@ test(
       params: { url: "https://mcp.example.com/mcp", public: true },
       name: "Search",
     });
+    await page.close();
+  }),
+);
+
+test(
+  "a field says what it does under it, as its kind's schema says",
+  withGateway(async (gateway) => {
+    const page = await open(gateway, "#/mcps/add");
+    const dialog = page.getByRole("dialog");
+    const about = dialog.getByText(
+      "It reaches only https servers on the public internet, never this machine or its network, and follows no redirect.",
+      { exact: true },
+    );
+    await about.waitFor();
+    const label = await dialog.getByText("Public addresses only", { exact: true }).boundingBox();
+    const said = await about.boundingBox();
+    assert.ok(label && said && said.y > label.y + label.height && said.x === label.x, "under it");
+    // A field whose schema says nothing has nothing under it.
+    assert.equal(await dialog.locator("p").count(), 1);
     await page.close();
   }),
 );

@@ -15,21 +15,24 @@ import { DeleteButton } from "./delete-dialog.tsx";
 import { Empty, rowClass, Scroll, TroubleDot, UsedBy, WhereIcon } from "./parts.tsx";
 import { useOffer } from "./settings-page.tsx";
 
-/** Each connection with how many tools it offers; a server's state has no event, so it's reread. */
+/**
+ * Each connection with how many tools it offers and, down, why; a server's state has no event, so
+ * it's reread.
+ */
 const readConnections = async () => {
   const connections = await listConnections();
   return Promise.all(
-    connections.map(async (entry) => ({
-      entry,
-      tools: await api
-        .call<{ status: { tools: unknown[] } }>("connections", "get", {
+    connections.map(async (entry) => {
+      const status = await api
+        .call<{ status: { tools: unknown[]; detail?: string } }>("connections", "get", {
           connection: entry.connection,
         })
         .then(
-          (reply) => reply.status.tools.length,
+          (reply) => reply.status,
           () => undefined,
-        ),
-    })),
+        );
+      return { entry, tools: status?.tools.length, why: status?.detail };
+    }),
   );
 };
 
@@ -64,7 +67,7 @@ export function McpsPage({ focus, adding }: { focus?: string; adding?: boolean }
       <Scroll>
         <ul className="mx-auto max-w-5xl">
           <Empty read={list} count={rows.length} none="No connections" />
-          {rows.map(({ entry, tools }) => (
+          {rows.map(({ entry, tools, why }) => (
             <li
               key={entry.connection}
               className={`${rowClass(focus === entry.connection)} grid-cols-[minmax(0,1.1fr)_minmax(0,1.3fr)_minmax(0,1fr)_72px_24px] tight:grid-cols-[minmax(0,1fr)_auto]`}
@@ -75,6 +78,10 @@ export function McpsPage({ focus, adding }: { focus?: string; adding?: boolean }
                   {entry.state === "down" && <TroubleDot />}
                 </div>
                 <div className="truncate text-[13px] text-muted-foreground">{originOf(entry)}</div>
+                {/* Down, it says why under its name, as on an agent's page. */}
+                {entry.state === "down" && why && (
+                  <div className="text-[13px] text-[var(--bad)]">{`${why.charAt(0).toUpperCase()}${why.slice(1)}`}</div>
+                )}
               </div>
               <span className="flex min-w-0 items-center gap-2 tight:col-span-2 tight:row-start-2">
                 {entry.origin && <WhereIcon kind={entry.origin.kind} />}

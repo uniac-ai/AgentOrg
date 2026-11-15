@@ -831,7 +831,12 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
                   type: "object",
                   properties: {
                     url: { type: "string", format: "uri", title: "Address" },
-                    public: { type: "boolean", title: "Public addresses only" },
+                    public: {
+                      type: "boolean",
+                      title: "Public addresses only",
+                      description:
+                        "It reaches only https servers on the public internet, never this machine or its network, and follows no redirect.",
+                    },
                   },
                   required: ["url"],
                   additionalProperties: false,
