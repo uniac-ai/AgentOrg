@@ -513,6 +513,7 @@ test("the core serves the frontend it is given, and its own sign-in page beside 
   const frontend = join(home, "frontend");
   mkdirSync(frontend);
   writeFileSync(join(frontend, "index.html"), "<p>given</p>");
+  writeFileSync(join(frontend, "icon-32.png"), "");
   writeFileSync(
     join(frontend, "frontend.json"),
     JSON.stringify({ version: "0.0.0-test", contract: FRONTEND_CONTRACT }),
@@ -526,6 +527,10 @@ test("the core serves the frontend it is given, and its own sign-in page beside 
   assert.equal(await (await fetch(`${app.url}/`)).text(), "<p>given</p>");
   assert.equal((await fetch(`${app.url}/signin`)).status, 200);
   assert.equal((await fetch(`${app.url}/app.js`)).status, 404, "only what the folder has");
+  // The tab's icon goes as what it is.
+  const icon = await fetch(`${app.url}/icon-32.png`);
+  assert.equal(icon.status, 200);
+  assert.equal(icon.headers.get("content-type"), "image/png");
 });
 
 test("a frontend of another contract, or a folder that isn't one, is refused before anything starts", async () => {
