@@ -68,6 +68,15 @@ const OFF_MAC = {
   screen: `Screen is turned off in ${MAC_APP}. Turn it on there to choose it.`,
   browser: `Your browser is turned off in ${MAC_APP}. Turn it on there to choose it.`,
 };
+/** The screen's macOS grants, as AgentComputer names them, and as System Settings does. */
+const GRANT_NAMES: Record<string, string> = {
+  "screen-recording": "Screen Recording",
+  accessibility: "Accessibility",
+};
+export const GRANTS = Object.keys(GRANT_NAMES);
+/** Why the screen can't be had while macOS hasn't given AgentOrg Mac one of its grants. */
+const ungrantedMac = (grants: string[]) =>
+  `${MacApp} doesn't have ${grants.map((one) => GRANT_NAMES[one] ?? one).join(" or ")}, which your screen needs. Set ${grants.length > 1 ? "them" : "it"} up there, under Screen.`;
 /** Why no container is made here, where AgentOrg Mac makes none. */
 export const NO_CONTAINER_MAC = `${MacApp} makes no container. To use a computer you run yourself, give its address.`;
 /** What to do when AgentComputer isn't installed here: the app doesn't include it. */
@@ -93,6 +102,8 @@ export type Found =
       };
       /** On a Mac with AgentOrg Mac, the parts of this machine the person has switched off. */
       off?: string[];
+      /** On a Mac with AgentOrg Mac, the screen's grants macOS hasn't given it. */
+      ungranted?: string[];
       made: { isolation: string; ready: boolean; reason?: string }[];
       starts?: true;
       why?: string;
@@ -119,10 +130,11 @@ const notHere = (found: Found, kind: typeof THIS | typeof CONTAINER) => {
 };
 const unavailable = (why: string | undefined) => (why ? { unavailable: why } : {});
 /**
- * Why a part of this computer can't be had now: switched off in AgentOrg Mac, in its words; else
- * as its service says, such as what to install or allow. Nothing where the service says nothing of
- * the part's readiness, as an older one doesn't of a switch. Its terminal is its service's to
- * refuse to the agent while it is off: the person may turn it on later.
+ * Why a part of this computer can't be had now: switched off in AgentOrg Mac, or its screen
+ * lacking a grant there, in its words; else as its service says, such as what to install or allow.
+ * Nothing where the service says nothing of the part's readiness, as an older one doesn't of a
+ * switch. Its terminal is its service's to refuse to the agent while it is off: the person may turn
+ * it on later.
  */
 const partOff = (found: Found, part: keyof typeof OFF_MAC) => {
   const offered = found?.thisComputer;
@@ -142,9 +154,11 @@ const partOff = (found: Found, part: keyof typeof OFF_MAC) => {
         : "The provider here can't give its screen.";
   }
   if (one.ready) return undefined;
-  return found?.mac && found.off?.includes(part)
-    ? OFF_MAC[part]
-    : (one.reason ?? `This computer's ${part} can't be used now.`);
+  if (found?.mac && found.off?.includes(part)) return OFF_MAC[part];
+  // Each grant is set up in the app's window, which asks macOS for it.
+  if (found?.mac && part === "screen" && found.ungranted?.length)
+    return ungrantedMac(found.ungranted);
+  return one.reason ?? `This computer's ${part} can't be used now.`;
 };
 
 /** The form as it stands now, with what was found on this machine. */
