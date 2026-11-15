@@ -16,6 +16,7 @@ type Kind = McpProvider["kinds"][number];
 interface Property {
   type?: string;
   title?: string;
+  description?: string;
   items?: { type?: string };
 }
 interface Schema {
@@ -30,6 +31,11 @@ const labelOf = (key: string, property: Property) =>
   (key.length <= 3 ? key.toUpperCase() : `${key.charAt(0).toUpperCase()}${key.slice(1)}`);
 const isList = (property: Property) => property.type === "array";
 const isFlag = (property: Property) => property.type === "boolean";
+/** What a field does, as its schema says it, in the muted line the unit form has under a field. */
+const About = ({ property }: { property: Property }) =>
+  property.description ? (
+    <p className="text-xs text-muted-foreground">{property.description}</p>
+  ) : null;
 
 export function ConnectDialog({
   open,
@@ -194,6 +200,7 @@ function KindForm({
                     onCheckedChange={(on) => setFlags({ ...flags, [field]: on })}
                   />
                 </div>
+                <About property={property} />
               </Field>
             ) : (
               <Field key={field}>
@@ -214,6 +221,7 @@ function KindForm({
                     onChange={(e) => setValues({ ...values, [field]: e.target.value })}
                   />
                 )}
+                <About property={property} />
               </Field>
             ),
           )}
@@ -229,6 +237,7 @@ function KindForm({
                 value={hidden[field] ?? ""}
                 onChange={(e) => setHidden({ ...hidden, [field]: e.target.value })}
               />
+              <About property={property} />
             </Field>
           ))}
           {openSecrets && (
