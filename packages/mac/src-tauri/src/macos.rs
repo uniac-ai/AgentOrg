@@ -158,6 +158,16 @@ pub fn dark_appearance() -> bool {
     })
 }
 
+/// Names a status item's button, which shows only a picture, for VoiceOver and the accessibility
+/// tree. On the main thread.
+pub fn name_status_item(item: &AnyObject, name: &str) {
+    let button: Option<Retained<AnyObject>> = unsafe { msg_send![item, button] };
+    if let Some(button) = button {
+        let name = NSString::from_str(name);
+        let _: () = unsafe { msg_send![&*button, setAccessibilityLabel: &*name] };
+    }
+}
+
 /// Whether a status item is drawn on a dark menu bar, from its button's appearance, which follows
 /// the menu bar, its wallpaper included. On the main thread.
 pub fn status_item_dark(item: &AnyObject) -> Option<bool> {
