@@ -46,7 +46,8 @@ export function AgentPage({
   /** The way forward being looked at, in its unit's form. */
   const [taking, setTaking] = useState<Way>();
   const watched = byId.get(id);
-  // While it works, its own model request may be tried again: the line says so in "Working"'s place.
+  // While it works, a model request of its own or of a piece of work may be tried again: the line
+  // says so in "Working"'s place.
   const retrying = useRetrying(watched?.detail, watched?.now.tone === "working");
   // An agent the list read since doesn't have: one deleted elsewhere, or a wrong address. A list
   // that couldn't be read says nothing of it.

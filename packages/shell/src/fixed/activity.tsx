@@ -78,8 +78,23 @@ export function Retry({ retrying }: { retrying: RetryState }) {
 }
 
 /**
- * The agent's own model request being tried again, as its Activity says it: read while it works,
- * when it starts to and each time its capability says the view changed. The latest read says it.
+ * The retry an agent's line says: its main loop's, or with none, the one of its pieces of work's
+ * whose next try begins first. Only the first page is read: pieces being worked on are the most
+ * recently active, so they lead it.
+ */
+const lineRetry = (pieces: Pieces) =>
+  pieces.retrying ??
+  pieces.works
+    .flatMap((work) => work.retrying ?? [])
+    .reduce<RetryState | undefined>(
+      (first, one) => (first && Date.parse(first.at) <= Date.parse(one.at) ? first : one),
+      undefined,
+    );
+
+/**
+ * A model request of the agent's being tried again, as its line says it: read from its Activity
+ * while it works, when it starts to and each time its capability says the view changed. The
+ * latest read says it.
  */
 export function useRetrying(detail: AgentDetail | undefined, working: boolean) {
   const connection = useConnection();
@@ -95,7 +110,7 @@ export function useRetrying(detail: AgentDetail | undefined, working: boolean) {
     const read = () => {
       const mine = ++asked;
       ask<Pieces>(source, {}).then(
-        (pieces) => live && mine === asked && setRetrying(pieces.retrying),
+        (pieces) => live && mine === asked && setRetrying(lineRetry(pieces)),
         () => {},
       );
     };

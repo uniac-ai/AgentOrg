@@ -506,7 +506,7 @@ test(
 );
 
 test(
-  "the agent's own request tried again is said on its line, in Working's place, and a piece's on the piece; neither in its conversation",
+  "the agent's own request tried again is said on its line, in Working's place, before a piece's, which is said on the piece; neither in its conversation",
   withGateway(async (gateway) => {
     const start = Date.now();
     const page = await open(gateway, "#/a/a-research", 1440, start);
@@ -526,24 +526,77 @@ test(
     const chats = page.getByRole("complementary", { name: "Chats" });
     await chats.getByText("Why are checkouts failing?").waitFor();
     assert.equal(await chats.getByText(/Retrying/).count(), 0);
-    // With a piece's too, each says its own.
+    // With a piece's too, each says its own: the line its own, though the piece's begins first.
+    const checkouts = {
+      id: "w1",
+      title: "Checkouts",
+      state: "working" as const,
+      at: ago(0),
+      entries: three(1),
+    };
     gateway.setWorks("a-research", [
-      {
-        id: "w1",
-        title: "Checkouts",
-        state: "working",
-        at: ago(0),
-        entries: three(1),
-        retrying: { attempt: 3, of: 10, at: after(start, 20) },
-      },
+      { ...checkouts, retrying: { attempt: 3, of: 10, at: after(start, 20) } },
     ]);
     await page.getByRole("main").getByRole("tab", { name: "Overview" }).click();
     await says(head(box(page), "Checkouts"), "Retrying in 8 s · attempt 3 of 10");
-    await says(line, "Retrying now · attempt 1 of 10");
-    // Its own no longer tried again: Working on its line, and the piece keeps its own.
-    gateway.setRetrying("a-research");
-    await says(line, "Working");
+    gateway.setRetrying("a-research", { attempt: 2, of: 10, at: after(start, 30) });
+    await says(line, "Retrying in 18 s · attempt 2 of 10");
     await says(head(box(page), "Checkouts"), "Retrying in 8 s · attempt 3 of 10");
+    // Its own no longer tried again: its line says the piece's, which the piece keeps.
+    gateway.setRetrying("a-research");
+    await says(line, "Retrying in 8 s · attempt 3 of 10");
+    await says(head(box(page), "Checkouts"), "Retrying in 8 s · attempt 3 of 10");
+    await page.close();
+  }),
+);
+
+test(
+  "with none of its own, the agent's line says the retry of the piece of work whose next try begins first, until none is; never its conversation",
+  withGateway(async (gateway) => {
+    const start = Date.now();
+    const research = gateway.agents.get("a-research");
+    assert.ok(research);
+    const piece = (id: string, title: string, retrying?: Work["retrying"]) => ({
+      id,
+      title,
+      state: "working" as const,
+      at: ago(0),
+      entries: three(id === "w1" ? 1 : 2),
+      ...(retrying ? { retrying } : {}),
+    });
+    const checkouts = { attempt: 2, of: 10, at: after(start, 20) };
+    research.works = [piece("w1", "Checkouts", checkouts), piece("w2", "Logs")];
+    // On the tab it opens on, where no piece of work is shown.
+    const page = await open(gateway, "#/a/a-research", 1440, start);
+    const line = page.getByRole("status", { name: "State" });
+    await says(line, "Retrying in 20 s · attempt 2 of 10");
+    assert.match(
+      (await line.locator("span").first().getAttribute("class")) ?? "",
+      /bg-\[var\(--ok\)\] pulse/,
+    );
+    // Two tried again: the one whose next try begins first, though it is listed after.
+    gateway.setWorks("a-research", [
+      piece("w1", "Checkouts", checkouts),
+      piece("w2", "Logs", { attempt: 1, of: 10, at: after(start, 5) }),
+    ]);
+    await says(line, "Retrying in 5 s · attempt 1 of 10");
+    await page.clock.setFixedTime(start + 5_000);
+    await says(line, "Retrying now · attempt 1 of 10");
+    // That one's retry ends: the other's.
+    gateway.setWorks("a-research", [piece("w1", "Checkouts", checkouts), piece("w2", "Logs")]);
+    await says(line, "Retrying in 15 s · attempt 2 of 10");
+    // Its conversation holds what was said, and nothing of this.
+    await page.getByRole("button", { name: "Message" }).click();
+    const chats = page.getByRole("complementary", { name: "Chats" });
+    await chats.getByText("Why are checkouts failing?").waitFor();
+    assert.equal(await chats.getByText(/Retrying/).count(), 0);
+    // None tried again while it still works: Working, with the same dot.
+    gateway.setWorks("a-research", [piece("w1", "Checkouts"), piece("w2", "Logs")]);
+    await says(line, "Working");
+    assert.match(
+      (await line.locator("span").first().getAttribute("class")) ?? "",
+      /bg-\[var\(--ok\)\] pulse/,
+    );
     await page.close();
   }),
 );
