@@ -3,7 +3,7 @@
   "productName": "AgentOrg",
   "mainBinaryName": "AgentOrg",
   "version": "../package.json",
-  "identifier": "dev.agentorg.mac",
+  "identifier": "ai.uniac.agentorg",
   "build": {
     "frontendDist": "../../mac-window/dist",
     "devUrl": "http://localhost:5180",
@@ -39,7 +39,7 @@
       "signingIdentity": "-",
       "minimumSystemVersion": "13.0",
       "files": {
-        "Library/LaunchAgents/dev.agentorg.mac.provider.plist": "provider.plist",
+        "Library/LaunchAgents/ai.uniac.agentorg.provider.plist": "provider.plist",
         "MacOS/node": "target/assembly/bundle/MacOS/node",
         "Resources/cua-driver": "target/assembly/bundle/Resources/cua-driver",
         "Resources/agentcomputer": "target/assembly/bundle/Resources/agentcomputer",
