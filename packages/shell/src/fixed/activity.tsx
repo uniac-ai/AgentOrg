@@ -2,7 +2,7 @@
 // them, newest first. A box on the agent's Overview has the latest; the box opens into the layer's
 // window with all of it. It is for reading: nothing in it changes anything. Its rows are the rows
 // a call had in a chat.
-import type { Activity, ActivityPage } from "@agentorg/interfaces";
+import type { Activity, ActivityPage, Retrying } from "@agentorg/interfaces";
 import { Maximize2Icon, WrenchIcon, XIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { z } from "zod";
@@ -21,6 +21,7 @@ type Work = z.output<typeof Activity>["works"][number];
 type Entry = Work["entries"][number];
 type Page = z.output<typeof ActivityPage>;
 type Pieces = z.output<typeof Activity>;
+type RetryState = z.output<typeof Retrying>;
 
 /** How many calls the box holds: the latest of the newest pieces of work, at most so many of each. */
 const LATEST = 6;
@@ -31,8 +32,9 @@ const BOX_PAGES = 5;
 const WINDOW_PAGES = 50;
 /** How many pages of pieces of work the window reads: six pieces each. */
 const PIECE_PAGES = 20;
-/** How often how long ago is said again. */
+/** How often how long ago is said again, and how often a retry's wait is counted down. */
 const MINUTE = 60_000;
+const SECOND = 1000;
 
 /**
  * Where an agent's activity is read: the first view of kind `activity` one of its capabilities
@@ -63,6 +65,55 @@ async function ask<T>(source: Source, input: Record<string, unknown>): Promise<T
   );
   if (failed) throw new Error(output);
   return JSON.parse(output) as T;
+}
+
+/**
+ * A model request being tried again, said in "Working"'s place: when the next try begins, counted
+ * down each second, then "now" once it has; and which retry it is, of the most there will be.
+ */
+export function Retry({ retrying }: { retrying: RetryState }) {
+  useEvery(SECOND);
+  const left = Math.ceil((Date.parse(retrying.at) - Date.now()) / SECOND);
+  return `Retrying ${left > 0 ? `in ${left} s` : "now"} · attempt ${retrying.attempt} of ${retrying.of}`;
+}
+
+/**
+ * The agent's own model request being tried again, as its Activity says it: read while it works,
+ * when it starts to and each time its capability says the view changed. The latest read says it.
+ */
+export function useRetrying(detail: AgentDetail | undefined, working: boolean) {
+  const connection = useConnection();
+  const [retrying, setRetrying] = useState<RetryState>();
+  const source = activityOf(detail);
+  const key = source && JSON.stringify(source);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `key` says when `source` changed.
+  useEffect(() => {
+    setRetrying(undefined);
+    if (!source || !working || connection !== "open") return;
+    let live = true;
+    let asked = 0;
+    const read = () => {
+      const mine = ++asked;
+      ask<Pieces>(source, {}).then(
+        (pieces) => live && mine === asked && setRetrying(pieces.retrying),
+        () => {},
+      );
+    };
+    read();
+    const stop = api.subscribe(
+      source.capability,
+      "changed",
+      (payload) => {
+        if ((payload as { view?: string }).view === source.view) read();
+      },
+      { again: read },
+    );
+    return () => {
+      live = false;
+      stop();
+    };
+  }, [key, working, connection]);
+  return retrying;
 }
 
 /**
@@ -204,7 +255,10 @@ const rowsIn = (work: Work) => {
   return work.state === "stopped" ? rows.map(ended) : rows;
 };
 
-/** A piece of work: its title, then how it stands (worked on now, or when it last did something), then what it did. */
+/**
+ * A piece of work: its title, then how it stands (worked on now, its request being tried again, or
+ * when it last did something), then what it did.
+ */
 function Piece({ work, rows }: { work: Work; rows: readonly Row[] }) {
   // How long ago is said again as time goes by.
   useEvery(MINUTE);
@@ -219,7 +273,7 @@ function Piece({ work, rows }: { work: Work; rows: readonly Row[] }) {
               aria-label="Working"
               className="pulse mx-0.5 inline-block size-2 shrink-0 rounded-full bg-[var(--ok)]"
             />
-            Working
+            {work.retrying ? <Retry retrying={work.retrying} /> : "Working"}
           </span>
         ) : (
           <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
