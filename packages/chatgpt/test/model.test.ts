@@ -26,17 +26,21 @@ const modelOf = (
   store: Store,
   wait: (ms: number, signal: AbortSignal) => Promise<void>,
   now: () => number,
+  stallMs?: number,
+  held?: { session?: ReturnType<typeof serveChatGPT> },
 ) =>
   defineActor({
     exports: { login: accountLogin, session: llmSession },
     start(ctx) {
-      serveChatGPT(ctx.exports, {
+      const session = serveChatGPT(ctx.exports, {
         fetch: (request) => web.fetch(request),
         store,
         log: ctx.log,
         wait,
         now,
+        ...(stallMs ? { stallMs } : {}),
       });
+      if (held) held.session = session;
     },
   });
 type Definition = ReturnType<typeof modelOf>;
@@ -49,7 +53,7 @@ interface Reply {
 }
 
 /** ChatGPT with the fake as its way out and an in-memory store. */
-async function setup(t: test.TestContext, openai?: FakeOpenAI) {
+async function setup(t: test.TestContext, openai?: FakeOpenAI, stallMs?: number) {
   const fake = openai ?? (await fakeOpenAI());
   const values = new Map<string, unknown>();
   const web: { fetch: Fetch } = { fetch: (request) => fake.handle(request) };
@@ -68,6 +72,8 @@ async function setup(t: test.TestContext, openai?: FakeOpenAI) {
   const waits: number[] = [];
   const held: { wait?: (signal: AbortSignal) => Promise<void> } = {};
   const clock = { now: 0 };
+  /** The session as it runs, so a test can stop it as its program's closing does. */
+  const running: { session?: ReturnType<typeof serveChatGPT> } = {};
   const actor = createTestContext(
     modelOf(
       web,
@@ -78,6 +84,8 @@ async function setup(t: test.TestContext, openai?: FakeOpenAI) {
         await held.wait?.(signal);
       },
       () => clock.now,
+      stallMs,
+      running,
     ),
     { actorId: "chatgpt", module: "model" },
   );
@@ -95,7 +103,7 @@ async function setup(t: test.TestContext, openai?: FakeOpenAI) {
       throw error;
     }
   };
-  return { actor, fake, values, call, web, waits, held };
+  return { actor, fake, values, call, web, waits, held, clock, running };
 }
 
 function assertNoSecrets(fake: FakeOpenAI, outside: unknown[]) {
@@ -845,6 +853,128 @@ test("a cut connection is tried for about three minutes: one back in twenty seco
   assert.ok(s.waits.every(about), JSON.stringify(s.waits));
   assert.ok(waited() >= 181_000 * 0.9 && waited() <= 181_000 * 1.1, String(waited()));
   assert.equal(responses() - before, 1);
+});
+
+test("a try that gets nothing for too long, before its first byte or between two, is given up, and as no try begins so late, its failure is the answer", {
+  timeout: 15_000,
+}, async (t) => {
+  // Nothing for a second gives a try up here, five minutes in the app: each stall moves the clock
+  // the tries are timed by as far as the app's would have gone.
+  const s = await setup(t, undefined, 1000);
+  await signIn(s);
+  // OpenAI's responses on a port of this machine, each request answered as the next of `ways`
+  // says: silent, nothing after its first event, nothing after text, or as the fake answers.
+  type Way = "silent" | "midway" | "afterText" | "answer";
+  const ways: Way[] = [];
+  const server = createServer(async (request, response) => {
+    const body: Buffer[] = [];
+    try {
+      for await (const chunk of request) body.push(chunk as Buffer);
+    } catch {
+      return;
+    }
+    const way = ways.shift() ?? "answer";
+    if (way !== "answer") s.clock.now += 300_000;
+    if (way === "silent") return;
+    if (way !== "answer") {
+      const first = way === "midway" ? { type: "response.created" } : delta("Hel");
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.write(`event: ${first.type}\ndata: ${JSON.stringify(first)}\n\n`);
+      return;
+    }
+    const answer = await s.fake.handle(
+      new Request(`https://api.openai.com${request.url}`, {
+        method: request.method,
+        headers: { authorization: request.headers.authorization ?? "" },
+        body: Buffer.concat(body),
+      }),
+    );
+    response.writeHead(answer.status, Object.fromEntries(answer.headers));
+    if (answer.body) for await (const chunk of answer.body) response.write(chunk);
+    response.end();
+  });
+  const port = await new Promise<number>((resolve) =>
+    server.listen(0, "127.0.0.1", () => resolve((server.address() as AddressInfo).port)),
+  );
+  t.after(() => {
+    server.close();
+    server.closeAllConnections();
+  });
+  s.web.fetch = async (request) => {
+    const url = new URL(request.url);
+    if (url.origin !== "https://api.openai.com" || !url.pathname.endsWith("/responses"))
+      return s.fake.handle(request);
+    return fetch(`http://127.0.0.1:${port}${url.pathname}`, {
+      method: request.method,
+      headers: request.headers,
+      body: await request.text(),
+      signal: request.signal,
+    });
+  };
+  const ask = () =>
+    s.call("session", "respond", {
+      requestId: crypto.randomUUID(),
+      model: "gpt-test",
+      instructions: "",
+      input: [],
+    });
+  const heard = () => events(s.actor, "delta").length;
+
+  // Silent before its first byte: as one that couldn't reach OpenAI. After its first event: as
+  // one that broke off. Either way no try is left to begin in time.
+  for (const [way, failed] of [
+    ["silent", { code: "unavailable", message: "OpenAI couldn't be reached. Try again later." }],
+    ["midway", { code: "failed", message: "The response stream broke off." }],
+  ] as const) {
+    s.waits.length = 0;
+    ways.push(way);
+    await assert.rejects(ask(), failed, way);
+    assert.equal(s.waits.length, 0, way);
+  }
+  // Silent after text: as one that broke off, and those words may be with their reader.
+  const before = heard();
+  ways.push("afterText");
+  await assert.rejects(ask(), { code: "failed", message: "The response stream broke off." });
+  assert.equal(s.waits.length, 0);
+  assert.equal(heard() - before, 1);
+  // A try that answers in time is not given up.
+  s.fake.script({ events: [completed([text("Back")])] });
+  assert.deepEqual((await ask()).output, [{ type: "message", role: "assistant", content: "Back" }]);
+});
+
+test("a try's watch for silence is gone once its request ends: answered, refused, cancelled, or with its program closing", async (t) => {
+  const s = await setup(t, undefined, 600_000);
+  await signIn(s);
+  /** The timers this process keeps: a try's watch is one while its request is out. */
+  const timers = () => process.getActiveResourcesInfo().filter((one) => one === "Timeout").length;
+  const ask = (requestId = crypto.randomUUID()) =>
+    s.call("session", "respond", { requestId, model: "gpt-test", instructions: "", input: [] });
+  const before = timers();
+  s.fake.script({ events: [completed([text("ok")])] });
+  await ask();
+  assert.equal(timers(), before, "answered");
+  s.fake.script({ status: 400 });
+  await assert.rejects(ask());
+  assert.equal(timers(), before, "refused");
+
+  // A request whose fetch never ends, not even when it is told to: its watch goes when it is
+  // cancelled, or when its program closes, though nothing ever answers it.
+  let out = 0;
+  s.web.fetch = (request) => {
+    if (!request.url.endsWith("/v1/responses")) return s.fake.handle(request);
+    out++;
+    return new Promise<Response>(() => {});
+  };
+  for (const end of ["cancelled", "closing"] as const) {
+    const requestId = crypto.randomUUID();
+    const asked = out;
+    void ask(requestId).catch(() => {});
+    while (out === asked) await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.equal(timers(), before + 1, `its watch waits while it is out (${end})`);
+    if (end === "cancelled") await s.call("session", "cancel", { requestId });
+    else s.running.session?.stop();
+    assert.equal(timers(), before, end);
+  }
 });
 
 test("the wait OpenAI asks for is taken when it is the longer; one past a minute is the answer", async (t) => {

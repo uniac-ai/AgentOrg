@@ -16,6 +16,8 @@ export function serveChatGPT(
     /** How a wait between two tries of a response is spent, and the time. For tests. */
     wait?: (ms: number, signal: AbortSignal) => Promise<void>;
     now?: () => number;
+    /** How long a try may get nothing before it is given up. For tests. */
+    stallMs?: number;
   },
 ) {
   const { store, log } = options;
@@ -46,6 +48,7 @@ export function serveChatGPT(
     account,
     ...(options.wait ? { wait: options.wait } : {}),
     ...(options.now ? { now: options.now } : {}),
+    ...(options.stallMs ? { stallMs: options.stallMs } : {}),
     log,
     // Each consumer's text goes to that consumer alone.
     delta: (caller, requestId, text, call) =>

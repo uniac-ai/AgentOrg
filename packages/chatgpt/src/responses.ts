@@ -26,6 +26,13 @@ const WAIT_MAX_MS = 60_000;
  * on one call, ten minutes in the app, and the last try needs time to answer.
  */
 const RETRY_WITHIN_MS = 300_000;
+/**
+ * How long a try may get nothing, before its first byte or between two, before it is given up: as
+ * one that couldn't reach OpenAI, or after its first byte, one that broke off. What pi waits, and
+ * Codex between events and OpenCode for a first byte; what Node's own fetch waits by default.
+ * Since no try begins more than `RETRY_WITHIN_MS` after the first, such a failure is the answer.
+ */
+const STALL_MS = 300_000;
 /** OpenAI's codes for a server that failed or is overloaded, in a reply or inside a stream. */
 const SERVER_CODES = new Set(["server_error", "server_is_overloaded"]);
 
@@ -189,10 +196,14 @@ async function errorOf(response: Response) {
 
 const BLANK_LINE = /\r?\n\r?\n/;
 
-/** Server-sent events, one parsed `data` object at a time, until the stream or `signal` ends. */
+/**
+ * Server-sent events, one parsed `data` object at a time, until the stream or `signal` ends.
+ * `heard` is told each time something comes.
+ */
 async function* events(
   body: ReadableStream<Uint8Array>,
   signal: AbortSignal,
+  heard: () => void,
 ): AsyncGenerator<Record<string, unknown>> {
   const decoder = new TextDecoder();
   const reader = body.getReader();
@@ -203,6 +214,7 @@ async function* events(
   try {
     while (!done) {
       const read = await reader.read();
+      heard();
       done = read.done;
       if (signal.aborted) return;
       buffer += decoder.decode(read.value, { stream: !done });
@@ -360,6 +372,35 @@ export const sleep = (ms: number, signal: AbortSignal) =>
     else signal.addEventListener("abort", done, { once: true });
   });
 
+/**
+ * The signal for one try of a response: it aborts when `signal` does, or once nothing came for
+ * `ms` since `heard` last said something did, the first `heard` starting the wait. `stop` ends it.
+ * Once it has aborted, for either reason, nothing more is waited for: a try whose fetch doesn't
+ * end when it is told to leaves no wait behind to hold the process.
+ */
+function stalls(signal: AbortSignal, ms: number) {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const follow = () => {
+    clearTimeout(timer);
+    controller.abort(signal.reason);
+  };
+  if (signal.aborted) follow();
+  else signal.addEventListener("abort", follow, { once: true });
+  return {
+    signal: controller.signal,
+    heard() {
+      clearTimeout(timer);
+      if (controller.signal.aborted) return;
+      timer = setTimeout(() => controller.abort(new Error("Nothing came for too long.")), ms);
+    },
+    stop() {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", follow);
+    },
+  };
+}
+
 export function createSession(options: {
   fetch: Fetch;
   account: Account;
@@ -380,6 +421,8 @@ export function createSession(options: {
   /** How a wait between two tries is spent, and the time: a timer and the clock, unless a test gives its own. */
   wait?: (ms: number, signal: AbortSignal) => Promise<void>;
   now?: () => number;
+  /** How long a try may get nothing before it is given up: `STALL_MS`, unless a test gives its own. */
+  stallMs?: number;
   /** Where an error inside a response's stream that has no code is logged, by its fields' names. */
   log: Log;
 }) {
@@ -497,14 +540,33 @@ export function createSession(options: {
   };
 
   /**
-   * One try, sending `items`. `wrote` is told when text of it, or a streamed call's arguments,
-   * has been streamed: such a try is not made again.
+   * One try, given up once nothing comes for `stallMs`, before its first byte or between two: a
+   * cancel is still a cancel.
    */
   async function stream(
     input: RespondInput,
     items: Record<string, unknown>[],
     caller: string,
     signal: AbortSignal,
+    wrote: () => void,
+  ) {
+    const quiet = stalls(signal, options.stallMs ?? STALL_MS);
+    try {
+      return await tryOnce(input, items, caller, signal, quiet, wrote);
+    } finally {
+      quiet.stop();
+    }
+  }
+  /**
+   * One try, sending `items`. `wrote` is told when text of it, or a streamed call's arguments,
+   * has been streamed: such a try is not made again.
+   */
+  async function tryOnce(
+    input: RespondInput,
+    items: Record<string, unknown>[],
+    caller: string,
+    signal: AbortSignal,
+    quiet: ReturnType<typeof stalls>,
     wrote: () => void,
   ) {
     const asked = accounts;
@@ -531,6 +593,7 @@ export function createSession(options: {
       stream: true,
       store: false,
     });
+    quiet.heard();
     const response = await authorized(
       (token) =>
         new Request(`${API}/responses`, {
@@ -541,10 +604,11 @@ export function createSession(options: {
             accept: "text/event-stream",
           },
           body,
-          signal,
+          signal: quiet.signal,
         }),
       signal,
     );
+    quiet.heard();
     const requestId = response.headers.get("x-request-id");
     if (!response.body) throw refusalOf("empty_stream", { status: response.status, requestId });
     /**
@@ -578,7 +642,7 @@ export function createSession(options: {
     /** Each call of those the response is writing, by its item's id. */
     const calls = new Map<string, { id: string; name: string }>();
     try {
-      for await (const event of events(response.body, signal)) {
+      for await (const event of events(response.body, signal, quiet.heard)) {
         switch (event.type) {
           case "response.output_text.delta":
             if (typeof event.delta === "string") {
