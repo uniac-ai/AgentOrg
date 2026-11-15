@@ -417,6 +417,13 @@ pub fn window(with_window: bool) {
                 .menu(&menu)
                 .show_menu_on_left_click(true)
                 .build(app)?;
+            // Named, as the draft's button is: its picture alone says nothing to VoiceOver or to
+            // the accessibility tree.
+            let _ = tray.with_inner_tray_icon(|inner| {
+                if let Some(item) = inner.ns_status_item() {
+                    macos::name_status_item(&item, "AgentOrg");
+                }
+            });
             if with_window {
                 show_window(&handle);
             }
