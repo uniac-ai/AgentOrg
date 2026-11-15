@@ -89,6 +89,8 @@ jobs:
           # The bundled Node runs JavaScript, and loads the terminal's native module, under its
           # hardened runtime and entitlements.
           "$app/Contents/MacOS/node" -e 'require(process.argv[1])' "$PWD/$app/Contents/Resources/agentcomputer/node_modules/node-pty"
-          # The app's own program, in a way that needs no grant: nothing is registered here.
-          said="$("$app/Contents/MacOS/AgentOrg" unregister)"
-          case "$said" in "the background item isn't registered; "*) ;; *) exit 1 ;; esac
+          # The app's own program runs and reaches macOS's background items, in a way that needs
+          # no grant. Nothing is registered here: macOS says so, or, as on CI's runners, that it
+          # knows no such item and won't unregister it.
+          said="$("$app/Contents/MacOS/AgentOrg" unregister 2>&1 || true)"
+          case "$said" in "the background item "*) ;; *) exit 1 ;; esac
