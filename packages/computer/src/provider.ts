@@ -302,9 +302,12 @@ const STARTING = "Its computer is being started.";
 const TRYING = "Its computer is being started again.";
 /** While its service says it runs, and its connection is to be made again, as after an update. */
 const AGAIN = "Its computer is being reached again.";
-/** One the person's own service has, which isn't running, where AgentOrg Mac starts nothing. */
-const SELF_RUN_DOWN =
-  "The AgentComputer you run yourself isn't running. Start it with agentcomputer up.";
+/**
+ * One the person's own service has, which isn't running, where AgentOrg Mac starts nothing. That
+ * service's record, which says whether it is this computer, can't be read while it is stopped:
+ * either way on is said.
+ */
+const SELF_RUN_DOWN = `The AgentComputer you run yourself isn't running. Start it with agentcomputer up. If this computer is this Mac, you can instead attach it again through ${MAC_APP}.`;
 /** The service this machine runs, where it has gone: the page's own words, with the command. */
 const LOCAL_DOWN = "No AgentComputer is running on this machine. Start it with agentcomputer up.";
 /**

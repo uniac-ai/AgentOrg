@@ -1804,12 +1804,12 @@ test("on a Mac with AgentOrg Mac, this computer attached through the service you
       },
     }),
   );
-  // That service not running: it says so, with how to start it.
+  // That service not running: it says so, with both ways on, since which kind it is can't be read.
   await restart();
   await until(async () => (await units.status({ instance: "computer_old" })).state === "down");
   assert.equal(
     (await units.status({ instance: "computer_old" })).detail,
-    "The AgentComputer you run yourself isn't running. Start it with agentcomputer up.",
+    "The AgentComputer you run yourself isn't running. Start it with agentcomputer up. If this computer is this Mac, you can instead attach it again through the AgentOrg app.",
   );
   assert.equal(command.ran(), false, "nothing of AgentComputer was started");
   // Running: this computer is offered again, through AgentOrg Mac, with its folder.
