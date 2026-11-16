@@ -112,9 +112,8 @@ fn part(capability: &str) -> Result<&str, Refusal> {
     }
 }
 
-/// A call off the window's thread, its answer noted in the log when it changes.
-async fn read(
-    what: &'static str,
+/// A call off the window's thread.
+async fn called(
     method: &'static str,
     path: String,
     body: Option<Value>,
@@ -125,13 +124,26 @@ async fn read(
     if answer.is_ok() {
         ANSWERED.store(true, Ordering::Relaxed);
     }
-    noted(
-        what,
-        match &answer {
-            Ok(_) => "answered".into(),
-            Err(refusal) => format!("{} {}", refusal.code, refusal.message),
-        },
-    );
+    answer
+}
+
+/// How a call ended, as the log says it.
+fn outcome(answer: &Result<Value, Refusal>) -> String {
+    match answer {
+        Ok(_) => "answered".into(),
+        Err(refusal) => format!("{} {}", refusal.code, refusal.message),
+    }
+}
+
+/// A call off the window's thread, its answer noted in the log when it changes.
+async fn read(
+    what: &'static str,
+    method: &'static str,
+    path: String,
+    body: Option<Value>,
+) -> Result<Value, Refusal> {
+    let answer = called(method, path, body).await;
+    noted(what, outcome(&answer));
     answer
 }
 
@@ -140,10 +152,15 @@ async fn setup() -> Result<Value, Refusal> {
     read("setup", "GET", "/v1/setup".into(), None).await
 }
 
+/// A switch the person sets, each time in the log with its part and which way, as it is the
+/// person's own act.
 #[tauri::command]
 async fn set_switch(capability: String, on: bool) -> Result<Value, Refusal> {
     let path = format!("/v1/setup/{}", part(&capability)?);
-    read("set_switch", "PUT", path, Some(json!({ "on": on }))).await
+    let answer = called("PUT", path, Some(json!({ "on": on }))).await;
+    let way = if on { "on" } else { "off" };
+    log("window", &format!("set_switch {capability} {way}: {}", outcome(&answer)));
+    answer
 }
 
 /// A need's own setup control, on the person's click, through the service: for a screen grant,
@@ -606,6 +623,38 @@ mod tests {
         // A record naming an address off this Mac is no service: the token isn't sent there.
         record("http://192.0.2.1:7878");
         assert_eq!(run(setup()).unwrap_err().code, 503);
+
+        // Each switch set is in the log, with its part and which way, the same way twice too: it
+        // is the person's own act. One refused says why.
+        let lines = || fs::read_to_string(crate::places::logs().join("AgentOrg.log"));
+        let before = lines().unwrap_or_default().lines().count();
+        for (on, status, body) in [
+            (false, "200 OK", "{}"),
+            (true, "200 OK", "{}"),
+            (true, "200 OK", "{}"),
+            (false, "409 Conflict", r#"{"code":409,"message":"The screen isn't ready."}"#),
+        ] {
+            let (url, heard) = service_answering(status, body);
+            record(&url);
+            let _ = run(set_switch("screen".into(), on));
+            heard.join().unwrap();
+        }
+        let said: Vec<String> = lines()
+            .unwrap()
+            .lines()
+            .skip(before)
+            .filter_map(|line| line.split_once(" window: ").map(|(_, words)| words.to_owned()))
+            .filter(|words| words.starts_with("set_switch "))
+            .collect();
+        assert_eq!(
+            said,
+            [
+                "set_switch screen off: answered",
+                "set_switch screen on: answered",
+                "set_switch screen on: answered",
+                "set_switch screen off: 409 The screen isn't ready.",
+            ]
+        );
 
         // A part that isn't one is refused before anything is sent.
         assert_eq!(run(set_switch("../computers".into(), true)).unwrap_err().code, 400);
