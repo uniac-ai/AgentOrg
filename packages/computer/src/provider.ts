@@ -26,7 +26,12 @@ import { homedir } from "node:os";
 import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { Computer, type ComputerDetail, ComputerError, type LiveSurface } from "@agentorg/computer";
+import {
+  Computer,
+  type ComputerDetail,
+  ComputerError,
+  type LiveSurface,
+} from "@agentorg/computer-sdk";
 import {
   capability,
   type FactRow as FactRowShape,

@@ -24,7 +24,7 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { Computer } from "@agentorg/computer";
+import { Computer } from "@agentorg/computer-sdk";
 import { Hub, listen, PERSON } from "@agentorg/hub";
 import { capability, tools, Unit, unitProvider } from "@agentorg/interfaces";
 import { Refused } from "@agentorg/sdk";
