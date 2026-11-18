@@ -237,7 +237,7 @@ test("an Assistant is made running, bound to the model, with no store and nothin
   );
   const request = await s.turn("hello");
   assert.deepEqual(request.tools, []);
-  assert.match(request.instructions, /You act only through your tools/);
+  assert.equal(request.instructions, "You are an assistant in AgentOrg.");
   assert.deepEqual(await s.texts(), ["user: hello", "assistant: ok"]);
 });
 
@@ -391,9 +391,16 @@ test("a stopped agent whose connection ended is down until it is stopped or star
   assert.equal((await s.talk.history({})).messages.length, 4);
 });
 
+/** What the Assistant template gave an agent before the looper's frame said it for every agent. */
+const EARLIER = `You are an assistant in AgentOrg, working for the person who created you.
+You act only through your tools, and your tools are exactly the connections the person gave you. If something needs a connection you don't have, say which.
+Before you promise to do something, check that one of your tools does it. A connection you are given later shows up as new tools at your next turn; until then, don't say you can use it.
+Keep replies short and plain.`;
+
 test("settings and an exposed tools@1 reach the agent as they do any engine", async (t) => {
   const s = await setup(t);
   const { agent, settings } = await s.create();
+  let instructions = "You keep the docs.";
   const made = s.hub.state.createActor(PERSON, { name: "Management" });
   const management = await s.join_(
     connect({
@@ -405,7 +412,7 @@ test("settings and an exposed tools@1 reach the agent as they do any engine", as
   );
   management.exports.settings.implement({
     get: async () => ({
-      instructions: "You keep the docs.",
+      instructions,
       skills: [{ name: "review", description: "Review a change." }],
     }),
     skill: async () => ({ text: "# Review" }),
@@ -429,6 +436,12 @@ test("settings and an exposed tools@1 reach the agent as they do any engine", as
   assert.deepEqual(
     s.requests.at(-1)?.tools?.map((tool) => tool.name),
     ["settings__skill", "lookup__search"],
+  );
+  // An agent made when the template said more keeps those words, and is told the template's now.
+  instructions = `${EARLIER}\n\nWhat you are for: docs.`;
+  const request = await s.turn("and now?");
+  assert.ok(
+    request.instructions.startsWith("You are an assistant in AgentOrg.\n\nWhat you are for: docs."),
   );
 });
 
