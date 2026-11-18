@@ -8,7 +8,7 @@ import type { Model } from "@agentorg/looper";
 import { type Context, Refused, type Slot } from "@agentorg/sdk";
 import { agentTools } from "./agents.js";
 import { createChats } from "./chats.js";
-import { instructionsWith, skillTool } from "./settings.js";
+import { alwaysOf, instructionsWith, skillTool } from "./settings.js";
 import { type Candidate, type LeftOut, listedBy, listsTools, offered, relayed } from "./tools.js";
 import { ACTIVITY, serveWork } from "./work.js";
 
@@ -66,7 +66,9 @@ export function startEngine(
     const settings = ctx.slots.settings.bound ? await ctx.slots.settings.call.get({}) : undefined;
     // The agent's own instructions: who its main loop speaks as, with nothing of its skills.
     const voice = settings ? settings.instructions : options.instructions();
-    const told = instructionsWith(voice, settings?.skills ?? []);
+    const skills = settings?.skills ?? [];
+    const always = settings ? await alwaysOf(ctx.slots.settings, skills) : [];
+    const told = instructionsWith(voice, skills, always);
     const own: Candidate[] = [
       ...(settings?.skills.length ? [skillTool(ctx.slots.settings)] : []),
       // The agents whose conversations are exposed to it, which it talks to from itself.
