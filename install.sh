@@ -13,7 +13,7 @@
 set -euo pipefail
 
 # What this script installs: one release of AgentOrg, its core and its Mac app, and one Node.
-AGENTORG_VERSION="0.0.22"
+AGENTORG_VERSION="0.0.23"
 # The Mac app's archive for that release; empty until one is published.
 APP_SHA256=""
 NODE_VERSION="24.22.3"
