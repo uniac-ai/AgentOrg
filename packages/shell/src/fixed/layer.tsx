@@ -181,7 +181,7 @@ const ROOM = {
 export function Layer() {
   const { open } = useChats();
   const chat = useRoute().screen !== "chat";
-  const { shown: computer, activity } = useComputers();
+  const { shown: computer, activity, onPage } = useComputers();
   const { byId } = useAgents();
   /** The window's own key: whose it is, and which. */
   const shown = computer ?? (activity && `activity ${activity}`);
@@ -201,7 +201,8 @@ export function Layer() {
   const room = `${ROOM[!chat ? "none" : open ? "panel" : "pill"]} ${onTop === "window" ? "narrow:z-[60]" : ""}`;
   return (
     <>
-      {computer && owner && hasComputer(owner.detail, !!owner.held?.windows) && (
+      {/* A page that shows the computer itself, beside what it shows, has it instead. */}
+      {computer && owner && !onPage && hasComputer(owner.detail, !!owner.held?.windows) && (
         <Window key={shown} className={room}>
           <Computer
             agent={{ id: computer, name: owner.entry.name, tone: owner.now.tone }}

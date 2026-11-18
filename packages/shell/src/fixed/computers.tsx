@@ -26,6 +26,10 @@ interface Computers {
   openActivity(agent: string): void;
   /** Closes the layer's window. */
   close(): void;
+  /** A page shows the open computer itself, beside what it shows, so the layer draws no window for it. */
+  onPage: boolean;
+  /** Said by that page while it shows the computer, and unsaid when it stops. */
+  showOnPage(on: boolean): void;
   /** The frames drawn now. A computer's views are one set, shown in one of its frames. */
   frames: readonly DrawnFrame[];
   draw(frame: DrawnFrame): void;
@@ -40,6 +44,7 @@ export function ComputersProvider({ children }: { children: React.ReactNode }) {
   /** What the layer's window shows: whose, and which. */
   const [layered, setLayered] = useState<{ agent: string; activity: boolean }>();
   const [frames, setFrames] = useState<readonly DrawnFrame[]>([]);
+  const [onPage, showOnPage] = useState(false);
   const erase = useCallback(
     (agent: string, overlay: boolean) =>
       setFrames((was) => was.filter((f) => f.agent !== agent || f.overlay !== overlay)),
@@ -62,11 +67,13 @@ export function ComputersProvider({ children }: { children: React.ReactNode }) {
       activity: layered?.activity ? layered.agent : undefined,
       openActivity: (agent) => setLayered({ agent, activity: true }),
       close: () => setLayered(undefined),
+      onPage,
+      showOnPage,
       frames,
       draw,
       erase,
     }),
-    [picked, layered, frames, draw, erase],
+    [picked, layered, onPage, frames, draw, erase],
   );
   return <Context.Provider value={value}>{children}</Context.Provider>;
 }

@@ -223,6 +223,11 @@
     --tab: 64px;
     --tab-open: 80px;
   }
+  /* How long a window of the page takes to open, and to close. */
+  :root {
+    --window-open: 220ms;
+    --window-close: 160ms;
+  }
   @media (prefers-reduced-motion: reduce) {
     [data-chat-column] * {
       transition: none;

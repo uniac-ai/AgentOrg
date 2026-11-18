@@ -203,16 +203,9 @@ test(
     const page = await open(gateway);
     const research = conversation(page, "Research");
     await research.getByRole("button", { name: "Research's computer" }).click();
-    const window = page.getByRole("group", { name: "Window" });
-    await window.getByRole("region", { name: "Research's computer" }).waitFor();
-    // With no floating chat beside it, the window ends where the page ends.
-    const [shown, room] = await Promise.all([
-      window.boundingBox(),
-      page.evaluate(() => innerWidth - 20),
-    ]);
-    assert.equal(Math.round((shown?.x ?? 0) + (shown?.width ?? 0)), room);
-    await window.getByRole("button", { name: "Close Research's computer" }).click();
-    await window.waitFor({ state: "detached" });
+    const shown = page.getByRole("main").getByRole("region", { name: "Research's computer" });
+    await shown.getByRole("button", { name: "Close Research's computer" }).click();
+    await shown.waitFor({ state: "detached" });
     await research.getByRole("button", { name: "Research's page" }).click();
     await page.waitForURL(/#\/a\/a-research$/);
     // The face leaves the floating chat as it was: collapsed.
