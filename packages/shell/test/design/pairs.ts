@@ -21,6 +21,8 @@ import {
   docsAgent,
   firstStart,
   inDesign,
+  MOMENTS,
+  type Moment,
   messageDocs,
   noted,
   openConversation,
@@ -36,6 +38,7 @@ import {
   readChat,
   refuseSend,
   releaseNotes,
+  researchSays,
   SECTIONS,
   SIGN_INS,
   type SignIn,
@@ -48,6 +51,7 @@ import {
   signInState,
   startTerminals,
   unreadReply,
+  writeSoFar,
   youActed,
 } from "./samples.ts";
 
@@ -88,6 +92,8 @@ interface Screen {
   signIn?: SignIn;
   /** A case the built side's sample chat is given. */
   given?: ChatCase;
+  /** Research's conversation, built, at one of the design's moments for a reply's bubbles. */
+  research?: Moment;
   /** Terminals the built side is given, as the design's sample has them. */
   terminals?: { cmd: string; running: boolean }[];
   design(page: Page): Promise<unknown>;
@@ -183,6 +189,17 @@ const TERMINALS = [
   { cmd: "npm run dev", running: true },
   { cmd: "npm test -- checkout", running: true },
 ];
+/** Research's conversation in the floating chat: Team, Research, its Chats, the conversation. */
+async function researchInFloatingChat(page: Page) {
+  await openDesignAgent(page, "Research", "Chats");
+  await page
+    .getByRole("main")
+    .getByRole("list", { name: "Chats with Research" })
+    .getByRole("button")
+    .first()
+    .click();
+  await page.getByRole("complementary", { name: "Chats" }).locator(".prose-chat").first().waitFor();
+}
 /** The design's own windows, on Research's computer. */
 const windowOf = async (page: Page, name: string) => {
   await openDesignAgent(page, "Research");
@@ -543,6 +560,42 @@ const SCREENS: Screen[] = [
       await banner.getByRole("alert").waitFor();
     },
   },
+  // A reply as bubbles: Research's conversation at the design's moments, on Chat, in the floating
+  // chat and on a phone. Shot against the design that draws them.
+  ...(
+    [
+      ["reply-one-line", "oneLine", ["wide"], "chat"],
+      ["reply-long", "long", ["wide", "phone"], "chat"],
+      ["reply-writing", "writing", ["wide"], "chat"],
+      ["reply-long-floating", "long", ["wide"], "floating"],
+      ["reply-result", "result", ["wide"], "chat"],
+    ] as const
+  ).map(
+    ([name, moment, sizes, where]): Screen => ({
+      name,
+      sizes: [...sizes],
+      themes: ["dark", "light"],
+      agents: true,
+      chats: true,
+      research: moment,
+      hash: where === "chat" ? "#/chat/a-research" : "#/a/a-research",
+      design: async (page) => {
+        await inDesign(page, MOMENTS[moment]);
+        // Shot 3.5 s in on its clock, as the design's own pair is: the runner waits 0.9 s more.
+        if (moment === "writing") await page.waitForTimeout(2600);
+        if (where === "floating") await researchInFloatingChat(page);
+      },
+      built: async (page, gateway) => {
+        const main = page.getByRole("main");
+        if (where === "floating") await researchInFloatingChat(page);
+        const thread =
+          where === "floating" ? page.getByRole("complementary", { name: "Chats" }) : main;
+        await thread.locator(".whitespace-pre-wrap").last().waitFor();
+        if (moment === "writing") writeSoFar(gateway);
+        await thread.locator(".prose-chat").first().waitFor();
+      },
+    }),
+  ),
   ...CREATES.map(
     ([state, sizes]): Screen => ({
       name: `create-${state}`,
@@ -747,6 +800,8 @@ for (const screen of SCREENS.filter((one) => wanted(one.name)))
         });
         if (gateway) {
           if (screen.agents) designAgents(gateway);
+          // Before the page is read, as a conversation opened later reads it.
+          if (screen.research) researchSays(gateway, screen.research);
           if (screen.firstStart) firstStart(gateway);
           if (screen.build) sampleBuild(gateway);
           if (screen.settings) sampleSettings(gateway);

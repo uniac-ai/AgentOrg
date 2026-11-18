@@ -26,6 +26,7 @@ import {
   docsAgent,
   downTriage,
   inDesign,
+  MOMENTS,
   messageDocs,
   notAnswered,
   noted,
@@ -43,6 +44,7 @@ import {
   readChat,
   refuseSend,
   releaseNotes,
+  researchSays,
   SECTIONS,
   SIGN_INS,
   sampleBuild,
@@ -1222,6 +1224,24 @@ const probe = (what: Part): Parts => {
     const reply = panel?.querySelector(".prose-chat");
     parts.reply = of(reply);
     parts["reply.copy"] = of(panel?.querySelector('button[aria-label="Copy"]'));
+    // The agent's first and last messages, each a bubble at a time, and its Copy under them.
+    const replies = [...(panel?.querySelectorAll('[data-slot="message"]') ?? [])].filter((one) =>
+      one.querySelector(".prose-chat"),
+    );
+    for (const [name, message] of [
+      ["first", replies[0]],
+      ["last", replies.length > 1 ? replies.at(-1) : undefined],
+    ] as const) {
+      const bubbles = [...(message?.querySelectorAll('[data-slot="bubble"]') ?? [])];
+      parts[`replies.${name}.bubbles`] = message ? bubbles.length : null;
+      for (const [i, bubble] of bubbles.slice(0, 6).entries()) {
+        parts[`replies.${name}.${i}`] = of(bubble);
+        parts[`replies.${name}.${i}.content`] = of(
+          bubble.querySelector('[data-slot="bubble-content"]'),
+        );
+      }
+      parts[`replies.${name}.copy`] = of(message?.querySelector('button[aria-label="Copy"]'));
+    }
     const wrong = panel?.querySelector('[role="alert"]');
     parts.wrong = of(wrong);
     parts["wrong.words"] = of(wrong?.children[0], "w");
@@ -1690,6 +1710,27 @@ if (wants("thread"))
         },
         "earlier",
       );
+      // A reply as bubbles: Research's conversation at two of the design's moments, a long reply,
+      // and a receipt with its result, in the floating chat. The design's control puts the moment
+      // in the floating chat that is open.
+      for (const moment of ["long", "result"] as const)
+        await one(moment, undefined, async (page, gateway) => {
+          if (gateway) researchSays(gateway, moment);
+          await openConversation(page, "Research");
+          if (!gateway) await inDesign(page, MOMENTS[moment]);
+          await panel(page)
+            .locator(".prose-chat", {
+              hasText: moment === "long" ? "npm install" : "four of those",
+            })
+            .waitFor();
+          // At its end on both sides: the design's doesn't follow a conversation its control
+          // replaces, where the built one follows what comes to its end.
+          await panel(page)
+            .locator('[data-slot="message-scroller-viewport"]')
+            .evaluate((room) => {
+              room.scrollTop = room.scrollHeight;
+            });
+        });
     }
 
 // An agent's page: who it is, how it stands, and what is under its tabs. Research has a computer,

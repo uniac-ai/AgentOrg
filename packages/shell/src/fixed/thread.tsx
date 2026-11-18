@@ -16,7 +16,7 @@ import {
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Streamdown } from "streamdown";
 import { api, go, useConnection } from "../data.ts";
-import { Bubble, BubbleContent } from "../ui/bubble.tsx";
+import { Bubble, BubbleContent, BubbleGroup } from "../ui/bubble.tsx";
 import { Button } from "../ui/button.tsx";
 import {
   InputGroup,
@@ -37,6 +37,7 @@ import {
   useMessageScrollerScrollable,
 } from "../ui/message-scroller.tsx";
 import { type ListedChat, PERSON, useAllChats } from "./all-chats.tsx";
+import { bubblesOf, isCode } from "./bubbles.ts";
 import { CloseChats } from "./chat-parts.tsx";
 import { useChats } from "./chats.tsx";
 import { surfacesOf, windowsOf } from "./computer.tsx";
@@ -755,7 +756,13 @@ function Room({ children }: { children: React.ReactNode }) {
   );
 }
 
-/** One of the agent's messages: its words, and its own Copy under them. */
+/**
+ * One of the agent's messages: its bubbles, which its blank lines make, and one Copy for the whole
+ * message under the last. Each bubble is filled as the person's is, at the start side, as wide as
+ * its words up to 80%, 4 px apart; a code block keeps the conversation's whole width and the frame
+ * code has, with no fill. A bubble is known by its place in the message: as the message is written,
+ * bubbles are only added at its end, and only the last one's words change.
+ */
 function Reply({
   text,
   streaming,
@@ -775,27 +782,43 @@ function Reply({
   const settled = !(isLast && (awaiting || streaming));
   /** It has no words: there is nothing to copy. */
   const wordless = !text.trim();
+  const bubbles = useMemo(() => bubblesOf(text), [text]);
   return (
     <Message className="group/reply">
       <MessageContent className="gap-2">
-        <Bubble variant="ghost" className="w-full">
-          {/* Its size is said here: the bubble's own would outrank a rule of the sheet's. */}
-          <BubbleContent className="prose-chat w-full text-[15px] leading-[1.6]">
-            <Streamdown
-              controls={{ table: false, code: true }}
-              animated={{
-                animation: "reveal",
-                duration: 260,
-                easing: "ease-out",
-                stagger: 14,
-                maxBacklogMs: 420,
-              }}
-              isAnimating={streaming && !reduced}
-            >
-              {text}
-            </Streamdown>
-          </BubbleContent>
-        </Bubble>
+        <BubbleGroup className="gap-1">
+          {bubbles.map((bubble, n) => {
+            const code = isCode(bubble);
+            return (
+              <Bubble
+                // biome-ignore lint/suspicious/noArrayIndexKey: a message's bubbles only grow at its end.
+                key={n}
+                variant={code ? "ghost" : "muted"}
+                className={code ? "w-full" : "max-w-[80%]"}
+              >
+                {/* Its size is said here: the bubble's own would outrank a rule of the sheet's. */}
+                <BubbleContent
+                  className={`prose-chat text-[15px] leading-[1.6] ${code ? "w-full" : "rounded-3xl px-4 py-2"}`}
+                >
+                  <Streamdown
+                    controls={{ table: false, code: true }}
+                    animated={{
+                      animation: "reveal",
+                      duration: 260,
+                      easing: "ease-out",
+                      stagger: 14,
+                      maxBacklogMs: 420,
+                    }}
+                    // Only the last is being written.
+                    isAnimating={streaming && !reduced && n === bubbles.length - 1}
+                  >
+                    {bubble}
+                  </Streamdown>
+                </BubbleContent>
+              </Bubble>
+            );
+          })}
+        </BubbleGroup>
         {/* Its room is always kept, so nothing moves when it appears. */}
         <MessageFooter
           className={`h-6 gap-0.5 px-0 ${!settled || wordless ? "invisible" : isLast ? "" : "invisible group-hover/reply:visible"}`}
