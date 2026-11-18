@@ -21,7 +21,7 @@ import { type App, SignIn, startApp } from "../src/index.ts";
 
 async function setup(t: test.TestContext) {
   const home = mkdtempSync(join(tmpdir(), "agentorg-app-"));
-  const app = await startApp({ home, firstRun: { log: () => {} } });
+  const app = await startApp({ home, defaultPort: 0, firstRun: { log: () => {} } });
   t.after(async () => {
     await app.close();
     rmSync(home, { recursive: true, force: true });
@@ -136,9 +136,14 @@ function restarting(t: test.TestContext) {
   });
   return {
     home,
-    /** Start on the home, at `port`, or where the app itself chooses. */
-    async start(port?: number) {
-      const app = await startApp({ home, firstRun: { log: () => {} }, ...(port ? { port } : {}) });
+    /** Start on the home, at `port`, or where the app itself chooses, from `fresh` on a fresh home. */
+    async start(port?: number, fresh = 0) {
+      const app = await startApp({
+        home,
+        defaultPort: fresh,
+        firstRun: { log: () => {} },
+        ...(port ? { port } : {}),
+      });
       apps.push(app);
       return app;
     },
@@ -217,6 +222,37 @@ test("with no port asked for, the app takes the address its kept sessions are fo
   const back = await start(port);
   assert.equal(back.url, first.url);
   assert.equal(await tabWith(back, session), 4401);
+});
+
+test("a fresh home starts on the default port, or a free one when it is taken; a home with a kept port keeps it", async (t) => {
+  // A port that is free now stands for the default, so no test takes the person's own.
+  const probe = createTcpServer();
+  await new Promise<void>((done) => probe.listen(0, "127.0.0.1", done));
+  const fresh = (probe.address() as { port: number }).port;
+  await new Promise((done) => probe.close(done));
+  const portOf = (app: App) => Number(new URL(app.url).port);
+
+  const first = restarting(t);
+  const a = await first.start(undefined, fresh);
+  assert.equal(portOf(a), fresh);
+  await a.close();
+
+  // The default taken: another port, not an error.
+  const other = await taking(t, fresh);
+  const second = restarting(t);
+  const b = await second.start(undefined, fresh);
+  assert.notEqual(portOf(b), fresh);
+  // Signed in there, that home keeps its port, though the default is free again.
+  await signIn(b);
+  await b.close();
+  await new Promise((done) => other.close(done));
+  const again = await second.start(undefined, fresh);
+  assert.equal(again.url, b.url);
+  await again.close();
+  // Its own port taken, it goes to the default before any other.
+  await taking(t, portOf(b));
+  const moved = await second.start(undefined, fresh);
+  assert.equal(portOf(moved), fresh);
 });
 
 test("a port that was asked for and is taken is an error, not another port", async (t) => {
@@ -518,7 +554,7 @@ test("the core serves the frontend it is given, and its own sign-in page beside 
     join(frontend, "frontend.json"),
     JSON.stringify({ version: "0.0.0-test", contract: FRONTEND_CONTRACT }),
   );
-  const app = await startApp({ home, frontend, firstRun: { log: () => {} } });
+  const app = await startApp({ home, frontend, defaultPort: 0, firstRun: { log: () => {} } });
   t.after(async () => {
     await app.close();
     rmSync(home, { recursive: true, force: true });

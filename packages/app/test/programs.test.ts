@@ -178,6 +178,7 @@ async function open(
   const start = async () => {
     const app = await startApp({
       home,
+      defaultPort: 0,
       firstRun: {
         log: () => {},
         // An empty path: the test starts any service itself.
@@ -660,7 +661,11 @@ test("a home an earlier release ran starts as a fresh one: its package Actors cl
   const stored = sha();
 
   const problems: string[] = [];
-  const app = await startApp({ home, firstRun: { log: (line) => problems.push(line) } });
+  const app = await startApp({
+    home,
+    defaultPort: 0,
+    firstRun: { log: (line) => problems.push(line) },
+  });
   const person = personOf(app, home);
   t.after(async () => {
     await person.close();
