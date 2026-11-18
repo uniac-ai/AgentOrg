@@ -96,14 +96,14 @@ export const listsTools = (described: DescribedInterface) => described.id === TO
 
 /**
  * What a `tools@1` slot lists now. A slot that can't answer gives no tools and says why, and is
- * asked again at the next request.
+ * asked again at the next turn. A call reads `slot.call` when it runs, so a slot that gives its
+ * handle as it is then is reached through that.
  */
 export async function listedBy(
   name: string,
   slot: { readonly call: Readonly<Record<string, (input: unknown) => Promise<unknown>>> },
 ): Promise<{ candidates: Candidate[]; leftOut: LeftOut[] }> {
   const list = slot.call.list as (input: object) => Promise<unknown>;
-  const call = slot.call.call as (input: object) => Promise<unknown>;
   let entries: z.output<typeof ToolEntry>[];
   try {
     ({ tools: entries } = (await list({})) as { tools: typeof entries });
@@ -117,6 +117,7 @@ export async function listedBy(
       ...(entry.description ? { description: entry.description } : {}),
       parameters: entry.inputSchema as Candidate["parameters"],
       run: async (args, group) => {
+        const call = slot.call.call as (input: object) => Promise<unknown>;
         const { output, failed, images } = (await call({
           name: entry.name,
           arguments: args,

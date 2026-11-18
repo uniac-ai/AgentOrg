@@ -18,6 +18,7 @@ import {
   forget,
   type Store as LooperStore,
   type Model,
+  type Part,
   Refusal,
   type Retry,
   type Tool,
@@ -162,7 +163,7 @@ export function createChats(options: {
    */
   model: Model;
   request(): Promise<{
-    instructions: string;
+    instructions: string | readonly Part[];
     tools: Tool[];
     model?: string | undefined;
     voice?: string | undefined;

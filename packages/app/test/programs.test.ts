@@ -1066,3 +1066,88 @@ test("a socket from the person reaches a computer's surfaces live, with no token
     assert.ok(!heard.some((one) => one.includes(secret)), "no token reaches the page");
   await person.call("agents", "remove", { agent });
 });
+
+/**
+ * A saved copy of what the model is told, in test/told: a change of words shows as a diff here.
+ * With WRITE_TOLD=1 the copy is written instead, for a change that is meant.
+ */
+function matchesSaved(name: string, text: string) {
+  // From dist/test, the sources' test folder.
+  const file = new URL(`../../test/told/${name}`, import.meta.url);
+  if (process.env.WRITE_TOLD === "1") writeFileSync(file, text);
+  assert.equal(
+    text,
+    readFileSync(file, "utf8"),
+    `${name} changed: if that is meant, run with WRITE_TOLD=1`,
+  );
+}
+
+test("an agent made from the Assistant template is told the saved words, by its main loop and in its work", async (t) => {
+  const root = newFolder("agentorg-told-");
+  const data = join(root, "data");
+  const workspace = join(root, "work");
+  mkdirSync(workspace);
+  await startService(t, data);
+  // The model, scripted: whose the message is, then one reply. What each request is told is kept.
+  const fake = await fakeOpenAI();
+  const told: { frontDesk: string[]; worker: string[] } = { frontDesk: [], worker: [] };
+  const s = await open(
+    t,
+    { dataFolder: data, webUrl: "http://127.0.0.1:9/mcp", agentsFolder: join(root, "Agents") },
+    async (request) => {
+      if (!request.url.endsWith("/responses")) return fake.handle(request);
+      const body = (await request.clone().json()) as {
+        instructions: string;
+        tools?: { name: string }[];
+      };
+      if (body.tools?.some((tool) => tool.name === "route")) {
+        told.frontDesk.push(body.instructions);
+        const call = { type: "function_call", call_id: "r1", name: "route" };
+        fake.script({ events: [completed([{ ...call, arguments: '{"title":"Say hello"}' }])] });
+        return fake.handle(request);
+      }
+      told.worker.push(body.instructions);
+      const sent = { type: "function_call", call_id: "s1", name: "send" };
+      fake.script({
+        events: [
+          completed(
+            told.worker.length === 1
+              ? [{ ...sent, arguments: '{"message":1,"text":"Hello."}' }]
+              : [],
+          ),
+        ],
+      });
+      return fake.handle(request);
+    },
+  );
+  const { person } = await s.start();
+  const { authorizeUrl } = await person.call<{ authorizeUrl: string }>("login", "start", {
+    redirectUri: "http://127.0.0.1:4321/oauth/chatgpt",
+  });
+  await person.call("login", "complete", { callbackUrl: await fake.authorize(authorizeUrl) });
+  const { agent } = await person.call<{ agent: string }>("agents", "create", {
+    template: "assistant",
+    fill: [{ values: { kind: "this", workspace, ...NEITHER } }],
+    name: "Told",
+    purpose: "Checks what it is told.",
+  });
+  const slot = await chatSlot(person, agent);
+  await until(
+    () =>
+      person.call(slot, "list").then(
+        () => true,
+        () => false,
+      ),
+    "the chat to be exposed",
+  );
+  await person.call(slot, "send", { text: "Hi!" });
+  await until(() => told.worker.length >= 1, "the worker to be asked");
+  await until(
+    async () => (await person.call<{ state: string }>(slot, "state")).state === "idle",
+    "the turn to end",
+  );
+  matchesSaved("assistant-front-desk.txt", told.frontDesk[0] ?? "");
+  // Its workspace is this test's own folder, said as <root>.
+  matchesSaved("assistant-worker.txt", (told.worker[0] ?? "").replaceAll(root, "<root>"));
+  await person.call("agents", "remove", { agent });
+});
