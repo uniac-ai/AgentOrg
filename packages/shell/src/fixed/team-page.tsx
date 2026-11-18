@@ -135,12 +135,7 @@ export function TeamPage({
             </header>
           )}
           <div className="min-h-0 flex-1">
-            <AgentPage
-              key={chosen}
-              agent={chosen}
-              tab={tab}
-              onTab={(next) => go({ screen: "team", agent: chosen, tab: next })}
-            />
+            <AgentPage key={chosen} agent={chosen} tab={tab} />
           </div>
         </div>
       )}

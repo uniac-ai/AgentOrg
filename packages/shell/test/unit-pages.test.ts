@@ -12,7 +12,7 @@ test(
     const page = await open(gateway);
     await page
       .getByRole("navigation", { name: "Main" })
-      .getByRole("button", { name: "Templates" })
+      .getByRole("button", { name: "Settings" })
       .click();
     const list = page.getByRole("list", { name: "Templates" });
     const assistant = list.getByRole("listitem").filter({ hasText: "Assistant" });
@@ -70,7 +70,7 @@ test(
     await page.getByRole("button", { name: "Dismiss" }).click();
     await page
       .getByRole("navigation", { name: "Main" })
-      .getByRole("button", { name: "Templates" })
+      .getByRole("button", { name: "Settings" })
       .click();
     const main = page.getByRole("main");
     await main.getByRole("tab", { name: "Templates", selected: true }).waitFor();
@@ -320,7 +320,7 @@ test(
     assert.equal(gateway.calls.filter((c) => c.method === "create").length, 0, "not yet");
 
     await create.click();
-    await page.waitForURL(/#\/a\/a-6$/);
+    await page.waitForURL(/#\/team\/a-6$/);
     assert.equal(gateway.calls.filter((c) => c.method === "create").length, 1);
     await page.close();
   }),

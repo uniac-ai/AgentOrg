@@ -24,9 +24,15 @@ async function open(
   await page.goto(`${gateway.url}/${hash}`);
   return page;
 }
-/** An agent in the left bar, by its state and its name. */
-const inBar = (page: Page, name: string) =>
-  page.getByRole("navigation", { name: "Main" }).getByRole("button", { name, exact: true });
+/** An agent's row in the team page's list, by its name and, if given, what its line says. */
+const inTeam = (page: Page, name: string, says?: string) => {
+  const row = page
+    .getByRole("main")
+    .getByRole("list", { name: "Agents" })
+    .getByRole("listitem")
+    .filter({ has: page.getByText(name, { exact: true }) });
+  return says ? row.filter({ has: page.getByText(says, { exact: true }) }) : row;
+};
 const box = (locator: Locator) => locator.boundingBox();
 /** How an agent's page says it stands. */
 const state = (page: Page) => page.getByRole("main").getByRole("status", { name: "State" });
@@ -49,19 +55,20 @@ test(
     await state(page).getByText("Working", { exact: true }).waitFor();
     // What it is doing is read in its chats, not on its line.
     assert.equal((await state(page).innerText()).trim(), "Working");
-    for (const name of [
-      "Working Research",
-      "Idle Reviewer",
-      "Has a problem Triage",
-      "Stopped Weekly report",
-      "Has a problem Broken",
-    ])
-      await inBar(page, name).waitFor();
-    await inBar(page, "Idle Reviewer").click();
+    for (const [name, says] of [
+      ["Research", "Working"],
+      ["Reviewer", "Idle"],
+      ["Weekly report", "Stopped"],
+    ] as const)
+      await inTeam(page, name, says).waitFor();
+    // Something wrong is marked on the face.
+    for (const name of ["Triage", "Broken"])
+      await inTeam(page, name).getByRole("img", { name: "Has a problem" }).waitFor();
+    await inTeam(page, "Reviewer").click();
     await state(page).getByText("Idle", { exact: true }).waitFor();
-    await inBar(page, "Has a problem Triage").click();
+    await inTeam(page, "Triage").click();
     await state(page).getByText("linear is down, so its tools are left out").waitFor();
-    await inBar(page, "Has a problem Broken").click();
+    await inTeam(page, "Broken").click();
     await state(page).getByText("Its program exited.").waitFor();
     await page.close();
   }),
@@ -74,9 +81,9 @@ test(
     const row = (on: Page) =>
       on.getByRole("main").getByRole("list", { name: "Chats with Research" }).getByRole("button");
     await state(page).getByText("Working", { exact: true }).waitFor();
-    // An agent at work says so in the bar, whatever page is open.
+    // An agent at work says so in the team page's list, whichever agent is open beside it.
     gateway.setChatStatus("a-reviewer", { state: "working" });
-    await inBar(page, "Working Reviewer").waitFor();
+    await inTeam(page, "Reviewer", "Working").waitFor();
     // What it was answering failed. The agent is idle, with nothing wrong of its own: the
     // conversation's row says the problem, and the conversation holds what can be done.
     gateway.failChat("a-research", {
@@ -86,7 +93,7 @@ test(
     await row(page).getByText("You've reached your plan's limit.").waitFor();
     await state(page).getByText("Idle", { exact: true }).waitFor();
     assert.equal(await state(page).getByRole("button").count(), 0);
-    await inBar(page, "Idle Research").waitFor();
+    await inTeam(page, "Research", "Idle").waitFor();
     gateway.failChat("a-research", { code: "failed", message: "The model refused it." });
     await row(page).getByText("The model refused it.").waitFor();
     assert.equal((await state(page).innerText()).trim(), "Idle");
@@ -294,7 +301,10 @@ test(
     await message.waitFor();
     // Its head has no "…": nothing on its page stops it.
     assert.equal(await page.getByRole("button", { name: "More for Reviewer" }).count(), 0);
-    assert.equal(await page.getByRole("main").getByRole("button", { name: "Stop" }).count(), 0);
+    assert.equal(
+      await page.getByRole("main").getByRole("button", { name: "Stop", exact: true }).count(),
+      0,
+    );
     // Stopped elsewhere, it is started where it says so, and there is nothing to message.
     stopElsewhere(gateway, "a-reviewer");
     await state(page).getByText("Stopped", { exact: true }).waitFor();
@@ -327,48 +337,11 @@ test(
     await dialog.getByRole("button", { name: "Delete" }).waitFor();
     assert.equal(await dialog.getByRole("alert").count(), 0);
     await dialog.getByRole("button", { name: "Delete" }).click();
-    await page.waitForURL(/#\/$/);
-    // It is gone from the bar too.
-    await inBar(page, "Idle Reviewer").waitFor({ state: "detached" });
-    await inBar(page, "Working Research").waitFor();
+    await page.waitForURL(/#\/team$/);
+    // It is gone from the team page's list too.
+    await inTeam(page, "Reviewer").waitFor({ state: "detached" });
+    await inTeam(page, "Research", "Working").waitFor();
     assert.equal(gateway.agents.has("a-reviewer"), false);
-    await page.close();
-  }),
-);
-
-test(
-  "the left bar holds the agents, the plus and Settings",
-  withGateway(async (gateway) => {
-    const page = await open(gateway);
-    const nav = page.getByRole("navigation", { name: "Main" });
-    await nav.getByRole("button", { name: "Research" }).waitFor();
-    assert.deepEqual(
-      (await nav.getByRole("button").allInnerTexts()).map((t) => t.split("\n").at(-1)),
-      [
-        "Home",
-        "",
-        "Research",
-        "Reviewer",
-        "Triage",
-        "Weekly report",
-        "Broken",
-        "Templates",
-        "Settings",
-      ],
-    );
-    // A face is the agent's initials, and its state is in the row's name whether or not it shows.
-    const weeklyRow = nav.getByRole("button", { name: "Stopped Weekly report", exact: true });
-    assert.equal((await weeklyRow.innerText()).split("\n")[0], "WR");
-    await nav.getByRole("button", { name: "Working Research", exact: true }).waitFor();
-    const settings = await nav.getByRole("button", { name: "Settings" }).boundingBox();
-    assert.ok(settings && settings.y + settings.height > 860, "at the bottom");
-    await nav.getByRole("button", { name: "Create" }).click();
-    await page
-      .getByRole("dialog", { name: "Create" })
-      .getByRole("button", { name: "Empty" })
-      .waitFor();
-    await page.keyboard.press("Escape");
-
     await page.close();
   }),
 );
@@ -416,9 +389,10 @@ test(
     assert.match(page.url(), /#\/a\/a-reviewer$/);
     // An agent that isn't there says so, and nothing else.
     await page.goto(`${gateway.url}/#/a/a-nobody`);
-    await inBar(page, "Idle Reviewer").waitFor();
-    await main.getByText("This agent isn't here").waitFor();
-    assert.equal((await main.innerText()).trim(), "This agent isn't here\nHome");
+    await inTeam(page, "Reviewer", "Idle").waitFor();
+    const missing = main.getByText("This agent isn't here").locator("xpath=../..");
+    await missing.waitFor();
+    assert.equal((await missing.innerText()).trim(), "This agent isn't here\nTeam");
     await page.close();
   }),
 );
@@ -488,14 +462,18 @@ test(
 );
 
 test(
-  "an agent that isn't here says so, with the way Home",
+  "an agent that isn't here says so, with the way to Team",
   withGateway(async (gateway) => {
     const page = await open(gateway, "#/a/a-nobody");
     const main = page.getByRole("main");
     await main.getByText("This agent isn't here", { exact: true }).waitFor();
-    assert.equal(await main.getByRole("heading").count(), 0, "nothing of an agent is drawn");
-    await main.getByRole("button", { name: "Home", exact: true }).click();
-    await page.waitForURL(/#\/$/);
+    assert.deepEqual(
+      await main.getByRole("heading").allInnerTexts(),
+      ["Team"],
+      "nothing of an agent is drawn: the team page's head alone",
+    );
+    await main.getByRole("button", { name: "Team", exact: true }).click();
+    await page.waitForURL(/#\/team$/);
     // One deleted while its page is open says the same.
     await page.goto(`${gateway.url}/#/a/a-triage`);
     await main.getByRole("heading", { name: "Triage" }).waitFor();
@@ -523,10 +501,7 @@ test(
     await page.waitForTimeout(300);
     assert.equal(await main.getByText("This agent isn't here").count(), 0);
     gateway.answerAgain("agents.list");
-    await page
-      .getByRole("navigation", { name: "Main" })
-      .getByRole("button", { name: /Reviewer/ })
-      .waitFor({ timeout: 15_000 });
+    await inTeam(page, "Reviewer").waitFor({ timeout: 15_000 });
     // Made, and gone to, before the list has been read again: its page waits for it.
     const holding = gateway.hold("agents.list");
     await page.evaluate(() => {

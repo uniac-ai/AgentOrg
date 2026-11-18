@@ -1,5 +1,5 @@
-// The frame around the pages, wide, as a rail and on a phone, in a real browser over the stand-in
-// gateway.
+// The frame around the pages, wide and on a phone, in a real browser over the stand-in gateway:
+// the bar of places, where the app opens, and where an agent's address leads.
 import assert from "node:assert/strict";
 import test from "node:test";
 import { type Browser, chromium, type Locator, type Page } from "@playwright/test";
@@ -34,79 +34,71 @@ const withGateway = (run: (gateway: Gateway) => Promise<void>) => async () => {
 const fits = (page: Page) =>
   page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
 
-test(
-  "the left bar runs the window's height: Home first, search with Create beside it, the agents, then Templates and Settings at the foot",
-  withGateway(async (gateway) => {
-    const page = await open(gateway, WIDE);
-    const nav = page.getByRole("navigation", { name: "Main" });
-    await nav.getByRole("button", { name: "Research" }).waitFor();
-    const bar = await nav.boundingBox();
-    assert.deepEqual(bar, { x: 0, y: 0, width: 236, height: WIDE.height });
-    assert.equal(await page.getByRole("banner").filter({ visible: true }).count(), 0, "no top bar");
-    assert.equal(await nav.getByRole("button").first().innerText(), "Home");
-    const home = await nav.getByRole("button", { name: "Home" }).boundingBox();
-    assert.ok(home && home.y < 20, "nothing above Home");
-    assert.equal(
-      await nav.getByRole("button", { name: "Home" }).getAttribute("aria-current"),
-      "page",
-    );
-    assert.doesNotMatch(await nav.innerText(), /AgentOrg/, "no product name in the bar");
-    const y = async (name: string) => {
-      const box = await nav.getByRole("button", { name, exact: true }).boundingBox();
-      assert.ok(box, name);
-      return box.y + box.height / 2;
-    };
-    const search = await nav.getByRole("searchbox", { name: "Search" }).boundingBox();
-    const plus = await nav.getByRole("button", { name: "Create" }).boundingBox();
-    assert.ok(search && plus);
-    assert.ok(Math.abs(search.y + search.height / 2 - (await y("Create"))) < 1, "one row");
-    assert.ok(plus.x > search.x + search.width - 1, "the plus on its right");
-    const last = await nav.getByRole("button", { name: "Broken" }).boundingBox();
-    assert.ok(last);
-    assert.ok((await y("Home")) < search.y, "Home above the search row");
-    assert.ok(search.y < (await nav.getByRole("button", { name: "Research" }).boundingBox())!.y);
-    assert.ok(last.y + last.height < (await y("Templates")), "Templates below the agents");
-    assert.ok((await y("Templates")) < (await y("Settings")), "Settings last");
-    assert.ok(WIDE.height - (await y("Settings")) < 60, "at the foot");
-    await page.close();
-  }),
-);
-
 /** A part's box as [x, y, width, height]. */
 const boxOf = async (part: Locator) => {
   const box = await part.boundingBox();
   assert.ok(box, `${part} is on the page`);
-  return [box.x, box.y, box.width, box.height];
+  return [box.x, box.y, box.width, box.height] as [number, number, number, number];
 };
+const bar = (page: Page) => page.getByRole("navigation", { name: "Main" });
+const place = (page: Page, name: string | RegExp) =>
+  bar(page).getByRole("button", { name, exact: typeof name === "string" });
+/** The label a place shows beside it. */
+const label = (page: Page) => page.locator('[data-slot="tooltip-content"]');
+/** The shell has its note of what is read: a reply said from here on is new. */
+async function noted(gateway: Gateway) {
+  for (let tries = 0; !gateway.notes.has("ui/read-conversations"); tries++) {
+    assert.ok(tries < 400, "the note of what is read is begun");
+    await new Promise((done) => setTimeout(done, 20));
+  }
+  await new Promise((done) => setTimeout(done, 5));
+}
+const reply = (id: string, text: string) => ({
+  id,
+  role: "assistant" as const,
+  text,
+  at: new Date().toISOString(),
+});
 
 test(
-  "wide, the frame's parts are where the design puts them",
+  "the bar runs the page's height with a hairline at its edge: Chat and Team in its middle, Settings at its foot, and no words, agents, search or Create",
   withGateway(async (gateway) => {
     const page = await open(gateway, WIDE);
-    const nav = page.getByRole("navigation", { name: "Main" });
-    const row = (name: string) => nav.getByRole("button", { name, exact: true });
-    await row("Working Research").waitFor();
-    assert.deepEqual(await boxOf(nav), [0, 0, 236, 900]);
-    assert.deepEqual(await boxOf(row("Home")), [10, 12, 216, 40]);
-    assert.deepEqual(await boxOf(nav.getByRole("searchbox")), [10, 60, 180, 36]);
-    assert.deepEqual(await boxOf(row("Create")), [194, 62, 32, 32]);
-    // Rows are 40 tall and 42 apart.
-    assert.deepEqual(await boxOf(row("Working Research")), [10, 106, 216, 40]);
-    assert.deepEqual(await boxOf(row("Idle Reviewer")), [10, 148, 216, 40]);
-    assert.deepEqual(await boxOf(row("Has a problem Triage")), [10, 190, 216, 40]);
-    assert.deepEqual(await boxOf(row("Templates")), [10, 808, 216, 40]);
-    assert.deepEqual(await boxOf(row("Settings")), [10, 850, 216, 40]);
-    // A face is 28 across in its row, and its mark is 8, at the face's foot on the right.
-    const mark = row("Working Research").getByRole("img", { name: "Working" });
-    assert.deepEqual(await boxOf(mark.locator("xpath=..")), [18, 112, 28, 28]);
-    assert.deepEqual(await boxOf(mark), [38, 132, 8, 8]);
-    assert.equal(
-      await row("Working Research").evaluate((e) => getComputedStyle(e).fontSize),
-      "15px",
+    await page.getByRole("main").getByRole("list", { name: "Chats" }).waitFor();
+    assert.deepEqual(await boxOf(bar(page)), [0, 0, 60, 900]);
+    assert.deepEqual(
+      await bar(page).evaluate((nav) => {
+        const style = getComputedStyle(nav);
+        const line = getComputedStyle(document.documentElement).getPropertyValue("--line");
+        return [style.borderRightWidth, style.borderRightColor, style.borderTopWidth, line];
+      }),
+      ["1px", "rgba(255, 255, 255, 0.08)", "0px", "rgb(255 255 255 / 0.08)"],
     );
+    // Three places, each an icon of 22 in a place of 44, 12 apart, centred on the bar's height
+    // and across what the hairline leaves of it.
+    assert.deepEqual(
+      await bar(page)
+        .getByRole("button")
+        .evaluateAll((places) => places.map((one) => one.getAttribute("aria-label"))),
+      ["Chat", "Team", "Settings"],
+    );
+    assert.deepEqual(await boxOf(place(page, "Chat")), [7.5, 400, 44, 44]);
+    assert.deepEqual(await boxOf(place(page, "Team")), [7.5, 456, 44, 44]);
+    assert.deepEqual(await boxOf(place(page, "Settings")), [7.5, 844, 44, 44]);
+    for (const name of ["Chat", "Team", "Settings"]) {
+      const [x, y, width, height] = await boxOf(place(page, name).locator("svg"));
+      const [px, py] = await boxOf(place(page, name));
+      assert.deepEqual([width, height], [22, 22], name);
+      assert.deepEqual([x - px, y - py], [11, 11], `${name}'s icon in the middle of its place`);
+    }
+    assert.equal(await bar(page).innerText(), "", "no words");
+    assert.equal(await bar(page).getByRole("list").count(), 0, "no agents");
+    assert.equal(await bar(page).getByRole("searchbox").count(), 0, "no search");
+    assert.equal(await bar(page).getByRole("button", { name: "Create" }).count(), 0);
+    assert.equal(await page.getByRole("button", { name: "Home" }).count(), 0, "no Home");
     // The page is everything beside the bar, with no frame of its own.
     const main = page.locator("main");
-    assert.deepEqual(await boxOf(main), [236, 0, 1204, 900]);
+    assert.deepEqual(await boxOf(main), [60, 0, 1380, 900]);
     assert.deepEqual(
       await main.evaluate((e) => {
         const style = getComputedStyle(e);
@@ -119,137 +111,241 @@ test(
 );
 
 test(
-  "as a rail, the frame's parts are where the design puts them, and so is the drawer its search opens",
-  withGateway(async (gateway) => {
-    const page = await open(gateway, { width: 800, height: 900 });
-    const nav = page.getByRole("navigation", { name: "Main" });
-    await nav.getByRole("button", { name: "Working Research" }).waitFor();
-    assert.deepEqual(await boxOf(nav), [0, 0, 60, 900]);
-    assert.deepEqual(await boxOf(nav.getByRole("button", { name: "Home" })), [8, 12, 44, 40]);
-    assert.deepEqual(
-      await boxOf(nav.getByRole("button", { name: "Search", exact: true })),
-      [14, 60, 32, 32],
-    );
-    assert.deepEqual(await boxOf(nav.getByRole("button", { name: "Create" })), [14, 96, 32, 32]);
-    assert.deepEqual(
-      await boxOf(nav.getByRole("button", { name: "Working Research" })),
-      [8, 138, 44, 40],
-    );
-    assert.deepEqual(await boxOf(page.locator("main")), [60, 0, 740, 900]);
-    await nav.getByRole("button", { name: "Search", exact: true }).click();
-    const drawer = page.getByRole("dialog").getByRole("navigation", { name: "Main" });
-    assert.deepEqual(await boxOf(drawer), [0, 0, 272, 900]);
-    assert.deepEqual(await boxOf(drawer.getByRole("searchbox")), [10, 60, 216, 36]);
-    // A click on the page behind it closes it.
-    await page.locator("[data-drawer-overlay]").click({ position: { x: 600, y: 400 } });
-    await drawer.waitFor({ state: "detached" });
-    await page.close();
-  }),
-);
-
-test(
-  "on a phone, the frame's parts are where the design puts them, and so is the drawer behind Menu",
-  withGateway(async (gateway) => {
-    const page = await open(gateway, PHONE);
-    const head = page.getByRole("banner");
-    assert.deepEqual(await boxOf(head), [0, 0, 390, 48]);
-    assert.deepEqual(await boxOf(head.getByRole("button", { name: "Menu" })), [8, 8, 32, 32]);
-    assert.deepEqual(await boxOf(page.locator("main")), [0, 48, 390, 796]);
-    await head.getByRole("button", { name: "Menu" }).click();
-    const menu = page.getByRole("dialog").getByRole("navigation", { name: "Main" });
-    assert.deepEqual(await boxOf(menu), [0, 0, 272, 844]);
-    assert.deepEqual(await boxOf(menu.getByRole("button", { name: "Home" })), [10, 12, 252, 40]);
-    assert.equal(
-      await menu.getByRole("searchbox").evaluate((e) => e === document.activeElement),
-      false,
-      "opened as a menu, its search isn't taken to be wanted",
-    );
-    // Create from the drawer: its window opens once the drawer is gone, and has the keyboard.
-    await menu.getByRole("button", { name: "Create" }).click();
-    await menu.waitFor({ state: "detached" });
-    const create = page.getByRole("dialog", { name: "Create" });
-    await create.getByRole("button", { name: "Empty" }).waitFor();
-    await page.waitForFunction(() => document.activeElement?.closest('[role="dialog"]'));
-    await page.close();
-  }),
-);
-
-test(
-  "search narrows the agents by name, and what it leaves out comes back",
+  "each place leads where it says and is marked while you are in it: Settings opens on its first section",
   withGateway(async (gateway) => {
     const page = await open(gateway, WIDE);
-    const nav = page.getByRole("navigation", { name: "Main" });
-    const names = () =>
-      nav.getByRole("list", { name: "Agents" }).getByRole("listitem").allInnerTexts();
-    await nav.getByRole("button", { name: "Research" }).waitFor();
-    const search = nav.getByRole("searchbox", { name: "Search" });
-    const still = await nav.getByRole("button", { name: "Settings" }).boundingBox();
-    await search.fill("re");
+    const main = page.getByRole("main");
+    // Read with the pointer away, since a place under it has the hover's background.
+    const current = async () => {
+      await page.mouse.move(700, 450);
+      return bar(page)
+        .locator('[aria-current="page"]')
+        .evaluateAll((places) =>
+          places.map((one) => [
+            one.getAttribute("aria-label"),
+            getComputedStyle(one).backgroundColor,
+          ]),
+        );
+    };
+    await main.getByRole("list", { name: "Chats" }).waitFor();
+    assert.deepEqual(await current(), [["Chat", "rgba(255, 255, 255, 0.08)"]]);
+    const still = await boxOf(bar(page));
+    await place(page, "Team").click();
+    await page.waitForURL(/#\/team$/);
+    await main.getByRole("region", { name: "Team" }).waitFor();
+    assert.deepEqual(await current(), [["Team", "rgba(255, 255, 255, 0.08)"]]);
+    await place(page, "Settings").click();
+    await page.waitForURL(/#\/settings\/templates$/);
+    await main.getByRole("tab", { name: "Templates", selected: true }).waitFor();
+    assert.deepEqual(await current(), [["Settings", "rgba(255, 255, 255, 0.08)"]]);
+    // Every section of Settings is in its place.
+    await main.getByRole("tab", { name: "Skills" }).click();
+    await page.waitForURL(/#\/skills$/);
     assert.deepEqual(
-      (await names()).map((n) => n.split("\n").at(-1)),
-      ["Research", "Reviewer", "Weekly report"],
+      (await current()).map(([name]) => name),
+      ["Settings"],
     );
-    await search.fill("zzz");
-    assert.deepEqual(await names(), []);
-    assert.deepEqual(await nav.getByRole("button", { name: "Settings" }).boundingBox(), still);
-    // Narrowed to a rail, which has no field to show or clear a search, every agent is there.
-    await search.fill("re");
-    await page.setViewportSize({ width: 800, height: 900 });
-    await nav.getByRole("button", { name: "Triage" }).waitFor();
-    assert.equal(await nav.getByRole("list", { name: "Agents" }).getByRole("listitem").count(), 5);
+    await place(page, "Chat").click();
+    await page.waitForURL(/#\/chat$/);
+    await main.getByRole("list", { name: "Chats" }).waitFor();
+    assert.deepEqual(
+      (await current()).map(([name]) => name),
+      ["Chat"],
+    );
+    assert.deepEqual(await boxOf(bar(page)), still, "the bar doesn't move between places");
+    // A place not current is plain until the pointer is on it.
+    assert.equal(
+      await place(page, "Team").evaluate((one) => getComputedStyle(one).backgroundColor),
+      "rgba(0, 0, 0, 0)",
+    );
     await page.close();
   }),
 );
 
 test(
-  "narrow, the bar is a rail of faces, and its search opens the whole bar with the field ready",
+  "a place's label shows beside it while the pointer rests on it or the keyboard is on it, fading in and out",
   withGateway(async (gateway) => {
-    const page = await open(gateway, { width: 820, height: 900 });
-    const nav = page.getByRole("navigation", { name: "Main" });
-    await nav.getByRole("button", { name: "Research" }).waitFor();
-    assert.equal((await nav.boundingBox())?.width, 60);
-    assert.equal(await nav.getByRole("searchbox").isVisible(), false);
-    const face = await nav.getByRole("button", { name: "Research" }).boundingBox();
-    assert.ok(face && face.x >= 0 && face.x + face.width <= 60, "a row is its face alone");
-    const main = await page.locator("main").boundingBox();
+    const page = await open(gateway, WIDE);
+    await place(page, "Team").waitFor();
+    assert.equal(await label(page).count(), 0, "no label at first");
+    await place(page, "Team").hover();
+    await label(page).waitFor();
+    assert.equal(await label(page).innerText(), "Team");
+    const animation = () => label(page).evaluate((one) => getComputedStyle(one).animationName);
+    assert.equal(await animation(), "enter", "it fades in");
+    // Once it has come in: beside its place, past its arrow, on the place's middle.
+    await label(page).evaluate((one) =>
+      Promise.all(one.getAnimations().map((moving) => moving.finished)),
+    );
+    const [x, y, , height] = await boxOf(label(page));
+    assert.equal(Math.round(x * 10) / 10, 68);
+    assert.ok(Math.abs(y + height / 2 - 478) < 1, "on the place's middle");
+    // Away from it: the pointer leaves the place and goes on, as a hand moves it.
+    await page.mouse.move(700, 450, { steps: 4 });
+    await page.locator('[data-slot="tooltip-content"][data-state="closed"]').waitFor();
+    assert.equal(await animation(), "exit", "it fades out");
+    await label(page).waitFor({ state: "detached" });
 
-    await nav.getByRole("button", { name: "Search", exact: true }).click();
-    const drawer = page.getByRole("dialog").getByRole("navigation", { name: "Main" });
-    const field = drawer.getByRole("searchbox", { name: "Search" });
-    await field.waitFor();
-    assert.equal((await page.getByRole("dialog").boundingBox())?.width, 272);
-    assert.equal(await field.evaluate((e) => e === document.activeElement), true, "ready to type");
-    assert.deepEqual(
-      await page.locator("main").boundingBox(),
-      main,
-      "over the page, moving nothing",
-    );
-    await field.fill("tri");
-    await drawer.getByRole("button", { name: "Triage" }).click();
-    await drawer.waitFor({ state: "detached" });
-    await page.waitForURL(/#\/a\/a-triage/);
-    // What was typed went with the drawer, and the keyboard is back where it was.
-    assert.equal(await nav.getByRole("list", { name: "Agents" }).getByRole("listitem").count(), 5);
-    const search = nav.getByRole("button", { name: "Search", exact: true });
-    await search.and(page.locator(":focus")).waitFor();
-    await search.click();
-    await field.waitFor();
+    // From the keyboard: the place it is on shows its label, and only that one.
+    await place(page, "Chat").focus();
+    await label(page).getByText("Chat").waitFor();
+    await page.keyboard.press("Tab");
+    await label(page).filter({ hasText: "Team" }).waitFor();
+    await label(page).filter({ hasText: "Chat" }).waitFor({ state: "detached" });
     await page.keyboard.press("Escape");
-    await drawer.waitFor({ state: "detached" });
-    await search.and(page.locator(":focus")).waitFor();
-    // A long list scrolls in the rail as in the bar, with no bar of its own showing.
-    assert.deepEqual(
-      await nav.getByRole("list", { name: "Agents" }).evaluate((list) => {
-        const style = getComputedStyle(list.parentElement as Element);
-        return [style.overflowY, style.scrollbarWidth];
-      }),
-      ["auto", "none"],
-    );
+    await label(page).waitFor({ state: "detached" });
+    await page.close();
+  }),
+);
+
+test(
+  "the Chat icon carries the count of conversations with something new, as the floating chat's button does",
+  withGateway(async (gateway) => {
+    const page = await open(gateway, WIDE, "#/team");
+    const pill = page.getByRole("group", { name: "Chats, collapsed" });
+    await pill.getByRole("button", { name: "Chats", exact: true }).waitFor();
+    await noted(gateway);
+    assert.equal(await place(page, "Chat").innerText(), "", "nothing new, no count");
+    gateway.addMessage("a-reviewer", reply("r9", "All clear on #482."));
+    await pill.getByRole("button", { name: "Chats, 1 new" }).waitFor();
+    await place(page, "Chat, 1 new").waitFor();
+    assert.equal(await place(page, "Chat, 1 new").innerText(), "1");
+    gateway.addMessage("a-research", reply("s9", "Found it."));
+    await pill.getByRole("button", { name: "Chats, 2 new" }).waitFor();
+    assert.equal(await place(page, "Chat, 2 new").innerText(), "2");
+    // The chat page opens on the newest, which is read there; then the other is read too.
+    await place(page, "Chat, 2 new").click();
+    const main = page.getByRole("main");
+    await main
+      .getByRole("region", { name: "Conversation with Research" })
+      .getByText("Found it.")
+      .waitFor();
+    await place(page, "Chat, 1 new").waitFor();
+    await main.getByRole("list", { name: "Chats" }).getByText("All clear on #482.").click();
+    await main
+      .getByRole("region", { name: "Conversation with Reviewer" })
+      .getByText("All clear on #482.")
+      .waitFor();
+    await place(page, "Chat").waitFor();
+    assert.equal(await place(page, "Chat").innerText(), "");
+    await page.close();
+  }),
+);
+
+test(
+  "the app opens on Chat, and so does an address that names nothing",
+  withGateway(async (gateway) => {
+    for (const hash of ["", "#/", "#/nothing/here"]) {
+      const page = await open(gateway, WIDE, hash);
+      await page.getByRole("main").getByRole("list", { name: "Chats" }).waitFor();
+      assert.equal(await place(page, "Chat").getAttribute("aria-current"), "page", hash);
+      await page.close();
+    }
+  }),
+);
+
+test(
+  "an agent's own address and its tabs show its details in Team",
+  withGateway(async (gateway) => {
+    const page = await open(gateway, WIDE, "#/a/a-reviewer");
+    const main = page.getByRole("main");
+    await main.getByRole("heading", { name: "Reviewer", level: 1 }).waitFor();
+    await main.getByRole("region", { name: "Team" }).waitFor();
+    assert.equal(await place(page, "Team").getAttribute("aria-current"), "page");
     assert.equal(
-      await nav.getByRole("button", { name: "Triage" }).getAttribute("aria-current"),
-      "page",
-      "the rail shows where you are",
+      await main
+        .getByRole("list", { name: "Agents" })
+        .getByRole("button", { name: /Reviewer/ })
+        .getAttribute("aria-current"),
+      "true",
     );
+    await page.goto(`${gateway.url}/#/a/a-research/chats`);
+    await main.getByRole("heading", { name: "Research", level: 1 }).waitFor();
+    await main.getByRole("tab", { name: "Chats", selected: true }).waitFor();
+    await main.getByRole("region", { name: "Team" }).waitFor();
+    // Its tabs are Team's from there on.
+    await main.getByRole("tab", { name: "Overview" }).click();
+    await page.waitForURL(/#\/team\/a-research\/overview$/);
+    await page.close();
+  }),
+);
+
+test(
+  "on a phone the places sit in a row along the foot with their labels, the current one in full colour, and the floating chat's button above them",
+  withGateway(async (gateway) => {
+    const page = await open(gateway, PHONE, "#/team");
+    const main = page.getByRole("main");
+    await main.getByRole("region", { name: "Team" }).waitFor();
+    assert.deepEqual(await boxOf(bar(page)), [0, 788, 390, 56]);
+    assert.deepEqual(
+      await bar(page).evaluate((nav) => {
+        const style = getComputedStyle(nav);
+        return [style.borderTopWidth, style.borderTopColor, style.borderRightWidth];
+      }),
+      ["1px", "rgba(255, 255, 255, 0.08)", "0px"],
+    );
+    assert.deepEqual(await boxOf(place(page, "Chat")), [0, 789, 130, 55]);
+    assert.deepEqual(await boxOf(place(page, "Team")), [130, 789, 130, 55]);
+    assert.deepEqual(await boxOf(place(page, "Settings")), [260, 789, 130, 55]);
+    // Each label is under its icon.
+    for (const name of ["Chat", "Team", "Settings"]) {
+      assert.equal(await place(page, name).innerText(), name);
+      const icon = await boxOf(place(page, name).locator("svg"));
+      const words = await boxOf(place(page, name).getByText(name, { exact: true }));
+      assert.ok(words[1] >= icon[1] + icon[3], `${name}'s label under its icon`);
+      assert.equal(
+        await place(page, name)
+          .getByText(name)
+          .evaluate((e) => getComputedStyle(e).fontSize),
+        "10px",
+      );
+    }
+    const colours = await bar(page)
+      .getByRole("button")
+      .evaluateAll((places) =>
+        places.map((one) => [
+          one.getAttribute("aria-label"),
+          getComputedStyle(one).color,
+          getComputedStyle(one).backgroundColor,
+        ]),
+      );
+    assert.deepEqual(colours, [
+      ["Chat", "rgb(161, 161, 161)", "rgba(0, 0, 0, 0)"],
+      ["Team", "rgb(250, 250, 250)", "rgba(0, 0, 0, 0)"],
+      ["Settings", "rgb(161, 161, 161)", "rgba(0, 0, 0, 0)"],
+    ]);
+    // No menu button and no head: the page has the room above the row.
+    assert.equal(await page.getByRole("button", { name: "Menu" }).count(), 0);
+    assert.equal(await page.getByRole("banner").filter({ visible: true }).count(), 0);
+    assert.deepEqual(await boxOf(page.locator("main")), [0, 0, 390, 788]);
+    // The floating chat's button sits above the row.
+    const pill = await boxOf(page.getByRole("group", { name: "Chats, collapsed" }));
+    assert.equal(pill[1] + pill[3], 788 - 20);
+    // A label doesn't show beside a place here: it is under it already.
+    await place(page, "Settings").hover();
+    await page.waitForTimeout(300);
+    assert.equal(await label(page).filter({ visible: true }).count(), 0);
+    assert.equal(await fits(page), true);
+    await page.close();
+  }),
+);
+
+test(
+  "the dark background is rgb(25, 25, 25), and the light one is as it was",
+  withGateway(async (gateway) => {
+    const page = await open(gateway, WIDE);
+    await bar(page).waitFor();
+    const backgrounds = () =>
+      page.evaluate(() =>
+        [document.body, document.querySelector("[data-shell]") as Element].map(
+          (one) => getComputedStyle(one).backgroundColor,
+        ),
+      );
+    assert.deepEqual(await backgrounds(), ["rgb(25, 25, 25)", "rgb(25, 25, 25)"]);
+    await page.evaluate(() => {
+      document.documentElement.dataset.theme = "light";
+    });
+    assert.deepEqual(await backgrounds(), ["rgb(243, 243, 243)", "rgb(243, 243, 243)"]);
     await page.close();
   }),
 );
@@ -309,23 +405,17 @@ test(
   "at phone width nothing runs off the side, and Create and Settings still work",
   withGateway(async (gateway) => {
     const page = await open(gateway, PHONE);
-    // Home, with its chats on it.
+    // Chat, with its conversations on it.
     await page
       .getByRole("main")
-      .getByRole("region", { name: "Recent" })
+      .getByRole("list", { name: "Chats" })
       .getByRole("listitem")
       .first()
       .waitFor();
-    assert.equal(await page.getByRole("navigation", { name: "Main" }).isVisible(), false);
-    assert.equal(await fits(page), true, "Home");
-    // The bar is behind the menu button, and the top of the page names the place.
-    const head = page.getByRole("banner");
-    assert.equal(await head.innerText(), "Home");
-    await head.getByRole("button", { name: "Menu" }).click();
-    const drawer = page.getByRole("dialog").getByRole("navigation", { name: "Main" });
-    assert.equal(await drawer.getByRole("button").first().innerText(), "Home");
-    await drawer.getByRole("button", { name: "Create", exact: true }).click();
-    await drawer.waitFor({ state: "detached" });
+    assert.equal(await fits(page), true, "Chat");
+    // Create is on Team.
+    await place(page, "Team").click();
+    await page.getByRole("main").getByRole("button", { name: "Create" }).click();
     const stack = page.getByRole("dialog", { name: "Create" });
     await stack.getByRole("button", { name: /^Assistant/ }).click();
     await stack.getByLabel("Name").fill("Foreman");
@@ -337,10 +427,8 @@ test(
     await stack.getByRole("button", { name: "Create", exact: true }).waitFor();
     await page.keyboard.press("Escape");
     await stack.waitFor({ state: "detached" });
-    await head.getByRole("button", { name: "Menu" }).click();
-    await drawer.getByRole("button", { name: "Settings" }).click();
-    await drawer.waitFor({ state: "detached" });
-    assert.equal(await head.innerText(), "Settings");
+    await place(page, "Settings").click();
+    await page.getByRole("tab", { name: "Templates", selected: true }).waitFor();
     const skills = page.getByRole("tab", { name: "Skills" });
     const account = page.getByRole("tab", { name: "Account" });
     await skills.waitFor();

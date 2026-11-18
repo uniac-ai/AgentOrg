@@ -46,12 +46,13 @@ test(
     const page = await open(gateway);
     const place = setUp(page);
     await place.getByRole("heading", { name: "Sign in with ChatGPT" }).waitFor();
-    // Their agents and chats are there, and the bar has no mark of its own for it.
+    // Their chats with their agents are there, and the bar has no mark of its own for it.
     await page
-      .getByRole("navigation", { name: "Main" })
-      .getByRole("button", { name: /Reviewer/ })
+      .getByRole("main")
+      .getByRole("list", { name: "Chats" })
+      .getByRole("button")
+      .filter({ hasText: "Reviewer" })
       .waitFor();
-    await page.getByRole("main").getByRole("region", { name: "Recent" }).waitFor();
     assert.equal(await marked(page), 0);
     const before = await place.boundingBox();
     // The sign-in's start is held, so the wait is seen before the tab goes to ChatGPT's page.

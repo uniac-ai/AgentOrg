@@ -63,7 +63,7 @@ async function researchChat(page: Page) {
     .getByRole("button")
     .first()
     .click();
-  await panel(page).getByRole("button", { name: "Research's page" }).waitFor();
+  await panel(page).getByRole("button", { name: "Research's details" }).waitFor();
   // Once what was said in it is read.
   await panel(page).getByRole("log").locator(":scope > *").first().waitFor();
 }
@@ -146,7 +146,7 @@ test(
       .getByRole("button")
       .first()
       .click();
-    await panel(page).getByRole("button", { name: "Triage's page" }).waitFor();
+    await panel(page).getByRole("button", { name: "Triage's details" }).waitFor();
     assert.equal(
       await panel(page)
         .getByRole("button", { name: /computer$/ })
@@ -414,7 +414,7 @@ test(
     assert.equal(gateway.live.files.sockets.size, 1);
     await page
       .getByRole("navigation", { name: "Main" })
-      .getByRole("button", { name: "Home" })
+      .getByRole("button", { name: "Settings" })
       .click();
     await until(() => gateway.live.files.sockets.size === 0, "its view is closed");
     await page.close();

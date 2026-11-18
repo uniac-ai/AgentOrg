@@ -101,7 +101,7 @@ test(
     await window_.waitFor({ state: "detached" });
     await page
       .getByRole("navigation", { name: "Main" })
-      .getByRole("button", { name: "Templates" })
+      .getByRole("button", { name: "Settings" })
       .click();
     await page.getByRole("main").getByRole("button", { name: "Use" }).first().click();
     await card(page, "Computer").waitFor();
@@ -143,7 +143,7 @@ test(
     await name.fill(" Solo ");
     assert.equal(await create.isDisabled(), false);
     await create.click();
-    await page.waitForURL(/#\/a\/a-6$/);
+    await page.waitForURL(/#\/team\/a-6$/);
     const sent = gateway.calls.find((c) => c.method === "create")?.input as {
       name: string;
       purpose?: string;
@@ -155,7 +155,7 @@ test(
     await plus(page).click();
     await name.waitFor();
     await named(page, "Create").click();
-    await page.waitForURL(/#\/a\/a-7$/);
+    await page.waitForURL(/#\/team\/a-7$/);
     assert.equal(
       (gateway.calls.findLast((c) => c.method === "create")?.input as { name?: string } | undefined)
         ?.name,
@@ -164,7 +164,7 @@ test(
     // A template is offered none, and waits for one.
     await page
       .getByRole("navigation", { name: "Main" })
-      .getByRole("button", { name: "Templates" })
+      .getByRole("button", { name: "Settings" })
       .click();
     await page.getByRole("main").getByRole("button", { name: "New template", exact: true }).click();
     await name.waitFor();
@@ -488,7 +488,7 @@ test(
 
     await page
       .getByRole("navigation", { name: "Main" })
-      .getByRole("button", { name: "Templates" })
+      .getByRole("button", { name: "Settings" })
       .click();
     await page.getByRole("main").getByRole("button", { name: "New template", exact: true }).click();
     await panel(page).locator("#build-name").waitFor();
@@ -518,7 +518,7 @@ test(
     assert.equal(await folder.getAttribute("placeholder"), "~/Agents/Foreman");
 
     await named(page, "Create").click();
-    await page.waitForURL(/#\/a\/a-6$/);
+    await page.waitForURL(/#\/team\/a-6$/);
     const sent = gateway.calls.find((c) => c.method === "create")?.input as {
       stack: { units: { values: Record<string, unknown> }[] };
     };
@@ -566,7 +566,7 @@ test(
 
     await page
       .getByRole("navigation", { name: "Main" })
-      .getByRole("button", { name: "Templates" })
+      .getByRole("button", { name: "Settings" })
       .click();
     await page.getByRole("main").getByRole("button", { name: "New template", exact: true }).click();
     const fresh = page.getByRole("dialog", { name: "New template" });
@@ -597,9 +597,8 @@ test(
     const page = await browser().newPage({ viewport: { width: 390, height: 844 } });
     page.setDefaultTimeout(8000);
     await page.addInitScript((s) => localStorage.setItem("agentorg.session", s), SESSION);
-    await page.goto(`${gateway.url}/#/`);
-    await page.getByRole("button", { name: "Menu" }).click();
-    await page.getByRole("dialog").getByRole("button", { name: "Create", exact: true }).click();
+    await page.goto(`${gateway.url}/#/team`);
+    await page.getByRole("main").getByRole("button", { name: "Create", exact: true }).click();
     const window_ = panel(page);
     await window_.locator("#build-name").waitFor();
     await window_.evaluate((e) => Promise.all(e.getAnimations().map((moving) => moving.finished)));

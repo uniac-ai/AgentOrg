@@ -59,20 +59,10 @@ async function until<T>(read: () => Promise<T> | T, expected: T) {
 const NAMES = ["Research", "Reviewer", "Triage", "Weekly report", "Broken"];
 
 test(
-  "wide, the team page lists the agents in the bar's order, opens on the first, and marks its row",
+  "wide, the team page lists the agents in the order they are read, opens on the first, and marks its row",
   withGateway(async (gateway) => {
     const page = await open(gateway);
     await until(async () => (await listed(page)).map(([name]) => name), NAMES);
-    // The bar lists them in the same order.
-    const bar = await page
-      .getByRole("navigation", { name: "Main" })
-      .getByRole("list", { name: "Agents" })
-      .getByRole("button")
-      .allInnerTexts();
-    assert.deepEqual(
-      bar.map((text) => text.split("\n").filter(Boolean).at(-1)),
-      NAMES,
-    );
     await heading(page, "Research").waitFor();
     assert.equal(await row(page, "Research").getAttribute("aria-current"), "true");
     assert.equal(await row(page, "Reviewer").getAttribute("aria-current"), null);
@@ -135,7 +125,7 @@ test(
 );
 
 test(
-  "choosing an agent shows its details beside the list, and its tabs stay in the team page; the agent's own address is untouched",
+  "choosing an agent shows its details beside the list, and its tabs stay in the team page; the agent's own address shows them there too",
   withGateway(async (gateway) => {
     const page = await open(gateway);
     await row(page, "Reviewer").click();
@@ -147,14 +137,15 @@ test(
     await page.waitForURL(/#\/team\/a-reviewer\/overview$/);
     await page.getByRole("main").getByRole("tabpanel", { name: "Overview" }).waitFor();
     await team(page).waitFor();
-    // The agent's own page keeps its tabs at its own address.
+    // The agent's own address shows the same, in the team page, and its tabs are the team page's.
     await page.evaluate(() => {
-      location.hash = "#/a/a-reviewer";
+      location.hash = "#/a/a-research";
     });
-    await heading(page, "Reviewer").waitFor();
-    assert.equal(await team(page).count(), 0);
+    await heading(page, "Research").waitFor();
+    await team(page).waitFor();
+    assert.equal(await row(page, "Research").getAttribute("aria-current"), "true");
     await page.getByRole("main").getByRole("tab", { name: "Overview" }).click();
-    await page.waitForURL(/#\/a\/a-reviewer\/overview$/);
+    await page.waitForURL(/#\/team\/a-research\/overview$/);
     await page.close();
   }),
 );
@@ -212,7 +203,7 @@ test(
 );
 
 test(
-  "an agent's head has no …, in the team page and on its own page; a stopped agent is started from its line",
+  "an agent's head has no …, in the team page and at its own address; a stopped agent is started from its line",
   withGateway(async (gateway) => {
     const page = await open(gateway, "#/team/a-weekly");
     await heading(page, "Weekly report").waitFor();

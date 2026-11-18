@@ -158,7 +158,7 @@ function AccountTab() {
           <Account login={login} />
         </Section>
       ) : (
-        // Signed out, it says so, with the same way in Home has.
+        // Signed out, it says so, with the same way in the banner has.
         needs && (
           <Section title="ChatGPT">
             <div

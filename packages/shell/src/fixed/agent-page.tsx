@@ -1,7 +1,7 @@
 // An agent's own page: who it is and how it stands, then what belongs to it. Its computer comes
 // first, where it has one. What it's made of is behind one button, never on the everyday surface.
 // Its line follows no chat: a chat's problem is said on that chat's row, and in the chat. It is
-// drawn alone at the agent's address, and as an agent's details on the team page.
+// drawn as an agent's details on the team page.
 import { MessageCircleIcon, SlidersHorizontalIcon } from "lucide-react";
 import { useState } from "react";
 import { type AgentTab, api, go } from "../data.ts";
@@ -28,13 +28,11 @@ const big = "h-10 rounded-full px-4 text-[15px]";
 export function AgentPage({
   agent: id,
   tab: asked,
-  onTab = (tab) => go({ screen: "agent", agent: id, tab }),
 }: {
   agent: string;
   tab?: AgentTab | undefined;
-  /** Where choosing a tab goes: by default, the agent's own address. */
-  onTab?: (tab: AgentTab) => void;
 }) {
+  const onTab = (tab: AgentTab) => go({ screen: "team", agent: id, tab });
   const { byId, list, unread, reads } = useAgents();
   // The list as it was when the page opened may not have an agent just made: only a read since says.
   const [opened] = useState(reads);
@@ -275,9 +273,9 @@ function Missing() {
         <Button
           variant="secondary"
           className="h-9 rounded-full px-4"
-          onClick={() => go({ screen: "home" })}
+          onClick={() => go({ screen: "team" })}
         >
-          Home
+          Team
         </Button>
       </div>
     </div>

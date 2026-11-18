@@ -70,7 +70,7 @@ export function UsedBy({ agents }: { agents: { agent: string; name: string }[] }
       {agents.map((agent, i) => (
         <span key={agent.agent}>
           {i > 0 && ", "}
-          <Jump to={{ screen: "agent", agent: agent.agent }}>{agent.name}</Jump>
+          <Jump to={{ screen: "team", agent: agent.agent }}>{agent.name}</Jump>
         </span>
       ))}
     </span>

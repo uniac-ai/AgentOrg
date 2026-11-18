@@ -360,10 +360,10 @@ function Head({
       )}
       <button
         type="button"
-        aria-label={`${agent.name}'s page`}
+        aria-label={`${agent.name}'s details`}
         className="shrink-0 rounded-full"
         onClick={() => {
-          go({ screen: "agent", agent: agent.id });
+          go({ screen: "team", agent: agent.id });
           // The chat is put away; the chat page leaves it as it was.
           if (!page) close();
         }}

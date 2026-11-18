@@ -395,7 +395,7 @@ test(
 );
 
 test(
-  "the left bar doesn't move between pages, and no page overflows or shows a scrollbar",
+  "the bar doesn't move between pages, and no page overflows or shows a scrollbar",
   withGateway(async (gateway) => {
     for (const width of [1440, 390])
       for (const hash of ["#/skills", "#/mcps", "#/settings/providers", "#/settings/account"]) {
@@ -421,7 +421,7 @@ test(
     const first = nav.getByRole("button").nth(0);
     await first.waitFor();
     const before = await first.boundingBox();
-    for (const name of [/^Settings$/, /Research$/, /^Templates$/, /^Home$/]) {
+    for (const name of [/^Settings$/, /^Team$/, /^Chat/]) {
       await nav.getByRole("button", { name }).click();
       assert.deepEqual(await first.boundingBox(), before);
       // The bar marks where you are.
@@ -481,7 +481,7 @@ test(
 );
 
 test(
-  "Account says who is signed in to ChatGPT with the way out; signed out, it says so with the way in Home has",
+  "Account says who is signed in to ChatGPT with the way out; signed out, it says so with the way in the banner has",
   withGateway(async (gateway) => {
     const page = await open(gateway, "#/settings/account");
     const main = page.getByRole("main");

@@ -197,7 +197,7 @@ test(
 );
 
 test(
-  "on the chat page a conversation's face goes to its agent's page, and its computer button opens the agent's computer",
+  "on the chat page a conversation's face goes to its agent's details, and its computer button opens the agent's computer",
   withGateway(async (gateway) => {
     computerWith(gateway, "terminal");
     const page = await open(gateway);
@@ -206,8 +206,8 @@ test(
     const shown = page.getByRole("main").getByRole("region", { name: "Research's computer" });
     await shown.getByRole("button", { name: "Close Research's computer" }).click();
     await shown.waitFor({ state: "detached" });
-    await research.getByRole("button", { name: "Research's page" }).click();
-    await page.waitForURL(/#\/a\/a-research$/);
+    await research.getByRole("button", { name: "Research's details" }).click();
+    await page.waitForURL(/#\/team\/a-research$/);
     // The face leaves the floating chat as it was: collapsed.
     assert.equal(await page.getByRole("complementary", { name: "Chats" }).count(), 0);
     await page.getByRole("group", { name: "Chats, collapsed" }).waitFor();
@@ -222,10 +222,9 @@ test(
     gateway.noChats();
     const holding = gateway.hold("chat.list");
     let page = await open(gateway);
-    await page
-      .getByRole("navigation", { name: "Main" })
-      .getByRole("button", { name: /Research/ })
-      .waitFor();
+    // Once the agents have been asked for, nothing is said while their chats aren't listed.
+    while (!gateway.calls.some((c) => c.method === "list" && c.slot === "agents"))
+      await page.waitForTimeout(20);
     await page.waitForTimeout(400);
     // Let go whatever is found, so a failing check doesn't leave the call held.
     const before = await list(page).getByText("No chats").count();
@@ -246,12 +245,16 @@ test(
 );
 
 test(
-  "agents that can't be read: the chat page says so where its list would be",
+  "agents that can't be read: the chat page says so where its list would be, and stops saying it once they are read",
   withGateway(async (gateway) => {
     gateway.refuseEvery("agents.list", "unavailable", "The manager isn't answering.");
     const page = await open(gateway);
     await list(page).getByText("Can't be read right now", { exact: true }).waitFor();
     assert.equal(await list(page).getByRole("button", { name: "Create" }).count(), 0);
+    // Answered again, the agents are back, and their chats.
+    gateway.answerAgain("agents.list");
+    await row(page, "Research").waitFor({ timeout: 15_000 });
+    assert.equal(await list(page).getByText("Can't be read right now").count(), 0);
     await page.close();
   }),
 );
