@@ -31,6 +31,37 @@ AgentOrg creates and manages agents. Each part is a program that joins a Hub as 
 - `Refused` with code `unimplemented`: the export has no handler for that method yet.
 - `OutcomeUnknown`: the channel dropped mid-call. Read state before retrying.
 
+## Installing it on a Mac
+
+One line in Terminal sets AgentOrg up for the account that runs it:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/uniac-ai/AgentOrg/main/install.sh | bash
+```
+
+[`install.sh`](install.sh) needs macOS 13 or later on Apple silicon, and is refused as root. Everything but the Mac app goes in the account's own folders; the Mac app goes in `/Applications` when the account can write there, else `~/Applications`. In order, it:
+
+- puts the Mac app, which lends this Mac to agents, in place and starts it in the background (`AgentOrg register`); one waiting for the person's approval in Login Items is said to be;
+- downloads Node at the version the script pins into `~/.agentorg/runtime`;
+- makes `~/.agentorg/AgentOrg Core.app`, that Node named for AgentOrg, so macOS lists the service as AgentOrg Core;
+- installs `@agentorg/cli` at the script's release into `~/.agentorg/app/<version>`, with `current` pointing at it;
+- writes the launcher `~/.local/bin/agentorg`, which runs it on the home, and refuses to replace an `agentorg` there that it didn't write;
+- runs `agentorg start`, so the core runs as a service and starts at every login, and `agentorg open`.
+
+**What is checked:** Node's archive and the Mac app's are each checked against the SHA-256 the script carries for them. The core comes from npm at the version the script pins, checked by npm's own integrity. Each download and unpacking happens in a folder of its own and is moved into place only when whole.
+
+**The home** is the one the launcher names, once there is one; else `AGENTORG_HUB_HOME`, which must be a full path; else a home an earlier AgentOrg made at `~/.local/share/agentorg`, used where it is; else `~/.agentorg/home`.
+
+**Run again,** it puts back what is missing. When the release it pins is newer than the one installed, or with `--update` (`… | bash -s -- --update`), it updates:
+
+1. it fetches and checks the new files, and keeps a copy of the Mac app there now;
+2. it stops the service and copies the home;
+3. it starts the new core, then puts the new Mac app in place.
+
+If either doesn't answer, the service is stopped and both go back to what ran before, with the home as it was. A script whose release is older than the one installed does nothing.
+
+**For a rehearsal** of a build that isn't published, `--app FILE.zip`, `--core FILE.tgz` and `--node FILE.tar.gz` take files instead of downloading them; Node's is still checked. `AGENTORG_APP_DIR` names the one folder the Mac app goes in. Until a release publishes the Mac app, the line says so and installs nothing.
+
 ## The `agentorg` command
 
 `@agentorg/cli` provides `agentorg`.

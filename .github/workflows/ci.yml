@@ -26,6 +26,9 @@ jobs:
         run: npx playwright install --only-shell chromium
       - name: Lint and format
         run: npm run check
+      # The runner carries shellcheck. install.sh is the line a person pastes on a Mac.
+      - name: Check install.sh
+        run: shellcheck install.sh
       # The published 0.0.5 the smoke starts sandboxes its Actors in a user namespace, which stock
       # Ubuntu's AppArmor restricts.
       - name: Allow unprivileged user namespaces
