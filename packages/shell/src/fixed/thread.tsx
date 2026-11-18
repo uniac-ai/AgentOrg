@@ -782,7 +782,9 @@ function Reply({
   const settled = !(isLast && (awaiting || streaming));
   /** It has no words: there is nothing to copy. */
   const wordless = !text.trim();
-  const bubbles = useMemo(() => bubblesOf(text), [text]);
+  // What is still being written may hold back a last paragraph that isn't yet a list or words.
+  // Copy and whether it is settled are the message's, not what is drawn of it.
+  const bubbles = useMemo(() => bubblesOf(text, streaming), [text, streaming]);
   return (
     <Message className="group/reply">
       <MessageContent className="gap-2">
