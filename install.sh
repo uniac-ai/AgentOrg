@@ -14,7 +14,9 @@ set -euo pipefail
 
 # What this script installs: one release of AgentOrg, its core and its Mac app, and one Node.
 AGENTORG_VERSION="0.0.23"
-# The Mac app's archive for that release; empty until one is published.
+# The Mac app that release carries, which is AgentComputer's: its version, and its archive's sum,
+# empty until one is published. Both are as mac-app.json pins them.
+APP_VERSION="0.0.32"
 APP_SHA256=""
 NODE_VERSION="24.22.3"
 NODE_SHA256="ff6e17d4874b76d272212b908cc020d6e815fba5a6c7eaaa06add725840307fd"
@@ -289,9 +291,9 @@ running_version() { "$BIN/agentorg" status 2>/dev/null | sed -n 's/^AgentOrg \([
 install() {
   say "Setting up AgentOrg $AGENTORG_VERSION on this Mac."
   local kept=1 status=0
-  # The app already at this release is kept, and only started; any other, or one that can't start,
-  # is replaced.
-  if [ -z "$app_file" ] && there="$(installed_app)" && [ "$(app_version "$there")" = "$AGENTORG_VERSION" ]; then
+  # The app already at the version this release carries is kept, and only started; any other, or
+  # one that can't start, is replaced.
+  if [ -z "$app_file" ] && there="$(installed_app)" && [ "$(app_version "$there")" = "$APP_VERSION" ]; then
     kept=0
     register "$there" || kept=$?
   fi

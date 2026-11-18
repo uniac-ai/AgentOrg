@@ -66,8 +66,29 @@ jobs:
             agentorg-core-*.tgz
             agentorg-frontend-*.tgz
 
-  publish:
+  # The Mac app this release carries: AgentComputer's archive at the version mac-app.json pins,
+  # checked and named as install.sh fetches it, for the GitHub release made by hand after the tag.
+  # With no sum pinned there is no archive yet: the job says so, fetches nothing and passes, and
+  # the release goes on without one. A pinned archive that doesn't check stops the publish.
+  mac-app:
     needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: carry
+        name: Fetch and check the pinned Mac app
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/carry-mac-app.sh
+      - if: steps.carry.outputs.carried == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mac-app
+          path: mac-app/
+          if-no-files-found: error
+
+  publish:
+    needs: [build, mac-app]
     runs-on: ubuntu-latest
     environment: npm
     permissions:
