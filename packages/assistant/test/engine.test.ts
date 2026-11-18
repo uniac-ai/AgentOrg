@@ -310,6 +310,35 @@ test("what the agent's tools do is not in its chat, and the model reads how each
   assert.deepEqual(ends(again.requests[0]), ended);
 });
 
+test("a turn keeps the tools it was offered, and reaches a slot bound again meanwhile through its new handle", async () => {
+  const s = await setup();
+  const bindAgain = (id: string) =>
+    s.actor.expose(
+      "layout",
+      tools,
+      listing({
+        place: () => {
+          // Bound again while the turn runs, as when a binding is made anew.
+          if (id === "p1") {
+            s.actor.unexpose("layout");
+            bindAgain("p2");
+          }
+          return { id };
+        },
+      }),
+    );
+  bindAgain("p1");
+  s.script.push(
+    calls(callTool("layout__place", { actor: "board", module: "panel" }, "c1")),
+    calls(callTool("layout__place", { actor: "board", module: "panel" }, "c2")),
+  );
+  await s.turn("Place it twice.");
+  const outputs = (s.requests[2]?.input ?? [])
+    .filter((item) => item.type === "function_call_output")
+    .map((item) => String(item.output));
+  assert.deepEqual(outputs, [JSON.stringify({ id: "p1" }), JSON.stringify({ id: "p2" })]);
+});
+
 test("a person's pictures reach the model with their message and stay in the chat; a tool's reach it with its call's output", async () => {
   const s = await setup();
   const png = { mediaType: "image/png" as const, data: "iVBORw0KGgo=" };

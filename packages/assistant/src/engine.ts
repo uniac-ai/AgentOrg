@@ -49,7 +49,17 @@ export function startEngine(
     else ctx.log.info("Everything is offered to the model again.");
   };
   /**
-   * What a request says and offers, and to which model, read afresh: none of it outlives it.
+   * A slot as exposed when a call runs, not when its tools were listed: a turn keeps what it was
+   * offered, and a slot bound again meanwhile is reached through its new handle. One that is gone
+   * answers through the handle it had, which refuses as it does.
+   */
+  const live = (slot: ReturnType<typeof ctx.exposed>[number]) => ({
+    get call() {
+      return (ctx.exposed().find((one) => one.slot === slot.slot) ?? slot).call;
+    },
+  });
+  /**
+   * What a turn says and offers, and to which model, read afresh for each: none of it outlives it.
    * `leftOut` is what it couldn't offer, and why.
    */
   const request = async () => {
@@ -60,20 +70,20 @@ export function startEngine(
     const own: Candidate[] = [
       ...(settings?.skills.length ? [skillTool(ctx.slots.settings)] : []),
       // The agents whose conversations are exposed to it, which it talks to from itself.
-      ...agentTools(ctx.exposed()),
+      ...agentTools(ctx.exposed(), () => ctx.exposed()),
     ];
     // In the order they came, each asked at once so one slow server delays only itself.
     const exposed = await Promise.all(
       ctx
         .exposed()
         .filter((slot) => listsTools(slot.described))
-        .map((slot) => listedBy(slot.slot, slot)),
+        .map((slot) => listedBy(slot.slot, live(slot))),
     );
     const fitted = offered([...own, ...exposed.flatMap((one) => one.candidates)]);
     const leftOut = [...told.leftOut, ...exposed.flatMap((one) => one.leftOut), ...fitted.leftOut];
     report(leftOut);
     return {
-      instructions: told.instructions,
+      instructions: told.parts,
       tools: fitted.tools,
       model: await chosen(),
       voice,

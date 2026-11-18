@@ -3,6 +3,7 @@
  * instructions, and one tool to read them. A skill's text is read only when the model asks for it.
  */
 import type { agentSettings, SkillEntry } from "@agentorg/interfaces";
+import type { Part } from "@agentorg/looper";
 import type { Slot } from "@agentorg/sdk";
 import type { z } from "zod";
 import type { Candidate, LeftOut } from "./tools.js";
@@ -17,23 +18,28 @@ const SLOT = "settings";
 const HEADING = `## Skills
 A skill is written instructions for a kind of task. When one fits what you're asked, read it with settings__skill and follow it before you start. Pass path to read a file its SKILL.md refers to.`;
 
-/** The agent's instructions and the skills that fit in them; any that don't are reported. */
+/**
+ * What the agent is told, as the looper's parts in order: its own instructions, then the skills
+ * that fit beside them, named one a line; any that don't fit are reported.
+ */
 export function instructionsWith(
   instructions: string,
   skills: z.output<typeof SkillEntry>[],
-): { instructions: string; leftOut: LeftOut[] } {
+): { parts: Part[]; leftOut: LeftOut[] } {
   const leftOut: LeftOut[] = [];
-  if (skills.length === 0) return { instructions, leftOut };
-  let text = `${instructions}\n\n${HEADING}`;
+  const own: Part = { owner: "agent", text: instructions };
+  if (skills.length === 0) return { parts: [own], leftOut };
+  // The skills' lines fit beside the agent's own words, with the blank line between them.
+  let text = HEADING;
   for (const { name, description } of skills) {
     const line = `\n- ${name}: ${description}`;
-    if (text.length + line.length > MAX_INSTRUCTIONS)
+    if (instructions.length + 2 + text.length + line.length > MAX_INSTRUCTIONS)
       leftOut.push({ slot: SLOT, tool: name, reason: "limit" });
     else text += line;
   }
   return leftOut.length === skills.length
-    ? { instructions, leftOut }
-    : { instructions: text, leftOut };
+    ? { parts: [own], leftOut }
+    : { parts: [own, { owner: "skills", text }], leftOut };
 }
 
 /** The one way the model reads a skill: its `SKILL.md`, or a file of its folder by `path`. */

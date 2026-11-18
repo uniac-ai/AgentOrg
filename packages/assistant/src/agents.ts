@@ -24,12 +24,20 @@ const none = (agent: unknown): Outcome => ({
   code: "unknown",
 });
 
-/** The two functions over the conversations exposed to the agent, if any are. */
-export function agentTools(exposed: readonly ExposedSlot[]): Candidate[] {
+/**
+ * The two functions over the conversations exposed to the agent, if any are. A call reaches the
+ * agent through its conversation as exposed when it runs (`now`), else as it was listed.
+ */
+export function agentTools(
+  exposed: readonly ExposedSlot[],
+  now: () => readonly ExposedSlot[] = () => exposed,
+): Candidate[] {
   const reached = exposed.filter((one) => one.described.id === CHAT_ID);
   if (reached.length === 0) return [];
+  const find = (slots: readonly ExposedSlot[], agent: unknown) =>
+    slots.find((one) => one.described.id === CHAT_ID && one.provider.actor === agent);
   const of = (agent: unknown) =>
-    reached.find((one) => one.provider.actor === agent)?.call as Chats | undefined;
+    (find(now(), agent) ?? find(reached, agent))?.call as Chats | undefined;
   // The ids it can reach, so the model needn't look them up.
   const agent = {
     type: "string",
