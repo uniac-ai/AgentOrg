@@ -11,7 +11,7 @@ export interface PersonCalls {
 
 /** What the sign-in tab says, by outcome: `complete`'s refusal code, or `signed_in`. */
 const SAYS: Record<string, string> = {
-  signed_in: "Signed in to ChatGPT. You can close this tab.",
+  signed_in: "Signed in to ChatGPT.",
   denied: "You declined on ChatGPT's page. Start again from AgentOrg when you're ready.",
   expired: "This sign-in expired. Start again from AgentOrg.",
 };
@@ -19,10 +19,10 @@ const FAILED = "The sign-in didn't work. Start again from AgentOrg.";
 
 /**
  * `/oauth/chatgpt`: where ChatGPT sends the browser back. It hands the whole callback address to
- * the person's `login.complete`, then sends the tab on to `?result=<outcome>`, an address without
- * the sign-in's code, so the code stays out of the tab's address and history; that page says how
- * it went and links back to the shell. The code is never logged or shown, and no page sends a
- * referrer.
+ * the person's `login.complete`, then sends the tab on, to an address without the sign-in's code,
+ * so the code stays out of the tab's address and history: signed in, straight to the dashboard;
+ * otherwise to `?result=<outcome>`, a page that says how it went and links back to the shell. The
+ * code is never logged or shown, and no page sends a referrer.
  */
 export function oauthRoute(person: PersonCalls) {
   return (request: IncomingMessage, response: ServerResponse, url: URL) => {
@@ -36,7 +36,8 @@ export function oauthRoute(person: PersonCalls) {
       );
     const after = (outcome: string) => {
       response.writeHead(303, {
-        Location: `${url.pathname}?result=${encodeURIComponent(outcome)}`,
+        Location:
+          outcome === "signed_in" ? "/" : `${url.pathname}?result=${encodeURIComponent(outcome)}`,
         "Cache-Control": "no-store",
         "Referrer-Policy": "no-referrer",
       });
