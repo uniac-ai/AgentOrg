@@ -54,8 +54,8 @@ import {
   signInHash,
   signInState,
   startTerminals,
-  stopAgent,
   supportBefore,
+  toTeam,
   unreadReply,
 } from "./samples.ts";
 
@@ -1036,6 +1036,27 @@ const probe = (what: Part): Parts => {
           parts[`${key}.${i}.${j}`] = of(part);
       }
     }
+    // The rail of the sections' logos at the options' right: its box; its logos, the first two and
+    // the last, each with its label; which is current; and the first line, its track and how much
+    // of it is lit.
+    const rail = form?.querySelector('nav[aria-label="Sections"]');
+    parts.rail = of(rail);
+    const logos = [...(rail?.querySelectorAll("button") ?? [])];
+    parts["rail.logos"] = logos.length;
+    parts["rail.current"] = logos.findIndex((one) => one.getAttribute("aria-current"));
+    for (const [name, logo] of [
+      ["first", logos[0]],
+      ["second", logos[1]],
+      ["last", logos.at(-1)],
+    ] as const) {
+      parts[`rail.${name}`] = of(logo);
+      parts[`rail.${name}.icon`] = of(logo?.querySelector("svg"));
+      parts[`rail.${name}.label`] = of(logo?.querySelector("span"));
+    }
+    const line = rail?.querySelector("[data-line]");
+    parts["rail.line"] = of(line);
+    parts["rail.line.track"] = of(line?.children[0]);
+    parts["rail.line.lit"] = of(line?.children[1]);
     const foot = form?.querySelector(":scope > footer");
     parts.foot = of(foot);
     for (const [i, child] of [...(foot?.children ?? [])].entries())
@@ -1548,6 +1569,8 @@ if (wants("chat"))
         ? await builtPage(gateway, "wide", theme)
         : await designPage("wide", theme);
       if (gateway) await noted(gateway);
+      // The layer is over every place but Chat, which is a chat of its own: Team, then.
+      await toTeam(page);
       for (const unread of [1, 2]) {
         // One more chat says something: in the design by its own control, in the build by its agent.
         if (!gateway) {
@@ -1747,13 +1770,13 @@ if (wants("agent"))
       }
     }
 
-// An agent's computer on its page: Research's, with its browser in front, wide and on a phone,
-// and as it is while Research is stopped. What a window holds is measured with the windows.
+// An agent's computer on its page: Research's, with its browser in front, wide and on a phone.
+// What a window holds is measured with the windows. A stopped Research isn't measured: the design
+// has no Stop on an agent's page any more, so it can't be stopped there.
 if (wants("computer"))
   for (const [state, size] of [
     ["page", "wide"],
     ["page", "phone"],
-    ["stopped", "wide"],
   ] as const)
     for (const theme of ["dark", "light"] as const)
       for (const side of ["design", "built"] as const) {
@@ -1765,7 +1788,6 @@ if (wants("computer"))
         if (!gateway) await openDesignAgent(page, "Research");
         const main = page.getByRole("main");
         await main.getByRole("navigation", { name: "Dock" }).waitFor();
-        if (state === "stopped") await stopAgent(page, "Research", gateway);
         await rest(page, size);
         all[`computer.${state}.${size}.${theme}.${side}`] = await measure(page, "computer");
         await page.close();
@@ -2084,8 +2106,9 @@ if (wants("said")) {
 
 // The shell's one bar: the plan's notice, wide, as a rail and on a phone, and beside an open
 // chat; "Reconnecting…" in the same place. And what is said when something pressed is refused: a
-// Start in a stopped agent's computer, a file taken out of Files that changed on the way, and a
-// sign-in that didn't start, in the banner.
+// file taken out of Files that changed on the way, and a sign-in that didn't start, in the banner.
+// A Start refused in a stopped agent's computer isn't measured: the design has no Stop on an
+// agent's page any more, so the agent can't be stopped there.
 if (wants("bar")) {
   type BarCase = { state: string; size: Size };
   const BARS: BarCase[] = [
@@ -2095,7 +2118,6 @@ if (wants("bar")) {
     { state: "beside", size: "wide" },
     { state: "beside", size: "rail" },
     { state: "reconnecting", size: "wide" },
-    { state: "start", size: "wide" },
     { state: "file", size: "wide" },
     { state: "signin", size: "wide" },
   ];
@@ -2146,18 +2168,6 @@ if (wants("bar")) {
           await page.getByRole("complementary", { name: "Chats" }).waitFor();
         }
         if (state === "reconnecting") gateway?.goAway();
-        if (state === "start") {
-          if (!gateway) await openDesignAgent(page, "Research");
-          await main.getByRole("navigation", { name: "Dock" }).waitFor();
-          await stopAgent(page, "Research", gateway);
-          if (gateway) {
-            gateway.refuseNext("agents.start", "unavailable", "Its provider isn't connected.");
-            await main
-              .getByRole("region", { name: "Research's computer" })
-              .getByRole("button", { name: "Start" })
-              .click();
-          } else await inDesign(page, "Action refused");
-        }
         if (state === "file") {
           if (!gateway) await openDesignAgent(page, "Research");
           await openFiles(page);
@@ -2260,8 +2270,9 @@ if (wants("settings")) {
 
 // An agent's activity: Research's box on its Overview and its window, wide and on a phone, and the
 // window beside an open chat; then the box with nothing yet (the design's Docs, the built side's
-// Reviewer), that can't be read, and Research's once it is stopped. The built side's Research is
-// given the design's pieces of work.
+// Reviewer), and that can't be read. The built side's Research is given the design's pieces of
+// work. Research's once it is stopped isn't measured: the design has no Stop on an agent's page
+// any more, so it can't be stopped there.
 if (wants("activity")) {
   type ActivityCase = { state: string; size: Size };
   const CASES: ActivityCase[] = [
@@ -2272,7 +2283,6 @@ if (wants("activity")) {
     { state: "beside", size: "wide" },
     { state: "none", size: "wide" },
     { state: "unread", size: "wide" },
-    { state: "stopped", size: "wide" },
   ];
   for (const one of CASES)
     for (const theme of ["dark", "light"] as const)

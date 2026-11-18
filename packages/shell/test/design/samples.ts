@@ -617,10 +617,7 @@ export const heldComputer = (over: Partial<Held> = {}): Held => ({
  * the agent's row, then its tab.
  */
 export async function openAgent(page: Page, name: string, tab?: string) {
-  await page
-    .getByRole("navigation", { name: "Main" })
-    .getByRole("button", { name: "Team", exact: true })
-    .click();
+  await toTeam(page);
   await page
     .getByRole("main")
     .getByRole("list", { name: "Agents" })
@@ -631,6 +628,12 @@ export async function openAgent(page: Page, name: string, tab?: string) {
 }
 /** An agent's details in the design. */
 export const openDesignAgent = openAgent;
+/** Team, from the bar, in the design and built. */
+export const toTeam = (page: Page) =>
+  page
+    .getByRole("navigation", { name: "Main" })
+    .getByRole("button", { name: "Team", exact: true })
+    .click();
 
 /** An agent's setup, opened from its page: read, and slid in, so nothing in it still moves. */
 export async function openSetup(page: Page, name: string) {
@@ -829,7 +832,12 @@ export async function openSampleChat(page: Page) {
 
 /** Opens your conversation with an agent, by its name, from the list. */
 export async function openConversation(page: Page, name: string) {
-  if (!(await chats(page).count())) await page.getByRole("button", { name: /^Chats/ }).click();
+  // The layer's chats are over every place but Chat, which is a chat of its own: from Team, then.
+  if (!(await chats(page).count())) {
+    const tab = page.getByRole("button", { name: /^Chats/ });
+    if (!(await tab.count())) await toTeam(page);
+    await tab.click();
+  }
   await chats(page)
     .getByRole("list", { name: "Chats" })
     .getByRole("button")
@@ -905,7 +913,7 @@ const BUILD_UNITS: Units["units"] = [
     ...FROM,
     id: "computer",
     title: "Computer",
-    description: "A place to run commands and keep files",
+    description: "Where it runs commands, keeps files and acts on a screen",
     needs: [],
     gives: {
       slots: [{ name: "computer" }],
@@ -914,22 +922,23 @@ const BUILD_UNITS: Units["units"] = [
     },
     form: [
       {
-        id: "where",
+        id: "kind",
         type: "choice",
         value: "string",
-        title: "Where it resides",
+        title: "Which computer",
         required: true,
         options: [
           {
-            value: "local",
+            value: "this",
             title: "This computer",
-            description: "Runs as you, with your files and no approvals.",
+            description:
+              "The whole machine: your files, apps, screen and signed-in browser. It acts as you, with everything you can reach.",
             caution: true,
           },
           {
-            value: "container",
-            title: "A new container",
-            description: "Kept apart from your files and programs.",
+            value: "new",
+            title: "A new computer",
+            description: "Made for this agent and kept apart from yours.",
           },
         ],
       },
@@ -937,11 +946,46 @@ const BUILD_UNITS: Units["units"] = [
         id: "workspace",
         type: "directory",
         value: "string",
-        title: "Workspace directory",
-        description: "The folder it works in. Removing the agent leaves it.",
+        title: "Where its work happens",
+        description: "It's told to work here. Not a wall: the rest of your computer is open to it.",
         required: true,
         placeholder: "~/Agents/{name}",
-        visible: { field: "where", in: ["local"] },
+        visible: { field: "kind", in: ["this"] },
+      },
+      {
+        id: "made",
+        type: "choice",
+        value: "string",
+        title: "Made as",
+        required: true,
+        default: "container",
+        visible: { field: "kind", in: ["new"] },
+        options: [
+          {
+            value: "container",
+            title: "A container on this machine",
+            description: "Commands and files, apart from yours.",
+          },
+          {
+            value: "vm",
+            title: "A virtual machine on this machine",
+            unavailable: "The provider here can't make virtual machines yet.",
+          },
+          {
+            value: "remote",
+            title: "At another address",
+            description: "A computer provider there makes it.",
+          },
+        ],
+      },
+      {
+        id: "address",
+        type: "text",
+        value: "string",
+        title: "Provider's address",
+        required: true,
+        placeholder: "computers.acme.dev",
+        visible: { field: "made", in: ["remote"] },
       },
       {
         id: "access",
@@ -964,17 +1008,63 @@ const BUILD_UNITS: Units["units"] = [
         ],
       },
       {
+        id: "screen",
+        type: "choice",
+        value: "string",
+        title: "Screen",
+        required: true,
+        default: "on",
+        visible: { field: "kind", in: ["this"] },
+        options: [
+          {
+            value: "on",
+            title: "Your screen",
+            description: "It sees your screen and acts on it, as you would.",
+          },
+          { value: "off", title: "No screen" },
+        ],
+      },
+      {
         id: "browser",
         type: "choice",
         value: "string",
         title: "Browser",
         required: true,
-        default: "on",
+        default: "yours",
+        visible: { field: "kind", in: ["this"] },
         options: [
-          { value: "on", title: "With a browser", description: "It opens pages and acts on them." },
-          { value: "off", title: "No browser" },
+          {
+            value: "yours",
+            title: "Your browser",
+            description: "Signed in as you: it acts as you on every site you're signed in to.",
+            caution: true,
+          },
+          { value: "none", title: "No browser" },
         ],
-        visible: { field: "access", in: ["terminal"] },
+      },
+      // A new computer's own browser goes with it; yours is an explicit pick, with the same caution.
+      {
+        id: "madeBrowser",
+        type: "choice",
+        value: "string",
+        title: "Browser",
+        required: true,
+        default: "own",
+        visible: { field: "kind", in: ["new"] },
+        options: [
+          {
+            value: "own",
+            title: "Its own browser",
+            description: "In the computer made for it, apart from yours.",
+          },
+          {
+            value: "yours",
+            title: "Your browser",
+            description: "Signed in as you: it acts as you on every site you're signed in to.",
+            caution: true,
+          },
+          { value: "none", title: "No browser" },
+        ],
       },
     ],
   },
@@ -1132,12 +1222,7 @@ const BUILD_TEMPLATES: Template[] = [
       {
         provider: "AgentOrg",
         unit: "computer",
-        values: {
-          where: "local",
-          workspace: "~/code/storefront",
-          access: "terminal",
-          browser: "off",
-        },
+        values: { kind: "this", workspace: "~/code/storefront" },
       },
       { provider: "AgentOrg", unit: "web", values: { service: "exa" } },
     ],
@@ -1152,7 +1237,8 @@ export const sampleBuild = (gateway: Gateway) =>
  * The create window's states, each with the widths it is shown at: an empty stack, as it opens; a
  * template with an answer chosen that grants something; a name and what it's for typed on its
  * card; one whose unit has boxes to tick and numbers; a card folded; its two menus; saving the
- * stack as a template; made while signed out of the model account; and a new template.
+ * stack as a template; made while signed out of the model account; a new template; and its rail,
+ * the options scrolled between two headings, and with the keyboard in it so its labels show.
  */
 export const CREATES = [
   ["empty", ["wide", "phone"]],
@@ -1165,6 +1251,8 @@ export const CREATES = [
   ["save", ["wide"]],
   ["out", ["wide"]],
   ["template", ["wide"]],
+  ["between", ["wide", "phone"]],
+  ["labels", ["wide"]],
 ] as const;
 export type Create = (typeof CREATES)[number][0];
 
@@ -1192,7 +1280,7 @@ export async function createState(page: Page, state: Create, design: boolean) {
   const from = (name: string) =>
     window.getByRole("button", { name: new RegExp(`^${name}`) }).click();
   const card = (name: string) => window.getByRole("region", { name, exact: true });
-  if (state === "local" || state === "typed" || state === "folded" || state === "out") {
+  if (["local", "typed", "folded", "out", "between", "labels"].includes(state)) {
     await from("Assistant");
     await card("Web").waitFor();
   }
@@ -1222,6 +1310,34 @@ export async function createState(page: Page, state: Create, design: boolean) {
   if (state === "save") {
     await page.getByRole("menuitem", { name: /^Save as template/ }).click();
     await page.getByRole("dialog", { name: "Save as template" }).waitFor();
+  }
+  const rail = window.getByRole("navigation", { name: "Sections" });
+  const still = () =>
+    rail.evaluate((nav) =>
+      Promise.all(nav.getAnimations({ subtree: true }).map((one) => one.finished)),
+    );
+  // Halfway between the first two headings, once the rail is back at rest.
+  if (state === "between") {
+    await rail.evaluate((nav) => {
+      const box = nav.previousElementSibling as HTMLElement;
+      const top =
+        box.getBoundingClientRect().top + Number.parseFloat(getComputedStyle(box).paddingTop);
+      const [first = 0, second = 0] = [
+        ...box.querySelectorAll(":scope > section > div:first-child"),
+      ].map((heading) => heading.getBoundingClientRect().top - top + box.scrollTop);
+      box.scrollTop = (first + second) / 2;
+    });
+    await rail.and(page.locator("[data-scrolling]")).waitFor();
+    await rail.and(page.locator(":not([data-scrolling])")).waitFor();
+    await still();
+  }
+  // The keyboard in the rail, on its first logo, from the last of the options, which stays put.
+  if (state === "labels") {
+    await window
+      .getByRole("button", { name: "Add a unit" })
+      .evaluate((add: HTMLElement) => add.focus({ preventScroll: true }));
+    await page.keyboard.press("Tab");
+    await still();
   }
   // A press scrolls what it presses into view, by more one time than another: back to the start.
   await page.locator('ul[aria-label="Start from"]').evaluate((row) => {

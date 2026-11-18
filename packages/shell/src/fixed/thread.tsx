@@ -44,6 +44,7 @@ import { useComputers } from "./computers.tsx";
 import { type ChatMessage, type ChatStatus, reasonOf, type Tone } from "./data.ts";
 import { Face } from "./face.tsx";
 import { needsOf, SignInButton, useLogin } from "./login.tsx";
+import { useReducedMotion } from "./motion.ts";
 import { fixOf } from "./notice.ts";
 import { fit, type Put, type Sent, sourceOf, together } from "./pictures.ts";
 import { useAgents } from "./watch.tsx";
@@ -114,17 +115,6 @@ function turnsOf(
   for (const { id, text, images } of unrecorded) turns.push({ kind: "user", id, text, images });
   for (const [id, text] of streaming) agentTurn().parts.push({ id, text, streaming: true });
   return turns;
-}
-
-function useReducedMotion(): boolean {
-  return useSyncExternalStore(
-    (changed) => {
-      const query = matchMedia("(prefers-reduced-motion: reduce)");
-      query.addEventListener("change", changed);
-      return () => query.removeEventListener("change", changed);
-    },
-    () => matchMedia("(prefers-reduced-motion: reduce)").matches,
-  );
 }
 
 /** Where a message is written, and nothing else. What's half typed waits there, in this session. */

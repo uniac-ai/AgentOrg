@@ -42,6 +42,7 @@ import { useAct } from "./data.ts";
 import { Face } from "./face.tsx";
 import { FormField } from "./form.tsx";
 import { needsOf, useLogin } from "./login.tsx";
+import { Rail, type RailSection } from "./rail.tsx";
 import {
   type CatalogUnit,
   type DraftUnit,
@@ -365,6 +366,22 @@ function Options() {
     );
   const overall = draft?.problems.filter((p) => p.unit === undefined) ?? [];
   const refused = act.failed ?? overall.map((p) => p.message).join(" ");
+  // The rail's sections, in order, each found by its heading: the base, each unit, the way to add
+  // one. What to start from is above the scroll and isn't one.
+  const scroller = useRef<HTMLDivElement>(null);
+  const sections: RailSection[] = [
+    { key: "base", label: "Base", logo: BotIcon },
+    ...(draft?.units ?? []).map((unit) => ({
+      key: `unit-${unit.key}`,
+      label: unit.unit?.title ?? unit.id,
+      logo: logoOf(unit.unit),
+    })),
+    { key: "add", label: "Add", logo: PlusIcon },
+  ].map((section) => ({
+    ...section,
+    heading: () =>
+      scroller.current?.querySelector<HTMLElement>(`[data-heading="${CSS.escape(section.key)}"]`),
+  }));
   return (
     <>
       <form
@@ -394,47 +411,51 @@ function Options() {
         </DialogDescription>
         <StartFrom />
         {draft && (
-          <div className="no-bar min-h-0 flex-1 overflow-y-auto pt-1 pr-14 pl-5">
-            <Part id="base" title="Base" logo={BotIcon}>
-              <BaseOptions />
-            </Part>
-            {draft.units.map((unit, i) => (
-              <UnitPart
-                key={unit.key}
-                unit={unit}
-                above={draft.units.slice(0, i)}
-                problems={draft.problems.filter((p) => p.unit === i)}
-              />
-            ))}
-            <Part id="add" title="Add" logo={PlusIcon} last>
-              <DropdownMenu modal={false}>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    className="w-full justify-start text-muted-foreground"
-                    disabled={addable.length === 0}
-                  >
-                    <PlusIcon />
-                    Add a unit
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="start" className="w-72">
-                  <DropdownMenuLabel className="sr-only">Units</DropdownMenuLabel>
-                  {addable.map((unit) => (
-                    <DropdownMenuItem
-                      key={`${unit.provider}/${unit.id}`}
-                      onSelect={() => building.addUnit(unit)}
-                      className="flex-col items-start gap-0"
+          // The options scroll with no scrollbar: the rail of their sections stands at the right.
+          <div className="relative min-h-0 flex-1">
+            <div ref={scroller} className="no-bar relative h-full overflow-y-auto pt-1 pr-14 pl-5">
+              <Part id="base" title="Base" logo={BotIcon}>
+                <BaseOptions />
+              </Part>
+              {draft.units.map((unit, i) => (
+                <UnitPart
+                  key={unit.key}
+                  unit={unit}
+                  above={draft.units.slice(0, i)}
+                  problems={draft.problems.filter((p) => p.unit === i)}
+                />
+              ))}
+              <Part id="add" title="Add" logo={PlusIcon} last>
+                <DropdownMenu modal={false}>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="w-full justify-start text-muted-foreground"
+                      disabled={addable.length === 0}
                     >
-                      <span>{unit.title}</span>
-                      <span className="text-xs text-muted-foreground">{unit.description}</span>
-                    </DropdownMenuItem>
-                  ))}
-                </DropdownMenuContent>
-              </DropdownMenu>
-            </Part>
+                      <PlusIcon />
+                      Add a unit
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start" className="w-72">
+                    <DropdownMenuLabel className="sr-only">Units</DropdownMenuLabel>
+                    {addable.map((unit) => (
+                      <DropdownMenuItem
+                        key={`${unit.provider}/${unit.id}`}
+                        onSelect={() => building.addUnit(unit)}
+                        className="flex-col items-start gap-0"
+                      >
+                        <span>{unit.title}</span>
+                        <span className="text-xs text-muted-foreground">{unit.description}</span>
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </Part>
+            </div>
+            <Rail scroller={scroller} sections={sections} />
           </div>
         )}
         {draft && (
