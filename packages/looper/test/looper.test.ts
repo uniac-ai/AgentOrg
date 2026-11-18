@@ -81,7 +81,7 @@ test("a message is answered in its thread, through the tools it was given, on th
     },
   ];
   const { looper, values, said, working, requests } = looperWith(
-    [calls("look", '{"at":"it"}'), sends("It is there.", 1), [], sends("Elsewhere.", 1)],
+    [calls("look", '{"at":"it"}'), sends("It is there.", 1), sends("Elsewhere.", 1)],
     tools,
   );
   const { messageId } = await looper.send("one", "Look at it.");
@@ -110,15 +110,15 @@ test("a message is answered in its thread, through the tools it was given, on th
   assert.equal(said[0]?.message.id, messageId);
   // At work from each message until its work's turn ends, said once each way.
   assert.deepEqual(working, [true, false, true, false]);
-  // Each thread's record is its own: the first's requests hold the call, then the reply sent, each
-  // with its output, and the other thread's hold none of it.
+  // Each thread's record is its own: the first's requests hold the call with its output, and the
+  // other thread's hold none of it. A reply that answers all a turn took ends it.
   assert.deepEqual(
     requests.map(({ input }) => input.length),
-    [1, 3, 5, 1, 3],
+    [1, 3, 1],
   );
   // The frame, what its host tells it, then which work this is and how to answer and hand a
   // message back.
-  assert.equal(requests[3]?.instructions, `${FRAME}\n\nBe brief.\n\n${workInstructions("Work")}`);
+  assert.equal(requests[2]?.instructions, `${FRAME}\n\nBe brief.\n\n${workInstructions("Work")}`);
   assert.deepEqual(
     [...values.keys()]
       .filter((key) => key.startsWith("thread/"))

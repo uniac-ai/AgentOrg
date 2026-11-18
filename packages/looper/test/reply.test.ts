@@ -1,7 +1,18 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { Json } from "../src/index.ts";
-import { held, kept, looperWith, newWork, routeTo, says, sends, stops, until } from "./support.ts";
+import type { Json, Tool } from "../src/index.ts";
+import {
+  gate,
+  held,
+  kept,
+  looperWith,
+  newWork,
+  routeTo,
+  says,
+  sends,
+  stops,
+  until,
+} from "./support.ts";
 
 /** The number the message `text` had in the request whose lines are `lines`. */
 const numberOf = (lines: string[] | undefined, text: string) =>
@@ -115,29 +126,102 @@ test("what a worker sends is read back whole, however long, as what it said", as
   assert.deepEqual(inputs[1], ["Write it out.", long, "Thanks."]);
 });
 
-test("after a send the model is asked again, reads that it was sent, and a request that calls nothing ends the turn", async () => {
-  const { looper, said, asked, raw, working, answer } = looperWith({ askAfterSend: true });
+test("a response that only sends, answering all it took, ends the turn without asking again; a call beside a send goes on, and reads that it was sent", async () => {
+  const { tool, calls, finish } = held();
+  finish();
+  const waiting = gate();
+  const wait: Tool = {
+    name: "wait",
+    parameters: {},
+    run: async () => {
+      await waiting.shut;
+      return { output: "waited", ok: true };
+    },
+  };
+  const { looper, said, asked, raw, numbered, working, answer } = looperWith({
+    askAfterSend: true,
+    tools: [tool, wait],
+  });
   await looper.send("a", "Hello.");
   await until(() => asked.length === 1, "the request");
   answer("Hello.", sends("Hi."));
-  await until(() => asked.length === 2, "the request after the send");
+  await looper.settled();
   assert.deepEqual(said, ["a: user: Hello.", "a: assistant: Hi."]);
-  assert.deepEqual(working, [true]);
-  // The model reads the send as its call, and its output.
+  assert.deepEqual(working, [true, false]);
+  assert.equal(asked.length, 1);
+  // A line on where it stands, with its next call beside it: asked again, it reads both.
+  await looper.send("a", "Look it up.");
+  await until(() => asked.length === 2, "the next turn's request");
+  answer("Look it up.", [...sends("Looking."), ...calls(1)]);
+  await until(() => asked.length === 3, "the request after the call");
   assert.deepEqual(
-    raw[1]?.slice(1).map((item) => {
+    raw[2]?.slice(-4).map((item) => {
       const { callId: _, ...rest } = item as { callId: string };
       return rest;
     }),
     [
-      { type: "function_call", name: "send", arguments: '{"message":1,"text":"Hi."}' },
+      { type: "function_call", name: "send", arguments: '{"message":3,"text":"Looking."}' },
       { type: "function_call_output", output: "Sent." },
+      { type: "function_call", name: "hold", arguments: "{}" },
+      { type: "function_call_output", output: "held" },
     ],
   );
-  answer("Hello.", []);
+  answer("Look it up.", sends("Found it."));
   await looper.settled();
-  assert.deepEqual(working, [true, false]);
-  assert.equal(asked.length, 2);
+  assert.equal(asked.length, 3);
+  // A message said while it answered is answered before the turn ends.
+  await looper.send("a", "First.");
+  await until(() => asked.length === 4, "the request");
+  await looper.send("a", "Second.");
+  answer("First.", sends("One."));
+  await until(() => asked.length === 5, "the request for the message said meanwhile");
+  answer("Second.", sends("Two."));
+  await looper.settled();
+  assert.equal(asked.length, 5);
+  // Two messages read in one request, and only one answered: asked again for the other.
+  await looper.send("a", "Run it.");
+  await until(() => asked.length === 6, "the request");
+  answer("Run it.", [{ type: "function_call", callId: "w1", name: "wait", arguments: "{}" }]);
+  await until(() => looper.state("a").state === "tool", "the call to run");
+  await looper.send("a", "And this.");
+  waiting.open();
+  await until(() => asked.length === 7, "the request that reads both");
+  answer("And this.", sends("Ran it.", numberOf(numbered[6], "Run it.")));
+  await until(() => asked.length === 8, "the request for the one left");
+  answer("And this.", sends("This too."));
+  await looper.settled();
+  assert.equal(asked.length, 8);
+  assert.deepEqual(working, [true, false, true, false, true, false, true, false]);
+});
+
+test("a response that sends with its steps ends the turn as one that only sends; one that only keeps its steps goes on", async () => {
+  const { tool, calls, finish } = held();
+  finish();
+  const { looper, asked, answer } = looperWith({ askAfterSend: true, tools: [tool] });
+  const steps = (callId: string, args: Json) => ({
+    type: "function_call" as const,
+    callId,
+    name: "status",
+    arguments: JSON.stringify(args),
+  });
+  await looper.send("a", "Look it up.");
+  await until(() => asked.length === 1, "the request");
+  answer("Look it up.", [
+    steps("s1", { steps: [{ text: "Look it up", state: "in_progress" }] }),
+    ...sends("Found it."),
+  ]);
+  await looper.settled();
+  assert.equal(asked.length, 1);
+  // Its message answered and a call beside it, then its steps alone: it goes on, asked again.
+  await looper.send("a", "And the rest.");
+  await until(() => asked.length === 2, "the request");
+  answer("And the rest.", [...sends("On it."), ...calls(1)]);
+  await until(() => asked.length === 3, "the request after the call");
+  answer("And the rest.", [steps("s2", { advance: true })]);
+  await until(() => asked.length === 4, "the request after its steps alone");
+  answer("And the rest.", []);
+  await looper.settled();
+  assert.equal(asked.length, 4);
 });
 
 test("a turn that goes on after a restart leaves what it took and didn't answer not answered, in each chat", async () => {

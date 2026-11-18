@@ -387,12 +387,11 @@ test("a turn cut off as the app stops goes on when it is started again, with the
 
   // The agent is back before management, which holds its settings: the turn waits for them.
   held = false;
-  // It answers by sending, and has nothing more to say after.
+  // It answers by sending, which answers all its turn took.
   const sent = { type: "function_call", call_id: "s1", name: "send" };
-  fake.script(
-    { events: [completed([{ ...sent, arguments: '{"message":1,"text":"Went on."}' }])] },
-    { events: [completed([])] },
-  );
+  fake.script({
+    events: [completed([{ ...sent, arguments: '{"message":1,"text":"Went on."}' }])],
+  });
   ({ person } = await s.start());
   await until(() => reached(person), "the chat to be back");
   const texts = async () =>
@@ -411,8 +410,8 @@ test("a turn cut off as the app stops goes on when it is started again, with the
     async () => (await person.call<{ state: string }>(slot, "state")).state === "idle",
     "the turn to end",
   );
-  // Asked as it went on, and once more after it had sent, before its turn ended.
-  assert.equal(asked.length, 3);
+  // Asked as it went on; its reply answered all it took, so its turn ended there.
+  assert.equal(asked.length, 2);
 });
 
 test("a model request being tried again is on the agent's Activity: the main loop's at its top, a piece of work's on it, gone at the answer and at giving up", async (t) => {
@@ -573,14 +572,11 @@ test("a model request being tried again is on the agent's Activity: the main loo
     ],
   });
   const sent = { type: "function_call", call_id: "s1", name: "send" };
-  answers.work.push(
-    (number) => ({
-      events: [
-        completed([{ ...sent, arguments: JSON.stringify({ message: number, text: "Done." }) }]),
-      ],
-    }),
-    { events: [completed([])] },
-  );
+  answers.work.push((number) => ({
+    events: [
+      completed([{ ...sent, arguments: JSON.stringify({ message: number, text: "Done." }) }]),
+    ],
+  }));
   cut.work = true;
   asked = Date.now();
   await person.call(slot, "send", { text: "Write the report." });

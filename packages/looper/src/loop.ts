@@ -174,7 +174,7 @@ export const workInstructions = (
   others: string[] = [],
 ) => `This is one piece of work: ${title}. Other pieces of work may be going on beside it, each with a worker of its own, and a message may reach several of them at once.
 
-Each message starts with its number in brackets, like [12]. One from anyone other than the person then says who it is from, like [12] (from <who>): what you send in reply reaches them. Decide each one once. If it asks for something that belongs to this work, do it and answer it by calling \`send\` with its number: only what you send reaches whoever said it. What you write without sending is not a reply: it shows only in your Activity, if they open it. You may send while the work goes on, and more than once. If it asks for something that does not belong to this work, call \`hand_back\` with its number and one sentence why, and send nothing about it: it is then given to other work, or starts new work.${
+Each message starts with its number in brackets, like [12]. One from anyone other than the person then says who it is from, like [12] (from <who>): what you send in reply reaches them. Decide each one once. If it asks for something that belongs to this work, do it and answer it by calling \`send\` with its number: only what you send reaches whoever said it. What you write without sending is not a reply: it shows only in your Activity, if they open it. You may send while the work goes on, and more than once. A response that calls only \`send\` and leaves no message unanswered ends your turn: to keep working after a progress line, make your next call in the same response. If it asks for something that does not belong to this work, call \`hand_back\` with its number and one sentence why, and send nothing about it: it is then given to other work, or starts new work.${
   others.length > 0
     ? ` The other work in its conversations, in the order it began: ${others.map((one) => JSON.stringify(one)).join(", ")}. A message about what one of them did or decided is not this work's, though it says "you": call \`hand_back\` for it, naming the one it is about, rather than answering that this work didn't do it.`
     : ""
@@ -480,7 +480,7 @@ export function createLoop(options: {
    * A `send`: what it sends is said in the thread of the message it answers, and kept there as
    * the call and its output, which is all the model reads of it. One that names no message of
    * this work's to answer, or says nothing, is refused to the model; one the store refuses fails
-   * the turn, as any reply would.
+   * the turn, as any reply would. It says whether it was sent.
    */
   const sending = async (call: FunctionCall, id: string, read: number, thread: string) => {
     const refuse = (message: string) =>
@@ -490,20 +490,25 @@ export function createLoop(options: {
       args = JSON.parse(call.arguments);
     } catch {}
     const { message, text } = (args ?? {}) as Record<string, unknown>;
-    if (typeof message !== "number" || typeof text !== "string" || text.trim() === "")
-      return refuse("Give the message's number and what to say.");
+    if (typeof message !== "number" || typeof text !== "string" || text.trim() === "") {
+      await refuse("Give the message's number and what to say.");
+      return false;
+    }
     const output = { type: "function_call_output" as const, callId: call.callId, output: SENT };
     const sent = await record.reply(message, [call, output], { id, read });
-    if (!sent)
-      return refuse(
+    if (!sent) {
+      await refuse(
         `There is no message [${message}] of this work to answer: check its number, and that it wasn't handed back.`,
       );
+      return false;
+    }
     show(sent);
     out.replied?.(sent.thread);
     // The message it names is answered, the first time one is sent to it.
     const answers = sent.entry.closes;
     if (answers !== undefined && (await record.progress(sent.thread, answers, "answered")))
       out.progress?.(sent.thread, answers, "answered");
+    return true;
   };
   /**
    * A `status`: the work's steps as the call leaves them, kept, and the list as its answer. When
@@ -812,6 +817,12 @@ export function createLoop(options: {
       }
       /** Whether every call of this request handed a message back. */
       let handedAll = true;
+      /**
+       * Whether every call of this request was a send that was sent, or a `status` beside one,
+       * and whether one was.
+       */
+      let sentAll = true;
+      let sentAny = false;
       for (const [i, call] of called.entries()) {
         if (current.cancelled) {
           await skipped(called.slice(i), "cancelled", thread);
@@ -823,12 +834,20 @@ export function createLoop(options: {
         if (call.name === SEND.name) {
           handedAll = false;
           current.acted = true;
-          // A reply that streamed keeps the id its pieces had.
-          await sending(call, current.streams?.get(call.callId)?.reply ?? id, read, thread);
+          // A reply that streamed keeps the id its pieces had. Each is sent, whatever came before.
+          const sent = await sending(
+            call,
+            current.streams?.get(call.callId)?.reply ?? id,
+            read,
+            thread,
+          );
+          sentAll &&= sent;
+          sentAny ||= sent;
           continue;
         }
         // Keeping its steps is the looper's own: kept for the model, and no entry of its work. It
-        // is not the turn at something of its own, nor only handing back.
+        // is not the turn at something of its own, nor only handing back; beside a send, it
+        // keeps the turn no longer than the send would alone.
         if (call.name === STATUS.name) {
           handedAll = false;
           await answered(call, await stepping(current, call), id, read, thread);
@@ -836,12 +855,14 @@ export function createLoop(options: {
         }
         // Handing a message back is the looper's own: kept for the model, shown to nobody.
         if (call.name === HAND_BACK.name) {
+          sentAll = false;
           const result = await runTool(tools, call.name, call.arguments, current.group);
           handedAll &&= result.ok;
           await answered(call, result, id, read, thread);
           continue;
         }
         handedAll = false;
+        sentAll = false;
         current.acted = true;
         status(current, { state: "tool" });
         // A call that has started runs to its end, and its real result is kept: it may have
@@ -880,6 +901,11 @@ export function createLoop(options: {
         !(await record.unanswered(current.from ?? 0)) &&
         (await ends())
       )
+        return;
+      // So does one that only sent, each reply sent, perhaps with its steps, once nothing it took
+      // is left unanswered: the next request would read only what it sent. A message said
+      // meanwhile is answered first.
+      if (sentAll && sentAny && !(await record.unanswered(current.from ?? 0)) && (await ends()))
         return;
       status(current, { state: "thinking" });
     }
