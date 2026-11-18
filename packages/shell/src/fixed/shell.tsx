@@ -19,6 +19,7 @@ import { AgentPage } from "./agent-page.tsx";
 import { AllChatsProvider } from "./all-chats.tsx";
 import { BuildDialog } from "./build.tsx";
 import { BuildingProvider, useBuilding } from "./building.tsx";
+import { ChatPage } from "./chat-page.tsx";
 import { ChatsProvider, useChats } from "./chats.tsx";
 import { ComputerViews } from "./computer.tsx";
 import { ComputersProvider } from "./computers.tsx";
@@ -143,7 +144,7 @@ function LeftBar({
   // Search finds agents by name, and they stay where the agents are. A conversation has no name of
   // its own: it is its agent's.
   const wanted = query.trim().toLowerCase();
-  const current = "agent" in route ? route.agent : undefined;
+  const current = route.screen === "agent" ? route.agent : undefined;
   return (
     <nav
       aria-label="Main"
@@ -246,7 +247,10 @@ function LeftBar({
  * phone it sits above the chat's place, as wide as the page.
  */
 function ShellBar({ notice, dismiss }: Required<Notice>) {
-  const { open } = useChats();
+  const chats = useChats();
+  const route = useRoute();
+  // On the chat page there is no chat in the layer to leave room for.
+  const open = chats.open && route.screen !== "chat";
   const reconnecting = useWaited(useConnection() !== "open");
   if (!notice && !reconnecting) return null;
   const room = open
@@ -302,11 +306,13 @@ function Frame({ notice, dismiss }: Required<Notice>) {
   const place =
     route.screen === "home"
       ? "Home"
-      : "agent" in route
-        ? list.find((agent) => agent.agent === route.agent)?.name
-        : inTemplates(route)
-          ? "Templates"
-          : "Settings";
+      : route.screen === "chat"
+        ? "Chat"
+        : route.screen === "agent"
+          ? list.find((agent) => agent.agent === route.agent)?.name
+          : inTemplates(route)
+            ? "Templates"
+            : "Settings";
   return (
     <div
       ref={setShell}
@@ -363,6 +369,7 @@ function Frame({ notice, dismiss }: Required<Notice>) {
         <ShellBar notice={notice} dismiss={dismiss} />
         <main className="@container/main relative min-h-0 flex-1">
           {route.screen === "home" && <HomePage />}
+          {route.screen === "chat" && <ChatPage agent={route.agent} />}
           {route.screen === "agent" && (
             <AgentPage key={route.agent} agent={route.agent} tab={route.tab} />
           )}

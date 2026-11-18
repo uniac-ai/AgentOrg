@@ -81,9 +81,11 @@ export function useLoad<T>(
 
 /** What an agent's page can show under its head. */
 export type AgentTab = "computer" | "chats" | "overview";
-/** The hash route: home, an agent, or settings. */
+/** The hash route: home, chat, an agent, or settings. */
 export type Route =
   | { screen: "home" }
+  /** The chat page, on your conversation with an agent if one is named. */
+  | { screen: "chat"; agent?: string }
   | { screen: "settings"; tab: "templates" | "providers" | "account" }
   | { screen: "agent"; agent: string; tab?: AgentTab }
   | { screen: "skills" | "mcps"; focus?: string; adding?: boolean };
@@ -99,6 +101,8 @@ function routeOf(hash: string): Route {
       ...(managed[2] === "add" ? { adding: true } : {}),
       ...(managed[3] ? { focus: decodeURIComponent(managed[3]) } : {}),
     };
+  const chat = /^#\/chat(?:\/([^/]+))?$/.exec(hash);
+  if (chat) return { screen: "chat", ...(chat[1] ? { agent: decodeURIComponent(chat[1]) } : {}) };
   const [, agent, under] = /^#\/a\/([^/]+)(?:\/(computer|chats|overview))?$/.exec(hash) ?? [];
   if (!agent) return { screen: "home" };
   return {
@@ -125,6 +129,10 @@ export function go(route: Route) {
   }
   if (route.screen === "settings") {
     location.hash = `#/settings/${route.tab}`;
+    return;
+  }
+  if (route.screen === "chat") {
+    location.hash = `#/chat${route.agent ? `/${encodeURIComponent(route.agent)}` : ""}`;
     return;
   }
   location.hash =
