@@ -7,6 +7,7 @@
 //! instance reads each grant through a fresh one of itself (`granted <need>`), which answers by its
 //! exit code.
 
+mod dashboard;
 mod grant;
 mod log;
 mod macos;
