@@ -24,7 +24,7 @@ function get(origin: string, path: string, method = "GET") {
   );
 }
 
-test("/oauth/chatgpt completes the sign-in through the person's login, and keeps the code out of the tab", async (t) => {
+test("/oauth/chatgpt completes the sign-in through the person's login, sends the tab back to the dashboard, and keeps the code out of it", async (t) => {
   const completed: string[] = [];
   let refuse: string | undefined;
   const route = oauthRoute({
@@ -51,12 +51,13 @@ test("/oauth/chatgpt completes the sign-in through the person's login, and keeps
     assert.equal(sent.headers["referrer-policy"], "no-referrer");
     return get(origin, location);
   };
-  const done = await back();
-  assert.equal(done.status, 200);
-  assert.match(done.body, /Signed in to ChatGPT/);
-  assert.doesNotMatch(done.body, /SECRET-CODE/);
-  assert.equal(done.headers["referrer-policy"], "no-referrer");
-  assert.equal(done.headers["cache-control"], "no-store");
+  // Signed in: straight to the dashboard, in the same tab.
+  const signedIn = await get(origin, callback);
+  assert.equal(signedIn.status, 303);
+  assert.equal(signedIn.headers.location, "/");
+  assert.equal(signedIn.headers["referrer-policy"], "no-referrer");
+  assert.equal(signedIn.headers["cache-control"], "no-store");
+  assert.doesNotMatch(signedIn.body, /SECRET-CODE/);
   // The whole address it came back to, as the login compares it with the redirect.
   assert.deepEqual(completed, [`${origin}${callback}`]);
 
@@ -75,4 +76,9 @@ test("/oauth/chatgpt completes the sign-in through the person's login, and keeps
   // An outcome page made up by hand says only what it says; it completes nothing.
   assert.match((await get(origin, "/oauth/chatgpt?result=bogus")).body, /didn't work/);
   assert.equal(completed.length, 4);
+  // The page an older tab may still hold says so, and links back.
+  const said = await get(origin, "/oauth/chatgpt?result=signed_in");
+  assert.equal(said.status, 200);
+  assert.match(said.body, /Signed in to ChatGPT\.<\/p><p><a href="\/">Back to AgentOrg/);
+  assert.doesNotMatch(said.body, /close this tab/);
 });
