@@ -49,6 +49,7 @@ import {
   sampleLoad,
   sampleSettings,
   sampleWork,
+  settingsBar,
   signInAccount,
   signInHash,
   signInState,
@@ -67,7 +68,6 @@ const PARTS = [
   "browser",
   "chat",
   "thread",
-  "home",
   "agent",
   "computer",
   "signin",
@@ -104,7 +104,7 @@ interface Measured {
 type Parts = Record<string, Measured | string | number | null>;
 /**
  * What a probe measures: the frame, one window's own rows, the chat in its layer, one chat, the
- * way to a chat's older messages, Home, an agent's page, its setup, its computer's frame on its
+ * way to a chat's older messages, an agent's page, its setup, its computer's frame on its
  * page, that computer as the layer's window, its files window's own rows, the model
  * account's states, the create window, Settings' frame with its Templates, Settings' other
  * sections and what two of them offer, what a page says where it has nothing it can show,
@@ -118,7 +118,6 @@ type Part =
   | "chat"
   | "thread"
   | "earlier"
-  | "home"
   | "agent"
   | "setup"
   | "computer"
@@ -135,18 +134,17 @@ type Part =
 type Gateway = Awaited<ReturnType<typeof standIn>>;
 
 /**
- * Runs in the page. `frame` measures the left bar, a drawer if one is open, the phone's head and
- * the page area, from the shell's top left. `terminal` and `browser` measure those windows' own
+ * Runs in the page. `frame` measures the bar of places, each place with its icon and, on a phone,
+ * its label, and the page area, from the shell's top left. `terminal` and `browser` measure those windows' own
  * rows, from the window's top left. `chat` measures the collapsed chat and its panel, from the
  * shell's top left. A window is also measured in the cases the design draws for it: what was
- * typed refused, its view closed, only watched, no tab, and the page asking. `home` measures
- * Home's two sections, from the shell's top left. `earlier` measures the way to a chat's older
+ * typed refused, its view closed, only watched, no tab, and the page asking. `earlier` measures the way to a chat's older
  * messages, from the top of what was said. `thread` also measures a chat in the cases the design
  * draws for it: a step with no call, a problem with its fix, and a refused send. `thread` measures one chat, a chat about to be started, and the chats the bar's
  * search finds, from the shell's top left. `agent` measures an agent's page: its head, how it
  * stands, its tabs, its computer's column and its chats, from the shell's top left; `setup` its
- * setup, from the sheet's own top left. Each also lists the controls and marks seen in its regions: the bar, a
- * drawer, the phone's head, a window, the collapsed chat and its panel, and Home. The page
+ * setup, from the sheet's own top left. Each also lists the controls and marks seen in its regions: the bar,
+ * a window, and the collapsed chat and its panel. The page
  * area is not listed on a page that isn't the design's yet.
  */
 const probe = (what: Part): Parts => {
@@ -376,44 +374,18 @@ const probe = (what: Part): Parts => {
     return parts;
   }
 
-  if (what === "home") {
-    const shell = document.querySelector("[data-shell]");
-    const page = document.querySelector("main");
-    if (!shell || !page) return parts;
-    origin = shell.getBoundingClientRect();
-    controls("page", page);
-    // Its two sections, each a head and its rows. How tall a section is, is how many chats it has.
-    for (const [key, label] of [
-      ["needs", "Needs you"],
-      ["recent", "Recent"],
-    ] as const) {
-      const section = page.querySelector(`section[aria-label="${label}"]`);
-      parts[key] = of(section, "h");
-      const head = section?.children[0];
-      parts[`${key}.head`] = of(head);
-      parts[`${key}.title`] = of(head?.querySelector("h2"));
-      parts[`${key}.all`] = of(head?.querySelector("button"));
-      parts[`${key}.row`] = of(section?.querySelector("li button"));
-    }
-    return parts;
-  }
-
   if (what === "said") {
-    // What a page says where it has nothing it can show: Home's Recent with what is beside it, the
-    // left bar, the first row of a Settings list, or an agent that isn't here.
+    // What a page says where it has nothing it can show: Chat's list with what is beside it, the
+    // first row of a Settings list, or an agent that isn't here.
     const shell = document.querySelector("[data-shell]");
     const main = document.querySelector("main");
     if (!shell || !main) return parts;
     origin = shell.getBoundingClientRect();
-    const recent = main.querySelector('section[aria-label="Recent"]');
-    parts.recent = of(recent);
-    parts["recent.head"] = of(recent?.children[0]);
-    parts["recent.title"] = of(recent?.querySelector("h2"));
-    parts["recent.line"] = of(recent?.children[1]);
-    parts["recent.said"] = of(recent?.querySelector("p"));
-    parts["recent.create"] = of(recent?.querySelector("button"));
-    const bar = [...document.querySelectorAll('nav[aria-label="Main"] p')].find(seen);
-    parts.bar = of(bar);
+    const chats = main.querySelector('section[aria-label="Chats"]');
+    const nothing = chats?.querySelector("p");
+    parts["chats.line"] = of(nothing?.parentElement);
+    parts["chats.said"] = of(nothing);
+    parts["chats.create"] = of(nothing?.parentElement?.querySelector("button"));
     const first = main.querySelector("ul > li > p");
     parts["list.row"] = of(first?.parentElement);
     parts["list.said"] = of(first);
@@ -421,12 +393,10 @@ const probe = (what: Part): Parts => {
       (e) => e.textContent === "This agent isn't here",
     );
     parts["missing.said"] = of(missing);
-    parts["missing.home"] = of(missing?.nextElementSibling);
+    parts["missing.way"] = of(missing?.nextElementSibling);
     parts["missing.column"] = of(missing?.parentElement);
     // What each says, word for word.
-    parts.words = [recent?.querySelector("p"), bar, first, missing]
-      .map((e) => e?.textContent ?? "")
-      .join(" | ");
+    parts.words = [nothing, first, missing].map((e) => e?.textContent ?? "").join(" | ");
     return parts;
   }
 
@@ -653,13 +623,13 @@ const probe = (what: Part): Parts => {
   }
 
   if (what === "signin") {
-    // The model account's states, wherever one shows, from the shell's top left: Home's place
-    // for what is left to set up, the bar's mark, an agent's line, a chat's place for the way
-    // in, and a tab that is no longer signed in.
+    // The model account's states, wherever one shows, from the shell's top left: the banner of
+    // what is left to set up, an agent's line, a chat's place for the way in, and a tab that is
+    // no longer signed in.
     const shell = document.querySelector("[data-shell]");
     if (!shell) return parts;
     origin = shell.getBoundingClientRect();
-    const place = document.querySelector('main section[aria-label="Set up"]');
+    const place = document.querySelector('section[aria-label="Set up"]');
     controls("place", place);
     parts.place = of(place);
     // Each state's words lie in the same cell: the one seen is measured, with what it says, since
@@ -675,11 +645,6 @@ const probe = (what: Part): Parts => {
       : null;
     parts["place.way"] = of(way);
     parts["place.way.turning"] = of(way?.querySelector("svg"));
-    parts["bar.mark"] = of(
-      document.querySelector(
-        'nav[aria-label="Main"] button[aria-label="Home"] span.relative > span',
-      ),
-    );
     const line = document.querySelector('main [role="status"][aria-label="State"]');
     controls("line", line);
     parts.line = of(line);
@@ -1323,69 +1288,30 @@ const probe = (what: Part): Parts => {
   if (!shell) return parts;
   origin = shell.getBoundingClientRect();
   parts.shell = `${origin.width} x ${origin.height}`;
-  const navs = [...document.querySelectorAll('nav[aria-label="Main"]')].filter(seen);
-  parts.bars = navs.length;
-  navs.forEach((nav, n) => {
-    const at = navs.length > 1 && n === navs.length - 1 ? "drawer" : "bar";
-    // The agents are the sample's: there are as many rows as agents.
-    controls(at, nav, 'ul[aria-label="Agents"]');
-    const button = (name: string) =>
-      [...nav.querySelectorAll("button")].find(
-        (b) => seen(b) && (b.title === name || b.getAttribute("aria-label") === name),
-      );
-    const row = (name: string, b: Element | undefined) => {
-      parts[`${at}.${name}`] = of(b);
-      parts[`${at}.${name}.cell`] = of(b?.children[0]);
-      parts[`${at}.${name}.label`] = of(b?.children[1]);
-      if (/Home|Templates|Settings/.test(name))
-        parts[`${at}.${name}.icon`] = of(b?.children[0]?.querySelector("svg"));
-    };
-    parts[`${at}.nav`] = of(nav);
-    row("Home", button("Home"));
-    parts[`${at}.search`] = of(nav.querySelector('input[type="search"]'));
-    parts[`${at}.searchButton`] = of(button("Search"));
-    parts[`${at}.Create`] = of(button("Create"));
-    [...nav.querySelectorAll('[aria-label="Agents"] button')]
-      .filter(seen)
-      .slice(0, 3)
-      .forEach((b, i) => {
-        row(`agent${i}`, b);
-      });
-    // A face is measured within its own row: which agent is in which row is the data's.
-    for (const [word, label] of [
-      ["Working", "working"],
-      ["Has a problem", "trouble"],
-    ] as const) {
-      const mark = [
-        ...nav.querySelectorAll(`[aria-label="Agents"] [role="img"][aria-label="${word}"]`),
-      ].find(seen);
-      const top = mark?.closest("button")?.getBoundingClientRect().y ?? 0;
-      const within = (m: Measured | null) => {
-        if (m) m.box[1] = round(Number(m.box[1]) + origin.y - top);
-        return m;
-      };
-      const face = mark?.parentElement;
-      parts[`${at}.face.${label}`] = within(of(face));
-      const disc = within(of(face?.children[0]));
-      // A face's colours are its agent's own.
-      if (disc) disc.bg = "the agent's";
-      parts[`${at}.face.${label}.disc`] = disc;
-      parts[`${at}.face.${label}.mark`] = within(of(mark));
-    }
-    row("Templates", button("Templates"));
-    row("Settings", button("Settings"));
-  });
+  // The bar of places: its box and its hairline, then each place, its icon, and its label where
+  // the place shows it (a phone's, under the icon).
+  const nav = [...document.querySelectorAll('nav[aria-label="Main"]')].find(seen);
+  controls("bar", nav);
+  parts.bar = of(nav);
+  if (nav) {
+    const style = getComputedStyle(nav);
+    parts["bar.edge"] = ["top", "right"]
+      .map((side) =>
+        [side, "width", "color"]
+          .map((one, i) => (i ? style.getPropertyValue(`border-${side}-${one}`) : one))
+          .join(" "),
+      )
+      .join(", ");
+  }
+  for (const place of [...(nav?.querySelectorAll("button") ?? [])].filter(seen)) {
+    // Chat's name carries its count, which is the sample's.
+    const name = (place.getAttribute("aria-label") ?? "").split(",")[0];
+    parts[`bar.${name}`] = of(place);
+    parts[`bar.${name}.icon`] = of(place.querySelector("svg"));
+    parts[`bar.${name}.label`] = of([...place.querySelectorAll(":scope > span")].at(-1));
+  }
   // The page area's own box and surface.
-  const main = of(document.querySelector("main"));
-  parts.main = main;
-  const head = [...document.querySelectorAll("header")].find(seen);
-  parts.head = of(head);
-  controls("head", head);
-  parts["head.menu"] = of(head?.querySelector("button"));
-  parts["head.place"] = of(head?.querySelector("span"));
-  parts.overlay = of(
-    [...document.querySelectorAll("[data-drawer-overlay], [aria-hidden].bg-black\\/40")].find(seen),
-  );
+  parts.main = of(document.querySelector("main"));
   return parts;
 };
 
@@ -1431,30 +1357,25 @@ async function rest(page: Page, size: Size) {
 const measure = (page: Page, what: Part) => page.evaluate(probe, what);
 const all: Record<string, Parts> = {};
 
-// The frame: each width in each theme, and the drawer from the rail's search and the phone's menu.
+// The frame: each width in each theme, signed out of the model as the design opens if it does, so
+// both have the same banner over them.
 if (wants("frame"))
   for (const size of Object.keys(SIZES) as Size[])
-    for (const theme of ["dark", "light"] as const)
+    for (const theme of ["dark", "light"] as const) {
+      let signedOut = false;
       for (const side of ["design", "built"] as const) {
         const gateway = side === "built" ? await standIn() : undefined;
+        if (gateway && signedOut) gateway.setAccount("signed_out");
         const page = gateway
           ? await builtPage(gateway, size, theme)
           : await designPage(size, theme);
+        if (!gateway) signedOut = (await page.getByRole("region", { name: "Set up" }).count()) > 0;
         await rest(page, size);
         all[`frame.${size}.${theme}.${side}`] = await measure(page, "frame");
-        if (theme === "dark" && size !== "wide") {
-          await (size === "phone"
-            ? page.getByRole("button", { name: "Menu" })
-            : page
-                .getByRole("navigation", { name: "Main" })
-                .getByRole("button", { name: "Search", exact: true })
-          ).click();
-          await rest(page, size);
-          all[`frame.${size}.drawer.${side}`] = await measure(page, "frame");
-        }
         await page.close();
         await gateway?.close();
       }
+    }
 
 // The terminal window: the design's own, and the built one with terminals of the same names in
 // the same states. Then the cases the design draws from its own controls, which the built side
@@ -1462,10 +1383,7 @@ if (wants("frame"))
 if (wants("terminal"))
   for (const theme of ["dark", "light"] as const) {
     const drawn = await designPage("wide", theme);
-    await drawn
-      .getByRole("navigation", { name: "Main" })
-      .getByRole("button", { name: "Research", exact: true })
-      .click();
+    await openDesignAgent(drawn, "Research");
     await drawn.getByRole("button", { name: "Terminal", exact: true }).click();
     await rest(drawn, "wide");
     const designed = await measure(drawn, "terminal");
@@ -1533,10 +1451,7 @@ if (wants("browser"))
         ? await builtPage(gateway, "wide", theme, "#/a/a-research")
         : await designPage("wide", theme);
       if (!gateway) {
-        await page
-          .getByRole("navigation", { name: "Main" })
-          .getByRole("button", { name: "Research", exact: true })
-          .click();
+        await openDesignAgent(page, "Research");
         await page.getByRole("button", { name: "Browser", exact: true }).click();
       }
       await page.getByRole("button", { name: "New tab", exact: true }).click();
@@ -1739,33 +1654,6 @@ if (wants("thread"))
       );
     }
 
-// Home: the chats that need you and the recent ones, wide and on a phone. The built side has as
-// many that need you as the design's sample: one with a problem, one whose message wasn't answered,
-// and one with a reply not yet read.
-if (wants("home"))
-  for (const size of ["wide", "phone"] as const)
-    for (const theme of ["dark", "light"] as const)
-      for (const side of ["design", "built"] as const) {
-        const gateway = side === "built" ? await standIn() : undefined;
-        if (gateway) {
-          sampleAgents(gateway);
-          sampleChats(gateway);
-        }
-        const page = gateway
-          ? await builtPage(gateway, size, theme)
-          : await designPage(size, theme);
-        if (gateway) {
-          await noted(gateway);
-          releaseNotes(gateway);
-          gateway.changed();
-        }
-        await page.getByRole("region", { name: "Needs you" }).getByRole("button").nth(1).waitFor();
-        await rest(page, size);
-        all[`home.${size}.${theme}.${side}`] = await measure(page, "home");
-        await page.close();
-        await gateway?.close();
-      }
-
 // An agent's page: who it is, how it stands, and what is under its tabs. Research has a computer,
 // shown wide and on a phone, and its chats; Reviewer is idle, Triage has a problem and Weekly
 // report is stopped, each with its chats alone. The built side's computer says the load the
@@ -1870,7 +1758,7 @@ if (wants("computer"))
         await gateway?.close();
       }
 
-// The model account's states. Home's place for what is left to set up, wide and on a phone, as
+// The model account's states. The banner of what is left to set up, wide and on a phone, as
 // it is signed out, waiting for ChatGPT, while ChatGPT starts, and with an account that can't be
 // used; an agent's line and a chat's place while signed out; and a tab no longer signed in.
 if (wants("signin"))
@@ -2076,9 +1964,8 @@ if (wants("templates"))
         await gateway?.close();
       }
 
-// What a page says where it has nothing it can show: Home and the left bar with no chats, no
-// agents, or agents that can't be read; each Settings list with none or none that can be read; an
-// agent that isn't here. The design reaches each from its own bar; the built side from what the
+// What a page says where it has nothing it can show: Chat's list with no agents, or agents that
+// can't be read; each Settings list with none or none that can be read; an agent that isn't here. The design reaches each from its own bar; the built side from what the
 // stand-in has, or a call it refuses every time.
 if (wants("said")) {
   type Said = {
@@ -2096,7 +1983,7 @@ if (wants("said")) {
     call: string,
     none: string,
   ): Said[] => [
-    // As the design's control does, every list is so: the agents in the left bar too.
+    // As the design's control does, every list is so: the agents too.
     {
       state: `${none}`,
       presses: 2,
@@ -2121,7 +2008,6 @@ if (wants("said")) {
     },
   ];
   const SAID: Said[] = [
-    { state: "no chats", presses: 1, set: (g) => g.noChats(), says: "No chats" },
     { state: "no agents", presses: 2, set: (g) => g.agents.clear(), says: "No agents" },
     {
       state: "agents unread",
@@ -2133,15 +2019,11 @@ if (wants("said")) {
     ...listOf((page) => openSection(page, "mcps"), "#/mcps", "connections.list", "No connections"),
     // Templates, without waiting for a template the sample would have.
     ...listOf(
-      async (page) => {
-        if ((page.viewportSize()?.width ?? 0) < 640)
-          await page.getByRole("button", { name: "Menu" }).click();
-        await page
-          .getByRole("navigation", { name: "Main" })
-          .last()
-          .getByRole("button", { name: "Templates" })
-          .click();
-      },
+      async (page) =>
+        (await settingsBar(page))
+          .getByRole("button", { name: /^(Templates|Settings)$/ })
+          .first()
+          .click(),
       "#/settings/templates",
       "agents.templates",
       "No templates",
@@ -2170,7 +2052,6 @@ if (wants("said")) {
             await one.open?.(page);
           }
           await page.getByRole("main").getByText(one.says, { exact: true }).first().waitFor();
-          // A phone's drawer opened to reach a section is closed again by going there.
           await rest(page, size);
           all[`said.${one.state}.${size}.${theme}.${side}`] = await measure(page, "said");
           await page.close();
@@ -2181,7 +2062,7 @@ if (wants("said")) {
 // The shell's one bar: the plan's notice, wide, as a rail and on a phone, and beside an open
 // chat; "Reconnecting…" in the same place. And what is said when something pressed is refused: a
 // Start in a stopped agent's computer, a file taken out of Files that changed on the way, and a
-// sign-in that didn't start, in Home's place.
+// sign-in that didn't start, in the banner.
 if (wants("bar")) {
   type BarCase = { state: string; size: Size };
   const BARS: BarCase[] = [
@@ -2210,7 +2091,13 @@ if (wants("bar")) {
           const [width, height] = SIZES[size];
           page = await browser.newPage({ viewport: { width, height } });
           await page.addInitScript((one) => localStorage.setItem("agentorg.session", one), SESSION);
-          const hash = state === "start" || state === "file" ? "#/a/a-research" : "#/";
+          // Beside the open chat is on Team: the chat page has no floating chat.
+          const hash =
+            state === "start" || state === "file"
+              ? "#/a/a-research"
+              : state === "beside"
+                ? "#/team"
+                : "#/";
           await page.goto(`${gateway.url}/${hash}`);
           if (theme === "light")
             await page.evaluate(() => {
@@ -2227,6 +2114,11 @@ if (wants("bar")) {
         }
         const main = page.getByRole("main");
         if (state === "beside") {
+          if (!gateway)
+            await page
+              .getByRole("navigation", { name: "Main" })
+              .getByRole("button", { name: "Team", exact: true })
+              .click();
           await page.getByRole("button", { name: /^Chats/ }).click();
           await page.getByRole("complementary", { name: "Chats" }).waitFor();
         }

@@ -1,5 +1,6 @@
 // The chat page in a real browser, over the stand-in gateway: your conversations at the left and
-// the open one beside them, or one at a time where there is no room for both.
+// the open one beside them, or one at a time where there is no room for both; at the first start,
+// your agents in their place.
 import assert from "node:assert/strict";
 import test from "node:test";
 import { type Browser, chromium, type Page } from "@playwright/test";
@@ -42,6 +43,8 @@ const row = (page: Page, name: string) => rows(page).filter({ hasText: name });
 /** The agents the rows name, top to bottom: each row's face comes first, then its name. */
 const names = async (page: Page) =>
   (await rows(page).allInnerTexts()).map((text) => text.split("\n").filter(Boolean)[1]);
+/** The stand-in's agents, in the order they are read. */
+const NAMES = ["Research", "Reviewer", "Triage", "Weekly report", "Broken"];
 /** The open conversation, on the page. */
 const conversation = (page: Page, name: string) =>
   page.getByRole("main").getByRole("region", { name: `Conversation with ${name}` });
@@ -216,27 +219,88 @@ test(
 );
 
 test(
-  "with nothing to list, the chat page says which nothing it is: no chats once every agent's are listed, no agents with the way to make one, or that they can't be read",
+  "at the first start, before any conversation has begun, the list is your agents, each by its face and name alone, and wide it opens on the first one's conversation, empty with its box",
   withGateway(async (gateway) => {
-    // Agents with no chats: once each agent's chats are listed, it says there are none.
     gateway.noChats();
     const holding = gateway.hold("chat.list");
-    let page = await open(gateway);
-    // Once the agents have been asked for, nothing is said while their chats aren't listed.
+    const page = await open(gateway);
+    // Once the agents have been asked for, nothing is listed or said while their chats aren't.
     while (!gateway.calls.some((c) => c.method === "list" && c.slot === "agents"))
       await page.waitForTimeout(20);
     await page.waitForTimeout(400);
     // Let go whatever is found, so a failing check doesn't leave the call held.
-    const before = await list(page).getByText("No chats").count();
+    const before = [
+      await rows(page).count(),
+      await anyConversation(page).count(),
+      await list(page).getByText("No chats").count(),
+    ];
     holding();
-    assert.equal(before, 0, "nothing is said before the chats are listed");
-    await list(page).getByText("No chats", { exact: true }).waitFor();
-    assert.equal(await list(page).getByRole("button", { name: "Create" }).count(), 0);
+    assert.deepEqual(before, [0, 0, 0], "nothing before the chats are listed");
+    await until(() => names(page), NAMES);
+    // Each row is the list's own, with its face and its name: nothing under the name, and no time.
+    for (const one of await rows(page).all()) {
+      assert.equal((await one.innerText()).split("\n").filter(Boolean).length, 2);
+      assert.equal((await one.boundingBox())?.height, 68);
+    }
+    assert.equal(await list(page).getByText("No chats").count(), 0, 'no longer "No chats"');
+    // Wide, it opens on the first one's conversation: empty, with its box, its row marked.
+    const research = conversation(page, "Research");
+    await research.getByRole("textbox", { name: "Message" }).waitFor();
+    assert.equal(await research.locator('[data-slot="message-scroller-item"]').count(), 0);
+    assert.equal(await row(page, "Research").getAttribute("aria-current"), "true");
+    // Another row opens its own.
+    await row(page, "Triage").click();
+    await conversation(page, "Triage").getByRole("textbox", { name: "Message" }).waitFor();
+    assert.equal(await row(page, "Triage").getAttribute("aria-current"), "true");
+    assert.equal(await row(page, "Research").getAttribute("aria-current"), null);
     await page.close();
+  }),
+);
 
+test(
+  "the first message makes it a conversation, and once one has begun the list is conversations only",
+  withGateway(async (gateway) => {
+    gateway.noChats();
+    const page = await open(gateway);
+    await until(() => names(page), NAMES);
+    const box = conversation(page, "Research").getByRole("textbox", { name: "Message" });
+    await box.fill("Why are checkouts failing?");
+    await box.press("Enter");
+    await until(() => names(page), ["Research"]);
+    assert.match(await row(page, "Research").innerText(), /You: Why are checkouts failing\?/);
+    await conversation(page, "Research").getByText("Why are checkouts failing?").waitFor();
+    assert.equal(await row(page, "Research").getAttribute("aria-current"), "true");
+    // A page opened now lists the conversation alone.
+    const late = await open(gateway);
+    await until(() => names(late), ["Research"]);
+    await late.close();
+    await page.close();
+  }),
+);
+
+test(
+  "on a phone, the first start lists the agents, and a row opens its empty conversation alone, with the way back",
+  withGateway(async (gateway) => {
+    gateway.noChats();
+    const page = await open(gateway, "#/chat", PHONE);
+    await until(() => names(page), NAMES);
+    assert.equal(await anyConversation(page).count(), 0);
+    await row(page, "Reviewer").click();
+    await conversation(page, "Reviewer").getByRole("textbox", { name: "Message" }).waitFor();
+    assert.equal(await list(page).count(), 0);
+    await conversation(page, "Reviewer").getByRole("button", { name: "All chats" }).click();
+    await page.waitForURL(/#\/chat$/);
+    await until(() => names(page), NAMES);
+    await page.close();
+  }),
+);
+
+test(
+  "with nothing to list, the chat page says which nothing it is: no agents, with the way to make one",
+  withGateway(async (gateway) => {
     // No agents: it says so, with Create beside it, which opens the creation window.
     gateway.agents.clear();
-    page = await open(gateway);
+    const page = await open(gateway);
     await list(page).getByText("No agents", { exact: true }).waitFor();
     await list(page).getByRole("button", { name: "Create" }).click();
     await page.getByRole("dialog", { name: "Create" }).waitFor();

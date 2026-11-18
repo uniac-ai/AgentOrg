@@ -45,6 +45,23 @@ export function likeAgent(gateway: Gateway, agent: string, name: string, purpose
     chat: { status: { state: "idle" }, messages: [] },
   });
 }
+/**
+ * The first start as the design's sample has it: one agent, Assistant, with a computer and with
+ * nothing said to it yet.
+ */
+export function firstStart(gateway: Gateway) {
+  likeAgent(gateway, "assistant", "Assistant", "Works on a computer and on the web");
+  for (const id of [...gateway.agents.keys()]) if (id !== "assistant") gateway.agents.delete(id);
+  gateway.noChats();
+  computer(
+    gateway,
+    [
+      { surface: "terminal", protocol: "terminal@1", operate: true },
+      { surface: "files", protocol: "files@1", operate: true },
+    ],
+    "assistant",
+  );
+}
 /** An agent you have never messaged, as the design's sample has Docs. */
 export const docsAgent = (gateway: Gateway) => {
   likeAgent(gateway, "a-docs", "Docs", "Keeps the product docs in step with what ships");
@@ -1232,7 +1249,7 @@ export type Section = (typeof SECTIONS)[number][0];
  * The bar, with Settings on it: on a phone the older design's is behind Menu; the built one, and
  * the design's from its icon bar on, are along the foot.
  */
-async function settingsBar(page: Page) {
+export async function settingsBar(page: Page) {
   const menu = page.getByRole("button", { name: "Menu" });
   if ((page.viewportSize()?.width ?? 0) < 640 && (await menu.count())) await menu.click();
   return page.getByRole("navigation", { name: "Main" }).last();

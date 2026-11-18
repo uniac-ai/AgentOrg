@@ -18,6 +18,7 @@ import {
   cpuOf,
   createState,
   docsAgent,
+  firstStart,
   inDesign,
   messageDocs,
   noted,
@@ -74,6 +75,8 @@ interface Screen {
   chats?: boolean;
   /** The built side's agents are the design's sample: what each is for, and Research's computer. */
   agents?: boolean;
+  /** The built side is at its first start: one agent, with no conversation begun. */
+  firstStart?: boolean;
   /** The built side's Settings lists the design's sample where it shows. */
   settings?: boolean;
   /** The built side builds from the design's sample: its base, units and templates. */
@@ -402,6 +405,24 @@ const SCREENS: Screen[] = [
       await page.locator('[data-beside="open"]').waitFor();
     },
   },
+  // The first start, from the later design: one agent, whose conversation hasn't begun, signed out
+  // as the design opens. Its "This Mac" card, which isn't built, is put away by its own control.
+  {
+    name: "first-start",
+    sizes: ["wide", "phone"],
+    themes: ["dark", "light"],
+    firstStart: true,
+    signIn: "out",
+    design: (page) => inDesign(page, "Nothing missing"),
+    built: async (page) => {
+      await chatRow(page, "Assistant").waitFor();
+      if ((page.viewportSize()?.width ?? 0) >= 640)
+        await page
+          .getByRole("main")
+          .getByRole("region", { name: "Conversation with Assistant" })
+          .waitFor();
+    },
+  },
   // The team page, with Reviewer's details, by the bar's Team icon on both sides.
   ...(
     [
@@ -714,6 +735,7 @@ for (const screen of SCREENS.filter((one) => wanted(one.name)))
         });
         if (gateway) {
           if (screen.agents) sampleAgents(gateway);
+          if (screen.firstStart) firstStart(gateway);
           if (screen.build) sampleBuild(gateway);
           if (screen.settings) sampleSettings(gateway);
           if (screen.signIn) signInAccount(gateway, screen.signIn);
