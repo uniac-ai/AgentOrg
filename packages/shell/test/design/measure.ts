@@ -57,6 +57,7 @@ import {
   supportBefore,
   toTeam,
   unreadReply,
+  youActed,
 } from "./samples.ts";
 
 const [design, out, only] = process.argv.slice(2);
@@ -1867,6 +1868,9 @@ if (wants("window"))
           : await designPage(size, theme);
         if (!gateway) await openDesignAgent(page, "Research");
         await openWindow(page, state === "beside");
+        // Expand is pressed in its browser, which the design counts as acting there: the built
+        // side's computer says so.
+        if (gateway && state === "expanded") youActed(gateway);
         await rest(page, size);
         all[`window.${state}.${size}.${theme}.${side}`] = await measure(page, "window");
         await page.close();

@@ -15,6 +15,7 @@ import { ComputerViews } from "./computer.tsx";
 import { ComputersProvider } from "./computers.tsx";
 import { Layer } from "./layer.tsx";
 import { LoginProvider, type LoginStatus, SignInBanner } from "./login.tsx";
+import { PresenceProvider } from "./presence.tsx";
 import { SettingsWindow } from "./settings-window.tsx";
 import { TeamPage } from "./team-page.tsx";
 import { AgentsProvider } from "./watch.tsx";
@@ -40,11 +41,13 @@ export function FixedShell({
           <AllChatsProvider>
             <BuildingProvider>
               <ComputersProvider>
-                <LoginProvider status={login}>
-                  <Frame notice={notice} dismiss={dismiss} />
-                  {/* Each computer's views, which outlive the frame they are shown in. */}
-                  <ComputerViews />
-                </LoginProvider>
+                <PresenceProvider>
+                  <LoginProvider status={login}>
+                    <Frame notice={notice} dismiss={dismiss} />
+                    {/* Each computer's views, which outlive the frame they are shown in. */}
+                    <ComputerViews />
+                  </LoginProvider>
+                </PresenceProvider>
               </ComputersProvider>
             </BuildingProvider>
           </AllChatsProvider>

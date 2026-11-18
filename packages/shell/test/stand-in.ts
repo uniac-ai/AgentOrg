@@ -521,10 +521,14 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
     },
     /** `metrics@1`: the sockets watching, and the latest reading, which one that opens later gets at once. */
     load: { sockets: new Set<WebSocket>(), reading: undefined as string | undefined },
-    /** `presence@1`: the sockets watching, and who is acting now, which each gets as it opens. */
+    /**
+     * `presence@1`: the sockets watching, each with whose computer, and who is acting now, which each
+     * gets as it opens: on every computer, unless one agent's says its own.
+     */
     presence: {
-      sockets: new Set<WebSocket>(),
+      sockets: new Map<WebSocket, string>(),
       event: JSON.stringify({ type: "presence", acting: [] }),
+      of: new Map<string, string>(),
     },
     /** `files@1`: the workspace's files by path, and every request made of it. */
     files: {
@@ -1216,9 +1220,9 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
         if (live.load.reading) socket.send(live.load.reading);
       }
       if (surface.protocol === "presence@1") {
-        live.presence.sockets.add(socket);
+        live.presence.sockets.set(socket, target.agent);
         socket.on("close", () => live.presence.sockets.delete(socket));
-        socket.send(live.presence.event);
+        socket.send(live.presence.of.get(target.agent) ?? live.presence.event);
       }
     });
   });
@@ -1573,17 +1577,24 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
       });
     },
     /**
-     * Who is acting now, the most recent first, as `presence@1` says it: to every socket watching
-     * and to those that come later.
+     * Who is acting now, the most recent first, as `presence@1` says it: on every computer, or on
+     * one agent's, to every socket watching it and to those that come later.
      */
     presence(
       acting: { who: "person" | "agent"; name?: string; capability: string; terminal?: string }[],
+      agent?: string,
     ) {
-      live.presence.event = JSON.stringify({
+      const event = JSON.stringify({
         type: "presence",
         acting: acting.map((one) => ({ ...one, at: new Date().toISOString() })),
       });
-      for (const ws of live.presence.sockets) ws.send(live.presence.event);
+      if (agent) live.presence.of.set(agent, event);
+      else {
+        live.presence.event = event;
+        live.presence.of.clear();
+      }
+      for (const [ws, whose] of live.presence.sockets)
+        if (!agent || whose === agent) ws.send(event);
     },
     /** The screen comes to show this PNG, as `screen@1` sends it: its size, then the frame. */
     screenFrame(png: Buffer, width: number, height: number) {

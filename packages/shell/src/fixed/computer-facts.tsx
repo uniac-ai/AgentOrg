@@ -8,21 +8,15 @@ import type { z } from "zod";
 import { api, useConnection } from "../data.ts";
 import { type OpenSurface, targetOf, windowsOf } from "./computer.tsx";
 import { Load } from "./computer-load.tsx";
-import { type AgentDetail, REFRESH_MS } from "./data.ts";
-import { type LiveTarget, useLive } from "./live-socket.ts";
+import type { AgentDetail } from "./data.ts";
+import type { LiveTarget } from "./live-socket.ts";
+import { PRESENCE, usePresence } from "./presence.tsx";
 
 type Row = z.output<typeof FactRow>;
 type Held = NonNullable<AgentDetail["capabilities"]>[number];
 
 /** The column's views of these kinds, in the order their capabilities give them. */
 const KINDS = ["facts", "meters", "presence"];
-/** The protocol a computer says who is acting on it in: the whole list, each time it changes. */
-const PRESENCE = "presence@1";
-interface Acting {
-  who: "person" | "agent";
-  name?: string;
-  capability: string;
-}
 
 export const columnOf = (detail: AgentDetail | undefined) =>
   (detail?.capabilities ?? []).flatMap((held) =>
@@ -101,7 +95,7 @@ function Fact({ row }: { row: Row }) {
  * Who acted on each window of the computer in the last few seconds, as its presence surface says:
  * the agent first, other agents, then you. One row for each window with someone, in the dock's
  * order; none, and it says so. Before the surface first says, or while it can't be watched,
- * nothing is shown.
+ * nothing is shown. It is the computer's one reading, which its frames' heads read too.
  */
 function InUse({
   agent,
@@ -112,25 +106,8 @@ function InUse({
   target: LiveTarget;
   windows: ReturnType<typeof windowsOf>;
 }) {
-  const [acting, setActing] = useState<Acting[]>();
-  const live = useLive(
-    target,
-    (data) => {
-      if (typeof data !== "string") return;
-      const frame = JSON.parse(data) as { type?: string; acting?: Acting[] };
-      if (frame.type === "presence" && Array.isArray(frame.acting)) setActing(frame.acting);
-    },
-    () => setActing(undefined),
-  );
-  // A socket that closed is opened again, as often as what has no event is read again.
-  const closed = live.state.phase === "closed";
-  // biome-ignore lint/correctness/useExhaustiveDependencies: `again` is this socket's own.
-  useEffect(() => {
-    if (!closed) return;
-    const timer = setTimeout(live.again, REFRESH_MS);
-    return () => clearTimeout(timer);
-  }, [closed]);
-  if (live.state.phase !== "open" || !acting) return null;
+  const acting = usePresence(target);
+  if (!acting) return null;
   const rows = windows.flatMap((window) => {
     const here = acting.filter((one) => one.capability === window.kind);
     const agents = [
