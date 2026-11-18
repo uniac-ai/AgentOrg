@@ -85,8 +85,10 @@ export function Setup({
   );
 }
 
-/** What it's made of, read again while the sheet is open and after each change. */
-/** What it is made of. `onLeave` puts the setup away for Settings, where what isn't made yet is. */
+/**
+ * What it's made of, read again while the sheet is open and after each change. `onLeave` puts the
+ * setup away for Settings, where what isn't made yet is.
+ */
 function Made({ agent: entry, onLeave }: { agent: AgentEntry; onLeave(): void }) {
   const id = entry.agent;
   const tick = useEvery(REFRESH_MS);

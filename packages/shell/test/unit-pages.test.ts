@@ -51,6 +51,8 @@ test(
     await panel(page).waitFor({ state: "detached" });
 
     await assistant.getByRole("button", { name: "New template from Assistant" }).click();
+    // Once its stack is drawn.
+    await panel(page).getByRole("region", { name: "Base", exact: true }).waitFor();
     assert.equal(await panel(page).getByLabel("Name").inputValue(), "Assistant copy");
     await panel(page).getByRole("button", { name: "Save template" }).click();
     await list.getByRole("listitem").filter({ hasText: "Assistant copy" }).waitFor();

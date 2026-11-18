@@ -7,6 +7,7 @@
   --muted: rgb(161 161 161);
   --faint: rgb(115 115 115);
   --line: rgb(255 255 255 / 0.08);
+  --line-strong: rgb(255 255 255 / 0.14);
   --hover: rgb(255 255 255 / 0.05);
   --selected: rgb(255 255 255 / 0.08);
   --accent: rgb(250 250 250);
@@ -15,6 +16,9 @@
   --bad: rgb(248 113 113);
   --warn: rgb(251 191 36);
   --ring: rgb(150 150 150);
+  /* The creation window, and the card in it. */
+  --create: rgb(38 38 38);
+  --create-card: rgb(46 46 46);
   --radius: 16px;
   --font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   color-scheme: dark;
@@ -30,11 +34,14 @@
   --muted: rgb(110 110 110);
   --faint: rgb(160 160 160);
   --line: rgb(0 0 0 / 0.07);
+  --line-strong: rgb(0 0 0 / 0.14);
   --hover: rgb(0 0 0 / 0.04);
   --selected: rgb(0 0 0 / 0.06);
   --accent: rgb(24 24 24);
   --accent-fg: rgb(250 250 250);
   --ring: rgb(160 160 160);
+  --create: rgb(255 255 255);
+  --create-card: rgb(246 246 246);
   color-scheme: light;
 }
 * {

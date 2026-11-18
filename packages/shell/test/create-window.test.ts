@@ -16,6 +16,7 @@ import {
   withBrowser,
   withGateway,
 } from "./build-kit.ts";
+import { sampleBuild } from "./design/samples.ts";
 
 withBrowser();
 
@@ -39,8 +40,14 @@ const opened = (page: Page) =>
     ).then(() => undefined),
   );
 
+/** The options' sections, by their headings' words. */
+const sections = (page: Page) =>
+  panel(page).locator('form[aria-label="Build"] section h3').allInnerTexts();
+/** The identity card, at the window's left. */
+const identity = (page: Page) => panel(page).getByRole("complementary", { name: /as it will be$/ });
+
 test(
-  "Create is one window, open on an empty stack: what to start from on the left, the stack beside it, clean each time",
+  "Create is one window, open on an empty stack: the card at the left, the options beside it with what to start from at their top, clean each time",
   withGateway(async (gateway) => {
     const page = await open(gateway);
     await agentsRead(page);
@@ -52,15 +59,21 @@ test(
     assert.equal(await name.inputValue(), "");
     await window_.evaluate((e) => Promise.all(e.getAnimations().map((moving) => moving.finished)));
     const box = await boxOf(window_);
-    assert.deepEqual([box.width, box.height], [840, 700]);
-    const from = await boxOf(window_.getByRole("navigation", { name: "Start from" }));
-    assert.deepEqual([from.x - box.x, from.y - box.y, from.width, from.height], [0, 0, 250, 700]);
-    assert.ok((await boxOf(name)).x > from.x + from.width, "the stack is on its right");
-    assert.equal(
-      await window_.getByRole("list", { name: "Units" }).getByRole("listitem").count(),
-      1,
-      "an empty stack is its base alone",
+    assert.deepEqual([box.width, box.height], [920, 680]);
+    const card_ = await boxOf(identity(page));
+    assert.deepEqual(
+      [card_.x - box.x, card_.y - box.y, card_.width, card_.height],
+      [0, 0, 300, 680],
     );
+    const nameBox = await boxOf(name);
+    assert.ok(
+      nameBox.x > card_.x && nameBox.x + nameBox.width < card_.x + card_.width,
+      "on the card",
+    );
+    const from = await boxOf(window_.getByRole("list", { name: "Start from" }));
+    assert.ok(from.x >= card_.x + card_.width, "what to start from is beside the card");
+    await card(page, "Base").waitFor();
+    assert.deepEqual(await sections(page), ["Base", "Add"], "an empty stack is its base alone");
 
     await name.fill("Foreman");
     await window_.getByLabel("What it's for").fill("Keeps things current");
@@ -124,7 +137,8 @@ test(
     await plus(page).click();
     const name = panel(page).locator("#build-name");
     await name.waitFor();
-    assert.equal((await name.getAttribute("placeholder")) ?? "", "");
+    // Not a name: what the field is, greyed.
+    assert.equal(await name.getAttribute("placeholder"), "Name");
     assert.equal(await named(page, "Create").isDisabled(), true);
     release();
     await agentsRead(page);
@@ -169,7 +183,7 @@ test(
       .click();
     await settingsWindow(page).getByRole("button", { name: "New template", exact: true }).click();
     await name.waitFor();
-    assert.equal(await name.getAttribute("placeholder"), null);
+    assert.equal(await name.getAttribute("placeholder"), "Name", "what the field is, greyed");
     assert.equal(await named(page, "Save template").isDisabled(), true);
     await page.close();
   }),
@@ -191,8 +205,7 @@ test(
     const create = named(page, "Create");
     const options = window_.getByRole("button", { name: "Build options" });
     const before = [await boxOf(create), await boxOf(options)];
-    const units = window_.getByRole("list", { name: "Units" });
-    const scrolled = await units.evaluate((el) => {
+    const scrolled = await card(page, "Base").evaluate((el) => {
       const scroller = el.parentElement as HTMLElement;
       scroller.scrollTop = 500;
       return scroller.scrollTop;
@@ -200,7 +213,7 @@ test(
     assert.ok(scrolled > 0, "it scrolls");
     assert.deepEqual([await boxOf(create), await boxOf(options)], before);
     const box = await boxOf(window_);
-    assert.deepEqual([box.width, box.height], [840, 700], "and the window is as it was");
+    assert.deepEqual([box.width, box.height], [920, 680], "and the window is as it was");
     await page.close();
   }),
 );
@@ -419,7 +432,7 @@ test(
   }),
 );
 test(
-  "a unit's card starts open whoever brought it, folds to its head alone, and opens again on asking",
+  "a unit's section starts open whoever brought it, folds to its heading alone, and opens again on asking",
   withGateway(async (gateway) => {
     const page = await open(gateway);
     await fromTemplate(page, "Assistant");
@@ -429,7 +442,11 @@ test(
     assert.equal(await fold.getAttribute("aria-expanded"), "true");
     await fold.click();
     assert.equal(await web.getByRole("combobox").count(), 0);
-    assert.equal((await boxOf(web)).height, 40, "its head alone");
+    assert.equal(
+      await web.evaluate((e) => e.children[1]?.childElementCount),
+      0,
+      "its heading alone",
+    );
     assert.equal((await web.innerText()).trim(), "Web", "with nothing said beside its name");
     await web.getByRole("button", { name: "Open Web" }).click();
     await web.getByRole("combobox", { name: "Search service" }).waitFor();
@@ -586,14 +603,8 @@ test(
   }),
 );
 
-/** Assistant, picked on a phone, where what to start from runs across the top. */
-const fromAssistantOnPhone = async (page: Page) => {
-  await named(page, /^Assistant/).click();
-  await card(page, "Computer").waitFor();
-};
-
 test(
-  "on a phone what to start from runs across the top by name, the stack fills the rest, and the window's menu is at its foot",
+  "on a phone the card is on top, compact, the options under it, and the window's menu at its foot with the close at the corner",
   withGateway(async (gateway) => {
     const page = await browser().newPage({ viewport: { width: 390, height: 844 } });
     page.setDefaultTimeout(8000);
@@ -601,34 +612,44 @@ test(
     await page.goto(`${gateway.url}/#/team`);
     await page.getByRole("main").getByRole("button", { name: "Create", exact: true }).click();
     const window_ = panel(page);
-    await window_.locator("#build-name").waitFor();
+    await card(page, "Base").waitFor();
     await window_.evaluate((e) => Promise.all(e.getAnimations().map((moving) => moving.finished)));
     const box = await boxOf(window_);
-    assert.deepEqual([box.x, box.width, box.height], [16, 358, 700]);
-    const from = await boxOf(window_.getByRole("navigation", { name: "Start from" }));
-    assert.deepEqual([from.x, from.y - box.y, from.width, from.height], [16, 0, 358, 68]);
-    const [empty, assistant] = [
-      await boxOf(named(page, "Empty")),
-      await boxOf(named(page, /^Assistant/)),
-    ];
-    assert.equal(empty.y, assistant.y, "one row");
-    assert.ok(assistant.x >= empty.x + empty.width);
-    assert.equal(
-      (await named(page, /^Assistant/).innerText()).trim(),
-      "Assistant",
-      "by name alone",
+    assert.deepEqual([box.x, box.width, box.height], [16, 358, 680]);
+    // The card, compact: a small face beside the name and the line.
+    const top = await boxOf(identity(page));
+    assert.deepEqual([top.x - box.x, top.y - box.y, top.width], [0, 0, 358]);
+    const face = await boxOf(
+      identity(page).locator('[aria-hidden="true"]').filter({ visible: true }).first(),
     );
-    // Where the window's head isn't drawn, its menu is at the foot, left of Create.
+    assert.deepEqual([face.width, face.height], [44, 44]);
+    const name = await boxOf(window_.locator("#build-name"));
+    assert.ok(name.x >= face.x + face.width, "the name beside the face");
+    await named(page, /^Assistant/).click();
+    await card(page, "Computer").waitFor();
+    // What it can do, as small chips in a row.
+    const chips = identity(page)
+      .getByRole("list", { name: "What it can do" })
+      .getByRole("listitem");
+    const [first, second] = [await boxOf(chips.nth(0)), await boxOf(chips.nth(1))];
+    assert.equal(first.y, second.y, "in a row");
+    assert.equal(first.height, 28);
+    // The options under the card.
+    const from = await boxOf(window_.getByRole("list", { name: "Start from" }));
+    assert.ok(from.y >= top.y + top.height, "what to start from under the card");
+    // Where the window's head isn't drawn, its menu is at the foot, left of Create; the close is
+    // at the corner.
     const options = window_.locator("footer").getByRole("button", { name: "Build options" });
-    await fromAssistantOnPhone(page);
     const [menu, create] = [await boxOf(options), await boxOf(named(page, "Create"))];
     assert.equal(menu.y + menu.height / 2, create.y + create.height / 2, "on Create's row");
     assert.ok(menu.x < create.x && menu.x - box.x < 40, "at the foot's left");
+    const close = await boxOf(
+      window_.getByRole("button", { name: "Close" }).filter({ visible: true }),
+    );
+    assert.deepEqual([box.x + box.width - (close.x + close.width), close.y - box.y], [8, 8]);
     await options.click();
     await page.getByRole("menuitem", { name: "Save as template…" }).waitFor();
     await page.keyboard.press("Escape");
-    const form = await boxOf(window_.getByRole("form", { name: "Build" }));
-    assert.deepEqual([form.x, form.y, form.width, form.height], [16, box.y + 68, 358, 632]);
     await page.close();
   }),
 );
@@ -664,5 +685,197 @@ test(
     await card(page, "Computer").waitFor({ state: "detached" });
     assert.deepEqual(await offered(), all);
     await page.close();
+  }),
+);
+
+/** Opens Create from Team, at rest once its stack is drawn and it has opened. */
+async function openCreate(page: Page) {
+  await agentsRead(page);
+  await plus(page).click();
+  await card(page, "Base").waitFor();
+  await opened(page);
+  return panel(page);
+}
+/** A part's middle, from the top. */
+const middle = async (part: Locator) => {
+  const box = await boxOf(part);
+  return Math.round((box.y + box.height / 2) * 10) / 10;
+};
+
+test(
+  "the window is Create New Agent, its title, menu and close on one line; it is rgb(38, 38, 38), or white in the light theme, its card a little lighter",
+  withGateway(async (gateway) => {
+    const page = await open(gateway);
+    const window_ = await openCreate(page);
+    const line = await middle(window_.getByRole("heading", { name: "Create New Agent" }));
+    assert.equal(await middle(window_.getByRole("button", { name: "Build options" })), line);
+    assert.equal(
+      await middle(window_.getByRole("button", { name: "Close" }).filter({ visible: true })),
+      line,
+    );
+    const colours = async () => [
+      await window_.evaluate((e) => getComputedStyle(e).backgroundColor),
+      await identity(page)
+        .locator(":scope > div")
+        .evaluate((e) => getComputedStyle(e).backgroundColor),
+    ];
+    assert.deepEqual(await colours(), ["rgb(38, 38, 38)", "rgb(46, 46, 46)"]);
+    await page.evaluate(() => {
+      document.documentElement.dataset.theme = "light";
+    });
+    // Once the window's own change of colour has run.
+    await window_.evaluate((e) => Promise.all(e.getAnimations().map((moving) => moving.finished)));
+    assert.deepEqual(await colours(), ["rgb(255, 255, 255)", "rgb(246, 246, 246)"]);
+    await page.close();
+  }),
+);
+
+test(
+  "the card shows the face, the name offered and what the base or the template is; what is typed on it is its name, the face's letters and its line; the keyboard starts in the name",
+  withGateway(async (gateway) => {
+    const page = await open(gateway);
+    const window_ = await openCreate(page);
+    const name = window_.locator("#build-name");
+    const line = window_.getByLabel("What it's for");
+    assert.equal(await name.evaluate((e) => e === document.activeElement), true, "the keyboard");
+    assert.equal(await name.getAttribute("placeholder"), "Scout");
+    // The face's disc, with its letters.
+    const disc = identity(page).locator('[aria-hidden="true"]').filter({ visible: true }).first();
+    assert.equal(await disc.innerText(), "S");
+    assert.equal((await boxOf(disc)).width, 96);
+    assert.equal(await line.getAttribute("placeholder"), "Chats and uses what you connect");
+    await named(page, /^Assistant/).click();
+    await card(page, "Computer").waitFor();
+    assert.equal(await line.getAttribute("placeholder"), "Does what you ask on a computer");
+    const colour = () => disc.evaluate((e) => getComputedStyle(e).backgroundImage);
+    const was = await colour();
+    await name.fill("Foreman");
+    assert.equal(await disc.innerText(), "F");
+    assert.equal(await colour(), was, "its colour stays");
+    await window_.getByRole("complementary", { name: "Foreman, as it will be" }).waitFor();
+    await line.fill("Keeps dependencies current");
+    assert.equal(await line.inputValue(), "Keeps dependencies current");
+    // Typed in place: no box around either.
+    for (const field of [name, line])
+      assert.deepEqual(
+        await field.evaluate((e) => [
+          getComputedStyle(e).borderTopWidth,
+          getComputedStyle(e).backgroundColor,
+        ]),
+        ["0px", "rgba(0, 0, 0, 0)"],
+      );
+    await page.close();
+  }),
+);
+
+test(
+  "the card has a row for each unit chosen, its logo and its title, following the options; with no units it has none and says nothing in their place",
+  withGateway(async (gateway) => {
+    const page = await open(gateway);
+    const window_ = await openCreate(page);
+    const can = identity(page).getByRole("list", { name: "What it can do" });
+    const rows = () => can.getByRole("listitem").allInnerTexts();
+    assert.deepEqual(await rows(), []);
+    assert.equal(await can.isVisible(), false, "nothing in their place");
+    await named(page, /^Assistant/).click();
+    await card(page, "Web").waitFor();
+    assert.deepEqual(await rows(), ["Computer", "Web"]);
+    assert.equal(
+      await can.getByRole("listitem").first().locator("svg").filter({ visible: true }).count(),
+      1,
+      "its logo",
+    );
+    await window_.getByRole("button", { name: "Add a unit" }).click();
+    await page.getByRole("menuitem", { name: /^Agent control/ }).click();
+    assert.deepEqual(await rows(), ["Computer", "Web", "Agent control"]);
+    await card(page, "Web").getByRole("button", { name: "Remove Web" }).click();
+    assert.deepEqual(await rows(), ["Computer", "Agent control"]);
+    await page.close();
+  }),
+);
+
+test(
+  "what to start from is a row of small cards that scrolls sideways when longer than the window; choosing one marks it and fills the options",
+  withGateway(async (gateway) => {
+    // The design's sample, with more templates than the row has room for.
+    sampleBuild(gateway);
+    const page = await open(gateway);
+    const window_ = await openCreate(page);
+    const row = window_.getByRole("list", { name: "Start from" });
+    const tiles = row.getByRole("button");
+    const [first, second] = [await boxOf(tiles.nth(0)), await boxOf(tiles.nth(1))];
+    assert.deepEqual([first.width, first.height], [184, 60]);
+    assert.equal(first.y, second.y, "one row");
+    assert.equal(second.x, first.x + first.width + 8);
+    assert.equal(await chosen(page, "Empty"), "true");
+    const scrolled = await row.evaluate((e) => {
+      e.scrollLeft = 100;
+      return [e.scrollWidth > e.clientWidth, e.scrollLeft, getComputedStyle(e).scrollbarWidth];
+    });
+    assert.deepEqual(scrolled, [true, 100, "none"], "it scrolls sideways, with no bar");
+    await named(page, /^Assistant/).click();
+    await card(page, "Computer").waitFor();
+    assert.equal(await chosen(page, /^Assistant/), "true");
+    assert.equal(await chosen(page, "Empty"), null);
+    assert.deepEqual(await sections(page), ["Base", "Computer", "Web", "Add"]);
+    await page.close();
+  }),
+);
+
+test(
+  "each section has its heading, a logo and a title; a unit's has its fold and its remove there",
+  withGateway(async (gateway) => {
+    const page = await open(gateway);
+    await fromTemplate(page, "Assistant");
+    await opened(page);
+    for (const name of ["Base", "Computer", "Web", "Add"]) {
+      const heading = card(page, name).locator("[data-heading]");
+      assert.equal((await boxOf(heading)).height, 40, name);
+      assert.equal(await heading.locator("svg").first().isVisible(), true, `${name}'s logo`);
+      assert.equal(await heading.getByRole("heading", { name, exact: true }).count(), 1);
+    }
+    const computer = card(page, "Computer").locator("[data-heading]");
+    await computer.getByRole("button", { name: "Fold Computer" }).waitFor();
+    await computer.getByRole("button", { name: "Remove Computer" }).waitFor();
+    // Its questions are what they were.
+    await card(page, "Computer").getByRole("combobox", { name: "Where it resides" }).waitFor();
+    await page.close();
+  }),
+);
+
+test(
+  "it opens and closes in the page's window times, growing a little; with reduced motion it only fades",
+  withGateway(async (gateway) => {
+    const motion = (part: Locator, phase: "enter" | "exit") =>
+      part.evaluate((e, which) => {
+        const style = getComputedStyle(e);
+        const scale = style.getPropertyValue(`--tw-${which}-scale`).replace(/\s/g, "");
+        const percent = /^calc\((\d+)\*1%\)$/.exec(scale)?.[1];
+        return [
+          style.animationName,
+          style.animationDuration,
+          percent ? Number(percent) / 100 : Number(scale),
+        ];
+      }, phase);
+    const page = await open(gateway);
+    await agentsRead(page);
+    await plus(page).click();
+    assert.deepEqual(await motion(panel(page), "enter"), ["enter", "0.22s", 0.96]);
+    await opened(page);
+    await page.keyboard.press("Escape");
+    const closing = page.locator('[data-slot="dialog-content"][data-state="closed"]');
+    assert.deepEqual(await motion(closing, "exit"), ["exit", "0.16s", 0.96]);
+    await page.close();
+
+    const reduced = await browser().newPage({
+      viewport: { width: 1440, height: 900 },
+      reducedMotion: "reduce",
+    });
+    await reduced.addInitScript((s) => localStorage.setItem("agentorg.session", s), SESSION);
+    await reduced.goto(`${gateway.url}/#/team`);
+    await agentsRead(reduced);
+    await plus(reduced).click();
+    assert.deepEqual(await motion(panel(reduced), "enter"), ["enter", "0.22s", 1]);
+    await reduced.close();
   }),
 );

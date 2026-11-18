@@ -181,11 +181,8 @@ test(
     await control.getByText("Needs a computer above it").waitFor();
     await control.getByRole("button", { name: "Add it" }).click();
     assert.deepEqual(
-      await panel(page)
-        .getByRole("list", { name: "Units" })
-        .getByRole("listitem")
-        .evaluateAll((items) => items.map((i) => i.getAttribute("aria-label"))),
-      ["Base", "Computer", "Agent control"],
+      await panel(page).locator('form[aria-label="Build"] section h3').allInnerTexts(),
+      ["Base", "Computer", "Agent control", "Add"],
     );
     assert.equal(await control.getByText("Needs a computer above it").count(), 0);
     const limit = control.getByLabel("Agents alive");

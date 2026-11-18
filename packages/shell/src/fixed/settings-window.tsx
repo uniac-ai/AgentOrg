@@ -69,7 +69,7 @@ export function SettingsWindow() {
           event.preventDefault();
           opener.current?.focus();
         }}
-        className={`window flex h-[min(600px,calc(100%-2rem))] gap-0 overflow-hidden rounded-3xl bg-background p-0 ring-0 sm:max-w-[860px] max-sm:top-0 max-sm:left-0 max-sm:h-full max-sm:max-w-none max-sm:translate-x-0 max-sm:translate-y-0 max-sm:rounded-none`}
+        className="window flex h-[min(600px,calc(100%-2rem))] gap-0 overflow-hidden rounded-3xl bg-background p-0 ring-0 sm:max-w-[860px] max-sm:top-0 max-sm:left-0 max-sm:h-full max-sm:max-w-none max-sm:translate-x-0 max-sm:translate-y-0 max-sm:rounded-none"
       >
         <DialogDescription className="sr-only">AgentOrg's settings, by section</DialogDescription>
         <nav
