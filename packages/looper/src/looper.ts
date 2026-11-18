@@ -44,6 +44,7 @@ import type { FilesOf } from "./compaction.js";
 import { createLoop, type Place } from "./loop.js";
 import { createMain, type Listed, stopWord, TOLD, titled } from "./main.js";
 import { createRecord, createThread, messageOf, READS, type Thread, userEntry } from "./record.js";
+import type { Part } from "./told.js";
 import {
   type Call,
   codeOf,
@@ -148,13 +149,14 @@ export function createLooper(options: {
   store: Store;
   model: Model;
   /**
-   * Read for each model request, since any of it may change between two: what the model is told,
-   * what it can call, and which model to ask, none meaning the model's own default. `voice` is
+   * Read for each piece of work's turn and each request of the main loop, since any of it may
+   * change between two: what the model is told, as words or as parts in order (see `told.ts`), what
+   * it can call, and which model to ask, none meaning the model's own default. `voice` is
    * who the main loop speaks as when it answers a message itself: what the host's own model is
    * told of itself, with nothing of what it can call.
    */
   request(): Promise<{
-    instructions: string;
+    instructions: string | readonly Part[];
     tools: Tool[];
     model?: string | undefined;
     voice?: string | undefined;

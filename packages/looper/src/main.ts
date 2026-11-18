@@ -9,6 +9,7 @@
  * those before it but what it is given.
  */
 import { PICTURES_BUDGET, withPictures } from "./record.js";
+import { build } from "./told.js";
 import {
   head,
   type Item,
@@ -207,6 +208,21 @@ export function createMain(options: {
     options.retried();
   };
 
+  /** What the main loop is told when it may answer: its words, then who it speaks as, if anyone. */
+  const spokenAs = (instructions: string, voice: string | undefined) => {
+    if (!voice) return instructions;
+    const told = build([
+      { owner: "looper", text: instructions },
+      { owner: "looper", text: VOICE },
+      { owner: "host", text: voice, max: TOLD.voice },
+    ]);
+    for (const part of told.cut)
+      options.log.warn(
+        `What ${part.owner} tells the model was cut from ${part.was} to ${part.kept} characters.`,
+      );
+    return told.text;
+  };
+
   /**
    * Make one request of the model: what it wrote, and what it called `route` with. `voiced` is
    * whether it is told who it speaks as. None for a request that is dropped, which the model is
@@ -235,10 +251,7 @@ export function createMain(options: {
       const asked = options.model.respond({
         requestId: mine.requestId,
         ...(model ? { model } : {}),
-        instructions:
-          voiced && voice
-            ? `${instructions}\n\n${VOICE}\n\n${head(voice, TOLD.voice)}`
-            : instructions,
+        instructions: voiced ? spokenAs(instructions, voice) : instructions,
         input,
         tools: [ROUTE],
       });
