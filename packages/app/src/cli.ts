@@ -19,6 +19,10 @@ const USAGE = `Usage: agentorg [command] [--home DIR]
                                             login, and again whenever it ends
   stop                                      stop the service, until agentorg start
   status                                    whether it runs, where, and as a service
+  update                                    update AgentOrg and its Mac app, as the one line
+                                            installed them on a Mac
+  uninstall [--delete-home]                 remove the service and what the line installed;
+                                            the home stays unless --delete-home
   hub [--port N]                            run a bare Hub, without the shell
   actors | bindings | exports | audit       each one's list
   bind <consumer.slot> <provider.export>    hub.grants.bind
@@ -44,6 +48,7 @@ const { values, positionals } = parseArgs({
     port: { type: "string" },
     frontend: { type: "string" },
     "no-open": { type: "boolean" },
+    "delete-home": { type: "boolean" },
     help: { type: "boolean", short: "h" },
     version: { type: "boolean" },
   },
@@ -54,9 +59,9 @@ const [command, ...rest] = positionals as string[];
 // `hub` is the SDK's, which reads its options itself, strictly. Everything else is
 // this command's: an option it doesn't know is a mistake, never a reason to start the app.
 if (command !== "hub") {
-  const unknown = Object.keys(values).find(
-    (name) => !["home", "port", "frontend", "no-open", "help", "version"].includes(name),
-  );
+  const known = ["home", "port", "frontend", "no-open", "help", "version"];
+  if (command === "uninstall") known.push("delete-home");
+  const unknown = Object.keys(values).find((name) => !known.includes(name));
   if (unknown !== undefined)
     usage(
       `Unknown option ${unknown.length === 1 ? "-" : "--"}${unknown}. An argument that starts with - goes after --.`,
@@ -161,7 +166,8 @@ async function signInAddress(app: { url: string; token: string }): Promise<strin
     method: "POST",
     headers: { Authorization: `Bearer ${app.token}` },
   });
-  if (!response.ok) throw new Error(`The app refused (${response.status}).`);
+  if (!response.ok)
+    throw new Error(`AgentOrg at ${app.url} refused to sign a browser in (${response.status}).`);
   const { code } = (await response.json()) as { code: string };
   return `${app.url}/signin#${code}`;
 }
@@ -296,7 +302,7 @@ function nodeByName(): string {
 }
 
 /** The service commands' view of this machine: the real `launchctl`, on this account. */
-async function serviceCommand(name: "start" | "stop" | "status") {
+async function serviceCommand(name: "start" | "stop" | "status" | "update" | "uninstall") {
   const service = await import("./service.js");
   const system: import("./service.js").ServiceSystem = {
     platform: process.platform,
@@ -317,7 +323,16 @@ async function serviceCommand(name: "start" | "stop" | "status") {
     sleep: (ms) => new Promise((done) => setTimeout(done, ms)),
   };
   try {
-    if (name === "status") {
+    if (name === "update" || name === "uninstall") {
+      const installed = await import("./installed.js");
+      if (name === "uninstall")
+        for (const line of await installed.uninstall(system, home, {
+          deleteHome: values["delete-home"] === true,
+        }))
+          write(process.stdout, line);
+      else if (process.platform !== "darwin") throw new service.ServiceError(installed.ELSEWHERE);
+      else process.exitCode = await installed.update(installed.INSTALL_SCRIPT, home);
+    } else if (name === "status") {
       const { lines, running: answers } = await service.status(system, home);
       for (const line of lines) write(process.stdout, line);
       process.exitCode = answers ? 0 : 3;
@@ -362,18 +377,28 @@ async function serviceCommand(name: "start" | "stop" | "status") {
 }
 
 if (command === undefined) await runApp();
-else if (command === "start" || command === "stop" || command === "status") {
+else if (["start", "stop", "status", "update", "uninstall"].includes(command)) {
   if (rest.length > 0) usage(`agentorg ${command} takes no arguments.`);
   if (values.port !== undefined || values.frontend !== undefined)
     usage(`agentorg ${command} takes no --port or --frontend.`);
-  await serviceCommand(command);
+  await serviceCommand(command as "start" | "stop" | "status" | "update" | "uninstall");
 } else if (command === "open") {
   const app = running();
   if (!app || !(await answers(app.url))) {
-    write(process.stderr, `AgentOrg isn't running in ${home}. Run agentorg first.`);
+    write(
+      process.stderr,
+      `AgentOrg isn't running in ${home}. Run ${process.platform === "darwin" ? "agentorg start" : "agentorg"} first.`,
+    );
     process.exit(1);
   }
-  if (!(await signBrowserIn(app))) {
+  let opened: boolean;
+  try {
+    opened = await signBrowserIn(app);
+  } catch (error) {
+    write(process.stderr, error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
+  if (!opened) {
     write(process.stderr, "No browser could be opened here.");
     process.exit(1);
   }

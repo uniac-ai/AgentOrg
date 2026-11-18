@@ -1528,7 +1528,7 @@ test("AgentOrg Mac's service older than this build takes is said to be, with how
   app.info.version = "0.0.28";
   assert.equal(
     await why(),
-    "The AgentOrg app on this Mac is older than this AgentOrg. Update it, and open it again.",
+    "The AgentOrg app on this Mac is older than this AgentOrg. Run agentorg update, which updates both.",
   );
 });
 
