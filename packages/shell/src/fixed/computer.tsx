@@ -143,6 +143,7 @@ export function Computer({
   down,
   mend,
   overlay = false,
+  beside = false,
 }: {
   agent: { id: string; name: string; tone: Tone };
   surfaces: readonly OpenSurface[];
@@ -153,6 +154,8 @@ export function Computer({
   /** Down, the ways to mend it its provider offers, under what to call it. */
   mend?: { heading: string; ways: { title: string; take(): void }[] } | undefined;
   overlay?: boolean;
+  /** The overlay's frame drawn by a page beside what it shows, rather than over the page. */
+  beside?: boolean;
 }) {
   const { picked, pick, close, draw, erase } = useComputers();
   // A Start pressed here and refused says why at this window's foot, until it is pressed again or
@@ -189,7 +192,7 @@ export function Computer({
   return (
     <section
       aria-label={`${agent.name}'s computer`}
-      className={`relative flex min-h-0 min-w-0 flex-col overflow-hidden bg-[var(--canvas)] ${overlay ? "h-full w-full rounded-3xl shadow-2xl phone:rounded-none" : "h-[620px] rounded-2xl tight:h-[560px]"}`}
+      className={`relative flex min-h-0 min-w-0 flex-col overflow-hidden bg-[var(--canvas)] ${beside ? "h-full w-full rounded-2xl" : overlay ? "h-full w-full rounded-3xl shadow-2xl phone:rounded-none" : "h-[620px] rounded-2xl tight:h-[560px]"}`}
       style={{
         backgroundImage: `linear-gradient(155deg, ${tintOf(agent.id).soft}, transparent 62%)`,
       }}

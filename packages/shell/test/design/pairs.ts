@@ -13,6 +13,7 @@ import {
   type ChatCase,
   CREATES,
   closeEveryTab,
+  computer,
   computerWith,
   cpuOf,
   createState,
@@ -345,6 +346,32 @@ const SCREENS: Screen[] = [
         .getByRole("main")
         .getByRole("region", { name: "Conversation with Reviewer" })
         .waitFor();
+    },
+  },
+  // An agent's computer beside the conversation on the chat page: Release notes', which holds
+  // files only, so no page's address is in the picture.
+  {
+    name: "chat-page-computer",
+    sizes: ["wide"],
+    themes: ["dark", "light"],
+    chats: true,
+    agents: true,
+    hash: "#/chat",
+    design: async (page) => {
+      await chatIcon(page);
+      await page
+        .getByRole("list", { name: "Conversations" })
+        .getByRole("button", { name: /Release notes/ })
+        .click();
+      await page.getByRole("button", { name: "Release notes's computer" }).click();
+    },
+    built: async (page, gateway) => {
+      await asTheDesign(gateway);
+      computer(gateway, [{ surface: "files", protocol: "files@1", operate: true }], "a-release");
+      gateway.changed();
+      await chatRow(page, "Release notes").click();
+      await page.getByRole("button", { name: "Release notes's computer" }).click();
+      await page.locator('[data-beside="open"]').waitFor();
     },
   },
   {
