@@ -123,10 +123,11 @@ test(
     // It closes by its own Close only: not Escape, not a press on the page, not going elsewhere.
     await page.keyboard.press("Escape");
     await page
-      .getByRole("navigation", { name: "Main" })
-      .getByRole("button", { name: "Settings" })
+      .getByRole("main")
+      .getByRole("list", { name: "Agents" })
+      .getByRole("button", { name: /Reviewer/ })
       .click();
-    await page.getByRole("tab", { name: "Skills" }).waitFor();
+    await page.getByRole("main").getByRole("heading", { name: "Reviewer", level: 1 }).waitFor();
     await main(page).click({ position: { x: 300, y: 600 } });
     assert.deepEqual(await boxOf(panel(page)), [1000, 20, 420, 860]);
     await closeChats(page);
@@ -477,8 +478,14 @@ test(
     await openNewest(page, "Reviewer");
     await page
       .getByRole("navigation", { name: "Main" })
-      .getByRole("button", { name: "Settings" })
+      .getByRole("button", { name: "Chat" })
       .click();
+    await page.waitForURL(/#\/chat$/);
+    await page
+      .getByRole("navigation", { name: "Main" })
+      .getByRole("button", { name: "Team" })
+      .click();
+    await page.waitForURL(/#\/team$/);
     await panel(page).getByRole("textbox", { name: "Message" }).waitFor();
     gateway.agents.delete("a-reviewer");
     gateway.changed();

@@ -1,4 +1,5 @@
-// Skills, MCP connections and Settings in a real browser, over the stand-in gateway.
+// Skills, MCP connections and Settings in a real browser, over the stand-in gateway. Settings is a
+// window over the place; its old addresses open it on what they name.
 import assert from "node:assert/strict";
 import test from "node:test";
 import { type Browser, chromium, type Locator, type Page } from "@playwright/test";
@@ -18,6 +19,10 @@ async function open(gateway: Gateway, hash: string, width = 1440, height = 900):
   page.setDefaultTimeout(8000);
   await page.addInitScript((session) => localStorage.setItem("agentorg.session", session), SESSION);
   await page.goto(`${gateway.url}/${hash}`);
+  // Settings' old addresses open its window: nothing in it is measured until it has opened. One
+  // that opens a section's form opens it over the window, which is then hidden behind it.
+  if (/^#\/(settings|skills|mcps)/.test(hash) && !hash.endsWith("/add"))
+    await opened(settings(page));
   return page;
 }
 const withGateway = (run: (gateway: Gateway) => Promise<void>) => async () => {
@@ -28,8 +33,19 @@ const withGateway = (run: (gateway: Gateway) => Promise<void>) => async () => {
     await gateway.close();
   }
 };
+/** The Settings window. */
+const settings = (page: Page) => page.getByRole("dialog", { name: "Settings" });
 const row = (page: Page, name: string) =>
-  page.getByRole("main").getByRole("listitem").filter({ hasText: name });
+  settings(page).getByRole("listitem").filter({ hasText: name });
+/** One of Settings' sections, chosen by its row. */
+const choose = (page: Page, name: string) =>
+  settings(page)
+    .getByRole("navigation", { name: "Settings" })
+    .getByRole("button", { name })
+    .click();
+/** The forms a section opens over the window. */
+const addSkill = (page: Page) => page.getByRole("dialog", { name: "Add skill" });
+const connectForm = (page: Page) => page.getByRole("dialog", { name: "Connect an MCP" });
 /** A dialog has finished opening: its own animations, as it grows to its size, are over. */
 const opened = (dialog: Locator) =>
   dialog.evaluate((el) =>
@@ -41,7 +57,7 @@ const opened = (dialog: Locator) =>
     ).then(() => undefined),
   );
 const labels = (page: Page) =>
-  page.getByRole("dialog").locator('[data-slot="field-label"]').allInnerTexts();
+  connectForm(page).locator('[data-slot="field-label"]').allInnerTexts();
 
 test(
   "Skills lists what's there and what uses each, and adds one from a folder",
@@ -50,7 +66,7 @@ test(
     await row(page, "cite-sources").getByRole("button", { name: "Research" }).waitFor();
     await row(page, "weekly-numbers").getByText("Not used yet").waitFor();
     await page.getByRole("button", { name: "Add skill" }).click();
-    const dialog = page.getByRole("dialog");
+    const dialog = addSkill(page);
     gateway.refuseNext("skills.add", "invalid", "That folder has no SKILL.md.");
     await dialog.getByRole("textbox").fill("/skills/empty");
     await dialog.getByRole("button", { name: "Add" }).click();
@@ -139,7 +155,7 @@ test(
   withGateway(async (gateway) => {
     const page = await open(gateway, "#/mcps");
     await page.getByRole("button", { name: "Connect", exact: true }).click();
-    const dialog = page.getByRole("dialog");
+    const dialog = connectForm(page);
     await dialog.getByLabel("Name").waitFor();
     await opened(dialog);
     const size = await dialog.boundingBox();
@@ -176,7 +192,7 @@ test(
   "a yes-or-no field is a switch, off at first, and goes as true or false",
   withGateway(async (gateway) => {
     const page = await open(gateway, "#/mcps/add");
-    const dialog = page.getByRole("dialog");
+    const dialog = connectForm(page);
     const only = dialog.getByRole("switch", { name: "Public addresses only" });
     assert.equal(await only.getAttribute("aria-checked"), "false");
     assert.equal(await dialog.getByRole("textbox", { name: "Public addresses only" }).count(), 0);
@@ -200,7 +216,7 @@ test(
   "a field says what it does under it, as its kind's schema says",
   withGateway(async (gateway) => {
     const page = await open(gateway, "#/mcps/add");
-    const dialog = page.getByRole("dialog");
+    const dialog = connectForm(page);
     const about = dialog.getByText(
       "It reaches only https servers on the public internet, never this machine or its network, and follows no redirect.",
       { exact: true },
@@ -220,7 +236,7 @@ test(
   "a command takes its arguments one per line and its secrets by name",
   withGateway(async (gateway) => {
     const page = await open(gateway, "#/mcps/add");
-    const dialog = page.getByRole("dialog");
+    const dialog = connectForm(page);
     await dialog.getByRole("combobox", { name: "Kind" }).click();
     await page.getByRole("option", { name: /starts/ }).click();
     await dialog.getByLabel("Name").fill("Search");
@@ -249,7 +265,7 @@ test(
   withGateway(async (gateway) => {
     gateway.refuseNext("connections.create", "invalid", "url: its parameters don't fit.");
     const page = await open(gateway, "#/mcps/add");
-    const dialog = page.getByRole("dialog");
+    const dialog = connectForm(page);
     await dialog.getByLabel("Name").fill("Bad");
     await dialog.getByLabel("Address", { exact: true }).fill("nope");
     await dialog.getByRole("button", { name: "Connect" }).click();
@@ -329,7 +345,10 @@ test(
 
     await row(page, "weekly-numbers").hover();
     await page.getByRole("button", { name: "Delete weekly-numbers" }).click();
-    await page.getByRole("dialog").getByText("Nothing uses it.").waitFor();
+    await page
+      .getByRole("dialog", { name: "Delete weekly-numbers?" })
+      .getByText("Nothing uses it.")
+      .waitFor();
     await page.close();
   }),
 );
@@ -358,29 +377,29 @@ test(
   "Settings holds skills, MCP connections, providers and the account",
   withGateway(async (gateway) => {
     const page = await open(gateway, "#/");
+    await page.getByRole("button", { name: "Dismiss" }).click();
     await page
       .getByRole("navigation", { name: "Main" })
       .getByRole("button", { name: "Settings" })
       .click();
-    await page.getByRole("tab", { name: "Skills" }).waitFor();
-    await page.getByRole("button", { name: "Dismiss" }).click();
-    assert.deepEqual(await page.getByRole("tab").allInnerTexts(), [
+    const sections = settings(page).getByRole("navigation", { name: "Settings" });
+    assert.deepEqual(await sections.getByRole("button").allInnerTexts(), [
       "Templates",
       "Skills",
       "MCP connections",
       "Providers",
       "Account",
     ]);
-    await page.getByRole("tab", { name: "Skills" }).click();
+    await choose(page, "Skills");
     await row(page, "cite-sources").waitFor();
-    await page.getByRole("tab", { name: "Providers" }).click();
+    await choose(page, "Providers");
     const agents = page.getByRole("region", { name: "Agent providers" });
     await agents.getByText("AgentOrg").waitFor();
     await agents.getByText("Assistant, Code reviewer").waitFor();
     const mcp = page.getByRole("region", { name: "MCP providers" });
     await mcp.getByText("Local", { exact: true }).waitFor();
     await mcp.getByRole("button", { name: "4 connections" }).waitFor();
-    await page.getByRole("tab", { name: "Account" }).click();
+    await choose(page, "Account");
     const chatgpt = page.getByRole("region", { name: "ChatGPT" });
     await chatgpt.getByText("sam@example.com").waitFor();
     await chatgpt.getByText("Plus").waitFor();
@@ -395,17 +414,19 @@ test(
 );
 
 test(
-  "the bar doesn't move between pages, and no page overflows or shows a scrollbar",
+  "the bar doesn't move between places or when Settings opens over them, and no section overflows or shows a scrollbar",
   withGateway(async (gateway) => {
     for (const width of [1440, 390])
       for (const hash of ["#/skills", "#/mcps", "#/settings/providers", "#/settings/account"]) {
         const page = await open(gateway, hash, width);
-        await page.getByRole("main").getByText(/./).first().waitFor();
+        await settings(page).getByRole("region").locator("li, section").first().waitFor();
         await page.waitForTimeout(150);
         const bad = await page.evaluate(() => {
           const out: string[] = [];
           if (document.documentElement.scrollWidth > innerWidth) out.push("page overflows");
-          for (const el of document.querySelectorAll<HTMLElement>("main, main *"))
+          for (const el of document.querySelectorAll<HTMLElement>(
+            '[role="dialog"], [role="dialog"] *',
+          ))
             if (
               /auto|scroll/.test(getComputedStyle(el).overflowY) &&
               el.offsetWidth - el.clientWidth > 0
@@ -417,51 +438,58 @@ test(
         await page.close();
       }
     const page = await open(gateway, "#/");
-    const nav = page.getByRole("navigation", { name: "Main" });
-    const first = nav.getByRole("button").nth(0);
+    // By its markup: under the open window the bar is out of reach, but still there.
+    const place = (name: string) =>
+      page.locator(`nav[aria-label="Main"] button[aria-label^="${name}"]`);
+    const first = place("Chat");
     await first.waitFor();
     const before = await first.boundingBox();
-    for (const name of [/^Settings$/, /^Team$/, /^Chat/]) {
-      await nav.getByRole("button", { name }).click();
+    for (const name of ["Team", "Chat"]) {
+      await place(name).click();
       assert.deepEqual(await first.boundingBox(), before);
       // The bar marks where you are.
-      await nav.getByRole("button", { name }).and(page.locator('[aria-current="page"]')).waitFor();
+      await place(name).and(page.locator('[aria-current="page"]')).waitFor();
       assert.deepEqual(await first.boundingBox(), before);
     }
+    // Settings opens over the place, which the bar still marks, and the bar stays.
+    await place("Settings").click();
+    await opened(settings(page));
+    assert.deepEqual(await first.boundingBox(), before);
+    assert.equal(await place("Settings").getAttribute("aria-current"), null);
+    assert.equal(await place("Chat").getAttribute("aria-current"), "page");
     await page.close();
   }),
 );
 
 test(
-  "Settings' pages are set in the shell's own type, and connections with none to list say so in the first row's place",
+  "Settings' sections are set in the window's type, and connections with none to list say so in the first row's place",
   withGateway(async (gateway) => {
     const page = await open(gateway, "#/skills");
-    await page.getByRole("button", { name: "Dismiss" }).click();
     const title = row(page, "cite-sources").getByText("cite-sources", { exact: true });
     await title.waitFor();
     assert.deepEqual(
       await title.evaluate((e) => [getComputedStyle(e).fontSize, getComputedStyle(e).fontWeight]),
-      ["15px", "500"],
+      ["14px", "500"],
     );
-    await page.getByRole("tab", { name: "MCP connections" }).click();
+    await choose(page, "MCP connections");
     const name = row(page, "GitHub acme").getByText("GitHub acme", { exact: true });
     await name.waitFor();
-    assert.equal(await name.evaluate((e) => getComputedStyle(e).fontSize), "15px");
+    assert.equal(await name.evaluate((e) => getComputedStyle(e).fontSize), "14px");
     for (const [tab, words] of [
       ["Providers", "AgentOrg"],
       ["Account", "sam@example.com"],
     ] as const) {
-      await page.getByRole("tab", { name: tab }).click();
-      const said = page.getByRole("main").getByText(words, { exact: true });
+      await choose(page, tab);
+      const said = settings(page).getByText(words, { exact: true });
       await said.waitFor();
-      assert.equal(await said.evaluate((e) => getComputedStyle(e).fontSize), "15px", tab);
+      assert.equal(await said.evaluate((e) => getComputedStyle(e).fontSize), "14px", tab);
     }
     // With none, as when the last is removed, the list says so in its first row's place.
     for (const agent of gateway.agents.values()) agent.mcp = [];
     for (const connection of [...gateway.connections.keys()])
       gateway.connections.delete(connection);
     const before = gateway.calls.length;
-    await page.getByRole("tab", { name: "MCP connections" }).click();
+    await choose(page, "MCP connections");
     await page.getByRole("button", { name: "Connect", exact: true }).waitFor();
     for (const end = Date.now() + 8000; ; ) {
       const read = gateway.calls
@@ -472,7 +500,7 @@ test(
       await page.waitForTimeout(50);
     }
     await page.waitForTimeout(100);
-    const list = page.getByRole("main").getByRole("list");
+    const list = settings(page).getByRole("region", { name: "MCP connections" }).getByRole("list");
     await list.getByText("No connections", { exact: true }).waitFor();
     assert.equal(await list.getByRole("listitem").count(), 1);
     assert.equal((await list.innerText()).trim(), "No connections");
@@ -484,8 +512,7 @@ test(
   "Account says who is signed in to ChatGPT with the way out; signed out, it says so with the way in the banner has",
   withGateway(async (gateway) => {
     const page = await open(gateway, "#/settings/account");
-    const main = page.getByRole("main");
-    const chatgpt = main.getByRole("region", { name: "ChatGPT" });
+    const chatgpt = settings(page).getByRole("region", { name: "ChatGPT" });
     await chatgpt.getByText("sam@example.com").waitFor();
     assert.deepEqual(
       (await chatgpt.innerText()).split("\n").filter((word) => word.trim()),
@@ -514,9 +541,16 @@ test(
               "Use another account",
             ],
       );
-      // The same way in as the banner's, at the size it has here.
+      // The same way in as the banner's, under the words, as wide as they have room for: the
+      // window's section is narrow.
       const way = await chatgpt.getByRole("button").boundingBox();
-      assert.ok(way && Math.round(way.width) === 232 && Math.round(way.height) === 40);
+      const words = await chatgpt
+        .getByText("Signed out", { exact: true })
+        .locator("..")
+        .boundingBox();
+      assert.ok(way && words && Math.round(way.height) === 40);
+      assert.equal(Math.round(way.width), Math.round(words.width));
+      assert.ok(way.y >= words.y + words.height, "under the words");
     }
     // Pressed, it waits for ChatGPT's page as the banner's does, and takes this tab there.
     // ChatGPT's page is answered here: nothing leaves this computer.
@@ -533,42 +567,39 @@ test(
 );
 
 test(
-  "a section's page moves with the wheel from anywhere under the row: beside the page as well as over it",
+  "a section's contents move with the wheel from anywhere over them, under the window's top line, which stays",
   withGateway(async (gateway) => {
-    // Wide enough that there is room at each side of the page, and too short for its list.
-    const page = await open(gateway, "#/skills", 1900, 150);
-    // The plan's notice lies at the foot, where the wheel is turned below: put away first.
-    await page.getByRole("button", { name: "Dismiss" }).click();
+    // Too short for the list.
+    const page = await open(gateway, "#/skills", 1440, 160);
+    const window = settings(page);
     const first = row(page, "cite-sources");
     await first.waitFor();
+    await opened(window);
     const top = async (of: ReturnType<Page["locator"]>) => (await of.boundingBox())?.y ?? 0;
-    const area = await page.getByRole("main").boundingBox();
-    const list = await page.getByRole("main").getByRole("list").boundingBox();
-    const tabs = page.getByRole("main").getByRole("tablist");
-    assert.ok(area && list);
-    const [rowWas, tabsWas] = [await top(first), await top(tabs)];
+    const head = window.getByRole("button", { name: "Add skill" });
+    const area = await window.getByRole("region", { name: "Skills" }).boundingBox();
+    assert.ok(area);
+    const [rowWas, headWas] = [await top(first), await top(head)];
     for (const [side, x] of [
-      ["right of the page", list.x + list.width + 80],
-      ["left of the page", list.x - 80],
-      ["page", list.x + list.width / 2],
+      ["left", area.x + 10],
+      ["middle", area.x + area.width / 2],
+      ["right", area.x + area.width - 10],
     ] as const) {
-      assert.ok(x > area.x && x < area.x + area.width, `the ${side} is in the page area`);
-      await page.mouse.move(x, area.y + area.height - 40);
+      await page.mouse.move(x, area.y + area.height - 10);
       await page.mouse.wheel(0, 20);
       await page.waitForFunction(
         ([was, name]) => {
-          const rows = [...document.querySelectorAll("main li")];
+          const rows = [...document.querySelectorAll('[role="dialog"] li')];
           const one = rows.find((li) => li.textContent?.includes(name as string));
           return !!one && one.getBoundingClientRect().y < (was as number);
         },
         [rowWas, "cite-sources"] as const,
       );
-      // The row of sections stays where it is: the page under it is what moves.
-      assert.equal(await top(tabs), tabsWas);
+      assert.equal(await top(head), headWas, `the top line stays, the wheel at the ${side}`);
       await page.mouse.wheel(0, -400);
       await page.waitForFunction(
         ([was, name]) => {
-          const rows = [...document.querySelectorAll("main li")];
+          const rows = [...document.querySelectorAll('[role="dialog"] li')];
           const one = rows.find((li) => li.textContent?.includes(name as string));
           return one?.getBoundingClientRect().y === was;
         },
@@ -583,7 +614,7 @@ test(
   "a list with no rows says which nothing it is, in the first row's place: none yet, or none that can be read",
   withGateway(async (gateway) => {
     const first = (page: Page) =>
-      page.getByRole("main").locator("ul").first().getByRole("listitem").first();
+      settings(page).getByRole("region").locator("ul").first().getByRole("listitem").first();
     const lists = [
       ["#/settings/templates", "No templates", "agents.templates"],
       ["#/skills", "No skills", "skills.list"],
@@ -593,14 +624,14 @@ test(
     for (const [hash, none] of lists) {
       const page = await open(gateway, hash);
       await first(page).getByText(none, { exact: true }).waitFor();
-      assert.equal(await page.getByRole("main").getByText("Can't be read right now").count(), 0);
+      assert.equal(await settings(page).getByText("Can't be read right now").count(), 0);
       await page.close();
     }
     for (const [hash, none, call] of lists) {
       gateway.refuseEvery(call, "unavailable", "Not answering.");
       const page = await open(gateway, hash);
       await first(page).getByText("Can't be read right now", { exact: true }).waitFor();
-      assert.equal(await page.getByRole("main").getByText(none).count(), 0, "not that it has none");
+      assert.equal(await settings(page).getByText(none).count(), 0, "not that it has none");
       await page.close();
     }
   }),

@@ -48,13 +48,13 @@ export function WhereIcon({ kind }: { kind: string }) {
   );
 }
 
-/** Text that goes somewhere: plain until it's pointed at. */
-export function Jump({ to, children }: { to: Route; children: React.ReactNode }) {
+/** Text that goes somewhere, a place or a part of Settings: plain until it's pointed at. */
+export function Jump({ to, children }: { to: Route | (() => void); children: React.ReactNode }) {
   return (
     <Button
       variant="link"
       className="h-auto min-w-0 justify-start truncate border-0 p-0 text-[13px] font-normal text-inherit"
-      onClick={() => go(to)}
+      onClick={() => (typeof to === "function" ? to() : go(to))}
     >
       {children}
     </Button>

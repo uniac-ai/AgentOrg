@@ -1170,18 +1170,21 @@ export type Create = (typeof CREATES)[number][0];
 /** The create window in one of its states, reached as a person reaches it, and at rest. */
 export async function createState(page: Page, state: Create, design: boolean) {
   // The design these were drawn from has its older bar, with Create and Templates on it, behind
-  // Menu on a phone; built, Create is on Team, and Templates is Settings' first section.
+  // Menu on a phone; built, Create is on Team, and New template is in Settings, on Templates.
   const bar = async () => {
     if (design && (page.viewportSize()?.width ?? 0) < 640)
       await page.getByRole("button", { name: "Menu" }).click();
     return page.getByRole("navigation", { name: "Main" }).last();
   };
   if (state === "out" && design) await inDesign(page, /^ChatGPT:/);
-  if (state === "template") {
-    await (await bar()).getByRole("button", { name: design ? "Templates" : "Settings" }).click();
+  if (state === "template" && design) {
+    await (await bar()).getByRole("button", { name: "Templates" }).click();
     await page.getByRole("main").getByRole("button", { name: "New template", exact: true }).click();
-  } else if (design)
-    await (await bar()).getByRole("button", { name: "Create", exact: true }).click();
+  } else if (state === "template")
+    await (await openSettingsWindow(page))
+      .getByRole("button", { name: "New template", exact: true })
+      .click();
+  else if (design) await (await bar()).getByRole("button", { name: "Create", exact: true }).click();
   else {
     await (await bar()).getByRole("button", { name: "Team", exact: true }).click();
     await page.getByRole("main").getByRole("button", { name: "Create", exact: true }).click();
@@ -1225,18 +1228,35 @@ export async function createState(page: Page, state: Create, design: boolean) {
   });
 }
 
-/** The Templates page, reached from the bar as a person reaches it, with its rows read. */
-export async function openTemplates(page: Page) {
-  await (await settingsBar(page))
-    .getByRole("button", { name: /^(Templates|Settings)$/ })
-    .first()
+/**
+ * The Settings window, opened from the bar's Settings as a person opens it, at rest once it has
+ * opened.
+ */
+export async function openSettingsWindow(page: Page) {
+  await page
+    .getByRole("navigation", { name: "Main" })
+    .getByRole("button", { name: "Settings" })
     .click();
-  const main = page.getByRole("main");
-  await main.getByRole("tab", { name: "Templates", selected: true }).waitFor();
-  await main.getByText("Storefront worker").waitFor();
+  const window = page.getByRole("dialog", { name: "Settings" });
+  await window.waitFor();
+  await window.evaluate((e) => Promise.all(e.getAnimations().map((moving) => moving.finished)));
+  return window;
 }
 
-/** The sections of Settings that have a page of their own to measure, by their tab's words. */
+/** Templates, the section Settings opens on, with its rows read. */
+export async function openTemplates(page: Page) {
+  const window = await openSettingsWindow(page);
+  const templates = window.getByRole("region", { name: "Templates" });
+  // On a phone the window opens on its sections, and Templates is chosen from them.
+  if ((page.viewportSize()?.width ?? 0) < 640)
+    await window
+      .getByRole("navigation", { name: "Settings" })
+      .getByRole("button", { name: "Templates" })
+      .click();
+  await templates.getByText("Storefront worker").waitFor();
+}
+
+/** The sections of Settings that have contents of their own to measure, by their row's words. */
 export const SECTIONS = [
   ["skills", "Skills"],
   ["mcps", /^MCP/],
@@ -1245,32 +1265,23 @@ export const SECTIONS = [
 ] as const;
 export type Section = (typeof SECTIONS)[number][0];
 
-/**
- * The bar, with Settings on it: on a phone the older design's is behind Menu; the built one, and
- * the design's from its icon bar on, are along the foot.
- */
-export async function settingsBar(page: Page) {
-  const menu = page.getByRole("button", { name: "Menu" });
-  if ((page.viewportSize()?.width ?? 0) < 640 && (await menu.count())) await menu.click();
-  return page.getByRole("navigation", { name: "Main" }).last();
-}
-
-/** One of Settings' sections, reached from the bar and then its tab, with its page read. */
+/** One of Settings' sections, chosen in its window as a person chooses it, with its contents read. */
 export async function openSection(page: Page, section: Section) {
-  await (await settingsBar(page)).getByRole("button", { name: "Settings" }).click();
-  const main = page.getByRole("main");
+  const window = await openSettingsWindow(page);
   const name = SECTIONS.find(([id]) => id === section)?.[1] ?? "";
-  await main.getByRole("tab", { name }).click();
-  await main.getByRole("tab", { name, selected: true }).waitFor();
-  await main.locator("li, section").first().waitFor();
+  await window.getByRole("navigation", { name: "Settings" }).getByRole("button", { name }).click();
+  await window.getByRole("region", { name }).locator("li, section").first().waitFor();
 }
 
-/** What a section offers, opened from the end of the row: Skills' and MCP connections' dialogs. */
+/** What a section offers, opened from the window's top line: Skills' and MCP connections' dialogs. */
 export async function openOffer(page: Page, section: "skills" | "mcps") {
   await openSection(page, section);
   const [offer, title] =
     section === "skills" ? ["Add skill", "Add skill"] : ["Connect", "Connect an MCP"];
-  await page.getByRole("main").getByRole("button", { name: offer, exact: true }).click();
+  await page
+    .getByRole("dialog", { name: "Settings" })
+    .getByRole("button", { name: offer, exact: true })
+    .click();
   const dialog = page.getByRole("dialog", { name: title });
   await dialog.getByRole("textbox").first().waitFor();
   await dialog.evaluate((e) => Promise.all(e.getAnimations().map((moving) => moving.finished)));

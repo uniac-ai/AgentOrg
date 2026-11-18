@@ -4,7 +4,7 @@ import { Button } from "../ui/button.tsx";
 import { useBuilding } from "./building.tsx";
 import { DeleteButton } from "./delete-dialog.tsx";
 import { Empty, rowClass, Scroll } from "./parts.tsx";
-import { useOffer } from "./settings-page.tsx";
+import { useOffer } from "./settings-window.tsx";
 
 export function TemplatesPage() {
   const { catalog, catalogRead, removeTemplate, start } = useBuilding();

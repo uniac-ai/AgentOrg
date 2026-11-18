@@ -35,6 +35,7 @@ import {
   openOffer,
   openSampleChat,
   openSection,
+  openSettingsWindow,
   openSetup,
   openTemplates,
   openWindow,
@@ -49,7 +50,6 @@ import {
   sampleLoad,
   sampleSettings,
   sampleWork,
-  settingsBar,
   signInAccount,
   signInHash,
   signInState,
@@ -376,7 +376,7 @@ const probe = (what: Part): Parts => {
 
   if (what === "said") {
     // What a page says where it has nothing it can show: Chat's list with what is beside it, the
-    // first row of a Settings list, or an agent that isn't here.
+    // first row of a Settings list, in its window, or an agent that isn't here.
     const shell = document.querySelector("[data-shell]");
     const main = document.querySelector("main");
     if (!shell || !main) return parts;
@@ -386,7 +386,10 @@ const probe = (what: Part): Parts => {
     parts["chats.line"] = of(nothing?.parentElement);
     parts["chats.said"] = of(nothing);
     parts["chats.create"] = of(nothing?.parentElement?.querySelector("button"));
-    const first = main.querySelector("ul > li > p");
+    // A Settings list is in the Settings window: measured from the window's own top left.
+    const window = [...document.querySelectorAll('[role="dialog"]')].find(seen);
+    const first = (window ?? main).querySelector("ul > li > p");
+    if (window) origin = window.getBoundingClientRect();
     parts["list.row"] = of(first?.parentElement);
     parts["list.said"] = of(first);
     const missing = [...main.querySelectorAll("span")].find(
@@ -649,8 +652,8 @@ const probe = (what: Part): Parts => {
     controls("line", line);
     parts.line = of(line);
     parts["line.dot"] = of(line?.children[0]);
+    // Signed out, the line says why the agent can't work; the way in is the banner's.
     parts["line.words"] = of(line?.children[1]);
-    parts["line.setup"] = of(line?.querySelector("button"));
     parts["line.says"] = line?.textContent?.trim() ?? null;
     const send = document.querySelector('[role="group"][aria-label="Sign in to send"]');
     controls("send", send);
@@ -800,28 +803,40 @@ const probe = (what: Part): Parts => {
     return parts;
   }
 
+  /** The Settings window open now: its sections down the left, and the chosen one's line and room. */
+  const settingsWindow = () => {
+    const window = [...document.querySelectorAll('[role="dialog"]')].find((one) =>
+      one.querySelector('nav[aria-label="Settings"]'),
+    );
+    if (!window) throw new Error("Settings isn't open");
+    const nav = window.querySelector('nav[aria-label="Settings"]');
+    const tabs = [...(nav?.children ?? [])].filter((one) => one.tagName === "BUTTON");
+    const right = [...window.children].find((one) => one.tagName === "SECTION");
+    const head = right?.querySelector(":scope > header");
+    // What the section offers: the line's button that isn't its close or its way back.
+    const offer = [...(head?.querySelectorAll("button") ?? [])].find(
+      (one) => seen(one) && !["Close", null].includes(one.getAttribute("aria-label")),
+    );
+    const close = [...(head?.querySelectorAll('button[aria-label="Close"]') ?? [])].find(seen);
+    return { window, nav, tabs, head, offer, close, room: head?.nextElementSibling };
+  };
+
   if (what === "settings") {
-    // One of Settings' sections under the row, from the page's own top left: a list's first and
-    // last rows cell by cell, or a page's titled parts with their rows; then the dialog it
-    // opened, from the dialog's own top left.
-    const main = document.querySelector("main");
-    const list = main?.querySelector('[role="tablist"]');
-    if (!main || !list) throw new Error("Settings isn't open");
-    origin = main.getBoundingClientRect();
+    // One of Settings' sections in its window, from the window's own top left: a list's first and
+    // last rows cell by cell, or its titled parts with their rows; then a dialog it opened over
+    // the window, from that dialog's own top left.
+    const { window, tabs, offer, room } = settingsWindow();
+    origin = window.getBoundingClientRect();
     // The agents that use a provider are the sample's: they are named in a row that isn't a
     // list's, so they are left out of what is seen, and their cell is measured below.
-    const shown = [...list.children].findIndex(
-      (tab) => tab.getAttribute("aria-selected") === "true",
-    );
+    const shown = tabs.findIndex((tab) => tab.getAttribute("aria-current") === "true");
     parts["section.shown"] = shown;
     controls(
       "page",
-      main,
+      room,
       shown === 3 ? "section:first-of-type > :nth-child(2) > * > :nth-child(3)" : "",
     );
-    const offer = list.parentElement?.parentElement?.querySelector(":scope > button");
     parts.offer = of(offer);
-    const room = under(list.parentElement?.parentElement);
     // A cell with what it holds, two deep: words are as wide as they are, so a width "fills".
     // A row is measured from its own top left, however many rows the sample has above it.
     const cells = (key: string, row: Element | null | undefined) => {
@@ -863,7 +878,9 @@ const probe = (what: Part): Parts => {
       parts[`part.${n}.title`] = of(part.querySelector("h2"), "w");
       cells(`part.${n}.row`, part.children[1]?.children[0]);
     }
-    const dialog = [...document.querySelectorAll('[role="dialog"]')].find(seen);
+    const dialog = [...document.querySelectorAll('[role="dialog"]')].find(
+      (one) => seen(one) && one !== window,
+    );
     if (dialog) {
       (dialog as HTMLElement).style.animation = "none";
       origin = dialog.getBoundingClientRect();
@@ -882,30 +899,21 @@ const probe = (what: Part): Parts => {
   }
 
   if (what === "templates") {
-    // Settings' frame and the Templates under it, from the page's own top left: its sections in
-    // a row with what the section offers at their end, then each template's row.
-    const main = document.querySelector("main");
-    const list = main?.querySelector('[role="tablist"]');
-    if (!main || !list) throw new Error("Settings isn't open");
-    origin = main.getBoundingClientRect();
-    controls("page", main);
-    const row = list.parentElement?.parentElement;
-    // What the row is in, which is as wide as the page and starts where it does; and under it
-    // the page with its own space around it: what holds the page scrolls, and may be wider.
-    parts.frame = of(row?.parentElement, "h");
-    parts.row = of(row);
-    parts.sections = of(list);
-    for (const [n, tab] of [...list.children].entries()) parts[`section.${n}`] = of(tab);
-    parts["section.shown"] = [...list.children].findIndex(
-      (tab) => tab.getAttribute("aria-selected") === "true",
-    );
-    const offer = row?.querySelector(":scope > button");
+    // The Settings window as it opens, on Templates, from its own top left: its title and its
+    // sections down the left, the top line with what the section offers and the close, then
+    // each template's row.
+    const { window, nav, tabs, head, offer, close, room } = settingsWindow();
+    origin = window.getBoundingClientRect();
+    controls("window", window);
+    parts.window = of(window);
+    parts.nav = of(nav);
+    parts.title = of(nav?.querySelector("h2"), "w");
+    for (const [n, tab] of tabs.entries()) parts[`section.${n}`] = of(tab);
+    parts["section.shown"] = tabs.findIndex((tab) => tab.getAttribute("aria-current") === "true");
+    parts.head = of(head);
     parts.offer = of(offer);
     parts["offer.icon"] = of(offer?.querySelector("svg"));
-    parts["offer.words"] = of(offer?.querySelector("span"));
-    let room = under(row);
-    while (room?.children[0] && getComputedStyle(room).paddingTop === "0px")
-      room = room.children[0];
+    parts.close = of(close);
     parts.room = of(room, "h");
     const rows = [...(room?.querySelectorAll("li") ?? [])];
     parts.rows = of(room?.querySelector("ul"), "h");
@@ -1784,7 +1792,7 @@ if (wants("signin"))
               : state === "chat"
                 ? "send"
                 : state === "line"
-                  ? "line.setup"
+                  ? "line.words"
                   : "place";
           if (!measured[shown]) throw new Error(`${state} on the ${side} side has no ${shown}`);
           all[`signin.${state}.${size}.${theme}.${side}`] = measured;
@@ -1946,8 +1954,8 @@ if (wants("create"))
           await gateway?.close();
         }
 
-// Settings' frame with the Templates page: the built side is given the design's sample of what
-// an agent is built from.
+// The Settings window as it opens, on Templates: the built side is given the design's sample of
+// what an agent is built from.
 if (wants("templates"))
   for (const size of Object.keys(SIZES) as Size[])
     for (const theme of ["dark", "light"] as const)
@@ -2019,11 +2027,15 @@ if (wants("said")) {
     ...listOf((page) => openSection(page, "mcps"), "#/mcps", "connections.list", "No connections"),
     // Templates, without waiting for a template the sample would have.
     ...listOf(
-      async (page) =>
-        (await settingsBar(page))
-          .getByRole("button", { name: /^(Templates|Settings)$/ })
-          .first()
-          .click(),
+      async (page) => {
+        const window = await openSettingsWindow(page);
+        // On a phone the window opens on its sections, and Templates is chosen from them.
+        if ((page.viewportSize()?.width ?? 0) < 640)
+          await window
+            .getByRole("navigation", { name: "Settings" })
+            .getByRole("button", { name: "Templates" })
+            .click();
+      },
       "#/settings/templates",
       "agents.templates",
       "No templates",
@@ -2051,7 +2063,12 @@ if (wants("said")) {
             if (one.control) await inDesign(page, one.control);
             await one.open?.(page);
           }
-          await page.getByRole("main").getByText(one.says, { exact: true }).first().waitFor();
+          // On the page, or in the Settings window over it.
+          await page
+            .getByText(one.says, { exact: true })
+            .filter({ visible: true })
+            .first()
+            .waitFor();
           await rest(page, size);
           all[`said.${one.state}.${size}.${theme}.${side}`] = await measure(page, "said");
           await page.close();
@@ -2209,7 +2226,10 @@ if (wants("settings")) {
           : await designPage(size, theme);
         await signInState(page, "out", !gateway);
         await openSection(page, "account");
-        await page.getByRole("main").getByText("Signed out", { exact: true }).waitFor();
+        await page
+          .getByRole("dialog", { name: "Settings" })
+          .getByText("Signed out", { exact: true })
+          .waitFor();
         await rest(page, size);
         all[`settings.account.out.${size}.${theme}.${side}`] = await measure(page, "settings");
         await page.close();

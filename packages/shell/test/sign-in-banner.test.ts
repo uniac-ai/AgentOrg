@@ -46,7 +46,8 @@ test(
   withGateway(async (gateway) => {
     gateway.setAccount("signed_out");
     const page = await open(gateway);
-    for (const hash of ["#/", "#/a/a-reviewer", "#/chat", "#/team", "#/skills"]) {
+    // Every place: Settings is a window over one, not a page of its own.
+    for (const hash of ["#/", "#/a/a-reviewer", "#/chat", "#/team"]) {
       await page.evaluate((to) => {
         location.hash = to;
       }, hash);

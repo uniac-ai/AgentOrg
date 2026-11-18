@@ -643,8 +643,9 @@ test(
     // The face in a conversation's head is its agent: its details, with the chat out of the way.
     await page
       .getByRole("navigation", { name: "Main" })
-      .getByRole("button", { name: "Settings" })
+      .getByRole("button", { name: "Team" })
       .click();
+    await page.waitForURL(/#\/team$/);
     await panel(page).getByRole("button", { name: "Reviewer's details" }).click();
     await page.waitForURL(/#\/team\/a-reviewer$/);
     await panel(page).waitFor({ state: "detached" });
