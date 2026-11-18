@@ -845,6 +845,8 @@ mod tests {
             // Whatever changed the settings meanwhile, the driver started again has them as set.
             let config = places.driver_home.join(".cua-driver/config.json");
             fs::write(&config, r#"{"cursor":{"halo":true,"badges":"minimal"}}"#).unwrap();
+            // Its pid is known as it is started, before it has copied its settings.
+            until("the driver's settings read", || seen.exists());
             fs::remove_file(&seen).unwrap();
             accessibility.store(true, Ordering::Relaxed);
             regrant.store(true, Ordering::Relaxed);
@@ -956,7 +958,8 @@ mod tests {
         let pid = root.join("pid");
         program(&programs.driver, &format!("echo $$ > '{}'\nexec sleep 600", pid.display()));
         let places = places_in(&root);
-        first_picture(&programs, &places, Duration::from_millis(300));
+        // Long enough for the stand-in to say which process it is on a busy machine.
+        first_picture(&programs, &places, Duration::from_secs(3));
         until("the picture", || fs::read_to_string(&pid).is_ok_and(|said| !said.trim().is_empty()));
         let pid: i32 = fs::read_to_string(&pid).unwrap().trim().parse().unwrap();
         // Ended once the wait is over, and reaped: no process is left.
