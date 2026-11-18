@@ -246,6 +246,8 @@ async function runApp() {
       home,
       ...(port === undefined ? {} : { port: Number(port) }),
       ...(frontend === undefined ? {} : { frontend }),
+      // A home with no agents gets the Assistant once AgentOrg Mac is there.
+      firstRun: { assistant: true },
     });
   } catch (error) {
     // Another Hub already has the home, the port is taken, or the home is from a newer version.

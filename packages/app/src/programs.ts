@@ -21,9 +21,21 @@ export interface ProgramsOptions {
   fetch?: (request: Request, init: RequestInit) => Promise<Response>;
   /**
    * Where the computer connector looks for a local service and for `agentcomputer` to start one,
-   * the web unit's server, and agents' folders. For tests.
+   * the web unit's server, and agents' folders, and how long it waits between looks for a computer
+   * here. For tests.
    */
-  computer?: { dataFolder?: string; webUrl?: string; agentsFolder?: string; path?: string };
+  computer?: {
+    dataFolder?: string;
+    webUrl?: string;
+    agentsFolder?: string;
+    path?: string;
+    macRecord?: string | null;
+  };
+  /**
+   * Whether a home with no agents gets the first Assistant, once AgentOrg Mac is there. Off by
+   * default: the `agentorg` command turns it on.
+   */
+  assistant?: boolean;
 }
 
 export interface Programs {
@@ -63,6 +75,23 @@ const ASSISTANT_TEMPLATE: NonNullable<ManagerOptions["templates"]>[number] = {
     { provider: "Computers", unit: "computer", values: { access: "terminal", browser: true } },
     { provider: "Computers", unit: "web", values: { service: "exa" } },
   ],
+};
+
+/** The Assistant made at a home's first start, and what its file under `programs` keeps. */
+const FIRST_ASSISTANT = "Assistant";
+const MADE_FILE = "assistant.json";
+/** The parts of this machine the first Assistant uses, switched on in AgentOrg Mac once. */
+const FIRST_PARTS = ["terminal", "files", "screen"];
+/**
+ * What the first Assistant's AgentOrg control unit lets it do: make and manage its own agents from
+ * the Assistant template, on its own computer, with commands, and no browser of their own.
+ */
+const FIRST_CONTROL = {
+  agents: "own",
+  templates: ["assistant"],
+  places: ["own"],
+  access: "terminal",
+  browser: false,
 };
 
 /** The Hub's exports each program holds. */
@@ -190,6 +219,7 @@ export async function startPrograms(
     return actorId;
   });
 
+  let computerProvider: Awaited<ReturnType<typeof startComputerProvider>> | undefined;
   const computer = await attempt("the computer connector", async () => {
     const { actorId, credential } = await identity("computer", "Computers", [hubBinding("actors")]);
     const running = await startComputerProvider({
@@ -200,6 +230,7 @@ export async function startPrograms(
       log: programLog,
       ...options.computer,
     });
+    computerProvider = running;
     closers.unshift(() => running.close());
     return actorId;
   });
@@ -236,6 +267,92 @@ export async function startPrograms(
           call("grants", "expose", { provider, export: "provider", to: management }),
         );
 
+  /**
+   * The first Assistant, on a home with no agents: once AgentOrg Mac's service answers, its parts
+   * are switched on, once, and one agent is made with its computer, the screen when it can be
+   * had, the web, and its own agents. The file under `programs` says how far it got, so a start
+   * that didn't finish goes on from there without switching anything again. A home that has
+   * agents, or gets one while the app waits, gets none.
+   */
+  const made = join(root, MADE_FILE);
+  const kept = (() => {
+    try {
+      return JSON.parse(readFileSync(made, "utf8")) as { switched?: true; made?: boolean };
+    } catch {
+      return {};
+    }
+  })();
+  const mark = (what: { switched?: true; made?: boolean; agent?: string }) => {
+    writeFileSync(`${made}.tmp`, JSON.stringify({ ...what, at: new Date().toISOString() }), {
+      mode: 0o600,
+      flush: true,
+    });
+    renameSync(`${made}.tmp`, made);
+  };
+  const stopAssisting = new AbortController();
+  const firstAssistant = async () => {
+    if (!options.assistant || kept.made !== undefined) return;
+    if (!agents || !computer || !management || !computerProvider) return;
+    const someThere = async () =>
+      (await call<{ agents: unknown[] }>("agents", "list")).agents.length > 0;
+    const none = () => mark({ ...kept, made: false });
+    if (await someThere()) return none();
+    if (!(await computerProvider.macService(stopAssisting.signal))) return;
+    // The person may have made one while the app waited.
+    if (await someThere()) return none();
+    if (!kept.switched) {
+      for (const part of await computerProvider.switchOn(FIRST_PARTS))
+        log(
+          `First run: this Mac's ${part} couldn't be switched on in AgentOrg; switch it on there.`,
+        );
+      mark({ switched: true });
+    }
+    if (stopAssisting.signal.aborted) return;
+    type Option = { value: unknown; unavailable?: string };
+    const { units } = await call<{
+      units: { id: string; provider: string; form: { id: string; options?: Option[] }[] }[];
+    }>("agents", "units");
+    const form = units.find((one) => one.id === "computer" && one.provider === computer)?.form;
+    const why = (field: string, value: string) => {
+      const option = form
+        ?.find((one) => one.id === field)
+        ?.options?.find((one) => one.value === value);
+      return option ? option.unavailable : `It has no ${field} ${value}.`;
+    };
+    const notHere = why("kind", "this");
+    if (notHere) return log(`First run: the Assistant isn't made yet: ${notHere}`);
+    const noScreen = why("screen", "on");
+    const { agent } = await call<{ agent: string }>("agents", "create", {
+      stack: {
+        base: { provider: agents, creatable: "assistant" },
+        template: "assistant",
+        units: [
+          {
+            provider: computer,
+            unit: "computer",
+            values: {
+              kind: "this",
+              access: "terminal",
+              screen: noScreen ? "off" : "on",
+              ownBrowser: "none",
+            },
+          },
+          { provider: computer, unit: "web", values: { service: "exa" } },
+          { provider: management, unit: "control", values: FIRST_CONTROL },
+        ],
+      },
+      name: FIRST_ASSISTANT,
+    });
+    mark({ switched: true, made: true, agent });
+    if (noScreen) log(`First run: the Assistant was made without the screen: ${noScreen}`);
+  };
+  const assisting = firstAssistant().catch((error: unknown) => {
+    if (!stopAssisting.signal.aborted)
+      log(
+        `First run: the Assistant couldn't be made: ${error instanceof Error ? error.message : String(error)}`,
+      );
+  });
+
   return {
     ...(chatgpt ? { chatgpt } : {}),
     ...(agents ? { agents } : {}),
@@ -243,6 +360,9 @@ export async function startPrograms(
     ...(computer ? { computer } : {}),
     ...(management ? { management } : {}),
     async close() {
+      // The first Assistant's wait ends, and a creation under way finishes, before anything closes.
+      stopAssisting.abort();
+      await assisting;
       for (const close of closers)
         await close().catch((error: unknown) => log(`A program didn't stop: ${String(error)}`));
     },

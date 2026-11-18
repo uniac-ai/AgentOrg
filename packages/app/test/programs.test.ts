@@ -110,7 +110,7 @@ function headlessShell(): string {
  * A real service on `data`, as the person would start it, stopped when the test ends. It drives the
  * headless shell: left to itself, the service starts the Chrome installed on the machine.
  */
-async function startService(t: test.TestContext, data: string) {
+async function startService(t: test.TestContext, data: string, more: string[] = []) {
   const service = spawn(
     process.execPath,
     [
@@ -125,6 +125,7 @@ async function startService(t: test.TestContext, data: string) {
       data,
       "--browser-path",
       headlessShell(),
+      ...more,
     ],
     { stdio: "ignore" },
   );
@@ -170,8 +171,14 @@ const newFolder = (prefix: string) => {
 
 async function open(
   t: test.TestContext,
-  computer?: { dataFolder: string; webUrl: string; agentsFolder: string },
+  computer?: {
+    dataFolder: string;
+    webUrl: string;
+    agentsFolder: string;
+    macRecord?: string;
+  },
   fetch?: (request: Request) => Promise<Response>,
+  firstRun: { assistant?: boolean; log?: (line: string) => void } = {},
 ) {
   const home = newFolder("agentorg-programs-");
   const started: { app: App; person: Person }[] = [];
@@ -180,10 +187,12 @@ async function open(
       home,
       defaultPort: 0,
       firstRun: {
-        log: () => {},
+        log: firstRun.log ?? (() => {}),
         // An empty path: the test starts any service itself.
         computer: { path: "", ...computer },
         ...(fetch ? { fetch } : {}),
+        // Made only where a test asks for it, so no other test's agents change.
+        assistant: firstRun.assistant ?? false,
       },
     });
     const person = personOf(app, home);
@@ -803,6 +812,159 @@ test("the bundled Assistant is a computer and the web, and its computer goes wit
   await person.call("agents", "remove", { agent: untouched });
   assert.equal((await Computer.list(reached)).length, 0);
   assert.ok(existsSync(folder), "it's a folder someone can see, so it stays");
+});
+
+/** What the first Assistant's file under the home's programs says, once it says `made`. */
+async function firstMade(home: string) {
+  const file = join(home, "programs", "assistant.json");
+  for (const end = Date.now() + 60_000; Date.now() < end; ) {
+    try {
+      const read = JSON.parse(readFileSync(file, "utf8")) as { made?: boolean; agent?: string };
+      if (read.made !== undefined) return read;
+    } catch {}
+    await new Promise((done) => setTimeout(done, 100));
+  }
+  throw new Error("The first Assistant's file never said whether it was made.");
+}
+/** AgentOrg Mac's parts, as its service says: which are on. */
+async function partsOn(service: { apiUrl: string; apiKey: string }) {
+  const { capabilities } = (await (
+    await fetch(`${service.apiUrl}/v1/setup`, {
+      headers: { Authorization: `Bearer ${service.apiKey}` },
+    })
+  ).json()) as { capabilities: { capability: string; on: boolean }[] };
+  return Object.fromEntries(capabilities.map((one) => [one.capability, one.on]));
+}
+
+test("a fresh home's first start makes the Assistant once AgentOrg Mac comes, with its parts switched on, and never again", async (t) => {
+  const root = newFolder("agentorg-first-");
+  // AgentOrg Mac's folder, where its service, which starts with its parts off, keeps its record.
+  const mac = join(root, "mac");
+  const agentsFolder = join(root, "Agents");
+  const said: string[] = [];
+  const s = await open(
+    t,
+    {
+      dataFolder: join(root, "unused"),
+      webUrl: "http://127.0.0.1:9/mcp",
+      agentsFolder,
+      macRecord: mac,
+    },
+    undefined,
+    { assistant: true, log: (line) => said.push(line) },
+  );
+  const { person } = await s.start();
+  type Listed = { agents: { agent: string; name: string }[] };
+  // No AgentOrg Mac yet: nothing is made, and the app goes on waiting for it.
+  assert.deepEqual((await person.call<Listed>("agents", "list")).agents, []);
+  assert.equal(existsSync(join(s.home, "programs", "assistant.json")), false);
+
+  const reached = await startService(t, mac, ["--lend"]);
+  const first = await firstMade(s.home);
+  assert.equal(first.made, true);
+  const listed = (await person.call<Listed>("agents", "list")).agents;
+  assert.deepEqual(
+    listed.map((one) => [one.agent, one.name]),
+    [[first.agent, "Assistant"]],
+  );
+  // Its parts were switched on, all but the person's own browser.
+  assert.deepEqual(await partsOn(reached), {
+    terminal: true,
+    files: true,
+    screen: true,
+    browser: false,
+  });
+  // This computer, with commands, the screen when it can be had, the web, and its own agents.
+  const read = await person.call<{
+    units: { unit: string; values: Record<string, unknown> }[];
+    skills: { name: string }[];
+  }>("agents", "get", { agent: first.agent });
+  assert.deepEqual(
+    read.units.map((one) => one.unit),
+    ["computer", "web", "control"],
+  );
+  const [computer, web, control] = read.units;
+  assert.deepEqual(
+    { ...computer?.values, screen: undefined },
+    { kind: "this", access: "terminal", ownBrowser: "none", screen: undefined },
+  );
+  // Here the screen can't be had (no driver), and the log says so.
+  const withoutScreen = said.filter((line) =>
+    line.startsWith("First run: the Assistant was made without the screen: "),
+  );
+  assert.equal(computer?.values.screen, withoutScreen.length ? "off" : "on");
+  assert.equal(web?.values.service, "exa");
+  assert.deepEqual(
+    {
+      agents: control?.values.agents,
+      templates: control?.values.templates,
+      places: control?.values.places,
+      access: control?.values.access,
+      browser: control?.values.browser,
+    },
+    {
+      agents: "own",
+      templates: ["assistant"],
+      places: ["own"],
+      access: "terminal",
+      browser: false,
+    },
+  );
+  assert.ok(read.skills.some((one) => one.name === "delegating"));
+  assert.ok(
+    existsSync(join(agentsFolder, "Assistant")),
+    "its work happens in a folder named for it",
+  );
+  assert.deepEqual(
+    said.filter((line) => line.includes("couldn't")),
+    [],
+  );
+
+  // Made once: removed, and a part switched off, neither comes back at the next start.
+  await person.call("agents", "remove", { agent: first.agent });
+  await fetch(`${reached.apiUrl}/v1/setup/screen`, {
+    method: "PUT",
+    headers: { Authorization: `Bearer ${reached.apiKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ on: false }),
+  });
+  await s.stop();
+  const again = await s.start();
+  assert.deepEqual((await again.person.call<Listed>("agents", "list")).agents, []);
+  assert.equal((await partsOn(reached)).screen, false);
+});
+
+test("a home that has agents gets no first Assistant, also one the person makes while the app waits, and its parts stay off", async (t) => {
+  const root = newFolder("agentorg-first-");
+  const mac = join(root, "mac");
+  const s = await open(
+    t,
+    {
+      dataFolder: join(root, "unused"),
+      webUrl: "http://127.0.0.1:9/mcp",
+      agentsFolder: join(root, "Agents"),
+      macRecord: mac,
+    },
+    undefined,
+    { assistant: true },
+  );
+  const { person } = await s.start();
+  // While the app waits for AgentOrg Mac, the person makes an agent of their own.
+  const mine = await createAssistant(person, "Mine");
+  const reached = await startService(t, mac, ["--lend"]);
+  const marked = await firstMade(s.home);
+  assert.equal(marked.made, false);
+  assert.equal(marked.agent, undefined);
+  type Listed = { agents: { agent: string }[] };
+  assert.deepEqual(
+    (await person.call<Listed>("agents", "list")).agents.map((one) => one.agent),
+    [mine],
+  );
+  assert.deepEqual(await partsOn(reached), {
+    terminal: false,
+    files: false,
+    screen: false,
+    browser: false,
+  });
 });
 
 test("a socket from the person reaches a computer's surfaces live, with no token in it", async (t) => {
