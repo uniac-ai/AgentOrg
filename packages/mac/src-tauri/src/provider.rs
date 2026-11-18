@@ -347,7 +347,7 @@ fn stop(kept: &mut [&mut Kept]) {
 }
 
 /// The environment the provider gives what it starts: a small one of its own, never the app's.
-fn small_env(home: &Path) -> Vec<(String, String)> {
+pub fn small_env(home: &Path) -> Vec<(String, String)> {
     let own = |name: &str, otherwise: &str| {
         std::env::var(name).unwrap_or_else(|_| otherwise.into())
     };

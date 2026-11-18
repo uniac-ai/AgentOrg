@@ -1,6 +1,7 @@
 //! The menu-bar item, held by the window's process for as long as it runs: a monitor glyph with a
-//! dot for the app's state, and a menu with that state in words, "Open AgentOrg" and "Quit AgentOrg
-//! (stops lending)". The process stays when its window closes, so the item stays. After a login,
+//! dot for the app's state, and a menu with that state in words, "Open AgentOrg" (the dashboard,
+//! while AgentOrg is connected), "Agent Control…" (the window) and "Quit AgentOrg (stops
+//! lending)". The process stays when its window closes, so the item stays. After a login,
 //! the provider starts it with no window (`menu-bar`). Quitting from the item unregisters the
 //! background item, so nothing of the app runs or starts at login until it is opened again.
 

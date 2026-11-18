@@ -15,7 +15,7 @@ use crate::log::log;
 use crate::menu_bar::{self, Dot};
 use crate::places::data;
 use crate::provider::AppState;
-use crate::{macos, provider};
+use crate::{dashboard, macos, provider};
 use std::time::Instant;
 use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem, MenuItemKind, PredefinedMenuItem};
@@ -257,6 +257,9 @@ struct Read {
     short: Option<bool>,
     connected: bool,
     setup_at: Option<Instant>,
+    /// Whether the app runs and its service answered this time, with AgentOrg connected: when
+    /// "Open AgentOrg" can open the dashboard, as the design has it.
+    open: bool,
 }
 
 /// How often the menu-bar item reads the setup: every 5 s while the window is open, as its page
@@ -287,6 +290,7 @@ fn dot_now(read: &mut Read, started: Instant, window_open: bool) -> Dot {
             (read.short, read.setup_at) = (Some(menu_bar::short(&said)), Some(Instant::now()));
         }
     }
+    read.open = connection.is_ok() && app == AppState::Running && read.connected;
     menu_bar::dot(app, read.short, read.connected, started.elapsed() >= menu_bar::FIRST)
 }
 
@@ -397,6 +401,13 @@ pub fn window(with_window: bool) {
         ])
         .on_menu_event(|app, event| match event.id().as_ref() {
             "open" => show_window(app),
+            // The dashboard, off the main thread: the launcher can take a few seconds.
+            "dashboard" => {
+                thread::spawn(|| match dashboard::open(&crate::places::home()) {
+                    Ok(()) => log("menu bar", "Open AgentOrg: the dashboard opened"),
+                    Err(why) => log("menu bar", &format!("Open AgentOrg: {why}")),
+                });
+            }
             "quit-window" => {
                 if let Some(window) = app.get_webview_window(MAIN) {
                     let _ = window.close();
@@ -417,7 +428,10 @@ pub fn window(with_window: bool) {
             let none = None::<&str>;
             let heading = MenuItem::with_id(app, "heading", "AgentOrg", false, none)?;
             let status = MenuItem::with_id(app, "status", Dot::Waiting.words(), false, none)?;
-            let open = MenuItem::with_id(app, "open", "Open AgentOrg", true, none)?;
+            // As the design has it: "Open AgentOrg" opens the dashboard, only while AgentOrg is
+            // connected, and the window has an entry of its own.
+            let dashboard = MenuItem::with_id(app, "dashboard", "Open AgentOrg", false, none)?;
+            let open = MenuItem::with_id(app, "open", "Agent Control…", true, none)?;
             let quit_words = "Quit AgentOrg (stops lending)";
             let quit = MenuItem::with_id(app, "quit-lending", quit_words, true, none)?;
             let menu = Menu::with_items(
@@ -426,6 +440,7 @@ pub fn window(with_window: bool) {
                     &heading,
                     &status,
                     &PredefinedMenuItem::separator(app)?,
+                    &dashboard,
                     &open,
                     &PredefinedMenuItem::separator(app)?,
                     &quit,
@@ -455,8 +470,9 @@ pub fn window(with_window: bool) {
             thread::spawn(move || {
                 let state = || (provider::state_now(), macos::background_item_status());
                 let mut said = state();
-                let mut read = Read { short: None, connected: false, setup_at: None };
+                let mut read = Read { short: None, connected: false, setup_at: None, open: false };
                 let mut shown = None;
+                let mut dashboard_on = false;
                 // Light or dark as the menu bar itself is drawn, read on the main thread from the
                 // item; macOS's own appearance where it can't be.
                 let menu_bar_dark = |tray: &tauri::tray::TrayIcon| {
@@ -473,6 +489,10 @@ pub fn window(with_window: bool) {
                     }
                     let window_open = handle.get_webview_window(MAIN).is_some();
                     let dot = dot_now(&mut read, started, window_open);
+                    if read.open != dashboard_on {
+                        dashboard_on = read.open;
+                        let _ = dashboard.set_enabled(dashboard_on);
+                    }
                     let dark = menu_bar_dark(&tray);
                     if shown != Some((dot, dark)) {
                         let _ = tray.set_icon(Some(picture(dot, dark)));
