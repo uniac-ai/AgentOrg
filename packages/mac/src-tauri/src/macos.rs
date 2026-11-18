@@ -102,24 +102,57 @@ pub fn open_login_items() {
     }
 }
 
+/// Where the background item stands after registering it.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Registered {
+    On,
+    WaitsForApproval,
+    NotRegistered,
+    NotInBuild,
+    Failed(String),
+}
+
+impl Registered {
+    /// As the log, and `register`, say it.
+    pub fn words(&self) -> String {
+        match self {
+            Registered::On => "the background item is on".into(),
+            Registered::WaitsForApproval => {
+                "the background item waits for the person's approval in Login Items".into()
+            }
+            Registered::NotRegistered => "the background item isn't registered".into(),
+            Registered::NotInBuild => "no background item in this build".into(),
+            Registered::Failed(why) => format!("the background item couldn't be registered: {why}"),
+        }
+    }
+
+    /// `register`'s exit code: 0 on, 2 waiting for the person in Login Items, 1 otherwise.
+    pub fn exit_code(&self) -> i32 {
+        match self {
+            Registered::On => 0,
+            Registered::WaitsForApproval => 2,
+            _ => 1,
+        }
+    }
+}
+
 /// Registers the background item unless it is on or waiting for the person's approval, so that a
-/// person's choice in Login Items stands, and says where it stands, as the log reads it.
-pub fn register_background_item() -> String {
-    let Some(item) = background_item() else { return "no background item in this build".into() };
+/// person's choice in Login Items stands, and says where it stands.
+pub fn register_background_item() -> Registered {
+    let Some(item) = background_item() else { return Registered::NotInBuild };
     let status = |item: &AnyObject| -> isize { unsafe { msg_send![item, status] } };
     if !matches!(status(&item), 1 | 2) {
         let done: Result<(), Retained<NSError>> =
             unsafe { msg_send![&*item, registerAndReturnError: _] };
         if let Err(error) = done {
-            let why = error.localizedDescription();
-            return format!("the background item couldn't be registered: {why}");
+            return Registered::Failed(error.localizedDescription().to_string());
         }
     }
     match status(&item) {
-        0 => "the background item isn't registered".into(),
-        1 => "the background item is on".into(),
-        2 => "the background item waits for the person's approval in Login Items".into(),
-        _ => "the background item isn't in this build".into(),
+        0 => Registered::NotRegistered,
+        1 => Registered::On,
+        2 => Registered::WaitsForApproval,
+        _ => Registered::NotInBuild,
     }
 }
 
@@ -208,4 +241,26 @@ pub fn program_of(pid: i32) -> Option<PathBuf> {
     let length = unsafe { libc::proc_pidpath(pid, path.as_mut_ptr().cast(), path.len() as u32) };
     let path = String::from_utf8_lossy(&path[..length.max(0) as usize]).into_owned();
     (length > 0).then(|| PathBuf::from(path))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Registered;
+
+    #[test]
+    fn register_exits_0_when_on_2_when_waiting_for_the_person_and_1_otherwise() {
+        assert_eq!(Registered::On.exit_code(), 0);
+        assert_eq!(Registered::WaitsForApproval.exit_code(), 2);
+        for other in [
+            Registered::NotRegistered,
+            Registered::NotInBuild,
+            Registered::Failed("Operation not permitted".into()),
+        ] {
+            assert_eq!(other.exit_code(), 1);
+        }
+        assert_eq!(
+            Registered::Failed("Operation not permitted".into()).words(),
+            "the background item couldn't be registered: Operation not permitted"
+        );
+    }
 }

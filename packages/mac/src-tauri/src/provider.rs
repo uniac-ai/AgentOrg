@@ -2,7 +2,10 @@
 //! embedded on a private socket as the driver's embedding guide has a host run it, and the service,
 //! which reaches the driver there, each with a small environment, never the app's own. Either one
 //! that ends is started again: at once, then with waits growing to 30 s. Once a grant changes, the
-//! driver is started again, since it reads its grants once. What it does goes to the app's log.
+//! driver is started again, since it reads its grants once. Started again for Screen Recording
+//! just given, it takes one picture of the whole screen, so that macOS's alert on a first capture
+//! follows the person's own step rather than an agent's later one. What it does goes to the app's
+//! log.
 
 use crate::log::{log, rotate};
 use crate::{grant, macos, places};
@@ -465,10 +468,49 @@ fn write_state(places: &Places, said: &Said) {
     }
 }
 
+/// How long the first picture is waited for before it is ended: the driver answers in well under a
+/// second, so one still running then is stuck.
+const PICTURE_MS: u64 = 30_000;
+
+/// One picture of the whole screen through the driver, as small as it takes one, which nothing
+/// keeps: the first capture after Screen Recording is given, which macOS may answer with its alert.
+/// It runs by itself, and is waited for off this thread, for `wait` at most, then ended.
+fn first_picture(programs: &Programs, places: &Places, wait: Duration) {
+    let mut command = Command::new(&programs.driver);
+    command
+        .args(["call", "get_desktop_state", r#"{"max_image_dimension":64}"#, "--socket"])
+        .arg(&places.socket)
+        .env_clear()
+        .envs(small_env(&places.driver_home))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    match command.spawn() {
+        Ok(mut picture) => {
+            log("provider", "Screen Recording given: one picture of the screen, as macOS may ask");
+            thread::spawn(move || {
+                let end = Instant::now() + wait;
+                while matches!(picture.try_wait(), Ok(None)) {
+                    if Instant::now() >= end {
+                        let _ = picture.kill();
+                        let _ = picture.wait();
+                        log("provider", "the first picture took too long, and was ended");
+                        return;
+                    }
+                    sleep(Duration::from_millis(100));
+                }
+            });
+        }
+        Err(error) => log("provider", &format!("the first picture couldn't be taken: {error}")),
+    }
+}
+
 /// Keeps the driver and the service running until asked to stop. The driver reads the grants
 /// once, at its start: so where they differ from what it read, it is started again. While it runs
 /// they are read when `regrant` is set, and, while one is missing, again after `every`, doubling to
-/// at most 60 times that, as the person may switch one in System Settings at any time.
+/// at most 60 times that, as the person may switch one in System Settings at any time. Where the
+/// driver starts again with Screen Recording that the one before it didn't have, it takes one
+/// picture once it answers.
 pub fn provide(
     programs: &Programs,
     places: &Places,
@@ -501,6 +543,8 @@ pub fn provide(
     // long until they are read again.
     let (mut read_by_driver, mut read_at, mut wait): (Option<Grants>, _, _) =
         (None, Instant::now(), every);
+    // Whether the driver now starting is the first with Screen Recording just given.
+    let mut picture_due = false;
     while !stop_now.load(Ordering::Relaxed) {
         let told = regrant.swap(false, Ordering::Relaxed);
         let missing_one = read_by_driver.is_some_and(|read| read != (true, true));
@@ -516,7 +560,11 @@ pub fn provide(
         driver.reap();
         service.reap();
         if missing.is_empty() && driver.due() {
+            let before = read_by_driver;
             read_by_driver = Some(grants());
+            // Given since the driver before read them: not at the provider's own start.
+            picture_due = before.is_some_and(|(_, screen)| !screen)
+                && read_by_driver.is_some_and(|(_, screen)| screen);
             (read_at, wait) = (Instant::now(), every);
             let _ = fs::remove_file(&places.socket);
             if let Err(error) = cursor_settings(&places.driver_home) {
@@ -525,6 +573,10 @@ pub fn provide(
             driver.start(driver_command(programs, places, identifier));
         }
         let socket = driver.pid().is_some() && places.socket.exists();
+        if socket && picture_due {
+            picture_due = false;
+            first_picture(programs, places, Duration::from_millis(PICTURE_MS));
+        }
         if missing.is_empty() && socket && service.due() {
             service.start(service_command(programs, places));
         }
@@ -751,7 +803,9 @@ mod tests {
         // The stand-in keeps the pointer's settings as it found them when it started.
         let seen = root.join("seen.json");
         let keeps = format!("cp \"$HOME/.cua-driver/config.json\" '{}'", seen.display());
-        program(&programs.driver, &format!("{keeps}\n: > \"$5\"\nexec sleep 600"));
+        // Called, as for the first picture once Screen Recording is given, it answers at once.
+        let called = "if [ \"$1\" = call ]; then exit 0; fi";
+        program(&programs.driver, &format!("{called}\n{keeps}\n: > \"$5\"\nexec sleep 600"));
         let record = r#"echo "{\"url\":\"http://127.0.0.1:1\",\"pid\":$$}" > "$7/server.json""#;
         program(&programs.node, &format!("{record}\nexec sleep 600"));
         program(&programs.service, "");
@@ -794,7 +848,8 @@ mod tests {
             fs::remove_file(&seen).unwrap();
             accessibility.store(true, Ordering::Relaxed);
             regrant.store(true, Ordering::Relaxed);
-            until("the driver again", || again(was));
+            // Its pid is known as it is started, before it has read its settings.
+            until("the driver again, its settings read", || again(was) && seen.exists());
             let found: Value = serde_json::from_str(&fs::read_to_string(&seen).unwrap()).unwrap();
             assert_eq!(found["cursor"]["halo"], false);
             assert_eq!(found["cursor"]["badges"], "off");
@@ -811,6 +866,101 @@ mod tests {
             sleep(Duration::from_millis(1_000));
             assert_eq!(reads.load(Ordering::Relaxed), read);
         });
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn screen_recording_just_given_is_followed_by_one_picture_once_the_driver_answers() {
+        crate::test_home();
+        let root = std::env::temp_dir().join(format!("agentorg-picture-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let programs = Programs {
+            node: root.join("app/node"),
+            service: root.join("app/agentcomputer/agentcomputer.js"),
+            driver: root.join("app/cua-driver"),
+            themes: root.join("app/cursor-themes"),
+        };
+        // The stand-in driver: served, it makes its socket and runs on; called, it notes the call.
+        let calls = root.join("calls");
+        let driver = format!(
+            "if [ \"$1\" = call ]; then echo \"$2 $3 $4 $5\" >> '{}'; exit 0; fi\n\
+             : > \"$5\"\nexec sleep 600",
+            calls.display()
+        );
+        program(&programs.driver, &driver);
+        let record = r#"echo "{\"url\":\"http://127.0.0.1:1\",\"pid\":$$}" > "$7/server.json""#;
+        program(&programs.node, &format!("{record}\nexec sleep 600"));
+        program(&programs.service, "");
+        let places = places_in(&root);
+        let (accessibility, screen_recording) = (AtomicBool::new(true), AtomicBool::new(false));
+        let grants =
+            || (accessibility.load(Ordering::Relaxed), screen_recording.load(Ordering::Relaxed));
+        let started = || read::<Said>(&places.state).and_then(|said| said.driver);
+        let noted = || fs::read_to_string(&calls).unwrap_or_default();
+        let (stop_now, regrant) = (AtomicBool::new(false), AtomicBool::new(false));
+        thread::scope(|scope| {
+            let _stops = Stops(&stop_now);
+            scope.spawn(|| {
+                let (stop, menu_bar) = (&stop_now, &mut no_menu_bar);
+                let every = Duration::from_secs(3600);
+                provide(&programs, &places, "test.id", stop, &regrant, &grants, every, menu_bar)
+            });
+            until("the driver", || started().is_some());
+            // At the provider's start, nothing is pictured, whatever the grants.
+            sleep(Duration::from_millis(500));
+            assert_eq!(noted(), "");
+            // Accessibility given alone: the driver starts again, with no picture.
+            accessibility.store(false, Ordering::Relaxed);
+            let was = started().unwrap();
+            regrant.store(true, Ordering::Relaxed);
+            until("the driver again", || started().is_some_and(|now| now != was));
+            accessibility.store(true, Ordering::Relaxed);
+            let was = started().unwrap();
+            regrant.store(true, Ordering::Relaxed);
+            until("the driver again", || started().is_some_and(|now| now != was));
+            sleep(Duration::from_millis(500));
+            assert_eq!(noted(), "");
+            // Screen Recording given: one picture, through the new driver's socket.
+            screen_recording.store(true, Ordering::Relaxed);
+            let was = started().unwrap();
+            regrant.store(true, Ordering::Relaxed);
+            until("the picture", || !noted().is_empty());
+            assert!(started().is_some_and(|now| now != was));
+            let socket = places.socket.display().to_string();
+            let picture =
+                format!("get_desktop_state {{\"max_image_dimension\":64}} --socket {socket}\n");
+            assert_eq!(noted(), picture);
+            // Read again with nothing changed, nothing more.
+            regrant.store(true, Ordering::Relaxed);
+            until("the grants read", || !regrant.load(Ordering::Relaxed));
+            sleep(Duration::from_millis(500));
+            assert_eq!(noted(), picture);
+            stop_now.store(true, Ordering::Relaxed);
+            until("it stopped", || !places.state.exists());
+        });
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_first_picture_that_doesnt_answer_is_ended() {
+        crate::test_home();
+        let root = std::env::temp_dir().join(format!("agentorg-stuck-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let programs = Programs {
+            node: root.join("app/node"),
+            service: root.join("app/agentcomputer/agentcomputer.js"),
+            driver: root.join("app/cua-driver"),
+            themes: root.join("app/cursor-themes"),
+        };
+        // A driver that never answers the call, saying which process it is.
+        let pid = root.join("pid");
+        program(&programs.driver, &format!("echo $$ > '{}'\nexec sleep 600", pid.display()));
+        let places = places_in(&root);
+        first_picture(&programs, &places, Duration::from_millis(300));
+        until("the picture", || fs::read_to_string(&pid).is_ok_and(|said| !said.trim().is_empty()));
+        let pid: i32 = fs::read_to_string(&pid).unwrap().trim().parse().unwrap();
+        // Ended once the wait is over, and reaped: no process is left.
+        until("the picture ended", || unsafe { libc::kill(pid, 0) } != 0);
         let _ = fs::remove_dir_all(&root);
     }
 
