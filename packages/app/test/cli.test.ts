@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { type ChildProcess, execFile, spawn } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test, { after } from "node:test";
@@ -28,6 +28,20 @@ const runIn = (env: Record<string, string>, ...args: string[]) =>
     ),
   );
 const run = (...args: string[]) => runIn({}, ...args);
+
+/**
+ * An account folder of its own, with stand-ins first on the PATH for `launchctl` and for what opens
+ * a browser: a command that wrongly gets past its checks touches nothing of this machine's.
+ */
+function account(t: test.TestContext) {
+  const folder = mkdtempSync(join(tmpdir(), "agentorg-account-"));
+  t.after(() => rmSync(folder, { recursive: true, force: true }));
+  const bin = join(folder, "bin");
+  mkdirSync(bin);
+  for (const name of ["launchctl", "open", "xdg-open"])
+    writeFileSync(join(bin, name), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+  return { HOME: folder, PATH: `${bin}:${process.env.PATH}` };
+}
 
 test("agentorg runs the app; while it runs, the person's commands go through it", async (t) => {
   const home = mkdtempSync(join(tmpdir(), "agentorg-cli-"));
@@ -85,16 +99,23 @@ test("agentorg runs the app; while it runs, the person's commands go through it"
   assert.match(elsewhere.stderr, /^Stop it first to run it with --port or --frontend\.\n$/);
   // Its status names it and its version. An account folder of its own, so no service of this
   // account's is read.
-  const account = mkdtempSync(join(tmpdir(), "agentorg-account-"));
-  t.after(() => rmSync(account, { recursive: true, force: true }));
+  const scratch = account(t);
   const own = JSON.parse(readFileSync(join(dirname(cli), "..", "..", "package.json"), "utf8"));
-  const shown = await runIn({ HOME: account }, "status", "--home", home);
+  const shown = await runIn(scratch, "status", "--home", home);
   assert.equal(shown.code, 0, shown.stderr);
   assert.match(
     shown.stdout,
     new RegExp(
       `^AgentOrg ${own.version.replaceAll(".", "\\.")} is running at http://127\\.0\\.0\\.1:\\d+, on `,
     ),
+  );
+  // A sign-in the app won't give is said, not thrown.
+  writeFileSync(join(home, "cli-token"), "not-the-token\n");
+  const unsigned = await runIn(scratch, "open", "--home", home);
+  assert.equal(unsigned.code, 1);
+  assert.match(
+    unsigned.stderr,
+    /^AgentOrg at http:\/\/127\.0\.0\.1:\d+ refused to sign a browser in \(\d{3}\)\.\n$/,
   );
   // Stopped, the app takes its files with it.
   const exited = new Promise((done) => app?.once("exit", done));
@@ -104,9 +125,8 @@ test("agentorg runs the app; while it runs, the person's commands go through it"
 });
 
 test("status says when the app isn't running; the service commands take no arguments", async (t) => {
-  const account = mkdtempSync(join(tmpdir(), "agentorg-account-"));
-  t.after(() => rmSync(account, { recursive: true, force: true }));
-  const shown = await runIn({ HOME: account }, "status");
+  const own = account(t);
+  const shown = await runIn(own, "status");
   assert.equal(shown.code, 3);
   assert.equal(
     shown.stdout,
@@ -114,8 +134,8 @@ test("status says when the app isn't running; the service commands take no argum
       ? `AgentOrg isn't running on ${scratchHome}.\nIt isn't set up as a service. agentorg start sets it up.\n`
       : `AgentOrg isn't running on ${scratchHome}.\n`,
   );
-  for (const name of ["start", "stop", "status"]) {
-    const extra = await runIn({ HOME: account }, name, "now");
+  for (const name of ["start", "stop", "status", "update", "uninstall"]) {
+    const extra = await runIn(own, name, "now");
     assert.equal(extra.code, 2, name);
     assert.match(extra.stderr, new RegExp(`^agentorg ${name} takes no arguments\\.\\nUsage:`));
   }
@@ -128,7 +148,8 @@ test("an unknown command gets the app's usage", async () => {
   assert.match(unknown.stderr, /open +sign a browser in/);
 });
 
-test("an unknown option gets the usage and starts nothing; --version prints the version", async () => {
+test("an unknown option gets the usage and starts nothing; --version prints the version", async (t) => {
+  const scratch = account(t);
   // Each is refused before anything runs: none of them may start the app on the default home.
   for (const args of [
     ["--nope"],
@@ -139,8 +160,11 @@ test("an unknown option gets the usage and starts nothing; --version prints the 
     ["call", "s", "m", "-1"],
     ["start", "--port", "5"],
     ["stop", "--frontend", "/x"],
+    ["uninstall", "--port", "5"],
+    ["stop", "--delete-home"],
+    ["--delete-home"],
   ]) {
-    const result = await run(...args);
+    const result = await runIn(scratch, ...args);
     assert.equal(result.code, 2, args.join(" "));
     assert.match(result.stderr, /Usage: agentorg \[command\]/, args.join(" "));
     assert.equal(result.stdout, "", args.join(" "));
@@ -162,7 +186,10 @@ test("without --home or AGENTORG_HUB_HOME, the home is agentorg in the XDG data 
       ),
     );
     assert.equal(result.code, 1);
-    assert.match(result.stderr, new RegExp(`isn't running in ${join(data, "agentorg")}\\.`));
+    assert.equal(
+      result.stderr,
+      `AgentOrg isn't running in ${join(data, "agentorg")}. Run ${process.platform === "darwin" ? "agentorg start" : "agentorg"} first.\n`,
+    );
   } finally {
     rmSync(data, { recursive: true, force: true });
   }

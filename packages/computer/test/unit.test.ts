@@ -244,7 +244,7 @@ test("this computer's screen and the person's browser: off unless chosen, greyed
   assert.equal(field(older, "screen")?.default, "off");
   assert.equal(
     option({ ...older, mac: true }, "screen", "on")?.unavailable,
-    "The AgentOrg app on this Mac is older than this AgentOrg. Update it, and open it again.",
+    "The AgentOrg app on this Mac is older than this AgentOrg. Run agentorg update, which updates both.",
   );
   assert.equal(option({ made: [], starts: true }, "screen", "on")?.unavailable, undefined);
   assert.equal(field({ made: [], starts: true }, "screen")?.default, "off");

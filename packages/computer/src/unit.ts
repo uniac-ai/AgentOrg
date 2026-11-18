@@ -61,7 +61,7 @@ const MacApp = MAC_APP.charAt(0).toUpperCase() + MAC_APP.slice(1);
 /** What to do when AgentOrg Mac is on this Mac but isn't running: nothing starts it but the person. */
 export const OPEN_MAC = `${MacApp} isn't open on this Mac. Open it to use this computer.`;
 /** What to do when AgentOrg Mac's service is older than this build. */
-export const UPDATE_MAC = `${MacApp} on this Mac is older than this AgentOrg. Update it, and open it again.`;
+export const UPDATE_MAC = `${MacApp} on this Mac is older than this AgentOrg. Run agentorg update, which updates both.`;
 /**
  * The oldest AgentOrg Mac service this build takes: the first to attach the screen while only
  * macOS's grants are missing, which choosing the screen then relies on.
