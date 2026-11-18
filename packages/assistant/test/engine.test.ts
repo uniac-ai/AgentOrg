@@ -656,6 +656,71 @@ test("bound to settings, instructions and skills come from it, read at each requ
   assert.deepEqual(offeredNames(s.requests[1]), []);
 });
 
+test("a skill's ALWAYS.md is told while the skill is given, after the agent's words and before the skills, and is gone at the next turn once it isn't", async () => {
+  const s = await setup();
+  const files = new Map([
+    ["review", "# Review"],
+    ["review/ALWAYS.md", "Review only what you are shown.\n"],
+  ]);
+  const PLAIN = { name: "plain", description: "Has nothing always to say." };
+  let skills = [REVIEW, PLAIN];
+  const read: string[] = [];
+  s.actor.bind("settings", {
+    get: () => ({ instructions: "You keep the docs.", skills }),
+    skill: ({ name, path }: { name: string; path?: string }) => {
+      read.push(path ? `${name}/${path}` : name);
+      const text = files.get(path ? `${name}/${path}` : name);
+      if (text === undefined) throw new Refused("unknown", "No such skill or file.");
+      return { text };
+    },
+  });
+  await s.turn("hello");
+  assert.ok(
+    String(s.requests[0]?.instructions).startsWith(
+      "You keep the docs.\n\nReview only what you are shown.\n\n## Skills",
+    ),
+  );
+  // Each skill's ALWAYS.md is asked for, and nothing else of it: one with none costs that one read.
+  assert.deepEqual([...new Set(read)].sort(), ["plain/ALWAYS.md", "review/ALWAYS.md"]);
+  // The skill taken away, as with its unit: not told at the next turn.
+  skills = [PLAIN];
+  await s.turn("again");
+  const after = String(s.requests.at(-1)?.instructions);
+  assert.ok(after.startsWith("You keep the docs.\n\n## Skills"));
+  assert.ok(!after.includes("Review only what you are shown."));
+});
+
+test("what skills always tell the agent fits within the limit too, in order, before their names; what doesn't is left out and reported", async () => {
+  const s = await setup();
+  const instructions = "x".repeat(MAX_INSTRUCTIONS - 3_000);
+  const files = new Map([
+    ["a/ALWAYS.md", "a".repeat(2_000)],
+    ["b/ALWAYS.md", "b".repeat(2_000)],
+  ]);
+  const skills = ["a", "b"].map((name) => ({ name, description: "y" }));
+  s.actor.bind("settings", {
+    get: () => ({ instructions, skills }),
+    skill: ({ name, path }: { name: string; path?: string }) => {
+      const text = files.get(`${name}/${path}`);
+      if (text === undefined) throw new Refused("unknown", "No such skill or file.");
+      return { text };
+    },
+  });
+  await s.turn("hello");
+  const told = String(s.requests[0]?.instructions);
+  assert.ok(told.includes("a".repeat(2_000)));
+  assert.ok(!told.includes("b".repeat(2_000)));
+  assert.ok(
+    told.length <= MAX_INSTRUCTIONS + 5_000,
+    "within the request, with the looper's own words",
+  );
+  // The skills' names still fit after what was kept.
+  assert.ok(told.includes("- a: y\n- b: y"));
+  assert.deepEqual(warnings(s)[0]?.fields, {
+    leftOut: [{ slot: "settings", tool: "b/ALWAYS.md", reason: "limit" }],
+  });
+});
+
 test("the model reads a skill's text and files through settings", async () => {
   const s = await setup();
   s.actor.bind("settings", settingsOf("Do the work.", [REVIEW]));
