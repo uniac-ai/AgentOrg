@@ -53,6 +53,7 @@ import {
   MAC_RECORD,
   NEW,
   NO_CONTAINER_MAC,
+  OLDEST_MAC,
   OPEN_MAC,
   REACHES,
   REMOTE,
@@ -198,6 +199,15 @@ export interface ComputerProvider {
 }
 
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
+/** Whether version `a` (x.y.z) is older than `b`; one that isn't a version is. */
+const older = (a: string, b: string) => {
+  const parts = (v: string) => v.split("-")[0]?.split(".").map(Number) ?? [];
+  const [x, y] = [parts(a), parts(b)];
+  if (x.length !== 3 || x.some(Number.isNaN)) return true;
+  for (let i = 0; i < 3; i++)
+    if ((x[i] as number) !== (y[i] as number)) return (x[i] as number) < (y[i] as number);
+  return false;
+};
 const quiet: Log = { info() {}, warn() {}, error() {} };
 /** An endpoint at the address the service was reached on, whatever the service calls itself. */
 const at = (apiUrl: string, endpoint: string) => {
@@ -648,6 +658,9 @@ export async function startComputerProvider(
     if (!reached || !info) return undefined;
     if (!Array.isArray(info.made))
       throw new Refused("unavailable", macHere() ? UPDATE_MAC : UPDATE_STEPS);
+    // AgentOrg Mac is updated with this core, so one older than it can take is said to be.
+    if (macHere() && older(String(info.version), OLDEST_MAC))
+      throw new Refused("unavailable", UPDATE_MAC);
     // On a Mac with AgentOrg Mac, a part the person switched off, or a screen grant it lacks, is
     // said in its words.
     const setup = macHere() ? await within(SERVICE_ANSWERS_MS, setupOf(reached)) : undefined;
@@ -970,7 +983,7 @@ export async function startComputerProvider(
     const info = reached && (await within(SURFACES_MS, Computer.getInfo(computer.id, reached)));
     if (!info) return undefined;
     if (fromBefore(info) || attachedBefore(computer, info)) seenBefore(computer, info);
-    // On AgentOrg Mac's service, a screen lacking a grant is said in the app's words, as in Create.
+    // On AgentOrg Mac's service, a screen lacking a grant is said in the app's words.
     const screenOut = info.surfaces.some((one) => one.surface === "screen" && one.unavailable);
     const ungranted =
       screenOut && "local" in computer.service && computer.service.mac

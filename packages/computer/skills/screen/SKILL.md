@@ -18,7 +18,7 @@ A window's bounds from `screen__apps` are in the screen's points, not the pixels
 
 ## When it refuses
 
-When a screen tool refuses because the screen can't be used now (it is turned off, a grant is missing, or Cua Driver is missing or out of date), that is the person's to fix, not yours. Tell them, and carry on with the terminal and files where you can. On a machine lent through the AgentOrg app, point them to the app, under Screen.
+When a screen tool refuses because the screen can't be used now (it is turned off, a grant is missing, or Cua Driver is missing or out of date), that is the person's to fix, not yours. Tell them, and carry on with the terminal and files where you can. On a machine lent through the AgentOrg app, tell them where: the AgentOrg icon in the menu bar, Agent Control…, Screen, and Set up for a grant macOS hasn't given.
 
 ## A machine the person lends
 

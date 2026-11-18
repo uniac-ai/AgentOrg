@@ -91,6 +91,8 @@ async function standIn(
     body?: Record<string, unknown>;
   }[] = [];
   const computers = new Map<string, Record<string, unknown>>(Object.entries(records));
+  /** The version it says it is, which a test may change. */
+  const info = { version: "0.0.29" };
   /** What it says of this computer, which a test may change: each part ready, or why not. */
   const thisComputer = {
     ready: true,
@@ -153,7 +155,7 @@ async function standIn(
       });
     if (request.method === "GET" && path === "/v1/info")
       return send(200, {
-        version: "0.0.20",
+        version: info.version,
         thisComputer,
         made: [{ isolation: "container", ready: true, capabilities: [], browsers: [] }],
       });
@@ -274,6 +276,7 @@ async function standIn(
     asked,
     computers,
     held,
+    info,
     thisComputer,
     setup,
     /** Gone, as a service stopped is: nothing answers at its address. */
@@ -1512,6 +1515,37 @@ test("a first start waits for AgentOrg Mac's service until it answers, the provi
   assert.deepEqual(await provider.current.switchOn(["nonsense"]), ["nonsense"]);
 });
 
+test("AgentOrg Mac's service older than this build takes is said to be, with how to update it", async (t) => {
+  const { units, macRecord } = await setup(t, { service: false, mac: true });
+  const app = await standIn(t);
+  recordIn(t, macRecord, app);
+  const why = async () =>
+    form(
+      (await units.units({})).units.find((one) => one.id === "computer"),
+      "kind",
+    )?.options?.[0]?.unavailable;
+  assert.equal(await why(), undefined);
+  app.info.version = "0.0.28";
+  assert.equal(
+    await why(),
+    "The AgentOrg app on this Mac is older than this AgentOrg. Update it, and open it again.",
+  );
+});
+
+test("a service the person runs themselves has no floor: an older one is used as it is", async (t) => {
+  const { units, data } = await setup(t, { service: false });
+  const own = await standIn(t);
+  own.info.version = "0.0.20";
+  recordIn(t, data, own);
+  assert.equal(
+    form(
+      (await units.units({})).units.find((one) => one.id === "computer"),
+      "kind",
+    )?.options?.[0]?.unavailable,
+    undefined,
+  );
+});
+
 test("on a Mac with AgentOrg Mac open, this computer is attached through it, nothing is started, and no container is offered", async (t) => {
   const command = onPathThatSays(t);
   const { units, dir, root, macRecord } = await setup(t, {
@@ -1632,7 +1666,7 @@ const lacksAccessibility = (mac: boolean) =>
     ? "Screen Recording and Accessibility are needed, and AgentOrg is missing Accessibility. Set it up in AgentOrg."
     : "Screen Recording and Accessibility are needed, and Cua Driver is missing Accessibility. Grant it in System Settings, under Privacy & Security.";
 
-test("this computer's screen lacking a grant can't be chosen, in the AgentOrg app's words on a Mac and its service's elsewhere", async (t) => {
+test("this computer's screen lacking only a grant can be chosen through AgentOrg Mac, and elsewhere can't, in its service's words", async (t) => {
   for (const mac of [true, false])
     await t.test(mac ? "AgentOrg Mac" : "the service this machine runs", async (t) => {
       const command = onPathThatSays(t);
@@ -1660,12 +1694,8 @@ test("this computer's screen lacking a grant can't be chosen, in the AgentOrg ap
         (await units.units({})).units.find((one) => one.id === "computer"),
         "screen",
       )?.options?.find((one) => one.value === "on")?.unavailable;
-      assert.equal(
-        screen,
-        mac
-          ? "The AgentOrg app doesn't have Accessibility, which your screen needs. Set it up there, under Screen."
-          : needs,
-      );
+      // AgentOrg Mac's service attaches the screen while only macOS's grants are missing.
+      assert.equal(screen, mac ? undefined : needs);
       assert.equal(command.ran(), false);
     });
 });
