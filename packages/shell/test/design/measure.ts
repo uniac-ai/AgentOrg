@@ -22,6 +22,7 @@ import {
   computerWith,
   cpuOf,
   createState,
+  designAgents,
   docsAgent,
   downTriage,
   inDesign,
@@ -44,7 +45,6 @@ import {
   releaseNotes,
   SECTIONS,
   SIGN_INS,
-  sampleAgents,
   sampleBuild,
   sampleChats,
   sampleLoad,
@@ -1611,7 +1611,7 @@ if (wants("thread"))
       ) => {
         const gateway = side === "built" ? await standIn() : undefined;
         if (gateway) {
-          sampleAgents(gateway);
+          designAgents(gateway);
           sampleChats(gateway, given);
         }
         const page = gateway
@@ -1718,7 +1718,7 @@ if (wants("agent"))
         const chats =
           state === "chats" || state === "held" || state === "never" || state === "others";
         if (gateway) {
-          sampleAgents(gateway);
+          designAgents(gateway);
           sampleChats(gateway);
           docsAgent(gateway);
           between(gateway);
@@ -1781,7 +1781,7 @@ if (wants("computer"))
     for (const theme of ["dark", "light"] as const)
       for (const side of ["design", "built"] as const) {
         const gateway = side === "built" ? await standIn() : undefined;
-        if (gateway) sampleAgents(gateway);
+        if (gateway) designAgents(gateway);
         const page = gateway
           ? await builtPage(gateway, size, theme, "#/a/a-research")
           : await designPage(size, theme);
@@ -1804,7 +1804,7 @@ if (wants("signin"))
         for (const side of ["design", "built"] as const) {
           const gateway = side === "built" ? await standIn() : undefined;
           if (gateway) {
-            sampleAgents(gateway);
+            designAgents(gateway);
             signInAccount(gateway, state);
           }
           const page = gateway
@@ -1834,7 +1834,7 @@ if (wants("files"))
     for (const theme of ["dark", "light"] as const)
       for (const side of ["design", "built"] as const) {
         const gateway = side === "built" ? await standIn() : undefined;
-        if (gateway) sampleAgents(gateway);
+        if (gateway) designAgents(gateway);
         const page = gateway
           ? await builtPage(gateway, "wide", theme, "#/a/a-research")
           : await designPage("wide", theme);
@@ -1859,7 +1859,7 @@ if (wants("window"))
       for (const side of ["design", "built"] as const) {
         const gateway = side === "built" ? await standIn() : undefined;
         if (gateway) {
-          sampleAgents(gateway);
+          designAgents(gateway);
           sampleChats(gateway);
         }
         const page = gateway
@@ -1880,7 +1880,7 @@ if (wants("setup"))
     for (const theme of ["dark", "light"] as const)
       for (const side of ["design", "built"] as const) {
         const gateway = side === "built" ? await standIn() : undefined;
-        if (gateway) sampleAgents(gateway);
+        if (gateway) designAgents(gateway);
         const page = gateway
           ? await builtPage(gateway, size, theme, "#/a/a-research")
           : await designPage(size, theme);
@@ -1900,7 +1900,7 @@ if (wants("setup"))
         const gateway = side === "built" ? await standIn() : undefined;
         const name = which === "down" ? "Triage" : "Research";
         if (gateway) {
-          sampleAgents(gateway);
+          designAgents(gateway);
           downTriage(gateway);
         }
         const page = gateway
@@ -2128,7 +2128,7 @@ if (wants("bar")) {
         const notice = state === "notice" || state === "beside";
         let page: Page;
         if (gateway) {
-          sampleAgents(gateway);
+          designAgents(gateway);
           if (state === "signin") gateway.setAccount("signed_out");
           // Taken out a part at a time, it can change between two of them.
           if (state === "file")
@@ -2290,7 +2290,7 @@ if (wants("activity")) {
         const gateway = side === "built" ? await standIn() : undefined;
         const name = one.state === "none" ? (gateway ? "Reviewer" : "Docs") : "Research";
         if (gateway) {
-          sampleAgents(gateway);
+          designAgents(gateway);
           sampleWork(gateway, one.state === "stopped");
           if (one.state === "unread") gateway.refuseEvery("work.call", "unavailable", "Not now.");
           if (one.state === "beside") sampleChats(gateway);
@@ -2346,7 +2346,7 @@ if (wants("overview"))
       for (const side of ["design", "built"] as const) {
         const gateway = side === "built" ? await standIn() : undefined;
         if (gateway) {
-          sampleAgents(gateway);
+          designAgents(gateway);
           sampleWork(gateway);
           const ago = (days: number) => new Date(Date.now() - days * 86_400_000).toISOString();
           gateway.logChange({
