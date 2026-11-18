@@ -143,17 +143,28 @@ test(
     await page.evaluate(
       () => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))),
     );
-    const [first, after, under] = [
-      await title.boundingBox(),
-      await row.getByRole("button", { name: "Use" }).boundingBox(),
-      await row.getByText("mystery").boundingBox(),
-    ];
+    // The three it compares, and the row's columns, read at one moment.
+    const { first, after, under, columns } = await row.evaluate((e) => {
+      const box = (one: Element | undefined) => {
+        const r = one?.getBoundingClientRect();
+        return r && { x: r.x, y: r.y, width: r.width, height: r.height };
+      };
+      const words = (text: string) =>
+        [...e.querySelectorAll("div, span")].find((one) => one.textContent === text);
+      const use = [...e.querySelectorAll("button")].find((one) => one.textContent === "Use");
+      return {
+        first: box(words("From elsewhere")),
+        after: box(use),
+        under: box(words("mystery")),
+        columns: getComputedStyle(e).gridTemplateColumns,
+      };
+    });
     assert.ok(first && after && under);
     assert.ok(first.width > 120, `the name has room (${first.width}px)`);
     assert.ok(after.x >= first.x + first.width, "then Use, beside it");
     assert.ok(
       under.y >= first.y + first.height,
-      `what it is built from, under them: ${JSON.stringify({ first, under, columns: await row.evaluate((e) => getComputedStyle(e).gridTemplateColumns) })}`,
+      `what it is built from, under them: ${JSON.stringify({ first, under, columns })}`,
     );
     assert.equal(
       await title.evaluate((e) => e.scrollWidth <= e.clientWidth),

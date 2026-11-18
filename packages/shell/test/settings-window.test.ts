@@ -97,6 +97,58 @@ test(
   }),
 );
 
+/**
+ * The Settings window on the frame after a change: its box, its background, and what of it and of
+ * what is behind it is still moving, read at one moment.
+ */
+const nextFrame = (page: Page) =>
+  page.evaluate(
+    () =>
+      new Promise<{ box: number[]; background: string; moving: string[] }>((done) =>
+        requestAnimationFrame(() => {
+          const window = document.querySelector('[role="dialog"]') as HTMLElement;
+          const behind = document.querySelector('[data-slot="dialog-overlay"]');
+          const box = window.getBoundingClientRect();
+          done({
+            box: [box.x, box.y, box.width, box.height],
+            background: getComputedStyle(window).backgroundColor,
+            moving: [...window.getAnimations(), ...(behind?.getAnimations() ?? [])].map((one) =>
+              one instanceof CSSTransition ? one.transitionProperty : "animation",
+            ),
+          });
+        }),
+      ),
+  );
+
+test(
+  "the window keeps its shape as the screen changes, with nothing gliding: a phone's at once, and wide again at once; a new theme's colours at once",
+  withGateway(async (gateway) => {
+    const page = await open(gateway);
+    await openSettings(page);
+    await page.setViewportSize(PHONE);
+    assert.deepEqual(await nextFrame(page), {
+      box: [0, 0, PHONE.width, PHONE.height],
+      background: "rgb(35, 35, 35)",
+      moving: [],
+    });
+    await page.setViewportSize(WIDE);
+    assert.deepEqual(await nextFrame(page), {
+      box: [290, 150, 860, 600],
+      background: "rgb(35, 35, 35)",
+      moving: [],
+    });
+    await page.evaluate(() => {
+      document.documentElement.dataset.theme = "light";
+    });
+    assert.deepEqual(await nextFrame(page), {
+      box: [290, 150, 860, 600],
+      background: "rgb(255, 255, 255)",
+      moving: [],
+    });
+    await page.close();
+  }),
+);
+
 test(
   "the five sections are listed down the left; choosing one shows its contents at the right and marks its row",
   withGateway(async (gateway) => {

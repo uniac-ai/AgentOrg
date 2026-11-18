@@ -39,7 +39,7 @@ function DialogOverlay({
     <DialogPrimitive.Overlay
       data-slot="dialog-overlay"
       className={cn(
-        "fixed inset-0 isolate z-50 bg-black/10 duration-100 supports-backdrop-filter:backdrop-blur-xs data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0",
+        "fixed inset-0 isolate z-50 bg-black/10 transition-none duration-100 supports-backdrop-filter:backdrop-blur-xs data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0",
         className
       )}
       {...props}
@@ -49,7 +49,9 @@ function DialogOverlay({
 
 /**
  * A window of the page opens and closes in the page's window times, fading and growing a little as
- * it opens; with reduced motion it only fades. What is behind it fades in the same times.
+ * it opens; with reduced motion it only fades. What is behind it fades in the same times. The
+ * times are for opening and closing alone: a dialog and what is behind it transition nothing, so a
+ * change to the window's box, as when the screen narrows, or to its colours takes effect at once.
  */
 const WINDOW =
   "data-open:duration-[var(--window-open)] data-closed:duration-[var(--window-close)] data-open:zoom-in-96 data-closed:zoom-out-96 motion-reduce:data-open:zoom-in-100 motion-reduce:data-closed:zoom-out-100"
@@ -73,7 +75,7 @@ function DialogContent({
       <DialogPrimitive.Content
         data-slot="dialog-content"
         className={cn(
-          "fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 gap-4 rounded-xl bg-popover p-4 text-sm text-popover-foreground ring-1 ring-foreground/10 duration-100 outline-none sm:max-w-sm data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+          "fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 gap-4 rounded-xl bg-popover p-4 text-sm text-popover-foreground ring-1 ring-foreground/10 transition-none duration-100 outline-none sm:max-w-sm data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
           asWindow && WINDOW,
           className
         )}
