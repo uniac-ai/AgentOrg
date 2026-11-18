@@ -421,6 +421,10 @@ pub fn cursor_settings(driver_home: &Path) -> std::io::Result<()> {
     fs::rename(&written, &path)
 }
 
+/// Where the person sets up this Mac's parts, in the app: what the service's refusals name for a
+/// part switched off or a grant missing, ending with the part, as the window's cards name them.
+const SETUP_IN: &str = "AgentOrg: its icon in the menu bar, Agent Control…";
+
 fn service_command(programs: &Programs, places: &Places) -> Command {
     let mut command = Command::new(&programs.node);
     command
@@ -431,6 +435,7 @@ fn service_command(programs: &Programs, places: &Places) -> Command {
         .arg(&programs.driver)
         .arg("--screen-socket")
         .arg(&places.socket)
+        .args(["--setup-in", SETUP_IN])
         .env_clear()
         .envs(small_env(&places.home));
     command
@@ -716,14 +721,17 @@ mod tests {
             let config: Value = serde_json::from_str(&config.unwrap()).unwrap();
             assert_eq!(config["cursor"]["halo"], false);
 
-            // The service: lending only, reaching the driver on its socket, its home the person's.
+            // The service: lending only, reaching the driver on its socket, its home the person's,
+            // and told where the person sets this Mac up, which its refusals name.
             let (service, data) = (programs.service.display(), places.data.display());
             let lend = "serve --lend --listen 127.0.0.1:0";
+            let driver = programs.driver.display();
+            let setup_in = "--setup-in AgentOrg: its icon in the menu bar, Agent Control…";
             assert_eq!(
                 said("service.args").trim(),
                 format!(
-                    "{service} {lend} --data {data} --screen-driver {} --screen-socket {socket}",
-                    programs.driver.display()
+                    "{service} {lend} --data {data} --screen-driver {driver} \
+                     --screen-socket {socket} {setup_in}"
                 )
             );
             let env = said("service.env");
