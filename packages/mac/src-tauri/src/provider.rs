@@ -468,10 +468,14 @@ fn write_state(places: &Places, said: &Said) {
     }
 }
 
+/// How long the first picture is waited for before it is ended: the driver answers in well under a
+/// second, so one still running then is stuck.
+const PICTURE_MS: u64 = 30_000;
+
 /// One picture of the whole screen through the driver, as small as it takes one, which nothing
 /// keeps: the first capture after Screen Recording is given, which macOS may answer with its alert.
-/// It runs by itself, and is waited for off this thread.
-fn first_picture(programs: &Programs, places: &Places) {
+/// It runs by itself, and is waited for off this thread, for `wait` at most, then ended.
+fn first_picture(programs: &Programs, places: &Places, wait: Duration) {
     let mut command = Command::new(&programs.driver);
     command
         .args(["call", "get_desktop_state", r#"{"max_image_dimension":64}"#, "--socket"])
@@ -485,7 +489,16 @@ fn first_picture(programs: &Programs, places: &Places) {
         Ok(mut picture) => {
             log("provider", "Screen Recording given: one picture of the screen, as macOS may ask");
             thread::spawn(move || {
-                let _ = picture.wait();
+                let end = Instant::now() + wait;
+                while matches!(picture.try_wait(), Ok(None)) {
+                    if Instant::now() >= end {
+                        let _ = picture.kill();
+                        let _ = picture.wait();
+                        log("provider", "the first picture took too long, and was ended");
+                        return;
+                    }
+                    sleep(Duration::from_millis(100));
+                }
             });
         }
         Err(error) => log("provider", &format!("the first picture couldn't be taken: {error}")),
@@ -562,7 +575,7 @@ pub fn provide(
         let socket = driver.pid().is_some() && places.socket.exists();
         if socket && picture_due {
             picture_due = false;
-            first_picture(programs, places);
+            first_picture(programs, places, Duration::from_millis(PICTURE_MS));
         }
         if missing.is_empty() && socket && service.due() {
             service.start(service_command(programs, places));
@@ -790,7 +803,9 @@ mod tests {
         // The stand-in keeps the pointer's settings as it found them when it started.
         let seen = root.join("seen.json");
         let keeps = format!("cp \"$HOME/.cua-driver/config.json\" '{}'", seen.display());
-        program(&programs.driver, &format!("{keeps}\n: > \"$5\"\nexec sleep 600"));
+        // Called, as for the first picture once Screen Recording is given, it answers at once.
+        let called = "if [ \"$1\" = call ]; then exit 0; fi";
+        program(&programs.driver, &format!("{called}\n{keeps}\n: > \"$5\"\nexec sleep 600"));
         let record = r#"echo "{\"url\":\"http://127.0.0.1:1\",\"pid\":$$}" > "$7/server.json""#;
         program(&programs.node, &format!("{record}\nexec sleep 600"));
         program(&programs.service, "");
@@ -923,6 +938,29 @@ mod tests {
             stop_now.store(true, Ordering::Relaxed);
             until("it stopped", || !places.state.exists());
         });
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_first_picture_that_doesnt_answer_is_ended() {
+        crate::test_home();
+        let root = std::env::temp_dir().join(format!("agentorg-stuck-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let programs = Programs {
+            node: root.join("app/node"),
+            service: root.join("app/agentcomputer/agentcomputer.js"),
+            driver: root.join("app/cua-driver"),
+            themes: root.join("app/cursor-themes"),
+        };
+        // A driver that never answers the call, saying which process it is.
+        let pid = root.join("pid");
+        program(&programs.driver, &format!("echo $$ > '{}'\nexec sleep 600", pid.display()));
+        let places = places_in(&root);
+        first_picture(&programs, &places, Duration::from_millis(300));
+        until("the picture", || fs::read_to_string(&pid).is_ok_and(|said| !said.trim().is_empty()));
+        let pid: i32 = fs::read_to_string(&pid).unwrap().trim().parse().unwrap();
+        // Ended once the wait is over, and reaped: no process is left.
+        until("the picture ended", || unsafe { libc::kill(pid, 0) } != 0);
         let _ = fs::remove_dir_all(&root);
     }
 
