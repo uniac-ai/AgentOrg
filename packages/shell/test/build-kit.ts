@@ -20,7 +20,8 @@ export async function open(gateway: Gateway): Promise<Page> {
   const page = await launched.newPage({ viewport: { width: 1440, height: 900 } });
   page.setDefaultTimeout(8000);
   await page.addInitScript((session) => localStorage.setItem("agentorg.session", session), SESSION);
-  await page.goto(`${gateway.url}/#/`);
+  // Team, where Create is.
+  await page.goto(`${gateway.url}/#/team`);
   return page;
 }
 export const withGateway = (run: (gateway: Gateway) => Promise<void>) => async () => {
@@ -50,6 +51,6 @@ export async function choose(page: Page, field: string, option: RegExp) {
 export const gives = (page: Page, name: string) =>
   card(page, name).locator("[data-gives]").innerText();
 
-/** The shell has read its agents: they are in the left bar, which a phone keeps behind Menu. */
+/** The shell has read its agents: they are in the team page's list. */
 export const agentsRead = (page: Page) =>
   page.locator('ul[aria-label="Agents"] li').first().waitFor({ state: "attached" });

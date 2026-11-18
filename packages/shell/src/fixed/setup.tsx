@@ -76,7 +76,7 @@ export function Setup({
         open={deleting}
         onOpenChange={setDeleting}
         onDelete={() => api.call("agents", "remove", { agent: agent.agent })}
-        onDeleted={() => go({ screen: "home" })}
+        onDeleted={() => go({ screen: "team" })}
       >
         Its chats and what was created for it go with it. Connections you made and your skills stay.
         This can't be undone.

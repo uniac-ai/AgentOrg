@@ -210,11 +210,11 @@ test(
 );
 
 test(
-  "Home has no card for it, and a signed-out agent's line says why it can't work with no Set up",
+  "the page the app opens on has no card for it, and a signed-out agent's line says why it can't work with no Set up",
   withGateway(async (gateway) => {
     gateway.setAccount("signed_out");
     const page = await open(gateway);
-    await page.getByRole("main").getByRole("region", { name: "Recent" }).waitFor();
+    await page.getByRole("main").getByRole("list", { name: "Chats" }).waitFor();
     assert.equal(await page.getByRole("main").getByRole("region", { name: "Set up" }).count(), 0);
     await page.evaluate(() => {
       location.hash = "#/a/a-reviewer";

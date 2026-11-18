@@ -1,4 +1,4 @@
-// The layer over the page: one layer across the whole screen, the left bar included, and nothing
+// The layer over the page: one layer across the whole screen, the bar included, and nothing
 // above it. The chat lives in it, at the right, collapsed to a narrow column or open as a panel.
 // One inset from the screen's edges places it; nothing in it dims the page, and it closes by its
 // own Close.
@@ -46,7 +46,7 @@ function ChatPill({ returned }: { returned: boolean }) {
   return (
     <div
       data-chat-column
-      className="pointer-events-none absolute top-[var(--inset)] right-[var(--inset)] bottom-[var(--inset)] z-50 w-[var(--tab)] phone:z-30"
+      className="pointer-events-none absolute top-[var(--inset)] right-[var(--inset)] bottom-[var(--inset)] z-50 w-[var(--tab)] phone:bottom-[calc(var(--inset)+var(--foot))] phone:z-30"
     >
       {/* biome-ignore lint/a11y/useSemanticElements: the chat's own controls, not a form. */}
       <div

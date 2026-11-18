@@ -21,11 +21,6 @@
     @slot;
   }
 }
-@custom-variant rail {
-  @container app (40rem <= width < 60rem) {
-    @slot;
-  }
-}
 @custom-variant narrow {
   @container app (width < 68.75rem) {
     @slot;
@@ -222,6 +217,8 @@
     --panel: 420px;
     --tab: 64px;
     --tab-open: 80px;
+    /* A phone's row of places along the foot. */
+    --foot: 56px;
   }
   /* How long a window of the page takes to open, and to close. */
   :root {

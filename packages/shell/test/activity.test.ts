@@ -154,7 +154,7 @@ test(
     await tabs.getByRole("tab", { name: "Overview" }).waitFor();
     assert.deepEqual(await tabs.getByRole("tab").allInnerTexts(), ["Chats", "Overview"]);
     await tabs.getByRole("tab", { name: "Overview" }).click();
-    assert.match(page.url(), /#\/a\/a-reviewer\/overview$/);
+    assert.match(page.url(), /#\/team\/a-reviewer\/overview$/);
     const activity = box(page);
     await activity.getByRole("region", { name: "Review #482" }).waitFor();
     // Six calls at most, three of each, newest piece first; what was written and not sent isn't here.

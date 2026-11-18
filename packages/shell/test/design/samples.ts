@@ -149,14 +149,9 @@ export function between(gateway: Gateway) {
   });
 }
 
-/** Opens the conversation between Release notes and Research, from Release notes' page. */
+/** Opens the conversation between Release notes and Research, from Release notes' details. */
 export async function openBetween(page: Page) {
-  // The built bar names an agent after how it stands; the design's, by its name alone.
-  await page
-    .getByRole("navigation", { name: "Main" })
-    .getByRole("button", { name: /(^| )Release notes$/ })
-    .click();
-  await page.getByRole("main").getByRole("tab", { name: "Chats" }).click();
+  await openAgent(page, "Release notes", "Chats");
   await page
     .getByRole("main")
     .getByRole("list", { name: "Release notes's chats with other agents" })
@@ -600,17 +595,25 @@ export const heldComputer = (over: Partial<Held> = {}): Held => ({
   ...over,
 });
 
-/** An agent's page in the design, reached as a person reaches it: from the bar, then its tab. */
-export async function openDesignAgent(page: Page, name: string, tab?: string) {
-  if ((page.viewportSize()?.width ?? 0) < 640)
-    await page.getByRole("button", { name: "Menu" }).click();
+/**
+ * An agent's details, reached as a person reaches them, in the design and built: the bar's Team,
+ * the agent's row, then its tab.
+ */
+export async function openAgent(page: Page, name: string, tab?: string) {
   await page
     .getByRole("navigation", { name: "Main" })
-    .getByRole("button", { name, exact: true })
-    .last()
+    .getByRole("button", { name: "Team", exact: true })
     .click();
+  await page
+    .getByRole("main")
+    .getByRole("list", { name: "Agents" })
+    .getByRole("button", { name: new RegExp(name) })
+    .click();
+  await page.getByRole("main").getByRole("heading", { name, level: 1 }).waitFor();
   if (tab) await page.getByRole("main").getByRole("tab", { name: tab }).click();
 }
+/** An agent's details in the design. */
+export const openDesignAgent = openAgent;
 
 /** An agent's setup, opened from its page: read, and slid in, so nothing in it still moves. */
 export async function openSetup(page: Page, name: string) {
@@ -840,13 +843,9 @@ export async function notAnswered(page: Page, gateway?: Gateway) {
   );
 }
 
-/** Opens your conversation with Docs, never messaged, by its page's Message. */
+/** Opens your conversation with Docs, never messaged, by its details' Message. */
 export async function messageDocs(page: Page) {
-  // The built bar names an agent after how it stands; the design's, by its name alone.
-  await page
-    .getByRole("navigation", { name: "Main" })
-    .getByRole("button", { name: /(^| )Docs$/ })
-    .click();
+  await openAgent(page, "Docs");
   await page.getByRole("main").getByRole("button", { name: "Message", exact: true }).click();
   await chats(page).getByRole("heading", { name: "Docs" }).waitFor();
 }
@@ -1153,16 +1152,23 @@ export type Create = (typeof CREATES)[number][0];
 
 /** The create window in one of its states, reached as a person reaches it, and at rest. */
 export async function createState(page: Page, state: Create, design: boolean) {
+  // The design these were drawn from has its older bar, with Create and Templates on it, behind
+  // Menu on a phone; built, Create is on Team, and Templates is Settings' first section.
   const bar = async () => {
-    if ((page.viewportSize()?.width ?? 0) < 640)
+    if (design && (page.viewportSize()?.width ?? 0) < 640)
       await page.getByRole("button", { name: "Menu" }).click();
     return page.getByRole("navigation", { name: "Main" }).last();
   };
   if (state === "out" && design) await inDesign(page, /^ChatGPT:/);
   if (state === "template") {
-    await (await bar()).getByRole("button", { name: "Templates" }).click();
+    await (await bar()).getByRole("button", { name: design ? "Templates" : "Settings" }).click();
     await page.getByRole("main").getByRole("button", { name: "New template", exact: true }).click();
-  } else await (await bar()).getByRole("button", { name: "Create", exact: true }).click();
+  } else if (design)
+    await (await bar()).getByRole("button", { name: "Create", exact: true }).click();
+  else {
+    await (await bar()).getByRole("button", { name: "Team", exact: true }).click();
+    await page.getByRole("main").getByRole("button", { name: "Create", exact: true }).click();
+  }
   const window = page.getByRole("dialog", {
     name: state === "template" ? "New template" : "Create",
   });
@@ -1204,12 +1210,9 @@ export async function createState(page: Page, state: Create, design: boolean) {
 
 /** The Templates page, reached from the bar as a person reaches it, with its rows read. */
 export async function openTemplates(page: Page) {
-  if ((page.viewportSize()?.width ?? 0) < 640)
-    await page.getByRole("button", { name: "Menu" }).click();
-  await page
-    .getByRole("navigation", { name: "Main" })
-    .last()
-    .getByRole("button", { name: "Templates" })
+  await (await settingsBar(page))
+    .getByRole("button", { name: /^(Templates|Settings)$/ })
+    .first()
     .click();
   const main = page.getByRole("main");
   await main.getByRole("tab", { name: "Templates", selected: true }).waitFor();
@@ -1225,15 +1228,19 @@ export const SECTIONS = [
 ] as const;
 export type Section = (typeof SECTIONS)[number][0];
 
+/**
+ * The bar, with Settings on it: on a phone the older design's is behind Menu; the built one, and
+ * the design's from its icon bar on, are along the foot.
+ */
+async function settingsBar(page: Page) {
+  const menu = page.getByRole("button", { name: "Menu" });
+  if ((page.viewportSize()?.width ?? 0) < 640 && (await menu.count())) await menu.click();
+  return page.getByRole("navigation", { name: "Main" }).last();
+}
+
 /** One of Settings' sections, reached from the bar and then its tab, with its page read. */
 export async function openSection(page: Page, section: Section) {
-  if ((page.viewportSize()?.width ?? 0) < 640)
-    await page.getByRole("button", { name: "Menu" }).click();
-  await page
-    .getByRole("navigation", { name: "Main" })
-    .last()
-    .getByRole("button", { name: "Settings" })
-    .click();
+  await (await settingsBar(page)).getByRole("button", { name: "Settings" }).click();
   const main = page.getByRole("main");
   const name = SECTIONS.find(([id]) => id === section)?.[1] ?? "";
   await main.getByRole("tab", { name }).click();

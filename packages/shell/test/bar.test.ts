@@ -43,15 +43,16 @@ const bar = (page: Page) =>
   page.getByRole("status").filter({ hasText: /ChatGPT plan|Reconnecting/ });
 
 test(
-  "the plan's notice is the bar at the foot of the page beside the left bar; beside an open chat it ends short of it, its link and close whole",
+  "the plan's notice is the bar at the foot of the page beside the bar of places; beside an open chat it ends short of it, its link and close whole",
   withGateway(async (gateway) => {
     for (const width of [1440, 1024, 820]) {
-      const page = await open(gateway, "#/", width);
+      // A page with the floating chat on it: Team.
+      const page = await open(gateway, "#/team", width);
       const notice = bar(page);
       await notice.getByText("You're using your ChatGPT plan").waitFor();
       const left = await boxOf(page.getByRole("navigation", { name: "Main" }));
       const box = await boxOf(notice);
-      assert.equal(box.x, left.x + left.width + 20, `${width}: an inset from the left bar`);
+      assert.equal(box.x, left.x + left.width + 20, `${width}: an inset from the bar`);
       assert.equal(box.y + box.height, 900 - 20, `${width}: an inset from the foot`);
       assert.equal(
         await notice.getByRole("link", { name: "Manage usage" }).getAttribute("href"),

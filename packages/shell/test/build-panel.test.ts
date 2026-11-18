@@ -98,7 +98,7 @@ test(
     assert.equal(await key.getAttribute("type"), "password");
     await key.fill("the-key");
     await panel(page).getByRole("button", { name: "Create", exact: true }).click();
-    await page.waitForURL(/#\/a\/a-6$/);
+    await page.waitForURL(/#\/team\/a-6$/);
     await page.getByRole("main").getByText("Keeps dependencies current").waitFor();
     assert.deepEqual(gateway.calls.find((c) => c.method === "create")?.input, {
       stack: {

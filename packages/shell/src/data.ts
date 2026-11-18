@@ -81,15 +81,13 @@ export function useLoad<T>(
 
 /** What an agent's page can show under its head. */
 export type AgentTab = "computer" | "chats" | "overview";
-/** The hash route: home, chat, team, an agent, or settings. */
+/** The hash route: chat, team, or settings. */
 export type Route =
-  | { screen: "home" }
   /** The chat page, on your conversation with an agent if one is named. */
   | { screen: "chat"; agent?: string }
   /** The team page, on an agent's details if one is named. */
   | { screen: "team"; agent?: string; tab?: AgentTab }
   | { screen: "settings"; tab: "templates" | "providers" | "account" }
-  | { screen: "agent"; agent: string; tab?: AgentTab }
   | { screen: "skills" | "mcps"; focus?: string; adding?: boolean };
 function routeOf(hash: string): Route {
   // Settings opens on its first tab.
@@ -103,22 +101,19 @@ function routeOf(hash: string): Route {
       ...(managed[2] === "add" ? { adding: true } : {}),
       ...(managed[3] ? { focus: decodeURIComponent(managed[3]) } : {}),
     };
-  const team = /^#\/team(?:\/([^/]+)(?:\/(computer|chats|overview))?)?$/.exec(hash);
+  // An agent's own address, from before its details were on the team page, shows them there.
+  const team =
+    /^#\/team(?:\/([^/]+)(?:\/(computer|chats|overview))?)?$/.exec(hash) ??
+    /^#\/a\/([^/]+)(?:\/(computer|chats|overview))?$/.exec(hash);
   if (team)
     return {
       screen: "team",
       ...(team[1] ? { agent: decodeURIComponent(team[1]) } : {}),
       ...(team[2] ? { tab: team[2] as AgentTab } : {}),
     };
+  // The app opens on Chat, and so does an address that names nothing.
   const chat = /^#\/chat(?:\/([^/]+))?$/.exec(hash);
-  if (chat) return { screen: "chat", ...(chat[1] ? { agent: decodeURIComponent(chat[1]) } : {}) };
-  const [, agent, under] = /^#\/a\/([^/]+)(?:\/(computer|chats|overview))?$/.exec(hash) ?? [];
-  if (!agent) return { screen: "home" };
-  return {
-    screen: "agent",
-    agent: decodeURIComponent(agent),
-    ...(under ? { tab: under as AgentTab } : {}),
-  };
+  return { screen: "chat", ...(chat?.[1] ? { agent: decodeURIComponent(chat[1]) } : {}) };
 }
 export function useRoute(): Route {
   const hash = useSyncExternalStore(
@@ -131,9 +126,8 @@ export function useRoute(): Route {
   return routeOf(hash);
 }
 export function go(route: Route) {
-  if (route.screen === "skills" || route.screen === "mcps") {
-    const rest = route.adding ? "/add" : route.focus ? `/s/${encodeURIComponent(route.focus)}` : "";
-    location.hash = `#/${route.screen}${rest}`;
+  if (route.screen === "chat") {
+    location.hash = `#/chat${route.agent ? `/${encodeURIComponent(route.agent)}` : ""}`;
     return;
   }
   if (route.screen === "settings") {
@@ -145,14 +139,8 @@ export function go(route: Route) {
     location.hash = `#/team${agent}${route.agent && route.tab ? `/${route.tab}` : ""}`;
     return;
   }
-  if (route.screen === "chat") {
-    location.hash = `#/chat${route.agent ? `/${encodeURIComponent(route.agent)}` : ""}`;
-    return;
-  }
-  location.hash =
-    route.screen === "agent"
-      ? `#/a/${encodeURIComponent(route.agent)}${route.tab ? `/${route.tab}` : ""}`
-      : "#/";
+  const rest = route.adding ? "/add" : route.focus ? `/s/${encodeURIComponent(route.focus)}` : "";
+  location.hash = `#/${route.screen}${rest}`;
 }
 
 export type ThemeName = "dark" | "light";

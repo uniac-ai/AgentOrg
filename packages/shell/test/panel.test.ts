@@ -13,7 +13,8 @@ test.after(() => browser.close());
 
 type Gateway = Awaited<ReturnType<typeof standIn>>;
 
-async function open(gateway: Gateway, hash = "#/", width = 1440): Promise<Page> {
+/** Opens a page with the floating chat on it: Team, since the chat page has none. */
+async function open(gateway: Gateway, hash = "#/team", width = 1440): Promise<Page> {
   const page = await browser.newPage({ viewport: { width, height: 900 } });
   page.setDefaultTimeout(8000);
   await page.addInitScript((session) => localStorage.setItem("agentorg.session", session), SESSION);
@@ -139,7 +140,7 @@ test(
 test(
   "on a phone the panel takes the screen",
   withGateway(async (gateway) => {
-    const page = await open(gateway, "#/", 390);
+    const page = await open(gateway, "#/team", 390);
     await chatButton(page).click();
     assert.deepEqual(await boxOf(panel(page)), [0, 0, 390, 900]);
     await page.close();
@@ -357,7 +358,7 @@ test(
       (session) => localStorage.setItem("agentorg.session", session),
       SESSION,
     );
-    await page.goto(`${gateway.url}/#/`);
+    await page.goto(`${gateway.url}/#/team`);
     await until(
       () => Object.keys(gateway.notes.get("ui/read-conversations") as object).sort(),
       ["at", "since"],

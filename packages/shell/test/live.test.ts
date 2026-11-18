@@ -160,7 +160,7 @@ test(
     ]);
     assert.equal(await selected(), "Computer");
     await tabs.getByRole("tab", { name: "Chats" }).click();
-    await page.waitForURL(/#\/a\/a-research\/chats$/);
+    await page.waitForURL(/#\/team\/a-research\/chats$/);
     await main
       .getByRole("tabpanel", { name: "Chats" })
       .getByRole("list", { name: "Chats with Research" })

@@ -160,7 +160,7 @@ function Stack() {
         ...(purpose ? { purpose } : {}),
       });
       hide();
-      go({ screen: "agent", agent });
+      go({ screen: "team", agent });
     });
   };
   /** The window's menu: in its head, or at its foot where the head isn't drawn. */

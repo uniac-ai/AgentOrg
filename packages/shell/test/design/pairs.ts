@@ -90,10 +90,6 @@ interface Screen {
   built(page: Page, gateway: Gateway): Promise<unknown>;
   part?: (page: Page) => ReturnType<Page["locator"]>;
 }
-const railSearch = (page: Page) =>
-  page
-    .getByRole("navigation", { name: "Main" })
-    .getByRole("button", { name: "Search", exact: true });
 const terminalWindow = (page: Page) =>
   page.getByRole("tablist", { name: "Terminals" }).locator("xpath=../../..");
 const browserWindow = (page: Page) =>
@@ -103,12 +99,21 @@ const ownTab = async (page: Page) => {
   await page.getByRole("tab", { name: "New tab", selected: true }).waitFor();
 };
 type Gateway = Awaited<ReturnType<typeof standIn>>;
-/** The design's own way to its chat page: its bar's Chat icon. */
+/** The way to the chat page, in the design and built: the bar's Chat icon. */
 const chatIcon = (page: Page) =>
   page.getByRole("navigation", { name: "Main" }).getByRole("button", { name: /^Chat/ }).click();
-/** The design's own way to its team page: its bar's Team icon. */
+/** The way to the team page, in the design and built: the bar's Team icon. */
 const teamIcon = (page: Page) =>
   page.getByRole("navigation", { name: "Main" }).getByRole("button", { name: "Team" }).click();
+/**
+ * A place's label, beside it: shown from the keyboard, which the pointer moving away leaves. A
+ * key pressed first makes it the keyboard's focus, ring and all, after the built side's Dismiss.
+ */
+const labelOf = async (page: Page, name: string) => {
+  await page.keyboard.press("Shift");
+  await page.getByRole("navigation", { name: "Main" }).getByRole("button", { name }).focus();
+  await page.locator('[data-slot="tooltip-content"]').waitFor();
+};
 /** A row of the team page's list, in the design or built. */
 const teamRow = (page: Page, name: string) =>
   page
@@ -176,10 +181,7 @@ const TERMINALS = [
 ];
 /** The design's own windows, on Research's computer. */
 const windowOf = async (page: Page, name: string) => {
-  await page
-    .getByRole("navigation", { name: "Main" })
-    .getByRole("button", { name: "Research", exact: true })
-    .click();
+  await openDesignAgent(page, "Research");
   await page.getByRole("button", { name, exact: true }).click();
 };
 const terminalOf = (page: Page) => windowOf(page, "Terminal");
@@ -199,34 +201,43 @@ const oneMoreReply = async (page: Page) => {
   await page.getByRole("button", { name: "Chats, 2 new" }).waitFor();
 };
 const SCREENS: Screen[] = [
+  // The frame: the bar, on Chat, where the app opens, with the design's sample in it.
   {
     name: "frame",
     sizes: ["wide", "rail", "phone"],
     themes: ["dark", "light"],
+    chats: true,
+    agents: true,
     design: async () => {},
-    built: async () => {},
+    built: async (page, gateway) => {
+      await asTheDesign(gateway);
+      await chatRow(page, "Release notes").waitFor();
+    },
   },
   {
-    name: "frame-drawer",
-    sizes: ["rail", "phone"],
-    themes: ["dark"],
-    design: (page) =>
-      (page.viewportSize()?.width === 390
-        ? page.getByRole("button", { name: "Menu" })
-        : railSearch(page)
-      ).click(),
-    built: (page) =>
-      (page.viewportSize()?.width === 390
-        ? page.getByRole("button", { name: "Menu" })
-        : railSearch(page)
-      ).click(),
+    name: "frame-label",
+    sizes: ["wide"],
+    themes: ["dark", "light"],
+    chats: true,
+    agents: true,
+    design: (page) => labelOf(page, "Team"),
+    built: async (page, gateway) => {
+      await asTheDesign(gateway);
+      await chatRow(page, "Release notes").waitFor();
+      await labelOf(page, "Team");
+    },
   },
+  // The floating chat, on Team: it is on every page but Chat.
   {
     name: "chat-collapsed",
     sizes: ["wide", "phone"],
     themes: ["dark", "light"],
     unread: true,
-    design: oneMoreReply,
+    hash: "#/team",
+    design: async (page) => {
+      await teamIcon(page);
+      await oneMoreReply(page);
+    },
     built: (page) => page.getByRole("button", { name: "Chats, 2 new" }).waitFor(),
   },
   {
@@ -234,7 +245,9 @@ const SCREENS: Screen[] = [
     sizes: ["wide", "phone"],
     themes: ["dark", "light"],
     unread: true,
+    hash: "#/team",
     design: async (page) => {
+      await teamIcon(page);
       await oneMoreReply(page);
       await page.getByRole("button", { name: "Chats, 2 new" }).click();
     },
@@ -251,7 +264,11 @@ const SCREENS: Screen[] = [
       sizes: ["wide", "phone"],
       themes: ["dark", "light"],
       chats: true,
-      design: reach,
+      hash: "#/team",
+      design: async (page) => {
+        await teamIcon(page);
+        await reach(page);
+      },
       built: reach,
     }),
   ),
@@ -268,7 +285,9 @@ const SCREENS: Screen[] = [
       themes: ["dark", "light"],
       chats: true,
       given,
+      hash: "#/team",
       design: async (page) => {
+        await teamIcon(page);
         await openSampleChat(page);
         await inDesign(page, control);
         await earlierInView(page);
@@ -290,7 +309,9 @@ const SCREENS: Screen[] = [
       sizes: ["wide"],
       themes: ["dark", "light"],
       chats: true,
+      hash: "#/team",
       design: async (page) => {
+        await teamIcon(page);
         await reach(page);
         await refuseSend(page);
       },
@@ -302,19 +323,17 @@ const SCREENS: Screen[] = [
       },
     }),
   ),
-  // The chat page. The design reaches it by its bar's Chat icon; the built side by its address,
-  // since nothing links to it yet, so the built side still has its left bar and, on a phone, its
-  // menu button.
+  // The chat page, by the bar's Chat icon on both sides.
   {
     name: "chat-page",
     sizes: ["wide"],
     themes: ["dark", "light"],
     chats: true,
     agents: true,
-    hash: "#/chat",
     design: chatIcon,
     built: async (page, gateway) => {
       await asTheDesign(gateway);
+      await chatIcon(page);
       await page
         .getByRole("main")
         .getByRole("region", { name: /^Conversation with / })
@@ -327,10 +346,10 @@ const SCREENS: Screen[] = [
     themes: ["dark", "light"],
     chats: true,
     agents: true,
-    hash: "#/chat",
     design: chatIcon,
     built: async (page, gateway) => {
       await asTheDesign(gateway);
+      await chatIcon(page);
       await chatRow(page, "Reviewer").waitFor();
     },
   },
@@ -340,7 +359,6 @@ const SCREENS: Screen[] = [
     themes: ["dark", "light"],
     chats: true,
     agents: true,
-    hash: "#/chat",
     design: async (page) => {
       await chatIcon(page);
       await page
@@ -350,6 +368,7 @@ const SCREENS: Screen[] = [
     },
     built: async (page, gateway) => {
       await asTheDesign(gateway);
+      await chatIcon(page);
       await chatRow(page, "Reviewer").click();
       await page
         .getByRole("main")
@@ -365,7 +384,6 @@ const SCREENS: Screen[] = [
     themes: ["dark", "light"],
     chats: true,
     agents: true,
-    hash: "#/chat",
     design: async (page) => {
       await chatIcon(page);
       await page
@@ -378,64 +396,38 @@ const SCREENS: Screen[] = [
       await asTheDesign(gateway);
       computer(gateway, [{ surface: "files", protocol: "files@1", operate: true }], "a-release");
       gateway.changed();
+      await chatIcon(page);
       await chatRow(page, "Release notes").click();
       await page.getByRole("button", { name: "Release notes's computer" }).click();
       await page.locator('[data-beside="open"]').waitFor();
     },
   },
-  // The team page, with Reviewer's details. The design reaches it by its bar's Team icon; the
-  // built side by its address, since nothing links to it yet.
-  {
-    name: "team-page",
-    sizes: ["wide"],
-    themes: ["dark", "light"],
-    agents: true,
-    hash: "#/team/a-reviewer",
-    design: async (page) => {
-      await teamIcon(page);
-      await teamRow(page, "Reviewer").click();
-    },
-    built: (page) =>
-      page.getByRole("main").getByRole("heading", { name: "Reviewer", level: 1 }).waitFor(),
-  },
-  {
-    name: "team-page-list",
-    sizes: ["rail", "phone"],
-    themes: ["dark", "light"],
-    agents: true,
-    hash: "#/team",
-    design: teamIcon,
-    built: (page) => teamRow(page, "Reviewer").waitFor(),
-  },
-  {
-    name: "team-page-details",
-    sizes: ["rail", "phone"],
-    themes: ["dark", "light"],
-    agents: true,
-    hash: "#/team",
-    design: async (page) => {
-      await teamIcon(page);
-      await teamRow(page, "Reviewer").click();
-    },
-    built: async (page) => {
-      await teamRow(page, "Reviewer").click();
-      await page.getByRole("main").getByRole("heading", { name: "Reviewer", level: 1 }).waitFor();
-    },
-  },
-  {
-    name: "home",
-    sizes: ["wide", "phone"],
-    themes: ["dark", "light"],
-    chats: true,
-    design: async () => {},
-    // As many need you as in the design's sample: one with a problem, one with a reply not read.
-    built: async (page, gateway) => {
-      await noted(gateway);
-      releaseNotes(gateway);
-      gateway.changed();
-      await page.getByRole("region", { name: "Needs you" }).getByRole("button").nth(1).waitFor();
-    },
-  },
+  // The team page, with Reviewer's details, by the bar's Team icon on both sides.
+  ...(
+    [
+      ["team-page", ["wide"], true],
+      ["team-page-list", ["rail", "phone"], false],
+      ["team-page-details", ["rail", "phone"], true],
+    ] as const
+  ).map(
+    ([name, sizes, details]): Screen => ({
+      name,
+      sizes: [...sizes],
+      themes: ["dark", "light"],
+      agents: true,
+      design: async (page) => {
+        await teamIcon(page);
+        if (details) await teamRow(page, "Reviewer").click();
+      },
+      built: async (page) => {
+        await teamIcon(page);
+        await teamRow(page, "Reviewer").waitFor();
+        if (!details) return;
+        await teamRow(page, "Reviewer").click();
+        await page.getByRole("main").getByRole("heading", { name: "Reviewer", level: 1 }).waitFor();
+      },
+    }),
+  ),
   ...AGENT_PAGES.map(
     ({ name, agent, id, tab, sizes, part }): Screen => ({
       name,
@@ -589,14 +581,6 @@ const SCREENS: Screen[] = [
       await openSetup(page, "Research");
     },
     built: (page) => openSetup(page, "Research"),
-  },
-  {
-    name: "chats-found",
-    sizes: ["wide"],
-    themes: ["dark", "light"],
-    chats: true,
-    design: (page) => page.getByRole("searchbox", { name: "Search" }).fill("Route today"),
-    built: (page) => page.getByRole("searchbox", { name: "Search" }).fill("Route today"),
   },
   {
     name: "terminal",

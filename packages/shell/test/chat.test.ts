@@ -618,20 +618,20 @@ test(
 );
 
 test(
-  "search in the bar finds agents, not what was said to them",
+  "search on the team page finds agents, not what was said to them",
   withGateway(async (gateway) => {
     gateway.converse("a-research", [reply("o1", "The three oldest are #212, #240 and #251.")]);
     const page = await visit(gateway, "a-reviewer");
-    const bar = page.getByRole("navigation", { name: "Main" });
-    await bar.getByRole("searchbox", { name: "Search" }).fill("oldest");
+    const team = page.getByRole("main").getByRole("region", { name: "Team" });
+    await team.getByRole("searchbox", { name: "Search" }).fill("oldest");
     await page.waitForTimeout(300);
-    assert.equal(await bar.getByRole("list", { name: "Chats found" }).count(), 0);
+    assert.equal(await page.getByRole("list", { name: "Chats found" }).count(), 0);
     await page.close();
   }),
 );
 
 test(
-  "the chat opens on what it showed last, its face goes to its agent's page, and nothing in it starts, renames or archives a chat",
+  "the chat opens on what it showed last, its face goes to its agent's details, and nothing in it starts, renames or archives a chat",
   withGateway(async (gateway) => {
     const page = await open(gateway);
     await panel(page).getByRole("button", { name: "Close chats" }).click();
@@ -640,13 +640,13 @@ test(
     // Its head is the agent, with nothing to rename or archive.
     await panel(page).getByRole("heading", { name: "Reviewer" }).waitFor();
     assert.equal(await panel(page).getByRole("button", { name: "Chat options" }).count(), 0);
-    // The face in a conversation's head is its agent: its page, with the chat out of the way.
+    // The face in a conversation's head is its agent: its details, with the chat out of the way.
     await page
       .getByRole("navigation", { name: "Main" })
       .getByRole("button", { name: "Settings" })
       .click();
-    await panel(page).getByRole("button", { name: "Reviewer's page" }).click();
-    await page.waitForURL(/#\/a\/a-reviewer$/);
+    await panel(page).getByRole("button", { name: "Reviewer's details" }).click();
+    await page.waitForURL(/#\/team\/a-reviewer$/);
     await panel(page).waitFor({ state: "detached" });
     // The list starts nothing and keeps nothing archived: an agent is messaged from its page.
     await page.getByRole("button", { name: /^Chats/ }).click();
