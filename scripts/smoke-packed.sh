@@ -43,6 +43,8 @@ trap cleanup EXIT
 
 step() { echo "== $*"; }
 # Start `agentorg` ($1) on a home ($2) in the background as $pid, logging to $3, until it serves.
+# This build's starts pass --port 0: its default port, 7731, is the person's, and a check never takes
+# it. The published versions started here predate that default and take any free port already.
 start_on() {
   # An account folder of its own, so no AgentOrg Mac of this machine's is looked at.
   HOME="$work/account" "$1" --no-open --home "$2" "${@:4}" >"$3" 2>&1 &
@@ -148,7 +150,7 @@ npm install --global --silent --no-audit --no-fund --prefix "$global" --cache "$
 
 step "run agentorg --no-open on a fresh home"
 home="$work/home"
-HOME="$work/account" "$agentorg" --no-open --home "$home" >"$work/app.log" 2>&1 &
+HOME="$work/account" "$agentorg" --no-open --port 0 --home "$home" >"$work/app.log" 2>&1 &
 pid=$!
 echo "pid $pid"
 url=""
@@ -232,21 +234,21 @@ statuses() {
   for path in "$@"; do echo "$(curl -s -o /dev/null -w '%{http_code}' "$at$path") $path"; done
 }
 # With none given, it starts, says so, and its own pages are all it serves.
-start_on "$corebin" "$work/home-core" "$work/core.log"
+start_on "$corebin" "$work/home-core" "$work/core.log" --port 0
 grep -q '^No frontend: give one with --frontend DIR' "$work/core.log" ||
   { cat "$work/core.log" >&2; exit 1; }
 [ "$(statuses "$work/core.log" / /app.js /signin /signin.js | tr '\n' ' ')" = "200 / 404 /app.js 200 /signin 200 /signin.js " ] ||
   { statuses "$work/core.log" / /app.js /signin /signin.js >&2; exit 1; }
 stop_app
 # Given the frontend of its release, it serves it.
-start_on "$corebin" "$work/home-core" "$work/core.log" --frontend "$work/front/frontend"
+start_on "$corebin" "$work/home-core" "$work/core.log" --port 0 --frontend "$work/front/frontend"
 statuses "$work/core.log" / /app.js /app.css /signin /signin.js | tee "$work/served.txt"
 ! grep -qv '^200 ' "$work/served.txt" || exit 1
 stop_app
 # One that speaks another contract is refused, saying what goes together.
 printf '{"version":"9.9.9","contract":2}' >"$work/front/frontend/frontend.json"
 # Ended after 60 s if it does start, which fails the check below as well.
-if perl -e 'alarm 60; exec @ARGV' "$corebin" --no-open --home "$work/home-core" \
+if perl -e 'alarm 60; exec @ARGV' "$corebin" --no-open --port 0 --home "$work/home-core" \
   --frontend "$work/front/frontend" >"$work/core.log" 2>&1; then
   echo "The core started on another contract's frontend" >&2
   exit 1
@@ -281,7 +283,7 @@ made="$(both_ready "$was" "$uphome")" ||
 echo "0.0.5: $made"
 "$was" actors --home "$uphome" >"$work/old-actors.json"
 stop_app
-start_on "$agentorg" "$uphome" "$work/up.log"
+start_on "$agentorg" "$uphome" "$work/up.log" --port 0
 for _ in $(seq 1 120); do
   "$agentorg" call agents creatable --home "$uphome" >"$work/up-creatable.json" 2>/dev/null &&
     grep -Eq '"id": ?"assistant"' "$work/up-creatable.json" && break
@@ -360,7 +362,7 @@ slot="$(chat_slot "$was" "$home6")"
 [ -n "$slot" ] || { echo "0.0.6 gave the person no chat" >&2; exit 1; }
 "$was" call "$slot" send '{"text":"Said on 0.0.6."}' --home "$home6" >/dev/null
 stop_app
-start_on "$agentorg" "$home6" "$work/up6.log"
+start_on "$agentorg" "$home6" "$work/up6.log" --port 0
 # Its chats changed shape since 0.0.6: the person's reach to them must answer, at the slot it had,
 # with the conversation as the person's. The slot keeps its name while the agent is away, so the
 # name alone doesn't say the reach works: its conversations must answer.
@@ -461,7 +463,7 @@ for v in 0.0.7 0.0.8 0.0.9; do
       { echo "$v bound its agent to no $bound" >&2; cat "$work/bound-$v.txt" >&2; exit 1; }
   done
   stop_app
-  start_on "$agentorg" "$homev" "$work/up-$v.log"
+  start_on "$agentorg" "$homev" "$work/up-$v.log" --port 0
   # The person keeps the slot across the change of the chat interface: its conversations answer
   # once the agent is back.
   for _ in $(seq 1 120); do
@@ -587,7 +589,7 @@ for v in 0.0.10 0.0.11 0.0.12 0.0.13 0.0.14 0.0.15 0.0.16 0.0.17 0.0.18 0.0.19 0
       { echo "$v bound its agent to no $bound" >&2; cat "$work/bound-$v.txt" >&2; exit 1; }
   done
   stop_app
-  start_on "$agentorg" "$homev" "$work/up-$v.log"
+  start_on "$agentorg" "$homev" "$work/up-$v.log" --port 0
   # The person keeps the conversation's slot, which answers once the agent is back.
   back=""
   for _ in $(seq 1 120); do
