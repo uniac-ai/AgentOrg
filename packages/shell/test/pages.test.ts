@@ -248,16 +248,24 @@ test(
     await skills.getByText("files", { exact: true }).waitFor();
     assert.equal(await skills.getByRole("button", { name: /^Remove / }).count(), 0);
 
+    // The way to a new one puts the setup away and opens Settings straight on its section.
+    const settings = page.getByRole("dialog", { name: "Settings" });
+    const chosen = (name: string) =>
+      settings
+        .getByRole("navigation", { name: "Settings" })
+        .getByRole("button", { name })
+        .and(page.locator('[aria-current="true"]'));
     await sheet.getByRole("button", { name: "Add an MCP" }).click();
     await page.getByRole("menuitem", { name: "Connect a new MCP…" }).click();
-    await page.getByRole("tab", { name: "MCP connections", selected: true }).waitFor();
-    await page.getByRole("dialog").waitFor({ state: "detached" });
-    await page.goBack();
+    await chosen("MCP connections").waitFor();
+    await sheet.waitFor({ state: "detached" });
+    await page.keyboard.press("Escape");
+    await settings.waitFor({ state: "detached" });
     sheet = await openSetup(page, "Triage");
     await sheet.getByRole("button", { name: "Add a skill" }).click();
     await page.getByRole("menuitem", { name: "Add a new skill…" }).click();
-    await page.getByRole("tab", { name: "Skills", selected: true }).waitFor();
-    await page.getByRole("dialog").waitFor({ state: "detached" });
+    await chosen("Skills").waitFor();
+    await sheet.waitFor({ state: "detached" });
     await page.close();
   }),
 );

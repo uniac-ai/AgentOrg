@@ -13,7 +13,7 @@ import {
 } from "./data.ts";
 import { DeleteButton } from "./delete-dialog.tsx";
 import { Empty, rowClass, Scroll, TroubleDot, UsedBy, WhereIcon } from "./parts.tsx";
-import { useOffer } from "./settings-page.tsx";
+import { useOffer } from "./settings-window.tsx";
 
 /**
  * Each connection with how many tools it offers and, down, why; a server's state has no event, so

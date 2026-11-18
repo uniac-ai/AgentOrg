@@ -1,7 +1,16 @@
 // What a stack becomes: templates kept in Settings, and the units an agent's pages name.
 import assert from "node:assert/strict";
 import test from "node:test";
-import { card, choose, fromTemplate, open, panel, withBrowser, withGateway } from "./build-kit.ts";
+import {
+  card,
+  choose,
+  fromTemplate,
+  open,
+  panel,
+  settingsWindow,
+  withBrowser,
+  withGateway,
+} from "./build-kit.ts";
 import { openSetup } from "./design/samples.ts";
 
 withBrowser();
@@ -27,7 +36,11 @@ test(
         .count(),
       1,
     );
+    // The creation window opens over Settings; it is used once it has opened.
     await assistant.getByRole("button", { name: "Use" }).click();
+    await panel(page).evaluate((e) =>
+      Promise.all(e.getAnimations().map((moving) => moving.finished)),
+    );
     assert.equal(
       await panel(page)
         .getByRole("button", { name: /^Assistant/ })
@@ -72,12 +85,18 @@ test(
       .getByRole("navigation", { name: "Main" })
       .getByRole("button", { name: "Settings" })
       .click();
-    const main = page.getByRole("main");
-    await main.getByRole("tab", { name: "Templates", selected: true }).waitFor();
+    const main = settingsWindow(page);
+    await main
+      .getByRole("navigation", { name: "Settings" })
+      .getByRole("button", { name: "Templates" })
+      .and(page.locator('[aria-current="true"]'))
+      .waitFor();
+    // Nothing is measured until it has opened.
+    await main.evaluate((e) => Promise.all(e.getAnimations().map((moving) => moving.finished)));
     assert.equal(
       (await main.getByRole("button", { name: "New template", exact: true }).innerText()).trim(),
       "New template",
-      "what the section offers, in words where there is room",
+      "what the section offers, in words",
     );
     const row = main
       .getByRole("list", { name: "Templates" })
@@ -90,15 +109,18 @@ test(
     const title = row.getByText("From elsewhere", { exact: true });
     assert.deepEqual(
       await title.evaluate((e) => [getComputedStyle(e).fontSize, getComputedStyle(e).fontWeight]),
-      ["15px", "500"],
+      ["14px", "500"],
     );
+    // The window's section is narrow, so the row takes its narrower layout: the name first, then
+    // what can be done with it, and what it is built from under them.
     const [name, units, use] = [
       await title.boundingBox(),
       await row.getByText("mystery").boundingBox(),
       await row.getByRole("button", { name: "Use" }).boundingBox(),
     ];
     assert.ok(name && units && use);
-    assert.ok(units.x > name.x + name.width && use.x > units.x + units.width, "across one row");
+    assert.ok(use.x >= name.x + name.width, "Use beside the name");
+    assert.ok(units.y >= name.y + name.height, "what it is built from under them");
     const remove = row.getByRole("button", { name: "Delete From elsewhere" });
     const seen = () => remove.evaluate((e) => getComputedStyle(e).opacity);
     await page.mouse.move(5, 5);
@@ -111,6 +133,16 @@ test(
     // from goes under them.
     await page.setViewportSize({ width: 390, height: 844 });
     await page.waitForFunction(() => document.documentElement.clientWidth === 390);
+    // There the window shows its sections first, as it was opened from the bar.
+    await main
+      .getByRole("navigation", { name: "Settings" })
+      .getByRole("button", { name: "Templates" })
+      .click();
+    // Measured once the section is shown and laid out at its new width.
+    await main.getByRole("region", { name: "Templates", exact: true }).waitFor();
+    await page.evaluate(
+      () => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))),
+    );
     const [first, after, under] = [
       await title.boundingBox(),
       await row.getByRole("button", { name: "Use" }).boundingBox(),
@@ -119,7 +151,10 @@ test(
     assert.ok(first && after && under);
     assert.ok(first.width > 120, `the name has room (${first.width}px)`);
     assert.ok(after.x >= first.x + first.width, "then Use, beside it");
-    assert.ok(under.y >= first.y + first.height, "what it is built from, under them");
+    assert.ok(
+      under.y >= first.y + first.height,
+      `what it is built from, under them: ${JSON.stringify({ first, under, columns: await row.evaluate((e) => getComputedStyle(e).gridTemplateColumns) })}`,
+    );
     assert.equal(
       await title.evaluate((e) => e.scrollWidth <= e.clientWidth),
       true,

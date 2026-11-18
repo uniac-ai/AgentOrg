@@ -3,7 +3,7 @@
 import { LoaderCircleIcon, MessageCircleIcon, SettingsIcon, UsersIcon, XIcon } from "lucide-react";
 import { useLayoutEffect } from "react";
 import { USAGE, useWaited } from "../app.tsx";
-import { go, type Route, useConnection, useRoute } from "../data.ts";
+import { go, openSettings, useConnection, useRoute, useSettings } from "../data.ts";
 import { Button } from "../ui/button.tsx";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../ui/tooltip.tsx";
 import { AllChatsProvider, useAllChats } from "./all-chats.tsx";
@@ -15,11 +15,8 @@ import { ComputerViews } from "./computer.tsx";
 import { ComputersProvider } from "./computers.tsx";
 import { Layer } from "./layer.tsx";
 import { LoginProvider, type LoginStatus, SignInBanner } from "./login.tsx";
-import { McpsPage } from "./mcps-page.tsx";
-import { SettingsFrame, SettingsPage, sectionOf } from "./settings-page.tsx";
-import { SkillsPage } from "./skills-page.tsx";
+import { SettingsWindow } from "./settings-window.tsx";
 import { TeamPage } from "./team-page.tsx";
-import { TemplatesPage } from "./templates-page.tsx";
 import { AgentsProvider } from "./watch.tsx";
 
 /** The plan's notice, while it is to be shown, and what dismisses it. */
@@ -57,9 +54,6 @@ export function FixedShell({
   );
 }
 
-/** Settings opens on its first section. */
-const SETTINGS: Route = { screen: "settings", tab: "templates" };
-
 /**
  * One place of the bar: an icon alone. Its label shows beside it while the pointer rests on it or
  * the keyboard is on it, fading in and out. On a phone each label sits under its icon instead.
@@ -70,6 +64,7 @@ function Place({
   current,
   onClick,
   children,
+  ...rest
 }: {
   label: string;
   /** What a screen reader is told, where it is more than the label. */
@@ -77,7 +72,7 @@ function Place({
   current: boolean;
   onClick(): void;
   children: React.ReactNode;
-}) {
+} & Omit<React.ComponentProps<"button">, "name">) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -86,6 +81,7 @@ function Place({
           aria-label={name}
           aria-current={current ? "page" : undefined}
           onClick={onClick}
+          {...rest}
           className={`relative grid size-11 shrink-0 place-items-center rounded-xl hover:bg-[var(--hover)] ${current ? "bg-[var(--selected)]" : ""} phone:flex phone:h-full phone:w-auto phone:flex-1 phone:flex-col phone:items-center phone:justify-center phone:gap-0.5 phone:rounded-none phone:bg-transparent phone:hover:bg-transparent ${current ? "" : "phone:text-muted-foreground"}`}
         >
           {children}
@@ -110,6 +106,7 @@ function Place({
  */
 function IconBar() {
   const route = useRoute();
+  const settings = useSettings();
   const unread = useAllChats().chats.filter((chat) => chat.unread).length;
   const icon = "size-[22px]";
   return (
@@ -140,7 +137,14 @@ function IconBar() {
       </Place>
       {/* Settings stays at the foot, so the places are centered on the bar's whole height. */}
       <div className="absolute bottom-3 phone:static phone:flex phone:h-full phone:flex-1">
-        <Place label="Settings" current={!!sectionOf(route)} onClick={() => go(SETTINGS)}>
+        {/* Settings is a window over the place, not a place: it is never the current one. */}
+        <Place
+          label="Settings"
+          current={false}
+          aria-haspopup="dialog"
+          aria-expanded={settings.open}
+          onClick={() => openSettings()}
+        >
           <SettingsIcon className={icon} />
         </Place>
       </div>
@@ -197,7 +201,6 @@ function ShellBar({ notice, dismiss }: Required<Notice>) {
 
 function Frame({ notice, dismiss }: Required<Notice>) {
   const route = useRoute();
-  const section = sectionOf(route);
   return (
     // What is left to set up runs across the top, over the bar and the page; the shell, with its
     // layer, is below it.
@@ -215,27 +218,13 @@ function Frame({ notice, dismiss }: Required<Notice>) {
             <main className="@container/main relative min-h-0 flex-1">
               {route.screen === "chat" && <ChatPage agent={route.agent} />}
               {route.screen === "team" && <TeamPage agent={route.agent} tab={route.tab} />}
-              {section && (
-                <SettingsFrame tab={section}>
-                  {route.screen === "skills" && (
-                    <SkillsPage focus={route.focus} adding={route.adding} />
-                  )}
-                  {route.screen === "mcps" && (
-                    <McpsPage focus={route.focus} adding={route.adding} />
-                  )}
-                  {route.screen === "settings" &&
-                    (route.tab === "templates" ? (
-                      <TemplatesPage />
-                    ) : (
-                      <SettingsPage tab={route.tab} />
-                    ))}
-                </SettingsFrame>
-              )}
             </main>
           </div>
         </div>
         {/* Over the page, bar included: the one layer, with the chat. */}
         <Layer />
+        {/* Settings, a window over the place; the creation window opens over it. */}
+        <SettingsWindow />
         <BuildDialog />
       </div>
     </div>

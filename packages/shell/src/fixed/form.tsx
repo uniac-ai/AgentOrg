@@ -1,7 +1,7 @@
 // One field of a unit's form, drawn from its description. A type this host doesn't know gets the
 // plain control for the kind of value it holds.
 import { useRef, useState } from "react";
-import { useLoad } from "../data.ts";
+import { openSettings, useLoad } from "../data.ts";
 import { Checkbox } from "../ui/checkbox.tsx";
 import { Field as FieldBox, FieldDescription, FieldError, FieldLabel } from "../ui/field.tsx";
 import { Input } from "../ui/input.tsx";
@@ -167,7 +167,7 @@ function ConnectionField({
   if (list.loaded && options.length === 0)
     return (
       <FieldDescription>
-        <Jump to={{ screen: "mcps", adding: true }}>Connect an MCP first</Jump>
+        <Jump to={() => openSettings("mcps", { adding: true })}>Connect an MCP first</Jump>
       </FieldDescription>
     );
   return field.value === "strings" ? (

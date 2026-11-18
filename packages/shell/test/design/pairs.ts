@@ -28,6 +28,7 @@ import {
   openOffer,
   openSampleChat,
   openSection,
+  openSettingsWindow,
   openSetup,
   openTemplates,
   openWindow,
@@ -562,15 +563,33 @@ const SCREENS: Screen[] = [
       built: (page) => createState(page, state, false),
     }),
   ),
+  // Settings, a window over the place: as it opens, on Templates (on a phone, its sections first),
+  // then a section with its action, a phone's second screen. MCP connections isn't shot: its
+  // sample rows show local addresses.
+  {
+    name: "settings",
+    sizes: ["wide", "rail", "phone"],
+    themes: ["dark", "light"],
+    build: true,
+    design: openSettingsWindow,
+    built: async (page) => {
+      const window = await openSettingsWindow(page);
+      if ((page.viewportSize()?.width ?? 0) >= 640)
+        await window
+          .getByRole("region", { name: "Templates" })
+          .getByText("Storefront worker")
+          .waitFor();
+    },
+  },
   {
     name: "templates",
-    sizes: ["wide", "rail", "phone"],
+    sizes: ["phone"],
     themes: ["dark", "light"],
     build: true,
     design: openTemplates,
     built: openTemplates,
   },
-  ...SECTIONS.map(
+  ...SECTIONS.filter(([section]) => section !== "mcps").map(
     ([section]): Screen => ({
       name: `settings-${section}`,
       sizes: ["wide", "phone"],
@@ -580,7 +599,7 @@ const SCREENS: Screen[] = [
       built: (page) => openSection(page, section),
     }),
   ),
-  ...(["skills", "mcps"] as const).map(
+  ...(["skills"] as const).map(
     (section): Screen => ({
       name: `settings-offer-${section}`,
       sizes: ["wide"],

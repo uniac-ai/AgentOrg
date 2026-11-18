@@ -414,7 +414,7 @@ test(
     assert.equal(gateway.live.files.sockets.size, 1);
     await page
       .getByRole("navigation", { name: "Main" })
-      .getByRole("button", { name: "Settings" })
+      .getByRole("button", { name: /^Chat/ })
       .click();
     await until(() => gateway.live.files.sockets.size === 0, "its view is closed");
     await page.close();

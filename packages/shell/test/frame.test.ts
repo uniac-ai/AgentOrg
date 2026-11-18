@@ -111,15 +111,16 @@ test(
 );
 
 test(
-  "each place leads where it says and is marked while you are in it: Settings opens on its first section",
+  "each place leads where it says and is marked while you are in it; Settings opens over the place, which stays marked",
   withGateway(async (gateway) => {
     const page = await open(gateway, WIDE);
     const main = page.getByRole("main");
-    // Read with the pointer away, since a place under it has the hover's background.
+    // Read with the pointer away, since a place under it has the hover's background; and by the
+    // bar's markup, which an open window puts out of reach but leaves there.
     const current = async () => {
       await page.mouse.move(700, 450);
-      return bar(page)
-        .locator('[aria-current="page"]')
+      return page
+        .locator('nav[aria-label="Main"] [aria-current="page"]')
         .evaluateAll((places) =>
           places.map((one) => [
             one.getAttribute("aria-label"),
@@ -135,16 +136,11 @@ test(
     await main.getByRole("region", { name: "Team" }).waitFor();
     assert.deepEqual(await current(), [["Team", "rgba(255, 255, 255, 0.08)"]]);
     await place(page, "Settings").click();
-    await page.waitForURL(/#\/settings\/templates$/);
-    await main.getByRole("tab", { name: "Templates", selected: true }).waitFor();
-    assert.deepEqual(await current(), [["Settings", "rgba(255, 255, 255, 0.08)"]]);
-    // Every section of Settings is in its place.
-    await main.getByRole("tab", { name: "Skills" }).click();
-    await page.waitForURL(/#\/skills$/);
-    assert.deepEqual(
-      (await current()).map(([name]) => name),
-      ["Settings"],
-    );
+    await page.getByRole("dialog", { name: "Settings" }).waitFor();
+    assert.deepEqual(await current(), [["Team", "rgba(255, 255, 255, 0.08)"]]);
+    assert.match(page.url(), /#\/team$/, "the address is the place's");
+    await page.keyboard.press("Escape");
+    await page.getByRole("dialog", { name: "Settings" }).waitFor({ state: "detached" });
     await place(page, "Chat").click();
     await page.waitForURL(/#\/chat$/);
     await main.getByRole("list", { name: "Chats" }).waitFor();
@@ -351,57 +347,6 @@ test(
 );
 
 test(
-  "Settings picks its sections across the top, with what a section offers at their end, and they don't move between sections",
-  withGateway(async (gateway) => {
-    const page = await open(gateway, WIDE, "#/skills");
-    await page.getByRole("button", { name: "Dismiss" }).click();
-    const main = page.getByRole("main");
-    const list = main.getByRole("tablist");
-    const skills = main.getByRole("tab", { name: "Skills" });
-    const account = main.getByRole("tab", { name: "Account" });
-    const add = main.getByRole("button", { name: "Add skill" });
-    await add.waitFor();
-    const before = await list.boundingBox();
-    const [one, two, offer] = [
-      await skills.boundingBox(),
-      await account.boundingBox(),
-      await add.boundingBox(),
-    ];
-    assert.ok(one && two && before && offer);
-    assert.ok(two.x > one.x && Math.abs(two.y - one.y) < 1, "a row");
-    // The page is 1080 wide and centred beside the bar; the row is 20 in from its sides.
-    const room = await main.boundingBox();
-    assert.ok(room);
-    const left = room.x + (room.width - 1080) / 2;
-    assert.deepEqual([before.x, before.y, before.height], [left + 20, 24, 32]);
-    assert.ok(Math.abs(offer.y + offer.height / 2 - (before.y + 16)) < 1, "on the same row");
-    assert.equal(offer.x + offer.width, left + 1080 - 20, "what it offers ends the row");
-    const row = await main.getByText("cite-sources").first().boundingBox();
-    assert.ok(row && row.y > before.y + before.height, "the section is under them");
-    // It is one row for every section: it keeps the keyboard as the section under it changes.
-    await list.evaluate((row) => row.setAttribute("data-same", "row"));
-    await skills.focus();
-    await page.keyboard.press("ArrowRight");
-    await main.getByRole("tab", { name: "MCP connections", selected: true }).waitFor();
-    await main.getByRole("button", { name: "Connect", exact: true }).waitFor();
-    assert.equal(await add.count(), 0, "what the section offers changes with it");
-    await page.keyboard.press("ArrowRight");
-    await main.getByRole("tab", { name: "Providers", selected: true }).waitFor();
-    assert.equal(await page.evaluate(() => document.activeElement?.textContent), "Providers");
-    assert.equal(await list.getAttribute("data-same"), "row", "the same row, not another like it");
-    await account.click();
-    await main.getByRole("tab", { name: "Account", selected: true }).waitFor();
-    assert.deepEqual(await list.boundingBox(), before);
-    assert.equal(
-      await list.locator("xpath=../..").getByRole("button").count(),
-      0,
-      "Account offers nothing",
-    );
-    await page.close();
-  }),
-);
-
-test(
   "at phone width nothing runs off the side, and Create and Settings still work",
   withGateway(async (gateway) => {
     const page = await open(gateway, PHONE);
@@ -427,31 +372,19 @@ test(
     await stack.getByRole("button", { name: "Create", exact: true }).waitFor();
     await page.keyboard.press("Escape");
     await stack.waitFor({ state: "detached" });
+    // Settings takes the screen, and a section's action is whole on its top line.
     await place(page, "Settings").click();
-    await page.getByRole("tab", { name: "Templates", selected: true }).waitFor();
-    const skills = page.getByRole("tab", { name: "Skills" });
-    const account = page.getByRole("tab", { name: "Account" });
-    await skills.waitFor();
-    const [one, two] = [await skills.boundingBox(), await account.boundingBox()];
-    assert.ok(one && two && two.x > one.x && Math.abs(two.y - one.y) < 1, "sections in a row");
-    assert.deepEqual(
-      await page.getByRole("tab").allInnerTexts(),
-      ["Templates", "Skills", "MCPs", "Providers", "Account"],
-      "the long one is said short",
-    );
-    const first = await page.getByRole("tab", { name: "Templates" }).boundingBox();
-    assert.ok(first && first.x >= 0, "the first section isn't cut off");
-    await page.getByRole("button", { name: "Dismiss" }).click();
-    await page.getByRole("tab", { name: "Skills" }).click();
-    // What it offers is its mark alone there, at the end of a row that scrolls sideways.
-    const add = page.getByRole("button", { name: "Add skill" });
-    assert.equal((await add.innerText()).trim(), "");
-    await add.evaluate((button) => {
-      const row = button.parentElement as HTMLElement;
-      row.scrollLeft = row.scrollWidth;
-    });
+    const settings = page.getByRole("dialog", { name: "Settings" });
+    await settings.evaluate((e) => Promise.all(e.getAnimations().map((moving) => moving.finished)));
+    assert.deepEqual(await boxOf(settings), [0, 0, PHONE.width, PHONE.height]);
+    await settings
+      .getByRole("navigation", { name: "Settings" })
+      .getByRole("button", { name: "Skills" })
+      .click();
+    const add = settings.getByRole("button", { name: "Add skill" });
+    assert.equal((await add.innerText()).trim(), "Add skill");
     const action = await add.boundingBox();
-    assert.ok(action && action.x + action.width <= PHONE.width, "what it offers comes into view");
+    assert.ok(action && action.x + action.width <= PHONE.width, "what it offers is in view");
     assert.equal(await fits(page), true, "settings");
     await page.close();
   }),

@@ -11,7 +11,7 @@ import {
   XIcon,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { api, go } from "../data.ts";
+import { api, closeSettings, go, openSettings } from "../data.ts";
 import { Button } from "../ui/button.tsx";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../ui/dialog.tsx";
 import {
@@ -139,7 +139,8 @@ function Stack() {
       act.run(async () => {
         await saveTemplate(name, purpose);
         hide();
-        go({ screen: "settings", tab: "templates" });
+        // Back to the templates, in Settings, whether or not it was opened over it.
+        openSettings("templates");
       });
       return;
     }
@@ -159,7 +160,9 @@ function Stack() {
         name,
         ...(purpose ? { purpose } : {}),
       });
+      // It closes, and Settings too if it was opened over it: the new agent is shown in Team.
       hide();
+      closeSettings();
       go({ screen: "team", agent });
     });
   };

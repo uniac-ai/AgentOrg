@@ -81,26 +81,13 @@ export function useLoad<T>(
 
 /** What an agent's page can show under its head. */
 export type AgentTab = "computer" | "chats" | "overview";
-/** The hash route: chat, team, or settings. */
+/** The hash route: a place, chat or team. Settings is a window over the place, not a route. */
 export type Route =
   /** The chat page, on your conversation with an agent if one is named. */
   | { screen: "chat"; agent?: string }
   /** The team page, on an agent's details if one is named. */
-  | { screen: "team"; agent?: string; tab?: AgentTab }
-  | { screen: "settings"; tab: "templates" | "providers" | "account" }
-  | { screen: "skills" | "mcps"; focus?: string; adding?: boolean };
+  | { screen: "team"; agent?: string; tab?: AgentTab };
 function routeOf(hash: string): Route {
-  // Settings opens on its first tab.
-  if (hash === "#/settings") return { screen: "settings", tab: "templates" };
-  const tab = /^#\/settings\/(templates|providers|account)$/.exec(hash)?.[1];
-  if (tab) return { screen: "settings", tab: tab as "templates" | "providers" | "account" };
-  const managed = /^#\/(skills|mcps)(?:\/(add|s\/([^/]+)))?$/.exec(hash);
-  if (managed)
-    return {
-      screen: managed[1] as "skills" | "mcps",
-      ...(managed[2] === "add" ? { adding: true } : {}),
-      ...(managed[3] ? { focus: decodeURIComponent(managed[3]) } : {}),
-    };
   // An agent's own address, from before its details were on the team page, shows them there.
   const team =
     /^#\/team(?:\/([^/]+)(?:\/(computer|chats|overview))?)?$/.exec(hash) ??
@@ -130,18 +117,96 @@ export function go(route: Route) {
     location.hash = `#/chat${route.agent ? `/${encodeURIComponent(route.agent)}` : ""}`;
     return;
   }
-  if (route.screen === "settings") {
-    location.hash = `#/settings/${route.tab}`;
-    return;
-  }
-  if (route.screen === "team") {
-    const agent = route.agent ? `/${encodeURIComponent(route.agent)}` : "";
-    location.hash = `#/team${agent}${route.agent && route.tab ? `/${route.tab}` : ""}`;
-    return;
-  }
-  const rest = route.adding ? "/add" : route.focus ? `/s/${encodeURIComponent(route.focus)}` : "";
-  location.hash = `#/${route.screen}${rest}`;
+  const agent = route.agent ? `/${encodeURIComponent(route.agent)}` : "";
+  location.hash = `#/team${agent}${route.agent && route.tab ? `/${route.tab}` : ""}`;
 }
+
+/** A section of Settings, in the order the window lists them. */
+export type SettingsSection = "templates" | "skills" | "mcps" | "providers" | "account";
+/** What is named in a section when it opens: a row to show, or its form for adding one. */
+export interface SettingsNamed {
+  focus?: string;
+  adding?: boolean;
+}
+/**
+ * The Settings window, over whatever place is looked at: whether it is open, its section, and what
+ * is named in it. On a phone it shows its sections first (`listing`), then one section.
+ */
+export interface SettingsState extends SettingsNamed {
+  open: boolean;
+  section: SettingsSection;
+  listing: boolean;
+}
+let settings: SettingsState = { open: false, section: "templates", listing: true };
+const settingsListeners = new Set<() => void>();
+function setSettings(next: SettingsState) {
+  settings = next;
+  for (const listener of [...settingsListeners]) listener();
+}
+export function useSettings(): SettingsState {
+  return useSyncExternalStore(
+    (fn) => {
+      settingsListeners.add(fn);
+      return () => void settingsListeners.delete(fn);
+    },
+    () => settings,
+  );
+}
+/**
+ * Opens Settings: straight on the section asked for, with what is named in it; or, asked for none,
+ * on the section last looked at, its sections first on a phone.
+ */
+export function openSettings(section?: SettingsSection, named: SettingsNamed = {}) {
+  setSettings({ open: true, section: section ?? settings.section, listing: !section, ...named });
+}
+/** Closes Settings. It opens again on the same section, with nothing named in it. */
+export function closeSettings() {
+  if (settings.open)
+    setSettings({ open: false, section: settings.section, listing: settings.listing });
+}
+/** Another section, chosen in the window. */
+export function pickSection(section: SettingsSection) {
+  setSettings({ open: true, section, listing: false });
+}
+/** On a phone, back from a section to the sections. */
+export function backToSections() {
+  setSettings({ ...settings, listing: true });
+}
+
+/** What Settings' old addresses name: a section, with a row to show or its form for adding. */
+function settingsAt(hash: string): [SettingsSection, SettingsNamed] | undefined {
+  if (hash === "#/settings") return ["templates", {}];
+  const tab = /^#\/settings\/(templates|providers|account)$/.exec(hash)?.[1];
+  if (tab) return [tab as SettingsSection, {}];
+  const managed = /^#\/(skills|mcps)(?:\/(add|s\/([^/]+)))?$/.exec(hash);
+  if (!managed) return undefined;
+  return [
+    managed[1] as SettingsSection,
+    {
+      ...(managed[2] === "add" ? { adding: true } : {}),
+      ...(managed[3] ? { focus: decodeURIComponent(managed[3]) } : {}),
+    },
+  ];
+}
+/** The address of the place being looked at, which Settings opens over. */
+let place = "#/chat";
+/**
+ * An old Settings address opens the window on what it names, over the place that was behind (Chat
+ * when there was none), and the address goes back to that place's. Going to a place closes it.
+ * This runs before anything that reads the address, so nothing ever reads a Settings address.
+ */
+function readAddress() {
+  const named = settingsAt(location.hash);
+  if (named) {
+    openSettings(...named);
+    history.replaceState(history.state, "", place);
+    return;
+  }
+  place = location.hash || "#/";
+  closeSettings();
+}
+readAddress();
+addEventListener("hashchange", readAddress);
 
 export type ThemeName = "dark" | "light";
 const THEME = "agentorg.theme";

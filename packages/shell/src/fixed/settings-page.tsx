@@ -1,91 +1,14 @@
-import { PlusIcon } from "lucide-react";
-import { createContext, useContext, useLayoutEffect, useRef, useState } from "react";
+// Settings' Providers and Account sections, drawn in the Settings window.
 import { USAGE } from "../app.tsx";
-import { api, go, type Route, setTheme, type ThemeName, useLoad, useTheme } from "../data.ts";
+import { api, pickSection, setTheme, type ThemeName, useLoad, useTheme } from "../data.ts";
 import { Button } from "../ui/button.tsx";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select.tsx";
-import { Tabs, TabsList, TabsTrigger } from "../ui/tabs.tsx";
 import { listAgents, listConnections, listMcpProviders, useAct, useCreatables } from "./data.ts";
 import { type LoginStatus, needsOf, SignInButton, useLogin, useLoginStatus } from "./login.tsx";
 import { Jump, rowClass, Scroll, Section, UsedBy } from "./parts.tsx";
 
 const countOf = (n: number) => `${n} ${n === 1 ? "connection" : "connections"}`;
 const THREE = "grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)_minmax(0,1fr)] tight:grid-cols-1";
-
-type Tab = "templates" | "skills" | "mcps" | "providers" | "account";
-const ROUTES: Record<Tab, Route> = {
-  templates: { screen: "settings", tab: "templates" },
-  skills: { screen: "skills" },
-  mcps: { screen: "mcps" },
-  providers: { screen: "settings", tab: "providers" },
-  account: { screen: "settings", tab: "account" },
-};
-
-/** What a section offers, by its name. */
-interface Offer {
-  label: string;
-  run(): void;
-}
-const Offered = createContext<(offer?: Offer) => void>(() => {});
-/** The section drawn under the frame offers this at the end of the row of sections. */
-export function useOffer(label: string, run: () => void) {
-  const offer = useContext(Offered);
-  const latest = useRef(run);
-  latest.current = run;
-  // Before anything is painted, so a section and what it offers change as one.
-  useLayoutEffect(() => {
-    offer({ label, run: () => latest.current() });
-    return () => offer(undefined);
-  }, [offer, label]);
-}
-
-/** The section a route is, if it is one of Settings'. */
-export const sectionOf = (route: Route): Tab | undefined =>
-  route.screen === "settings"
-    ? route.tab
-    : route.screen === "skills" || route.screen === "mcps"
-      ? route.screen
-      : undefined;
-
-/**
- * Settings' sections across the top, with what the section offers at their end, over its page.
- * Where there is little room what it offers is its mark alone. It is one frame for every section,
- * so the row keeps the keyboard and its place as the section under it changes.
- */
-export function SettingsFrame({ tab, children }: { tab: Tab; children: React.ReactNode }) {
-  const [action, setAction] = useState<Offer>();
-  return (
-    // The row and the page under it are 1080 wide and centred; what scrolls is as wide as the
-    // page area, so the wheel works beside the page as well as over it.
-    <div className="flex h-full flex-col pt-2">
-      <div className="mx-auto w-full max-w-[1080px] shrink-0">
-        <div className="no-bar flex items-center justify-between gap-2 overflow-x-auto px-5 pt-4 tight:px-3.5">
-          <Tabs value={tab} onValueChange={(next) => go(ROUTES[next as Tab])}>
-            <TabsList>
-              <TabsTrigger value="templates">Templates</TabsTrigger>
-              <TabsTrigger value="skills">Skills</TabsTrigger>
-              <TabsTrigger value="mcps">
-                <span className="tight:hidden">MCP connections</span>
-                <span className="hidden tight:inline">MCPs</span>
-              </TabsTrigger>
-              <TabsTrigger value="providers">Providers</TabsTrigger>
-              <TabsTrigger value="account">Account</TabsTrigger>
-            </TabsList>
-          </Tabs>
-          {action && (
-            <Button size="sm" aria-label={action.label} onClick={action.run}>
-              <PlusIcon />
-              <span className="tight:hidden">{action.label}</span>
-            </Button>
-          )}
-        </div>
-      </div>
-      <div className="min-h-0 flex-1">
-        <Offered.Provider value={setAction}>{children}</Offered.Provider>
-      </div>
-    </div>
-  );
-}
 
 export function SettingsPage({ tab }: { tab: "providers" | "account" }) {
   return (
@@ -134,7 +57,7 @@ function Providers() {
               {provider.kinds.map((k) => k.title).join(", ")}
             </span>
             <span className="text-[13px] text-muted-foreground">
-              <Jump to={{ screen: "mcps" }}>
+              <Jump to={() => pickSection("mcps")}>
                 {countOf(
                   connections.filter((c) => c.origin?.provider === provider.provider).length,
                 )}

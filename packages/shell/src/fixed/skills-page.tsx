@@ -6,7 +6,7 @@ import { Input } from "../ui/input.tsx";
 import { listDetails, listSkills, useAct } from "./data.ts";
 import { DeleteButton } from "./delete-dialog.tsx";
 import { Empty, rowClass, Scroll, UsedBy } from "./parts.tsx";
-import { useOffer } from "./settings-page.tsx";
+import { useOffer } from "./settings-window.tsx";
 
 export function SkillsPage({ focus, adding }: { focus?: string; adding?: boolean }) {
   const [changed, setChanged] = useState(0);

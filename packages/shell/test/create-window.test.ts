@@ -12,6 +12,7 @@ import {
   panel,
   plus,
   SESSION,
+  settingsWindow,
   withBrowser,
   withGateway,
 } from "./build-kit.ts";
@@ -103,7 +104,7 @@ test(
       .getByRole("navigation", { name: "Main" })
       .getByRole("button", { name: "Settings" })
       .click();
-    await page.getByRole("main").getByRole("button", { name: "Use" }).first().click();
+    await settingsWindow(page).getByRole("button", { name: "Use" }).first().click();
     await card(page, "Computer").waitFor();
     assert.equal(await name.inputValue(), "", "what was typed went with the window");
     await page.close();
@@ -166,7 +167,7 @@ test(
       .getByRole("navigation", { name: "Main" })
       .getByRole("button", { name: "Settings" })
       .click();
-    await page.getByRole("main").getByRole("button", { name: "New template", exact: true }).click();
+    await settingsWindow(page).getByRole("button", { name: "New template", exact: true }).click();
     await name.waitFor();
     assert.equal(await name.getAttribute("placeholder"), null);
     assert.equal(await named(page, "Save template").isDisabled(), true);
@@ -490,7 +491,7 @@ test(
       .getByRole("navigation", { name: "Main" })
       .getByRole("button", { name: "Settings" })
       .click();
-    await page.getByRole("main").getByRole("button", { name: "New template", exact: true }).click();
+    await settingsWindow(page).getByRole("button", { name: "New template", exact: true }).click();
     await panel(page).locator("#build-name").waitFor();
     assert.equal(await panel(page).locator("footer").getByText(sentence).count(), 0);
     await page.close();
@@ -568,7 +569,7 @@ test(
       .getByRole("navigation", { name: "Main" })
       .getByRole("button", { name: "Settings" })
       .click();
-    await page.getByRole("main").getByRole("button", { name: "New template", exact: true }).click();
+    await settingsWindow(page).getByRole("button", { name: "New template", exact: true }).click();
     const fresh = page.getByRole("dialog", { name: "New template" });
     await fresh.locator("#build-name").waitFor();
     assert.equal(await fresh.getByRole("button", { name: "Build options" }).count(), 0);

@@ -1,7 +1,7 @@
 // What an agent is made of, and the way to delete it: a sheet from the side of its page.
 import { ChevronRightIcon, MoreHorizontalIcon, PlusIcon, XIcon } from "lucide-react";
 import { useRef, useState } from "react";
-import { api, go, useLoad } from "../data.ts";
+import { api, go, openSettings, type SettingsSection, useLoad } from "../data.ts";
 import { Button } from "../ui/button.tsx";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible.tsx";
 import {
@@ -59,7 +59,7 @@ export function Setup({
             <DialogTitle className="text-[17px]">{agent.name}'s setup</DialogTitle>
             <DialogDescription className="sr-only">What {agent.name} is made of</DialogDescription>
           </DialogHeader>
-          <Made agent={agent} />
+          <Made agent={agent} onLeave={onClose} />
           <div className="flex h-14 shrink-0 items-center border-t px-5">
             <Button
               variant="ghost"
@@ -86,7 +86,8 @@ export function Setup({
 }
 
 /** What it's made of, read again while the sheet is open and after each change. */
-function Made({ agent: entry }: { agent: AgentEntry }) {
+/** What it is made of. `onLeave` puts the setup away for Settings, where what isn't made yet is. */
+function Made({ agent: entry, onLeave }: { agent: AgentEntry; onLeave(): void }) {
   const id = entry.agent;
   const tick = useEvery(REFRESH_MS);
   const [changed, setChanged] = useState(0);
@@ -192,7 +193,7 @@ function Made({ agent: entry }: { agent: AgentEntry }) {
               );
               change("expose", { connection, ...(as ? { as } : {}) });
             }}
-            more={{ words: "Connect a new MCP…", screen: "mcps" }}
+            more={{ words: "Connect a new MCP…", section: "mcps", onLeave }}
           />
         }
       >
@@ -218,7 +219,7 @@ function Made({ agent: entry }: { agent: AgentEntry }) {
             label="Add a skill"
             items={spare.map((s) => ({ id: s.name, name: s.name }))}
             onPick={(skill) => change("expose", { skill })}
-            more={{ words: "Add a new skill…", screen: "skills" }}
+            more={{ words: "Add a new skill…", section: "skills", onLeave }}
           />
         }
       >
@@ -327,7 +328,7 @@ function AddMenu({
   label: string;
   items: { id: string; name: string }[];
   onPick(id: string, name: string): void;
-  more?: { words: string; screen: "mcps" | "skills" };
+  more?: { words: string; section: SettingsSection; onLeave(): void };
 }) {
   return (
     <DropdownMenu>
@@ -346,7 +347,12 @@ function AddMenu({
         {more && (
           <>
             <DropdownMenuSeparator />
-            <DropdownMenuItem onSelect={() => go({ screen: more.screen })}>
+            <DropdownMenuItem
+              onSelect={() => {
+                more.onLeave();
+                openSettings(more.section);
+              }}
+            >
               {more.words}
             </DropdownMenuItem>
           </>
