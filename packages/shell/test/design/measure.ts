@@ -19,6 +19,7 @@ import {
   type ChatCase,
   CREATES,
   closeEveryTab,
+  computerSays,
   computerWith,
   cpuOf,
   createState,
@@ -2013,6 +2014,7 @@ if (wants("create"))
           const gateway = side === "built" ? await standIn() : undefined;
           if (gateway) {
             sampleBuild(gateway);
+            computerSays(gateway, state);
             if (state === "out") signInAccount(gateway, "out");
           }
           // A window centred in an odd height sits on a half pixel, and what it opens is placed
