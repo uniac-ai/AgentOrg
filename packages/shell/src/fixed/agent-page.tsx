@@ -1,6 +1,7 @@
 // An agent's own page: who it is and how it stands, then what belongs to it. Its computer comes
 // first, where it has one. What it's made of is behind one button, never on the everyday surface.
-// Its line follows no chat: a chat's problem is said on that chat's row, and in the chat.
+// Its line follows no chat: a chat's problem is said on that chat's row, and in the chat. It is
+// drawn alone at the agent's address, and as an agent's details on the team page.
 import { MessageCircleIcon, SlidersHorizontalIcon } from "lucide-react";
 import { useState } from "react";
 import { type AgentTab, api, go } from "../data.ts";
@@ -13,7 +14,6 @@ import { useChats } from "./chats.tsx";
 import { Computer, hasComputer, surfacesOf, targetOf } from "./computer.tsx";
 import { ComputerFacts, columnOf } from "./computer-facts.tsx";
 import { ComputerLoad, LOAD } from "./computer-load.tsx";
-import { More } from "./controls.tsx";
 import { named, useAct, useCreatables, type Way } from "./data.ts";
 import { Face, MARK } from "./face.tsx";
 import { needsOf, useLogin } from "./login.tsx";
@@ -28,9 +28,12 @@ const big = "h-10 rounded-full px-4 text-[15px]";
 export function AgentPage({
   agent: id,
   tab: asked,
+  onTab = (tab) => go({ screen: "agent", agent: id, tab }),
 }: {
   agent: string;
   tab?: AgentTab | undefined;
+  /** Where choosing a tab goes: by default, the agent's own address. */
+  onTab?: (tab: AgentTab) => void;
 }) {
   const { byId, list, unread, reads } = useAgents();
   // The list as it was when the page opened may not have an agent just made: only a read since says.
@@ -133,7 +136,6 @@ export function AgentPage({
               <SlidersHorizontalIcon />
               Setup
             </Button>
-            <More agent={entry} onFailed={setFailed} />
           </div>
         </header>
         <div
@@ -177,7 +179,7 @@ export function AgentPage({
                 type="button"
                 role="tab"
                 aria-selected={tab === t}
-                onClick={() => go({ screen: "agent", agent: id, tab: t.id })}
+                onClick={() => onTab(t.id)}
                 className={`-mb-px h-11 border-b-2 text-[15px] ${tab === t ? "border-foreground font-medium" : "border-transparent text-muted-foreground hover:text-foreground"}`}
               >
                 {t.title}

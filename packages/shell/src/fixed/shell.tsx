@@ -32,6 +32,7 @@ import { McpsPage } from "./mcps-page.tsx";
 import { UNREAD } from "./parts.tsx";
 import { SettingsFrame, SettingsPage, sectionOf } from "./settings-page.tsx";
 import { SkillsPage } from "./skills-page.tsx";
+import { TeamPage } from "./team-page.tsx";
 import { TemplatesPage } from "./templates-page.tsx";
 import { AgentsProvider, useAgents } from "./watch.tsx";
 
@@ -308,11 +309,13 @@ function Frame({ notice, dismiss }: Required<Notice>) {
       ? "Home"
       : route.screen === "chat"
         ? "Chat"
-        : route.screen === "agent"
-          ? list.find((agent) => agent.agent === route.agent)?.name
-          : inTemplates(route)
-            ? "Templates"
-            : "Settings";
+        : route.screen === "team"
+          ? "Team"
+          : route.screen === "agent"
+            ? list.find((agent) => agent.agent === route.agent)?.name
+            : inTemplates(route)
+              ? "Templates"
+              : "Settings";
   return (
     <div
       ref={setShell}
@@ -370,6 +373,7 @@ function Frame({ notice, dismiss }: Required<Notice>) {
         <main className="@container/main relative min-h-0 flex-1">
           {route.screen === "home" && <HomePage />}
           {route.screen === "chat" && <ChatPage agent={route.agent} />}
+          {route.screen === "team" && <TeamPage agent={route.agent} tab={route.tab} />}
           {route.screen === "agent" && (
             <AgentPage key={route.agent} agent={route.agent} tab={route.tab} />
           )}

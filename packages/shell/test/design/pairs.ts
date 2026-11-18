@@ -106,6 +106,15 @@ type Gateway = Awaited<ReturnType<typeof standIn>>;
 /** The design's own way to its chat page: its bar's Chat icon. */
 const chatIcon = (page: Page) =>
   page.getByRole("navigation", { name: "Main" }).getByRole("button", { name: /^Chat/ }).click();
+/** The design's own way to its team page: its bar's Team icon. */
+const teamIcon = (page: Page) =>
+  page.getByRole("navigation", { name: "Main" }).getByRole("button", { name: "Team" }).click();
+/** A row of the team page's list, in the design or built. */
+const teamRow = (page: Page, name: string) =>
+  page
+    .getByRole("main")
+    .getByRole("list", { name: "Agents" })
+    .getByRole("button", { name: new RegExp(name) });
 /** A row of the built chat page's list. */
 const chatRow = (page: Page, name: string) =>
   page
@@ -374,6 +383,45 @@ const SCREENS: Screen[] = [
       await page.locator('[data-beside="open"]').waitFor();
     },
   },
+  // The team page, with Reviewer's details. The design reaches it by its bar's Team icon; the
+  // built side by its address, since nothing links to it yet.
+  {
+    name: "team-page",
+    sizes: ["wide"],
+    themes: ["dark", "light"],
+    agents: true,
+    hash: "#/team/a-reviewer",
+    design: async (page) => {
+      await teamIcon(page);
+      await teamRow(page, "Reviewer").click();
+    },
+    built: (page) =>
+      page.getByRole("main").getByRole("heading", { name: "Reviewer", level: 1 }).waitFor(),
+  },
+  {
+    name: "team-page-list",
+    sizes: ["rail", "phone"],
+    themes: ["dark", "light"],
+    agents: true,
+    hash: "#/team",
+    design: teamIcon,
+    built: (page) => teamRow(page, "Reviewer").waitFor(),
+  },
+  {
+    name: "team-page-details",
+    sizes: ["rail", "phone"],
+    themes: ["dark", "light"],
+    agents: true,
+    hash: "#/team",
+    design: async (page) => {
+      await teamIcon(page);
+      await teamRow(page, "Reviewer").click();
+    },
+    built: async (page) => {
+      await teamRow(page, "Reviewer").click();
+      await page.getByRole("main").getByRole("heading", { name: "Reviewer", level: 1 }).waitFor();
+    },
+  },
   {
     name: "home",
     sizes: ["wide", "phone"],
@@ -419,7 +467,7 @@ const SCREENS: Screen[] = [
       await openDesignAgent(page, "Research");
       await stopAgent(page, "Research");
     },
-    built: (page) => stopAgent(page, "Research"),
+    built: (page, gateway) => stopAgent(page, "Research", gateway),
   },
   ...(
     [

@@ -716,11 +716,26 @@ export async function signInState(page: Page, state: SignIn, design: boolean) {
   await place.getByRole("button", { name: "Waiting for ChatGPT…" }).waitFor();
 }
 
-/** An agent stopped from its page, as a person stops it. */
-export async function stopAgent(page: Page, name: string) {
+/** An agent stopped as something other than its page stops it: its page has no Stop. */
+export function stopElsewhere(gateway: Gateway, agent: string) {
+  const held = gateway.agents.get(agent) as Agent;
+  held.status = { state: "stopped" };
+  if (held.chat.status.state === "working") gateway.setChatStatus(agent, { state: "idle" });
+  gateway.changed();
+}
+
+/**
+ * An agent stopped, with its page showing it: in a design whose agent's head has "…", from there;
+ * on the built side, from elsewhere.
+ */
+export async function stopAgent(page: Page, name: string, gateway?: Gateway) {
   const main = page.getByRole("main");
-  await main.getByRole("button", { name: `More for ${name}` }).click();
-  await page.getByRole("menuitem", { name: "Stop" }).click();
+  const held = gateway && [...gateway.agents.values()].find((agent) => agent.name === name);
+  if (gateway && held) stopElsewhere(gateway, held.agent);
+  else {
+    await main.getByRole("button", { name: `More for ${name}` }).click();
+    await page.getByRole("menuitem", { name: "Stop" }).click();
+  }
   await main.getByText(`${name} is stopped`).waitFor();
 }
 

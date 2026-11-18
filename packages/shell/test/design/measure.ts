@@ -1863,7 +1863,7 @@ if (wants("computer"))
         if (!gateway) await openDesignAgent(page, "Research");
         const main = page.getByRole("main");
         await main.getByRole("navigation", { name: "Dock" }).waitFor();
-        if (state === "stopped") await stopAgent(page, "Research");
+        if (state === "stopped") await stopAgent(page, "Research", gateway);
         await rest(page, size);
         all[`computer.${state}.${size}.${theme}.${side}`] = await measure(page, "computer");
         await page.close();
@@ -2234,7 +2234,7 @@ if (wants("bar")) {
         if (state === "start") {
           if (!gateway) await openDesignAgent(page, "Research");
           await main.getByRole("navigation", { name: "Dock" }).waitFor();
-          await stopAgent(page, "Research");
+          await stopAgent(page, "Research", gateway);
           if (gateway) {
             gateway.refuseNext("agents.start", "unavailable", "Its provider isn't connected.");
             await main

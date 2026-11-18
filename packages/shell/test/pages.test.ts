@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { type Browser, chromium, type Locator, type Page } from "@playwright/test";
-import { openSetup } from "./design/samples.ts";
+import { openSetup, stopElsewhere } from "./design/samples.ts";
 import { SESSION, standIn } from "./stand-in.ts";
 
 let browser: Browser;
@@ -287,36 +287,28 @@ test(
 );
 
 test(
-  "an agent is stopped, started and deleted from its page, after asking",
+  "an agent stopped elsewhere is started from its page, and deleted from it after asking; its page has no Stop",
   withGateway(async (gateway) => {
     const page = await open(gateway, "#/a/a-reviewer");
-    const menu = page.getByRole("button", { name: "More for Reviewer" });
-    const stop = page.getByRole("menuitem", { name: "Stop" });
-    const start = page.getByRole("menuitem", { name: "Start" });
-    await menu.click();
-    await stop.click();
-    // Stopped, it is started where it says so, or from its menu in Stop's place, and there is
-    // nothing to message.
-    await state(page).getByText("Stopped", { exact: true }).waitFor();
     const message = page.getByRole("main").getByRole("button", { name: "Message", exact: true });
-    assert.equal(await message.isDisabled(), true);
-    await menu.click();
-    await start.waitFor();
-    assert.equal(await stop.count(), 0);
-    await start.click();
-    await state(page).getByText("Idle", { exact: true }).waitFor();
-    await menu.click();
-    await stop.click();
+    await message.waitFor();
+    // Its head has no "…": nothing on its page stops it.
+    assert.equal(await page.getByRole("button", { name: "More for Reviewer" }).count(), 0);
+    assert.equal(await page.getByRole("main").getByRole("button", { name: "Stop" }).count(), 0);
+    // Stopped elsewhere, it is started where it says so, and there is nothing to message.
+    stopElsewhere(gateway, "a-reviewer");
     await state(page).getByText("Stopped", { exact: true }).waitFor();
+    assert.equal(await message.isDisabled(), true);
     await state(page).getByRole("button", { name: "Start" }).click();
     await state(page).getByText("Idle", { exact: true }).waitFor();
     assert.equal(await state(page).getByRole("button").count(), 0);
     assert.equal(await message.isDisabled(), false);
-    // A stop that is refused says why, on its line.
-    gateway.refuseNext("agents.stop", "failed", "It wouldn't stop.");
-    await menu.click();
-    await stop.click();
-    await state(page).getByText("It wouldn't stop.").waitFor();
+    // A start that is refused says why, on its line.
+    stopElsewhere(gateway, "a-reviewer");
+    await state(page).getByText("Stopped", { exact: true }).waitFor();
+    gateway.refuseNext("agents.start", "failed", "It wouldn't start.");
+    await state(page).getByRole("button", { name: "Start" }).click();
+    await state(page).getByText("It wouldn't start.").waitFor();
     // Deleting it is in its setup, after asking.
     const sheet = await openSetup(page, "Reviewer");
     await sheet.getByRole("button", { name: "Delete Reviewer…" }).click();
@@ -451,7 +443,8 @@ test(
         await page.goto(`${gateway.url}/#/a/a-reviewer`);
         await page.reload();
       }
-      await page.getByRole("button", { name: "More for Reviewer" }).click();
+      const sheet = await openSetup(page, "Reviewer");
+      await sheet.getByRole("button", { name: "Add an MCP" }).click();
       const menu = page.locator('[data-slot="dropdown-menu-content"]');
       await menu.waitFor();
       const value = await luma(menu);
