@@ -24,9 +24,12 @@ test("a plain message is answered by the main loop itself: its text is the threa
   assert.deepEqual(await texts(looper, "a"), ["Hi.", "Hello. What can I do?"]);
 });
 
-test("the main loop is told to answer only what needs no work, and never to promise any", () => {
+test("the main loop is told to answer only what needs no work, and never to promise without starting it", () => {
   assert.match(MAIN_INSTRUCTIONS, /only when it needs no tools and nothing you can't see here/);
-  assert.match(MAIN_INSTRUCTIONS, /Never say you will do, find, check or look into something/);
+  assert.match(
+    MAIN_INSTRUCTIONS,
+    /Never say you will do something without starting the work in the same reply/,
+  );
   assert.match(MAIN_INSTRUCTIONS, /when in doubt whose it is, it is new work/);
 });
 

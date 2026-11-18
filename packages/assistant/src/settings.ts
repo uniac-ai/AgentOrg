@@ -4,16 +4,16 @@
  * but for its `ALWAYS.md`, which every request is told while the skill is exposed (see the README).
  */
 import type { agentSettings, SkillEntry } from "@agentorg/interfaces";
-import type { Part } from "@agentorg/looper";
+import { FRAME, type Part } from "@agentorg/looper";
 import type { Slot } from "@agentorg/sdk";
 import type { z } from "zod";
 import type { Candidate, LeftOut } from "./tools.js";
 
 /**
  * The longest the agent's own instructions may be: what a request can carry, less room for what
- * the looper tells a worker after them.
+ * the looper tells a worker before them, its frame, and after them.
  */
-export const MAX_INSTRUCTIONS = 198_000;
+export const MAX_INSTRUCTIONS = 198_000 - FRAME.length - 2;
 const SLOT = "settings";
 /** The file of a skill whose words the agent is told in every request while it has the skill. */
 export const ALWAYS = "ALWAYS.md";
@@ -46,9 +46,10 @@ const HEADING = `## Skills
 A skill is written instructions for a kind of task. When one fits what you're asked, read it with settings__skill and follow it before you start. Pass path to read a file its SKILL.md refers to.`;
 
 /**
- * What the agent is told, as the looper's parts in order: its own instructions, what its skills
- * always tell it (`always`, from `alwaysOf`), then the skills' names, one a line, as many of each
- * as fit within `MAX_INSTRUCTIONS` in that order; any that don't fit are reported.
+ * What the agent is told, as the looper's parts in order: its own instructions, cut to
+ * `MAX_INSTRUCTIONS`, what its skills always tell it (`always`, from `alwaysOf`), then the skills'
+ * names, one a line, as many of each as fit within `MAX_INSTRUCTIONS` in that order; any that
+ * don't fit are reported.
  */
 export function instructionsWith(
   instructions: string,
@@ -56,7 +57,7 @@ export function instructionsWith(
   always: Part[] = [],
 ): { parts: Part[]; leftOut: LeftOut[] } {
   const leftOut: LeftOut[] = [];
-  const own: Part = { owner: "agent", text: instructions };
+  const own: Part = { owner: "agent", text: instructions, max: MAX_INSTRUCTIONS };
   if (skills.length === 0) return { parts: [own], leftOut };
   // Each fits beside the agent's own words and those before it, a blank line between each.
   let used = instructions.length;

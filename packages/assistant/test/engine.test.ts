@@ -711,8 +711,8 @@ test("what skills always tell the agent fits within the limit too, in order, bef
   assert.ok(told.includes("a".repeat(2_000)));
   assert.ok(!told.includes("b".repeat(2_000)));
   assert.ok(
-    told.length <= MAX_INSTRUCTIONS + 5_000,
-    "within the request, with the looper's own words",
+    String(s.whole[0]?.instructions).length <= 200_000,
+    "the whole request, with the looper's own words, within what the model takes",
   );
   // The skills' names still fit after what was kept.
   assert.ok(told.includes("- a: y\n- b: y"));
@@ -757,6 +757,15 @@ test("skills that won't fit the instructions are left out and reported", async (
   assert.deepEqual(warnings(s)[0]?.fields, {
     leftOut: [{ slot: "settings", tool: "c", reason: "limit" }],
   });
+});
+
+test("an agent's own words past the limit are cut to it, so the whole request is within what the model takes", async () => {
+  const s = await setup();
+  s.actor.bind("settings", settingsOf("x".repeat(200_000), [REVIEW]));
+  await s.turn("hello");
+  assert.equal(s.requests.length, 1);
+  assert.equal(String(s.requests[0]?.instructions), "x".repeat(MAX_INSTRUCTIONS));
+  assert.ok(String(s.whole[0]?.instructions).length <= 200_000);
 });
 
 test("bound settings that can't answer end the turn rather than run it without its instructions", async () => {
