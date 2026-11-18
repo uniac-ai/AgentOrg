@@ -166,13 +166,19 @@ cp "${served}/\${url##*/}" "$out"`,
   return { run, served, out, fetched: () => existsSync(join(at, "fetched")) };
 }
 
-test("AgentOrg names one AgentComputer version: the connector's, the cli's development pin and mac-app.json's", () => {
+test("AgentOrg names one AgentComputer version: the SDK's pins, the program's development pins and mac-app.json's", () => {
   const read = (...path: string[]) => JSON.parse(readFileSync(join(root, ...path), "utf8"));
-  const connector = read("packages", "computer", "package.json").dependencies["@agentorg/computer"];
-  const cli = read("packages", "app", "package.json").devDependencies["@agentorg/computer"];
-  const app = read("mac-app.json").version;
-  assert.match(connector, /^\d+\.\d+\.\d+$/);
-  assert.deepEqual({ cli, app }, { cli: connector, app: connector });
+  const connector = read("packages", "computer", "package.json");
+  const cli = read("packages", "app", "package.json");
+  const sdk = connector.dependencies["@agentorg/computer-sdk"];
+  assert.match(sdk, /^\d+\.\d+\.\d+$/);
+  const named = {
+    "the cli's SDK": cli.dependencies["@agentorg/computer-sdk"],
+    "the connector's program, for its tests": connector.devDependencies["@agentorg/computer"],
+    "the cli's program, for its tests": cli.devDependencies["@agentorg/computer"],
+    "mac-app.json": read("mac-app.json").version,
+  };
+  assert.deepEqual(named, Object.fromEntries(Object.keys(named).map((what) => [what, sdk])));
 });
 
 test("with no sum pinned, the release's Mac app job fetches nothing, carries nothing and passes", async (t) => {

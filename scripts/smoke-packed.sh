@@ -132,13 +132,16 @@ mkdir "$work/install"
 (cd "$work/install" && echo '{"private":true}' >package.json &&
   npm install --silent --no-audit --no-fund --cache "$work/cache" "$tarball")
 agentorg="$work/install/node_modules/.bin/agentorg"
-# Every other @agentorg package is the one inside the cli: none came from the registry.
-top="$(ls "$work/install/node_modules/@agentorg")"
-[ "$top" = cli ] || { echo "Installed beside the cli: $top" >&2; exit 1; }
-# The AgentComputer SDK is inside; the service beside it in that package is not.
-sdk="$work/install/node_modules/@agentorg/cli/dist/node_modules/@agentorg/computer"
-[ -f "$sdk/dist/sdk.js" ] || { echo "No AgentComputer SDK in the cli" >&2; exit 1; }
-[ ! -e "$sdk/dist/agentcomputer.js" ] || { echo "The cli ships the service" >&2; exit 1; }
+# Beside the cli, the one @agentorg package from the registry is AgentComputer's SDK, at the version
+# the cli names; every other one is inside the cli.
+top="$(ls "$work/install/node_modules/@agentorg" | tr '\n' ' ')"
+[ "$top" = "cli computer-sdk " ] || { echo "Installed beside the cli: $top" >&2; exit 1; }
+sdk="$(node -p 'require(process.argv[1]).version' "$work/install/node_modules/@agentorg/computer-sdk/package.json")"
+pinned="$(node -p 'require(process.argv[1]).dependencies["@agentorg/computer-sdk"]' "$root/packages/app/package.json")"
+[ "$sdk" = "$pinned" ] || { echo "AgentComputer's SDK is $sdk, not $pinned" >&2; exit 1; }
+# AgentComputer's program is nowhere in the install.
+found="$(find "$work/install/node_modules" -name agentcomputer.js)"
+[ -z "$found" ] || { echo "The install holds AgentComputer's program: $found" >&2; exit 1; }
 ls "$work/install/node_modules/@agentorg/cli/dist/node_modules/@agentorg"
 "$agentorg" --version
 

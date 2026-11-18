@@ -9,9 +9,11 @@
 // dependencies are the cli's own, found further up. Run after `npm run build`:
 // `node packages/app/scripts/pack.js <destination>`, which prints the tarball's path.
 //
-// Its third-party dependencies are pinned by an npm-shrinkwrap.json made here from the root lockfile:
-// each, and what each needs in turn, at the version and integrity the repository was tested with.
-// The @agentorg packages inside it are files, not dependencies, so they aren't in it.
+// Its dependencies from the registry are pinned by an npm-shrinkwrap.json made here from the root
+// lockfile: each, and what each needs in turn, at the version and integrity the repository was
+// tested with. AgentComputer's SDK, @agentorg/computer-sdk, is one of them. The workspace's own
+// packages inside it are files, not dependencies, so they aren't in it; they are told by the
+// workspace's list, not by their scope, which the SDK shares.
 //
 // The core and the frontend are also packed alone, as files of a release, not published:
 // - `--core`: the same cli without the shell, as `agentorg-core-<version>.tgz`; it serves the
@@ -46,8 +48,12 @@ const BUNDLED = [
   "assistant",
   "computer",
 ];
-/** The AgentComputer SDK, without the service beside it in that package: the app never ships one. */
-const COMPUTER_SDK = "@agentorg/computer";
+/** The names of the workspace's own packages: shipped inside the cli, never fetched. */
+const OWN = new Set(
+  JSON.parse(readFileSync(join(root, "package.json"), "utf8")).workspaces.map(
+    (dir) => JSON.parse(readFileSync(join(root, dir, "package.json"), "utf8")).name,
+  ),
+);
 const flags = process.argv.slice(2).filter((arg) => arg.startsWith("--"));
 const destination = resolve(process.argv.slice(2).find((arg) => !arg.startsWith("--")) ?? ".");
 const alone = flags.includes("--core") ? "core" : flags.includes("--frontend") ? "frontend" : "";
@@ -106,7 +112,7 @@ function shrinkwrap(cli, bundledDirs) {
   for (const dir of bundledDirs) {
     const own = JSON.parse(readFileSync(join(root, dir, "package.json"), "utf8"));
     for (const dep of Object.keys({ ...own.dependencies, ...own.peerDependencies })) {
-      if (dep.startsWith("@agentorg/") || !cli.dependencies[dep]) continue;
+      if (OWN.has(dep) || !cli.dependencies[dep]) continue;
       const tested = resolveIn(packages, dir, dep);
       const shipped = resolveIn(packages, app, dep);
       if (tested && packages[tested] !== packages[shipped])
@@ -181,36 +187,11 @@ try {
     bundled.push(own.name);
     // What each needs from the registry, the cli must have: it's found from there.
     for (const [dep, range] of Object.entries({ ...own.dependencies, ...own.peerDependencies }))
-      if (!dep.startsWith("@agentorg/") && cli.dependencies[dep] !== range)
+      if (!OWN.has(dep) && cli.dependencies[dep] !== range)
         throw new Error(
           `${own.name} needs ${dep}@${range}; the cli's dependencies must say so too.`,
         );
   }
-  const sdk = join(root, "node_modules", COMPUTER_SDK);
-  const sdkInto = join(stage, "dist", "node_modules", COMPUTER_SDK);
-  const { version, license, type } = JSON.parse(readFileSync(join(sdk, "package.json"), "utf8"));
-  for (const path of [
-    "dist/sdk.js",
-    "dist/types",
-    "dist/THIRD_PARTY_LICENSES.txt",
-    "NOTICE",
-    "LICENSE",
-  ])
-    cpSync(join(sdk, path), join(sdkInto, path), { recursive: true });
-  writeFileSync(
-    join(sdkInto, "package.json"),
-    `${JSON.stringify(
-      {
-        name: COMPUTER_SDK,
-        version,
-        license,
-        type,
-        exports: { ".": { types: "./dist/types/sdk.d.ts", default: "./dist/sdk.js" } },
-      },
-      null,
-      2,
-    )}\n`,
-  );
   cli.files = [...cli.files, "dist/node_modules", "npm-shrinkwrap.json"];
   delete cli.devDependencies;
   delete cli.scripts;

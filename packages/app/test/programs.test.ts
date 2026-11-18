@@ -21,7 +21,7 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test, { after } from "node:test";
-import { Computer } from "@agentorg/computer";
+import { Computer } from "@agentorg/computer-sdk";
 import { HubState } from "@agentorg/hub";
 import { completed, fakeOpenAI, type Script, text } from "chatgpt/fake-openai";
 import WebSocket from "ws";

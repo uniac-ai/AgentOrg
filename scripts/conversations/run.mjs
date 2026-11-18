@@ -25,7 +25,7 @@ import { homedir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { Computer } from "@agentorg/computer";
+import { Computer } from "@agentorg/computer-sdk";
 import WebSocket from "ws";
 import { CHECKS, CORE, FIXTURE, GROUPS } from "./set.mjs";
 
