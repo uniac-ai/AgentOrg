@@ -2776,10 +2776,10 @@ test("a computer no longer held can't be shared", async (t) => {
   assert.ok(!(await s.names(tools)).includes("create_worker"), "it has nothing left to share");
 });
 
-test("an agent's own computer with the person's screen or browser is never shared with one it makes", async (t) => {
+test("an agent's own computer with the person's screen or browser is shared with one it makes without those: its terminal and files only", async (t) => {
   const s = await delegating(t);
   for (const held of [{ screen: "on" }, { ownBrowser: "yours" }]) {
-    const { tools } = await s.parent(
+    const { agent: parent, tools } = await s.parent(
       {
         templates: ["worker"],
         places: ["own", "new"],
@@ -2795,13 +2795,23 @@ test("an agent's own computer with the person's screen or browser is never share
         units: { properties: { computer: { properties: Record<string, unknown> } } };
       };
     };
-    assert.deepEqual(schema.properties.place.enum, ["new"], JSON.stringify(held));
+    assert.deepEqual(schema.properties.place.enum, ["own", "new"], JSON.stringify(held));
     // The person's browser is a browser for the bounds: a new computer may then have its own.
     assert.equal(
       "browser" in schema.properties.units.properties.computer.properties,
       "ownBrowser" in held,
       JSON.stringify(held),
     );
+    // Made on its own computer, the child gets what the maker's terminal and files reach.
+    const child = await s.made(tools, "create_worker", { name: "W", purpose: "P.", place: "own" });
+    const mine = (await s.calls.agents.get({ agent: parent })).mcp.map((one) => one.slot).sort();
+    const theirs = (await s.calls.agents.get({ agent: child })).mcp.map((one) => one.slot);
+    assert.ok(
+      mine.some((slot) => slot === "screen" || slot === "browser"),
+      JSON.stringify(mine),
+    );
+    assert.deepEqual(theirs, ["computer"], JSON.stringify(held));
+    await s.calls.agents.remove({ agent: child });
   }
   // Without either, its own computer can be shared, within the bounds.
   const { tools } = await s.parent(
