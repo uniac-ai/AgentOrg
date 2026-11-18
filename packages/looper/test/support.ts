@@ -11,6 +11,7 @@ import {
   textOf,
 } from "../src/index.ts";
 import { LAST_ACTIVE } from "../src/main.ts";
+import type { Part } from "../src/told.ts";
 
 /**
  * A looper whose model answers a worker's request only when the test says so, naming the request by
@@ -57,8 +58,11 @@ export function looperWith(
     summarizing?: (text: string) => OutputItem[] | Promise<OutputItem[]>;
     /** The files a call read and changed. */
     files?: FilesOf;
-    /** What the host tells each request's model, before the looper's own words. */
-    instructions?: string;
+    /**
+     * What the host tells each request's model, before the looper's own words: as words, as parts,
+     * or as what a function gives each time the host is asked.
+     */
+    instructions?: string | readonly Part[] | (() => string | readonly Part[]);
   } = {},
 ) {
   const values = options.values ?? new Map<string, Json>();
@@ -257,7 +261,10 @@ export function looperWith(
       },
     },
     request: async () => ({
-      instructions: options.instructions ?? "",
+      instructions:
+        typeof options.instructions === "function"
+          ? options.instructions()
+          : (options.instructions ?? ""),
       tools: options.tools ?? [],
       ...(options.voice === undefined ? {} : { voice: options.voice }),
     }),

@@ -30,6 +30,7 @@ import {
   type WorkEntry,
   wordsOf,
 } from "./record.js";
+import { build, type Part, partsOf } from "./told.js";
 import { capped, refused, runTool } from "./tools.js";
 import {
   type Call,
@@ -193,10 +194,15 @@ export interface Place {
 
 export function createLoop(options: {
   /**
-   * Read for each model request, since any of it may change between two: what the model is told,
-   * what it can call, and which model to ask, none meaning the model's own default.
+   * Read once a turn, since any of it may change between two: what the model is told, as words or
+   * as parts in order, what it can call, and which model to ask, none meaning the model's own
+   * default.
    */
-  request(): Promise<{ instructions: string; tools: Tool[]; model?: string | undefined }>;
+  request(): Promise<{
+    instructions: string | readonly Part[];
+    tools: Tool[];
+    model?: string | undefined;
+  }>;
   model: Model;
   /**
    * Ask for a place for a turn about to start, or a turn in the line for one. `begun` says whether
@@ -513,14 +519,28 @@ export function createLoop(options: {
   async function run(current: Turn) {
     /** Set while a request the model refused for its length is asked again. */
     let again = false;
+    // What the host tells the model and offers it is read once a turn, so each of its requests
+    // begins with the same bytes; a change shows at the work's next turn. The other work beside it
+    // is read for each request, as before: it changes only when work begins meanwhile, and a
+    // worker that didn't know of that work could answer a message that is its.
+    const { instructions, tools: theirs, model: chosen } = await options.request();
+    const tools = [...theirs, handBack];
+    const parts = partsOf(instructions);
+    const title = await options.title();
+    const specs = [...theirs.map(({ run: _, ...tool }) => tool), SEND, HAND_BACK];
+    let reported = false;
     for (;;) {
-      const { instructions, tools: theirs, model: chosen } = await options.request();
-      const tools = [...theirs, handBack];
-      const told = workInstructions(await options.title(), await options.others());
-      const offered = {
-        instructions: instructions ? `${instructions}\n\n${told}` : told,
-        tools: [...theirs.map(({ run: _, ...tool }) => tool), SEND, HAND_BACK],
-      };
+      const told = build([
+        ...parts,
+        { owner: "looper", text: workInstructions(title, await options.others()) },
+      ]);
+      if (!reported)
+        for (const part of told.cut)
+          log.warn(
+            `What ${part.owner} tells the model was cut from ${part.was} to ${part.kept} characters.`,
+          );
+      reported = true;
+      const offered = { instructions: told.text, tools: specs };
       let { items: input, read, thread, over } = await record.input(offered);
       if (current.cancelled) return;
       // A request that only decides whether to take what it was given is cut to fit instead: one
