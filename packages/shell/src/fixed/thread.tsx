@@ -80,11 +80,10 @@ interface Sending {
   messageId?: string;
 }
 
-/** What the thread shows: each message of the person, then what the agent said. */
+/** What the thread shows: each message of the person, and each of the agent's, on its own. */
 type Turn =
   | { kind: "user"; id: string; text: string; images: readonly Sent[] }
-  | { kind: "agent"; id: string; parts: Part[] };
-type Part = { id: string; text: string; streaming?: boolean };
+  | { kind: "agent"; id: string; text: string; streaming?: boolean };
 
 function turnsOf(
   messages: readonly ChatMessage[],
@@ -93,15 +92,9 @@ function turnsOf(
   keys: ReadonlyMap<string, string>,
 ): Turn[] {
   const turns: Turn[] = [];
-  // A reply is known by what it answers, so earlier messages read in above it, or more of it as
-  // it comes, never draw it anew.
-  const agentTurn = () => {
-    const last = turns.at(-1);
-    if (last?.kind === "agent") return last;
-    const turn: Turn = { kind: "agent", id: `reply ${last?.id ?? "first"}`, parts: [] };
-    turns.push(turn);
-    return turn;
-  };
+  // Each of the agent's messages is its own, known by its id. The words it streams under and its
+  // record share that id, so one being written and the same one once recorded are one thing here:
+  // nothing draws it anew, and earlier messages read in above it change nothing.
   for (const message of messages) {
     if (message.role === "user")
       turns.push({
@@ -110,10 +103,10 @@ function turnsOf(
         text: message.text,
         images: message.images ?? [],
       });
-    else agentTurn().parts.push({ id: message.id, text: message.text });
+    else turns.push({ kind: "agent", id: message.id, text: message.text });
   }
   for (const { id, text, images } of unrecorded) turns.push({ kind: "user", id, text, images });
-  for (const [id, text] of streaming) agentTurn().parts.push({ id, text, streaming: true });
+  for (const [id, text] of streaming) turns.push({ kind: "agent", id, text, streaming: true });
   return turns;
 }
 
@@ -701,7 +694,8 @@ export function Thread({
                     </Message>
                   ) : (
                     <Reply
-                      parts={turn.parts}
+                      text={turn.text}
+                      streaming={!!turn.streaming}
                       reduced={reduced}
                       isLast={turn === lastTurn}
                       awaiting={awaiting}
@@ -761,46 +755,47 @@ function Room({ children }: { children: React.ReactNode }) {
   );
 }
 
+/** One of the agent's messages: its words, and its own Copy under them. */
 function Reply({
-  parts,
+  text,
+  streaming,
   reduced,
   isLast,
   awaiting,
 }: {
-  parts: Part[];
+  text: string;
+  /** Still being written. */
+  streaming: boolean;
   reduced: boolean;
   isLast: boolean;
-  /** The chat still awaits its reply: the last one isn't settled, and offers nothing yet. */
+  /** The chat still awaits its reply: the last message isn't settled, and offers nothing yet. */
   awaiting: boolean;
 }) {
   const [copied, setCopied] = useState(false);
-  const texts = parts.map((part) => part.text);
-  const settled = !(isLast && (awaiting || parts.some((p) => p.streaming)));
-  /** Nothing in it has words: there is nothing to copy. */
-  const wordless = texts.every((text) => !text.trim());
+  const settled = !(isLast && (awaiting || streaming));
+  /** It has no words: there is nothing to copy. */
+  const wordless = !text.trim();
   return (
     <Message className="group/reply">
       <MessageContent className="gap-2">
-        {parts.map((part) => (
-          <Bubble key={part.id} variant="ghost" className="w-full">
-            {/* Its size is said here: the bubble's own would outrank a rule of the sheet's. */}
-            <BubbleContent className="prose-chat w-full text-[15px] leading-[1.6]">
-              <Streamdown
-                controls={{ table: false, code: true }}
-                animated={{
-                  animation: "reveal",
-                  duration: 260,
-                  easing: "ease-out",
-                  stagger: 14,
-                  maxBacklogMs: 420,
-                }}
-                isAnimating={!!part.streaming && !reduced}
-              >
-                {part.text}
-              </Streamdown>
-            </BubbleContent>
-          </Bubble>
-        ))}
+        <Bubble variant="ghost" className="w-full">
+          {/* Its size is said here: the bubble's own would outrank a rule of the sheet's. */}
+          <BubbleContent className="prose-chat w-full text-[15px] leading-[1.6]">
+            <Streamdown
+              controls={{ table: false, code: true }}
+              animated={{
+                animation: "reveal",
+                duration: 260,
+                easing: "ease-out",
+                stagger: 14,
+                maxBacklogMs: 420,
+              }}
+              isAnimating={streaming && !reduced}
+            >
+              {text}
+            </Streamdown>
+          </BubbleContent>
+        </Bubble>
         {/* Its room is always kept, so nothing moves when it appears. */}
         <MessageFooter
           className={`h-6 gap-0.5 px-0 ${!settled || wordless ? "invisible" : isLast ? "" : "invisible group-hover/reply:visible"}`}
@@ -810,7 +805,7 @@ function Reply({
             size="icon-xs"
             aria-label="Copy"
             onClick={() => {
-              void navigator.clipboard.writeText(texts.join("\n\n"));
+              void navigator.clipboard.writeText(text);
               setCopied(true);
               setTimeout(() => setCopied(false), 1200);
             }}
