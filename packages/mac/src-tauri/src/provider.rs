@@ -833,7 +833,8 @@ mod tests {
             fs::remove_file(&seen).unwrap();
             accessibility.store(true, Ordering::Relaxed);
             regrant.store(true, Ordering::Relaxed);
-            until("the driver again", || again(was));
+            // Its pid is known as it is started, before it has read its settings.
+            until("the driver again, its settings read", || again(was) && seen.exists());
             let found: Value = serde_json::from_str(&fs::read_to_string(&seen).unwrap()).unwrap();
             assert_eq!(found["cursor"]["halo"], false);
             assert_eq!(found["cursor"]["badges"], "off");
