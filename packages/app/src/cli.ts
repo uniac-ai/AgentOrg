@@ -1,7 +1,9 @@
 #!/usr/bin/env node
-import { spawn } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { execFile, spawn } from "node:child_process";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { homedir } from "node:os";
+import { delimiter, dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { hubHome, personCall, UsageError } from "@agentorg/sdk/person-commands";
 import WebSocket from "ws";
@@ -13,6 +15,10 @@ const USAGE = `Usage: agentorg [command] [--home DIR]
                                             run AgentOrg: the Hub, your gateway and the frontend:
                                             the one it carries, or the folder DIR
   open                                      sign a browser in to the running app
+  start [--no-open]                         run it as a background service on macOS: at every
+                                            login, and again whenever it ends
+  stop                                      stop the service, until agentorg start
+  status                                    whether it runs, where, and as a service
   hub [--port N]                            run a bare Hub, without the shell
   actors | bindings | exports | audit       each one's list
   bind <consumer.slot> <provider.export>    hub.grants.bind
@@ -77,20 +83,55 @@ if (values.help && command === undefined) {
 }
 const home = hubHome(values.home as string | undefined);
 
-/** The running app in this home, if there is one: its address, and the CLI's token. */
-function running(): { url: string; token: string } | undefined {
+/** Whether a process lives. The app runs as this user, so one this user can't signal is gone. */
+function alive(pid: number): boolean {
   try {
-    const { url, pid } = JSON.parse(readFileSync(join(home, "app.json"), "utf8")) as {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** The app as a home's `app.json` says, if its process lives. */
+function recorded(at: string): { url: string; pid: number; version?: string } | undefined {
+  try {
+    const app = JSON.parse(readFileSync(join(at, "app.json"), "utf8")) as {
       url: string;
       pid: number;
+      version?: string;
     };
-    // The app runs as this user, so a pid this user can't signal is someone else's now.
-    try {
-      process.kill(pid, 0);
-    } catch {
-      return undefined;
-    }
-    return { url, token: readFileSync(join(home, "cli-token"), "utf8").trim() };
+    return alive(app.pid) ? app : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Whether the app answers at its address. A record left by an app that crashed can name a process
+ * that has since been given to something else, so a living pid isn't enough.
+ */
+async function answers(url: string): Promise<boolean> {
+  try {
+    await fetch(url, { signal: AbortSignal.timeout(2_000) });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** The app on a home, if its process lives and its address answers. */
+async function runningOn(at: string) {
+  const app = recorded(at);
+  return app && (await answers(app.url)) ? app : undefined;
+}
+
+/** The running app in this home, if there is one: its address, and the CLI's token. */
+function running(): { url: string; token: string } | undefined {
+  const app = recorded(home);
+  if (!app) return undefined;
+  try {
+    return { url: app.url, token: readFileSync(join(home, "cli-token"), "utf8").trim() };
   } catch {
     return undefined;
   }
@@ -174,10 +215,28 @@ function throughApp(
   });
 }
 
+/** Sign a browser in to the running app; whether one opened. */
+async function signBrowserIn(app: { url: string; token: string }): Promise<boolean> {
+  return openBrowser(await signInAddress(app));
+}
+
 async function runApp() {
   const port = values.port as string | undefined;
   if (port !== undefined && (!/^\d{1,5}$/.test(port) || Number(port) > 65535))
     usage("--port takes a port number.");
+  // Already running on this home, as the service or in another terminal: open it, don't fight it.
+  // Asked for a port or a frontend, it says it can't give them.
+  const already = running();
+  if (already && (await answers(already.url))) {
+    write(process.stdout, `AgentOrg is already running at ${already.url}, home ${home}.`);
+    if (port !== undefined || values.frontend !== undefined) {
+      write(process.stderr, "Stop it first to run it with --port or --frontend.");
+      process.exit(1);
+    }
+    if (!values["no-open"] && !(await signBrowserIn(already)))
+      write(process.stdout, "No browser opened here. Run agentorg open where you have one.");
+    return;
+  }
   // The Hub is loaded only to run the app: a command through it needs none of it.
   const { startApp } = await import("./gateway.js");
   let app: Awaited<ReturnType<typeof startApp>>;
@@ -219,14 +278,100 @@ async function runApp() {
   process.once("SIGTERM", stop);
 }
 
+/**
+ * The Node this runs on, as the PATH names it when it does: `process.execPath` is resolved, and a
+ * package manager's versioned folder behind a link can be gone after its next upgrade.
+ */
+function nodeByName(): string {
+  const own = realpathSync(process.execPath);
+  for (const folder of (process.env.PATH ?? "").split(delimiter)) {
+    const named = join(folder, "node");
+    try {
+      if (folder && existsSync(named) && realpathSync(named) === own) return named;
+    } catch {}
+  }
+  return process.execPath;
+}
+
+/** The service commands' view of this machine: the real `launchctl`, on this account. */
+async function serviceCommand(name: "start" | "stop" | "status") {
+  const service = await import("./service.js");
+  const system: import("./service.js").ServiceSystem = {
+    platform: process.platform,
+    uid: process.getuid?.() ?? 0,
+    userHome: homedir(),
+    launchctl: (args) =>
+      new Promise((done) =>
+        execFile("launchctl", args, { timeout: 30_000 }, (error, stdout, stderr) =>
+          done({
+            code: error ? (typeof error.code === "number" ? error.code : 1) : 0,
+            stdout: String(stdout),
+            stderr: String(stderr),
+          }),
+        ),
+      ),
+    running: runningOn,
+    alive,
+    sleep: (ms) => new Promise((done) => setTimeout(done, ms)),
+  };
+  try {
+    if (name === "status") {
+      const { lines, running: answers } = await service.status(system, home);
+      for (const line of lines) write(process.stdout, line);
+      process.exitCode = answers ? 0 : 3;
+    } else if (name === "stop") {
+      const { was, on } = await service.stop(system, home);
+      const other = on !== undefined && on !== home ? ` It ran on ${on}.` : "";
+      write(
+        process.stdout,
+        was === "running"
+          ? `Stopped. It won't start again, also at a login, until agentorg start.${other}`
+          : was === "set-up"
+            ? `The service wasn't running. It won't start at a login either, until agentorg start.${other}`
+            : "AgentOrg isn't set up as a service.",
+      );
+    } else {
+      const program = nodeByName();
+      // Its PATH is this shell's, as it is now, with its Node first: what the app looks for by name
+      // (agentcomputer, for one) is found under the service as it is here.
+      const path = [dirname(program), ...(process.env.PATH ?? "").split(delimiter)]
+        .filter((folder, at, all) => folder !== "" && all.indexOf(folder) === at)
+        .join(delimiter);
+      const data = process.env.AGENTCOMPUTER_DATA;
+      const { url, note } = await service.start(system, {
+        program,
+        cli: fileURLToPath(import.meta.url),
+        home,
+        env: { PATH: path, ...(data ? { AGENTCOMPUTER_DATA: data } : {}) },
+      });
+      write(
+        process.stdout,
+        `AgentOrg is running at ${url}, home ${home}, as a service: it starts at every login, and again whenever it ends.${note ? ` ${note}` : ""}`,
+      );
+      const app = running();
+      if (!values["no-open"] && app && !(await signBrowserIn(app)))
+        write(process.stdout, "No browser opened here. Run agentorg open where you have one.");
+    }
+  } catch (error) {
+    if (!(error instanceof service.ServiceError)) throw error;
+    write(process.stderr, error.message);
+    process.exit(1);
+  }
+}
+
 if (command === undefined) await runApp();
-else if (command === "open") {
+else if (command === "start" || command === "stop" || command === "status") {
+  if (rest.length > 0) usage(`agentorg ${command} takes no arguments.`);
+  if (values.port !== undefined || values.frontend !== undefined)
+    usage(`agentorg ${command} takes no --port or --frontend.`);
+  await serviceCommand(command);
+} else if (command === "open") {
   const app = running();
-  if (!app) {
+  if (!app || !(await answers(app.url))) {
     write(process.stderr, `AgentOrg isn't running in ${home}. Run agentorg first.`);
     process.exit(1);
   }
-  if (!(await openBrowser(await signInAddress(app)))) {
+  if (!(await signBrowserIn(app))) {
     write(process.stderr, "No browser could be opened here.");
     process.exit(1);
   }

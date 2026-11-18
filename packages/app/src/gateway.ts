@@ -124,8 +124,13 @@ export type Route = (request: IncomingMessage, response: ServerResponse, url: UR
 export interface AppOptions {
   /** The Hub home. */
   home: string;
-  /** The gateway's port on 127.0.0.1; by default the kept sessions' if it can, else any free one. */
+  /**
+   * The gateway's port on 127.0.0.1; by default the kept sessions' if it can, else
+   * `DEFAULT_PORT`, else any free one.
+   */
   port?: number;
+  /** The port a fresh home starts on, `DEFAULT_PORT` by default; 0 for any free one. For tests. */
+  defaultPort?: number;
   /** The frontend's folder; the one this package carries by default, if it carries one. */
   frontend?: string;
   /**
@@ -159,6 +164,9 @@ export interface App {
 
 /** A line of the app's log on standard error, beginning with its time in UTC. */
 const log = (message: string) => process.stderr.write(`${new Date().toISOString()} ${message}\n`);
+
+/** The port a fresh home starts on, when it is free. */
+export const DEFAULT_PORT = 7731;
 
 /** The port the kept sessions were given at, if any are kept. */
 function keptPort(sessions: string): number | undefined {
@@ -433,9 +441,14 @@ export async function startApp(options: AppOptions): Promise<App> {
       server.listen(port, "127.0.0.1", () => done());
     });
   // With no port asked for, the one the kept sessions were given at, so a tab left open is still
-  // signed in. If that one can't be had, any free one, as on a first start.
+  // signed in; else the default; and if that can't be had either, any free one.
+  const kept = keptPort(sessions);
+  const fresh = options.defaultPort ?? DEFAULT_PORT;
   await (options.port === undefined
-    ? listenOn(keptPort(sessions) ?? 0).catch(() => listenOn(0))
+    ? (kept === undefined || kept === fresh
+        ? listenOn(fresh)
+        : listenOn(kept).catch(() => listenOn(fresh))
+      ).catch(() => listenOn(0))
     : listenOn(options.port)
   ).catch(async (error) => {
     person.close();
@@ -448,7 +461,10 @@ export async function startApp(options: AppOptions): Promise<App> {
   if (keptPort(sessions) !== port) rmSync(sessions, { force: true });
   origin = `http://127.0.0.1:${port}`;
   writePrivate(join(home, "cli-token"), `${signIn.cliToken}\n`);
-  writePrivate(join(home, "app.json"), `${JSON.stringify({ url: origin, pid: process.pid })}\n`);
+  writePrivate(
+    join(home, "app.json"),
+    `${JSON.stringify({ url: origin, pid: process.pid, version: VERSION })}\n`,
+  );
 
   let closing: Promise<void> | undefined;
   let stopped = () => {};
