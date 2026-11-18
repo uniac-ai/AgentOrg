@@ -473,6 +473,8 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
   /** How many units were added to living agents, to name each one. */
   let added = 0;
   const { agents, connections } = seed();
+  /** The models every agent here can use, its own copy. */
+  const models = [...MODELS];
   const skills = [
     { name: "cite-sources", description: "Links every claim to its source" },
     { name: "weekly-numbers", description: "Writes the weekly summary" },
@@ -792,7 +794,7 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
       },
       models: ({ agent }) => {
         const { model } = agentOf(agent);
-        return { models: MODELS, ...(model ? { current: model } : {}) };
+        return { models, ...(model ? { current: model } : {}) };
       },
       setModel: ({ agent, model }) => {
         if (model) agentOf(agent).model = model;
@@ -1477,6 +1479,8 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
     agents,
     connections,
     calls,
+    /** The models it offers, which a test may change. */
+    models,
     /** What an agent holds besides its Work comes to be this, and each says how it stands now. */
     setHeld(agent: string, held: Held[]) {
       agentOf(agent).held = held;

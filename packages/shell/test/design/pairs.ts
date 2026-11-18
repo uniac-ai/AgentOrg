@@ -17,6 +17,7 @@ import {
   computerWith,
   cpuOf,
   createState,
+  designAgents,
   docsAgent,
   firstStart,
   inDesign,
@@ -38,7 +39,6 @@ import {
   SECTIONS,
   SIGN_INS,
   type SignIn,
-  sampleAgents,
   sampleBuild,
   sampleChats,
   sampleLoad,
@@ -47,7 +47,6 @@ import {
   signInHash,
   signInState,
   startTerminals,
-  stopAgent,
   unreadReply,
 } from "./samples.ts";
 
@@ -471,18 +470,6 @@ const SCREENS: Screen[] = [
       ...(part ? { part } : {}),
     }),
   ),
-  {
-    name: "agent-computer-stopped",
-    sizes: ["wide"],
-    themes: ["dark", "light"],
-    agents: true,
-    hash: "#/a/a-research",
-    design: async (page) => {
-      await openDesignAgent(page, "Research");
-      await stopAgent(page, "Research");
-    },
-    built: (page, gateway) => stopAgent(page, "Research", gateway),
-  },
   ...(
     [
       ["window-expanded", ["wide", "phone"], false],
@@ -753,7 +740,7 @@ for (const screen of SCREENS.filter((one) => wanted(one.name)))
           },
         });
         if (gateway) {
-          if (screen.agents) sampleAgents(gateway);
+          if (screen.agents) designAgents(gateway);
           if (screen.firstStart) firstStart(gateway);
           if (screen.build) sampleBuild(gateway);
           if (screen.settings) sampleSettings(gateway);

@@ -384,6 +384,60 @@ export function sampleAgents(gateway: Gateway) {
   });
 }
 
+/**
+ * The agents as the design's sample has them, for the design measurement: those of `sampleAgents`,
+ * made from the design's units, with Research as the design builds it. Its computer is this one,
+ * from the design's Computer unit, with your screen and your browser, and it is working in its
+ * browser and on its screen. Its model is GPT-5.5, and its web is an MCP made for it.
+ */
+export function designAgents(gateway: Gateway) {
+  sampleAgents(gateway);
+  sampleBuild(gateway);
+  gateway.models.splice(
+    0,
+    gateway.models.length,
+    { id: "gpt-5.5", name: "GPT-5.5" },
+    { id: "gpt-5.5-mini", name: "GPT-5.5 mini" },
+  );
+  const research = gateway.agents.get("a-research") as Agent;
+  research.model = "gpt-5.5";
+  const [built] = research.units as NonNullable<Agent["units"]>;
+  if (built) {
+    built.values = {
+      kind: "this",
+      workspace: "~/Agents/Research",
+      access: "terminal",
+      screen: "on",
+      browser: "yours",
+    };
+    built.status.surfaces = built.status.surfaces?.flatMap((one) =>
+      one.surface === "browser"
+        ? [one, { surface: "screen", protocol: "screen@1", operate: true }]
+        : [one],
+    );
+  }
+  gateway.presence([
+    { who: "agent", name: "Research", capability: "browser" },
+    { who: "agent", name: "Research", capability: "screen" },
+  ]);
+  // Its web, made for it by its Web unit.
+  const notes = gateway.connections.get("c-notes");
+  if (notes?.origin)
+    gateway.connections.set("c-web", {
+      ...notes,
+      connection: "c-web",
+      name: "Web for Research",
+      origin: { ...notes.origin, kind: "url", target: "https://mcp.exa.ai" },
+      status: {
+        state: "connected",
+        tools: [{ name: "web_search_exa" }, { name: "web_fetch_exa" }],
+      },
+    });
+  research.mcp = research.mcp.map((one) =>
+    one.slot === "web" ? { slot: "web", connection: "c-web", instance: "i-web" } : one,
+  );
+}
+
 /** Triage as the design has it: its one skill, and its connection down with the design's why. */
 export function downTriage(gateway: Gateway) {
   (gateway.agents.get("a-triage") as Agent).skills = [
@@ -751,21 +805,6 @@ export function stopElsewhere(gateway: Gateway, agent: string) {
   held.status = { state: "stopped" };
   if (held.chat.status.state === "working") gateway.setChatStatus(agent, { state: "idle" });
   gateway.changed();
-}
-
-/**
- * An agent stopped, with its page showing it: in a design whose agent's head has "…", from there;
- * on the built side, from elsewhere.
- */
-export async function stopAgent(page: Page, name: string, gateway?: Gateway) {
-  const main = page.getByRole("main");
-  const held = gateway && [...gateway.agents.values()].find((agent) => agent.name === name);
-  if (gateway && held) stopElsewhere(gateway, held.agent);
-  else {
-    await main.getByRole("button", { name: `More for ${name}` }).click();
-    await page.getByRole("menuitem", { name: "Stop" }).click();
-  }
-  await main.getByText(`${name} is stopped`).waitFor();
 }
 
 /** What a page's CPU meter says, once it says it. */
