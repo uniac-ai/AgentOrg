@@ -250,6 +250,95 @@ export function sampleChats(gateway: Gateway, given?: ChatCase) {
   );
 }
 
+const FENCE = "```";
+/**
+ * The design's sample conversations for a reply's bubbles: Research's, asked a one-line question,
+ * asked for a long reply, and given work it answers with a receipt and later its result.
+ */
+export const SAID = {
+  oneLineAsk: "How much free disk space is there?",
+  oneLine: "There's 212 GB free of 494 GB.",
+  longAsk: "What's in README.md?",
+  long: `It's a small shop demo: a storefront, a cart and a fake card service.
+
+The README is about 300 words. Most of it says how to run the demo and test it.
+
+The code is in three folders, one for each part:
+
+- **web**: the storefront's pages and styles
+- **cart**: pricing, coupons and the checkout session
+- **pay**: a stand-in for the card processor
+
+To run it, the README gives one command:
+
+${FENCE}sh
+npm install && npm run dev
+${FENCE}`,
+  workAsk: "Go through the shop demo and write every TODO with its file and line to todos.md.",
+  receipt: "I'll write every TODO in the shop demo to todos.md, with its file and line.",
+  result: `todos.md has all 12 TODOs, from 5 files, each with its line.
+
+Half are in the cart folder, and four of those are about coupons.`,
+  unasked: `Two TODOs were added to pay/refund.ts after I wrote todos.md, so it's missing them.
+
+Should I add them?`,
+};
+/** A reply as the design writes it out: a word at a time, a list's mark with the word after it. */
+export const chunksOf = (text: string) => text.match(/(?:[-*+]|\d+\.)[ \t]+\S+\s*|\S+\s*/g) ?? [];
+/** The long reply as far as the design has written it 3.5 s in. */
+export const WRITTEN_SO_FAR = chunksOf(SAID.long).slice(0, 48).join("");
+
+/** Research's conversation at one of the design's moments for a reply's bubbles, by its control. */
+export const MOMENTS = {
+  oneLine: "A one-line answer",
+  long: "A long reply",
+  receipt: "A receipt, the work going on",
+  result: "The result arrived",
+  unasked: "A message nobody asked for",
+  writing: "A reply being written",
+} as const;
+export type Moment = keyof typeof MOMENTS;
+/**
+ * Research's conversation, built, at one of those moments, as the design's control puts it: each
+ * moment its own conversation, Research working while the work goes on or a reply is written. A
+ * reply being written is written as far as the design has it at the moment it is shown.
+ */
+export function researchSays(gateway: Gateway, moment: Moment) {
+  const at = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
+  const ask = (id: string, text: string, ago: number) => ({
+    id,
+    role: "user" as const,
+    text,
+    at: at(ago),
+  });
+  const said = (id: string, text: string, ago: number) => ({
+    id,
+    role: "assistant" as const,
+    text,
+    at: at(ago),
+  });
+  gateway.converse(
+    "a-research",
+    moment === "oneLine"
+      ? [ask("v-u1", SAID.oneLineAsk, 2), said("v-a1", SAID.oneLine, 1)]
+      : moment === "long"
+        ? [ask("v-u2", SAID.longAsk, 2), said("v-a2", SAID.long, 1)]
+        : moment === "writing"
+          ? [ask("v-u2", SAID.longAsk, 1)]
+          : [
+              ask("v-u3", SAID.workAsk, 6),
+              said("v-a3", SAID.receipt, 5),
+              ...(moment === "receipt" ? [] : [said("v-a4", SAID.result, 2)]),
+              ...(moment === "unasked" ? [said("v-a5", SAID.unasked, 1)] : []),
+            ],
+  );
+  gateway.setChatStatus("a-research", {
+    state: moment === "receipt" || moment === "writing" ? "working" : "idle",
+  });
+}
+/** The reply being written, as far as the design has it: the words that have come. */
+export const writeSoFar = (gateway: Gateway) => gateway.delta("a-research", "v-a2", WRITTEN_SO_FAR);
+
 /** What a page asks, as the design's sample has each. */
 export const ASKS = {
   confirm: {

@@ -263,14 +263,17 @@
     filter: blur(0);
   }
 }
+/*
+ * Agent text: the rhythm of a page, within a bubble too. Outside the layers, as the design has it,
+ * so a paragraph's own space under it holds over the space the markdown part sets between blocks.
+ */
+.prose-chat :where(p, ul, ol) {
+  margin: 0 0 0.75em;
+}
+.prose-chat :where(:last-child) {
+  margin-bottom: 0;
+}
 @layer components {
-  /* Agent text: the width and rhythm of a page, not a bubble. */
-  .prose-chat :where(p, ul, ol) {
-    margin: 0 0 0.75em;
-  }
-  .prose-chat :where(:last-child) {
-    margin-bottom: 0;
-  }
   @media (prefers-reduced-motion: reduce) {
     [data-sd-animate] {
       /* biome-ignore lint/complexity/noImportantStyles: Streamdown sets it inline. */
