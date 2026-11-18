@@ -30,8 +30,9 @@ fi
 work="$(mktemp -d "${TMPDIR:-/tmp}/agentorg-smoke.XXXXXX")"
 pid=""
 hubpid=""
+regpid=""
 cleanup() {
-  for p in "$pid" "$hubpid"; do
+  for p in "$pid" "$hubpid" "$regpid"; do
     if [ -n "$p" ] && kill -0 "$p" 2>/dev/null; then
       kill -TERM "$p" 2>/dev/null || true
       wait "$p" 2>/dev/null || true
@@ -147,6 +148,89 @@ global="$work/global"
 npm install --global --silent --no-audit --no-fund --prefix "$global" --cache "$work/cache" \
   "$tarball"
 "$global/bin/agentorg" --version
+
+step "installed as the registry gives it, its dependencies are the lockfile's"
+# npm keeps to a package's npm-shrinkwrap.json when the registry says the package has one, as it
+# does once the package is published, but not for a tarball named by its path. So a stand-in
+# registry gives the packed cli as the registry would, and sends every other request on to the
+# real one.
+cat >"$work/registry.mjs" <<'EOF'
+import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { createServer } from "node:http";
+const tarball = process.argv[2];
+const bytes = readFileSync(tarball);
+const read = (path) => execFileSync("tar", ["-xOzf", tarball, path], { encoding: "utf8" });
+const manifest = JSON.parse(read("package/package.json"));
+const files = execFileSync("tar", ["-tzf", tarball], { encoding: "utf8" }).split("\n");
+const server = createServer((request, response) => {
+  const { port } = server.address();
+  if (decodeURIComponent(request.url.slice(1)) === manifest.name) {
+    const version = {
+      ...manifest,
+      _hasShrinkwrap: files.includes("package/npm-shrinkwrap.json"),
+      dist: {
+        tarball: `http://127.0.0.1:${port}/cli.tgz`,
+        integrity: `sha512-${createHash("sha512").update(bytes).digest("base64")}`,
+      },
+    };
+    response.setHeader("content-type", "application/json");
+    response.end(JSON.stringify({ name: manifest.name, versions: { [manifest.version]: version } }));
+  } else if (request.url === "/cli.tgz") response.end(bytes);
+  else response.writeHead(302, { location: `https://registry.npmjs.org${request.url}` }).end();
+});
+server.listen(0, "127.0.0.1", () => console.log(`http://127.0.0.1:${server.address().port}/`));
+EOF
+node "$work/registry.mjs" "$tarball" >"$work/registry.url" 2>&1 &
+regpid=$!
+for _ in $(seq 1 20); do
+  [ -s "$work/registry.url" ] && break
+  sleep 0.5
+done
+version="$(node -p 'require(process.argv[1]).version' "$root/packages/app/package.json")"
+mkdir "$work/via-registry"
+(cd "$work/via-registry" && echo '{"private":true}' >package.json &&
+  npm install --silent --no-audit --no-fund --ignore-scripts --cache "$work/cache-registry" \
+    --registry "$(head -1 "$work/registry.url")" --replace-registry-host=never "@agentorg/cli@$version")
+kill -TERM "$regpid"
+wait "$regpid" 2>/dev/null || true
+regpid=""
+# Each package of its shrinkwrap is installed at its version, inside the cli, and nothing else is;
+# and each is the root lockfile's, at the same version and integrity.
+node --input-type=module -e '
+  import { existsSync, readdirSync, readFileSync } from "node:fs";
+  import { join } from "node:path";
+  const [cli, rootLock] = process.argv.slice(1);
+  const wrap = JSON.parse(readFileSync(join(cli, "npm-shrinkwrap.json"), "utf8")).packages;
+  const lock = JSON.parse(readFileSync(rootLock, "utf8")).packages;
+  const wanted = Object.keys(wrap).filter(Boolean);
+  for (const path of wanted) {
+    const { version } = JSON.parse(readFileSync(join(cli, path, "package.json"), "utf8"));
+    if (version !== wrap[path].version) throw new Error(`${path} is ${version}, not ${wrap[path].version}`);
+    const tested = lock[`packages/app/${path}`] ?? lock[path];
+    if (tested?.version !== version || tested?.integrity !== wrap[path].integrity)
+      throw new Error(`${path}@${version} is not the root lockfile'"'"'s`);
+  }
+  const installed = [];
+  const walk = (at) => {
+    if (!existsSync(join(cli, at))) return;
+    for (const name of readdirSync(join(cli, at)).filter((one) => !one.startsWith("."))) {
+      const scoped = name.startsWith("@") ? readdirSync(join(cli, at, name)).map((one) => `${name}/${one}`) : [name];
+      for (const one of scoped) {
+        installed.push(`${at}/${one}`);
+        walk(`${at}/${one}/node_modules`);
+      }
+    }
+  };
+  walk("node_modules");
+  const extra = installed.filter((path) => !wrap[path]);
+  if (extra.length || installed.length !== wanted.length)
+    throw new Error(`Installed beside the shrinkwrap: ${extra.join(", ") || "fewer than it lists"}`);
+  console.log(`${wanted.length} dependencies, each at the root lockfile'"'"'s version`);
+' "$work/via-registry/node_modules/@agentorg/cli" "$root/package-lock.json"
+top="$(ls "$work/via-registry/node_modules" | tr '\n' ' ')"
+[ "$top" = "@agentorg " ] || { echo "Installed beside the cli: $top" >&2; exit 1; }
 
 step "run agentorg --no-open on a fresh home"
 home="$work/home"

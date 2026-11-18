@@ -9,6 +9,10 @@
 // dependencies are the cli's own, found further up. Run after `npm run build`:
 // `node packages/app/scripts/pack.js <destination>`, which prints the tarball's path.
 //
+// Its third-party dependencies are pinned by an npm-shrinkwrap.json made here from the root lockfile:
+// each, and what each needs in turn, at the version and integrity the repository was tested with.
+// The @agentorg packages inside it are files, not dependencies, so they aren't in it.
+//
 // The core and the frontend are also packed alone, as files of a release, not published:
 // - `--core`: the same cli without the shell, as `agentorg-core-<version>.tgz`; it serves the
 //   frontend it is given;
@@ -51,6 +55,82 @@ const { version: release } = JSON.parse(
   readFileSync(join(root, "packages/app/package.json"), "utf8"),
 );
 
+/**
+ * Where npm finds `name` for the package at `from` in a lockfile's tree: its own node_modules, then
+ * each one above it, as Node does. `undefined` when it isn't installed.
+ */
+function resolveIn(packages, from, name) {
+  for (let at = from; ; ) {
+    const found = at ? `${at}/node_modules/${name}` : `node_modules/${name}`;
+    if (packages[found]) return found;
+    if (!at) return undefined;
+    const up = at.lastIndexOf("/node_modules/");
+    at = up >= 0 ? at.slice(0, up) : "";
+  }
+}
+
+/**
+ * The npm-shrinkwrap.json of `cli`, the staged package, from the root lockfile: its third-party
+ * dependencies as the app at `packages/app` has them, and each one's own, transitively. A
+ * bundled package whose dependency the workspace resolves to another copy than the cli's would
+ * ship untested, so that is refused.
+ */
+function shrinkwrap(cli, bundledDirs) {
+  const lock = JSON.parse(readFileSync(join(root, "package-lock.json"), "utf8"));
+  const { packages } = lock;
+  const app = "packages/app";
+  // The app's own node_modules is the package's root once published.
+  const placed = (at) => (at.startsWith(`${app}/`) ? at.slice(app.length + 1) : at);
+  const kept = new Map();
+  const visit = (from, name, optional) => {
+    const at = resolveIn(packages, from, name);
+    if (at === undefined) {
+      if (optional) return;
+      throw new Error(`The lockfile has no ${name} for ${from || "the root"}: run npm install.`);
+    }
+    const entry = packages[at];
+    if (entry.link) throw new Error(`${name} is a workspace package, not one from the registry.`);
+    const path = placed(at);
+    const before = kept.get(path);
+    if (before !== undefined) {
+      if (before !== entry) throw new Error(`Two copies of ${name} would go at ${path}.`);
+      return;
+    }
+    kept.set(path, entry);
+    for (const dep of Object.keys(entry.dependencies ?? {})) visit(at, dep, false);
+    for (const dep of Object.keys(entry.optionalDependencies ?? {})) visit(at, dep, true);
+    for (const dep of Object.keys(entry.peerDependencies ?? {}))
+      visit(at, dep, entry.peerDependenciesMeta?.[dep]?.optional === true);
+  };
+  for (const dep of Object.keys(cli.dependencies)) visit(app, dep, false);
+  for (const dir of bundledDirs) {
+    const own = JSON.parse(readFileSync(join(root, dir, "package.json"), "utf8"));
+    for (const dep of Object.keys({ ...own.dependencies, ...own.peerDependencies })) {
+      if (dep.startsWith("@agentorg/") || !cli.dependencies[dep]) continue;
+      const tested = resolveIn(packages, dir, dep);
+      const shipped = resolveIn(packages, app, dep);
+      if (tested && packages[tested] !== packages[shipped])
+        throw new Error(
+          `${dir} is tested with ${dep}@${packages[tested].version}, but the cli ships ${packages[shipped]?.version}.`,
+        );
+    }
+  }
+  const own = { name: cli.name, version: cli.version, license: cli.license };
+  for (const key of ["dependencies", "bin", "engines"]) if (cli[key]) own[key] = cli[key];
+  const listed = { "": own };
+  for (const path of [...kept.keys()].sort((a, b) => a.localeCompare(b, "en"))) {
+    const { dev, devOptional, extraneous, ...entry } = kept.get(path);
+    listed[path] = entry;
+  }
+  return {
+    name: cli.name,
+    version: cli.version,
+    lockfileVersion: 3,
+    requires: true,
+    packages: listed,
+  };
+}
+
 /** The workspace's `npm pack` of `dir`, unpacked into `into`. */
 function unpack(dir, into, work) {
   const [{ filename }] = JSON.parse(
@@ -87,10 +167,12 @@ try {
   const cli = unpack("packages/app", stage, work);
   for (const file of ["README.md", "LICENSE"]) copyFileSync(join(root, file), join(stage, file));
   const bundled = [];
+  const bundledDirs = [];
   // The core alone carries no frontend: it serves the one it is given.
   if (alone === "core") delete cli.dependencies["@agentorg/shell"];
   for (const name of BUNDLED.filter((one) => !(alone === "core" && one === "shell"))) {
     const dir = `packages/${name}`;
+    bundledDirs.push(dir);
     // Under its own name, scoped or not: the code finds it by that name.
     const { name: published } = JSON.parse(readFileSync(join(root, dir, "package.json"), "utf8"));
     const own = unpack(dir, join(stage, "dist", "node_modules", published), work);
@@ -129,10 +211,14 @@ try {
       2,
     )}\n`,
   );
-  cli.files = [...cli.files, "dist/node_modules"];
+  cli.files = [...cli.files, "dist/node_modules", "npm-shrinkwrap.json"];
   delete cli.devDependencies;
   delete cli.scripts;
   writeFileSync(join(stage, "package.json"), `${JSON.stringify(cli, null, 2)}\n`);
+  writeFileSync(
+    join(stage, "npm-shrinkwrap.json"),
+    `${JSON.stringify(shrinkwrap(cli, bundledDirs), null, 2)}\n`,
+  );
   mkdirSync(destination, { recursive: true });
   // The core alone is packed apart first: under the cli's own name it would take the cli's file.
   const packedTo = alone === "core" ? work : destination;
@@ -144,6 +230,8 @@ try {
   for (const name of bundled)
     if (!files.some(({ path }) => path === `dist/node_modules/${name}/package.json`))
       throw new Error(`${filename} doesn't hold ${name}.`);
+  if (!files.some(({ path }) => path === "npm-shrinkwrap.json"))
+    throw new Error(`${filename} doesn't hold its npm-shrinkwrap.json.`);
   if (alone === "core") {
     const file = join(destination, `agentorg-core-${release}.tgz`);
     // Copied, not moved: the work folder may be on another disk.
