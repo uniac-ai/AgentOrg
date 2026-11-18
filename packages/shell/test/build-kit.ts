@@ -33,11 +33,12 @@ export const withGateway = (run: (gateway: Gateway) => Promise<void>) => async (
   }
 };
 export const plus = (page: Page) => page.getByRole("button", { name: /^Create/ }).first();
-export const panel = (page: Page) => page.getByRole("dialog", { name: /^(Create|New template)$/ });
+export const panel = (page: Page) =>
+  page.getByRole("dialog", { name: /^(Create New Agent|New template)$/ });
 /** The Settings window, which the creation window opens over from Templates. */
 export const settingsWindow = (page: Page) => page.getByRole("dialog", { name: "Settings" });
 export const card = (page: Page, name: string) =>
-  panel(page).getByRole("list", { name: "Units" }).getByRole("listitem", { name });
+  panel(page).getByRole("region", { name, exact: true });
 export async function fromTemplate(page: Page, name: string) {
   await agentsRead(page);
   await plus(page).click();

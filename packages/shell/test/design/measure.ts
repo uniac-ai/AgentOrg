@@ -946,13 +946,14 @@ const probe = (what: Part): Parts => {
 
   if (what === "create") {
     // The create window, from its own top left: it is centred in a window the design's own bar
-    // makes taller. What to start from, the stack's head, its two names, each unit's card with
-    // its fields, the way to add one, and its foot; then a menu or the dialog it opened.
+    // makes taller. At its left the identity card: its face, its name and its line, and a row for
+    // each unit. At its right the head, what to start from in a row, each section's heading and
+    // what it asks, and the foot; then a menu or the dialog it opened.
     const titled = (title: RegExp) =>
       [...document.querySelectorAll('[role="dialog"]')].find((one) =>
         title.test(one.querySelector("h2")?.textContent ?? ""),
       );
-    const window = titled(/^(Create|New template)$/);
+    const window = titled(/^(Create New Agent|New template)$/);
     if (!window) throw new Error("the create window isn't open");
     // Measuring what moves starts it moving again: each such part is held still from then on.
     const still = (e: Element | null | undefined) => {
@@ -967,70 +968,75 @@ const probe = (what: Part): Parts => {
     parts["window.right"] = round(innerWidth - origin.right);
     parts["window.centre"] = round((origin.top + origin.bottom) / 2 - innerHeight / 2);
     controls("window", window);
-    const from = window.querySelector("nav");
-    parts.from = of(from);
-    parts["from.title"] = of(from?.querySelector("h2"));
-    const rows = [...(from?.querySelectorAll("button") ?? [])];
+    const card = window.querySelector("aside");
+    const face = card?.querySelector(":scope > div > span:not(.hidden)");
+    parts.card = of(card);
+    parts["card.panel"] = of(card?.children[0]);
+    parts["card.face"] = of([...(card?.querySelectorAll("[aria-hidden]") ?? [])].find(seen));
+    parts["card.face.box"] = of([...(face?.parentElement?.children ?? [])].find(seen));
+    parts["card.name"] = of(card?.querySelector("input"));
+    parts["card.line"] = of(card?.querySelector("textarea"));
+    const can = card?.querySelector("ul");
+    parts["card.can"] = of(can);
+    const abilities = [...(can?.children ?? [])];
     for (const [name, row] of [
-      ["first", rows[0]],
-      ["second", rows[1]],
-      ["last", rows.at(-1)],
-      ["chosen", rows.find((row) => row.getAttribute("aria-current"))],
+      ["first", abilities[0]],
+      ["last", abilities.at(-1)],
     ] as const) {
-      parts[`from.${name}`] = of(row);
-      parts[`from.${name}.name`] = of(row?.children[0]);
-      parts[`from.${name}.says`] = of(row?.children[1]);
+      parts[`card.can.${name}`] = of(row);
+      parts[`card.can.${name}.logo`] = of(
+        [...(row?.querySelectorAll("[aria-hidden]") ?? [])].find(seen),
+      );
+      parts[`card.can.${name}.title`] = of(row?.lastElementChild, "w");
     }
-    parts["from.chosen.is"] = rows.findIndex((row) => row.getAttribute("aria-current"));
-    const close = [...window.querySelectorAll(":scope > button")].at(-1);
-    parts.close = of(close);
-    parts["close.icon"] = of(close?.querySelector("svg"));
+    // Narrow, the close is at the corner, outside the head.
+    const corner = [...window.querySelectorAll(":scope > button")].find(seen);
+    parts.corner = of(corner);
     const form = window.querySelector("form");
     parts.form = of(form);
-    const [head, room, foot] = form?.children ?? [];
+    const head = form?.querySelector(":scope > header");
     parts.head = of(head);
-    const options = head?.querySelector("button");
+    parts["head.title"] = of(head?.querySelector("h2"), "w");
+    const [options, close] = [...(head?.querySelectorAll("button") ?? [])].filter(seen);
     parts["head.options"] = of(options);
     parts["head.options.icon"] = of(options?.querySelector("svg"));
-    parts.room = of(room);
-    const [names, units, add] = room?.children ?? [];
-    parts.names = of(names);
-    for (const [i, field] of [...(names?.children ?? [])].entries()) {
-      parts[`names.${i}`] = of(field);
-      parts[`names.${i}.label`] = of(field.children[0]);
-      parts[`names.${i}.box`] = of(field.children[1]);
+    parts["head.close"] = of(close);
+    const from = form?.querySelector('ul[aria-label="Start from"]');
+    parts.from = of(from, "w");
+    const tiles = [...(from?.querySelectorAll("button") ?? [])];
+    for (const [name, tile] of [
+      ["first", tiles[0]],
+      ["second", tiles[1]],
+      ["chosen", tiles.find((one) => one.getAttribute("aria-current"))],
+    ] as const) {
+      parts[`from.${name}`] = of(tile);
+      parts[`from.${name}.name`] = of(tile?.children[0], "w");
+      parts[`from.${name}.says`] = of(tile?.children[1], "w");
     }
-    parts.units = of(units);
-    // Each card by its place in the stack: its head, then what it holds, a field at a time, a
-    // field's own parts three deep at most, and a group of boxes by its first and last.
-    for (const [n, card] of [...(units?.children ?? [])].entries()) {
-      const key = `unit.${n}`;
-      parts[key] = of(card);
-      const bar = card.children.length > 0 && card.querySelector("svg")?.parentElement;
-      const row = bar && bar !== card ? bar : card;
-      for (const [i, child] of [...row.children].entries()) {
-        parts[`${key}.head.${i}`] = of(child);
-        parts[`${key}.head.${i}.icon`] = of(child.matches("button") ? child.children[0] : null);
+    parts["from.chosen.is"] = tiles.findIndex((one) => one.getAttribute("aria-current"));
+    const sections = [...(form?.querySelectorAll("section") ?? [])];
+    parts.room = of(sections[0]?.parentElement, "h");
+    parts.sections = sections.length;
+    // Each section by its place: its heading, a part at a time, then what it asks, a field at a
+    // time, a field's own parts three deep at most.
+    for (const [n, section] of sections.entries()) {
+      const key = `section.${n}`;
+      const [heading, body] = section.children;
+      parts[key] = of(section, "h");
+      parts[`${key}.heading`] = of(heading);
+      for (const [i, child] of [...(heading?.children ?? [])].entries()) {
+        parts[`${key}.heading.${i}`] = of(child, child.matches("h3") ? "w" : "");
+        parts[`${key}.heading.${i}.icon`] = of(child.querySelector("svg"));
       }
-      const body = row === card ? null : card.children[1];
-      parts[`${key}.body`] = of(body);
-      for (const [i, held] of [...(body?.children ?? [])].entries()) {
+      const asks = body?.children[0];
+      parts[`${key}.body`] = of(asks, "h");
+      for (const [i, held] of [...(asks?.children ?? [])].slice(0, 6).entries()) {
         parts[`${key}.${i}`] = of(held);
-        for (const [j, part] of [...held.children].slice(0, 4).entries()) {
+        for (const [j, part] of [...held.children].slice(0, 3).entries())
           parts[`${key}.${i}.${j}`] = of(part);
-          const boxes = part.matches('[role="group"]') ? [...part.children] : [];
-          for (const [name, box] of [
-            ["first", boxes[0]],
-            ["last", boxes.at(-1)],
-          ] as const) {
-            parts[`${key}.${i}.${j}.${name}`] = of(box);
-            parts[`${key}.${i}.${j}.${name}.box`] = of(box?.children[0]);
-          }
-        }
       }
     }
-    parts.add = of(add);
-    parts["add.icon"] = of(add?.querySelector("svg"));
+    const foot = form?.querySelector(":scope > footer");
     parts.foot = of(foot);
     for (const [i, child] of [...(foot?.children ?? [])].entries())
       parts[`foot.${foot && foot.children.length - 1 === i ? "finish" : "says"}`] = of(child);

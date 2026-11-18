@@ -895,7 +895,7 @@ const BUILD_BASES: Creatable[] = [
     provider: "bundled",
     id: "assistant",
     title: "Assistant",
-    description: "Chats and uses what you connect",
+    description: "Talks with you and works with what it is given",
     instructions: "Help.",
     asks: [],
   },
@@ -1149,14 +1149,15 @@ export const sampleBuild = (gateway: Gateway) =>
   gateway.setCatalog({ bases: BUILD_BASES, units: BUILD_UNITS, templates: BUILD_TEMPLATES });
 
 /**
- * The create window's states, each with the widths it is shown at: an empty stack; a template
- * with an answer chosen that grants something; one whose unit has boxes to tick and numbers; a
- * card folded; its two menus; saving the stack as a template; made while signed out of the model
- * account; and a new template.
+ * The create window's states, each with the widths it is shown at: an empty stack, as it opens; a
+ * template with an answer chosen that grants something; a name and what it's for typed on its
+ * card; one whose unit has boxes to tick and numbers; a card folded; its two menus; saving the
+ * stack as a template; made while signed out of the model account; and a new template.
  */
 export const CREATES = [
   ["empty", ["wide", "phone"]],
   ["local", ["wide", "phone"]],
+  ["typed", ["wide", "phone"]],
   ["builder", ["wide"]],
   ["folded", ["wide"]],
   ["add", ["wide"]],
@@ -1169,41 +1170,41 @@ export type Create = (typeof CREATES)[number][0];
 
 /** The create window in one of its states, reached as a person reaches it, and at rest. */
 export async function createState(page: Page, state: Create, design: boolean) {
-  // The design these were drawn from has its older bar, with Create and Templates on it, behind
-  // Menu on a phone; built, Create is on Team, and New template is in Settings, on Templates.
-  const bar = async () => {
-    if (design && (page.viewportSize()?.width ?? 0) < 640)
-      await page.getByRole("button", { name: "Menu" }).click();
-    return page.getByRole("navigation", { name: "Main" }).last();
-  };
   if (state === "out" && design) await inDesign(page, /^ChatGPT:/);
-  if (state === "template" && design) {
-    await (await bar()).getByRole("button", { name: "Templates" }).click();
-    await page.getByRole("main").getByRole("button", { name: "New template", exact: true }).click();
-  } else if (state === "template")
+  // An agent is made from Team's way to add one; a template from New template, in Settings.
+  if (state === "template")
     await (await openSettingsWindow(page))
       .getByRole("button", { name: "New template", exact: true })
       .click();
-  else if (design) await (await bar()).getByRole("button", { name: "Create", exact: true }).click();
   else {
-    await (await bar()).getByRole("button", { name: "Team", exact: true }).click();
+    await page
+      .getByRole("navigation", { name: "Main" })
+      .getByRole("button", { name: "Team", exact: true })
+      .click();
     await page.getByRole("main").getByRole("button", { name: "Create", exact: true }).click();
   }
   const window = page.getByRole("dialog", {
-    name: state === "template" ? "New template" : "Create",
+    name: state === "template" ? "New template" : "Create New Agent",
   });
-  await window.getByRole("list", { name: "Units" }).waitFor();
+  // Once its options are drawn and it has opened, so nothing in it still moves.
+  await window.getByRole("region", { name: "Base", exact: true }).waitFor();
+  await window.evaluate((e) => Promise.all(e.getAnimations().map((moving) => moving.finished)));
   const from = (name: string) =>
     window.getByRole("button", { name: new RegExp(`^${name}`) }).click();
-  const card = (name: string) => window.getByRole("listitem", { name });
-  if (state === "local" || state === "folded" || state === "out") {
+  const card = (name: string) => window.getByRole("region", { name, exact: true });
+  if (state === "local" || state === "typed" || state === "folded" || state === "out") {
     await from("Assistant");
     await card("Web").waitFor();
   }
+  // The computer's own questions, which the design words as its sample's: this computer.
   if (state === "local") {
-    await window.getByRole("combobox", { name: "Where it resides" }).click();
+    await window.getByRole("combobox", { name: /^(Where it resides|Which computer)$/ }).click();
     await page.getByRole("option", { name: "This computer" }).click();
-    await window.getByLabel("Workspace directory").waitFor();
+    await window.getByLabel(/^(Workspace directory|Where its work happens)$/).waitFor();
+  }
+  if (state === "typed") {
+    await window.getByLabel("Name").fill("Foreman");
+    await window.getByLabel("What it's for").fill("Keeps dependencies current");
   }
   if (state === "folded") await window.getByRole("button", { name: "Fold Computer" }).click();
   if (state === "builder" || state === "save") {
@@ -1223,7 +1224,7 @@ export async function createState(page: Page, state: Create, design: boolean) {
     await page.getByRole("dialog", { name: "Save as template" }).waitFor();
   }
   // A press scrolls what it presses into view, by more one time than another: back to the start.
-  await page.locator('nav[aria-label="Start from"]').evaluate((row) => {
+  await page.locator('ul[aria-label="Start from"]').evaluate((row) => {
     row.scrollLeft = 0;
   });
 }
