@@ -48,6 +48,8 @@ curl -fsSL https://raw.githubusercontent.com/uniac-ai/AgentOrg/main/install.sh |
 - writes the launcher `~/.local/bin/agentorg`, which runs it on the home, and refuses to replace an `agentorg` there that it didn't write;
 - runs `agentorg start`, so the core runs as a service and starts at every login, and `agentorg open`.
 
+**Where the Mac app comes from:** it is built and released in [AgentComputer](https://github.com/uniac-ai/AgentComputer). [`mac-app.json`](mac-app.json) pins the version AgentOrg carries and its archive's SHA-256, which `install.sh` repeats. A release's `mac-app` job checks that archive and hands it on unchanged for AgentOrg's release; with no sum pinned yet, it carries none.
+
 **What is checked:** Node's archive and the Mac app's are each checked against the SHA-256 the script carries for them. The core comes from npm at the version the script pins, checked by npm's own integrity. Each download and unpacking happens in a folder of its own and is moved into place only when whole.
 
 **The home** is the one the launcher names, once there is one; else `AGENTORG_HUB_HOME`, which must be a full path; else a home an earlier AgentOrg made at `~/.local/share/agentorg`, used where it is; else `~/.agentorg/home`.
