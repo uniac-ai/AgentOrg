@@ -384,6 +384,12 @@ export function sampleAgents(gateway: Gateway) {
   });
 }
 
+/** Research working, in its browser and on its screen, as the design's sample has it. */
+const RESEARCH_ACTING: { who: "agent"; name: string; capability: string }[] = [
+  { who: "agent", name: "Research", capability: "browser" },
+  { who: "agent", name: "Research", capability: "screen" },
+];
+
 /**
  * The agents as the design's sample has them, for the design measurement: those of `sampleAgents`,
  * made from the design's units, with Research as the design builds it. Its computer is this one,
@@ -416,10 +422,7 @@ export function designAgents(gateway: Gateway) {
         : [one],
     );
   }
-  gateway.presence([
-    { who: "agent", name: "Research", capability: "browser" },
-    { who: "agent", name: "Research", capability: "screen" },
-  ]);
+  gateway.presence(RESEARCH_ACTING);
   // Its web, made for it by its Web unit.
   const notes = gateway.connections.get("c-notes");
   if (notes?.origin)
@@ -697,6 +700,13 @@ export async function openSetup(page: Page, name: string) {
   await sheet.evaluate((e) => Promise.all(e.getAnimations().map((moving) => moving.finished)));
   return sheet;
 }
+
+/**
+ * The person acting in one of Research's windows, the most recent, as its computer says it: what
+ * the design counts a press or a key in a window as, for a few seconds. Research works on.
+ */
+export const youActed = (gateway: Gateway, capability = "browser") =>
+  gateway.presence([{ who: "person", capability }, ...RESEARCH_ACTING]);
 
 /** Research's computer as the layer's window: from Expand, or from a chat of its, beside it. */
 export async function openWindow(page: Page, beside: boolean) {

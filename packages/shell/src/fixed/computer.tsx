@@ -33,6 +33,7 @@ import { Face, tintOf } from "./face.tsx";
 import { FilesView } from "./files-view.tsx";
 import type { LiveTarget } from "./live-socket.ts";
 import { Refusal } from "./parts.tsx";
+import { PRESENCE, usePresence } from "./presence.tsx";
 import { ScreenView } from "./screen-view.tsx";
 import { TerminalsView } from "./terminals.tsx";
 import { clause } from "./words.ts";
@@ -177,6 +178,16 @@ export function Computer({
   const windows = windowsOf(surfaces);
   // The window in front is the one picked. Nothing follows the agent: it may be in several at once.
   const front = windows.find((w) => w.kind === picked[agent.id]) ?? windows[0];
+  // The window the person last acted on, while the computer says they are acting there: the agent
+  // is told so, by the computer itself, so its head says it.
+  const presence = surfaces.find((s) => s.protocol === PRESENCE && !s.unavailable);
+  const acting = usePresence(
+    presence && !stopped ? targetOf(agent.id, { ...presence, operate: false }) : undefined,
+  );
+  const you = acting?.find(
+    (one) => one.who === "person" && windows.some((w) => w.kind === one.capability),
+  );
+  const actedIn = windows.find((w) => w.kind === you?.capability);
   // Where this frame's window goes. The views are put there by what holds them: while the
   // computer is open in the layer, the frame on its page holds the window's place, empty.
   const [slot, setSlot] = useState<HTMLElement | null>(null);
@@ -202,16 +213,23 @@ export function Computer({
           {overlay && <Face agent={agent} size={20} plain />}
           <span className="truncate">{agent.name}'s computer</span>
         </h3>
-        {overlay && (
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            aria-label={`Close ${agent.name}'s computer`}
-            onClick={close}
-          >
-            <XIcon />
-          </Button>
-        )}
+        <div className="flex min-w-0 items-center gap-2">
+          {actedIn && (
+            <span className="truncate text-[13px] text-muted-foreground">
+              {`${agent.name} is told you acted in the ${actedIn.title.toLowerCase()}`}
+            </span>
+          )}
+          {overlay && (
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label={`Close ${agent.name}'s computer`}
+              onClick={close}
+            >
+              <XIcon />
+            </Button>
+          )}
+        </div>
       </header>
       <div className="min-h-0 flex-1 px-2.5">
         {stopped ? (

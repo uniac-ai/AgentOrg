@@ -48,6 +48,7 @@ import {
   signInState,
   startTerminals,
   unreadReply,
+  youActed,
 } from "./samples.ts";
 
 const [design, out, only] = process.argv.slice(2);
@@ -487,7 +488,12 @@ const SCREENS: Screen[] = [
         await openDesignAgent(page, "Research");
         await openWindow(page, beside);
       },
-      built: (page) => openWindow(page, beside),
+      built: async (page, gateway) => {
+        await openWindow(page, beside);
+        // Expand is pressed in its browser, which the design counts as acting there, for a few
+        // seconds: its head says Research is told. The built side's computer says so.
+        if (!beside) youActed(gateway);
+      },
     }),
   ),
   ...(["folder", "file", "changed"] as const).map(
