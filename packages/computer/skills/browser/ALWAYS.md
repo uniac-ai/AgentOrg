@@ -1,0 +1,1 @@
+Your browser tools may act in the person's own signed-in browser, as them. In their browser, work only in the tabs you open. Anything they would see as sent, posted, bought or deleted waits for their yes, as above.

@@ -1,0 +1,1 @@
+Your screen tools may act on the person's own screen, as them. Anything they would see as sent, posted, bought or deleted waits for their yes, as above. On a machine they lend, you act in a window, in the background, without moving their pointer; the screen skill says how.

@@ -65,6 +65,7 @@ import {
   REMOTE,
   SCREEN_SLOT,
   SKILLS,
+  skillFiles,
   THIS,
   UPDATE_MAC,
   ungrantedMac,
@@ -1570,7 +1571,7 @@ export async function startComputerProvider(
           units: [computerUnit(await findLocal(), await asksWhich()), WEB_UNIT],
         }),
         async skill({ unit, name, path: file }) {
-          if (!SKILLS[unit]?.includes(name) || file !== "SKILL.md")
+          if (!SKILLS[unit]?.includes(name) || !skillFiles(name).includes(file))
             throw new Refused("unknown", `${unit} has no file ${file} of a skill ${name}.`);
           const text = await readFile(join(SKILLS_DIR, name, file), "utf8");
           const now = createHash("sha256").update(text).digest("hex");

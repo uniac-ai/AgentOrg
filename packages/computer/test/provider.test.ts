@@ -32,6 +32,7 @@ import { connect } from "@agentorg/sdk/client";
 import type WebSocket from "ws";
 import { WebSocketServer } from "ws";
 import { startComputerProvider } from "../src/index.ts";
+import { skillFiles } from "../src/unit.ts";
 
 const refused = (code: string) => (error: unknown) =>
   error instanceof Refused && error.code === code;
@@ -561,6 +562,14 @@ test("each skill the form names can be read, with what it shipped before, and an
   assert.ok(computer.shipped?.every((hash) => /^[0-9a-f]{64}$/.test(hash)));
   await assert.rejects(
     units.skill({ unit: "computer", name: "nothing", path: "SKILL.md" }),
+    refused("unknown"),
+  );
+  // What the computer skill always tells its agent is served as a file of it; a skill that lists
+  // no such file has none to serve.
+  const always = await units.skill({ unit: "computer", name: "computer", path: "ALWAYS.md" });
+  assert.match(always.text, /^You have a computer, with a workspace folder/);
+  await assert.rejects(
+    units.skill({ unit: "computer", name: "files", path: "ALWAYS.md" }),
     refused("unknown"),
   );
 });
@@ -2608,7 +2617,7 @@ test("a computer's rows say its browser apart from what it reaches, and a browse
   await units.remove({ instance: alone.instance });
 });
 
-test("each skill's text is among the texts shipped.json says it shipped", () => {
+test("each skill's files are those its unit gives, and each text is among those shipped.json says it shipped", () => {
   const skills = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "skills");
   const shipped = JSON.parse(readFileSync(join(skills, "shipped.json"), "utf8")) as Record<
     string,
@@ -2617,12 +2626,15 @@ test("each skill's text is among the texts shipped.json says it shipped", () => 
   for (const name of readdirSync(skills, { withFileTypes: true })
     .filter((one) => one.isDirectory())
     .map((one) => one.name)) {
-    const now = createHash("sha256")
-      .update(readFileSync(join(skills, name, "SKILL.md"), "utf8"))
-      .digest("hex");
-    assert.ok(
-      shipped[`${name}/SKILL.md`]?.includes(now),
-      `append ${now} to "${name}/SKILL.md" in packages/computer/skills/shipped.json, and keep the others`,
-    );
+    assert.deepEqual(readdirSync(join(skills, name)).sort(), [...skillFiles(name)].sort());
+    for (const file of skillFiles(name)) {
+      const now = createHash("sha256")
+        .update(readFileSync(join(skills, name, file), "utf8"))
+        .digest("hex");
+      assert.ok(
+        shipped[`${name}/${file}`]?.includes(now),
+        `append ${now} to "${name}/${file}" in packages/computer/skills/shipped.json, and keep the others`,
+      );
+    }
   }
 });
