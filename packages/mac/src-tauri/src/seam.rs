@@ -259,10 +259,17 @@ struct Read {
     setup_at: Option<Instant>,
 }
 
+/// How often the menu-bar item reads the setup: every 5 s while the window is open, as its page
+/// does, and once a minute while it is closed, since the setup changes only on the person's own
+/// steps, and each read starts programs of the service's.
+fn setup_every(window_open: bool) -> Duration {
+    Duration::from_secs(if window_open { 5 } else { 60 })
+}
+
 /// The menu-bar item's state now, from the reads the window makes: the app's state, the setup,
-/// read every 5 s and not while starting again (as the page skips it then), and the connection.
-/// Blocking, off the main thread.
-fn dot_now(read: &mut Read, started: Instant) -> Dot {
+/// read as `setup_every` says and not while starting again (as the page skips it then), and the
+/// connection. Blocking, off the main thread.
+fn dot_now(read: &mut Read, started: Instant, window_open: bool) -> Dot {
     let connection = call("GET", "/v1/connection", None);
     if let Ok(said) = &connection {
         ANSWERED.store(true, Ordering::Relaxed);
@@ -274,7 +281,7 @@ fn dot_now(read: &mut Read, started: Instant) -> Dot {
         None if connection.is_ok() => AppState::Running,
         None => without_provider(),
     };
-    let due = read.setup_at.is_none_or(|at| at.elapsed() >= Duration::from_secs(5));
+    let due = read.setup_at.is_none_or(|at| at.elapsed() >= setup_every(window_open));
     if connection.is_ok() && app != AppState::StartingAgain && due {
         if let Ok(said) = call("GET", "/v1/setup", None) {
             (read.short, read.setup_at) = (Some(menu_bar::short(&said)), Some(Instant::now()));
@@ -312,7 +319,7 @@ const MAIN: &str = "main";
 fn show_window(app: &AppHandle) {
     // As every open of the app has: a background item not yet registered, or refused before, is
     // registered now.
-    log("window", &macos::register_background_item());
+    log("window", &macos::register_background_item().words());
     let _ = app.set_activation_policy(ActivationPolicy::Regular);
     let window = match app.get_webview_window(MAIN) {
         Some(window) => Some(window),
@@ -464,7 +471,8 @@ pub fn window(with_window: bool) {
                         said = now;
                         let _ = handle.emit("changed", ());
                     }
-                    let dot = dot_now(&mut read, started);
+                    let window_open = handle.get_webview_window(MAIN).is_some();
+                    let dot = dot_now(&mut read, started, window_open);
                     let dark = menu_bar_dark(&tray);
                     if shown != Some((dot, dark)) {
                         let _ = tray.set_icon(Some(picture(dot, dark)));
@@ -513,6 +521,12 @@ mod tests {
     use std::io::{BufRead, BufReader, Read, Write};
     use std::net::TcpListener;
     use std::thread::{self, JoinHandle};
+
+    #[test]
+    fn the_menu_bar_item_reads_the_setup_every_5_s_with_the_window_open_and_every_minute_without() {
+        assert_eq!(setup_every(true), Duration::from_secs(5));
+        assert_eq!(setup_every(false), Duration::from_secs(60));
+    }
 
     /// A stand-in for the service on loopback: it answers one request, and hands back what it
     /// was sent.

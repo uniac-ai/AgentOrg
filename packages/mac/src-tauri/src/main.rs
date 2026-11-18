@@ -1,9 +1,11 @@
-//! AgentOrg.app's one program, which runs four ways: the window and the menu-bar item, as a person
+//! AgentOrg.app's one program, which runs these ways: the window and the menu-bar item, as a person
 //! opens the app, or with the item alone as the provider starts it after a login (`menu-bar`); the
 //! provider, as macOS starts its background item (`--provider`); asking for the screen's grants, as
-//! the service opens the app to (`grant <need>...`); and `unregister`, which takes the background
-//! item away, for a person removing the app. A grant's instance reads each grant through a fresh
-//! one of itself (`granted <need>`), which answers by its exit code.
+//! the service opens the app to (`grant <need>...`); `register`, which registers the background
+//! item with no window, as the line that installs AgentOrg runs it; `unregister`, which takes the
+//! background item away; and `uninstall`, which removes the app and what it keeps. A grant's
+//! instance reads each grant through a fresh one of itself (`granted <need>`), which answers by its
+//! exit code.
 
 mod grant;
 mod log;
@@ -12,6 +14,7 @@ mod menu_bar;
 mod places;
 mod provider;
 mod seam;
+mod uninstall;
 
 /// A home of the tests' own, set once for every test, so that what they log stays out of the
 /// person's.
@@ -32,27 +35,21 @@ fn main() {
     match args.first().map(String::as_str) {
         Some("--provider") => provider::run_as_background_item(),
         Some("grant") => grant::ask(&args[1..]),
-        Some("unregister") => match macos::unregister_background_item() {
-            Ok(said) => {
-                // What the app keeps outside its folders: the driver's default.
-                let removed = if macos::driver_restores_windows(true) {
-                    "the driver's default removed"
-                } else {
-                    "the driver's default couldn't be reached"
-                };
-                let mut said = format!("{said}; {removed}");
-                if let Some(pid) = menu_bar::end_running(&menu_bar::state()) {
-                    said.push_str(&format!("; the menu bar item, process {pid}, ended"));
-                }
-                log::log("unregister", &said);
-                println!("{said}");
-            }
+        Some("register") => {
+            let registered = macos::register_background_item();
+            let said = registered.words();
+            log::log("register", &said);
+            println!("{said}");
+            std::process::exit(registered.exit_code());
+        }
+        Some("unregister") => match unregister() {
+            Ok(said) => println!("{said}"),
             Err(said) => {
-                log::log("unregister", &said);
                 eprintln!("{said}");
                 std::process::exit(1);
             }
         },
+        Some("uninstall") => uninstall::run(args.iter().any(|arg| arg == "--reset-privacy")),
         Some("granted") => std::process::exit(match args.get(1) {
             Some(need) if macos::granted(need) => 0,
             _ => 1,
@@ -60,4 +57,28 @@ fn main() {
         Some("menu-bar") => seam::window(false),
         _ => seam::window(true),
     }
+}
+
+/// Takes the background item away, which stops the provider and what it runs; removes the driver's
+/// default, what the app keeps outside its folders; and ends the menu-bar item where it runs. Says
+/// what was done, as the log has it, or why it couldn't be.
+pub fn unregister() -> Result<String, String> {
+    let said = match macos::unregister_background_item() {
+        Ok(said) => said,
+        Err(said) => {
+            log::log("unregister", &said);
+            return Err(said);
+        }
+    };
+    let removed = if macos::driver_restores_windows(true) {
+        "the driver's default removed"
+    } else {
+        "the driver's default couldn't be reached"
+    };
+    let mut said = format!("{said}; {removed}");
+    if let Some(pid) = menu_bar::end_running(&menu_bar::state()) {
+        said.push_str(&format!("; the menu bar item, process {pid}, ended"));
+    }
+    log::log("unregister", &said);
+    Ok(said)
 }
