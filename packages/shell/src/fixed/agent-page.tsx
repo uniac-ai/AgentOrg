@@ -153,16 +153,6 @@ export function AgentPage({
               failed ??
               (now.tone === "working" && retrying ? <Retry retrying={retrying} /> : now.text)}
           </span>
-          {/* The way in is on Home, where everything left to set up is. */}
-          {needs && (
-            <Button
-              variant="secondary"
-              className="ml-1 h-8 rounded-full px-4"
-              onClick={() => go({ screen: "home" })}
-            >
-              Set up
-            </Button>
-          )}
           {/* An agent that isn't running is started where it says so. */}
           {off && (
             <Button className="ml-1 h-8 rounded-full px-4" disabled={act.busy} onClick={start}>

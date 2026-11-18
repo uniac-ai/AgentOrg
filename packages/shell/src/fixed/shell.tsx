@@ -27,7 +27,7 @@ import { WORD } from "./data.ts";
 import { Face } from "./face.tsx";
 import { HomePage } from "./home-page.tsx";
 import { Layer } from "./layer.tsx";
-import { LoginProvider, type LoginStatus, useLogin } from "./login.tsx";
+import { LoginProvider, type LoginStatus, SignInBanner } from "./login.tsx";
 import { McpsPage } from "./mcps-page.tsx";
 import { UNREAD } from "./parts.tsx";
 import { SettingsFrame, SettingsPage, sectionOf } from "./settings-page.tsx";
@@ -135,7 +135,6 @@ function LeftBar({
 }) {
   const route = useRoute();
   const { list, byId, unread } = useAgents();
-  const login = useLogin();
   const [query, setQuery] = useState("");
   const rail = !drawer;
   const to = (next: Route) => {
@@ -161,13 +160,7 @@ function LeftBar({
         onClick={() => to({ screen: "home" })}
         label="Home"
       >
-        <span className="relative">
-          <HomeIcon className="size-[18px]" />
-          {/* Something is left to set up, and Home is where. */}
-          {login !== "in" && (
-            <span className="absolute -top-0.5 -right-1 size-2 rounded-full bg-[var(--warn)] ring-2 ring-[var(--canvas)]" />
-          )}
-        </span>
+        <HomeIcon className="size-[18px]" />
       </BarRow>
       {/* Search, with Create beside it. This row stays put however long the list beneath grows. */}
       <search className={`mt-1.5 flex shrink-0 items-center gap-1 ${rail ? "rail:flex-col" : ""}`}>
@@ -317,81 +310,90 @@ function Frame({ notice, dismiss }: Required<Notice>) {
               ? "Templates"
               : "Settings";
   return (
-    <div
-      ref={setShell}
-      data-shell
-      className="@container/app relative flex h-full min-h-0 w-full overflow-hidden bg-[var(--canvas)] text-[15px] leading-[1.5] text-foreground"
-    >
-      {/* The page: the bar and what's beside it. */}
-      <LeftBar onSearch={(event) => open("search", event)} onCreate={show} />
-      <Dialog.Root open={!!drawer} onOpenChange={(next) => !next && setDrawer(undefined)}>
-        <Dialog.Portal container={shell}>
-          <Dialog.Overlay
-            data-drawer-overlay
-            className="fixed inset-0 z-30 bg-black/40"
-            onClick={() => setDrawer(undefined)}
-          />
-          <Dialog.Content
-            aria-describedby={undefined}
-            className="fixed inset-y-0 left-0 z-40 outline-none"
-            // A click on the page behind closes it, as it lands, and not the press before it.
-            onPointerDownOutside={(event) => event.preventDefault()}
-            onCloseAutoFocus={(event) => {
-              event.preventDefault();
-              opener.current?.focus();
-              if (creating.current) show();
-              creating.current = false;
-            }}
-          >
-            <Dialog.Title className="sr-only">Menu</Dialog.Title>
-            <LeftBar
-              drawer
-              searching={drawer === "search"}
-              onGo={() => setDrawer(undefined)}
-              onCreate={() => {
-                creating.current = true;
-                setDrawer(undefined);
-              }}
+    // What is left to set up runs across the top, over the bar and the page; the shell, with its
+    // layer, is below it.
+    <div className="@container/app flex h-full min-h-0 w-full flex-col bg-[var(--canvas)] text-[15px] leading-[1.5] text-foreground">
+      <SignInBanner />
+      <div
+        ref={setShell}
+        data-shell
+        className="@container/app relative flex min-h-0 w-full flex-1 overflow-hidden bg-[var(--canvas)]"
+      >
+        {/* The page: the bar and what's beside it. */}
+        <LeftBar onSearch={(event) => open("search", event)} onCreate={show} />
+        <Dialog.Root open={!!drawer} onOpenChange={(next) => !next && setDrawer(undefined)}>
+          <Dialog.Portal container={shell}>
+            <Dialog.Overlay
+              data-drawer-overlay
+              className="fixed inset-0 z-30 bg-black/40"
+              onClick={() => setDrawer(undefined)}
             />
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
-      <div className="relative flex min-w-0 flex-1 flex-col">
-        <header className="hidden h-12 shrink-0 items-center gap-1 px-2 phone:flex">
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label="Menu"
-            aria-expanded={!!drawer}
-            onClick={(event) => open("menu", event)}
-          >
-            <MenuIcon />
-          </Button>
-          <span className="min-w-0 truncate text-[17px] font-semibold">{place}</span>
-        </header>
-        <ShellBar notice={notice} dismiss={dismiss} />
-        <main className="@container/main relative min-h-0 flex-1">
-          {route.screen === "home" && <HomePage />}
-          {route.screen === "chat" && <ChatPage agent={route.agent} />}
-          {route.screen === "team" && <TeamPage agent={route.agent} tab={route.tab} />}
-          {route.screen === "agent" && (
-            <AgentPage key={route.agent} agent={route.agent} tab={route.tab} />
-          )}
-          {section && (
-            <SettingsFrame tab={section}>
-              {route.screen === "skills" && (
-                <SkillsPage focus={route.focus} adding={route.adding} />
-              )}
-              {route.screen === "mcps" && <McpsPage focus={route.focus} adding={route.adding} />}
-              {route.screen === "settings" &&
-                (route.tab === "templates" ? <TemplatesPage /> : <SettingsPage tab={route.tab} />)}
-            </SettingsFrame>
-          )}
-        </main>
+            <Dialog.Content
+              aria-describedby={undefined}
+              className="fixed inset-y-0 left-0 z-40 outline-none"
+              // A click on the page behind closes it, as it lands, and not the press before it.
+              onPointerDownOutside={(event) => event.preventDefault()}
+              onCloseAutoFocus={(event) => {
+                event.preventDefault();
+                opener.current?.focus();
+                if (creating.current) show();
+                creating.current = false;
+              }}
+            >
+              <Dialog.Title className="sr-only">Menu</Dialog.Title>
+              <LeftBar
+                drawer
+                searching={drawer === "search"}
+                onGo={() => setDrawer(undefined)}
+                onCreate={() => {
+                  creating.current = true;
+                  setDrawer(undefined);
+                }}
+              />
+            </Dialog.Content>
+          </Dialog.Portal>
+        </Dialog.Root>
+        <div className="relative flex min-w-0 flex-1 flex-col">
+          <header className="hidden h-12 shrink-0 items-center gap-1 px-2 phone:flex">
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label="Menu"
+              aria-expanded={!!drawer}
+              onClick={(event) => open("menu", event)}
+            >
+              <MenuIcon />
+            </Button>
+            <span className="min-w-0 truncate text-[17px] font-semibold">{place}</span>
+          </header>
+          <ShellBar notice={notice} dismiss={dismiss} />
+          <main className="@container/main relative min-h-0 flex-1">
+            {route.screen === "home" && <HomePage />}
+            {route.screen === "chat" && <ChatPage agent={route.agent} />}
+            {route.screen === "team" && <TeamPage agent={route.agent} tab={route.tab} />}
+            {route.screen === "agent" && (
+              <AgentPage key={route.agent} agent={route.agent} tab={route.tab} />
+            )}
+            {section && (
+              <SettingsFrame tab={section}>
+                {route.screen === "skills" && (
+                  <SkillsPage focus={route.focus} adding={route.adding} />
+                )}
+                {route.screen === "mcps" && <McpsPage focus={route.focus} adding={route.adding} />}
+                {route.screen === "settings" &&
+                  (route.tab === "templates" ? (
+                    <TemplatesPage />
+                  ) : (
+                    <SettingsPage tab={route.tab} />
+                  ))}
+              </SettingsFrame>
+            )}
+          </main>
+        </div>
+        {/* Over the page, bar included: the one layer, with the chat. */}
+        <Layer />
+        <BuildDialog />
       </div>
-      {/* Over the page, bar included: the one layer, with the chat. */}
-      <Layer />
-      <BuildDialog />
     </div>
   );
 }

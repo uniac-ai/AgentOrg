@@ -467,6 +467,8 @@ export interface Call {
 }
 
 export async function standIn(options: { creatables?: Creatable[] } = {}) {
+  /** The address a sign-in gives. */
+  let authorizeUrl = "https://auth.example/authorize";
   let sendDelayMs = 0;
   /** How many units were added to living agents, to name each one. */
   let added = 0;
@@ -1135,7 +1137,7 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
         throw error;
       }
       if (method === "logout") return { revoked: true };
-      if (method === "start") return { authorizeUrl: "https://auth.example/authorize" };
+      if (method === "start") return { authorizeUrl };
       return account.state === "signed_in"
         ? { state: "signed_in", account: { email: "sam@example.com", plan: "Plus" } }
         : { state: account.state };
@@ -1529,6 +1531,10 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
       for (const [ws] of live.screens) ws.send(JSON.stringify(event));
     },
     /** The model account comes to stand this way, as its events say it. */
+    /** Where a sign-in sends the browser: ChatGPT's page, or, to test the check, somewhere else. */
+    authorizeAt(url: string) {
+      authorizeUrl = url;
+    },
     setAccount(state: "signed_out" | "signed_in" | "ineligible" | "none", started = true) {
       const was = account?.state;
       account = state === "none" ? undefined : { state, started };

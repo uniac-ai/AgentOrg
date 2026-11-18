@@ -514,19 +514,20 @@ test(
               "Use another account",
             ],
       );
-      // The same way in as Home's, its size included.
+      // The same way in as the banner's, at the size it has here.
       const way = await chatgpt.getByRole("button").boundingBox();
       assert.ok(way && Math.round(way.width) === 232 && Math.round(way.height) === 40);
     }
-    // Pressed, it opens ChatGPT's page as Home's does, and waits for it.
+    // Pressed, it waits for ChatGPT's page as the banner's does, and takes this tab there.
     // ChatGPT's page is answered here: nothing leaves this computer.
     await page
       .context()
       .route("https://auth.example/**", (route) => route.fulfill({ status: 200, body: "ChatGPT" }));
-    const popup = page.context().waitForEvent("page");
+    const holding = gateway.hold("login.start");
     await chatgpt.getByRole("button", { name: "Continue with ChatGPT" }).click();
-    await (await popup).close();
     await chatgpt.getByRole("button", { name: "Waiting for ChatGPT…" }).waitFor();
+    holding();
+    await page.waitForURL(/^https:\/\/auth\.example\/authorize/);
     await page.close();
   }),
 );

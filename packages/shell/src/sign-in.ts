@@ -20,8 +20,8 @@ function set(value: boolean) {
 export const endSigningIn = () => set(false);
 
 /**
- * The shell's ChatGPT sign-in, for its own buttons: ChatGPT's page opens
- * in a new tab, and the shell moves on when `login` says it is signed in.
+ * The shell's ChatGPT sign-in, for its own buttons: this tab goes to ChatGPT's page, and comes
+ * back to the shell when the sign-in is done, which moves on when `login` says it is signed in.
  */
 export async function signIn() {
   if (signingIn) return;
@@ -37,10 +37,12 @@ export async function signIn() {
           ? new Error("ChatGPT is still starting. Try again in a moment.")
           : error;
       });
-    // ChatGPT's own page, over https only: anything else isn't opened.
+    // ChatGPT's own page, over https only: anything else isn't gone to.
     if (new URL(authorizeUrl).protocol !== "https:")
       throw new Error("The sign-in address isn't https.");
-    window.open(authorizeUrl, "_blank", "noopener,noreferrer");
+    // A wait that ended meanwhile, as the account said where it stands, goes nowhere.
+    if (!signingIn) return;
+    location.assign(authorizeUrl);
   } catch (error) {
     set(false);
     throw error;

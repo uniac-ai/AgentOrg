@@ -7,7 +7,6 @@ import { useBuilding } from "./building.tsx";
 import { ChatRow } from "./chat-parts.tsx";
 import { useChats } from "./chats.tsx";
 import { useEvery } from "./data.ts";
-import { LeftToSetUp } from "./login.tsx";
 import { Nothing, UNREAD } from "./parts.tsx";
 import { useAgents } from "./watch.tsx";
 
@@ -63,7 +62,6 @@ export function HomePage() {
   return (
     <div className="no-bar h-full overflow-y-auto">
       <div className="mx-auto flex max-w-[720px] flex-col gap-10 px-4 pt-6 pb-28">
-        <LeftToSetUp />
         {rows("Needs you", needs)}
         {rows("Recent", recent, true)}
         {/* With nothing to list, Recent says which nothing it is: none yet, or none that can be read. */}

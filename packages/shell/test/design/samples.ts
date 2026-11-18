@@ -689,9 +689,10 @@ export const signInAccount = (gateway: Gateway, state: SignIn) =>
 
 /**
  * A page put in one of the model account's states and shown where it bites. The built side's
- * account already stands that way; the design is put there by its own controls.
+ * account already stands that way; the design is put there by its own controls. Built, the way in
+ * takes the tab to ChatGPT's page, so the wait is shown with the sign-in's start held.
  */
-export async function signInState(page: Page, state: SignIn, design: boolean) {
+export async function signInState(page: Page, state: SignIn, design: boolean, gateway?: Gateway) {
   const main = page.getByRole("main");
   if (design) {
     if (state === "gone") return inDesign(page, /^AgentOrg:/);
@@ -700,14 +701,19 @@ export async function signInState(page: Page, state: SignIn, design: boolean) {
     for (let n = 0; n < presses; n++) await inDesign(page, /^ChatGPT:/);
     if (state === "line" || state === "chat") await openDesignAgent(page, "Reviewer");
   } else if (state === "gone") return main.getByRole("heading", { name: "AgentOrg" }).waitFor();
-  if (state === "line") return main.getByRole("button", { name: "Set up" }).waitFor();
+  if (state === "line")
+    return main
+      .getByRole("status", { name: "State" })
+      .getByText("Agents can't work until you sign in with ChatGPT.")
+      .waitFor();
   if (state === "chat") {
     await main.getByRole("button", { name: "Message", exact: true }).click();
     return page.getByRole("group", { name: "Sign in to send" }).waitFor();
   }
-  const place = main.getByRole("region", { name: "Set up" });
+  const place = page.getByRole("region", { name: "Set up" });
   await place.waitFor();
   if (state !== "waiting") return;
+  gateway?.hold("login.start");
   // ChatGPT's page is answered here: nothing leaves this computer.
   await page
     .context()
