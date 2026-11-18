@@ -1,5 +1,5 @@
 // What is left to set up, which is the model account. Being signed out of it never keeps a
-// person out of the app. They see their agents and chats, Home says what is
+// person out of the app. They see their agents and chats, a banner across the top says what is
 // missing and holds the way to fix it, and every place it bites says the same sentence.
 import { LoaderCircleIcon } from "lucide-react";
 import { createContext, useContext, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
@@ -91,8 +91,8 @@ export function SignInButton({ className = "" }: { className?: string }) {
     <Button
       className={`h-10 w-[232px] shrink-0 rounded-full text-[15px] ${className}`}
       disabled={waiting}
-      // A sign-in that doesn't start leaves the button as it was, to be pressed again, and Home's
-      // place says so.
+      // A sign-in that doesn't start leaves the button as it was, to be pressed again, and the
+      // banner says so.
       onClick={() => {
         setFailed(false);
         signIn().catch(() => setFailed(true));
@@ -110,63 +110,34 @@ export function SignInButton({ className = "" }: { className?: string }) {
   );
 }
 
-const STATES = ["out", "waiting", "ineligible"] as const;
-const TITLES = {
-  out: "Sign in with ChatGPT",
-  ineligible: "This ChatGPT account can't be used",
-};
-const WORDS = {
-  out: "Your agents can't work until you do. ChatGPT's page opens, you approve AgentOrg there, and you come back here. It runs on your ChatGPT plan, and nothing is billed by us.",
-  waiting: "Approve AgentOrg on ChatGPT's page, then come back here.",
-  ineligible:
-    "It isn't eligible to use its plan in this app, so your agents can't work. Sign in with another account.",
-};
-const cell = (on: boolean) => `col-start-1 row-start-1 ${on ? "" : "invisible"}`;
-
 /**
- * Home's place for what is left to set up. It is there while something is, and gone once nothing
- * is. Every state's words are laid in the same cell, the others unseen, so the place is as tall
- * as its longest and going from one state to the next moves nothing.
+ * What is left to set up, as a banner across the top of the app, over the bar and every page. It
+ * is there while something is, and gone once nothing is; it has no close. It holds a title and the
+ * way in, at one height through every state, so going from one to the next moves nothing. On a
+ * phone the title wraps beside the way in.
  */
-export function LeftToSetUp() {
+export function SignInBanner() {
   const login = useLogin();
   const didnt = useFailed();
   if (login === "in") return null;
-  const which = login === "ineligible" ? "ineligible" : login === "waiting" ? "waiting" : "out";
-  // ChatGPT's page couldn't be opened: the place says so, and the way in can be pressed again.
-  const refused = didnt && which === "out";
-  // While it waits, the title is the one it had signed out.
-  const titled = which === "waiting" ? "out" : which;
+  // ChatGPT's page couldn't be opened: the banner says so, and the way in can be pressed again.
+  const refused = didnt && login === "out";
   return (
     <section
       aria-label="Set up"
-      className="flex items-center gap-6 rounded-3xl bg-[var(--raised)] px-6 py-5 tight:flex-col tight:items-stretch tight:gap-4"
+      className="flex h-12 shrink-0 items-center gap-4 border-b bg-[var(--raised)] px-4 phone:gap-3"
     >
-      <div className="min-w-0 flex-1">
-        <div className="grid">
-          {(["out", "ineligible"] as const).map((s) => (
-            <h2 key={s} className={`text-[17px] font-semibold ${cell(s === titled)}`}>
-              {TITLES[s]}
-            </h2>
-          ))}
-        </div>
-        <div className="mt-1 grid">
-          {STATES.map((s) => (
-            <p
-              key={s}
-              className={`text-[15px] text-muted-foreground ${cell(s === which && !refused)}`}
-            >
-              {WORDS[s]}
-            </p>
-          ))}
-          {refused && (
-            <p role="alert" className="col-start-1 row-start-1 text-[15px] text-[var(--bad)]">
-              ChatGPT's page couldn't be opened. Try again.
-            </p>
-          )}
-        </div>
+      <div className="flex min-w-0 flex-1 items-baseline gap-3">
+        <h2 className="shrink-0 text-[15px] font-semibold phone:line-clamp-2 phone:min-w-0 phone:shrink phone:leading-[18px]">
+          {login === "ineligible" ? "This ChatGPT account can't be used" : "Sign in with ChatGPT"}
+        </h2>
+        {refused && (
+          <p role="alert" className="min-w-0 truncate text-[13px] text-[var(--bad)] phone:hidden">
+            ChatGPT's page couldn't be opened. Try again.
+          </p>
+        )}
       </div>
-      <SignInButton className="tight:w-full" />
+      <SignInButton className="h-8 w-[196px] text-[13px]" />
     </section>
   );
 }

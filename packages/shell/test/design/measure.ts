@@ -1886,7 +1886,7 @@ if (wants("signin"))
           const page = gateway
             ? await builtPage(gateway, size, theme, signInHash(state), state !== "gone")
             : await designPage(size, theme);
-          await signInState(page, state, !gateway);
+          await signInState(page, state, !gateway, gateway);
           await rest(page, size);
           const measured = await measure(page, "signin");
           // Each state is measured where it shows: a part that isn't there is a failure, not a match.
@@ -2263,7 +2263,7 @@ if (wants("bar")) {
           } else await inDesign(page, "Action refused");
         }
         if (state === "signin") {
-          const place = main.getByRole("region", { name: "Set up" });
+          const place = page.getByRole("region", { name: "Set up" });
           if (gateway) {
             gateway.refuseNext("login.start", "unavailable", "Not answering.");
             await place.getByRole("button", { name: "Continue with ChatGPT" }).click();

@@ -514,9 +514,28 @@ const SCREENS: Screen[] = [
       signIn: state,
       hash: signInHash(state),
       design: (page) => signInState(page, state, true),
-      built: (page) => signInState(page, state, false),
+      built: (page, gateway) => signInState(page, state, false, gateway),
     }),
   ),
+  // The banner with the line that ChatGPT's page couldn't be opened.
+  {
+    name: "signin-refused",
+    sizes: ["wide"],
+    themes: ["dark", "light"],
+    agents: true,
+    signIn: "out",
+    design: async (page) => {
+      await inDesign(page, /^ChatGPT:/);
+      await inDesign(page, "Action refused");
+      await page.getByRole("region", { name: "Set up" }).getByRole("alert").waitFor();
+    },
+    built: async (page, gateway) => {
+      const banner = page.getByRole("region", { name: "Set up" });
+      gateway.refuseNext("login.start", "unavailable", "Not answering.");
+      await banner.getByRole("button", { name: "Continue with ChatGPT" }).click();
+      await banner.getByRole("alert").waitFor();
+    },
+  },
   ...CREATES.map(
     ([state, sizes]): Screen => ({
       name: `create-${state}`,

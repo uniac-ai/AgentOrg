@@ -1,4 +1,4 @@
-// The model account's states, wherever they show: Home's place for what is left to set up, the
+// The model account's states, wherever they show: the banner for what is left to set up, the
 // bar's mark, an agent's line, a chat's composer, the create window; and a tab that is no longer
 // signed in to AgentOrg. Over the stand-in gateway.
 import assert from "node:assert/strict";
@@ -34,39 +34,33 @@ async function open(gateway: Gateway, hash = "#/", session: string | null = SESS
   return page;
 }
 const SENTENCE = "Agents can't work until you sign in with ChatGPT.";
-const setUp = (page: Page) => page.getByRole("main").getByRole("region", { name: "Set up" });
-/** Whether Home's row in the bar is marked. */
+const setUp = (page: Page) => page.getByRole("region", { name: "Set up" });
+/** How many marks the bar has for something left to set up: none, since the banner says it. */
 const marked = (page: Page) =>
-  page
-    .getByRole("navigation", { name: "Main" })
-    .getByRole("button", { name: "Home", exact: true })
-    .locator("span.relative > span")
-    .count();
+  page.getByRole("navigation", { name: "Main" }).locator('[class*="var(--warn)"]').count();
 
 test(
-  "signed out of ChatGPT a person is in the app all the same: Home holds what is left to set up, and the way in",
+  "signed out of ChatGPT a person is in the app all the same: the banner holds what is left to set up, and the way in",
   withGateway(async (gateway) => {
     gateway.setAccount("signed_out");
     const page = await open(gateway);
     const place = setUp(page);
     await place.getByRole("heading", { name: "Sign in with ChatGPT" }).waitFor();
-    await place.getByText("Your agents can't work until you do.", { exact: false }).waitFor();
-    // Their agents and chats are there, and Home's row says something is left.
+    // Their agents and chats are there, and the bar has no mark of its own for it.
     await page
       .getByRole("navigation", { name: "Main" })
       .getByRole("button", { name: /Reviewer/ })
       .waitFor();
     await page.getByRole("main").getByRole("region", { name: "Recent" }).waitFor();
-    assert.equal(await marked(page), 1);
+    assert.equal(await marked(page), 0);
     const before = await place.boundingBox();
-    const popup = page.context().waitForEvent("page");
+    // The sign-in's start is held, so the wait is seen before the tab goes to ChatGPT's page.
+    const holding = gateway.hold("login.start");
     await place.getByRole("button", { name: "Continue with ChatGPT" }).click();
-    assert.match((await popup).url(), /^https:\/\/auth\.example\/authorize/);
-    // While it waits it says what to do, in the same place, and can't be pressed again.
+    // While it waits, in the same place, it can't be pressed again.
     const waiting = place.getByRole("button", { name: "Waiting for ChatGPT…" });
     await waiting.waitFor();
     assert.equal(await waiting.isDisabled(), true);
-    await place.getByText("Approve AgentOrg on ChatGPT's page, then come back here.").waitFor();
     assert.deepEqual(await place.boundingBox(), before, "nothing moves");
     assert.ok(
       gateway.calls.some(
@@ -76,10 +70,13 @@ test(
           String(c.input.redirectUri).endsWith("/oauth/chatgpt"),
       ),
     );
-    // Signed in, the place and the mark are gone.
+    // Signed in, the banner is gone, and the late answer takes the tab nowhere.
     gateway.setAccount("signed_in");
     await place.waitFor({ state: "detached" });
     assert.equal(await marked(page), 0);
+    holding();
+    await page.waitForTimeout(300);
+    assert.ok(page.url().startsWith(gateway.url));
     await page.close();
   }),
 );
@@ -109,10 +106,9 @@ test(
     await create.getByRole("button", { name: /^Assistant/ }).click();
     await create.getByText(SENTENCE).waitFor();
     await page.keyboard.press("Escape");
-    // The line's way in is Home, where everything left to set up is.
-    await state.getByRole("button", { name: "Set up" }).click();
-    await page.waitForURL(/#\/$/);
-    await setUp(page).waitFor();
+    // The line has no way in of its own: the banner over the page is the one.
+    assert.equal(await state.getByRole("button").count(), 0);
+    await setUp(page).getByRole("button", { name: "Continue with ChatGPT" }).waitFor();
     // An agent that isn't running says that, and how to start it: the sentence is for one that would work.
     await page.goto(`${gateway.url}/#/a/a-weekly`);
     await state.getByText("Stopped", { exact: true }).waitFor();
@@ -172,6 +168,8 @@ test(
     gateway.setAccount("signed_out");
     const page = await open(gateway);
     const place = setUp(page);
+    // The sign-in's start is held, so the tab stays here while it waits.
+    const starting = gateway.hold("login.start");
     await place.getByRole("button", { name: "Continue with ChatGPT" }).click();
     await place.getByRole("button", { name: "Waiting for ChatGPT…" }).waitFor();
     // The account changes, and is not yet read again.
@@ -187,6 +185,10 @@ test(
     await place.getByRole("button", { name: "Waiting for ChatGPT…" }).waitFor();
     gateway.setAccount("ineligible");
     await place.getByRole("button", { name: "Use another account" }).waitFor();
+    // The waits are over: the late answers take the tab nowhere.
+    starting();
+    await page.waitForTimeout(300);
+    assert.ok(page.url().startsWith(gateway.url));
     await page.close();
   }),
 );

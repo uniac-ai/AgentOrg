@@ -191,13 +191,12 @@ test(
 );
 
 test(
-  "a sign-in that didn't start is said in Home's place, in red, until the way in is pressed again",
+  "a sign-in that didn't start is said in the banner, in red, until the way in is pressed again",
   withGateway(async (gateway) => {
     gateway.setAccount("signed_out");
     const page = await open(gateway);
-    const place = page.getByRole("main").getByRole("region", { name: "Set up" });
-    const words = place.getByText("Your agents can't work until you do.", { exact: false });
-    await words.waitFor();
+    const place = page.getByRole("region", { name: "Set up" });
+    await place.getByRole("button", { name: "Continue with ChatGPT" }).waitFor();
     const before = await boxOf(place);
     gateway.refuseNext("login.start", "unavailable", "Not answering.");
     await place.getByRole("button", { name: "Continue with ChatGPT" }).click();
@@ -205,12 +204,12 @@ test(
     await said
       .getByText("ChatGPT's page couldn't be opened. Try again.", { exact: true })
       .waitFor();
-    assert.equal(await words.isVisible(), false, "in the words' place");
     assert.deepEqual(await boxOf(place), before, "nothing moves");
-    const popup = page.context().waitForEvent("page");
+    // Pressed again, the line goes as the sign-in starts; it is held, so the tab stays here.
+    gateway.hold("login.start");
     await place.getByRole("button", { name: "Continue with ChatGPT" }).click();
-    await popup;
     await said.waitFor({ state: "detached" });
+    await place.getByRole("button", { name: "Waiting for ChatGPT…" }).waitFor();
     await page.close();
   }),
 );
