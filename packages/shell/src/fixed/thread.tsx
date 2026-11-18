@@ -323,39 +323,49 @@ const ProblemLine = ({
 );
 
 /**
+ * Where a conversation is drawn: the chat page rather than the chat, and what its way back to the
+ * list does where the list isn't beside it.
+ */
+export interface OnPage {
+  back?: () => void;
+}
+
+/**
  * The head of your conversation with an agent: back to the list, its face to its page, its name,
  * and its computer, begun or not. One between two agents is named by both, and says it is
- * there to be read.
+ * there to be read. On the chat page it has no close, and a way back only where the list isn't
+ * beside it.
  */
 function Head({
   agent,
   other,
   begun,
+  page,
   children,
 }: {
   agent: { id: string; name: string; tone: Tone };
   other?: { name: string } | undefined;
   begun: boolean;
+  page?: OnPage | undefined;
   children?: React.ReactNode;
 }) {
   const { show, close } = useChats();
+  const back = page ? page.back : () => show({ kind: "list" });
   return (
-    <header className="flex h-14 shrink-0 items-center gap-1 pr-2.5 pl-2">
-      <Button
-        variant="ghost"
-        size="icon-sm"
-        aria-label="All chats"
-        onClick={() => show({ kind: "list" })}
-      >
-        <ChevronLeftIcon />
-      </Button>
+    <header className={`flex h-14 shrink-0 items-center gap-1 pr-2.5 ${back ? "pl-2" : "pl-4"}`}>
+      {back && (
+        <Button variant="ghost" size="icon-sm" aria-label="All chats" onClick={back}>
+          <ChevronLeftIcon />
+        </Button>
+      )}
       <button
         type="button"
         aria-label={`${agent.name}'s page`}
         className="shrink-0 rounded-full"
         onClick={() => {
           go({ screen: "agent", agent: agent.id });
-          close();
+          // The chat is put away; the chat page leaves it as it was.
+          if (!page) close();
         }}
       >
         <Face agent={agent} size={36} />
@@ -378,7 +388,7 @@ function Head({
         </h2>
       )}
       {children}
-      <CloseChats />
+      {!page && <CloseChats />}
     </header>
   );
 }
@@ -392,12 +402,15 @@ export function Thread({
   agent,
   chat,
   other,
+  page,
 }: {
   agent: { id: string; name: string; tone: Tone };
   /** As the list has it, once it is listed. */
   chat?: ListedChat | undefined;
   /** The agent its conversation is with, when it is not yours: read here, never written in. */
   other?: { id: string; name: string; tone: Tone } | undefined;
+  /** Drawn on the chat page rather than in the chat. */
+  page?: OnPage | undefined;
 }) {
   const { byId } = useAgents();
   const { read } = useAllChats();
@@ -624,7 +637,7 @@ export function Thread({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <Head agent={agent} other={other} begun={!!chat}>
+      <Head agent={agent} other={other} begun={!!chat} page={page}>
         {hasComputer && (
           <Button
             variant="ghost"

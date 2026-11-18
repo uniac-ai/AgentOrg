@@ -102,6 +102,21 @@ const ownTab = async (page: Page) => {
   await page.getByRole("tab", { name: "New tab", selected: true }).waitFor();
 };
 type Gateway = Awaited<ReturnType<typeof standIn>>;
+/** The design's own way to its chat page: its bar's Chat icon. */
+const chatIcon = (page: Page) =>
+  page.getByRole("navigation", { name: "Main" }).getByRole("button", { name: /^Chat/ }).click();
+/** A row of the built chat page's list. */
+const chatRow = (page: Page, name: string) =>
+  page
+    .getByRole("main")
+    .getByRole("list", { name: "Chats" })
+    .getByRole("button", { name: new RegExp(name) });
+/** The built side's conversations as the design's sample has them, Release notes' among them. */
+async function asTheDesign(gateway: Gateway) {
+  await noted(gateway);
+  releaseNotes(gateway);
+  gateway.changed();
+}
 /**
  * An agent's page: Research's with its computer and with its chats, and the agents that are
  * idle, have a problem, and are stopped. The computer's column is also shot alone: the frame
@@ -277,6 +292,61 @@ const SCREENS: Screen[] = [
       },
     }),
   ),
+  // The chat page. The design reaches it by its bar's Chat icon; the built side by its address,
+  // since nothing links to it yet, so the built side still has its left bar and, on a phone, its
+  // menu button.
+  {
+    name: "chat-page",
+    sizes: ["wide"],
+    themes: ["dark", "light"],
+    chats: true,
+    agents: true,
+    hash: "#/chat",
+    design: chatIcon,
+    built: async (page, gateway) => {
+      await asTheDesign(gateway);
+      await page
+        .getByRole("main")
+        .getByRole("region", { name: /^Conversation with / })
+        .waitFor();
+    },
+  },
+  {
+    name: "chat-page-list",
+    sizes: ["rail", "phone"],
+    themes: ["dark", "light"],
+    chats: true,
+    agents: true,
+    hash: "#/chat",
+    design: chatIcon,
+    built: async (page, gateway) => {
+      await asTheDesign(gateway);
+      await chatRow(page, "Reviewer").waitFor();
+    },
+  },
+  {
+    name: "chat-page-conversation",
+    sizes: ["rail", "phone"],
+    themes: ["dark", "light"],
+    chats: true,
+    agents: true,
+    hash: "#/chat",
+    design: async (page) => {
+      await chatIcon(page);
+      await page
+        .getByRole("list", { name: "Conversations" })
+        .getByRole("button", { name: /Reviewer/ })
+        .click();
+    },
+    built: async (page, gateway) => {
+      await asTheDesign(gateway);
+      await chatRow(page, "Reviewer").click();
+      await page
+        .getByRole("main")
+        .getByRole("region", { name: "Conversation with Reviewer" })
+        .waitFor();
+    },
+  },
   {
     name: "home",
     sizes: ["wide", "phone"],

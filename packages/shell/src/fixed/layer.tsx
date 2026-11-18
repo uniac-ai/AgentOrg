@@ -4,14 +4,13 @@
 // own Close.
 import { MessageCircleIcon } from "lucide-react";
 import { useEffect, useRef } from "react";
-import { api } from "../data.ts";
+import { api, useRoute } from "../data.ts";
 import { ActivityWindow } from "./activity.tsx";
 import { useAllChats } from "./all-chats.tsx";
-import { ChatRow, CloseChats } from "./chat-parts.tsx";
+import { ChatList, CloseChats } from "./chat-parts.tsx";
 import { useChats } from "./chats.tsx";
 import { Computer, hasComputer, surfacesOf } from "./computer.tsx";
 import { useComputers } from "./computers.tsx";
-import { useEvery } from "./data.ts";
 import { Face } from "./face.tsx";
 import { Thread } from "./thread.tsx";
 import { useAgents } from "./watch.tsx";
@@ -106,21 +105,17 @@ function ChatPill({ returned }: { returned: boolean }) {
 function Chats() {
   const { openChat } = useChats();
   const { chats } = useAllChats();
-  // The ages are read again as time passes.
-  useEvery(30_000);
   return (
     <>
       <header className="flex h-14 shrink-0 items-center gap-1 pr-2.5 pl-4">
         <h2 className="min-w-0 flex-1 truncate text-[17px] font-semibold">Chats</h2>
         <CloseChats />
       </header>
-      <ul aria-label="Chats" className="no-bar min-h-0 flex-1 overflow-y-auto px-2 pb-2">
-        {chats.map((chat) => (
-          <li key={chat.agent.id}>
-            <ChatRow chat={chat} onOpen={() => openChat(chat.agent.id)} />
-          </li>
-        ))}
-      </ul>
+      <ChatList
+        chats={chats}
+        onOpen={openChat}
+        className="no-bar min-h-0 flex-1 overflow-y-auto px-2 pb-2"
+      />
     </>
   );
 }
@@ -170,8 +165,9 @@ function ChatPanel() {
   );
 }
 
-/** Where a window ends: one gap short of the chat, at the width the chat has. */
+/** Where a window ends: one gap short of the chat, at the width the chat has; or, with no chat, where the page ends. */
 const ROOM = {
+  none: "right-[var(--inset)]",
   pill: "right-[calc(var(--inset)+var(--tab)+var(--gap))]",
   panel: "right-[calc(var(--inset)+var(--panel)+var(--gap))] narrow:right-[var(--inset)]",
 };
@@ -180,10 +176,11 @@ const ROOM = {
  * The layer's parts, over the page: the chat at the right, and to its left a window, an agent's
  * computer or its activity, in the room the chat leaves. Neither moves or resizes the other. Where the open chat
  * leaves a window too little room the two overlap, the one opened last on top; on a phone each
- * takes the screen.
+ * takes the screen. On the chat page there is no chat in the layer, since the page is the chat.
  */
 export function Layer() {
   const { open } = useChats();
+  const chat = useRoute().screen !== "chat";
   const { shown: computer, activity } = useComputers();
   const { byId } = useAgents();
   /** The window's own key: whose it is, and which. */
@@ -201,7 +198,7 @@ export function Layer() {
   const owner = computer ? byId.get(computer) : undefined;
   const surfaces = surfacesOf(owner?.detail);
   const doer = activity ? byId.get(activity) : undefined;
-  const room = `${ROOM[open ? "panel" : "pill"]} ${onTop === "window" ? "narrow:z-[60]" : ""}`;
+  const room = `${ROOM[!chat ? "none" : open ? "panel" : "pill"]} ${onTop === "window" ? "narrow:z-[60]" : ""}`;
   return (
     <>
       {computer && owner && hasComputer(owner.detail, !!owner.held?.windows) && (
@@ -223,7 +220,7 @@ export function Layer() {
           />
         </Window>
       )}
-      {open ? <ChatPanel /> : <ChatPill returned={opened.current} />}
+      {chat && (open ? <ChatPanel /> : <ChatPill returned={opened.current} />)}
     </>
   );
 }

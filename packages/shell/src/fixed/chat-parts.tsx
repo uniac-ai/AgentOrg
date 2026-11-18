@@ -1,8 +1,10 @@
-// What the chat's views share: a conversation's row in a list, and the control that collapses the chat.
+// What the chat's views share: a conversation's row, your conversations as a list of them, and the
+// control that collapses the chat.
 import { XIcon } from "lucide-react";
 import { Button } from "../ui/button.tsx";
 import type { ListedChat } from "./all-chats.tsx";
 import { useChats } from "./chats.tsx";
+import { useEvery } from "./data.ts";
 import { Face } from "./face.tsx";
 
 /** How long ago, in the one short form a row has room for. */
@@ -18,23 +20,27 @@ export function age(at: string, now = Date.now()): string {
 
 /**
  * One conversation in a list: the agent, and its latest message or its problem. One between two
- * agents is shown by the agent it is with, where the other's page lists it.
+ * agents is shown by the agent it is with, where the other's page lists it. The one open beside the
+ * list is marked.
  */
 export function ChatRow({
   chat,
   agent = chat.agent,
+  current = false,
   onOpen,
 }: {
   chat: ListedChat;
   agent?: ListedChat["agent"];
+  current?: boolean;
   onOpen(): void;
 }) {
   const fresh = chat.unread;
   return (
     <button
       type="button"
+      aria-current={current ? "true" : undefined}
       onClick={onOpen}
-      className="flex h-[68px] w-full items-center gap-3 rounded-xl px-2.5 text-left hover:bg-[var(--hover)]"
+      className={`flex h-[68px] w-full items-center gap-3 rounded-xl px-2.5 text-left hover:bg-[var(--hover)] ${current ? "bg-[var(--selected)]" : ""}`}
     >
       <Face agent={agent} size={40} plain />
       <span className="min-w-0 flex-1">
@@ -58,6 +64,35 @@ export function ChatRow({
         />
       </span>
     </button>
+  );
+}
+
+/** Your conversations, newest first, a row each; `current` is the agent of the one open beside them. */
+export function ChatList({
+  chats,
+  current,
+  onOpen,
+  className,
+}: {
+  chats: ListedChat[];
+  current?: string | undefined;
+  onOpen(agent: string): void;
+  className: string;
+}) {
+  // The ages are read again as time passes.
+  useEvery(30_000);
+  return (
+    <ul aria-label="Chats" className={className}>
+      {chats.map((chat) => (
+        <li key={chat.agent.id}>
+          <ChatRow
+            chat={chat}
+            current={chat.agent.id === current}
+            onOpen={() => onOpen(chat.agent.id)}
+          />
+        </li>
+      ))}
+    </ul>
   );
 }
 
