@@ -62,6 +62,11 @@ const MacApp = MAC_APP.charAt(0).toUpperCase() + MAC_APP.slice(1);
 export const OPEN_MAC = `${MacApp} isn't open on this Mac. Open it to use this computer.`;
 /** What to do when AgentOrg Mac's service is older than this build. */
 export const UPDATE_MAC = `${MacApp} on this Mac is older than this AgentOrg. Update it, and open it again.`;
+/**
+ * The oldest AgentOrg Mac service this build takes: the first to attach the screen while only
+ * macOS's grants are missing, which choosing the screen then relies on.
+ */
+export const OLDEST_MAC = "0.0.29";
 /** Why a part of this computer can't be had while the person has it off in AgentOrg Mac. */
 const OFF_MAC = {
   files: `Files are turned off in ${MAC_APP}. Turn them on there to use this computer.`,
@@ -130,8 +135,9 @@ const notHere = (found: Found, kind: typeof THIS | typeof CONTAINER) => {
 };
 const unavailable = (why: string | undefined) => (why ? { unavailable: why } : {});
 /**
- * Why a part of this computer can't be had now: switched off in AgentOrg Mac, or its screen
- * lacking a grant there, in its words; else as its service says, such as what to install or allow.
+ * Why a part of this computer can't be had now: switched off in AgentOrg Mac, in its words; else as
+ * its service says, such as what to install or allow. A screen lacking only macOS's grants there
+ * can be had: the computer starts without them.
  * Nothing where the service says nothing of the part's readiness, as an older one doesn't of a
  * switch. Its terminal is its service's to refuse to the agent while it is off: the person may turn
  * it on later.
@@ -155,9 +161,9 @@ const partOff = (found: Found, part: keyof typeof OFF_MAC) => {
   }
   if (one.ready) return undefined;
   if (found?.mac && found.off?.includes(part)) return OFF_MAC[part];
-  // Each grant is set up in the app's window, which asks macOS for it.
-  if (found?.mac && part === "screen" && found.ungranted?.length)
-    return ungrantedMac(found.ungranted);
+  // Only macOS's grants missing, the screen can be chosen: the computer starts without them, its
+  // screen's tools say what they lack, and work once the person gives them in the app.
+  if (found?.mac && part === "screen" && found.ungranted?.length) return undefined;
   return one.reason ?? `This computer's ${part} can't be used now.`;
 };
 

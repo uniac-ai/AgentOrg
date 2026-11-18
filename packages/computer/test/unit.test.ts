@@ -147,7 +147,7 @@ test("the computer's form is titled and ordered: which computer, where, how it's
   assert.deepEqual(titles("ownBrowser"), ["Your browser", "No browser"]);
 });
 
-test("this computer's screen and the person's browser: off unless chosen, greyed with why while they can't be had, in the AgentOrg app's words for a switch or a screen grant", () => {
+test("this computer's screen and the person's browser: off unless chosen, greyed with why while they can't be had, in the AgentOrg app's words for a switch; a screen lacking only grants there can be chosen", () => {
   const field = (found: Found, id: string) => computerUnit(found).form.find((one) => one.id === id);
   const here = (
     screen: { ready: boolean; reason?: string },
@@ -199,7 +199,8 @@ test("this computer's screen and the person's browser: off unless chosen, greyed
     option(off, "ownBrowser", "yours")?.unavailable,
     "Your browser is turned off in the AgentOrg app. Turn it on there to choose it.",
   );
-  // On in the AgentOrg app, with a grant macOS hasn't given it: set up there, in its words.
+  // On in the AgentOrg app, with only a grant macOS hasn't given it: it can be chosen, and the
+  // computer starts without that grant.
   const needs =
     "Screen Recording and Accessibility are needed, and AgentOrg is missing Accessibility. Set it up in AgentOrg.";
   const grants = (ungranted: string[], more: Partial<NonNullable<Found>> = {}) =>
@@ -212,14 +213,8 @@ test("this computer's screen and the person's browser: off unless chosen, greyed
       "screen",
       "on",
     )?.unavailable;
-  assert.equal(
-    grants(["accessibility"]),
-    "The AgentOrg app doesn't have Accessibility, which your screen needs. Set it up there, under Screen.",
-  );
-  assert.equal(
-    grants(["screen-recording", "accessibility"]),
-    "The AgentOrg app doesn't have Screen Recording or Accessibility, which your screen needs. Set them up there, under Screen.",
-  );
+  assert.equal(grants(["accessibility"]), undefined);
+  assert.equal(grants(["screen-recording", "accessibility"]), undefined);
   // The switch off is said first; and with no app, or no grant missing, the service's words.
   assert.equal(
     grants(["accessibility"], { off: ["screen"] }),
