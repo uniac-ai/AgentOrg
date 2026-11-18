@@ -469,6 +469,7 @@ async function setup(
     asAgent,
     asPerson,
     connected,
+    provider,
     restart,
     workspace,
     dir,
@@ -1467,6 +1468,49 @@ function recordIn(
   writeFileSync(join(folder, "control-token"), service.apiKey);
   return alive;
 }
+
+test("a first start waits for AgentOrg Mac's service until it answers, the provider closes or the wait is called off, and switches its parts on", async (t) => {
+  // No AgentOrg Mac anywhere to wait for: no wait at all.
+  const none = await setup(t, { service: false });
+  assert.equal(await none.provider.current.macService(), false);
+
+  const { provider, restart, macRecord, running } = await setup(t, { mac: true });
+  // Not there yet: the wait goes on until it is called off, or the provider closes.
+  const calledOff = new AbortController();
+  const waiting = provider.current.macService(calledOff.signal);
+  let ended = false;
+  void waiting.then(() => {
+    ended = true;
+  });
+  await new Promise((done) => setTimeout(done, 200));
+  assert.equal(ended, false);
+  calledOff.abort();
+  assert.equal(await waiting, false);
+  const closed = provider.current.macService();
+  await restart();
+  assert.equal(await closed, false);
+
+  // AgentOrg Mac's service answers: the wait ends, and its parts are switched on when asked.
+  const service = running as Service;
+  recordIn(t, macRecord, service);
+  const set = (part: string, on: boolean) =>
+    fetch(`${service.apiUrl}/v1/setup/${part}`, {
+      method: "PUT",
+      headers: { Authorization: `Bearer ${service.apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ on }),
+    });
+  assert.equal((await set("terminal", false)).status, 200);
+  assert.equal(await provider.current.macService(), true);
+  assert.deepEqual(await provider.current.switchOn(["terminal", "files"]), []);
+  const parts = (await (
+    await fetch(`${service.apiUrl}/v1/setup`, {
+      headers: { Authorization: `Bearer ${service.apiKey}` },
+    })
+  ).json()) as { capabilities: { capability: string; on: boolean }[] };
+  assert.equal(parts.capabilities.find((one) => one.capability === "terminal")?.on, true);
+  // A part the service doesn't know is said back.
+  assert.deepEqual(await provider.current.switchOn(["nonsense"]), ["nonsense"]);
+});
 
 test("on a Mac with AgentOrg Mac open, this computer is attached through it, nothing is started, and no container is offered", async (t) => {
   const command = onPathThatSays(t);

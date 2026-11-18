@@ -179,6 +179,18 @@ export interface ComputerProviderOptions {
 
 export interface ComputerProvider {
   /**
+   * For the app's first start: wait until AgentOrg Mac's service answers on this machine, looking
+   * again with longer waits, so an app opened later is found. It resolves true then, or false
+   * once the provider closes or `signal` aborts, and at once where there is no AgentOrg Mac to
+   * wait for. A service the person runs is never waited for: it is theirs to set up.
+   */
+  macService(signal?: AbortSignal): Promise<boolean>;
+  /**
+   * Switch `parts` on in AgentOrg Mac's service, whose parts start off. It answers those it
+   * couldn't switch on.
+   */
+  switchOn(parts: string[]): Promise<string[]>;
+  /**
    * Leave the Hub and let every connection and every capability's Actor go. The computers stay,
    * and resume at the next start.
    */
@@ -1552,9 +1564,58 @@ export async function startComputerProvider(
     throw error;
   });
 
+  /** Ends every wait for AgentOrg Mac's service when the provider closes. */
+  const stopping = new AbortController();
+  /** A wait of `ms` that `signal` cuts short, leaving nothing behind either way. */
+  const pause = (ms: number, signal: AbortSignal) =>
+    new Promise<void>((done) => {
+      const finish = () => {
+        clearTimeout(timer);
+        signal.removeEventListener("abort", finish);
+        done();
+      };
+      const timer = setTimeout(finish, ms);
+      signal.addEventListener("abort", finish, { once: true });
+    });
+  /** AgentOrg Mac's service, by its record, if it is running. */
+  const macReached = () => (macHere() ? serviceAt(macFolder as string) : undefined);
   return {
+    async macService(signal) {
+      if (macFolder === undefined) return false;
+      const ended = signal ? AbortSignal.any([stopping.signal, signal]) : stopping.signal;
+      for (let wait = 2_000; !ended.aborted; wait = Math.min(wait * 2, 30_000)) {
+        const reached = macReached();
+        if (reached && (await within(SERVICE_ANSWERS_MS, Computer.serviceInfo(reached))))
+          return !ended.aborted;
+        await pause(wait, ended);
+      }
+      return false;
+    },
+    async switchOn(parts) {
+      const reached = macReached();
+      const failed: string[] = [];
+      for (const part of parts) {
+        const answer = reached
+          ? await within(
+              SERVICE_ANSWERS_MS,
+              fetch(`${reached.apiUrl}/v1/setup/${part}`, {
+                method: "PUT",
+                headers: {
+                  Authorization: `Bearer ${reached.apiKey}`,
+                  "Content-Type": "application/json",
+                },
+                body: JSON.stringify({ on: true }),
+              }),
+            )
+          : undefined;
+        // 409 is on, with a request it makes that couldn't start: that one is the person's.
+        if (!answer || (!answer.ok && answer.status !== 409)) failed.push(part);
+      }
+      return failed;
+    },
     async close() {
       closing = true;
+      stopping.abort();
       await endAll();
       provider.close();
     },

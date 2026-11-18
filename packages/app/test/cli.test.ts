@@ -37,9 +37,11 @@ test("agentorg runs the app; while it runs, the person's commands go through it"
     if (app?.exitCode === null) app.kill("SIGTERM");
     rmSync(home, { recursive: true, force: true });
   });
-  // Any free port: the default one is the person's.
+  // Any free port: the default one is the person's. An account folder of its own, so no AgentOrg
+  // Mac of this machine's is looked at for the first Assistant.
   app = spawn(process.execPath, [cli, "--no-open", "--port", "0", "--home", home], {
     stdio: ["ignore", "pipe", "pipe"],
+    env: { ...process.env, HOME: join(home, "account") },
   });
   const started = await new Promise<string>((done, failed) => {
     let out = "";

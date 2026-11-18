@@ -44,7 +44,8 @@ trap cleanup EXIT
 step() { echo "== $*"; }
 # Start `agentorg` ($1) on a home ($2) in the background as $pid, logging to $3, until it serves.
 start_on() {
-  "$1" --no-open --home "$2" "${@:4}" >"$3" 2>&1 &
+  # An account folder of its own, so no AgentOrg Mac of this machine's is looked at.
+  HOME="$work/account" "$1" --no-open --home "$2" "${@:4}" >"$3" 2>&1 &
   pid=$!
   for _ in $(seq 1 120); do
     grep -q '^AgentOrg at http' "$3" && return 0
@@ -147,7 +148,7 @@ npm install --global --silent --no-audit --no-fund --prefix "$global" --cache "$
 
 step "run agentorg --no-open on a fresh home"
 home="$work/home"
-"$agentorg" --no-open --home "$home" >"$work/app.log" 2>&1 &
+HOME="$work/account" "$agentorg" --no-open --home "$home" >"$work/app.log" 2>&1 &
 pid=$!
 echo "pid $pid"
 url=""
