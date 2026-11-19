@@ -88,7 +88,10 @@ export function looperWith(
   const failures: string[] = [];
   /** Each piece of work said to have changed, in order. */
   const worked: string[] = [];
-  /** What was said to have become of each user message, in order: `thread: id fact`. */
+  /**
+   * What was said to have become of each user message, in order: `thread: id fact`, and with a
+   * step, `thread: id fact: step`.
+   */
   const progress: string[] = [];
   /**
    * What each worker's request held, in the order the model reads it, each of the person's
@@ -281,7 +284,8 @@ export function looperWith(
       failed: (thread, { code }) => void failures.push(`${thread}: ${code}`),
       // None for the main loop: its model request being tried again, or no longer.
       worked: (work) => void worked.push(work ?? ""),
-      progress: (thread, id, fact) => void progress.push(`${thread}: ${id} ${fact}`),
+      progress: (thread, id, fact, step) =>
+        void progress.push(`${thread}: ${id} ${fact}${step === undefined ? "" : `: ${step}`}`),
     },
     ...(options.stopped === undefined ? {} : { stopped: options.stopped }),
     ...(options.stopGroup === undefined ? {} : { stopGroup: options.stopGroup }),

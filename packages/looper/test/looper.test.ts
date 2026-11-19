@@ -8,7 +8,7 @@ import {
   type Shown,
   type Tool,
 } from "../src/index.ts";
-import { HAND_BACK, SEND, workInstructions } from "../src/loop.ts";
+import { HAND_BACK, SEND, STATUS, workInstructions } from "../src/loop.ts";
 import { newWork, sends } from "./support.ts";
 
 /**
@@ -88,11 +88,12 @@ test("a message is answered in its thread, through the tools it was given, on th
   await looper.settled();
   await looper.send("two", "And you?");
   await looper.settled();
-  // Its tools, and the looper's two functions beside them; what is sent streams as it is written.
+  // Its tools, and the looper's three functions beside them; what is sent streams as it is written.
   assert.deepEqual(requests[0]?.tools, [
     { name: "look", parameters: { type: "object" } },
     { ...SEND, streamed: true },
     HAND_BACK,
+    STATUS,
   ]);
 
   assert.deepEqual(ran, [{ at: "it" }]);

@@ -1,10 +1,12 @@
+import { OWN_FUNCTIONS } from "@agentorg/looper";
+
 /**
  * A worker's request as the agent's host made it, without what the looper adds: its words after
  * the agent's, its functions beside the agent's tools, and the number each of the person's
  * messages starts with. What the worker sent is put as the message it said.
  */
 /** The looper's own functions, offered beside the agent's tools. */
-const LOOPERS = ["send", "hand_back"];
+const LOOPERS = OWN_FUNCTIONS;
 
 export function asAsked<
   T extends {

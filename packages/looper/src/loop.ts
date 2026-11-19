@@ -5,10 +5,11 @@
  * at its next model request. A loop is one piece of work's: its messages come in the threads the
  * work follows, and what comes of a request is kept in the thread of the newest message that
  * request read and the work has not handed back. Its worker is told which work this is and reads
- * each of the person's messages by a number. It has two functions beside its tools:
- * `send`, the only way anything it says reaches the person, which answers a message, and
- * `hand_back`, which says a message is not this work's. What it writes without sending, and what
- * its calls did, are kept for the work and said in no thread. When what a request would send is
+ * each of the person's messages by a number. It has three functions beside its tools:
+ * `send`, the only way anything it says reaches the person, which answers a message;
+ * `hand_back`, which says a message is not this work's; and `status`, which keeps the work's
+ * steps, a short checklist. What it writes without sending, and what its calls did,
+ * are kept for the work and said in no thread. When what a request would send is
  * over its budget once its turn has done something of its own, or the model refuses it for its
  * length, the work's earlier steps are first summarized by its own model (see compaction.ts).
  */
@@ -26,10 +27,12 @@ import {
   PICTURES_BUDGET,
   SEND_NAME,
   SENT,
+  STATUS_NAME,
   userEntry,
   type WorkEntry,
   wordsOf,
 } from "./record.js";
+import { listOf, type Step, stepped, stepWords } from "./steps.js";
 import { build, type Part, partsOf } from "./told.js";
 import { capped, refused, runTool } from "./tools.js";
 import {
@@ -93,6 +96,52 @@ export const HAND_BACK: ToolSpec = {
     required: ["message", "why"],
   },
 };
+/** A function of the looper's own: it keeps the work's steps, a short checklist. */
+export const STATUS: ToolSpec = {
+  name: STATUS_NAME,
+  description:
+    "Keeps this work's steps, a short checklist. Set the list with `steps`, then move through it with `advance`, or with `done` and `start` by number. It answers with the list as it now stands.",
+  parameters: {
+    type: "object",
+    properties: {
+      steps: {
+        type: "array",
+        description:
+          "The whole list, in place of any before: at most eight, at most one in progress.",
+        items: {
+          type: "object",
+          properties: {
+            text: { type: "string", description: 'What the step is, like "Compare prices".' },
+            active: {
+              type: "string",
+              description: 'Its words while in progress, like "Comparing prices".',
+            },
+            state: {
+              type: "string",
+              enum: ["pending", "in_progress", "completed"],
+              description: "Pending unless given.",
+            },
+          },
+          required: ["text"],
+        },
+      },
+      advance: {
+        type: "boolean",
+        description: "Completes the step in progress and starts the next pending one.",
+      },
+      done: {
+        type: "array",
+        items: { type: "number" },
+        description: "Steps to mark completed, by number from 1.",
+      },
+      start: { type: "number", description: "The step to start, by number, after any `done`." },
+    },
+  },
+};
+/** The looper's own functions, offered to every worker after its host's tools. */
+const OWN = [SEND, HAND_BACK, STATUS];
+/** Their names: a request carries these beside the tools its host gives. */
+export const OWN_FUNCTIONS: readonly string[] = OWN.map(({ name }) => name);
 /**
  * What a worker is told after what its host tells it: which work this is, how to answer, and how
  * to hand a message back.
@@ -141,8 +190,11 @@ export interface LoopOut {
    * ends without a reply to it.
    */
   failed(thread: string, problem: { code: string; message: string }): void;
-  /** What became of the user message `id` in `thread`, once it is kept on it. */
-  progress?(thread: string, id: string, progress: Progress): void;
+  /**
+   * What became of the user message `id` in `thread`, once it is kept on it; while it is taken,
+   * with `step`, the words of the step its work is at, said again when that changes.
+   */
+  progress?(thread: string, id: string, progress: Progress, step?: string): void;
 }
 interface Turn {
   /** Its number among the starts of this loop: what names it to whoever stops it. */
@@ -192,6 +244,11 @@ interface Turn {
   pictured: { id: string; size: number }[];
   /** Set once summarizing its work's earlier steps failed: it cuts them for the rest of it. */
   summaryFailed?: boolean;
+  /**
+   * Set once a `status` call of it kept the work's steps: only then is what it reads at the step
+   * its work is at, and not at one an earlier turn left in progress.
+   */
+  stepped?: boolean;
 }
 /** A turn's place among the turns running: `entered` settles when it has it, or has left. */
 export interface Place {
@@ -243,6 +300,10 @@ export function createLoop(options: {
   back(handed: { message: number; why: string; leave: boolean }): Promise<string>;
   /** The files a call read and changed, by its name and arguments, for a compaction to list. */
   files?: FilesOf;
+  /** The work's steps, as `status` last kept them. */
+  steps(): readonly Step[];
+  /** Keep the work's steps: it rejects when they can't be kept, and they are as they were. */
+  keepSteps(steps: Step[]): Promise<void>;
   out: LoopOut;
   log: Log;
 }) {
@@ -420,6 +481,40 @@ export function createLoop(options: {
       out.progress?.(sent.thread, answers, "answered");
   };
   /**
+   * A `status`: the work's steps as the call leaves them, kept, and the list as its answer. When
+   * the words of the step in progress change, each message the turn holds that is taken is said
+   * to be at that step, and keeps it. A call that breaks a rule is refused to the model, with it.
+   */
+  const stepping = async (current: Turn, call: FunctionCall): Promise<Outcome> => {
+    let input: unknown;
+    try {
+      input = call.arguments.trim() === "" ? {} : JSON.parse(call.arguments);
+    } catch {
+      return refused("invalid", "The arguments aren't JSON.");
+    }
+    const before = options.steps();
+    let steps: Step[];
+    try {
+      steps = stepped(before, input);
+      await options.keepSteps(steps);
+    } catch (error) {
+      const { code, message } = codeOf(error);
+      return refused(code, message);
+    }
+    current.stepped = true;
+    const words = stepWords(steps);
+    if (words !== stepWords(before) && current.upTo !== undefined)
+      try {
+        for (const one of await record.stepOpen(current.from ?? 0, current.upTo, words))
+          out.progress?.(one.thread, one.id, "taken", words);
+      } catch (error) {
+        log.warn("A step couldn't be kept on the messages its work holds.", {
+          error: String(error),
+        });
+      }
+    return { output: listOf(steps), ok: true };
+  };
+  /**
    * Say what a `send` being written has said and hasn't been said yet, once the thread of the
    * message it names is known. Until it names one, what it says waits; when it names one this
    * work can't answer, nothing of it is said.
@@ -540,7 +635,17 @@ export function createLoop(options: {
       };
       const compacted = await summarize(ask, compacting, options.files);
       if (current.cancelled) return false;
-      await record.append({ role: "tool", text: COMPACTION_LINE, items: [], compacted }, at);
+      // The steps go with the summary: the calls that kept them may be among what it covers.
+      const steps = options.steps();
+      await record.append(
+        {
+          role: "tool",
+          text: COMPACTION_LINE,
+          items: [],
+          compacted: { ...compacted, ...(steps.length > 0 ? { steps: listOf(steps) } : {}) },
+        },
+        at,
+      );
       out.worked();
       return true;
     } catch (error) {
@@ -564,7 +669,7 @@ export function createLoop(options: {
     const tools = [...theirs, handBack];
     const parts = partsOf(instructions);
     const title = await options.title();
-    const specs = [...theirs.map(({ run: _, ...tool }) => tool), SEND, HAND_BACK];
+    const specs = [...theirs.map(({ run: _, ...tool }) => tool), ...OWN];
     let reported = false;
     for (;;) {
       const told = build([
@@ -587,10 +692,12 @@ export function createLoop(options: {
       if (current.cancelled) return;
       current.thread = thread;
       current.upTo = Math.max(current.upTo ?? 0, read);
-      // What this request reads for the first time is taken, and said so once that is kept. The
-      // request is made meanwhile: another piece of work may still be writing that message.
-      const kept = (await record.markTaken(current.from ?? 0, read)).kept.then((taken) => {
-        for (const one of taken) out.progress?.(one.thread, one.id, "taken");
+      // What this request reads for the first time is taken, and said so once that is kept: at
+      // the step its work is at, once this turn has kept its steps. The request is made
+      // meanwhile: another piece of work may still be writing that message.
+      const step = current.stepped ? stepWords(options.steps()) : undefined;
+      const kept = (await record.markTaken(current.from ?? 0, read, step)).kept.then((taken) => {
+        for (const one of taken) out.progress?.(one.thread, one.id, "taken", step);
       });
       // Waited for once the request is answered, so it is said before what comes of it.
       kept.catch(() => {});
@@ -676,6 +783,13 @@ export function createLoop(options: {
           current.acted = true;
           // A reply that streamed keeps the id its pieces had.
           await sending(call, current.streams?.get(call.callId)?.reply ?? id, read, thread);
+          continue;
+        }
+        // Keeping its steps is the looper's own: kept for the model, and no entry of its work. It
+        // is not the turn at something of its own, nor only handing back.
+        if (call.name === STATUS.name) {
+          handedAll = false;
+          await answered(call, await stepping(current, call), id, read, thread);
           continue;
         }
         // Handing a message back is the looper's own: kept for the model, shown to nobody.

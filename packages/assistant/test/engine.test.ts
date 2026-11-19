@@ -1863,7 +1863,10 @@ test("a message its conversation's work hands back is taken up by new work in th
   // A worker's request is the agent's own, then the looper's part: which work it is, each
   // message by its number, and the function to hand one back.
   assert.match(String(s.whole[0]?.instructions), /\n\nThis is one piece of work: Work\. /);
-  assert.equal(s.whole[0]?.tools?.at(-1)?.name, "hand_back");
+  assert.equal(
+    s.whole[0]?.tools?.some(({ name }) => name === "hand_back"),
+    true,
+  );
   assert.deepEqual(
     s.whole[0]?.input.map((item) => item.content),
     ["[1] Write the report."],
