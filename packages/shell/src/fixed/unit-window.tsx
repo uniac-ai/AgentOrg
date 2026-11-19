@@ -1,5 +1,6 @@
 // A unit's form in a window of its own, and one unit put in another's place: how an agent's units
 // are changed on its page, from its setup or from a way forward.
+import { Refused } from "@agentorg/sdk";
 import { CpuIcon } from "lucide-react";
 import { useState } from "react";
 import { api } from "../data.ts";
@@ -14,17 +15,62 @@ import {
 } from "../ui/dialog.tsx";
 import { UnitForm, UnitLine } from "./build.tsx";
 import type { AgentDetail } from "./data.ts";
-import { type CatalogUnit, isComplete, type Secrets, unitInput, type Values } from "./stack.ts";
+import {
+  type CatalogUnit,
+  isComplete,
+  type Secrets,
+  type StackProblem,
+  unitInput,
+  type Values,
+} from "./stack.ts";
 
 /** A unit an agent was built from, as its page reads it. */
 export type Applied = AgentDetail["units"][number];
+/** An agent as it stands: its base, and its units as management reads them back, in order. */
+export interface Standing {
+  base: { provider: string; creatable: string };
+  units: Applied[];
+}
+
+/**
+ * What management finds at `at` in the stack the agent would be after the change: its base and
+ * its units, the one changed as answered now in its place. Each other unit's problems are its own.
+ * Nothing when management can't say.
+ */
+async function problemsAt(standing: Standing, at: number, changed: ReturnType<typeof unitInput>) {
+  const place = new Map(standing.units.map((one, i) => [one.instance, i]));
+  const units = standing.units.map((one, i) => {
+    if (i === at) return changed;
+    // What it takes from another, by that one's place in the stack.
+    const needs = Object.fromEntries(
+      Object.entries(one.needs).flatMap(([kind, from]) =>
+        place.has(from) ? [[kind, place.get(from)]] : [],
+      ),
+    );
+    return {
+      provider: one.provider,
+      unit: one.unit,
+      values: one.values,
+      ...(Object.keys(needs).length > 0 ? { needs } : {}),
+    };
+  });
+  try {
+    const { problems } = await api.call<{ problems: StackProblem[] }>("agents", "check", {
+      stack: { base: standing.base, units },
+    });
+    return problems.filter((problem) => problem.unit === at);
+  } catch {
+    return [];
+  }
+}
 
 /**
  * One unit taken out and another put in its place, as answered now: at `at`, its index among the
- * agent's units, so it stays where it was. Refused, the one it was goes back there as it was built,
- * all but its secrets, and the refusal is passed on. It goes back as its form takes it today: a
- * value for a field the form no longer has, or one it doesn't show now, would be refused, and the
- * agent left without it.
+ * agent's units, so it stays where it was. First the agent as it would be is checked: refused at
+ * that place, nothing is taken out, and the refusal is passed on. Refused when it is added, the one
+ * it was goes back there as it was built, all but its secrets, and the refusal is passed on. It
+ * goes back as its form takes it today: a value for a field the form no longer has, or one it
+ * doesn't show now, would be refused, and the agent left without it.
  */
 export async function replaceUnit(
   agent: string,
@@ -33,15 +79,16 @@ export async function replaceUnit(
   unit: CatalogUnit,
   values: Values,
   secrets: Secrets,
+  standing: Standing,
 ) {
   const place = at >= 0 ? { at } : {};
+  const changed = unitInput(unit, values, secrets);
+  const found = at >= 0 ? await problemsAt(standing, at, changed) : [];
+  if (found.length > 0)
+    throw new Refused("invalid", found.map((problem) => problem.message).join(" "));
   await api.call("agents", "removeUnit", { agent, instance: applied.instance });
   try {
-    await api.call("agents", "addUnit", {
-      agent,
-      unit: unitInput(unit, values, secrets),
-      ...place,
-    });
+    await api.call("agents", "addUnit", { agent, unit: changed, ...place });
   } catch (refused) {
     // `unit` is today's form when it is the unit taken out; a way forward may put in another.
     const same = unit.provider === applied.provider && unit.id === applied.unit;
