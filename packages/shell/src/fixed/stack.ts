@@ -179,6 +179,16 @@ export const isComplete = (unit: CatalogUnit, values: Values, secrets: Secrets =
 const given = (answers: Record<string, string>) =>
   Object.fromEntries(Object.entries(answers).filter(([, value]) => value.trim()));
 
+/**
+ * A unit's answers for fields its form doesn't have at all, such as a template's kept from a form
+ * the unit no longer asks: sent as they are, so management refuses them in its own words, as it
+ * does a direct call, and a stack isn't made from a question no longer asked.
+ */
+const unasked = (unit: CatalogUnit, values: Values): Values =>
+  Object.fromEntries(
+    Object.entries(values).filter(([id]) => !unit.form.some((field) => field.id === id)),
+  );
+
 /** The stack as management takes it. */
 export function toStack(draft: Draft) {
   const base = draft.base as CatalogBase;
@@ -189,7 +199,10 @@ export function toStack(draft: Draft) {
       creatable: base.id,
       ...(Object.keys(answers).length > 0 ? { answers } : {}),
     },
-    units: draft.units.map((u) => unitInput(u.unit as CatalogUnit, u.values, u.secrets)),
+    units: draft.units.map((u) => {
+      const input = unitInput(u.unit as CatalogUnit, u.values, u.secrets);
+      return { ...input, values: { ...unasked(u.unit as CatalogUnit, u.values), ...input.values } };
+    }),
     ...(draft.from ? { template: draft.from.id } : {}),
   };
 }

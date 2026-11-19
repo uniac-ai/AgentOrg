@@ -644,7 +644,9 @@ function UnitPart({
   const supplier: CatalogUnit | undefined = catalog.units.find((u) =>
     u.gives.results.includes(lacking as string),
   );
-  const general = problems.filter((p) => !p.field);
+  // The section's own: those on no field, and on a field its form doesn't have, which no question
+  // would show, such as an answer a template kept that the unit no longer asks.
+  const general = problems.filter((p) => !p.field || !unit?.form.some((f) => f.id === p.field));
   return (
     <Part
       id={`unit-${key}`}
