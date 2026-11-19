@@ -21,6 +21,25 @@ const Sent = z.object({
 const With = z.string().min(1).max(128);
 /** The most of a message's text a conversation's entry carries. */
 export const LATEST_TEXT_MAX = 200;
+/** The most characters a step's words have. */
+export const STEP_MAX = 200;
+
+/**
+ * What became of a message the party said, the latest said of it:
+ * - `taken`: the agent has read it and is at work on it. `step` is said only with it: the words of
+ *   the step the agent is at, with none when it is at no step it keeps. `taken` is said again as
+ *   the step changes, and never after `answered` or `closed`.
+ * - `answered`: a reply to it was sent. It is said once.
+ * - `closed`: the agent is doing nothing for it now, with no answer. It may come with no `taken`
+ *   before it, for a message the agent never read. `answered` may still follow it.
+ *
+ * The agent is at work on a message while its latest is `taken`. A message with none has had
+ * nothing said of it: it is not taken yet, or was said before any of this was.
+ */
+export const MessageProgress = z.object({
+  state: z.enum(["taken", "answered", "closed"]),
+  step: z.string().max(STEP_MAX).optional(),
+});
 
 /** One message of a conversation: what the party said (`user`), or the agent's reply (`assistant`). */
 export const ChatMessage = z.object({
@@ -31,6 +50,8 @@ export const ChatMessage = z.object({
   at: z.string().max(64),
   /** The pictures the party sent with it. */
   images: Pictures.optional(),
+  /** What became of it, the latest said: the party's messages only. */
+  progress: MessageProgress.optional(),
 });
 /** What the agent is doing: `working` while it answers anything, in any conversation. */
 export const ChatStatus = z.object({ state: z.enum(["idle", "working"]) });
@@ -62,11 +83,12 @@ export const Conversation = z.object({
 
 /**
  * `chat@1`: an agent's conversations, one with each party that talks to it, found by who speaks:
- * the caller is the party. A conversation is what was said in it and nothing more: the party's
- * messages and the agent's replies. What the agent does to answer is not in it. Its first message
- * makes it. What works is the agent, not a conversation: `status` says when it starts and when it
- * is done. Events are live only: `history` is a conversation's record, `state` the agent's status
- * now, and `list` its conversations. A provider that can't take a message now refuses it `busy`.
+ * the caller is the party. A conversation is what was said in it: the party's messages and the
+ * agent's replies, with what became of each message the party said and the step the agent is at
+ * on it. Nothing else the agent does to answer is in it. Its first message makes it. What works
+ * is the agent, not a conversation: `status` says when it starts and when it is done. Events are
+ * live only: `history` is a conversation's record, `state` the agent's status now, and `list` its
+ * conversations. A provider that can't take a message now refuses it `busy`.
  */
 export const chat = defineInterface({
   name: "chat",
@@ -129,6 +151,12 @@ export const chat = defineInterface({
     delta: event(z.object({ with: With, id: MessageId, text: z.string() })),
     /** The agent's status, when it changes. */
     status: event(ChatStatus),
+    /**
+     * What became of the message `id` the party said, to its conversation's party and to the
+     * person: said as it changes, and again as its step changes while it is taken. It replaces
+     * what was said of that message before.
+     */
+    progress: event(MessageProgress.extend({ with: With, id: MessageId })),
     /**
      * A conversation as it now is, to its party and to the person: it began, a message was sent in
      * it, or one got no answer.

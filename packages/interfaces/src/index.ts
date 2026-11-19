@@ -22,6 +22,8 @@ export {
   chat,
   LATEST_TEXT_MAX,
   MESSAGE_TEXT_MAX,
+  MessageProgress,
+  STEP_MAX,
 } from "./chat.js";
 export {
   ConnectionKind,
@@ -79,6 +81,7 @@ export {
   Problem,
   ResultKind,
   Retrying,
+  Step,
   Surface,
   Unit,
   UnitId,
