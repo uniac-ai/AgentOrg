@@ -641,6 +641,9 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
     tabs: [{ id: 1, url: "https://shop.example/checkout", title: "Checkout" }],
   };
   let units = UNITS;
+  /** The form a unit has now, as offered. */
+  const formOf = (provider: string, id: string) =>
+    units.find((u) => u.provider === provider && u.id === id)?.form;
 
   const emit = (slot: string, event: string, payload: unknown) => {
     for (const s of subscribers)
@@ -857,6 +860,16 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
           unit: string;
           values?: Record<string, string | number | boolean | string[]>;
         };
+        // As management does: a value for a field the unit's form doesn't have is refused.
+        const form = formOf(unit.provider, unit.unit);
+        const unknown = Object.keys(unit.values ?? {}).filter(
+          (id) => form && !form.some((field) => field.id === id),
+        );
+        if (unknown.length > 0)
+          throw new Refusal(
+            "invalid",
+            unknown.map((id) => `This unit has no field ${id}.`).join(" "),
+          );
         const held = agentOf(agent);
         const instance = `i-added-${++added}`;
         // At `at`, its place from the top, or below the rest.
