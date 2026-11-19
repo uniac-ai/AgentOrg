@@ -48,6 +48,7 @@ import {
   researchSays,
   SECTIONS,
   SIGN_INS,
+  SMALLS,
   sampleBuild,
   sampleChats,
   sampleLoad,
@@ -56,6 +57,8 @@ import {
   signInAccount,
   signInHash,
   signInState,
+  smallSays,
+  smallState,
   startTerminals,
   supportBefore,
   toTeam,
@@ -82,6 +85,7 @@ const PARTS = [
   "window",
   "setup",
   "create",
+  "new-template",
   "unit-window",
   "templates",
   "settings",
@@ -114,7 +118,7 @@ type Parts = Record<string, Measured | string | number | null>;
  * What a probe measures: the frame, one window's own rows, the chat in its layer, one chat, the
  * way to a chat's older messages, an agent's page, its setup, its computer's frame on its
  * page, that computer as the layer's window, its files window's own rows, the model
- * account's states, the create window, Settings' frame with its Templates, Settings' other
+ * account's states, Create, New template's window, Settings' frame with its Templates, its other
  * sections and what two of them offer, what a page says where it has nothing it can show,
  * the shell's bar and what is said when something pressed is refused, an agent's activity in its
  * box and as the layer's window, or the rest of its Overview.
@@ -133,6 +137,7 @@ type Part =
   | "files"
   | "signin"
   | "create"
+  | "new-template"
   | "unit-window"
   | "templates"
   | "settings"
@@ -954,7 +959,48 @@ const probe = (what: Part): Parts => {
   }
 
   if (what === "create") {
-    // The create window, from its own top left: it is centred in a window the design's own bar
+    // Create for an agent, from its own top left: it is centred in a window the design's own bar
+    // makes taller. Its head, with its title and close; the row of templates, two of them; the
+    // face, the name and its line; what it can do, the first of it and its logo; what Create's
+    // check refused; and its foot, with Create.
+    const window = [...document.querySelectorAll('[role="dialog"]')].find(
+      (one) => one.querySelector("h2")?.textContent === "Create New Agent",
+    );
+    if (!window) throw new Error("Create isn't open");
+    // Measuring what moves starts it moving again: it is held still from then on.
+    parts["window.motion"] = of(window)?.motion ?? null;
+    (window as HTMLElement).style.animation = "none";
+    origin = window.getBoundingClientRect();
+    parts.window = of(window);
+    parts["window.centre"] = round((origin.top + origin.bottom) / 2 - innerHeight / 2);
+    controls("window", window);
+    const head = window.querySelector("header");
+    parts.head = of(head);
+    parts["head.title"] = inside(head, head?.querySelector("h2"));
+    parts["head.close"] = inside(head, head?.querySelector("button"));
+    const row = window.querySelector('ul[aria-label="Start from"]');
+    parts.row = of(row, "w");
+    const chips = row?.querySelectorAll("button");
+    parts["row.first"] = inside(row, chips?.[0]);
+    parts["row.second"] = inside(row, chips?.[1]);
+    const body = row?.nextElementSibling;
+    parts.body = of(body);
+    parts.face = inside(body, body?.children[0]);
+    parts.name = inside(body, window.querySelector("#build-name"));
+    parts.line = inside(body, window.querySelector("textarea"));
+    const can = window.querySelector('ul[aria-label="What it can do"]');
+    parts.can = inside(body, can);
+    parts["can.first"] = inside(can, can?.children[0]);
+    parts["can.first.logo"] = inside(can?.children[0], can?.children[0]?.children[0]);
+    parts.refused = inside(body, window.querySelector('[role="alert"]'));
+    const foot = window.querySelector("footer");
+    parts.foot = of(foot);
+    parts["foot.needs"] = inside(foot, foot?.querySelector("span"));
+    parts["foot.create"] = inside(foot, [...(foot?.querySelectorAll("button") ?? [])].at(-1));
+    return parts;
+  }
+  if (what === "new-template") {
+    // New template's window, from its own top left: it is centred in a window the design's own bar
     // makes taller. At its left the identity card: its face, its name and its line, and a row for
     // each unit. At its right the head, what to start from in a row, each section's heading and
     // what it asks, and the foot; then a menu or the dialog it opened.
@@ -1068,6 +1114,8 @@ const probe = (what: Part): Parts => {
     parts["rail.line.lit"] = of(line?.children[1]);
     const foot = form?.querySelector(":scope > footer");
     parts.foot = of(foot);
+    // What it says, if anything: nothing seen there is nothing, whether a place is kept for it or not.
+    parts["foot.says"] = null;
     for (const [i, child] of [...(foot?.children ?? [])].entries())
       parts[`foot.${foot && foot.children.length - 1 === i ? "finish" : "says"}`] = of(child);
     // A menu it opened, and the dialog to save the stack as a template, which is centred too.
@@ -2042,9 +2090,33 @@ if (wants("thread"))
       await gateway?.close();
     }
 
-// The create window in each of its states: the built side is given the design's sample of what
+// Create for an agent in each of its states: the built side is given the design's sample of what
 // an agent is built from.
 if (wants("create"))
+  for (const [state, sizes] of SMALLS)
+    for (const size of sizes)
+      for (const theme of ["dark", "light"] as const)
+        for (const side of ["design", "built"] as const) {
+          const gateway = side === "built" ? await standIn() : undefined;
+          if (gateway) {
+            sampleBuild(gateway);
+            smallSays(gateway, state);
+          }
+          // Centred in an odd height it would sit on a half pixel: the design's page is a pixel
+          // taller, so both sit on whole pixels.
+          const page = gateway
+            ? await builtPage(gateway, size, theme)
+            : await designPage(size, theme, 1);
+          await smallState(page, state, !gateway);
+          await rest(page, size);
+          all[`create.${state}.${size}.${theme}.${side}`] = await measure(page, "create");
+          await page.close();
+          await gateway?.close();
+        }
+
+// New template's window in each of its states: the built side is given the design's sample of
+// what an agent is built from.
+if (wants("new-template"))
   for (const [state, sizes] of CREATES)
     for (const size of sizes)
       for (const theme of ["dark", "light"] as const)
@@ -2053,7 +2125,6 @@ if (wants("create"))
           if (gateway) {
             sampleBuild(gateway);
             computerSays(gateway, state);
-            if (state === "out") signInAccount(gateway, "out");
           }
           // A window centred in an odd height sits on a half pixel, and what it opens is placed
           // on whole ones: the design's page is a pixel taller, so both sit on whole pixels.
@@ -2062,7 +2133,10 @@ if (wants("create"))
             : await designPage(size, theme, 1);
           await createState(page, state, !gateway);
           await rest(page, size);
-          all[`create.${state}.${size}.${theme}.${side}`] = await measure(page, "create");
+          all[`new-template.${state}.${size}.${theme}.${side}`] = await measure(
+            page,
+            "new-template",
+          );
           await page.close();
           await gateway?.close();
         }

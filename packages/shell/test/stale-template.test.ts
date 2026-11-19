@@ -1,11 +1,11 @@
 // A template whose answers its unit no longer asks is refused in Create, as management refuses
-// them when it is called directly, and the refusal is said on that unit's section; saved again
+// them when it is called directly, and the refusal is said above Create; saved again
 // from Settings, it keeps only what its units ask, and creates. In a real browser over the
 // stand-in gateway, which refuses what management refuses.
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { Locator, Page } from "@playwright/test";
-import { card, type Gateway, open, panel, withBrowser, withGateway } from "./build-kit.ts";
+import { type Gateway, open, panel, withBrowser, withGateway } from "./build-kit.ts";
 import type { Template } from "./stand-in.ts";
 
 withBrowser();
@@ -58,7 +58,7 @@ async function use(gateway: Gateway, page: Page, title: string) {
   await row(await templates(page), title)
     .getByRole("button", { name: "Use" })
     .click();
-  await panel(page).getByRole("region", { name: "Base", exact: true }).waitFor();
+  await panel(page).getByRole("button", { name: "Create", exact: true }).waitFor();
   await settled(panel(page));
   await panel(page).getByLabel("Name").fill("Kept");
   const from = gateway.calls.length;
@@ -74,27 +74,30 @@ async function created(gateway: Gateway, page: Page, from: number) {
 }
 
 /**
- * Where a section's refusal is, read at one moment: whether it is under every question the section
- * asks, and in the problem colour.
+ * What Create's check refused, read at one moment: its words, whether they are above Create, and
+ * whether they are in the problem colour.
  */
-const placed = (section: Locator, words: string) =>
-  section.evaluate((e, said) => {
-    const problem = [...e.querySelectorAll("p")].find((p) => p.textContent === said);
-    if (!problem) return null;
+const refusal = (page: Page) =>
+  panel(page).evaluate((e) => {
+    const said = e.querySelector('[role="alert"]');
+    const create = [...e.querySelectorAll("button")].find(
+      (b) => b.textContent?.trim() === "Create",
+    );
+    if (!said || !create) return null;
     const probe = document.createElement("i");
     probe.style.color = "var(--bad)";
     e.append(probe);
     const bad = getComputedStyle(probe).color;
     probe.remove();
-    const top = problem.getBoundingClientRect().top;
     return {
-      under: [...e.querySelectorAll("label")].every((l) => l.getBoundingClientRect().bottom <= top),
-      bad: getComputedStyle(problem).color === bad,
+      words: said.textContent,
+      above: said.getBoundingClientRect().bottom <= create.getBoundingClientRect().top,
+      bad: getComputedStyle(said).color === bad,
     };
-  }, words);
+  });
 
 test(
-  "where the Computer states this computer, a template that answered which computer is refused on its section in management's words, and nothing is made",
+  "where the Computer states this computer, a template that answered which computer is refused above Create in management's words, and nothing is made",
   withGateway(async (gateway) => {
     gateway.stateComputer(READY);
     gateway.addTemplate(MADE);
@@ -105,11 +108,9 @@ test(
       [WHOLE, ["This unit has no field kind."]],
     ] as const) {
       const from = await use(gateway, page, template.title);
-      const computer = card(page, "Computer");
-      for (const words of said) {
-        await computer.getByText(words, { exact: true }).waitFor();
-        assert.deepEqual(await placed(computer, words), { under: true, bad: true }, words);
-      }
+      const words = said.join(" ");
+      await panel(page).getByRole("alert").getByText(words, { exact: true }).waitFor();
+      assert.deepEqual(await refusal(page), { words, above: true, bad: true }, template.title);
       assert.equal(made(gateway, from).length, 0, `${template.title}: nothing made`);
       await page.keyboard.press("Escape");
       await panel(page).waitFor({ state: "detached" });
@@ -165,32 +166,24 @@ test(
 );
 
 test(
-  "another unit's template is refused the same way for an answer its form doesn't have, and under the question for one it no longer offers",
+  "another unit's template is refused the same way for an answer its form doesn't have, and for one it no longer offers",
   withGateway(async (gateway) => {
     gateway.addTemplate(kept("Kept region", "web", { service: "exa", region: "eu" }));
     gateway.addTemplate(kept("Kept search", "web", { service: "bing" }));
     const page = await open(gateway);
-    const web = card(page, "Web");
 
     let from = await use(gateway, page, "Kept region");
     const unasked = "This unit has no field region.";
-    await web.getByText(unasked, { exact: true }).waitFor();
-    assert.deepEqual(await placed(web, unasked), { under: true, bad: true });
+    await panel(page).getByRole("alert").getByText(unasked, { exact: true }).waitFor();
+    assert.deepEqual(await refusal(page), { words: unasked, above: true, bad: true });
     assert.equal(made(gateway, from).length, 0, "nothing made");
     await page.keyboard.press("Escape");
     await panel(page).waitFor({ state: "detached" });
 
     from = await use(gateway, page, "Kept search");
     const offered = "Search service isn't one of its options.";
-    await web.getByText(offered, { exact: true }).waitFor();
-    // Under the question it answers, as any answer the service refuses.
-    const at = await web.evaluate((e, said) => {
-      const problem = [...e.querySelectorAll("*")].find(
-        (one) => one.childElementCount === 0 && one.textContent === said,
-      );
-      return problem?.closest('[data-slot="field"]')?.querySelector("label")?.textContent ?? null;
-    }, offered);
-    assert.equal(at, "Search service");
+    await panel(page).getByRole("alert").getByText(offered, { exact: true }).waitFor();
+    assert.deepEqual(await refusal(page), { words: offered, above: true, bad: true });
     assert.equal(made(gateway, from).length, 0, "nothing made");
     await page.close();
   }),

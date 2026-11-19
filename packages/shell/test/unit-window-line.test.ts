@@ -5,12 +5,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { Locator, Page } from "@playwright/test";
 import {
-  agentsRead,
   browser,
   card,
   type Gateway,
-  panel,
-  plus,
+  newTemplate,
   SESSION,
   withBrowser,
   withGateway,
@@ -116,14 +114,10 @@ const read = (window: Locator) =>
     };
   });
 
-/** The look of the Computer's line in Create's section, which the window's line is drawn in. */
+/** The look of the Computer's line in a section of New template, which the window's line is drawn in. */
 async function createLook(gateway: Gateway) {
   const page = await at(gateway, "#/team");
-  await agentsRead(page);
-  await plus(page).click();
-  await panel(page)
-    .getByRole("button", { name: /^Assistant/ })
-    .click();
+  await newTemplate(page, "Assistant");
   await card(page, "Computer").waitFor();
   const look = await card(page, "Computer").evaluate((section) => {
     const line = section.querySelector(":scope > div:nth-child(2) > div > p:first-child");
@@ -135,7 +129,7 @@ async function createLook(gateway: Gateway) {
 }
 
 test(
-  "Change… and Add in Setup, and a way forward's window, say the unit's line in its card under its title, before its questions, as Create's section does",
+  "Change… and Add in Setup, and a way forward's window, say the unit's line in its card under its title, before its questions, as a section of New template does",
   withGateway(async (gateway) => {
     const look = await createLook(gateway);
     sampleAgents(gateway);

@@ -1,15 +1,14 @@
-// The rail beside the creation window's options, in a real browser over the stand-in gateway: one
-// logo for each section, joined by a line that lights as the options scroll.
+// The rail beside New template's options, in a real browser over the stand-in gateway: one logo for
+// each section, joined by a line that lights as the options scroll. Create for an agent has none.
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { Page } from "@playwright/test";
 import {
-  agentsRead,
   browser,
   type Gateway,
+  newTemplate,
   open,
   panel,
-  plus,
   SESSION,
   withBrowser,
   withGateway,
@@ -32,14 +31,9 @@ const opened = (page: Page) =>
     ).then(() => undefined),
   );
 
-/** Create, from the Assistant template: Base, Computer, Web and Add, once the window is open. */
+/** New template from Assistant: Base, Computer, Web and Add, once the window is open. */
 async function assistant(page: Page) {
-  await agentsRead(page);
-  await plus(page).click();
-  await panel(page)
-    .getByRole("button", { name: /^Assistant/ })
-    .click();
-  await panel(page).getByRole("region", { name: "Base", exact: true }).waitFor();
+  await newTemplate(page, "Assistant");
   await opened(page);
   // The pointer away from the rail.
   await page.mouse.move(700, 880);
@@ -178,7 +172,7 @@ test(
   }),
 );
 
-/** Create on a page whose clock the test moves. */
+/** Team, on a page whose clock the test moves. */
 async function openOnClock(gateway: Gateway): Promise<Page> {
   const page = await browser().newPage({ viewport: { width: 1440, height: 900 } });
   page.setDefaultTimeout(8000);

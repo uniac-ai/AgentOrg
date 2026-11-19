@@ -1372,11 +1372,11 @@ export const sampleBuild = (gateway: Gateway) =>
   gateway.setCatalog({ bases: BUILD_BASES, units: BUILD_UNITS, templates: BUILD_TEMPLATES });
 
 /**
- * The create window's states, each with the widths it is shown at: an empty stack, as it opens; a
- * template with an answer chosen that grants something; a name and what it's for typed on its
- * card; one whose unit has boxes to tick and numbers; a card folded; its two menus; saving the
- * stack as a template; made while signed out of the model account; a new template; and its rail,
- * the options scrolled between two headings, and with the keyboard in it so its labels show.
+ * New template's window, which builds a stack in its options, in its states, each with the widths
+ * it is shown at: an empty stack, as it opens; a template with an answer chosen that grants
+ * something; a name and what it's for typed on its card; one whose unit has boxes to tick and
+ * numbers; a card folded; the menu that adds a unit; its rail, the options scrolled between two
+ * headings, and with the keyboard in it so its labels show; and each unit's line.
  */
 export const CREATES = [
   ["empty", ["wide", "phone"]],
@@ -1385,10 +1385,6 @@ export const CREATES = [
   ["builder", ["wide"]],
   ["folded", ["wide"]],
   ["add", ["wide"]],
-  ["options", ["wide"]],
-  ["save", ["wide"]],
-  ["out", ["wide"]],
-  ["template", ["wide"]],
   ["between", ["wide", "phone"]],
   ["labels", ["wide"]],
   ["line-ready", ["wide", "rail", "phone"]],
@@ -1524,54 +1520,46 @@ export async function windowState(page: Page, state: UnitWindow, design: boolean
 
 /** The create window in one of its states, reached as a person reaches it, and at rest. */
 export async function createState(page: Page, state: Create, design: boolean) {
-  if (state === "out" && design) await inDesign(page, /^ChatGPT:/);
   const line = lineOf(state);
-  // A unit's line: the design opens it from Team by its own control, on the Assistant template.
+  // A unit's line: the design's own control sets it, as it opens Create, which is closed again.
   if (line && design) {
     await page
       .getByRole("navigation", { name: "Main" })
       .getByRole("button", { name: "Team", exact: true })
       .click();
     await inDesign(page, line.control);
+    await page.keyboard.press("Escape");
+    await page.getByRole("dialog", { name: "Create New Agent" }).waitFor({ state: "detached" });
   }
-  // An agent is made from Team's way to add one; a template from New template, in Settings.
-  else if (state === "template")
-    await (await openSettingsWindow(page))
-      .getByRole("button", { name: "New template", exact: true })
+  // The options are New template's, in Settings: Create for an agent has none. On a phone Settings
+  // opens on its sections, and Templates is chosen from them.
+  const settings = await openSettingsWindow(page);
+  if ((page.viewportSize()?.width ?? 0) < 640)
+    await settings
+      .getByRole("navigation", { name: "Settings" })
+      .getByRole("button", { name: "Templates" })
       .click();
-  else {
-    await page
-      .getByRole("navigation", { name: "Main" })
-      .getByRole("button", { name: "Team", exact: true })
-      .click();
-    await page.getByRole("main").getByRole("button", { name: "Create", exact: true }).click();
-  }
-  const window = page.getByRole("dialog", {
-    name: state === "template" ? "New template" : "Create New Agent",
-  });
+  await settings.getByRole("button", { name: "New template", exact: true }).click();
+  const window = page.getByRole("dialog", { name: "New template" });
   // Once its options are drawn and it has opened, so nothing in it still moves.
   await window.getByRole("region", { name: "Base", exact: true }).waitFor();
   await window.evaluate((e) => Promise.all(e.getAnimations().map((moving) => moving.finished)));
   const from = (name: string) =>
     window.getByRole("button", { name: new RegExp(`^${name}`) }).click();
   const card = (name: string) => window.getByRole("region", { name, exact: true });
-  if (
-    ["local", "typed", "folded", "out", "between", "labels"].includes(state) ||
-    (line && !design)
-  ) {
+  if (["local", "typed", "folded", "between", "labels"].includes(state) || line) {
     await from("Assistant");
     await card("Web").waitFor();
   }
-  // Every unit, each saying its own line: the units the design's control adds, added as a person
-  // adds them, and the options brought to Web's heading.
+  // Every unit, each saying its own line: added as a person adds them, and the options brought to
+  // Web's heading.
   if (state === "line-every") {
-    if (!design)
-      for (const unit of ["Agent control", "Skill", "Connection"]) {
-        await window.getByRole("button", { name: "Add a unit" }).click();
-        await page.getByRole("menuitem", { name: new RegExp(`^${unit}`) }).click();
-        await page.getByRole("menu").waitFor({ state: "detached" });
-        await card(unit).waitFor();
-      }
+    for (const unit of ["Agent control", "Skill", "Connection"]) {
+      await window.getByRole("button", { name: "Add a unit" }).click();
+      await page.getByRole("menuitem", { name: new RegExp(`^${unit}`) }).click();
+      await page.getByRole("menu").waitFor({ state: "detached" });
+      await card(unit).waitFor();
+    }
     await card("Web").evaluate((section) => section.scrollIntoView({ block: "start" }));
   }
   // The computer's own questions, which the design words as its sample's: this computer.
@@ -1585,21 +1573,13 @@ export async function createState(page: Page, state: Create, design: boolean) {
     await window.getByLabel("What it's for").fill("Keeps dependencies current");
   }
   if (state === "folded") await window.getByRole("button", { name: "Fold Computer" }).click();
-  if (state === "builder" || state === "save") {
+  if (state === "builder") {
     await from("Builder");
     await card("Agent control").waitFor();
   }
   if (state === "add") {
     await window.getByRole("button", { name: "Add a unit" }).click();
     await page.getByRole("menu").waitFor();
-  }
-  if (state === "options" || state === "save") {
-    await window.getByRole("button", { name: "Build options" }).click();
-    await page.getByRole("menu").waitFor();
-  }
-  if (state === "save") {
-    await page.getByRole("menuitem", { name: /^Save as template/ }).click();
-    await page.getByRole("dialog", { name: "Save as template" }).waitFor();
   }
   const rail = window.getByRole("navigation", { name: "Sections" });
   const still = () =>
@@ -1632,6 +1612,77 @@ export async function createState(page: Page, state: Create, design: boolean) {
   // A press scrolls what it presses into view, by more one time than another: back to the start.
   await page.locator('ul[aria-label="Start from"]').evaluate((row) => {
     row.scrollLeft = 0;
+  });
+}
+
+/**
+ * Create for an agent, small, in its states: as it opens, from Assistant, from Builder, signed out
+ * of the model account, and once Create's check has refused: the Computer that can't be had, and a
+ * template's answer its unit no longer asks (Storefront worker's which computer). Each with the
+ * widths it is shown at.
+ */
+export const SMALLS = [
+  ["opens", ["wide", "phone"]],
+  ["assistant", ["wide", "phone"]],
+  ["builder", ["wide"]],
+  ["out", ["wide"]],
+  ["cant", ["wide", "phone"]],
+  ["refused", ["wide"]],
+] as const;
+export type Small = (typeof SMALLS)[number][0];
+/** The install steps, the Computer's connector's words while AgentComputer isn't there. */
+const INSTALL_STEPS =
+  "AgentComputer isn't installed on this computer. Install it with npm install -g @agentorg/computer and try again. AgentOrg starts it for you.";
+/** The built side as the state has it, after the design's sample of what an agent is built from. */
+export function smallSays(gateway: Gateway, state: Small) {
+  if (state === "out") signInAccount(gateway, "out");
+  if (state === "cant") gateway.computerRefuses(INSTALL_STEPS);
+  // The Computer states this computer, so it asks no longer which.
+  if (state === "refused") gateway.stateComputer(READY);
+}
+/**
+ * Create for an agent in one of its states, reached as a person reaches it, and at rest. The
+ * design draws its two refusals from its own bar; the built side presses Create.
+ */
+export async function smallState(page: Page, state: Small, design: boolean) {
+  if (state === "out" && design) await inDesign(page, /^ChatGPT:/);
+  await page
+    .getByRole("navigation", { name: "Main" })
+    .getByRole("button", { name: "Team", exact: true })
+    .click();
+  const window = page.getByRole("dialog", { name: "Create New Agent" });
+  const refused = state === "cant" || state === "refused";
+  if (design && refused)
+    await inDesign(
+      page,
+      state === "cant" ? "Create: the Computer can't be had" : "Create: a refused template",
+    );
+  else {
+    await page.getByRole("main").getByRole("button", { name: "Create", exact: true }).click();
+    const start =
+      state === "builder" ? "Builder" : state === "refused" ? "Storefront worker" : "Assistant";
+    if (state !== "opens")
+      await window.getByRole("button", { name: new RegExp(`^${start}`) }).click();
+    if (refused) {
+      await window.getByRole("button", { name: "Create", exact: true }).click();
+      await window.getByRole("alert").waitFor();
+    }
+  }
+  await window.getByRole("button", { name: "Create", exact: true }).waitFor();
+  await window.evaluate((e) =>
+    Promise.all(
+      e
+        .getAnimations({ subtree: true })
+        .filter((a) => a.effect?.getTiming().iterations !== Number.POSITIVE_INFINITY)
+        .map((a) => a.finished),
+    ),
+  );
+  // A press scrolls what it presses into view, the window too: both back to their start.
+  await window.locator('ul[aria-label="Start from"]').evaluate((row) => {
+    row.scrollLeft = 0;
+  });
+  await window.evaluate((e) => {
+    e.scrollLeft = 0;
   });
 }
 

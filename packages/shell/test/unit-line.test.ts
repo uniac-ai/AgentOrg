@@ -1,15 +1,15 @@
-// A unit's own line under its heading in the creation window, in a real browser over the stand-in
-// gateway: what the unit says it is, as the base's line is drawn, before what it asks.
+// A unit's own line under its heading in New template's window, in a real browser over the stand-in
+// gateway: what the unit says it is, as the base's line is drawn, before what it asks. Create for an
+// agent shows each unit by its logo and name alone.
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { Page } from "@playwright/test";
 import {
-  agentsRead,
   browser,
   card,
   type Gateway,
+  newTemplate,
   panel,
-  plus,
   SESSION,
   withBrowser,
   withGateway,
@@ -23,17 +23,13 @@ const READY =
 const PART = `${READY} Screen is turned off in the AgentOrg app.`;
 const NONE = "The AgentOrg app isn't open on this Mac. Open it to use this computer.";
 
-/** Create, from the Assistant template, at this width, once the window has opened. */
+/** New template from Assistant, at this width, once the window has opened. */
 async function create(gateway: Gateway, width = 1440): Promise<Page> {
   const page = await browser().newPage({ viewport: { width, height: 900 } });
   page.setDefaultTimeout(8000);
   await page.addInitScript((session) => localStorage.setItem("agentorg.session", session), SESSION);
   await page.goto(`${gateway.url}/#/team`);
-  await agentsRead(page);
-  await plus(page).click();
-  await panel(page)
-    .getByRole("button", { name: /^Assistant/ })
-    .click();
+  await newTemplate(page, "Assistant");
   await card(page, "Computer").waitFor();
   await panel(page).evaluate((e) =>
     Promise.all(
@@ -178,22 +174,6 @@ test(
       return Math.abs((heading?.getBoundingClientRect().top ?? 999) - room);
     });
     assert.ok(top <= 2, `Web's heading at the top: ${top}`);
-    await page.close();
-  }),
-);
-
-test(
-  "when Create is pressed and a unit has come to say something else, its section says the new line",
-  withGateway(async (gateway) => {
-    gateway.changeForm("computer", (field) => {
-      delete field.required;
-    });
-    const page = await create(gateway);
-    await panel(page).getByLabel("Name").fill("Foreman");
-    gateway.describeUnit("computer", READY);
-    await panel(page).getByRole("button", { name: "Create", exact: true }).click();
-    await card(page, "Computer").getByText(READY, { exact: true }).waitFor();
-    assert.equal(gateway.calls.filter((c) => c.method === "create").length, 0, "not made yet");
     await page.close();
   }),
 );

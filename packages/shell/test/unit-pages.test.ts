@@ -1,19 +1,51 @@
 // What a stack becomes: templates kept in Settings, and the units an agent's pages name.
 import assert from "node:assert/strict";
 import test from "node:test";
+import type { Page } from "@playwright/test";
 import {
+  agentsRead,
   card,
   choose,
-  fromTemplate,
+  type Gateway,
+  newTemplate,
   open,
   panel,
+  plus,
   settingsWindow,
   withBrowser,
   withGateway,
 } from "./build-kit.ts";
 import { openSetup } from "./design/samples.ts";
+import type { Template } from "./stand-in.ts";
 
 withBrowser();
+
+/** A template kept with the Computer on this computer, its folder chosen, and the Web. */
+const LOCAL: Template = {
+  id: "local-assistant",
+  title: "Local assistant",
+  description: "Works in its own folder here",
+  base: { provider: "AgentOrg", creatable: "assistant" },
+  units: [
+    {
+      provider: "AgentOrg",
+      unit: "computer",
+      values: { where: "local", workspace: "/work/foreman", access: "terminal", browser: true },
+    },
+    { provider: "AgentOrg", unit: "web", values: { service: "exa" } },
+  ],
+};
+/** Foreman, made in Create from that template: Create asks only for its name. */
+async function foreman(gateway: Gateway, page: Page) {
+  gateway.addTemplate(LOCAL);
+  await agentsRead(page);
+  await plus(page).click();
+  await panel(page)
+    .getByRole("button", { name: /^Local assistant/ })
+    .click();
+  await panel(page).getByLabel("Name").fill("Foreman");
+  await panel(page).getByRole("button", { name: "Create", exact: true }).click();
+}
 
 test(
   "Settings lists the templates: use one, copy one, delete one",
@@ -178,26 +210,22 @@ test(
 );
 
 test(
-  "a saved template keeps no secret and nothing that isn't shown, and the stack stays open",
+  "a saved template keeps no secret and nothing that isn't shown",
   withGateway(async (gateway) => {
     const page = await open(gateway);
-    await fromTemplate(page, "Assistant");
+    await newTemplate(page, "Assistant");
     await choose(page, "Search service", /^Tavily/);
     await card(page, "Web").getByLabel("Key").fill("the-key");
     await choose(page, "What it reaches", /^No files or terminal/);
-    await panel(page).getByRole("button", { name: "Build options" }).click();
-    await page.getByRole("menuitem", { name: /^Save as template/ }).click();
-    const dialog = page.getByRole("dialog", { name: "Save as template" });
-    await dialog.getByLabel("Template name").fill("Browse only");
-    await dialog.getByRole("button", { name: "Save" }).click();
-    await dialog.waitFor({ state: "detached" });
+    await panel(page).getByLabel("Name").fill("Browse only");
+    await panel(page).getByRole("button", { name: "Save template" }).click();
+    await panel(page).waitFor({ state: "detached" });
     const saved = gateway.calls.find((c) => c.method === "saveTemplate")?.input;
     assert.equal(JSON.stringify(saved).includes("the-key"), false);
     assert.deepEqual((saved as { units: unknown[] }).units, [
       { provider: "AgentOrg", unit: "computer", values: { access: "none", browser: true } },
       { provider: "AgentOrg", unit: "web", values: { service: "tavily" } },
     ]);
-    assert.equal(await card(page, "Web").getByLabel("Key").inputValue(), "the-key");
     await page.close();
   }),
 );
@@ -206,15 +234,9 @@ test(
   "an agent's setup says what it was built from, each unit with its answers, and names the unit behind what one made",
   withGateway(async (gateway) => {
     const page = await open(gateway);
-    await fromTemplate(page, "Assistant");
-    await panel(page).getByLabel("Name").fill("Foreman");
-    await choose(page, "Where it resides", /^This computer/);
-    await card(page, "Computer")
-      .getByLabel("Workspace directory", { exact: true })
-      .fill("/work/foreman");
-    await panel(page).getByRole("button", { name: "Create", exact: true }).click();
+    await foreman(gateway, page);
     const sheet = await openSetup(page, "Foreman");
-    const built = sheet.getByRole("region", { name: "Built from Assistant" });
+    const built = sheet.getByRole("region", { name: "Built from Local assistant" });
     // Each answer is read with the question it answers.
     assert.deepEqual((await built.getByRole("listitem").first().innerText()).split("\n"), [
       "Computer",
@@ -239,15 +261,9 @@ test(
   "a unit is changed, removed or added from the agent's setup, and a change that is refused puts back what it was built from",
   withGateway(async (gateway) => {
     const page = await open(gateway);
-    await fromTemplate(page, "Assistant");
-    await panel(page).getByLabel("Name").fill("Foreman");
-    await choose(page, "Where it resides", /^This computer/);
-    await card(page, "Computer")
-      .getByLabel("Workspace directory", { exact: true })
-      .fill("/work/foreman");
-    await panel(page).getByRole("button", { name: "Create", exact: true }).click();
+    await foreman(gateway, page);
     const sheet = await openSetup(page, "Foreman");
-    const built = sheet.getByRole("region", { name: "Built from Assistant" });
+    const built = sheet.getByRole("region", { name: "Built from Local assistant" });
     const units = built.getByRole("listitem");
     const dialog = page.getByRole("dialog", { name: "Foreman's computer" });
     const change = async () => {
@@ -339,32 +355,31 @@ test(
 );
 
 test(
-  "a form that changed while it was open shows what's now chosen before anything is made",
+  "a form that changed while Create was open is read again before anything is made",
   withGateway(async (gateway) => {
     gateway.changeForm("computer", (field) => {
       delete field.required;
     });
     const page = await open(gateway);
-    await fromTemplate(page, "Assistant");
+    await agentsRead(page);
+    await plus(page).click();
+    await panel(page)
+      .getByRole("button", { name: /^Assistant/ })
+      .click();
     await panel(page).getByLabel("Name").fill("Foreman");
-    const computer = card(page, "Computer");
     const create = panel(page).getByRole("button", { name: "Create", exact: true });
+    const said = panel(page).getByRole("alert");
     gateway.findProblems([{ unit: 0, field: "where", message: "No service is running here." }]);
     await create.click();
-    await computer.getByText("No service is running here.").waitFor();
+    await said.getByText("No service is running here.").waitFor();
 
     gateway.findProblems([]);
     gateway.changeForm("computer", (field) => {
       if (field.id === "where") field.default = "local";
     });
+    // Read again first: nothing is made from a form as it was, and what was found then goes.
     await create.click();
-    // Under the field, apart from the list's hidden copy of each answer's words.
-    await computer.locator("p", { hasText: "It acts as you on this Mac." }).waitFor();
-    assert.equal(
-      await computer.getByRole("combobox", { name: "Where it resides" }).innerText(),
-      "This computer",
-    );
-    assert.equal(await computer.getByText("No service is running here.").count(), 0);
+    await said.waitFor({ state: "detached" });
     assert.equal(gateway.calls.filter((c) => c.method === "create").length, 0, "not yet");
 
     await create.click();
