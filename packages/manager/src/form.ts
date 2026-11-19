@@ -91,14 +91,36 @@ export function heldProblems(unit: TheUnit, worked: Worked): string[] {
   return problems;
 }
 
+/**
+ * The fields never shown, whatever is filled in: each whose `visible` leads, however far round, back
+ * to a field already passed. `shownFields` shows none of them. One that leads to a field the form
+ * doesn't have isn't counted: a form cut to what an agent may fill leaves out fields it may not.
+ */
+function neverShown(form: TheForm): Set<string> {
+  const byId = new Map(form.map((field) => [field.id, field]));
+  const never = new Set<string>();
+  for (const field of form) {
+    const passed = new Set<string>();
+    let at: TheField | undefined = field;
+    while (at?.visible && !passed.has(at.id)) {
+      passed.add(at.id);
+      at = byId.get(at.visible.field);
+    }
+    if (at && passed.has(at.id)) never.add(field.id);
+  }
+  return never;
+}
+
 /** Which fields are shown, given what was filled in and the defaults. */
 function shownFields(form: TheForm, values: Values): Set<string> {
   const byId = new Map(form.map((field) => [field.id, field]));
+  const never = neverShown(form);
   const seen = new Map<string, boolean>();
   const shown = (id: string): boolean => {
     const known = seen.get(id);
     if (known !== undefined) return known;
-    seen.set(id, false); // A field that depends on itself, however far round, isn't shown.
+    if (never.has(id)) return false;
+    seen.set(id, false);
     const field = byId.get(id) as TheField;
     const { visible } = field;
     let answer = true;
@@ -241,14 +263,16 @@ export function workedOut(unit: TheUnit, values: Values): Worked {
 
 /**
  * The JSON Schema of a form, for an agent to fill: flat strings, numbers, booleans and enums, as
- * MCP's elicitation allows. A secret is left out: an agent can never supply one. A field that shows
- * only after a choice is optional and says so.
+ * MCP's elicitation allows. A secret is left out: an agent can never supply one. So is a field
+ * never shown, whose value would be dropped. A field that shows only after a choice is optional and
+ * says so.
  */
 export function schemaOf(form: TheForm): Record<string, unknown> {
   const properties: Record<string, unknown> = {};
   const required: string[] = [];
+  const never = neverShown(form);
   for (const field of form) {
-    if (field.value === "secret") continue;
+    if (field.value === "secret" || never.has(field.id)) continue;
     const type = { string: "string", number: "number", boolean: "boolean", strings: "array" }[
       field.value
     ];

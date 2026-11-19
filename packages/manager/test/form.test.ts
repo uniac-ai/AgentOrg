@@ -200,6 +200,40 @@ test("what a unit gives is worked out from its description and the values alone"
   assert.deepEqual(workedOut(unit, { on: false, named: "mine" }).skills, []);
 });
 
+test("a field never shown, however far round it depends on itself, isn't in the schema an agent fills, and its value is dropped", () => {
+  const choice = {
+    authority: "setting",
+    type: "choice",
+    value: "string",
+    title: "T",
+    options: [
+      { value: "on", title: "On" },
+      { value: "off", title: "Off" },
+    ],
+  };
+  const form = [
+    { id: "screen", ...choice, visible: { field: "screen", in: ["on"] } },
+    { id: "a", ...choice, visible: { field: "b", in: ["on"] } },
+    { id: "b", ...choice, visible: { field: "a", in: ["on"] } },
+    { id: "after", ...choice, visible: { field: "screen", in: ["on"] } },
+    { id: "mode", ...choice },
+    { id: "shown", ...choice, visible: { field: "mode", in: ["on"] } },
+  ];
+  const schema = schemaOf(form as never) as { properties: Record<string, unknown> };
+  assert.deepEqual(Object.keys(schema.properties), ["mode", "shown"]);
+  const all = { screen: "on", a: "on", b: "on", after: "on", mode: "on", shown: "on" };
+  const settled = settle(form as never, all, []);
+  assert.deepEqual(settled.values, { mode: "on", shown: "on" });
+  assert.deepEqual(settled.problems, []);
+  // A form cut to what an agent may fill can leave out what a field shows after: it is still
+  // listed, with when it applies.
+  const cut = schemaOf([form[5]] as never) as {
+    properties: Record<string, { description?: string }>;
+  };
+  assert.deepEqual(Object.keys(cut.properties), ["shown"]);
+  assert.match(cut.properties.shown?.description ?? "", /Only when mode is on/);
+});
+
 test("the schema an agent fills leaves secrets out and says when a field applies", () => {
   const schema = schemaOf(form as never) as {
     properties: Record<string, Record<string, unknown>>;
