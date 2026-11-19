@@ -1532,6 +1532,12 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
       units = structuredClone(units);
       for (const field of units.find((u) => u.id === id)?.form ?? []) change(field);
     },
+    /** A unit comes to say this of itself, as its provider says it. */
+    describeUnit(id: string, description: string) {
+      units = structuredClone(units);
+      const unit = units.find((u) => u.id === id);
+      if (unit) unit.description = description;
+    },
     live,
     terminal,
     /** A `screencast@1` event, to every browser socket. */

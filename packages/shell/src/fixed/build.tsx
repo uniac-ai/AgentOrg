@@ -596,7 +596,11 @@ function BaseOptions() {
   );
 }
 
-/** A unit's section: its heading with its fold and its remove, and its questions as they were. */
+/**
+ * A unit's section: its heading with its fold and its remove; under it the unit's own line, what it
+ * says it is, as the base's line is drawn; then its questions as they were. Folded, it is its
+ * heading alone.
+ */
 function UnitPart({
   unit: entry,
   above,
@@ -655,41 +659,47 @@ function UnitPart({
       }
     >
       {unfolded && (
-        <div className="flex flex-col gap-3 px-0.5 empty:hidden">
-          {!unit && <p className="text-xs text-[var(--bad)]">Not available here.</p>}
-          {unit && (
-            <UnitForm
-              unit={unit}
-              id={`unit-${key}`}
-              agentName={draft?.mode === "agent" ? nameOf(draft, offered) : undefined}
-              values={values}
-              secrets={secrets}
-              problems={problems}
-              onValue={(field, value) => setValue(key, field, value)}
-              onSecret={(field, value) => setSecret(key, field, value)}
-            >
-              {lacking && (
-                <p className="flex items-center justify-between gap-2 text-xs text-[var(--warn)]">
-                  <span>Needs a {lacking} above it</span>
-                  {supplier && (
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="xs"
-                      onClick={() => addUnit(supplier, key)}
-                    >
-                      Add it
-                    </Button>
-                  )}
-                </p>
-              )}
-              {general.map((p) => (
-                <p key={p.message} className="text-xs text-[var(--bad)]">
-                  {p.message}
-                </p>
-              ))}
-            </UnitForm>
+        <div className="flex flex-col gap-3">
+          {/* Whole, as long as it is: it says what the unit is. */}
+          {unit?.description && (
+            <p className="px-0.5 text-[13px] text-muted-foreground">{unit.description}</p>
           )}
+          <div className="flex flex-col gap-3 px-0.5 empty:hidden">
+            {!unit && <p className="text-xs text-[var(--bad)]">Not available here.</p>}
+            {unit && (
+              <UnitForm
+                unit={unit}
+                id={`unit-${key}`}
+                agentName={draft?.mode === "agent" ? nameOf(draft, offered) : undefined}
+                values={values}
+                secrets={secrets}
+                problems={problems}
+                onValue={(field, value) => setValue(key, field, value)}
+                onSecret={(field, value) => setSecret(key, field, value)}
+              >
+                {lacking && (
+                  <p className="flex items-center justify-between gap-2 text-xs text-[var(--warn)]">
+                    <span>Needs a {lacking} above it</span>
+                    {supplier && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="xs"
+                        onClick={() => addUnit(supplier, key)}
+                      >
+                        Add it
+                      </Button>
+                    )}
+                  </p>
+                )}
+                {general.map((p) => (
+                  <p key={p.message} className="text-xs text-[var(--bad)]">
+                    {p.message}
+                  </p>
+                ))}
+              </UnitForm>
+            )}
+          </div>
         </div>
       )}
     </Part>

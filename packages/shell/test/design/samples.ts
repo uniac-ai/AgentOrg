@@ -1391,14 +1391,53 @@ export const CREATES = [
   ["template", ["wide"]],
   ["between", ["wide", "phone"]],
   ["labels", ["wide"]],
+  ["line-ready", ["wide", "rail", "phone"]],
+  ["line-part", ["wide"]],
+  ["line-none", ["wide"]],
+  ["line-every", ["wide"]],
 ] as const;
 export type Create = (typeof CREATES)[number][0];
+
+const READY =
+  "Sam's Mac mini, whole: your files and apps, its screen and your signed-in browser. It acts as you, with everything you can reach.";
+/**
+ * A unit's own line, at the design's states: what a computer already there says of itself (ready,
+ * with a part not ready, and not to be had), and every unit with what it says. Each by the design's
+ * control, and what the built side's Computer says, with a name that is nobody's.
+ */
+const LINES = {
+  "line-ready": { control: "Computer ready", says: READY },
+  "line-part": {
+    control: "A part not ready",
+    says: `${READY} Screen is turned off in the AgentOrg app.`,
+  },
+  "line-none": {
+    control: "Not to be had",
+    says: "The AgentOrg app isn't open on this Mac. Open it to use this computer.",
+  },
+  "line-every": { control: "Every unit's line", says: undefined },
+} as const;
+const lineOf = (state: Create) => (state in LINES ? LINES[state as keyof typeof LINES] : undefined);
+/** The built side's Computer says what the state has it say, before the page is read. */
+export function computerSays(gateway: Gateway, state: Create) {
+  const says = lineOf(state)?.says;
+  if (says) gateway.describeUnit("computer", says);
+}
 
 /** The create window in one of its states, reached as a person reaches it, and at rest. */
 export async function createState(page: Page, state: Create, design: boolean) {
   if (state === "out" && design) await inDesign(page, /^ChatGPT:/);
+  const line = lineOf(state);
+  // A unit's line: the design opens it from Team by its own control, on the Assistant template.
+  if (line && design) {
+    await page
+      .getByRole("navigation", { name: "Main" })
+      .getByRole("button", { name: "Team", exact: true })
+      .click();
+    await inDesign(page, line.control);
+  }
   // An agent is made from Team's way to add one; a template from New template, in Settings.
-  if (state === "template")
+  else if (state === "template")
     await (await openSettingsWindow(page))
       .getByRole("button", { name: "New template", exact: true })
       .click();
@@ -1418,9 +1457,24 @@ export async function createState(page: Page, state: Create, design: boolean) {
   const from = (name: string) =>
     window.getByRole("button", { name: new RegExp(`^${name}`) }).click();
   const card = (name: string) => window.getByRole("region", { name, exact: true });
-  if (["local", "typed", "folded", "out", "between", "labels"].includes(state)) {
+  if (
+    ["local", "typed", "folded", "out", "between", "labels"].includes(state) ||
+    (line && !design)
+  ) {
     await from("Assistant");
     await card("Web").waitFor();
+  }
+  // Every unit, each saying its own line: the units the design's control adds, added as a person
+  // adds them, and the options brought to Web's heading.
+  if (state === "line-every") {
+    if (!design)
+      for (const unit of ["Agent control", "Skill", "Connection"]) {
+        await window.getByRole("button", { name: "Add a unit" }).click();
+        await page.getByRole("menuitem", { name: new RegExp(`^${unit}`) }).click();
+        await page.getByRole("menu").waitFor({ state: "detached" });
+        await card(unit).waitFor();
+      }
+    await card("Web").evaluate((section) => section.scrollIntoView({ block: "start" }));
   }
   // The computer's own questions, which the design words as its sample's: this computer.
   if (state === "local") {

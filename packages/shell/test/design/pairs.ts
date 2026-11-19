@@ -12,8 +12,10 @@ import {
   ASKS,
   type ChatCase,
   CREATES,
+  type Create,
   closeEveryTab,
   computer,
+  computerSays,
   computerWith,
   cpuOf,
   createState,
@@ -86,6 +88,8 @@ interface Screen {
   settings?: boolean;
   /** The built side builds from the design's sample: its base, units and templates. */
   build?: boolean;
+  /** A state of the create window, whose Computer may say a line of its own. */
+  create?: Create;
   /** The design's page is this much taller than its own bar makes it. */
   taller?: number;
   /** The state of the two sign-ins the built side is in. */
@@ -604,6 +608,7 @@ const SCREENS: Screen[] = [
       build: true,
       // Centred in an odd height the design's window would sit on a half pixel.
       taller: 1,
+      create: state,
       ...(state === "out" ? { signIn: "out" as const } : {}),
       design: (page) => createState(page, state, true),
       built: (page) => createState(page, state, false),
@@ -804,6 +809,7 @@ for (const screen of SCREENS.filter((one) => wanted(one.name)))
           if (screen.research) researchSays(gateway, screen.research);
           if (screen.firstStart) firstStart(gateway);
           if (screen.build) sampleBuild(gateway);
+          if (screen.create) computerSays(gateway, screen.create);
           if (screen.settings) sampleSettings(gateway);
           if (screen.signIn) signInAccount(gateway, screen.signIn);
           if (screen.browser) computerWith(gateway, "browser", !screen.watch);
