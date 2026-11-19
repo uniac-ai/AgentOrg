@@ -31,6 +31,7 @@ const TYPES: Record<string, string> = {
 export const SESSION = "stand-in-session";
 const PERSON = "person";
 
+/** A message as `history` gives it, with what became of it once the party said it. */
 type Message = z.output<typeof chatInterface.methods.history.output>["messages"][number];
 type Status = z.output<typeof chatInterface.methods.state.output>;
 type Conversation = z.output<typeof chatInterface.events.chat.payload>;
@@ -1299,6 +1300,7 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
         throw error;
       }
       const spec = (chatInterface as unknown as Interface).methods[method] as Spec;
+      // What `history` answers keeps each message's `progress` through this parse: the contract has it.
       return spec.output.parse(
         chatCall(agent, method, spec.input.parse(input) as Record<string, unknown>),
       );
@@ -1730,6 +1732,16 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
     setWorks(agent: string, works: Work[]) {
       agentOf(agent).works = works;
       emit(workSlot(agent), "changed", { view: "activity" });
+    },
+    /**
+     * What became of a message in the person's conversation, as the service says it: kept with the
+     * message, for a page opened late, and said as the conversation's `progress` event.
+     */
+    progress(agent: string, id: string, progress: NonNullable<Message["progress"]>) {
+      const held = agentOf(agent);
+      const message = held.chat.messages.find((m) => m.id === id);
+      if (message) message.progress = progress;
+      say(held, "progress", { id, ...progress });
     },
     /** An agent's own model request comes to be tried again, or not, and its Work says so. */
     setRetrying(agent: string, retrying?: Work["retrying"]) {

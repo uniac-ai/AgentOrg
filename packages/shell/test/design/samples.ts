@@ -339,6 +339,61 @@ export function researchSays(gateway: Gateway, moment: Moment) {
 /** The reply being written, as far as the design has it: the words that have come. */
 export const writeSoFar = (gateway: Gateway) => gateway.delta("a-research", "v-a2", WRITTEN_SO_FAR);
 
+/**
+ * The design's words for a message's step in progress: its active wording, or its text where it has
+ * none, as "Read 4 files" hasn't; and one long enough to wrap.
+ */
+export const STEP_WORDS = {
+  tests: "Running the demo's tests",
+  files: "Read 4 files",
+  long: "Comparing what the three card processors would charge a shop that takes about 400 orders a month",
+} as const;
+/** The person's second message, sent while the first is in hand. */
+export const SECOND_ASK = "Also, which folder has the coupons?";
+
+/** Research's conversation with the person's message in hand, at each of the design's states, by its control. */
+export const HOLDS = {
+  taken: "Taken, no step yet",
+  inProgress: "A step in progress",
+  replanned: "A step re-planned",
+  answered: "Answered",
+  two: "Two messages in hand",
+  longStep: "A long step",
+} as const;
+export type Hold = keyof typeof HOLDS;
+/**
+ * Research's conversation, built, at one of those states, as a page opened then reads it: each
+ * message in hand taken, with its step's words once it has one. Answered is the long reply.
+ */
+export function researchHolds(gateway: Gateway, state: Hold) {
+  const at = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
+  const ask = (id: string, text: string, ago: number) => ({
+    id,
+    role: "user" as const,
+    text,
+    at: at(ago),
+  });
+  if (state === "answered") {
+    researchSays(gateway, "long");
+    return;
+  }
+  gateway.converse("a-research", [
+    ask("v-u2", SAID.longAsk, 2),
+    ...(state === "two" ? [ask("v-u6", SECOND_ASK, 1)] : []),
+  ]);
+  gateway.setChatStatus("a-research", { state: "working" });
+  const step =
+    state === "inProgress" || state === "replanned"
+      ? STEP_WORDS.tests
+      : state === "two"
+        ? STEP_WORDS.files
+        : state === "longStep"
+          ? STEP_WORDS.long
+          : undefined;
+  gateway.progress("a-research", "v-u2", { state: "taken", ...(step ? { step } : {}) });
+  if (state === "two") gateway.progress("a-research", "v-u6", { state: "taken" });
+}
+
 /** What a page asks, as the design's sample has each. */
 export const ASKS = {
   confirm: {

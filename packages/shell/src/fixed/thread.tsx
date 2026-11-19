@@ -42,13 +42,21 @@ import { CloseChats } from "./chat-parts.tsx";
 import { useChats } from "./chats.tsx";
 import { surfacesOf, windowsOf } from "./computer.tsx";
 import { useComputers } from "./computers.tsx";
-import { type ChatMessage, type ChatStatus, reasonOf, type Tone } from "./data.ts";
+import {
+  type ChatMessage,
+  type ChatStatus,
+  type Progress,
+  type ProgressSaid,
+  reasonOf,
+  type Tone,
+} from "./data.ts";
 import { Face } from "./face.tsx";
 import { needsOf, SignInButton, useLogin } from "./login.tsx";
 import { useReducedMotion } from "./motion.ts";
 import { fixOf } from "./notice.ts";
 import { fit, type Put, type Sent, sourceOf, together } from "./pictures.ts";
 import { useAgents } from "./watch.tsx";
+import { WorkingLine } from "./working-line.tsx";
 
 const PAGE = 100;
 
@@ -83,7 +91,7 @@ interface Sending {
 
 /** What the thread shows: each message of the person, and each of the agent's, on its own. */
 type Turn =
-  | { kind: "user"; id: string; text: string; images: readonly Sent[] }
+  | { kind: "user"; id: string; message?: string; text: string; images: readonly Sent[] }
   | { kind: "agent"; id: string; text: string; streaming?: boolean };
 
 function turnsOf(
@@ -101,12 +109,14 @@ function turnsOf(
       turns.push({
         kind: "user",
         id: keys.get(message.id) ?? message.id,
+        message: message.id,
         text: message.text,
         images: message.images ?? [],
       });
     else turns.push({ kind: "agent", id: message.id, text: message.text });
   }
-  for (const { id, text, images } of unrecorded) turns.push({ kind: "user", id, text, images });
+  for (const { id, messageId, text, images } of unrecorded)
+    turns.push({ kind: "user", id, ...(messageId ? { message: messageId } : {}), text, images });
   for (const [id, text] of streaming) turns.push({ kind: "agent", id, text, streaming: true });
   return turns;
 }
@@ -414,6 +424,8 @@ export function Thread({
   /** The record, in order, and the text still streaming by id. */
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [streaming, setStreaming] = useState<ReadonlyMap<string, string>>(new Map());
+  /** Where each message that came in stands, by its id, as the record and the latest word say. */
+  const [progress, setProgress] = useState<ReadonlyMap<string, Progress>>(new Map());
   /** Whether the agent works, in this chat or another. */
   const [working, setWorking] = useState(false);
   /** A message was sent from here and the agent hasn't gone idle since: its reply may be coming. */
@@ -478,6 +490,14 @@ export function Thread({
           (m, i) => i >= Math.max(first, 0) && !known.has(m.id) && !before.has(m.id),
         );
         setMessages([...older, ...page, ...newer]);
+        // A page opened late reads where each message stands from the record.
+        setProgress((was) => {
+          const said = page.filter((m) => m.progress);
+          if (said.length === 0) return was;
+          const next = new Map(was);
+          for (const m of said) if (m.progress) next.set(m.id, m.progress);
+          return next;
+        });
         // With earlier pages kept, whether there are earlier still is as their read said.
         if (older.length === 0) setHasEarlier(more);
         // A reply that settled while nothing was heard is in the record: its partial text goes.
@@ -536,6 +556,17 @@ export function Thread({
       ),
       api.subscribe(
         slot,
+        "progress",
+        (payload) => {
+          if (!here(payload)) return;
+          const { id, state, step } = payload as ProgressSaid;
+          // The latest word on a message replaces the earlier.
+          setProgress((was) => new Map(was).set(id, { state, ...(step ? { step } : {}) }));
+        },
+        { again: load },
+      ),
+      api.subscribe(
+        slot,
         "status",
         (payload) => {
           const status = payload as ChatStatus;
@@ -568,9 +599,18 @@ export function Thread({
   // for it: the agent's own line says it works.
   const asked = messages.at(-1)?.role === "user";
   const awaiting = unrecorded.length > 0 || (sentHere && working && asked);
+  /** Whether a message is in hand: its line is drawn under it, and its chat's problem waits. */
+  const taken = (now: Progress | undefined) => now?.state === "taken";
+  /** The message in hand, by its id. */
+  const inHand = (id: string | undefined) => {
+    const now = id === undefined ? undefined : progress.get(id);
+    return taken(now) ? now : undefined;
+  };
+  const holding = [...progress.values()].filter(taken);
   // While it awaits a reply its problem is not said: the reply ends it, or it is said again. A
-  // call of this thread's that failed is said in its place.
-  const problem = failure || awaiting ? undefined : entry?.problem;
+  // call of this thread's that failed is said in its place. While a message is in hand its line
+  // says where it stands, and a problem is said once nothing is.
+  const problem = failure || awaiting || holding.length > 0 ? undefined : entry?.problem;
   const wrong = failure?.said ?? problem?.message;
   // A problem that the plan's page can fix ends its line with the way there.
   const fix = problem && fixOf(problem);
@@ -691,6 +731,8 @@ export function Thread({
                             </BubbleContent>
                           </Bubble>
                         )}
+                        {/* While it is in hand, where it stands. */}
+                        <WorkingLine progress={inHand(turn.message)} />
                       </MessageContent>
                     </Message>
                   ) : (
