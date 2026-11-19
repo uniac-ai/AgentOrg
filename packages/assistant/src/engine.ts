@@ -125,6 +125,7 @@ export function startEngine(
     emit: {
       message: (message, to) => ctx.exports.chat.emit("message", message, { to }),
       delta: (delta, to) => ctx.exports.chat.emit("delta", delta, { to }),
+      progress: (progress, to) => ctx.exports.chat.emit("progress", progress, { to }),
       status: (status) => ctx.exports.chat.emit("status", status),
       chat: (entry, to) => ctx.exports.chat.emit("chat", entry, { to }),
       worked: () => ctx.exports.capability.emit("changed", { view: ACTIVITY }),

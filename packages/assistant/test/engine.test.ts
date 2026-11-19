@@ -2510,3 +2510,69 @@ test("Work's answer fits what another agent's loop takes whole: each text cut, t
   assert.ok(entries.length > 0 && entries.length < 20);
   assert.equal(more, true);
 });
+
+test("a party and the person see what became of the party's message, with its step, and a view opened late reads it with the message", async () => {
+  const s = await setup();
+  const answering = gate<Reply>();
+  s.script.push(
+    calls(
+      callTool("status", {
+        steps: [
+          { text: "Search flights", state: "completed" },
+          { text: "Compare prices", active: "Comparing prices", state: "in_progress" },
+        ],
+      }),
+    ),
+    () => answering.shut,
+  );
+  const from = s.actor.emitted.length;
+  const { messageId } = await sendAs(s, "Find a flight.", "act_1");
+  await until(() => s.requests.length === 2, "the request after its steps");
+  const said = () =>
+    s.actor.emitted
+      .slice(from)
+      .filter((e) => e.event === "progress")
+      .map((e) => ({ to: e.to, ...(e.payload as object) }));
+  const each = (progress: object) => [
+    { to: "act_1", with: "act_1", id: messageId, ...progress },
+    { to: PERSON, with: "act_1", id: messageId, ...progress },
+  ];
+  // Taken as the main loop decides on it, then at the step its work is at.
+  const taken = [
+    ...each({ state: "taken" }),
+    ...each({ state: "taken", step: "Comparing prices" }),
+  ];
+  assert.deepEqual(said(), taken);
+  const progressOf = async () =>
+    (
+      (await s.actor.call("chat", "history", { with: "act_1" }, PERSON)) as {
+        messages: { id: string; progress?: object }[];
+      }
+    ).messages.find((message) => message.id === messageId)?.progress;
+  assert.deepEqual(await progressOf(), { state: "taken", step: "Comparing prices" });
+  answering.open(say("Found one."));
+  await s.ended(from);
+  assert.deepEqual(said(), [...taken, ...each({ state: "answered" })]);
+  assert.deepEqual(await progressOf(), { state: "answered" });
+});
+
+test("Work carries the steps each piece of work keeps", async () => {
+  const s = await setup();
+  const steps = [
+    { text: "Search flights", state: "completed" },
+    { text: "Compare prices", active: "Comparing prices", state: "in_progress" },
+    { text: "Book", state: "pending" },
+  ];
+  s.script.push(calls(callTool("status", { steps })), say("Comparing now."));
+  await s.turn("Find a flight.");
+  const { works } = JSON.parse(
+    ((await s.actor.call("tools", "call", { name: "work", arguments: {} })) as { output: string })
+      .output,
+  );
+  assert.deepEqual(works[0].steps, steps);
+  // Its own call is no entry of its work: the steps show apart.
+  assert.equal(
+    works[0].entries.some((entry: { call?: { name: string } }) => entry.call?.name === "status"),
+    false,
+  );
+});
