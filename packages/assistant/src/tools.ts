@@ -5,7 +5,7 @@
  * other.
  */
 import { type ToolEntry, tools as toolsInterface } from "@agentorg/interfaces";
-import { type FilesOf, type Outcome, Refusal, type Tool } from "@agentorg/looper";
+import { type FilesOf, type Outcome, OWN_FUNCTIONS, Refusal, type Tool } from "@agentorg/looper";
 import {
   type DescribedInterface,
   describeInterface,
@@ -35,11 +35,10 @@ export interface LeftOut {
 }
 
 /**
- * What a request can carry of the agent's tools: two fewer than a request's count, since the
- * looper offers two functions of its own beside them; and, with the record and instructions, one
- * frame.
+ * What a request can carry of the agent's tools: a request's count, 128, less the looper's own
+ * functions it offers beside them; and, with the record and instructions, one frame.
  */
-export const MAX_TOOLS = 126;
+export const MAX_TOOLS = 128 - OWN_FUNCTIONS.length;
 export const TOOLS_BUDGET = 256 * 1024;
 const MAX_NAME = 64;
 const MAX_DESCRIPTION = 1024;

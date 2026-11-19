@@ -33,6 +33,8 @@ export const Compacted = z.object({
   read: z.array(z.string()).optional(),
   /** The files its calls changed, oldest first. */
   changed: z.array(z.string()).optional(),
+  /** The work's steps as they stood, as `status` answers with them. */
+  steps: z.string().optional(),
 });
 export type Compacted = z.output<typeof Compacted>;
 
@@ -291,8 +293,8 @@ export async function summarize(
   };
 }
 
-/** A compaction as the model is sent it: a user message, with the file lists. */
-export function summaryItem({ summary, read = [], changed = [] }: Compacted): Item {
+/** A compaction as the model is sent it: a user message, with the file lists, and the work's steps. */
+export function summaryItem({ summary, read = [], changed = [], steps }: Compacted): Item {
   const lists = [
     ...(read.length > 0 ? [`<read-files>\n${read.join("\n")}\n</read-files>`] : []),
     ...(changed.length > 0 ? [`<modified-files>\n${changed.join("\n")}\n</modified-files>`] : []),
@@ -300,7 +302,7 @@ export function summaryItem({ summary, read = [], changed = [] }: Compacted): It
   return {
     type: "message",
     role: "user",
-    content: `${SUMMARY_BEGINS}:\n\n<summary>\n${summary}${lists.length > 0 ? `\n\n${lists.join("\n\n")}` : ""}\n</summary>`,
+    content: `${SUMMARY_BEGINS}:\n\n<summary>\n${summary}${lists.length > 0 ? `\n\n${lists.join("\n\n")}` : ""}\n</summary>${steps ? `\n\nYour steps at this point, kept with \`status\`:\n${steps}` : ""}`,
   };
 }
 /** How a compaction's message begins, which a worker is told is no one's message. */

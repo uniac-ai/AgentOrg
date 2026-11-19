@@ -52,6 +52,7 @@ import {
   unansweredLast,
   userEntry,
 } from "./record.js";
+import { MOST_STEPS, Step } from "./steps.js";
 import type { Part } from "./told.js";
 import {
   type Call,
@@ -77,7 +78,8 @@ export const WAITING = 16;
 /**
  * What is kept of a piece of work: its title, the threads it follows, those of them it has left,
  * which it still reads and is given nothing more from, and once a turn of it has ended, when
- * that was, the head of what it last said, and whether that turn failed.
+ * that was, the head of what it last said, and whether that turn failed; and its steps, while its
+ * worker keeps any, which a record that doesn't read back leaves out.
  */
 const Work = z.object({
   title: z.string(),
@@ -87,6 +89,7 @@ const Work = z.object({
   last: z.string().optional(),
   failed: z.literal(true).optional(),
   stopped: z.literal(true).optional(),
+  steps: z.array(Step).max(MOST_STEPS).optional().catch(undefined),
 });
 
 /** Where a thread's record is kept in the looper's store. */
@@ -150,9 +153,11 @@ export interface LooperOut {
   worked(work?: string): void;
   /**
    * The user message `id` in `thread` was taken (a model request first read it), answered, or
-   * closed without an answer: said once it is kept on the message, each at most once.
+   * closed without an answer: said once it is kept on the message, each at most once. While it is
+   * taken, `step` is the words of the step the work that holds it is at: taken is said again, with
+   * the new words or none, as they change.
    */
-  progress?(thread: string, id: string, progress: Progress): void;
+  progress?(thread: string, id: string, progress: Progress, step?: string): void;
 }
 
 /**
@@ -456,6 +461,8 @@ export function createLooper(options: {
         title: () => titleOf(id),
         others: () => othersOf(id),
         back: (handed) => returned(id, handed),
+        steps: () => kept.get(id)?.steps ?? [],
+        keepSteps: (steps) => keepSteps(id, steps),
         ...(options.stopGroup ? { stopGroup: options.stopGroup } : {}),
         ...(options.files ? { files: options.files } : {}),
         // Marked before anything of the turn is kept, so a looper that goes in between leaves
@@ -483,7 +490,8 @@ export function createLooper(options: {
           replied: (thread) => lastIn.set(thread, id),
           delta: out.delta,
           failed: out.failed,
-          progress: (thread, message, progress) => out.progress?.(thread, message, progress),
+          progress: (thread, message, progress, step) =>
+            out.progress?.(thread, message, progress, step),
           worked: () => out.worked(id),
           status(status) {
             const on = running(status);
@@ -550,6 +558,24 @@ export function createLooper(options: {
       () => {},
     );
     return written;
+  };
+  /**
+   * Keep a piece of work's steps, none when the list is empty. Not kept, they are as they were,
+   * unless changed again meanwhile.
+   */
+  const keepSteps = async (id: string, steps: Step[]) => {
+    // Work from before works had records is kept first, as when it hands a message back.
+    if (!kept.has(id)) await follow(id, id);
+    const { steps: was, ...rest } = kept.get(id) as z.output<typeof Work>;
+    const now = steps.length > 0 ? steps : undefined;
+    kept.set(id, { ...rest, ...(now ? { steps: now } : {}) });
+    try {
+      await save(id);
+    } catch (error) {
+      const { steps: then, ...record } = kept.get(id) as z.output<typeof Work>;
+      if (then === now) kept.set(id, { ...record, ...(was ? { steps: was } : {}) });
+      throw error;
+    }
   };
   /**
    * A turn of a piece of work has ended: keep when, the head of what it last said, and whether it
@@ -1370,8 +1396,9 @@ export function createLooper(options: {
     /**
      * Its pieces of work, most recently active first, as many as `limit`, those last active before
      * the piece of work `before` if one is given: each with its title, whether it is working, idle or stopped,
-     * when it was last active, whether its last turn failed, and its `entries` latest entries,
-     * the call it is running now last. Refused `unknown` for a `before` there isn't.
+     * when it was last active, whether its last turn failed, its `entries` latest entries, the
+     * call it is running now last, and its steps, when it keeps any. Refused `unknown` for a
+     * `before` there isn't.
      */
     async works(limit: number, entries: number, before?: string) {
       await learn();
@@ -1401,6 +1428,7 @@ export function createLooper(options: {
           ...(at ? { at } : {}),
           ...(work.failed ? { failed: true as const } : {}),
           ...(await entriesOf(id, undefined, entries)),
+          ...(work.steps ? { steps: work.steps } : {}),
           ...retryingOf(works.get(id)?.loop.retrying()),
         })),
       );

@@ -125,10 +125,10 @@ export interface Shown {
   /** The pictures the person sent with it. */
   images?: Picture[];
   /**
-   * For what a person said: the latest of what has become of it, once anything has, in the shape
-   * a chat carries it.
+   * For what a person said: the latest of what has become of it, once anything has, and while it
+   * is taken, the words of the step its work is at.
    */
-  progress?: { state: Progress };
+  progress?: { state: Progress; step?: string };
 }
 
 /**

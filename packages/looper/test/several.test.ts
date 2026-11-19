@@ -95,7 +95,7 @@ test("a worker is told which work it is, reads each message by its number, and i
   assert.deepEqual(numbered[0], ["[1] Write the report."]);
   assert.deepEqual(told[0], {
     instructions: workInstructions("The report"),
-    tools: ["send", "hand_back"],
+    tools: ["send", "hand_back", "status"],
   });
   answer("Write the report.", sends("Report done."));
   await looper.settled();

@@ -1,4 +1,5 @@
 export type { FilesOf } from "./compaction.js";
+export { OWN_FUNCTIONS } from "./loop.js";
 export {
   createLooper,
   forget,
@@ -8,6 +9,7 @@ export {
   WAITING,
 } from "./looper.js";
 export { Entry, REQUEST_BUDGET, textOf, type WorkEntry } from "./record.js";
+export type { Step } from "./steps.js";
 export { build, type CutPart, type Part, partsOf } from "./told.js";
 export { capped, MAX_OUTPUT } from "./tools.js";
 export {
