@@ -249,3 +249,91 @@ test("this computer's screen and the person's browser: off unless chosen, greyed
   assert.equal(option({ made: [], starts: true }, "screen", "on")?.unavailable, undefined);
   assert.equal(field({ made: [], starts: true }, "screen")?.default, "off");
 });
+
+/** This machine as a service that says its name finds it, every part ready, on a Mac with AgentOrg Mac. */
+const NAMED: Found = {
+  machine: "Studio Mac",
+  thisComputer: {
+    ready: true,
+    capabilities: [
+      { capability: "files", ready: true },
+      { capability: "screen", ready: true },
+    ],
+    browsers: [{ kind: "own", ready: true }],
+  },
+  made: [],
+  mac: true,
+};
+const stated = (found: Found) => computerUnit(found, false);
+const fieldOf = (found: Found, id: string) => stated(found).form.find((one) => one.id === id);
+
+test("where no provider that makes is there, it states this computer in a line and asks only its own", () => {
+  const unit = stated(NAMED);
+  assert.equal(
+    unit.description,
+    "Studio Mac, whole: your files and apps, its screen and your signed-in browser. It acts as you, with everything you can reach.",
+  );
+  // Which computer isn't asked, nor anything of a new one's; nothing waits on which it is.
+  assert.deepEqual(
+    unit.form.map((one) => one.id),
+    ["workspace", "access", "screen", "ownBrowser"],
+  );
+  assert.ok(unit.form.every((one) => one.visible === undefined));
+  // What each answer is, and what it gives, are today's.
+  const asked = computerUnit(NAMED);
+  for (const field of unit.form) {
+    const { visible: _, ...was } = asked.form.find((one) => one.id === field.id) ?? {};
+    assert.deepEqual(field, was);
+  }
+  assert.deepEqual({ ...unit, description: "", form: [] }, { ...asked, description: "", form: [] });
+});
+
+test("a service that doesn't say its machine's name is called this computer", () => {
+  const { machine: _, ...older } = NAMED as NonNullable<Found>;
+  assert.match(stated(older).description, /^This computer, whole: your files and apps, /);
+});
+
+test("a part that can't be had isn't asked: the line says why, and a value for it is dropped", () => {
+  const off = "Screen is turned off in the AgentOrg app. Turn it on there to choose it.";
+  const found: Found = {
+    ...(NAMED as NonNullable<Found>),
+    thisComputer: {
+      ready: true,
+      capabilities: [
+        { capability: "files", ready: true },
+        { capability: "screen", ready: false, reason: "It's off." },
+      ],
+      browsers: [{ kind: "own", ready: true }],
+    },
+    off: ["screen"],
+  };
+  assert.equal(
+    stated(found).description,
+    `Studio Mac, whole: your files and apps and your signed-in browser. It acts as you, with everything you can reach. ${off}`,
+  );
+  // Never shown, as it shows only after itself; the reason stays on its answer.
+  const screen = fieldOf(found, "screen");
+  assert.deepEqual(screen?.visible, { field: "screen", in: ["on"] });
+  assert.equal(screen?.options?.find((one) => one.value === "on")?.unavailable, off);
+  assert.equal(fieldOf(found, "ownBrowser")?.visible, undefined);
+  // Only macOS's grants missing, the screen is had: the computer starts without them.
+  const ungranted: Found = {
+    ...found,
+    off: [],
+    ungranted: ["accessibility"],
+  };
+  assert.equal(fieldOf(ungranted, "screen")?.visible, undefined);
+  assert.match(stated(ungranted).description, /its screen and your signed-in browser\.[^.]*\.$/);
+});
+
+test("where this computer can't be had, the line is why, alone", () => {
+  assert.equal(stated(undefined).description, INSTALL_STEPS);
+  assert.equal(stated({ made: [], why: "Update it." }).description, "Update it.");
+  assert.equal(
+    stated({ thisComputer: { ready: false, reason: "Its user can't be found." }, made: [] })
+      .description,
+    "Its user can't be found.",
+  );
+  // None runs yet: one is started when a computer is added, and it is stated as this computer.
+  assert.match(stated({ made: [], starts: true }).description, /^This computer, whole: /);
+});
