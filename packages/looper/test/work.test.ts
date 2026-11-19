@@ -265,13 +265,15 @@ test("a main loop that can't be asked leaves the message with no answer, and the
 test("a waiting message the store won't give to its work stays waiting, and goes with the thread's next", async () => {
   let refuse = true;
   let first: string | undefined;
+  let writes = 0;
   const { looper, values, asked, failures, inputs, answer } = looperWith({
     routing: (text) => (text.includes("Write") ? newWork() : routeTo("a")),
     writing(key) {
       if (!key.startsWith("thread/c/")) return undefined;
-      // Kept once; written again as the work's, it is refused.
-      if (key === first && refuse) return Promise.reject(new Error("no"));
       first ??= key;
+      // Kept once, and taken as the main loop decides on it; written again as the work's, it
+      // is refused.
+      if (key === first && ++writes > 2 && refuse) return Promise.reject(new Error("no"));
       return undefined;
     },
   });

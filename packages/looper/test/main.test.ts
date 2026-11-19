@@ -344,8 +344,8 @@ test("a stop that lands as an answer beside a call is kept starts nothing; its w
   const { looper, values, said, asked, mains, working, inputs } = looperWith({
     routing: () => [...says("On it."), ...newWork("The report")],
     writing(key) {
-      // The thread's second message is the main loop's answer.
-      if (!key.startsWith("thread/t/msg/") || ++kept !== 2) return undefined;
+      // The thread's second message is the main loop's answer: its first write.
+      if (key !== "thread/t/msg/000000000002" || ++kept !== 1) return undefined;
       reached = true;
       return keeping.shut;
     },

@@ -16,6 +16,7 @@ import {
   type Json,
   type Log,
   type Picture,
+  type Progress,
   type Shown,
   type Store,
 } from "./types.js";
@@ -89,6 +90,11 @@ export const Entry = z.object({
    * is told so, unless a stop came as its turn ended.
    */
   unanswered: z.literal(true).optional(),
+  /**
+   * For a user message: the latest of what has become of it (see `Progress`), once anything has.
+   * Messages kept before this was have none.
+   */
+  progress: z.enum(["taken", "answered", "closed"]).optional(),
   /**
    * For what the main loop said in answer to messages that came back from all they were given
    * to: their ids. Such a message is decided, and not put to the main loop again.
@@ -421,8 +427,25 @@ export function messageOf(entry: Entry): Shown {
     text: textOf(entry),
     at: entry.at,
     ...(images.length > 0 ? { images } : {}),
+    ...(entry.role === "user" && entry.progress ? { progress: { state: entry.progress } } : {}),
   };
 }
+
+/**
+ * Whether `to` may be said of a user message of which `was` was said last: `taken` only of one
+ * with nothing said yet, `closed` only of one neither answered nor closed, and `answered` of any
+ * not answered yet, so one closed may still be.
+ */
+export const mayFollow = (was: Progress | undefined, to: Progress) =>
+  to === "taken"
+    ? was === undefined
+    : to === "closed"
+      ? was === undefined || was === "taken"
+      : was !== "answered";
+
+/** The ids of the user messages that end `said`, after the last that isn't one: what waits for an answer. */
+export const unansweredLast = (said: { id: string; role: string }[]) =>
+  said.slice(said.findLastIndex((one) => one.role !== "user") + 1).map(({ id }) => id);
 
 /**
  * Whether a message is said in its thread: what a person said, and what was said to them. What a
@@ -674,6 +697,36 @@ export function createThread(
     };
   };
 
+  /**
+   * Say `to` of a user message it holds, where that may follow what was said of it: kept on it at
+   * once in memory, and it gives whether it was written, after its writes before. Nothing when it
+   * may not follow. One the store refuses is as it was, and is logged: what became of a message
+   * is never what fails its work.
+   */
+  const advance = (record: Kept, to: Progress): Promise<boolean> | undefined => {
+    const was = record.entry.progress;
+    if (record.entry.role !== "user" || !mayFollow(was, to)) return undefined;
+    const advanced = change(
+      record,
+      (entry) => ({ ...entry, progress: to }),
+      ({ progress, ...entry }) =>
+        progress !== to
+          ? { ...entry, ...(progress === undefined ? {} : { progress }) }
+          : { ...entry, ...(was === undefined ? {} : { progress: was }) },
+    );
+    return advanced.store().then(
+      () => true,
+      (error: unknown) => {
+        advanced.undo();
+        log.warn("What became of a message couldn't be kept; it isn't said.", {
+          key: record.key,
+          error: String(error),
+        });
+        return false;
+      },
+    );
+  };
+
   const returnedOf = (held: Held) => {
     const answered = new Set(held.records.flatMap(({ entry }) => entry.answers ?? []));
     return held.records.flatMap(({ seq, entry }) =>
@@ -716,6 +769,7 @@ export function createThread(
         .map(({ entry }) => {
           const images = picturesOf(entry);
           return {
+            id: entry.id,
             role: entry.role as "user" | "assistant",
             text: textOf(entry),
             ...(images.length > 0 ? { images } : {}),
@@ -751,6 +805,42 @@ export function createThread(
      * its writes comes, and `undo` takes this change back out of it, and no other made since.
      */
     change: (...args: Parameters<typeof change>) => change(...args),
+    advance,
+    /**
+     * Say `to` of each user message `ids` names, where it may follow: once written, the ids of
+     * those it was kept of.
+     */
+    async progress(ids: string[], to: Progress): Promise<string[]> {
+      const held = await load();
+      const kept = await Promise.all(
+        held.records.flatMap((record) => {
+          const written = ids.includes(record.entry.id) ? advance(record, to) : undefined;
+          return written ? [written.then((ok) => (ok ? [record.entry.id] : []))] : [];
+        }),
+      );
+      return kept.flat();
+    },
+    /**
+     * The ids of the user messages that wait here to be decided or taken: those that came back
+     * from all they were given to, those a piece of work has still to take, and where nothing
+     * `followed` the thread, those said since anything else was.
+     */
+    async undecided(followed: boolean): Promise<string[]> {
+      const held = await load();
+      const ids = new Set(returnedOf(held).map(({ id }) => id));
+      for (const { entry } of held.records)
+        if (entry.to?.some((one) => one.place === undefined && one.back === undefined))
+          ids.add(entry.id);
+      if (!followed)
+        for (const id of unansweredLast(
+          held.records
+            .filter((record) => saidIn(record.entry))
+            .sort((a, b) => orderOf(a) - orderOf(b))
+            .map(({ entry }) => entry),
+        ))
+          ids.add(id);
+      return [...ids];
+    },
     /**
      * The user messages that every piece of work they were given to has handed back, and the
      * main loop hasn't answered: each with who returned it and why.
@@ -995,6 +1085,20 @@ export function createRecord(options: {
         !answered.has(`${thread} ${record.entry.id}`),
     );
   };
+  /**
+   * Say `to` of each user message of its still to answer past the place `from` and up to `upTo`,
+   * where that may follow what was said of it: at once in memory. `kept` settles once they are
+   * written, with each of those the store kept, and its thread.
+   */
+  const advanceOpen = async (from: number, upTo: number, to: Progress) => {
+    const writes: Promise<{ thread: string; id: string }[]>[] = [];
+    for (const { thread, record } of openOf(await load(), from)) {
+      const written =
+        placeOf(record) <= upTo ? options.thread(thread).advance(record, to) : undefined;
+      if (written) writes.push(written.then((ok) => (ok ? [{ thread, id: record.entry.id }] : [])));
+    }
+    return { kept: Promise.all(writes).then((kept) => kept.flat()) };
+  };
   /** Its user message at `place`, if it can answer it: not handed back, in a thread it hasn't left. */
   const answerable = (records: Placed[], place: number) => {
     const found = records.find(
@@ -1222,24 +1326,58 @@ export function createRecord(options: {
     },
     /**
      * Say of each user message of its still to answer past the place `from`, and up to `read`,
-     * that it went unanswered: kept on the message, which then needs nothing more. It gives the
-     * threads they were said in.
+     * that it went unanswered: kept on the message, which then needs nothing more, and is closed
+     * unless it was already. It gives the threads they were said in, and those it closed.
      */
-    async closeUnanswered(from: number, read: number): Promise<string[]> {
+    async closeUnanswered(
+      from: number,
+      read: number,
+    ): Promise<{ threads: string[]; closed: { thread: string; id: string }[] }> {
       const held = await load();
       const left = openOf(held, from).filter(({ record }) => placeOf(record) <= read);
+      const closed: { thread: string; id: string }[] = [];
       for (const { thread, record } of left) {
+        const was = record.entry.progress;
+        const closing = mayFollow(was, "closed");
         const change = options.thread(thread).change(
           record,
-          (entry) => ({ ...entry, unanswered: true as const }),
-          ({ unanswered: _, ...entry }) => entry,
+          (entry) => ({
+            ...entry,
+            unanswered: true as const,
+            ...(closing ? { progress: "closed" as const } : {}),
+          }),
+          ({ unanswered: _, progress, ...entry }) =>
+            closing && progress === "closed"
+              ? { ...entry, ...(was === undefined ? {} : { progress: was }) }
+              : { ...entry, ...(progress === undefined ? {} : { progress }) },
         );
         await change.store().catch((error: unknown) => {
           change.undo();
           throw error;
         });
+        if (closing) closed.push({ thread, id: record.entry.id });
       }
-      return [...new Set(left.map(({ thread }) => thread))];
+      return { threads: [...new Set(left.map(({ thread }) => thread))], closed };
+    },
+    /**
+     * Say of each user message of its still to answer past the place `from`, and up to `read`,
+     * of which nothing is said yet, that it was taken: a model request that read up to `read` is
+     * being made. `kept` settles once they are written, with each the store kept, and its
+     * thread: the request need not wait for that, as another piece of work may still be writing
+     * the message.
+     */
+    markTaken: (from: number, read: number) => advanceOpen(from, read, "taken"),
+    /**
+     * Close each user message of its still to answer past the place `from`, and up to `upTo`,
+     * as a turn that held them and was stopped or failed leaves them: not said to have gone
+     * unanswered. It gives each it closed, with its thread, once kept.
+     */
+    async closeOpen(from: number, upTo: number) {
+      return (await advanceOpen(from, upTo, "closed")).kept;
+    },
+    /** Say `to` of its user message `id` in `thread`, where that may follow: whether it was said. */
+    async progress(thread: string, id: string, to: Progress): Promise<boolean> {
+      return (await options.thread(thread).progress([id], to)).length > 0;
     },
     /**
      * Hand back what waits for it in `thread`, which it is leaving: a message there that names
