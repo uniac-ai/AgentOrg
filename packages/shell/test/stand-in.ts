@@ -419,6 +419,92 @@ const UNITS: Units["units"] = [
     ],
   },
 ];
+/**
+ * What the Computer unit asks where its connector states this computer, in the connector's words:
+ * its own four questions, none after a choice of which computer.
+ */
+const STATED: Units["units"][number]["form"] = [
+  {
+    id: "workspace",
+    type: "directory",
+    value: "string",
+    title: "Where its work happens",
+    description: "It's told to work here. Not a wall: the rest of your computer is open to it.",
+    placeholder: "~/Agents/{name}",
+  },
+  {
+    id: "access",
+    authority: "setting",
+    type: "choice",
+    value: "string",
+    title: "What it reaches",
+    required: true,
+    default: "terminal",
+    options: [
+      {
+        value: "terminal",
+        title: "Files and terminal",
+        description: "It can run any command.",
+        adds: { slots: [{ name: "computer" }], skills: SKILLS("terminal", "files", "computer") },
+      },
+      {
+        value: "files",
+        title: "Files",
+        description: "It can read and change files, but can't run anything.",
+        adds: { slots: [{ name: "computer" }], skills: SKILLS("files", "computer") },
+      },
+      {
+        value: "read",
+        title: "Read-only files",
+        description: "It can read files, but can't change them or run anything.",
+        adds: { slots: [{ name: "computer" }], skills: SKILLS("files", "computer") },
+      },
+      {
+        value: "none",
+        title: "No files or terminal",
+        description: "It has no files and can't run anything.",
+      },
+    ],
+  },
+  {
+    id: "screen",
+    authority: "setting",
+    type: "choice",
+    value: "string",
+    title: "Screen",
+    required: true,
+    default: "off",
+    options: [
+      {
+        value: "on",
+        title: "Your screen",
+        description: "It sees your screen and acts on it, as you would.",
+        adds: { slots: [{ name: "screen" }], skills: SKILLS("screen") },
+      },
+      { value: "off", title: "No screen" },
+    ],
+  },
+  {
+    id: "ownBrowser",
+    authority: "setting",
+    type: "choice",
+    value: "string",
+    title: "Browser",
+    required: true,
+    default: "none",
+    options: [
+      {
+        value: "yours",
+        title: "Your browser",
+        description: "Signed in as you: it acts as you on every site you're signed in to.",
+        caution: true,
+        adds: { slots: [{ name: "browser" }], skills: SKILLS("browser") },
+      },
+      { value: "none", title: "No browser" },
+    ],
+  },
+];
+
 const TEMPLATES: Template[] = [
   {
     id: "assistant",
@@ -1537,6 +1623,24 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
       units = structuredClone(units);
       const unit = units.find((u) => u.id === id);
       if (unit) unit.description = description;
+    },
+    /**
+     * The Computer unit states this computer, as its connector does where nothing that makes
+     * computers is there: this line, and its own four questions. A part that can't be had now is
+     * never shown, by a condition on itself, so a value for it is dropped; the line says why.
+     */
+    stateComputer(line: string, off?: "screen" | "ownBrowser") {
+      units = units.map((unit) =>
+        unit.id !== "computer"
+          ? unit
+          : {
+              ...unit,
+              description: line,
+              form: STATED.map((field) =>
+                field.id === off ? { ...field, visible: { field: field.id, in: ["on"] } } : field,
+              ),
+            },
+      );
     },
     live,
     terminal,

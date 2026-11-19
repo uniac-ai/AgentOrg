@@ -60,6 +60,9 @@ import {
   supportBefore,
   toTeam,
   unreadReply,
+  WINDOWS,
+  windowSays,
+  windowState,
   youActed,
 } from "./samples.ts";
 
@@ -79,6 +82,7 @@ const PARTS = [
   "window",
   "setup",
   "create",
+  "unit-window",
   "templates",
   "settings",
   "said",
@@ -129,6 +133,7 @@ type Part =
   | "files"
   | "signin"
   | "create"
+  | "unit-window"
   | "templates"
   | "settings"
   | "said"
@@ -1095,6 +1100,39 @@ const probe = (what: Part): Parts => {
     return parts;
   }
 
+  if (what === "unit-window") {
+    // A unit's window, measured from its own top left: centred over the page, where it lies follows
+    // its height. Its card, with the unit's title, then the unit's own line and the first question
+    // under it; a way forward's note below the card; and its foot.
+    const window = [...document.querySelectorAll('[role="dialog"]')].find((one) =>
+      one.querySelector("h2")?.textContent?.endsWith("'s computer"),
+    );
+    if (!window) return parts;
+    origin = window.getBoundingClientRect();
+    controls("window", window);
+    parts.title = of(window.querySelector("h2"));
+    const card = window.querySelector(".bg-card");
+    parts.card = of(card);
+    const head = card?.children[0];
+    parts["card.head"] = of(head);
+    parts["card.title"] = of(head?.querySelector("span"));
+    const body = head?.nextElementSibling;
+    const first = body?.children[0];
+    const line = first?.tagName === "P" ? first : null;
+    parts.line = of(line);
+    const question = body?.querySelector("label");
+    parts.question = of(question);
+    const [lineAt, questionAt] = [line?.getBoundingClientRect(), question?.getBoundingClientRect()];
+    parts["line.to.question"] = lineAt && questionAt ? round(questionAt.top - lineAt.bottom) : null;
+    const note = [...window.children].find((e) => e.tagName === "P");
+    parts.note = of(note);
+    const [noteAt, cardAt] = [note?.getBoundingClientRect(), card?.getBoundingClientRect()];
+    parts["note.below.card"] = noteAt && cardAt ? round(noteAt.top - cardAt.bottom) : null;
+    parts.foot = of(window.querySelector('[data-slot="dialog-footer"]'));
+    // The window itself last: measuring what opened plays its opening again.
+    parts.window = of(window);
+    return parts;
+  }
   if (what === "setup") {
     // An agent's setup, measured from its own top left: it lies over the page, as tall as the
     // window, which the design's own bar makes taller. Where it lies is how far its edges are
@@ -2025,6 +2063,28 @@ if (wants("create"))
           await createState(page, state, !gateway);
           await rest(page, size);
           all[`create.${state}.${size}.${theme}.${side}`] = await measure(page, "create");
+          await page.close();
+          await gateway?.close();
+        }
+
+// The unit window in each of its states: Change… on Research's computer from its setup, and a way
+// forward's window. The built side's Computer is stated by its connector, as the state has it.
+if (wants("unit-window"))
+  for (const [state, sizes] of WINDOWS)
+    for (const size of sizes)
+      for (const theme of ["dark", "light"] as const)
+        for (const side of ["design", "built"] as const) {
+          const gateway = side === "built" ? await standIn() : undefined;
+          if (gateway) {
+            designAgents(gateway);
+            windowSays(gateway, state);
+          }
+          const page = gateway
+            ? await builtPage(gateway, size, theme, "#/a/a-research")
+            : await designPage(size, theme);
+          await windowState(page, state, !gateway);
+          await rest(page, size);
+          all[`unit-window.${state}.${size}.${theme}.${side}`] = await measure(page, "unit-window");
           await page.close();
           await gateway?.close();
         }
