@@ -120,7 +120,10 @@ function Made({ agent: entry, onLeave }: { agent: AgentEntry; onLeave(): void })
     act.run(async () => {
       try {
         const at = agent.units.findIndex((one) => one.instance === applied.instance);
-        await replaceUnit(id, applied, at, unit, values, secrets);
+        await replaceUnit(id, applied, at, unit, values, secrets, {
+          base: { provider: entry.provider, creatable: entry.creatable },
+          units: agent.units,
+        });
       } finally {
         setChanged((was) => was + 1);
       }

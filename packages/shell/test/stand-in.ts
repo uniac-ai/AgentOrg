@@ -700,11 +700,20 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
   /** The form a unit has now, as offered. */
   const formOf = (provider: string, id: string) =>
     units.find((u) => u.provider === provider && u.id === id)?.form;
+  /** Why the Computer's connector refuses it now, in its words, if it does: this computer can't be had. */
+  let computerWhy: string | undefined;
   /**
    * What management's own check refuses in a unit's answers, in its words: an answer for a field
-   * the unit's form doesn't have, and one a shown field offers no option for.
+   * the unit's form doesn't have, one a shown field offers no option for or can't give now, and a
+   * shown secret it needs that isn't given. Then what the unit's own provider refuses: the
+   * Computer's connector, while this computer can't be had.
    */
-  const refusedIn = (provider: string, id: string, values: Record<string, unknown> = {}) => {
+  const refusedIn = (
+    provider: string,
+    id: string,
+    values: Record<string, unknown> = {},
+    secrets: string[] = [],
+  ) => {
     const form = formOf(provider, id);
     if (!form) return [];
     const shown = (field: (typeof form)[number], depth = 0): boolean => {
@@ -714,7 +723,7 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
       if (!other || depth > form.length || !shown(other, depth + 1)) return false;
       return [values[other.id] ?? other.default].flat().some((v) => wanted.includes(v as string));
     };
-    const found: { field: string; message: string }[] = Object.keys(values)
+    const found: { field?: string; message: string }[] = Object.keys(values)
       .filter((key) => !form.some((field) => field.id === key))
       .map((key) => ({ field: key, message: `This unit has no field ${key}.` }));
     for (const field of form) {
@@ -723,16 +732,35 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
       const offered = field.options.map((option) => option.value);
       if (![value].flat().every((one) => offered.includes(String(one))))
         found.push({ field: field.id, message: `${field.title} isn't one of its options.` });
+      else
+        for (const option of field.options)
+          if (option.unavailable && [value].flat().some((one) => String(one) === option.value))
+            found.push({ field: field.id, message: `${field.title}: ${option.unavailable}` });
     }
+    for (const field of form)
+      if (field.value === "secret" && field.required && shown(field) && !secrets.includes(field.id))
+        found.push({ field: field.id, message: `${field.title} must be given.` });
+    if (id === "computer" && computerWhy) found.push({ message: computerWhy });
     return found;
   };
   /** A stack's units as management checks them: each one's problems, with its place. */
   const stackRefused = (stack: unknown) =>
     (
-      (stack as { units?: { provider: string; unit: string; values?: Record<string, unknown> }[] })
-        ?.units ?? []
+      (
+        stack as {
+          units?: {
+            provider: string;
+            unit: string;
+            values?: Record<string, unknown>;
+            secrets?: Record<string, string>;
+          }[];
+        }
+      )?.units ?? []
     ).flatMap((u, unit) =>
-      refusedIn(u.provider, u.unit, u.values).map((problem) => ({ ...problem, unit })),
+      refusedIn(u.provider, u.unit, u.values, Object.keys(u.secrets ?? {})).map((problem) => ({
+        ...problem,
+        unit,
+      })),
     );
 
   const emit = (slot: string, event: string, payload: unknown) => {
@@ -955,17 +983,17 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
           provider: string;
           unit: string;
           values?: Record<string, string | number | boolean | string[]>;
+          secrets?: Record<string, string>;
         };
-        // As management does: a value for a field the unit's form doesn't have is refused.
-        const form = formOf(unit.provider, unit.unit);
-        const unknown = Object.keys(unit.values ?? {}).filter(
-          (id) => form && !form.some((field) => field.id === id),
+        // As management does: what its check refuses, it refuses here, in the same words.
+        const refused = refusedIn(
+          unit.provider,
+          unit.unit,
+          unit.values,
+          Object.keys(unit.secrets ?? {}),
         );
-        if (unknown.length > 0)
-          throw new Refusal(
-            "invalid",
-            unknown.map((id) => `This unit has no field ${id}.`).join(" "),
-          );
+        if (refused.length > 0)
+          throw new Refusal("invalid", refused.map((problem) => problem.message).join(" "));
         const held = agentOf(agent);
         const instance = `i-added-${++added}`;
         // At `at`, its place from the top, or below the rest.
@@ -1754,9 +1782,29 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
             },
       );
     },
-    /** The Computer unit asks which computer, as its connector does where one can be made. */
-    askComputer() {
-      units = units.map((unit) => (unit.id !== "computer" ? unit : { ...unit, form: WHOLE }));
+    /**
+     * The Computer unit asks which computer, as its connector does where one can be made; with
+     * `screenOff`, your screen is greyed with that reason.
+     */
+    askComputer(screenOff?: string) {
+      const form = WHOLE.map((field) =>
+        field.id === "screen" && screenOff
+          ? {
+              ...field,
+              options: field.options?.map((option) =>
+                option.value === "on" ? { ...option, unavailable: screenOff } : option,
+              ),
+            }
+          : field,
+      );
+      units = units.map((unit) => (unit.id !== "computer" ? unit : { ...unit, form }));
+    },
+    /**
+     * The Computer's connector refuses it with these words, as it does while this computer can't
+     * be had, in its check and when it is added; none, and it doesn't.
+     */
+    computerRefuses(why?: string) {
+      computerWhy = why;
     },
     /** A template comes to be kept, as it was saved, whatever its units ask now. */
     addTemplate(template: Template) {

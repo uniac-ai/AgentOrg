@@ -256,7 +256,11 @@ export function AgentPage({
           onSave={(values, secrets) => {
             setTaking(undefined);
             const at = detail.units.findIndex((one) => one.instance === from.instance);
-            act.run(() => replaceUnit(id, from, at, taken, values, secrets));
+            const standing = {
+              base: { provider: entry.provider, creatable: entry.creatable },
+              units: detail.units,
+            };
+            act.run(() => replaceUnit(id, from, at, taken, values, secrets, standing));
           }}
         />
       )}
