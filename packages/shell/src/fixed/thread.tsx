@@ -742,6 +742,7 @@ export function Thread({
                       reduced={reduced}
                       isLast={turn === lastTurn}
                       awaiting={awaiting}
+                      inHand={holding.length > 0}
                     />
                   )}
                 </MessageScrollerItem>
@@ -803,7 +804,9 @@ function Room({ children }: { children: React.ReactNode }) {
  * message under the last. Each bubble is filled as the person's is, at the start side, as wide as
  * its words up to 80%, 4 px apart; a code block keeps the conversation's whole width and the frame
  * code has, with no fill. A bubble is known by its place in the message: as the message is written,
- * bubbles are only added at its end, and only the last one's words change.
+ * bubbles are only added at its end, and only the last one's words change. Copy shows under the
+ * latest message once the agent's turn here is done, and under an earlier one while the pointer is
+ * on it; while a message of this conversation is in hand, the latest's waits for the pointer too.
  */
 function Reply({
   text,
@@ -811,6 +814,7 @@ function Reply({
   reduced,
   isLast,
   awaiting,
+  inHand,
 }: {
   text: string;
   /** Still being written. */
@@ -819,6 +823,8 @@ function Reply({
   isLast: boolean;
   /** The chat still awaits its reply: the last message isn't settled, and offers nothing yet. */
   awaiting: boolean;
+  /** A message of this conversation is in hand: the agent's turn here isn't done. */
+  inHand: boolean;
 }) {
   const [copied, setCopied] = useState(false);
   const settled = !(isLast && (awaiting || streaming));
@@ -865,7 +871,7 @@ function Reply({
         </BubbleGroup>
         {/* Its room is always kept, so nothing moves when it appears. */}
         <MessageFooter
-          className={`h-6 gap-0.5 px-0 ${!settled || wordless ? "invisible" : isLast ? "" : "invisible group-hover/reply:visible"}`}
+          className={`h-6 gap-0.5 px-0 ${!settled || wordless ? "invisible" : isLast && !inHand ? "" : "invisible group-hover/reply:visible"}`}
         >
           <Button
             variant="ghost"

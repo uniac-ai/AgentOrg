@@ -1371,7 +1371,10 @@ const probe = (what: Part): Parts => {
           bubble.querySelector('[data-slot="bubble-content"]'),
         );
       }
-      parts[`replies.${name}.copy`] = of(message?.querySelector('button[aria-label="Copy"]'));
+      const copy = message?.querySelector('button[aria-label="Copy"]');
+      parts[`replies.${name}.copy`] = of(copy);
+      // Whether it shows with the pointer away: it waits while the agent's turn here isn't done.
+      parts[`replies.${name}.copy.shown`] = copy ? getComputedStyle(copy).visibility : null;
     }
     const wrong = panel?.querySelector('[role="alert"]');
     parts.wrong = of(wrong);
@@ -1841,17 +1844,25 @@ if (wants("thread"))
         },
         "earlier",
       );
-      // A reply as bubbles: Research's conversation at two of the design's moments, a long reply,
-      // and a receipt with its result, in the floating chat. The design's control puts the moment
-      // in the floating chat that is open.
-      for (const moment of ["long", "result"] as const)
+      // A reply as bubbles: Research's conversation at three of the design's moments, a long reply,
+      // a receipt with the work going on, and the receipt with its result, in the floating chat.
+      // The design's control puts the moment in the floating chat that is open. While the work goes
+      // on, the person's message is in hand: a receipt beside work answers nothing.
+      for (const moment of ["long", "receipt", "result"] as const)
         await one(moment, undefined, async (page, gateway) => {
           if (gateway) researchSays(gateway, moment);
+          if (gateway && moment === "receipt")
+            gateway.progress("a-research", "v-u3", { state: "taken" });
           await openConversation(page, "Research");
           if (!gateway) await inDesign(page, MOMENTS[moment]);
           await panel(page)
             .locator(".prose-chat", {
-              hasText: moment === "long" ? "npm install" : "four of those",
+              hasText:
+                moment === "long"
+                  ? "npm install"
+                  : moment === "receipt"
+                    ? "with its file and line"
+                    : "four of those",
             })
             .waitFor();
           // At its end on both sides: the design's doesn't follow a conversation its control
