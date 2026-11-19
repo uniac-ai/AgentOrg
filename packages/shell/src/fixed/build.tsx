@@ -597,9 +597,27 @@ function BaseOptions() {
 }
 
 /**
- * A unit's section: its heading with its fold and its remove; under it the unit's own line, what it
- * says it is, as the base's line is drawn; then its questions as they were. Folded, it is its
- * heading alone.
+ * A unit's own line, what it says it is, as the base's line is drawn: whole, as long as it is.
+ * `inset` lines it up with questions set in by their section.
+ */
+export function UnitLine({
+  unit,
+  inset = false,
+}: {
+  unit: CatalogUnit | undefined;
+  inset?: boolean;
+}) {
+  if (!unit?.description) return null;
+  return (
+    <p className={`${inset ? "px-0.5 " : ""}text-[13px] text-muted-foreground`}>
+      {unit.description}
+    </p>
+  );
+}
+
+/**
+ * A unit's section: its heading with its fold and its remove; under it the unit's own line; then
+ * its questions as they were. Folded, it is its heading alone.
  */
 function UnitPart({
   unit: entry,
@@ -660,10 +678,7 @@ function UnitPart({
     >
       {unfolded && (
         <div className="flex flex-col gap-3">
-          {/* Whole, as long as it is: it says what the unit is. */}
-          {unit?.description && (
-            <p className="px-0.5 text-[13px] text-muted-foreground">{unit.description}</p>
-          )}
+          <UnitLine unit={unit} inset />
           <div className="flex flex-col gap-3 px-0.5 empty:hidden">
             {!unit && <p className="text-xs text-[var(--bad)]">Not available here.</p>}
             {unit && (

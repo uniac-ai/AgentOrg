@@ -52,7 +52,11 @@ import {
   signInHash,
   signInState,
   startTerminals,
+  type UnitWindow,
   unreadReply,
+  WINDOWS,
+  windowSays,
+  windowState,
   writeSoFar,
   youActed,
 } from "./samples.ts";
@@ -90,6 +94,8 @@ interface Screen {
   build?: boolean;
   /** A state of the create window, whose Computer may say a line of its own. */
   create?: Create;
+  /** A state of the unit window, whose Computer its connector states. */
+  unitWindow?: UnitWindow;
   /** The design's page is this much taller than its own bar makes it. */
   taller?: number;
   /** The state of the two sign-ins the built side is in. */
@@ -614,6 +620,19 @@ const SCREENS: Screen[] = [
       built: (page) => createState(page, state, false),
     }),
   ),
+  // The unit window: Change… on Research's computer from its setup, and a way forward's window.
+  ...WINDOWS.map(
+    ([state, sizes]): Screen => ({
+      name: `unit-window-${state}`,
+      sizes: [...sizes],
+      themes: ["dark", "light"],
+      agents: true,
+      unitWindow: state,
+      hash: "#/a/a-research",
+      design: (page) => windowState(page, state, true),
+      built: (page) => windowState(page, state, false),
+    }),
+  ),
   // Settings, a window over the place: as it opens, on Templates (on a phone, its sections first),
   // then a section with its action, a phone's second screen. MCP connections isn't shot: its
   // sample rows show local addresses.
@@ -810,6 +829,7 @@ for (const screen of SCREENS.filter((one) => wanted(one.name)))
           if (screen.firstStart) firstStart(gateway);
           if (screen.build) sampleBuild(gateway);
           if (screen.create) computerSays(gateway, screen.create);
+          if (screen.unitWindow) windowSays(gateway, screen.unitWindow);
           if (screen.settings) sampleSettings(gateway);
           if (screen.signIn) signInAccount(gateway, screen.signIn);
           if (screen.browser) computerWith(gateway, "browser", !screen.watch);

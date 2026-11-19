@@ -1424,6 +1424,104 @@ export function computerSays(gateway: Gateway, state: Create) {
   if (says) gateway.describeUnit("computer", says);
 }
 
+/**
+ * The unit window's states: Change… on Research's computer, stated by its connector with a line
+ * that says it is ready, that its screen is off, or what to install; and a way forward's window,
+ * the computer ready. Each with the widths it is shown at, the design's control, and what the
+ * built side's Computer says, with a name that is nobody's.
+ */
+export const WINDOWS = [
+  ["change-ready", ["wide"]],
+  ["change-part", ["wide", "phone"]],
+  ["change-install", ["wide", "phone"]],
+  ["way", ["wide"]],
+] as const;
+export type UnitWindow = (typeof WINDOWS)[number][0];
+const WINDOW_SAYS: Record<UnitWindow, { control: string; says: string; off?: "screen" }> = {
+  "change-ready": { control: "Change…, ready", says: READY },
+  "change-part": {
+    control: "Change…, a part not ready",
+    says: "Sam's Mac mini, whole: your files and apps and your signed-in browser. It acts as you, with everything you can reach. Screen is turned off in the AgentOrg app. Turn it on there to choose it.",
+    off: "screen",
+  },
+  "change-install": {
+    control: "Change…, not to be had",
+    says: "AgentComputer isn't installed on this computer. Install it with npm install -g @agentorg/computer and try again. AgentOrg starts it for you.",
+  },
+  way: { control: "A way forward", says: READY },
+};
+/** As the design's Research was filled in, in the stated Computer's own questions. */
+const STATED_RESEARCH = {
+  workspace: "~/Agents/Research",
+  access: "terminal",
+  screen: "on",
+  ownBrowser: "yours",
+};
+
+/**
+ * The built side at a state of the unit window, after the design's agents: the Computer stated as
+ * the state has it, and Research built from it; for a way forward, Research's computer can't be
+ * reached and its provider offers the design's two ways.
+ */
+export function windowSays(gateway: Gateway, state: UnitWindow) {
+  const { says, off } = WINDOW_SAYS[state];
+  gateway.stateComputer(says, off);
+  const research = gateway.agents.get("a-research") as Agent;
+  const [built] = research.units ?? [];
+  if (built) built.values = { ...STATED_RESEARCH };
+  if (state === "way")
+    research.held = [
+      heldComputer({
+        state: "down",
+        detail:
+          "A computer with no isolation is no longer made. Its folder is kept at ~/Agents/Research. Either way, its own browser and what it was signed in to aren't kept.",
+        from: "i-computer",
+        ways: [
+          {
+            title: "Attach this computer",
+            description:
+              "Its work happens in ~/Agents/Research, as before. Unlike before, it reaches the whole machine, as you.",
+            unit: "computer",
+            values: { ...STATED_RESEARCH },
+          },
+          { title: "Make a container", unit: "computer", values: { access: "terminal" } },
+        ],
+      }),
+    ];
+}
+
+/**
+ * The unit window at one of its states, reached as a person reaches it (Research's setup, its
+ * computer's "…", Change…; or its computer's way forward) or by the design's control, and at rest.
+ */
+export async function windowState(page: Page, state: UnitWindow, design: boolean) {
+  if (design) await inDesign(page, WINDOW_SAYS[state].control);
+  else if (state === "way")
+    await page
+      .getByRole("main")
+      .getByRole("region", { name: "Research's computer" })
+      .getByRole("button", { name: "Attach this computer" })
+      .click();
+  else {
+    const sheet = await openSetup(page, "Research");
+    await sheet
+      .getByRole("region", { name: /^Built from/ })
+      .getByRole("button", { name: "Computer options" })
+      .click();
+    await page.getByRole("menuitem", { name: "Change…" }).click();
+  }
+  const window = page.getByRole("dialog", { name: /'s computer$/ });
+  await window.waitFor();
+  await window.evaluate((e) =>
+    Promise.allSettled(
+      e
+        .getAnimations({ subtree: true })
+        .filter((a) => a.effect?.getTiming().iterations !== Number.POSITIVE_INFINITY)
+        .map((a) => a.finished),
+    ),
+  );
+}
+
 /** The create window in one of its states, reached as a person reaches it, and at rest. */
 export async function createState(page: Page, state: Create, design: boolean) {
   if (state === "out" && design) await inDesign(page, /^ChatGPT:/);

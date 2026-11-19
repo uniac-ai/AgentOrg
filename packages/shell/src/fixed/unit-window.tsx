@@ -12,7 +12,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "../ui/dialog.tsx";
-import { UnitForm } from "./build.tsx";
+import { UnitForm, UnitLine } from "./build.tsx";
 import type { AgentDetail } from "./data.ts";
 import { type CatalogUnit, isComplete, type Secrets, unitInput, type Values } from "./stack.ts";
 
@@ -48,9 +48,10 @@ export async function replaceUnit(
 }
 
 /**
- * One unit's form in a window of its own, as Create draws it: empty to add one, with what a unit
- * was built from to change it, or with a way forward's answers. A secret is asked again, as it is
- * never read back.
+ * One unit in a window of its own, as Create draws it: its own line under its title, then its form,
+ * empty to add one, with what a unit was built from to change it, or with a way forward's answers.
+ * A way forward's note, what taking it does, is below. A secret is asked again, as it is never read
+ * back.
  */
 export function UnitWindow({
   agentName,
@@ -84,6 +85,7 @@ export function UnitWindow({
             <span className="min-w-0 flex-1 truncate text-[13px] font-semibold">{unit.title}</span>
           </div>
           <div className="flex flex-col gap-3 px-3 pb-3">
+            <UnitLine unit={unit} />
             <UnitForm
               unit={unit}
               id="setup-unit"
