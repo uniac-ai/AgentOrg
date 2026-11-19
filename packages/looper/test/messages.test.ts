@@ -82,9 +82,10 @@ test("a message said as its turn ends starts the next turn", async () => {
   let writes = 0;
   const { looper, values, asked, inputs, answer } = looperWith({
     // Asked while the turn's end is being taken, as it keeps on its message that it went
-    // unanswered (that message's second write): taken once the turn is over.
+    // unanswered (that message's third write, after it was kept and taken): taken once the turn
+    // is over.
     writing(key) {
-      if (key === "thread/a/msg/000000000001" && ++writes === 2)
+      if (key === "thread/a/msg/000000000001" && ++writes === 3)
         again = looper.send("a", "Second.");
       return undefined;
     },

@@ -107,6 +107,14 @@ export interface Call {
   name: string;
 }
 
+/**
+ * What has become of a message a person said: `taken` once a model request first read it, the
+ * main loop's or a worker's; `answered` once a reply to it is kept; `closed` once nothing more is
+ * asked of it, without an answer. Each is said at most once, in that order, but a message closed
+ * may still be answered.
+ */
+export type Progress = "taken" | "answered" | "closed";
+
 /** A message as it is said in a thread: what a person said, or a reply. */
 export interface Shown {
   id: string;
@@ -116,6 +124,11 @@ export interface Shown {
   at: string;
   /** The pictures the person sent with it. */
   images?: Picture[];
+  /**
+   * For what a person said: the latest of what has become of it, once anything has, in the shape
+   * a chat carries it.
+   */
+  progress?: { state: Progress };
 }
 
 /**

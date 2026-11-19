@@ -41,6 +41,7 @@ import {
   type Model,
   type Outcome,
   type Picture,
+  type Progress,
   Refusal,
   type Retry,
   type Shown,
@@ -140,6 +141,8 @@ export interface LoopOut {
    * ends without a reply to it.
    */
   failed(thread: string, problem: { code: string; message: string }): void;
+  /** What became of the user message `id` in `thread`, once it is kept on it. */
+  progress?(thread: string, id: string, progress: Progress): void;
 }
 interface Turn {
   /** Its number among the starts of this loop: what names it to whoever stops it. */
@@ -176,6 +179,11 @@ interface Turn {
   acted?: boolean;
   /** The thread it answers in now: that of the newest message its latest request read. */
   thread?: string;
+  /**
+   * The place up to which it holds messages as its own: those it opened with, those that joined
+   * it, and all its latest request read. Those it leaves open are closed if it fails or is stopped.
+   */
+  upTo?: number;
   /** The threads it has taken a message in: each is told if it fails. */
   took: Set<string>;
   /** The word its calls are made under, which a stop of it names. */
@@ -309,9 +317,11 @@ export function createLoop(options: {
   const begin = (current: Turn) => {
     turnsBegun++;
     stoppedLast = false;
+    let failed = false;
     current.ended = placed(current)
       .catch((error: unknown) => {
         if (current.cancelled) return;
+        failed = true;
         // The log has the words the chat is given, so a model's failure has its reason there too.
         const detail = codeOf(error);
         log.error(`A turn failed: ${detail.message}`, { error: String(error) });
@@ -325,8 +335,10 @@ export function createLoop(options: {
       })
       // However it ended, what its calls gave goes before its place does; a turn the loop's
       // closing cut is gone on with, and keeps them. A message said meanwhile starts another turn.
+      // One that failed or was stopped closes what it held and left open, once it writes no more.
       .then(() => {
         if (turn === current) turn = undefined;
+        if (failed || (current.cancelled && !current.closed)) close(current);
         return current.closed ? undefined : unpicture(current, 0);
       })
       .finally(() => {
@@ -335,6 +347,27 @@ export function createLoop(options: {
       })
       .catch((error: unknown) => log.error("A turn's status failed.", { error: String(error) }));
     lastEnded = current.ended;
+  };
+  /** Closings of what turns held and left open, until each is kept and said. */
+  const closings = new Set<Promise<void>>();
+  /**
+   * Close each user message a turn that failed or was stopped held and left open, and say so once
+   * that is kept. Nothing waits for it but `drained` and `settled`: its writes may come after
+   * another piece of work's writes of the same messages.
+   */
+  const close = (current: Turn) => {
+    const { from = 0, upTo } = current;
+    if (upTo === undefined) return;
+    const closing = record
+      .closeOpen(from, upTo)
+      .then((closed) => {
+        for (const { thread, id } of closed) out.progress?.(thread, id, "closed");
+      })
+      .catch((error: unknown) =>
+        log.error("A turn's messages couldn't be closed.", { error: String(error) }),
+      );
+    closings.add(closing);
+    void closing.finally(() => closings.delete(closing));
   };
   /**
    * Keep the pictures of a turn's newest calls that fit `room` together, and leave out the rest:
@@ -381,6 +414,10 @@ export function createLoop(options: {
       );
     show(sent);
     out.replied?.(sent.thread);
+    // The message it names is answered, the first time one is sent to it.
+    const answers = sent.entry.closes;
+    if (answers !== undefined && (await record.progress(sent.thread, answers, "answered")))
+      out.progress?.(sent.thread, answers, "answered");
   };
   /**
    * Say what a `send` being written has said and hasn't been said yet, once the thread of the
@@ -549,6 +586,15 @@ export function createLoop(options: {
         ({ items: input, read, thread } = await record.input(offered));
       if (current.cancelled) return;
       current.thread = thread;
+      current.upTo = Math.max(current.upTo ?? 0, read);
+      // What this request reads for the first time is taken, and said so once that is kept. The
+      // request is made meanwhile: another piece of work may still be writing that message.
+      const kept = (await record.markTaken(current.from ?? 0, read)).kept.then((taken) => {
+        for (const one of taken) out.progress?.(one.thread, one.id, "taken");
+      });
+      // Waited for once the request is answered, so it is said before what comes of it.
+      kept.catch(() => {});
+      if (current.cancelled) return;
       current.streams = new Map();
       let output: Awaited<ReturnType<typeof respond>>;
       try {
@@ -562,10 +608,14 @@ export function createLoop(options: {
         const length = error instanceof Refusal && error.code === CONTEXT_LENGTH;
         if (!length || again || current.cancelled) throw error;
         again = true;
-        if (await compact(current, chosen, { thread, read }, true)) continue;
+        if (await compact(current, chosen, { thread, read }, true)) {
+          await kept;
+          continue;
+        }
         throw error;
       }
       again = false;
+      await kept;
       if (current.cancelled) return;
       const texts = output.flatMap((item) => (item.type === "message" ? [item.content] : []));
       const called = output.filter((item): item is FunctionCall => item.type === "function_call");
@@ -594,9 +644,10 @@ export function createLoop(options: {
           if (more) return false;
           // What it took and neither answered nor handed back went unanswered, said before it is
           // idle; unless a stop came meanwhile.
-          const unanswered = await record.closeUnanswered(current.from ?? 0, read);
+          const { threads, closed } = await record.closeUnanswered(current.from ?? 0, read);
+          for (const one of closed) out.progress?.(one.thread, one.id, "closed");
           if (current.cancelled) return true;
-          for (const where of unanswered) out.failed(where, NOT_ANSWERED);
+          for (const where of threads) out.failed(where, NOT_ANSWERED);
           await unpicture(current, 0);
           current.place?.leave();
           status(current, { state: "idle" });
@@ -708,7 +759,7 @@ export function createLoop(options: {
       { thread },
     );
     show(kept);
-    return { messageId: kept.entry.id };
+    return kept.entry;
   };
   /**
    * Start a turn: `open` takes its place and keeps what opens it, at once, then its loop runs.
@@ -737,6 +788,8 @@ export function createLoop(options: {
       const top = told ? await record.top() : 0;
       if (told) await options.starting(top);
       const begun = await open(current);
+      // What it opens with is its own, whether or not a request of it reads it.
+      if (begun) current.upTo = await record.top();
       // It opens with what its work held already: no message past that place says it started.
       const past = told && begun !== undefined && (await record.after(top));
       if (told && begun && !past) await options.starting();
@@ -771,14 +824,18 @@ export function createLoop(options: {
         const into = turn;
         if (into) {
           into.took.add(thread);
-          return { ...(await said(text, thread, true, images)), turn: into.id };
+          const { id, place } = await said(text, thread, true, images);
+          // It joined the turn: the turn holds it, whether or not a request of it reads it.
+          into.upTo = Math.max(into.upTo ?? 0, place ?? 0);
+          return { messageId: id, turn: into.id };
         }
         return (await start(
           cancelled,
           async (current) => {
             enter(current, await record.begun());
             current.took.add(thread);
-            return { opened: await said(text, thread, draining !== undefined, images) };
+            const { id } = await said(text, thread, draining !== undefined, images);
+            return { opened: { messageId: id } };
           },
           true,
           closed,
@@ -796,7 +853,10 @@ export function createLoop(options: {
         const into = turn;
         if (into) {
           into.took.add(thread);
-          return (await record.adopt(thread, true)) > 0 ? { turn: into.id } : {};
+          if ((await record.adopt(thread, true)) === 0) return {};
+          // What it took joined the turn, which holds it.
+          into.upTo = Math.max(into.upTo ?? 0, await record.top());
+          return { turn: into.id };
         }
         await start(false, async (current) => {
           enter(current, await record.begun());
@@ -932,18 +992,25 @@ export function createLoop(options: {
         current.requestId && model.cancel({ requestId: current.requestId }).catch(() => {}),
         line && inOrder(async () => show(await record.stopLine(line.text, line.thread))),
         // One that writes nothing more has what its calls gave left out now, before the stop is
-        // done; any other, once it has written what it will.
+        // done; any other, once it has written what it will. So too what it held and left open
+        // is closed, which `drained` waits for.
         quiet && !closing && unpicture(current, 0),
       ]);
+      if (quiet && !closing) close(current);
       return true;
     },
     /** Settles when the latest turn has written all it will. */
     settled: async () => {
       await lastEnded;
+      await Promise.all(closings);
     },
-    /** Settles when a stopped turn has written what it will: at once, if none is writing. */
+    /**
+     * Settles when a stopped turn has written what it will, and what it left open is closed: at
+     * once, if none is writing.
+     */
     drained: async () => {
       await draining;
+      await Promise.all(closings);
     },
   };
 }

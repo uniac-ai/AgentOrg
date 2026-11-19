@@ -1205,8 +1205,9 @@ test("a thread is marked before a message says it was handed back, and a store l
     writing: (key) => {
       order.push(key);
       // The first write after the message says it was handed back: the process is gone there.
+      // That is its third write, after it was kept and taken.
       if (handed && !left && key !== "thread/a/msg/000000000003") left = new Map(values);
-      if (key === "thread/a/msg/000000000003" && order.filter((one) => one === key).length === 2)
+      if (key === "thread/a/msg/000000000003" && order.filter((one) => one === key).length === 3)
         handed = true;
       return undefined;
     },

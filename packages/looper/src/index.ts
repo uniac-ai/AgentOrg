@@ -21,6 +21,7 @@ export {
   type Outcome,
   type OutputItem,
   type Picture,
+  type Progress,
   Refusal,
   type Retry,
   type Shown,

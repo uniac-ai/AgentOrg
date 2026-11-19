@@ -43,7 +43,15 @@ import { z } from "zod";
 import type { FilesOf } from "./compaction.js";
 import { createLoop, type Place } from "./loop.js";
 import { createMain, type Listed, stopWord, TOLD, titled } from "./main.js";
-import { createRecord, createThread, messageOf, READS, type Thread, userEntry } from "./record.js";
+import {
+  createRecord,
+  createThread,
+  messageOf,
+  READS,
+  type Thread,
+  unansweredLast,
+  userEntry,
+} from "./record.js";
 import type { Part } from "./told.js";
 import {
   type Call,
@@ -53,6 +61,7 @@ import {
   type Log,
   type Model,
   type Picture,
+  type Progress,
   Refusal,
   type Retry,
   type Shown,
@@ -139,6 +148,11 @@ export interface LooperOut {
    * being tried again changed.
    */
   worked(work?: string): void;
+  /**
+   * The user message `id` in `thread` was taken (a model request first read it), answered, or
+   * closed without an answer: said once it is kept on the message, each at most once.
+   */
+  progress?(thread: string, id: string, progress: Progress): void;
 }
 
 /**
@@ -469,6 +483,7 @@ export function createLooper(options: {
           replied: (thread) => lastIn.set(thread, id),
           delta: out.delta,
           failed: out.failed,
+          progress: (thread, message, progress) => out.progress?.(thread, message, progress),
           worked: () => out.worked(id),
           status(status) {
             const on = running(status);
@@ -726,6 +741,11 @@ export function createLooper(options: {
       [...why].map(async ([id, reason]) => ({ id, title: await titleOf(id), why: reason })),
     );
     if (cut()) return undefined;
+    // What this decision is about: what came back, or what was said since the thread's last
+    // answer. Each is taken as the main loop's request is made, if nothing was said of it yet.
+    const about = read.back.length > 0 ? read.back.map(({ id }) => id) : unansweredLast(read.said);
+    for (const id of await into.progress(about, "taken")) out.progress?.(thread, id, "taken");
+    if (cut()) return undefined;
     const replyId = crypto.randomUUID();
     // What no work was given: the main loop is told which was last active there.
     const last =
@@ -785,6 +805,10 @@ export function createLooper(options: {
             },
           );
           out.message(thread, messageOf(entry));
+          // With nothing placed it answers what it decided; beside work placed it is a receipt.
+          if (work === undefined)
+            for (const id of await into.progress(about, "answered"))
+              out.progress?.(thread, id, "answered");
           // A message said after what came back, where nothing follows, is decided on next.
           if (follows.length === 0 && late && read.back.length > 0) unread.add(thread);
           if (follows.length === 0 && work === undefined && !late)
@@ -1256,7 +1280,17 @@ export function createLooper(options: {
           await using(id, (loop) => loop.resume(typeof after === "number" ? after : undefined));
         // Work in a turn now keeps the mark as that turn's, and a looper that has closed leaves
         // it. Otherwise nothing goes on, and it goes, where one still stands.
-        if (!held.marked && !closed && held.stands !== undefined) held.mark(false);
+        if (!held.marked && !closed && held.stands !== undefined) {
+          held.mark(false);
+          // Not gone on with as it stopped: what the turn cut off held and left open is closed,
+          // once its mark has gone, which needs nothing read.
+          if (!going()) {
+            await held.writes;
+            const from = typeof after === "number" ? after : await held.record.acted();
+            for (const one of await held.record.closeOpen(from, Number.POSITIVE_INFINITY))
+              out.progress?.(one.thread, one.id, "closed");
+          }
+        }
       } catch (error) {
         log.warn("A turn that was cut off didn't go on.", { work: id, error: String(error) });
       }
@@ -1413,6 +1447,16 @@ export function createLooper(options: {
         .catch((error: unknown) =>
           log.warn("What was cut off couldn't be looked for.", { error: String(error) }),
         );
+      // What waits to be decided or taken is closed, unless something more was said of it.
+      for (const thread of [...marks.keys()]) {
+        const into = threadOf(thread);
+        try {
+          const ids = await into.undecided((followed.get(thread) ?? []).length > 0);
+          for (const id of await into.progress(ids, "closed")) out.progress?.(thread, id, "closed");
+        } catch (error) {
+          log.warn("What waits in a thread couldn't be closed.", { thread, error: String(error) });
+        }
+      }
       // The marks that look took off are off before this answers.
       await Promise.all([...works.values()].map(({ writes }) => writes));
     },
