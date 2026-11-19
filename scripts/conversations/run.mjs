@@ -26,7 +26,15 @@
 // The app is started on any free port, never 7731, and everything the runner starts it ends by the
 // PID it recorded. It needs a build (`npm run build`) and Docker for the containers.
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync, openSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -117,19 +125,19 @@ async function endEarlierRunner() {
     if (command.includes(join("conversations", "run.mjs"))) {
       note(`Ending ${pid}, the runner an earlier run kept up`);
       process.kill(pid, "SIGTERM");
-      for (let waited = 0; waited < 120; waited++) {
+      for (let waited = 0; ; waited++) {
         try {
           process.kill(pid, 0);
         } catch {
           break;
         }
+        if (waited === 120) usage(`The runner ${pid} kept up in ${dir} didn't end: end it first.`);
         await new Promise((done) => setTimeout(done, 500));
       }
     }
   }
   writeFileSync(file, `${process.pid}\n`);
 }
-await endEarlierRunner();
 
 /** A stand-in sign-in for `--dry`, refused where a real one is kept. */
 const STAND_IN = "stand-in";
@@ -184,6 +192,10 @@ function end() {
   return ended;
 }
 async function ending() {
+  try {
+    if (readFileSync(join(dir, "runner.pid"), "utf8").trim() === String(process.pid))
+      unlinkSync(join(dir, "runner.pid"));
+  } catch {}
   try {
     await person?.close();
     await app?.close();
@@ -529,19 +541,32 @@ async function until(what, check, ms) {
  * one-time code.
  */
 function openPage() {
-  spawn(process.platform === "darwin" ? "open" : "xdg-open", [app.signInUrl()], {
+  const child = spawn(process.platform === "darwin" ? "open" : "xdg-open", [app.signInUrl()], {
     stdio: "ignore",
     detached: true,
-  }).unref();
+  });
+  return new Promise((done) => {
+    child.once("error", (error) => {
+      note(`The page couldn't be opened: ${error.code}`);
+      done(false);
+    });
+    child.once("spawn", () => {
+      child.unref();
+      done(true);
+    });
+  });
 }
+/** Whether this run's page was opened: only then is it kept up after the run. */
+let opened = false;
 
 // --- sign-in -----------------------------------------------------------------------------------
 
 if (command === "sign-in") {
+  await endEarlierRunner();
   await startTheApp();
   const { state } = await person.call("login", "status");
   if (state !== "signed_in") {
-    openPage();
+    await openPage();
     console.log("Sign in with ChatGPT on the page that opened. This waits for it.");
     await until(
       "The sign-in",
@@ -581,6 +606,7 @@ const run = {
   conversations: [],
 };
 let exitCode = 0;
+await endEarlierRunner();
 try {
   await startService();
   await startTheApp();
@@ -592,8 +618,8 @@ try {
     await person.call("agents", "remove", { agent });
   }
   if (flags.open) {
-    openPage();
-    console.log("Its page is open in the browser, signed in.");
+    opened = await openPage();
+    if (opened) console.log("Its page is open in the browser, signed in.");
   }
   holding = false;
   for (const [at, group] of groups.entries()) {
@@ -606,7 +632,7 @@ try {
 } finally {
   // With its page open, the agents and the app stay up for the person to look over; only the
   // computers go.
-  if (flags.open) await killComputers("after the run");
+  if (opened) await killComputers("after the run");
   else await end();
 }
 if (stoppedWhy) {
@@ -625,7 +651,7 @@ if (stoppedWhy) console.error(stoppedWhy);
 console.log(
   `Model requests: ${spent.total} (front desk ${spent.frontDesk}); input tokens ${spent.input}; output tokens ${spent.output}, ${spent.reasoning} of them reasoning.`,
 );
-if (flags.open) {
+if (opened) {
   console.log(
     `The run is over (exit ${exitCode}). Its page stays up with its agents until the runner is stopped, or the next run in ${dir} starts.`,
   );
@@ -667,8 +693,14 @@ async function playGroup(group, at, service) {
     };
     return await playSteps(group, at, slot, files);
   } finally {
-    // Kept with its page open, for the person to look over; the next run removes it.
-    if (!flags.open)
+    // Kept with its page open, for the person to look over, but stopped, and its computer gone, so
+    // nothing of it reaches the next group; the next run removes it.
+    if (opened) {
+      await person
+        .call("agents", "stop", { agent })
+        .catch((error) => note(`Stopping ${name}: ${error}`));
+      await killComputers(`of ${name}`);
+    } else
       await person
         .call("agents", "remove", { agent })
         .catch((error) => note(`Removing ${name}: ${error}`));
@@ -782,6 +814,8 @@ async function playSteps(group, at, slot, files) {
       await app.close();
       app = undefined;
       await startTheApp();
+      // Its page went with the app it had: opened again on the app that came back.
+      if (opened) opened = await openPage();
       watch();
     }
   }
