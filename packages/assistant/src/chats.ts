@@ -176,6 +176,7 @@ export function createChats(options: {
   emit: {
     message(message: Emitted<"message">, to: string): void;
     delta(delta: Emitted<"delta">, to: string): void;
+    progress(progress: Emitted<"progress">, to: string): void;
     status(status: Emitted<"status">): void;
     chat(entry: Listed, to: string): void;
     /** What a piece of the agent's work did changed. */
@@ -231,6 +232,14 @@ export function createChats(options: {
         delta(thread, id, text) {
           const held = byThread.get(thread);
           if (held) tell(held, (to) => emit.delta({ with: held.with, id, text }, to));
+        },
+        // What became of a message the party said, with the step at work on it while it is taken.
+        progress(thread, id, state, step) {
+          const held = byThread.get(thread);
+          if (held)
+            tell(held, (to) =>
+              emit.progress({ with: held.with, id, state, ...(step ? { step } : {}) }, to),
+            );
         },
         working(on) {
           working = on;
