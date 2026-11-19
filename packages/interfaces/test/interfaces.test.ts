@@ -5,6 +5,7 @@ import { createTestContext } from "@agentorg/sdk/testing";
 import { Ajv2020 } from "ajv/dist/2020.js";
 import { z } from "zod";
 import {
+  Activity,
   accountLogin,
   agentProvider,
   agentSettings,
@@ -613,6 +614,72 @@ test("chat@1 lists an agent's conversations, each with its latest message and wh
       }),
     { code: "bad_output" },
   );
+});
+
+test("chat@1 says what became of each message the party said, with the step at work on it", async () => {
+  const t = createTestContext(client);
+  await t.start();
+  const message = {
+    id: "m1",
+    role: "user" as const,
+    text: "Find a flight.",
+    at: "2026-11-19T00:00:00Z",
+  };
+  const binding = t.bind("chat", {
+    history: () => ({
+      messages: [
+        { ...message, progress: { state: "taken" as const, step: "Comparing prices" } },
+        { id: "m2", role: "assistant" as const, text: "On it.", at: "2026-11-19T00:00:01Z" },
+      ],
+      more: false,
+    }),
+  });
+  // A view opened late reads it with the message.
+  assert.deepEqual((await t.ctx.slots.chat.call.history({})).messages[0]?.progress, {
+    state: "taken",
+    step: "Comparing prices",
+  });
+  const seen: unknown[] = [];
+  t.ctx.slots.chat.on("progress", (one) => seen.push(one));
+  const said = [
+    { with: "person", id: "m1", state: "taken" as const },
+    { with: "person", id: "m1", state: "taken" as const, step: "Comparing prices" },
+    { with: "person", id: "m1", state: "answered" as const },
+    { with: "person", id: "m3", state: "closed" as const },
+    { with: "person", id: "m4", state: "taken" as const, step: "x".repeat(200) },
+  ];
+  for (const one of said) binding.emit("progress", one);
+  assert.deepEqual(seen, said);
+  // Three states, a step of at most 200 characters, and always the message it is about.
+  for (const bad of [
+    { with: "person", id: "m1", state: "failed" },
+    { with: "person", id: "m1", state: "taken", step: "x".repeat(201) },
+    { with: "person", state: "taken" },
+  ])
+    assert.throws(() => binding.emit("progress", bad as never), { code: "bad_output" });
+});
+
+test("a piece of work's Activity may carry the steps it keeps, each in one of three states", () => {
+  const work = {
+    id: "w1",
+    title: "Find a flight",
+    state: "working" as const,
+    entries: [],
+    more: false,
+  };
+  const steps = [
+    { text: "Search flights", state: "completed" as const },
+    { text: "Compare prices", active: "Comparing prices", state: "in_progress" as const },
+    { text: "Book", state: "pending" as const },
+  ];
+  assert.deepEqual(Activity.parse({ works: [{ ...work, steps }] }).works[0]?.steps, steps);
+  // A page that knows no steps reads a piece of work without them as before.
+  assert.equal("steps" in (Activity.parse({ works: [work] }).works[0] ?? {}), false);
+  for (const bad of [
+    [{ text: "Book", state: "failed" }],
+    [{ text: "Book", state: "pending", owner: "me" }],
+  ])
+    assert.equal(Activity.safeParse({ works: [{ ...work, steps: bad }] }).success, false);
 });
 
 test("a field says what an agent may do with it, from a closed list", () => {

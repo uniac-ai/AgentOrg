@@ -94,11 +94,22 @@ export const Retrying = z.strictObject({
   at: z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,9})?Z$/),
 });
 /**
+ * One of the steps a piece of work keeps, in order: its words, `active` its words while it is in
+ * progress when they differ, and whether it is still to come, in progress, or done. A piece of work
+ * keeps at most eight, with at most one in progress.
+ */
+export const Step = z.strictObject({
+  text: z.string(),
+  active: z.string().optional(),
+  state: z.enum(["pending", "in_progress", "completed"]),
+});
+/**
  * What an `activity` view shows, as its operation answers with no `work`, given `{ before? }`: an
  * agent's pieces of work, most recently active first, those last active before the piece of work
  * `before` when it is given, each with whether it is working, idle or stopped, when it was last
  * active, whether its last turn failed, its latest entries, oldest first, with `more` when older
- * ones remain, and `retrying` while its model request is being tried again. Its own `more` says
+ * ones remain, `retrying` while its model request is being tried again, and `steps`, the steps it
+ * keeps, when it keeps any. Its own `more` says
  * whether pieces of work last active before those remain, and its own `retrying` is set while the
  * agent's main loop, which no piece of work is, has its model request tried again.
  */
@@ -113,6 +124,7 @@ export const Activity = z.strictObject({
       entries: z.array(WorkEntry),
       more: z.boolean(),
       retrying: Retrying.optional(),
+      steps: z.array(Step).optional(),
     }),
   ),
   more: z.boolean().optional(),
