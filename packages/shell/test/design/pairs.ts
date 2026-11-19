@@ -22,6 +22,8 @@ import {
   designAgents,
   docsAgent,
   firstStart,
+  HOLDS,
+  type Hold,
   inDesign,
   MOMENTS,
   type Moment,
@@ -40,6 +42,7 @@ import {
   readChat,
   refuseSend,
   releaseNotes,
+  researchHolds,
   researchSays,
   SECTIONS,
   SIGN_INS,
@@ -110,6 +113,8 @@ interface Screen {
   given?: ChatCase;
   /** Research's conversation, built, at one of the design's moments for a reply's bubbles. */
   research?: Moment;
+  /** Research's conversation, built, with the person's message in hand at one of the design's states. */
+  holds?: Hold;
   /** Terminals the built side is given, as the design's sample has them. */
   terminals?: { cmd: string; running: boolean }[];
   design(page: Page): Promise<unknown>;
@@ -612,6 +617,29 @@ const SCREENS: Screen[] = [
       },
     }),
   ),
+  // A message in hand: Research's conversation at each of the design's states for it, on Chat.
+  ...(
+    [
+      ["presence-taken", "taken"],
+      ["presence-in-progress", "inProgress"],
+      ["presence-replanned", "replanned"],
+      ["presence-answered", "answered"],
+      ["presence-two", "two"],
+      ["presence-long-step", "longStep"],
+    ] as const
+  ).map(
+    ([name, held]): Screen => ({
+      name,
+      sizes: ["wide", "phone"],
+      themes: ["dark", "light"],
+      agents: true,
+      chats: true,
+      holds: held,
+      hash: "#/chat/a-research",
+      design: (page) => inDesign(page, HOLDS[held]),
+      built: (page) => page.getByRole("main").locator(".whitespace-pre-wrap").first().waitFor(),
+    }),
+  ),
   // Create for an agent, small: as it opens, from a template, signed out, and refused.
   ...SMALLS.map(
     ([state, sizes]): Screen => ({
@@ -845,6 +873,7 @@ for (const screen of SCREENS.filter((one) => wanted(one.name)))
           if (screen.agents) designAgents(gateway);
           // Before the page is read, as a conversation opened later reads it.
           if (screen.research) researchSays(gateway, screen.research);
+          if (screen.holds) researchHolds(gateway, screen.holds);
           if (screen.firstStart) firstStart(gateway);
           if (screen.build) sampleBuild(gateway);
           if (screen.create) computerSays(gateway, screen.create);

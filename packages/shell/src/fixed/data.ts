@@ -4,6 +4,7 @@ import type {
   chat,
   connections,
   hubBindings,
+  MessageProgress,
   skills,
   WayForward,
 } from "@agentorg/interfaces";
@@ -24,6 +25,10 @@ export type McpProvider = Out<typeof connections.methods.providers>["providers"]
 export type Skill = Out<typeof skills.methods.list>["skills"][number];
 export type ChatMessage = Out<typeof chat.methods.history>["messages"][number];
 export type ChatStatus = Out<typeof chat.methods.state>;
+/** What became of a message the party said, the latest said of it: `history` gives it with the message. */
+export type Progress = z.output<typeof MessageProgress>;
+/** The `progress` event: what became of message `id`, in the conversation with `with`. */
+export type ProgressSaid = z.output<typeof chat.events.progress.payload>;
 export type Conversation = z.output<typeof chat.events.chat.payload>;
 type Binding = Out<typeof hubBindings.methods.list>["bindings"][number];
 
