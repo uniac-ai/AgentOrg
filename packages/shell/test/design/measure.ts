@@ -1155,8 +1155,9 @@ const probe = (what: Part): Parts => {
 
   if (what === "unit-window") {
     // A unit's window, measured from its own top left: centred over the page, where it lies follows
-    // its height. Its card, with the unit's title, then the unit's own line and the first question
-    // under it; a way forward's note below the card; and its foot.
+    // its height. Its card, with the unit's title and its fold, then the unit's own line and the
+    // first question under it; a way forward's note below the card; and its foot. And what has the
+    // keyboard as it opens: a control's name, or a field's kind.
     const window = [...document.querySelectorAll('[role="dialog"]')].find((one) =>
       one.querySelector("h2")?.textContent?.endsWith("'s computer"),
     );
@@ -1169,6 +1170,14 @@ const probe = (what: Part): Parts => {
     const head = card?.children[0];
     parts["card.head"] = of(head);
     parts["card.title"] = of(head?.querySelector("span"));
+    parts["card.fold"] = of(head?.querySelector("button"));
+    const active = document.activeElement;
+    parts.focused =
+      !active || !window.contains(active)
+        ? "outside"
+        : active.matches("input, textarea, select, [role=combobox]")
+          ? `a field, ${String(getSelection()) ? "its words selected" : "nothing selected"}`
+          : (active.getAttribute("aria-label") ?? active.tagName.toLowerCase());
     const body = head?.nextElementSibling;
     const first = body?.children[0];
     const line = first?.tagName === "P" ? first : null;

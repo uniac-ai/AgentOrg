@@ -1,7 +1,7 @@
 // A unit's form in a window of its own, and one unit put in another's place: how an agent's units
 // are changed on its page, from its setup or from a way forward.
 import { Refused } from "@agentorg/sdk";
-import { CpuIcon } from "lucide-react";
+import { ChevronRightIcon, CpuIcon } from "lucide-react";
 import { useState } from "react";
 import { api } from "../data.ts";
 import { Button } from "../ui/button.tsx";
@@ -104,7 +104,8 @@ export async function replaceUnit(
  * One unit in a window of its own, as Create draws it: its own line under its title, then its form,
  * empty to add one, with what a unit was built from to change it, or with a way forward's answers.
  * A way forward's note, what taking it does, is below. A secret is asked again, as it is never read
- * back.
+ * back. The card folds to its head, and is drawn whole: the window is as tall as what it holds, and
+ * scrolls only where that is taller than the screen.
  */
 export function UnitWindow({
   agentName,
@@ -124,32 +125,58 @@ export function UnitWindow({
 }) {
   const [values, setValues] = useState<Values>(given);
   const [secrets, setSecrets] = useState<Secrets>({});
+  const [open, setOpen] = useState(true);
   const title = `${agentName}'s ${unit.title.toLowerCase()}`;
+  // A card with nothing under its head has nothing to fold.
+  const hasBody = !!unit.description || unit.form.length > 0;
   return (
     <Dialog open onOpenChange={(next) => !next && onClose()}>
-      <DialogContent className="window ring-0 sm:max-w-md">
+      <DialogContent className="window no-bar max-h-[calc(100%-2rem)] overflow-y-auto ring-0 sm:max-w-md">
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription className="sr-only">What {title} is</DialogDescription>
         </DialogHeader>
-        <div className="no-bar flex max-h-[60vh] flex-col overflow-y-auto rounded-xl bg-card">
-          <div className="flex h-10 shrink-0 items-center gap-1.5 px-3">
-            <CpuIcon className="size-3.5 shrink-0 text-muted-foreground" />
-            <span className="min-w-0 flex-1 truncate text-[13px] font-semibold">{unit.title}</span>
-          </div>
-          <div className="flex flex-col gap-3 px-3 pb-3">
-            <UnitLine unit={unit} />
-            <UnitForm
-              unit={unit}
-              id="setup-unit"
-              agentName={agentName}
-              values={values}
-              secrets={secrets}
-              onValue={(field, value) => setValues((was) => ({ ...was, [field]: value }))}
-              onSecret={(field, value) => setSecrets((was) => ({ ...was, [field]: value }))}
-            />
-          </div>
-        </div>
+        {/* One unit, as a list's one item named for it, as Create lists its units. Its long last row
+            stays inside the window: the card is as narrow as the window lets it be. */}
+        <ul className="flex min-w-0 flex-col">
+          <li aria-label={unit.title} className="flex min-w-0 flex-col rounded-xl bg-card">
+            <div className="flex h-10 shrink-0 items-center gap-1.5 pr-1.5 pl-3">
+              <CpuIcon className="size-3.5 shrink-0 text-muted-foreground" />
+              <span className="min-w-0 flex-1 truncate text-[13px] font-semibold">
+                {unit.title}
+              </span>
+              {hasBody && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-xs"
+                  aria-label={open ? `Fold ${unit.title}` : `Open ${unit.title}`}
+                  aria-expanded={open}
+                  onClick={() => setOpen(!open)}
+                >
+                  <ChevronRightIcon
+                    className={`transition-transform motion-reduce:transition-none ${open ? "rotate-90" : ""}`}
+                  />
+                </Button>
+              )}
+            </div>
+            {/* Folded, it is its head alone. What was typed in it is kept above, for when it opens. */}
+            {open && (
+              <div className="flex flex-col gap-3 px-3 pb-3">
+                <UnitLine unit={unit} />
+                <UnitForm
+                  unit={unit}
+                  id="setup-unit"
+                  agentName={agentName}
+                  values={values}
+                  secrets={secrets}
+                  onValue={(field, value) => setValues((was) => ({ ...was, [field]: value }))}
+                  onSecret={(field, value) => setSecrets((was) => ({ ...was, [field]: value }))}
+                />
+              </div>
+            )}
+          </li>
+        </ul>
         {note && <p className="text-[13px] text-muted-foreground">{note}</p>}
         <DialogFooter>
           <Button variant="ghost" onClick={onClose}>
