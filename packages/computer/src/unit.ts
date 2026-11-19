@@ -1,6 +1,7 @@
 // The computer unit's form and what its answers give. The form is data, read by people and agents
 // alike, so what each answer grants is said in its description. Which service it runs on is found
-// when the form is read.
+// when the form is read. Where no provider that makes is there, the form asks nothing of which
+// computer: it states this one, in a line under its heading, and asks only what is its own.
 import type { Unit } from "@agentorg/interfaces";
 import type { z } from "zod";
 
@@ -110,13 +111,15 @@ export type Found =
       /** On a Mac with AgentOrg Mac, the screen's grants macOS hasn't given it. */
       ungranted?: string[];
       made: { isolation: string; ready: boolean; reason?: string }[];
+      /** The machine's name, as its person knows it, where its service says. */
+      machine?: string;
       starts?: true;
       why?: string;
       mac?: true;
     }
   | undefined;
 /** Why a computer on this machine can't be had now, if it can't. */
-const notHere = (found: Found, kind: typeof THIS | typeof CONTAINER) => {
+export const notHere = (found: Found, kind: typeof THIS | typeof CONTAINER) => {
   if (!found) return INSTALL_STEPS;
   if (found.why) return found.why;
   if (found.starts) return undefined;
@@ -167,10 +170,50 @@ const partOff = (found: Found, part: keyof typeof OFF_MAC) => {
   return one.reason ?? `This computer's ${part} can't be used now.`;
 };
 
-/** The form as it stands now, with what was found on this machine. */
-export const computerUnit = (found: Found): z.input<typeof Unit> => {
+/** What a unit's description holds at most. */
+const DESCRIPTION_MAX = 2000;
+/**
+ * This computer as the person reads it, in place of asking which: which machine, what of it the
+ * agent has, and why a part can't be had; or, where it can't be had at all, why alone.
+ */
+export const lineOf = (found: Found) => {
+  const why = notHere(found, THIS);
+  if (why) return why.slice(0, DESCRIPTION_MAX);
   const screenOff = partOff(found, "screen");
   const ownOff = partOff(found, "browser");
+  const has = [
+    "your files and apps",
+    ...(screenOff ? [] : ["its screen"]),
+    ...(ownOff ? [] : ["your signed-in browser"]),
+  ];
+  const listed = has.length > 1 ? `${has.slice(0, -1).join(", ")} and ${has.at(-1)}` : has[0];
+  const name = found?.machine || "This computer";
+  return [
+    `${name}, whole: ${listed}. It acts as you, with everything you can reach.`,
+    screenOff,
+    ownOff,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .slice(0, DESCRIPTION_MAX);
+};
+
+/**
+ * A field shown only where its part can be had: elsewhere it is never shown, so a value for it is
+ * dropped, and the line says why.
+ */
+const onlyWhere = (field: string, off: string | undefined) =>
+  off ? { visible: { field, in: ["on"] } } : {};
+
+/**
+ * The form as it stands now, with what was found on this machine. With `which`, a provider that
+ * makes is there, and the form asks which computer, a new one among them, as it always has.
+ * Without, it states this computer and asks only its own.
+ */
+export const computerUnit = (found: Found, which = true): z.input<typeof Unit> => {
+  const screenOff = partOff(found, "screen");
+  const ownOff = partOff(found, "browser");
+  if (!which) return statedUnit(found, screenOff, ownOff);
   return {
     id: COMPUTER,
     title: "Computer",
@@ -379,6 +422,35 @@ export const computerUnit = (found: Found): z.input<typeof Unit> => {
         { id: "in-use", place: "column", kind: "presence", when: "reachable", surface: "presence" },
       ],
     },
+  };
+};
+
+/** The fields of the form that states this computer: those of its own. */
+const STATED = ["workspace", "access", "screen", "ownBrowser"];
+
+/**
+ * The form that states this computer: the line under its heading, and today's fields that are
+ * this computer's own, none shown only after which computer is chosen. Its screen and the person's
+ * browser are asked only where they can be had.
+ */
+const statedUnit = (
+  found: Found,
+  screenOff: string | undefined,
+  ownOff: string | undefined,
+): z.input<typeof Unit> => {
+  const asked = computerUnit(found);
+  return {
+    ...asked,
+    description: lineOf(found),
+    form: asked.form
+      .filter((field) => STATED.includes(field.id))
+      .map(({ visible: _, ...field }) =>
+        field.id === "screen"
+          ? { ...field, ...onlyWhere("screen", screenOff) }
+          : field.id === "ownBrowser"
+            ? { ...field, ...onlyWhere("ownBrowser", ownOff) }
+            : field,
+      ),
   };
 };
 

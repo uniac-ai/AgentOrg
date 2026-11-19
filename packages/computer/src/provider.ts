@@ -58,6 +58,7 @@ import {
   MAC_RECORD,
   NEW,
   NO_CONTAINER_MAC,
+  notHere,
   OLDEST_MAC,
   OPEN_MAC,
   REACHES,
@@ -106,6 +107,11 @@ const Stored = z.object({
    * under earlier words than today's has its status restate it in today's.
    */
   words: z.number().optional(),
+  /**
+   * Which computer it is: this one, attached, or one made for its agent as a new one. None for one
+   * kept before this was: its service says, and it is kept then.
+   */
+  kind: z.enum([THIS, NEW]).optional(),
 });
 type Instance = z.infer<typeof Stored>;
 /**
@@ -123,6 +129,8 @@ interface Reached {
 const FILE = "instances.json";
 /** Holds the folders an earlier version's computers kept, by agent. */
 const EARLIER_FILE = "earlier-folders.json";
+/** Holds the agents whose computer made as a new one was removed, while each may have another. */
+const HAD_NEW_FILE = "had-new.json";
 const SKILLS_DIR = fileURLToPath(new URL("../../skills/", import.meta.url));
 /**
  * The sha256 of every text each skill file has had in a version shipped, the current one among
@@ -181,6 +189,13 @@ export interface ComputerProviderOptions {
    * elsewhere. With null, none is looked for. For tests.
    */
   macRecord?: string | null;
+  /**
+   * A provider that makes computers is there: the Computer unit asks which computer, a new one
+   * among them, as it always has. Without it, the unit states this computer, unless a computer made
+   * here as a new one is still kept. Set by the conversation runner and tests alone, until a unit
+   * of the provider's own takes new computers over.
+   */
+  makes?: boolean;
 }
 
 export interface ComputerProvider {
@@ -436,6 +451,7 @@ const beforeDetail = ({ folder, attached }: Pick<Before, "folder" | "attached">)
 const waysOn = (
   { folder, access, browser, attached }: Before,
   mac: boolean,
+  which: boolean,
 ): z.input<typeof WayForward>[] => [
   ...(access === "none"
     ? []
@@ -448,11 +464,16 @@ const waysOn = (
               ? "As before, it reaches the whole machine, as you."
               : "Unlike before, it reaches the whole machine, as you.",
           unit: COMPUTER,
-          values: { kind: THIS, access, ...(folder ? { workspace: folder } : {}) },
+          values: {
+            ...(which ? { kind: THIS } : {}),
+            access,
+            ...(folder ? { workspace: folder } : {}),
+          },
         },
       ]),
-  // AgentOrg Mac makes no container, and one attached is this computer already.
-  ...(mac || attached
+  // AgentOrg Mac makes no container, and one attached is this computer already. Where the form
+  // states this computer, none is made.
+  ...(mac || attached || !which
     ? []
     : [
         {
@@ -467,9 +488,17 @@ const waysOn = (
       ]),
 ];
 
+/**
+ * Which computer was filled in: what was chosen where the form asks, and this one where it states
+ * it. Anything else is none.
+ */
+const kindOf = (values: Record<string, unknown>, which: boolean) =>
+  which ? values.kind : values.kind === undefined ? THIS : undefined;
+
 /** Whether what was filled in is a computer on this machine: this one, or a container here. */
-const onThisMachine = (values: Record<string, unknown>) =>
-  values.kind === THIS || (values.kind === NEW && (values.made ?? CONTAINER) === CONTAINER);
+const onThisMachine = (values: Record<string, unknown>, which: boolean) =>
+  kindOf(values, which) === THIS ||
+  (kindOf(values, which) === NEW && (values.made ?? CONTAINER) === CONTAINER);
 
 /** What is wrong with what was filled in; nothing means it can be applied. */
 function problems(
@@ -477,15 +506,24 @@ function problems(
   values: Record<string, unknown>,
   found: Found,
   secrets: string[],
+  which: boolean,
 ): TheProblem[] {
   const wrong: TheProblem[] = [];
   if (unit === WEB) {
     if (values.service !== "exa") wrong.push({ field: "service", message: "Choose a service." });
     return wrong;
   }
-  if (values.kind !== THIS && values.kind !== NEW)
+  const kind = kindOf(values, which);
+  // Where it states this computer, it has no question of which: why it can't be had is its own.
+  if (!which && values.kind !== undefined)
+    wrong.push({ field: "kind", message: "This unit has no field kind." });
+  else if (!which) {
+    const why = notHere(found, THIS);
+    if (why) wrong.push({ message: why });
+  } else if (kind !== THIS && kind !== NEW)
     wrong.push({ field: "kind", message: "Choose which computer." });
-  else if (onThisMachine(values) && !found) wrong.push({ field: "kind", message: INSTALL_STEPS });
+  else if (onThisMachine(values, which) && !found)
+    wrong.push({ field: "kind", message: INSTALL_STEPS });
   else if (values.kind === NEW && values.made === REMOTE) {
     const given = secrets.includes("token") ? { token: "given" } : {};
     const { why } = parseConnection("url", { url: values.address }, given);
@@ -500,14 +538,14 @@ function problems(
   if (values.access === "none") {
     // With no files or terminal, it is its browser, or this computer's screen.
     const has =
-      values.kind === THIS
+      kind === THIS
         ? values.screen === "on" || values.ownBrowser === "yours"
-        : values.kind === NEW && values.browser === true;
+        : kind === NEW && values.browser === true;
     if (!has)
       wrong.push({
         field: "access",
         message:
-          values.kind === THIS
+          kind === THIS
             ? "With no files, no commands, no screen and no browser, there's no computer."
             : "With no files, no commands and no browser, there's no computer.",
       });
@@ -515,7 +553,7 @@ function problems(
     wrong.push({ field: "access", message: "Choose what it reaches." });
   // Where this computer's work happens: made with it if it's missing.
   const folder = fromHome(values.workspace);
-  if (values.kind === THIS && folder !== undefined) {
+  if (kind === THIS && folder !== undefined) {
     if (!isAbsolute(folder))
       wrong.push({
         field: "workspace",
@@ -671,7 +709,13 @@ export async function startComputerProvider(
     const setup = macHere() ? await within(SERVICE_ANSWERS_MS, setupOf(reached)) : undefined;
     return {
       reached,
-      found: { thisComputer: info.thisComputer, made: info.made, ...setup },
+      found: {
+        thisComputer: info.thisComputer,
+        made: info.made,
+        // A service older than 0.0.38 doesn't say it.
+        ...(typeof info.machine === "string" && info.machine ? { machine: info.machine } : {}),
+        ...setup,
+      },
     };
   };
   /**
@@ -776,6 +820,7 @@ export async function startComputerProvider(
       const reached = reachOf(entry.computer.service);
       const info =
         reached && (await within(SERVICE_ANSWERS_MS, Computer.getInfo(entry.computer.id, reached)));
+      if (info) learnKind(entry.computer, info);
       if (info && fromBefore(info)) before.set(instance, beforeOf(info));
       else if (info && attachedBefore(entry.computer, info))
         before.set(instance, { ...beforeOf(info), attached: true });
@@ -813,6 +858,63 @@ export async function startComputerProvider(
       return {};
     }
   })();
+  /**
+   * Which computer one kept from before which was said is, as its service says: this one if it is
+   * attached, else one made for its agent. It is kept from then on.
+   */
+  const learnKind = (computer: NonNullable<Instance["computer"]>, info: ComputerDetail) => {
+    const entry = Object.values(stored).find((one) => one.computer?.id === computer.id);
+    if (!entry || entry.kind) return;
+    entry.kind = info.attached ? THIS : NEW;
+    try {
+      save();
+    } catch (error) {
+      log.warn(`Which computer it is wasn't written: ${messageOf(error)}`);
+    }
+  };
+  /**
+   * Whether a kept computer was made for its agent as a new one, here or at another address. One
+   * whose service hasn't said yet is taken as one, so the form asks which until it has.
+   */
+  const madeNew = (entry: Instance) => entry.computer !== undefined && entry.kind !== THIS;
+  /**
+   * Agents whose computer made as a new one was removed: the form keeps asking which while one may
+   * be given its computer again, as a change in Setup takes it out and puts it back. Each goes once
+   * it has a computer here again, or is gone.
+   */
+  const hadNewPath = join(dir, HAD_NEW_FILE);
+  const hadNew = new Set<string>(
+    (() => {
+      try {
+        return z.array(z.string()).parse(JSON.parse(readFileSync(hadNewPath, "utf8")));
+      } catch {
+        return [];
+      }
+    })(),
+  );
+  const keepHadNew = () => {
+    try {
+      keep(hadNewPath, [...hadNew]);
+    } catch (error) {
+      log.warn(`The agents whose new computer was removed weren't written: ${messageOf(error)}`);
+    }
+  };
+  /** Whether an agent is there still: its Actor isn't closed. Not known, it is taken as there. */
+  let agentThere: (agent: string) => Promise<boolean> = async () => true;
+  /**
+   * Whether the Computer unit asks which computer, a new one among them, as it always has: a
+   * provider that makes is there, or a computer made here as a new one is kept, or was until its
+   * agent's was removed and that agent may have it again. Otherwise it states this computer.
+   */
+  const asksWhich = async () => {
+    if (options.makes === true || Object.values(stored).some(madeNew)) return true;
+    for (const agent of [...hadNew]) {
+      if (await agentThere(agent)) return true;
+      hadNew.delete(agent);
+      keepHadNew();
+    }
+    return false;
+  };
   /** Connect a link. A service on this machine may have moved to another port since. */
   const open = async (
     { slot, url, actor, credential }: Linked,
@@ -987,6 +1089,7 @@ export async function startComputerProvider(
     const reached = reachOf(computer.service);
     const info = reached && (await within(SURFACES_MS, Computer.getInfo(computer.id, reached)));
     if (!info) return undefined;
+    learnKind(computer, info);
     if (fromBefore(info) || attachedBefore(computer, info)) seenBefore(computer, info);
     // On AgentOrg Mac's service, a screen lacking a grant is said in the app's words.
     const screenOut = info.surfaces.some((one) => one.surface === "screen" && one.unavailable);
@@ -1020,10 +1123,11 @@ export async function startComputerProvider(
     secrets: Record<string, string>,
     name: string,
     agent: string,
+    which: boolean,
     agentName?: string,
   ) => {
-    const whole = values.kind === THIS;
-    const here = onThisMachine(values);
+    const whole = kindOf(values, which) === THIS;
+    const here = onThisMachine(values, which);
     const reached = here
       ? await startedLocal()
       : { apiUrl: String(values.address).replace(/\/$/, ""), apiKey: secrets.token as string };
@@ -1261,7 +1365,10 @@ export async function startComputerProvider(
     const seen = fromEarlier();
     if (seen) return seen;
     const now =
-      (found.words ?? 0) < WORDS && found.computer && info && nowOf(found.computer, info.info);
+      (found.words ?? 0) < WORDS &&
+      found.computer &&
+      info &&
+      nowOf(found.computer, info.info, await asksWhich());
     const state = down
       ? ("down" as const)
       : waiting
@@ -1288,7 +1395,11 @@ export async function startComputerProvider(
    * A computer made under older words, in today's: the answers today's form would have for it, and
    * the rows it would be made with now, from what its service says of it.
    */
-  const nowOf = (computer: NonNullable<Instance["computer"]>, info: ComputerDetail) => {
+  const nowOf = (
+    computer: NonNullable<Instance["computer"]>,
+    info: ComputerDetail,
+    which: boolean,
+  ) => {
     const whole = info.attached;
     const away = "local" in computer.service ? undefined : computer.service;
     // A folder its service made is its own, and goes with it: only one someone named is said.
@@ -1301,7 +1412,8 @@ export async function startComputerProvider(
     return {
       values: whole
         ? {
-            kind: THIS,
+            // Where the form states this computer, which it is isn't an answer.
+            ...(which ? { kind: THIS } : {}),
             access: info.access,
             ...(folder ? { workspace: toHome(folder) } : {}),
             screen: info.screen ? "on" : "off",
@@ -1379,7 +1491,7 @@ export async function startComputerProvider(
               state,
               ...(detail ? { detail } : {}),
               surfaces: surfaces ?? [],
-              ...(earlier ? { ways: waysOn(earlier, macHere()) } : {}),
+              ...(earlier ? { ways: waysOn(earlier, macHere(), await asksWhich()) } : {}),
             };
           },
           live: ({ surface, mode }) => ticket(instance, surface, mode),
@@ -1445,8 +1557,18 @@ export async function startComputerProvider(
         if (unit !== COMPUTER && unit !== WEB)
           throw new Refused("unknown", `This provider has no unit ${unit}.`);
       };
+      // An agent is gone once its Actor is closed, or the Hub knows it no more.
+      agentThere = async (agent) => {
+        try {
+          return (await ctx.slots.actors.call.get({ actorId: agent })).state !== "closed";
+        } catch (error) {
+          return !(error instanceof Refused && error.code === "unknown");
+        }
+      };
       ctx.exports.provider.implement({
-        units: async () => ({ units: [computerUnit(await findLocal()), WEB_UNIT] }),
+        units: async () => ({
+          units: [computerUnit(await findLocal(), await asksWhich()), WEB_UNIT],
+        }),
         async skill({ unit, name, path: file }) {
           if (!SKILLS[unit]?.includes(name) || file !== "SKILL.md")
             throw new Refused("unknown", `${unit} has no file ${file} of a skill ${name}.`);
@@ -1457,11 +1579,14 @@ export async function startComputerProvider(
         },
         async check({ unit, values, secrets }) {
           known(unit);
-          return { problems: problems(unit, values, await findLocal(), secrets) };
+          return {
+            problems: problems(unit, values, await findLocal(), secrets, await asksWhich()),
+          };
         },
         async apply({ unit, values, secrets, name, agent, agentName }) {
           known(unit);
-          const wrong = problems(unit, values, await findLocal(), Object.keys(secrets));
+          const which = await asksWhich();
+          const wrong = problems(unit, values, await findLocal(), Object.keys(secrets), which);
           if (wrong.length > 0)
             throw new Refused("invalid", wrong.map((problem) => problem.message).join(" "));
           const instance = `${unit}_${randomBytes(9).toString("hex")}`;
@@ -1473,11 +1598,13 @@ export async function startComputerProvider(
                   computer: undefined,
                   rows: undefined,
                 }
-              : await makeComputer(values, secrets, name, agent, agentName);
+              : await makeComputer(values, secrets, name, agent, which, agentName);
           const entry: Instance = {
             agent,
             links: [],
-            ...(computer ? { computer, words: WORDS } : {}),
+            ...(computer
+              ? { computer, words: WORDS, kind: kindOf(values, which) === THIS ? THIS : NEW }
+              : {}),
           };
           const made: Connection[] = [];
           const connections: { slot: string; connection: string; target: string }[] = [];
@@ -1510,6 +1637,8 @@ export async function startComputerProvider(
               delete earlier[agent];
               keepEarlier();
             }
+            // It has a computer here again: what it had before no longer keeps the form asking.
+            if (computer && hadNew.delete(agent)) keepHadNew();
             for (const server of made) server.run();
           } catch (error) {
             running.delete(instance);
@@ -1552,6 +1681,11 @@ export async function startComputerProvider(
             if (found.computer) await killComputer(found.computer);
           } finally {
             mending.delete(instance);
+          }
+          // One made as a new one: the form keeps asking which while its agent may have it again.
+          if (madeNew(found)) {
+            hadNew.add(found.agent);
+            keepHadNew();
           }
           // One from before: the agent's next computer, as a container, starts with its folder.
           const earlierOne = before.get(instance);

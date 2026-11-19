@@ -91,8 +91,8 @@ async function standIn(
     body?: Record<string, unknown>;
   }[] = [];
   const computers = new Map<string, Record<string, unknown>>(Object.entries(records));
-  /** The version it says it is, which a test may change. */
-  const info = { version: "0.0.29" };
+  /** The version it says it is, and its machine's name if it says one, which a test may change. */
+  const info: { version: string; machine?: string } = { version: "0.0.29" };
   /** What it says of this computer, which a test may change: each part ready, or why not. */
   const thisComputer = {
     ready: true,
@@ -156,6 +156,7 @@ async function standIn(
     if (request.method === "GET" && path === "/v1/info")
       return send(200, {
         version: info.version,
+        ...(info.machine ? { machine: info.machine } : {}),
         thisComputer,
         made: [{ isolation: "container", ready: true, capabilities: [], browsers: [] }],
       });
@@ -348,6 +349,9 @@ async function setup(
     // A connection's first wait before it tries again, and how often it asks its server.
     firstDelayMs = 50,
     pingEveryMs = 200,
+    // A provider that makes is there, so the form asks which computer, as these tests were
+    // written for; without it, the form states this computer.
+    makes = true,
   } = {},
 ) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "agentorg-computer-")));
@@ -379,7 +383,7 @@ async function setup(
     name: "Computers",
     bindings: [{ slot: "actors", provider: "hub", export: "actors" }],
   });
-  const start = () =>
+  const start = (on = makes) =>
     startComputerProvider({
       hubUrl: server.url,
       actorId: made.actorId,
@@ -393,6 +397,7 @@ async function setup(
       timing: { firstDelayMs, pingEveryMs },
       mendFirstMs,
       macRecord: mac ? macRecord : null,
+      makes: on,
       log: { info() {}, warn() {}, error: (line: string) => void logged.push(line) },
     });
   const provider = { current: await start() };
@@ -460,9 +465,10 @@ async function setup(
     await until(() => client.slots.held.bound);
     return client.slots.held;
   };
-  const restart = async () => {
+  /** Closed and started again, as at the app's next start: `makes` as it is then. */
+  const restart = async (now = makes) => {
     await provider.current.close();
-    provider.current = await start();
+    provider.current = await start(now);
   };
   return {
     hub,
@@ -2022,6 +2028,109 @@ test("a new computer here is a container with a workspace of its own, and no fol
     ],
   });
   assert.ok(JSON.parse(readFileSync(join(dir, "instances.json"), "utf8"))[made.instance]);
+});
+
+/** The stand-in recorded as the service this machine runs, where the connector looks for it. */
+function recordHere(t: test.TestContext, data: string, here: Awaited<ReturnType<typeof standIn>>) {
+  const alive = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60_000)"]);
+  t.after(() => alive.kill());
+  mkdirSync(data, { recursive: true });
+  writeFileSync(join(data, "server.json"), JSON.stringify({ url: here.apiUrl, pid: alive.pid }));
+  writeFileSync(join(data, "control-token"), here.apiKey);
+}
+
+test("where no provider that makes is there, the form states this computer, refuses which computer, and attaches it", async (t) => {
+  const { units, data, workspace } = await setup(t, { service: false, makes: false });
+  const here = await standIn(t);
+  here.info.machine = "Studio Mac";
+  here.thisComputer.capabilities.push(
+    { capability: "files", ready: true },
+    { capability: "screen", ready: true },
+  );
+  here.thisComputer.browsers.push({ kind: "own", ready: true });
+  recordHere(t, data, here);
+  const unit = (await units.units({})).units.find((one) => one.id === "computer");
+  Unit.parse(unit);
+  assert.equal(
+    unit?.description,
+    "Studio Mac, whole: your files and apps, its screen and your signed-in browser. It acts as you, with everything you can reach.",
+  );
+  assert.deepEqual(
+    unit?.form.map((one) => one.id),
+    ["workspace", "access", "screen", "ownBrowser"],
+  );
+  // Which computer is no answer of its: a new one least of all.
+  const values = { kind: "new", made: "container", access: "files" };
+  assert.deepEqual((await units.check({ unit: "computer", values, secrets: [] })).problems, [
+    { field: "kind", message: "This unit has no field kind." },
+  ]);
+  // Without it, the computer is this one, attached.
+  const made = await units.apply({
+    unit: "computer",
+    values: { access: "files", workspace },
+    secrets: {},
+    needs: {},
+    agent: "act_agent",
+    name: "Scout's computer",
+  });
+  // What was asked to attach or make, by its path.
+  const posted = here.asked
+    .filter((one) => one.method === "POST" && /^\/v1\/computers(\/attach)?$/.test(one.path))
+    .map((one) => one.path);
+  assert.deepEqual(posted, ["/v1/computers/attach"]);
+  assert.deepEqual(made.capability?.rows?.where, [{ label: "Computer", value: "This computer" }]);
+});
+
+test("from a home with one agent on this computer and one in a container, the form asks which while the container is there, a change keeps it one, and once its agent is gone the form states this computer", async (t) => {
+  const { units, data, workspace, dir, hub, restart, connected } = await setup(t, {
+    service: false,
+  });
+  // Its computers' endpoints answer, so their connections are made.
+  const here = await standIn(t, {}, { mcp: true });
+  recordHere(t, data, here);
+  // Two agents, as management makes them: each an Actor of its own.
+  const agentOf = (name: string) => hub.state.createActor(PERSON, { name }).actorId;
+  const [mine, boxed] = [agentOf("Scout"), agentOf("Docs")];
+  const applied = (agent: string, values: Record<string, unknown>) =>
+    units.apply({
+      unit: "computer",
+      values: values as never,
+      secrets: {},
+      needs: {},
+      agent,
+      name: "A computer",
+    });
+  const whole = await applied(mine, { kind: "this", access: "files", workspace });
+  const boxedValues = { kind: "new", made: "container", access: "files", browser: false };
+  const box = await applied(boxed, boxedValues);
+  // As today's release keeps them: nothing says which computer each is.
+  const path = join(dir, "instances.json");
+  const kept = JSON.parse(readFileSync(path, "utf8")) as Record<string, Record<string, unknown>>;
+  for (const entry of Object.values(kept)) delete entry.kind;
+  writeFileSync(path, JSON.stringify(kept));
+  // Started again with no provider that makes: both come back, and the form asks which.
+  await restart(false);
+  await connected(whole.instance);
+  await connected(box.instance);
+  const fieldIds = async () =>
+    (await units.units({})).units.find((one) => one.id === "computer")?.form.map((f) => f.id);
+  assert.ok((await fieldIds())?.includes("kind"));
+  // A change in Setup takes its unit out and puts it back as answered: it is a container still.
+  await units.remove({ instance: box.instance });
+  assert.ok((await fieldIds())?.includes("kind"));
+  const changed = await applied(boxed, boxedValues);
+  // What was asked to attach or make, by its path.
+  const posted = here.asked
+    .filter((one) => one.method === "POST" && /^\/v1\/computers(\/attach)?$/.test(one.path))
+    .map((one) => one.path);
+  assert.deepEqual(posted, ["/v1/computers/attach", "/v1/computers", "/v1/computers"]);
+  // Its agent removed, the form states this computer, which the other agent has still.
+  await units.remove({ instance: changed.instance });
+  hub.state.closeActor(PERSON, boxed);
+  assert.deepEqual(await fieldIds(), ["workspace", "access", "screen", "ownBrowser"]);
+  await connected(whole.instance);
+  await units.remove({ instance: whole.instance });
+  assert.equal(here.computers.size, 0);
 });
 
 test("a computer an earlier version made with no isolation isn't started: its capability says the two ways on, and removing it keeps its folder", async (t) => {

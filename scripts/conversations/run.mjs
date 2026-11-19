@@ -387,12 +387,14 @@ async function startTheApp() {
       fetch: counting,
       log: note,
       assistant: false,
-      // An empty path: the runner starts the service itself; no Mac's service is looked at.
+      // An empty path: the runner starts the service itself; no Mac's service is looked at. Its
+      // agents each get a new computer, which the service it starts makes.
       computer: {
         dataFolder: data,
         agentsFolder: join(dir, "agents"),
         path: "",
         macRecord: null,
+        makes: true,
         ...(flags.dry ? { webUrl: "http://127.0.0.1:9/mcp" } : {}),
       },
     },

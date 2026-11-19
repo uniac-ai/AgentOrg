@@ -30,6 +30,8 @@ export interface ProgramsOptions {
     agentsFolder?: string;
     path?: string;
     macRecord?: string | null;
+    /** A provider that makes computers is there: the Computer unit asks which. */
+    makes?: boolean;
   };
   /**
    * Whether a home with no agents gets the first Assistant, once AgentOrg Mac is there. Off by
@@ -65,14 +67,14 @@ export function closePackageActors(home: string) {
   }
 }
 
-/** The bundled Assistant: the base, the computer the person chooses, and the web. */
+/** The bundled Assistant: the base, the computer the person has, and the web. */
 const ASSISTANT_TEMPLATE: NonNullable<ManagerOptions["templates"]>[number] = {
   id: "assistant",
   title: "Assistant",
   description: "Works on a computer and on the web.",
   base: { provider: "AgentOrg", creatable: "assistant" },
   units: [
-    { provider: "Computers", unit: "computer", values: { access: "terminal", browser: true } },
+    { provider: "Computers", unit: "computer", values: { access: "terminal" } },
     { provider: "Computers", unit: "web", values: { service: "exa" } },
   ],
 };
@@ -319,28 +321,30 @@ export async function startPrograms(
         ?.options?.find((one) => one.value === value);
       return option ? option.unavailable : `It has no ${field} ${value}.`;
     };
-    const notHere = why("kind", "this");
-    if (notHere) return log(`First run: the Assistant isn't made yet: ${notHere}`);
     const noScreen = why("screen", "on");
+    const stack = {
+      base: { provider: agents, creatable: "assistant" },
+      template: "assistant",
+      units: [
+        {
+          provider: computer,
+          unit: "computer",
+          values: { access: "terminal", screen: noScreen ? "off" : "on", ownBrowser: "none" },
+        },
+        { provider: computer, unit: "web", values: { service: "exa" } },
+        { provider: management, unit: "control", values: FIRST_CONTROL },
+      ],
+    };
+    // Why this computer can't be had now, if it can't: its unit's check says.
+    const { problems } = await call<{ problems: { unit?: number; message: string }[] }>(
+      "agents",
+      "check",
+      { stack },
+    );
+    const notHere = problems.find((one) => one.unit === 0)?.message;
+    if (notHere) return log(`First run: the Assistant isn't made yet: ${notHere}`);
     const { agent } = await call<{ agent: string }>("agents", "create", {
-      stack: {
-        base: { provider: agents, creatable: "assistant" },
-        template: "assistant",
-        units: [
-          {
-            provider: computer,
-            unit: "computer",
-            values: {
-              kind: "this",
-              access: "terminal",
-              screen: noScreen ? "off" : "on",
-              ownBrowser: "none",
-            },
-          },
-          { provider: computer, unit: "web", values: { service: "exa" } },
-          { provider: management, unit: "control", values: FIRST_CONTROL },
-        ],
-      },
+      stack,
       name: FIRST_ASSISTANT,
     });
     mark({ switched: true, made: true, agent });

@@ -721,6 +721,45 @@ test("the templates' listing says which came with the app: it can't be removed, 
   assert.deepEqual(await listed(), [{ id: "assistant", title: assistant.title, shipped: true }]);
 });
 
+test("with no provider that makes, the person's computer is this one: a new one is no answer of its", async (t) => {
+  const root = newFolder("agentorg-which-");
+  const s = await open(t, {
+    dataFolder: join(root, "service"),
+    webUrl: "http://127.0.0.1:9/mcp",
+    agentsFolder: join(root, "Agents"),
+  });
+  const { person } = await s.start();
+  const { units, bases } = await person.call<{
+    units: { id: string; provider: string; form: { id: string }[] }[];
+    bases: { id: string; provider: string }[];
+  }>("agents", "units");
+  const computer = units.find((one) => one.id === "computer");
+  assert.equal(
+    computer?.form.some((field) => field.id === "kind"),
+    false,
+  );
+  const { problems } = await person.call<{ problems: { field?: string; message: string }[] }>(
+    "agents",
+    "check",
+    {
+      stack: {
+        base: { provider: bases[0]?.provider, creatable: "assistant" },
+        units: [
+          {
+            provider: computer?.provider,
+            unit: "computer",
+            values: { kind: "new", made: "container", access: "read" },
+          },
+        ],
+      },
+    },
+  );
+  assert.deepEqual(
+    problems.map((one) => one.message),
+    ["This unit has no field kind.", "This unit has no field made."],
+  );
+});
+
 test("the bundled Assistant is a computer and the web, and its computer goes with it", async (t) => {
   const root = newFolder("agentorg-assistant-");
   const data = join(root, "service");
@@ -749,16 +788,16 @@ test("the bundled Assistant is a computer and the web, and its computer goes wit
   const unit = {
     provider: computers,
     unit: "computer",
-    values: { kind: "this", access: "read" },
+    values: { access: "read" },
   };
   const { problems } = await person.call<{ problems: { message: string }[] }>("agents", "check", {
     stack: { base, units: [unit] },
   });
   assert.match(problems[0]?.message ?? "", /npm install -g @agentorg\/computer/);
-  // An untouched Assistant is refused: which computer is the person's to choose.
+  // An untouched Assistant is refused too: its computer, this one, can't be had yet.
   await assert.rejects(
     person.call("agents", "create", { template: "assistant", name: "Too soon" }),
-    /Which computer must be filled in/,
+    /npm install -g @agentorg\/computer/,
   );
   assert.deepEqual((await person.call<{ agents: unknown[] }>("agents", "list")).agents, []);
   assert.equal(existsSync(join(data, "server.json")), false);
@@ -767,7 +806,7 @@ test("the bundled Assistant is a computer and the web, and its computer goes wit
 
   const { agent } = await person.call<{ agent: string }>("agents", "create", {
     template: "assistant",
-    fill: [{ values: { kind: "this", workspace, ...NEITHER } }],
+    fill: [{ values: { workspace, ...NEITHER } }],
     name: "Helper",
   });
   const read = await person.call<{
@@ -776,7 +815,7 @@ test("the bundled Assistant is a computer and the web, and its computer goes wit
     skills: { name: string }[];
   }>("agents", "get", { agent });
   assert.equal(read.template, "assistant");
-  // This computer has no browser of its own: the template's answer is a made computer's.
+  // This computer has no browser of its own, and the template asks none.
   assert.deepEqual(read.mcp.map((one) => one.slot).sort(), ["computer", "web"]);
   assert.deepEqual(read.skills.map((one) => one.name).sort(), [
     "computer",
@@ -793,7 +832,7 @@ test("the bundled Assistant is a computer and the web, and its computer goes wit
   // With no folder named, its work happens in one named for the agent.
   const { agent: untouched } = await person.call<{ agent: string }>("agents", "create", {
     template: "assistant",
-    fill: [{ values: { kind: "this", ...NEITHER } }],
+    fill: [{ values: { ...NEITHER } }],
     name: "Right away",
   });
   const folder = join(agentsFolder, "Right away");
@@ -884,15 +923,17 @@ test("a fresh home's first start makes the Assistant once AgentOrg Mac comes, wi
     ["computer", "web", "control"],
   );
   const [computer, web, control] = read.units;
+  // Which computer isn't asked, and the person's browser, which can't be had here, isn't either.
   assert.deepEqual(
     { ...computer?.values, screen: undefined },
-    { kind: "this", access: "terminal", ownBrowser: "none", screen: undefined },
+    { access: "terminal", screen: undefined },
   );
   // Here the screen can't be had (no driver), and the log says so.
   const withoutScreen = said.filter((line) =>
     line.startsWith("First run: the Assistant was made without the screen: "),
   );
-  assert.equal(computer?.values.screen, withoutScreen.length ? "off" : "on");
+  // A screen that can't be had isn't asked, so no answer for it is kept.
+  assert.equal(computer?.values.screen, withoutScreen.length ? undefined : "on");
   assert.equal(web?.values.service, "exa");
   assert.deepEqual(
     {
@@ -981,7 +1022,7 @@ test("a socket from the person reaches a computer's surfaces live, with no token
   const { app, person } = await s.start();
   const { agent } = await person.call<{ agent: string }>("agents", "create", {
     template: "assistant",
-    fill: [{ values: { kind: "this", workspace, ...NEITHER } }],
+    fill: [{ values: { workspace, ...NEITHER } }],
     name: "Watched",
   });
   type Surfaces = { surface: string; protocol: string }[];
@@ -1127,7 +1168,7 @@ test("an agent made from the Assistant template is told the saved words, by its 
   await person.call("login", "complete", { callbackUrl: await fake.authorize(authorizeUrl) });
   const { agent } = await person.call<{ agent: string }>("agents", "create", {
     template: "assistant",
-    fill: [{ values: { kind: "this", workspace, ...NEITHER } }],
+    fill: [{ values: { workspace, ...NEITHER } }],
     name: "Told",
     purpose: "Checks what it is told.",
   });
