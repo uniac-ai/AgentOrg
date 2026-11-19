@@ -1,15 +1,16 @@
-// Creating an agent, in one window of two parts. At the left, the identity card of the agent being
-// made: its face, its name and what it's for, typed in place, and what it can do, following the
-// options as they change. At the right, a row of what to start from, then the options in sections:
-// its base, each unit with its questions, and the way to add one. Finished, a stack comes to MCP
-// exposures and skills.
+// Creating an agent, and building a template. An agent is made in one small window: where it starts
+// from, its name and what it's for, and what that gives it, shown and not asked; its details are
+// built in a chat. A template is built in one window of two parts. At the left, the identity card:
+// its face, its name and what it's for, typed in place, and what it can do, following the options as
+// they change. At the right, a row of what to start from, then the options in sections: its base,
+// each unit with its questions, and the way to add one. Finished, a stack comes to MCP exposures and
+// skills.
 import {
   BotIcon,
   BoxIcon,
   ChevronRightIcon,
   CpuIcon,
   type LucideIcon,
-  MoreHorizontalIcon,
   PlugIcon,
   PlusIcon,
   SparklesIcon,
@@ -23,8 +24,6 @@ import {
   DialogClose,
   DialogContent,
   DialogDescription,
-  DialogFooter,
-  DialogHeader,
   DialogTitle,
 } from "../ui/dialog.tsx";
 import {
@@ -98,38 +97,103 @@ function Tile({ logo: Logo, small = false }: { logo: LucideIcon; small?: boolean
 }
 
 /**
- * Create, in one window: the card on the left, the options on the right. A click outside closes
- * it, and it opens clean, with the keyboard in the name.
+ * Create, in one window. A click outside closes it, and it opens clean, with the keyboard in the
+ * name. An agent's is small: where it starts from, its name and what it's for, and what that gives.
+ * A template's is the card on the left and the options on the right.
  */
 export function BuildDialog() {
-  const { open, hide } = useBuilding();
+  const { open, hide, draft, choosing } = useBuilding();
+  const template = (draft?.mode ?? choosing?.mode) === "template";
   return (
     <Dialog open={open} onOpenChange={(next) => !next && hide()}>
       <DialogContent
         asWindow
-        // Its close is in its head, in line with the title and the menu.
+        // Its close is in its head, in line with the title.
         showCloseButton={false}
         onOpenAutoFocus={(event) => {
           event.preventDefault();
           document.getElementById("build-name")?.focus({ preventScroll: true });
         }}
-        className="window flex h-[min(680px,calc(100%-2rem))] gap-0 overflow-hidden rounded-3xl bg-[var(--create)] p-0 ring-0 max-sm:flex-col sm:max-w-[920px]"
+        className={
+          template
+            ? "window flex h-[min(680px,calc(100%-2rem))] gap-0 overflow-hidden rounded-3xl bg-[var(--create)] p-0 ring-0 max-sm:flex-col sm:max-w-[920px]"
+            : "window flex max-h-[calc(100%-2rem)] flex-col gap-0 overflow-hidden rounded-3xl bg-[var(--create)] p-0 ring-0 sm:max-w-[480px]"
+        }
       >
-        <IdentityCard />
-        {/* Narrow, the head isn't drawn: the close is at the corner. */}
-        <DialogClose asChild>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            aria-label="Close"
-            className="absolute top-2 right-2 z-10 hidden max-sm:inline-flex"
-          >
-            <XIcon />
-          </Button>
-        </DialogClose>
-        <Options />
+        {template ? (
+          <>
+            <IdentityCard />
+            {/* Narrow, the head isn't drawn: the close is at the corner. */}
+            <DialogClose asChild>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label="Close"
+                className="absolute top-2 right-2 z-10 hidden max-sm:inline-flex"
+              >
+                <XIcon />
+              </Button>
+            </DialogClose>
+            <Options />
+          </>
+        ) : (
+          <SmallCreate />
+        )}
       </DialogContent>
     </Dialog>
+  );
+}
+
+/**
+ * What is typed on the card: its name, offered for an agent until one is typed, and what it's for,
+ * which until then says what the template or the base is. The face's letters follow the name.
+ */
+function useCardWords() {
+  const { catalog, choosing, draft, setText } = useBuilding();
+  const offered = useOffered();
+  const mode = draft?.mode ?? choosing?.mode ?? "agent";
+  // An agent is offered a name no agent has, used if none is typed. A template has to be named.
+  const shown = mode === "template" ? "" : offered;
+  const name = draft?.name ?? "";
+  const named = name.trim() || shown;
+  const from = catalog.templates.find((t) => t.id === (draft ?? choosing)?.from?.id);
+  const says = from?.description || draft?.base?.description || "";
+  // A face of its own: its colour stays while its letters follow the name.
+  const face = { id: "a-new-agent", name: named || "?", tone: "idle" as const };
+  return { draft, setText, shown, name, named, says, face };
+}
+
+/**
+ * The name and what it's for, typed in place: no box, only a faint tint under the pointer. On the
+ * card, narrow, they sit at the left of a smaller face, compact.
+ */
+function TypedInPlace({ compact = false }: { compact?: boolean }) {
+  const { draft, setText, shown, name, says } = useCardWords();
+  const inPlace = `block w-full min-w-0 rounded-md border-0 bg-transparent p-0 text-center outline-none hover:bg-[var(--hover)] ${compact ? "max-sm:text-left" : ""}`;
+  return (
+    <>
+      {/* The name offered reads as a name until one is typed: Create works at once. */}
+      <input
+        id="build-name"
+        aria-label="Name"
+        value={name}
+        placeholder={shown || "Name"}
+        // Until the stack is drawn there is nothing yet to hold what is typed.
+        readOnly={!draft}
+        onChange={(e) => setText({ name: e.target.value })}
+        className={`${inPlace} h-8 text-[22px] font-semibold tracking-tight ${compact ? "max-sm:h-6 max-sm:text-[17px]" : ""} ${shown ? "placeholder:text-foreground" : "placeholder:text-[var(--faint)]"}`}
+      />
+      {/* What it's for, in one or two lines. */}
+      <textarea
+        aria-label="What it's for"
+        rows={1}
+        value={draft?.purpose ?? ""}
+        placeholder={says}
+        readOnly={!draft}
+        onChange={(e) => setText({ purpose: e.target.value.replace(/\n/g, " ") })}
+        className={`${inPlace} mt-1 field-sizing-content max-h-10 resize-none overflow-hidden text-[13px] leading-5 text-muted-foreground placeholder:text-muted-foreground ${compact ? "max-sm:mt-0 max-sm:line-clamp-1" : ""}`}
+      />
+    </>
   );
 }
 
@@ -139,21 +203,7 @@ export function BuildDialog() {
  * no box; the card is centred on its height. Narrow, it sits on top, compact.
  */
 function IdentityCard() {
-  const { catalog, choosing, draft, setText } = useBuilding();
-  const offered = useOffered();
-  const mode = draft?.mode ?? choosing?.mode ?? "agent";
-  // An agent is offered a name no agent has, used if none is typed. A template has to be named.
-  const shown = mode === "template" ? "" : offered;
-  const name = draft?.name ?? "";
-  const named = name.trim() || shown;
-  const from = catalog.templates.find((t) => t.id === (draft ?? choosing)?.from?.id);
-  // Until something is typed, the line says what the template or the base is.
-  const says = from?.description || draft?.base?.description || "";
-  // A face of its own: its colour stays while its letters follow the name.
-  const face = { id: "a-new-agent", name: named || "?", tone: "idle" as const };
-  // Typed in place: no box, only a faint tint under the pointer.
-  const inPlace =
-    "block w-full min-w-0 rounded-md border-0 bg-transparent p-0 text-center outline-none hover:bg-[var(--hover)] max-sm:text-left";
+  const { draft, named, face } = useCardWords();
   return (
     <aside
       aria-label={`${named || "New agent"}, as it will be`}
@@ -167,27 +217,7 @@ function IdentityCard() {
           <Face agent={face} size={44} plain />
         </span>
         <div className="mt-4 w-full min-w-0 max-sm:mt-0 max-sm:w-auto max-sm:flex-1">
-          {/* The name offered reads as a name until one is typed: Create works at once. */}
-          <input
-            id="build-name"
-            aria-label="Name"
-            value={name}
-            placeholder={shown || "Name"}
-            // Until the stack is drawn there is nothing yet to hold what is typed.
-            readOnly={!draft}
-            onChange={(e) => setText({ name: e.target.value })}
-            className={`${inPlace} h-8 text-[22px] font-semibold tracking-tight max-sm:h-6 max-sm:text-[17px] ${shown ? "placeholder:text-foreground" : "placeholder:text-[var(--faint)]"}`}
-          />
-          {/* What it's for, in one or two lines. */}
-          <textarea
-            aria-label="What it's for"
-            rows={1}
-            value={draft?.purpose ?? ""}
-            placeholder={says}
-            readOnly={!draft}
-            onChange={(e) => setText({ purpose: e.target.value.replace(/\n/g, " ") })}
-            className={`${inPlace} mt-1 field-sizing-content max-h-10 resize-none overflow-hidden text-[13px] leading-5 text-muted-foreground placeholder:text-muted-foreground max-sm:mt-0 max-sm:line-clamp-1`}
-          />
+          <TypedInPlace compact />
         </div>
         {/* What it can do: a row for each unit chosen at the right, and nothing said with none. */}
         <ul
@@ -214,17 +244,22 @@ function IdentityCard() {
   );
 }
 
-/** What to start from: Empty or a template, a row of small cards that scrolls sideways. */
-function StartFrom() {
+/**
+ * What to start from: Empty or a template, a row that scrolls sideways. For a template, small cards
+ * of a title and what it is; for an agent, titles alone, what each is read out with it.
+ */
+function StartFrom({ titles = false }: { titles?: boolean }) {
   const { catalog, choosing, start } = useBuilding();
   const isEmpty = !!choosing && !choosing.from;
   const tile = (on: boolean) =>
-    `flex h-[60px] w-[184px] flex-col justify-center rounded-xl px-3 text-left ${on ? "bg-[var(--selected)] ring-1 ring-[var(--line-strong)] ring-inset" : "bg-[var(--create-card)] hover:brightness-110"}`;
+    titles
+      ? `h-8 rounded-full px-3.5 text-[13px] ${on ? "bg-[var(--selected)] font-medium ring-1 ring-[var(--line-strong)] ring-inset" : "bg-[var(--create-card)] text-muted-foreground hover:text-foreground"}`
+      : `flex h-[60px] w-[184px] flex-col justify-center rounded-xl px-3 text-left ${on ? "bg-[var(--selected)] ring-1 ring-[var(--line-strong)] ring-inset" : "bg-[var(--create-card)] hover:brightness-110"}`;
   return (
     // No heading: the row says what it is.
     <ul
       aria-label="Start from"
-      className="no-bar flex shrink-0 gap-2 overflow-x-auto px-5 pb-4 max-sm:pt-3"
+      className={`no-bar flex shrink-0 overflow-x-auto px-5 ${titles ? "gap-1.5" : "gap-2 pb-4 max-sm:pt-3"}`}
     >
       <li className="shrink-0">
         <button
@@ -233,7 +268,7 @@ function StartFrom() {
           className={tile(isEmpty)}
           onClick={() => start(undefined, choosing?.mode)}
         >
-          <span className="text-[15px] font-medium">Empty</span>
+          <span className={titles ? "" : "text-[15px] font-medium"}>Empty</span>
         </button>
       </li>
       {catalog.templates.map((t) => (
@@ -244,12 +279,125 @@ function StartFrom() {
             className={tile(choosing?.from?.id === t.id)}
             onClick={() => start(t, choosing?.mode)}
           >
-            <span className="truncate text-[15px] font-medium">{t.title}</span>
-            <span className="truncate text-[13px] text-muted-foreground">{t.description}</span>
+            <span className={titles ? "" : "truncate text-[15px] font-medium"}>{t.title}</span>
+            <span className={titles ? "sr-only" : "truncate text-[13px] text-muted-foreground"}>
+              {titles ? `: ${t.description}` : t.description}
+            </span>
           </button>
         </li>
       ))}
     </ul>
+  );
+}
+
+/**
+ * Create for an agent, one small window. Where it starts from is chosen in the row of templates;
+ * its name and what it's for are typed, in place; what that gives is shown, each unit by its logo
+ * and its name, and isn't asked: an agent's details are built in a chat. It sends the template's
+ * stack as saved. What Create's check refuses, of the whole stack or of a unit, is said above
+ * Create in the service's words: the only place a unit's state shows.
+ */
+function SmallCreate() {
+  const { draft, hide, refreshUnits, setProblems } = useBuilding();
+  const { named, face } = useCardWords();
+  const offered = useOffered();
+  const act = useAct();
+  // Made while signed out of the model account, an agent can't work yet: the foot says so.
+  const needs = needsOf(useLogin());
+  // What its units still need isn't asked here: Create's check says what can't be made.
+  const ready = !!draft?.base && !!named && draft.units.every((u) => u.unit);
+  const finish = () => {
+    if (!draft || !ready) return;
+    const name = nameOf(draft, offered);
+    const purpose = draft.purpose.trim();
+    const stack = toStack(draft);
+    act.run(async () => {
+      // A form can change while it's open: what it gives is shown as it now is before it's used.
+      if (await refreshUnits()) return;
+      const { problems } = await api.call<{ problems: StackProblem[] }>("agents", "check", {
+        stack,
+      });
+      if (problems.length > 0) {
+        setProblems(problems);
+        return;
+      }
+      const { agent } = await api.call<{ agent: string }>("agents", "create", {
+        stack,
+        name,
+        ...(purpose ? { purpose } : {}),
+      });
+      // It closes, and Settings too if it was opened over it: the new agent is shown in Team.
+      hide();
+      closeSettings();
+      go({ screen: "team", agent });
+    });
+  };
+  const refused = act.failed ?? draft?.problems.map((p) => p.message).join(" ");
+  return (
+    <form
+      aria-label="Create"
+      className="flex min-h-0 flex-col"
+      onSubmit={(event) => {
+        event.preventDefault();
+        finish();
+      }}
+    >
+      <header className="flex h-14 shrink-0 items-center gap-1 pr-3 pl-5">
+        <DialogTitle className="min-w-0 flex-1 truncate text-[17px] font-semibold">
+          Create New Agent
+        </DialogTitle>
+        <DialogClose asChild>
+          <Button type="button" variant="ghost" size="icon-sm" aria-label="Close">
+            <XIcon />
+          </Button>
+        </DialogClose>
+      </header>
+      <DialogDescription className="sr-only">
+        Where it starts from, its name and what it's for, and what it can do
+      </DialogDescription>
+      <StartFrom titles />
+      <div className="no-bar flex min-h-0 flex-col items-center overflow-y-auto px-8 pt-8 pb-2 text-center max-sm:px-5 max-sm:pt-6">
+        <Face agent={face} size={80} plain />
+        <div className="mt-4 w-full min-w-0">
+          <TypedInPlace />
+        </div>
+        {/* What it can do, as where it starts from gives it: shown, not asked, with no heading. */}
+        {!!draft?.units.length && (
+          <ul aria-label="What it can do" className="mt-6 flex flex-wrap justify-center gap-1.5">
+            {draft.units.map((unit) => (
+              <li
+                key={unit.key}
+                className="flex h-8 items-center gap-2 rounded-full bg-[var(--create-card)] pr-3.5 pl-1.5 text-[13px]"
+              >
+                <Tile logo={logoOf(unit.unit)} small />
+                {unit.unit?.title ?? unit.id}
+              </li>
+            ))}
+          </ul>
+        )}
+        {refused && (
+          <p role="alert" className="mt-4 text-[13px] text-[var(--bad)]">
+            {refused}
+          </p>
+        )}
+      </div>
+      {draft && (
+        <footer className="flex shrink-0 items-center justify-end gap-4 px-5 pt-4 pb-5">
+          {needs && (
+            <span className="min-w-0 flex-1 truncate text-left text-[13px] text-muted-foreground">
+              {needs}
+            </span>
+          )}
+          <Button
+            type="submit"
+            disabled={!ready || act.busy}
+            className="h-10 rounded-full px-5 text-[15px]"
+          >
+            Create
+          </Button>
+        </footer>
+      )}
+    </form>
   );
 }
 
@@ -288,12 +436,12 @@ function Part({
 }
 
 /**
- * The options: the title, its menu and the close on one line; what to start from; then the
- * sections, each a heading and what it asks; and at the foot, Create and what is still missing.
+ * A template's options: the title and the close on one line; what to start from; then the
+ * sections, each a heading and what it asks; and at the foot, Save template.
  */
 function Options() {
   const building = useBuilding();
-  const { catalog, choosing, draft, hide, refreshUnits, saveTemplate, setProblems } = building;
+  const { catalog, draft, hide, saveTemplate } = building;
   // What can be added: a unit a stack holds once isn't offered while the stack has it.
   const addable = catalog.units.filter(
     (unit) =>
@@ -301,71 +449,19 @@ function Options() {
       !draft?.units.some((held) => held.unit?.provider === unit.provider && held.id === unit.id),
   );
   const act = useAct();
-  // Made while signed out of the model account, an agent can't work yet: the foot says so.
-  const needs = needsOf(useLogin());
-  const [saving, setSaving] = useState(false);
-  const offered = useOffered();
-  const isTemplate = (draft?.mode ?? choosing?.mode) === "template";
-  const ready = !!draft && isReady(draft, offered);
+  const ready = !!draft && isReady(draft);
   const finish = () => {
     if (!draft || !ready) return;
-    const name = nameOf(draft, offered);
+    const name = nameOf(draft, "");
     const purpose = draft.purpose.trim();
-    if (isTemplate) {
-      act.run(async () => {
-        await saveTemplate(name, purpose);
-        hide();
-        // Back to the templates, in Settings, whether or not it was opened over it.
-        openSettings("templates");
-      });
-      return;
-    }
-    const stack = toStack(draft);
     act.run(async () => {
-      // A form can change while it's open. What's chosen, and what it grants, show before it's used.
-      if (await refreshUnits()) return;
-      const { problems } = await api.call<{ problems: StackProblem[] }>("agents", "check", {
-        stack,
-      });
-      if (problems.length > 0) {
-        setProblems(problems);
-        return;
-      }
-      const { agent } = await api.call<{ agent: string }>("agents", "create", {
-        stack,
-        name,
-        ...(purpose ? { purpose } : {}),
-      });
-      // It closes, and Settings too if it was opened over it: the new agent is shown in Team.
+      await saveTemplate(name, purpose);
       hide();
-      closeSettings();
-      go({ screen: "team", agent });
+      // Back to the templates, in Settings, whether or not it was opened over it.
+      openSettings("templates");
     });
   };
-  /** The window's menu: in its head, or at its foot where the head isn't drawn. */
-  const options = (align: "start" | "end") =>
-    // Not modal: a modal menu dismissed with Escape swallows the next click outside the window.
-    draft &&
-    !isTemplate && (
-      <DropdownMenu modal={false}>
-        <DropdownMenuTrigger asChild>
-          <Button type="button" variant="ghost" size="icon-sm" aria-label="Build options">
-            <MoreHorizontalIcon />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align={align}>
-          {/* A stack with no base, or a unit nobody offers, can't be kept. */}
-          <DropdownMenuItem
-            disabled={!draft.base || draft.units.some((u) => !u.unit)}
-            onSelect={() => setSaving(true)}
-          >
-            Save as template…
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
-    );
-  const overall = draft?.problems.filter((p) => p.unit === undefined) ?? [];
-  const refused = act.failed ?? overall.map((p) => p.message).join(" ");
+  const refused = act.failed;
   // The rail's sections, in order, each found by its heading: the base, each unit, the way to add
   // one. What to start from is above the scroll and isn't one.
   const scroller = useRef<HTMLDivElement>(null);
@@ -383,157 +479,96 @@ function Options() {
       scroller.current?.querySelector<HTMLElement>(`[data-heading="${CSS.escape(section.key)}"]`),
   }));
   return (
-    <>
-      <form
-        aria-label="Build"
-        className="flex min-h-0 min-w-0 flex-1 flex-col"
-        onSubmit={(event) => {
-          event.preventDefault();
-          finish();
-        }}
-      >
-        {/* The title, the menu and the close in one line, centred on it. */}
-        <header className="flex h-14 shrink-0 items-center gap-1 pr-3 pl-5 max-sm:sr-only">
-          <DialogTitle className="min-w-0 flex-1 truncate text-[17px] font-semibold">
-            {isTemplate ? "New template" : "Create New Agent"}
-          </DialogTitle>
-          <span className="flex items-center gap-1 max-sm:hidden">
-            {options("end")}
-            <DialogClose asChild>
-              <Button type="button" variant="ghost" size="icon-sm" aria-label="Close">
-                <XIcon />
-              </Button>
-            </DialogClose>
-          </span>
-        </header>
-        <DialogDescription className="sr-only">
-          An agent's card at the left, and the options that make it at the right
-        </DialogDescription>
-        <StartFrom />
-        {draft && (
-          // The options scroll with no scrollbar: the rail of their sections stands at the right.
-          <div className="relative min-h-0 flex-1">
-            <div ref={scroller} className="no-bar relative h-full overflow-y-auto pt-1 pr-14 pl-5">
-              <Part id="base" title="Base" logo={BotIcon}>
-                <BaseOptions />
-              </Part>
-              {draft.units.map((unit, i) => (
-                <UnitPart
-                  key={unit.key}
-                  unit={unit}
-                  above={draft.units.slice(0, i)}
-                  problems={draft.problems.filter((p) => p.unit === i)}
-                />
-              ))}
-              <Part id="add" title="Add" logo={PlusIcon} last>
-                <DropdownMenu modal={false}>
-                  <DropdownMenuTrigger asChild>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      className="w-full justify-start text-muted-foreground"
-                      disabled={addable.length === 0}
-                    >
-                      <PlusIcon />
-                      Add a unit
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="start" className="w-72">
-                    <DropdownMenuLabel className="sr-only">Units</DropdownMenuLabel>
-                    {addable.map((unit) => (
-                      <DropdownMenuItem
-                        key={`${unit.provider}/${unit.id}`}
-                        onSelect={() => building.addUnit(unit)}
-                        className="flex-col items-start gap-0"
-                      >
-                        <span>{unit.title}</span>
-                        <span className="text-xs text-muted-foreground">{unit.description}</span>
-                      </DropdownMenuItem>
-                    ))}
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </Part>
-            </div>
-            <Rail scroller={scroller} sections={sections} />
-          </div>
-        )}
-        {draft && (
-          <footer className="flex shrink-0 items-center justify-end gap-4 px-5 py-3">
-            {/* Where the window's head isn't drawn, its menu is at the foot. */}
-            <span className="mr-auto sm:hidden">{options("start")}</span>
-            {refused ? (
-              <p role="alert" className="min-w-0 flex-1 text-[13px] text-[var(--bad)]">
-                {refused}
-              </p>
-            ) : (
-              !isTemplate &&
-              needs && (
-                <span className="min-w-0 flex-1 truncate text-[13px] text-muted-foreground">
-                  {needs}
-                </span>
-              )
-            )}
-            <Button
-              type="submit"
-              disabled={!ready || act.busy}
-              className="h-10 rounded-full px-5 text-[15px]"
-            >
-              {isTemplate ? "Save template" : "Create"}
+    <form
+      aria-label="Build"
+      className="flex min-h-0 min-w-0 flex-1 flex-col"
+      onSubmit={(event) => {
+        event.preventDefault();
+        finish();
+      }}
+    >
+      {/* The title and the close in one line, centred on it. */}
+      <header className="flex h-14 shrink-0 items-center gap-1 pr-3 pl-5 max-sm:sr-only">
+        <DialogTitle className="min-w-0 flex-1 truncate text-[17px] font-semibold">
+          New template
+        </DialogTitle>
+        <span className="flex items-center gap-1 max-sm:hidden">
+          <DialogClose asChild>
+            <Button type="button" variant="ghost" size="icon-sm" aria-label="Close">
+              <XIcon />
             </Button>
-          </footer>
-        )}
-      </form>
-      <SaveTemplate open={saving} onClose={() => setSaving(false)} />
-    </>
-  );
-}
-
-/** Keeps the stack as it stands, without its secrets; the stack stays open. */
-function SaveTemplate({ open, onClose }: { open: boolean; onClose(): void }) {
-  const { draft, saveTemplate } = useBuilding();
-  const [typed, setTyped] = useState<string>();
-  const act = useAct();
-  const title = typed ?? (draft?.from ? `${draft.from.title} copy` : "");
-  return (
-    <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
-      <DialogContent className="window ring-0 sm:max-w-sm">
-        <form
-          className="flex flex-col gap-4"
-          onSubmit={(event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            if (!title.trim()) return;
-            act.run(
-              () => saveTemplate(title.trim(), draft?.purpose.trim() ?? ""),
-              () => {
-                setTyped(undefined);
-                onClose();
-              },
-            );
-          }}
-        >
-          <DialogHeader>
-            <DialogTitle>Save as template</DialogTitle>
-          </DialogHeader>
-          <Input
-            aria-label="Template name"
-            value={title}
-            onChange={(e) => setTyped(e.target.value)}
-          />
-          {act.failed && (
-            <p role="alert" className="text-[13px] text-[var(--bad)]">
-              {act.failed}
+          </DialogClose>
+        </span>
+      </header>
+      <DialogDescription className="sr-only">
+        An agent's card at the left, and the options that make it at the right
+      </DialogDescription>
+      <StartFrom />
+      {draft && (
+        // The options scroll with no scrollbar: the rail of their sections stands at the right.
+        <div className="relative min-h-0 flex-1">
+          <div ref={scroller} className="no-bar relative h-full overflow-y-auto pt-1 pr-14 pl-5">
+            <Part id="base" title="Base" logo={BotIcon}>
+              <BaseOptions />
+            </Part>
+            {draft.units.map((unit, i) => (
+              <UnitPart
+                key={unit.key}
+                unit={unit}
+                above={draft.units.slice(0, i)}
+                problems={draft.problems.filter((p) => p.unit === i)}
+              />
+            ))}
+            <Part id="add" title="Add" logo={PlusIcon} last>
+              <DropdownMenu modal={false}>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="w-full justify-start text-muted-foreground"
+                    disabled={addable.length === 0}
+                  >
+                    <PlusIcon />
+                    Add a unit
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="w-72">
+                  <DropdownMenuLabel className="sr-only">Units</DropdownMenuLabel>
+                  {addable.map((unit) => (
+                    <DropdownMenuItem
+                      key={`${unit.provider}/${unit.id}`}
+                      onSelect={() => building.addUnit(unit)}
+                      className="flex-col items-start gap-0"
+                    >
+                      <span>{unit.title}</span>
+                      <span className="text-xs text-muted-foreground">{unit.description}</span>
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </Part>
+          </div>
+          <Rail scroller={scroller} sections={sections} />
+        </div>
+      )}
+      {draft && (
+        <footer className="flex shrink-0 items-center justify-end gap-4 px-5 py-3">
+          {refused && (
+            <p role="alert" className="min-w-0 flex-1 text-[13px] text-[var(--bad)]">
+              {refused}
             </p>
           )}
-          <DialogFooter>
-            <Button type="submit" disabled={!title.trim() || act.busy}>
-              Save
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
+          <Button
+            type="submit"
+            disabled={!ready || act.busy}
+            className="h-10 rounded-full px-5 text-[15px]"
+          >
+            Save template
+          </Button>
+        </footer>
+      )}
+    </form>
   );
 }
 

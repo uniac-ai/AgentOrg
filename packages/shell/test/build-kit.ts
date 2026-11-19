@@ -47,6 +47,31 @@ export async function fromTemplate(page: Page, name: string) {
     .click();
   await card(page, "Base").waitFor();
 }
+/**
+ * New template, from Settings: on its own, or from a template. It is the window that builds a stack,
+ * its options in sections, which Create for an agent no longer has. Once its stack is drawn.
+ */
+export async function newTemplate(page: Page, from?: string) {
+  await agentsRead(page);
+  await page
+    .getByRole("navigation", { name: "Main" })
+    .getByRole("button", { name: "Settings" })
+    .click();
+  const settings = settingsWindow(page);
+  // On a phone Settings opens on its sections, and Templates is chosen from them.
+  if ((page.viewportSize()?.width ?? 0) < 640)
+    await settings
+      .getByRole("navigation", { name: "Settings" })
+      .getByRole("button", { name: "Templates" })
+      .click();
+  await settings
+    .getByRole("button", {
+      name: from ? `New template from ${from}` : "New template",
+      exact: true,
+    })
+    .click();
+  await card(page, "Base").waitFor();
+}
 export async function choose(page: Page, field: string, option: RegExp) {
   await panel(page).getByRole("combobox", { name: field }).click();
   await page.getByRole("option", { name: option }).click();
