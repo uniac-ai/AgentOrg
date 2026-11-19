@@ -25,19 +25,24 @@ const cases: [string, string, string[]][] = [
     ["One line.\nThe next line."],
   ],
   [
-    "a list joins the line above it, with no blank line",
+    "a list right under a line, with no blank line, stays in its bubble",
     "Three folders:\n- **web**: pages\n- **cart**: pricing",
     ["Three folders:\n- **web**: pages\n- **cart**: pricing"],
   ],
   [
-    "a list joins the line above it, with a blank line",
+    "a list after a blank line starts a new bubble, as words do",
     "Three folders:\n\n- **web**: pages\n- **cart**: pricing",
-    ["Three folders:\n\n- **web**: pages\n- **cart**: pricing"],
+    ["Three folders:", "- **web**: pages\n- **cart**: pricing"],
   ],
   [
-    "a numbered list joins too",
+    "a numbered list right under a line stays in its bubble",
+    "Two steps:\n1. Pull.\n2. Run.",
+    ["Two steps:\n1. Pull.\n2. Run."],
+  ],
+  [
+    "a numbered list after a blank line starts a new bubble too",
     "Two steps:\n\n1. Pull.\n2. Run.",
-    ["Two steps:\n\n1. Pull.\n2. Run."],
+    ["Two steps:", "1. Pull.\n2. Run."],
   ],
   [
     "whatever follows a list starts a new bubble",
@@ -76,12 +81,13 @@ const cases: [string, string, string[]][] = [
   ],
   ["an empty message has no bubble", "", []],
   [
-    "the long reply: a first line, two paragraphs, the list with its line, the line after, the code",
+    "the long reply: a first line, two paragraphs, the line before the list, the list, the line after, the code",
     LONG_REPLY,
     [
       "It's a small shop demo: a storefront, a cart and a fake card service.",
       "The README is about 300 words. Most of it says how to run the demo and test it.",
-      "The code is in three folders, one for each part:\n\n- **web**: the storefront's pages and styles\n- **cart**: pricing, coupons and the checkout session\n- **pay**: a stand-in for the card processor",
+      "The code is in three folders, one for each part:",
+      "- **web**: the storefront's pages and styles\n- **cart**: pricing, coupons and the checkout session\n- **pay**: a stand-in for the card processor",
       "To run it, the README gives one command:",
       `${fence}sh\nnpm install && npm run dev\n${fence}`,
     ],
@@ -102,36 +108,43 @@ test("as a reply is written, the bubbles before the last never change, and one i
     );
     was = now;
   }
-  assert.equal(was.length, 5, "written out, the whole reply's five");
+  assert.equal(was.length, 6, "written out, the whole reply's six");
 });
 
-/**
- * Replies of many shapes, each with its bubbles once written out, as they were before anything was
- * held back while a message is written.
- */
+/** Replies of many shapes, each with its bubbles once written out. */
 const SHAPES: [string, string, string[]][] = [
   [
     "numbered, tight",
     "Here are the steps:\n\n1. Install it\n2. Run it\n3. Open the page\n\nThat is all.",
-    ["Here are the steps:\n\n1. Install it\n2. Run it\n3. Open the page", "That is all."],
+    ["Here are the steps:", "1. Install it\n2. Run it\n3. Open the page", "That is all."],
   ],
   [
     "numbered, loose",
     "Three things:\n\n1. First\n\n2. Second\n\n10. Tenth\n\nDone.",
-    ["Three things:\n\n1. First\n\n2. Second\n\n10. Tenth", "Done."],
+    ["Three things:", "1. First\n\n2. Second\n\n10. Tenth", "Done."],
   ],
-  ["numbered with a bracket", "Options:\n\n1) One\n2) Two", ["Options:\n\n1) One\n2) Two"]],
+  ["numbered with a bracket", "Options:\n\n1) One\n2) Two", ["Options:", "1) One\n2) Two"]],
   [
     "hyphen list",
     "The parts:\n\n- **web**: pages\n- **cart**: pricing\n\nAfter the list.",
-    ["The parts:\n\n- **web**: pages\n- **cart**: pricing", "After the list."],
+    ["The parts:", "- **web**: pages\n- **cart**: pricing", "After the list."],
   ],
-  ["star list", "The parts:\n\n* web\n* cart\n\nAfter.", ["The parts:\n\n* web\n* cart", "After."]],
-  ["plus list", "The parts:\n\n+ web\n+ cart", ["The parts:\n\n+ web\n+ cart"]],
+  ["star list", "The parts:\n\n* web\n* cart\n\nAfter.", ["The parts:", "* web\n* cart", "After."]],
+  ["plus list", "The parts:\n\n+ web\n+ cart", ["The parts:", "+ web\n+ cart"]],
   [
     "nested list",
     "Plan:\n\n- one\n  - inner\n- two\n\nEnd.",
-    ["Plan:\n\n- one\n  - inner\n- two", "End."],
+    ["Plan:", "- one\n  - inner\n- two", "End."],
+  ],
+  [
+    "a list right under its line",
+    "The parts:\n- web\n- cart\n\nAfter.",
+    ["The parts:\n- web\n- cart", "After."],
+  ],
+  [
+    "a numbered list right under its line",
+    "Two steps:\n1. Pull.\n2. Run.",
+    ["Two steps:\n1. Pull.\n2. Run."],
   ],
   [
     "bold start",
@@ -183,7 +196,8 @@ const SHAPES: [string, string, string[]][] = [
     [
       "It's a small shop demo: a storefront, a cart and a fake card service.",
       "The README is about 300 words. Most of it says how to run the demo and test it.",
-      "The code is in three folders, one for each part:\n\n- **web**: the storefront's pages and styles\n- **cart**: pricing, coupons and the checkout session\n- **pay**: a stand-in for the card processor",
+      "The code is in three folders, one for each part:",
+      "- **web**: the storefront's pages and styles\n- **cart**: pricing, coupons and the checkout session\n- **pay**: a stand-in for the card processor",
       "To run it, the README gives one command:",
       "```sh\nnpm install && npm run dev\n```",
     ],
@@ -214,7 +228,7 @@ for (const [name, text, written] of SHAPES)
 
 test("while written, a last paragraph that is only a number or a list's mark isn't drawn until the next piece says what it is; settled, it is", () => {
   assert.deepEqual(bubblesOf("Here are the steps:\n\n1", true), ["Here are the steps:"]);
-  assert.deepEqual(bubblesOf("Here are the steps:\n\n1.", true), ["Here are the steps:\n\n1."]);
+  assert.deepEqual(bubblesOf("Here are the steps:\n\n1.", true), ["Here are the steps:", "1."]);
   assert.deepEqual(bubblesOf("First line.\n\n*", true), ["First line."]);
   assert.deepEqual(bubblesOf("First line.\n\n*r", true), ["First line.", "*r"]);
   assert.deepEqual(bubblesOf("-", true), []);

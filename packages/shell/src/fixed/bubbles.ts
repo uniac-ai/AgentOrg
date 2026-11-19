@@ -1,16 +1,19 @@
-// A message's bubbles: its text split at its blank lines. A list stays in the bubble of the line
-// above it, with or without a blank line between, and whatever follows a list starts a new bubble.
-// It runs on the message's text, so a reply still being written is split as far as it has come.
+// A message's bubbles: its text split at its blank lines. A blank line always starts a new bubble,
+// before a list too: a list right under words, with no blank line between, stays in their bubble,
+// and after a blank line it starts its own, as words do. Whatever follows a list or code starts a
+// new bubble. It runs on the message's text, so a reply still being written is split as far as it
+// has come.
 //
 // While a message is written, a last paragraph that is only what may yet become a list's marker
-// (digits, or one of -, * and +) is held back until the next piece says what it is: as a list it
-// joins the bubble above, and as words it starts its own. So a bubble once drawn is never split or
-// merged as the rest comes. Once the message is settled, nothing is held.
+// (digits, or one of -, * and +) is held back until the next piece says what it is: after a list it
+// may be the list's next item, in the list's bubble, where as words it starts a bubble of its own.
+// So a bubble once drawn is never split or merged as the rest comes. Once the message is settled,
+// nothing is held.
 //
 // The blocks are the markdown library's own, as it draws them, so a blank line inside a code block
 // splits nothing. Each block is one of three kinds:
 // - a code block, which stays whole, as a bubble of its own;
-// - a list, which joins the bubble of the words above it;
+// - a list, which stays in the bubble of the words right above it, with no blank line between;
 // - anything else (a paragraph, or a heading or a table if a message has one anyway), which starts
 //   a bubble after a blank line, after a list or after code, and otherwise stays in the bubble it
 //   follows, since nothing split it.
@@ -42,7 +45,7 @@ export function bubblesOf(text: string, writing = false): string[] {
     }
     const kind = kindOf(block);
     const last = bubbles.at(-1);
-    const joins = !!last && before === "words" && (kind === "list" || (kind === "words" && !blank));
+    const joins = !!last && before === "words" && !blank && (kind === "list" || kind === "words");
     if (last && joins) last.push(block);
     else bubbles.push([block]);
     before = kind;

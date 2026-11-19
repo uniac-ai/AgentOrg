@@ -104,7 +104,7 @@ const messages = (thread: Locator) =>
   });
 
 test(
-  "a one-line answer is one bubble, and the long reply has its five: the first line, two paragraphs, the list with its line, the line after, and the code",
+  "a one-line answer is one bubble, and the long reply has its six: the first line, two paragraphs, the line before the list, the list, the line after, and the code",
   withGateway(async (gateway) => {
     let { page, thread } = await conversation(gateway, "oneLine");
     await thread.locator(".prose-chat").first().waitFor();
@@ -123,6 +123,7 @@ test(
         ["muted", "It's a small shop demo: "],
         ["muted", "The README is about 300 "],
         ["muted", "The code is in three fol"],
+        ["muted", "web: the storefront's pa"],
         ["muted", "To run it, the README gi"],
         ["ghost", "shnpm install && npm run"],
       ],
@@ -145,7 +146,7 @@ test(
       assert.ok(reply && said.person);
       const words = reply.bubbles.filter((b) => b.kind === "muted");
       const [code] = reply.bubbles.filter((b) => b.kind === "ghost");
-      assert.equal(words.length, 4);
+      assert.equal(words.length, 5);
       for (const bubble of words) {
         assert.deepEqual(
           [bubble.fill, bubble.corners, bubble.inside, bubble.type],
@@ -241,7 +242,7 @@ test(
     });
     gateway.setChatStatus("a-research", { state: "idle" });
     await thread.getByRole("button", { name: "Copy" }).waitFor();
-    assert.deepEqual(await seen(), [0, 1, 2, 3, 4], "recorded, the same five");
+    assert.deepEqual(await seen(), [0, 1, 2, 3, 4, 5], "recorded, the same six");
     await page.close();
   }),
 );
@@ -272,7 +273,7 @@ test(
     let said = await messages(thread);
     assert.deepEqual(
       said.agent.at(-1)?.bubbles.map((b) => b.kind),
-      ["muted", "muted", "muted", "muted", "ghost"],
+      ["muted", "muted", "muted", "muted", "muted", "ghost"],
     );
     await page.close();
     ({ page, thread } = await conversation(gateway, "long", "chat", 390));
@@ -280,7 +281,7 @@ test(
     said = await messages(thread);
     const reply = said.agent.at(-1);
     assert.ok(reply);
-    assert.equal(reply.bubbles.length, 5);
+    assert.equal(reply.bubbles.length, 6);
     for (const bubble of reply.bubbles)
       assert.ok(
         bubble.left >= reply.left - 0.5 && bubble.right <= reply.left + reply.width + 0.5,
@@ -325,7 +326,7 @@ const drawn = (thread: Locator) =>
   );
 
 test(
-  'a numbered list after a line, as it is written: its "1" waits for its ".", and the list is then in the line\'s bubble, the same element throughout',
+  'a numbered list after a line and a blank line, as it is written: its "1" waits for its ".", then the list starts its own bubble, and each bubble stays the same element',
   withGateway(async (gateway) => {
     const { page, thread, sockets } = await conversation(gateway, "writing");
     await piece(page, gateway, sockets, "Here are the steps:\n\n");
@@ -337,11 +338,18 @@ test(
       'after "1", still the one bubble',
     );
     await piece(page, gateway, sockets, ".");
+    const listed = await drawn(thread);
+    assert.equal(listed.length, 2, 'after ".", the list has its own bubble');
+    assert.deepEqual(listed[0], { words: "Here are the steps:", was: true }, "the line's the same");
     await piece(page, gateway, sockets, " Install it");
-    const now = await drawn(thread);
-    assert.equal(now.length, 1, "the list is in the line's bubble");
-    assert.equal(now[0]?.was, true, "the same element");
-    assert.match(now[0]?.words ?? "", /^Here are the steps:\s*Install it$/);
+    assert.deepEqual(
+      await drawn(thread),
+      [
+        { words: "Here are the steps:", was: true },
+        { words: "Install it", was: true },
+      ],
+      "the list's words come into the list's bubble, the same element",
+    );
     await page.close();
   }),
 );
