@@ -505,6 +505,62 @@ const STATED: Units["units"][number]["form"] = [
   },
 ];
 
+/** One of the stated form's questions, by its id. */
+const stated = (id: string) => STATED.find((field) => field.id === id) as (typeof STATED)[number];
+const THIS_ONE = { field: "kind", in: ["this"] };
+/**
+ * What the Computer unit asks where something that makes computers is there, in its connector's
+ * words: which computer first, then this one's questions or how a new one is made.
+ */
+const WHOLE: Units["units"][number]["form"] = [
+  {
+    id: "kind",
+    type: "choice",
+    value: "string",
+    title: "Which computer",
+    required: true,
+    options: [
+      {
+        value: "this",
+        title: "This computer",
+        description:
+          "The whole machine: your files, apps, screen and signed-in browser. It acts as you, with everything you can reach.",
+        caution: true,
+      },
+      {
+        value: "new",
+        title: "A new computer",
+        description: "Made for this agent and kept apart from yours.",
+      },
+    ],
+  },
+  { ...stated("workspace"), visible: THIS_ONE },
+  {
+    id: "made",
+    type: "choice",
+    value: "string",
+    title: "Made as",
+    required: true,
+    default: "container",
+    visible: { field: "kind", in: ["new"] },
+    options: [
+      {
+        value: "container",
+        title: "A container on this machine",
+        description: "Commands and files, apart from yours.",
+      },
+      {
+        value: "remote",
+        title: "At another address",
+        description: "A computer provider there makes it.",
+      },
+    ],
+  },
+  stated("access"),
+  { ...stated("screen"), visible: THIS_ONE },
+  { ...stated("ownBrowser"), visible: THIS_ONE },
+];
+
 const TEMPLATES: Template[] = [
   {
     id: "assistant",
@@ -644,6 +700,40 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
   /** The form a unit has now, as offered. */
   const formOf = (provider: string, id: string) =>
     units.find((u) => u.provider === provider && u.id === id)?.form;
+  /**
+   * What management's own check refuses in a unit's answers, in its words: an answer for a field
+   * the unit's form doesn't have, and one a shown field offers no option for.
+   */
+  const refusedIn = (provider: string, id: string, values: Record<string, unknown> = {}) => {
+    const form = formOf(provider, id);
+    if (!form) return [];
+    const shown = (field: (typeof form)[number], depth = 0): boolean => {
+      if (!field.visible) return true;
+      const { field: on, in: wanted } = field.visible;
+      const other = form.find((f) => f.id === on);
+      if (!other || depth > form.length || !shown(other, depth + 1)) return false;
+      return [values[other.id] ?? other.default].flat().some((v) => wanted.includes(v as string));
+    };
+    const found: { field: string; message: string }[] = Object.keys(values)
+      .filter((key) => !form.some((field) => field.id === key))
+      .map((key) => ({ field: key, message: `This unit has no field ${key}.` }));
+    for (const field of form) {
+      const value = values[field.id];
+      if (!field.options || value === undefined || !shown(field)) continue;
+      const offered = field.options.map((option) => option.value);
+      if (![value].flat().every((one) => offered.includes(String(one))))
+        found.push({ field: field.id, message: `${field.title} isn't one of its options.` });
+    }
+    return found;
+  };
+  /** A stack's units as management checks them: each one's problems, with its place. */
+  const stackRefused = (stack: unknown) =>
+    (
+      (stack as { units?: { provider: string; unit: string; values?: Record<string, unknown> }[] })
+        ?.units ?? []
+    ).flatMap((u, unit) =>
+      refusedIn(u.provider, u.unit, u.values).map((problem) => ({ ...problem, unit })),
+    );
 
   const emit = (slot: string, event: string, payload: unknown) => {
     for (const s of subscribers)
@@ -792,7 +882,9 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
         templates = templates.filter((t) => t.id !== id);
         return {};
       },
-      check: () => ({ problems }),
+      check: (input) => ({
+        problems: [...problems, ...("stack" in input ? stackRefused(input.stack) : [])],
+      }),
       // As management reads its log: newest first, those before `before`, `limit` of them.
       activity: ({ agent, before, limit = 50 }) => {
         const matching = changes.filter(
@@ -803,6 +895,10 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
         return { entries: matching.slice(0, Number(limit)), more: matching.length > Number(limit) };
       },
       create: (input) => {
+        // All or none, as management makes it: refused, nothing is made.
+        const refused = stackRefused(input.stack);
+        if (refused.length > 0)
+          throw new Refusal("invalid", refused.map((problem) => problem.message).join(" "));
         const made = `a-${agents.size + 1}`;
         const { base, units, template } = input.stack as unknown as {
           template?: string;
@@ -1641,6 +1737,9 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
      * The Computer unit states this computer, as its connector does where nothing that makes
      * computers is there: this line, and its own four questions. A part that can't be had now is
      * never shown, by a condition on itself, so a value for it is dropped; the line says why.
+     * The real connector never states this computer while it keeps a made computer: while any
+     * computer it keeps was made, or an agent's made one was removed, it gives the whole form,
+     * which asks which computer. So no state here turns a made container into the whole machine.
      */
     stateComputer(line: string, off?: "screen" | "ownBrowser") {
       units = units.map((unit) =>
@@ -1654,6 +1753,14 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
               ),
             },
       );
+    },
+    /** The Computer unit asks which computer, as its connector does where one can be made. */
+    askComputer() {
+      units = units.map((unit) => (unit.id !== "computer" ? unit : { ...unit, form: WHOLE }));
+    },
+    /** A template comes to be kept, as it was saved, whatever its units ask now. */
+    addTemplate(template: Template) {
+      templates.push(structuredClone(template));
     },
     live,
     terminal,
