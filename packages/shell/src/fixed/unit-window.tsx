@@ -22,7 +22,9 @@ export type Applied = AgentDetail["units"][number];
 /**
  * One unit taken out and another put in its place, as answered now: at `at`, its index among the
  * agent's units, so it stays where it was. Refused, the one it was goes back there as it was built,
- * all but its secrets, and the refusal is passed on.
+ * all but its secrets, and the refusal is passed on. It goes back as its form takes it today: a
+ * value for a field the form no longer has, or one it doesn't show now, would be refused, and the
+ * agent left without it.
  */
 export async function replaceUnit(
   agent: string,
@@ -41,7 +43,11 @@ export async function replaceUnit(
       ...place,
     });
   } catch (refused) {
-    const was = { provider: applied.provider, unit: applied.unit, values: applied.values };
+    // `unit` is today's form when it is the unit taken out; a way forward may put in another.
+    const same = unit.provider === applied.provider && unit.id === applied.unit;
+    const was = same
+      ? unitInput(unit, applied.values)
+      : { provider: applied.provider, unit: applied.unit, values: applied.values };
     await api.call("agents", "addUnit", { agent, unit: was, ...place }).catch(() => {});
     throw refused;
   }

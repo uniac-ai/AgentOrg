@@ -20,6 +20,8 @@ import { heldComputer, openSetup, sampleAgents } from "./design/samples.ts";
 withBrowser();
 
 /** What the Computer unit says where its connector states this computer, with nobody's name. */
+const READY =
+  "Sam's Mac mini, whole: your files and apps, its screen and your signed-in browser. It acts as you, with everything you can reach.";
 const SCREEN_OFF =
   "Sam's Mac mini, whole: your files and apps and your signed-in browser. It acts as you, with everything you can reach. Screen is turned off in the AgentOrg app. Turn it on there to choose it.";
 const INSTALL =
@@ -252,5 +254,57 @@ test(
       assert.ok(seen.fits && !seen.sideways, `${width}: fits, nothing sideways`);
       await page.close();
     }
+  }),
+);
+
+test(
+  "a change that is refused puts the Computer back as today's form takes it: an agent made before the computer was stated keeps it, in its place, and the page says why",
+  withGateway(async (gateway) => {
+    gateway.stateComputer(READY);
+    // Made before the computer was stated: its record holds which computer, a field the form no
+    // longer has, which is refused if it is sent.
+    builtWith(gateway, {
+      kind: "this",
+      workspace: "~/Agents/Triage",
+      access: "terminal",
+      screen: "on",
+      ownBrowser: "yours",
+    });
+    const triage = gateway.agents.get("a-triage");
+    triage?.units?.push({
+      provider: "units",
+      needs: {},
+      status: { state: "connected" },
+      instance: "i-web",
+      unit: "web",
+      title: "Web",
+      values: { service: "exa" },
+    });
+    const page = await at(gateway, "#/a/a-triage");
+    const window = await change(page);
+    await window.getByLabel("Where its work happens", { exact: true }).fill("/nowhere");
+    gateway.refuseNext("agents.addUnit", "invalid", "That folder can't be used.");
+    await window.getByRole("button", { name: "Save" }).click();
+    const sheet = page.getByRole("dialog", { name: "Triage's setup" });
+    await sheet.getByRole("alert").getByText("That folder can't be used.").waitFor();
+    // Back first, as it was answered, with only what its form has.
+    const units = gateway.agents.get("a-triage")?.units ?? [];
+    assert.deepEqual(
+      units.map((u) => u.unit),
+      ["computer", "web"],
+    );
+    assert.deepEqual(units[0]?.values, {
+      workspace: "~/Agents/Triage",
+      access: "terminal",
+      screen: "on",
+      ownBrowser: "yours",
+    });
+    await sheet
+      .getByRole("region", { name: /^Built from/ })
+      .getByRole("listitem")
+      .first()
+      .getByText("~/Agents/Triage")
+      .waitFor();
+    await page.close();
   }),
 );
