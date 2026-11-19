@@ -217,8 +217,27 @@ const UNITS = [
     title: "Computer",
     description: "A computer to share.",
     form: [
-      { id: "kind", type: "text", value: "string", title: "Which computer" },
-      { id: "made", type: "text", value: "string", title: "Made as" },
+      // As the real unit asks where a provider that makes is there: a new one among its answers.
+      {
+        id: "kind",
+        type: "choice",
+        value: "string",
+        title: "Which computer",
+        options: [
+          { value: "this", title: "This computer" },
+          { value: "new", title: "A new computer" },
+        ],
+      },
+      {
+        id: "made",
+        type: "choice",
+        value: "string",
+        title: "Made as",
+        options: [
+          { value: "container", title: "A container on this machine" },
+          { value: "remote", title: "At another address" },
+        ],
+      },
       {
         id: "access",
         authority: "setting",
@@ -407,6 +426,16 @@ async function setup(t: test.TestContext) {
     rows?: Record<string, { label: string; value: string }[]>;
     /** What each instance's status says it is in today's words. */
     now?: { values: Record<string, unknown>; rows?: Record<string, object[]> };
+    /**
+     * The Computer unit states this computer, as where no provider that makes is there: no
+     * `kind`, and its screen and the person's browser never shown.
+     */
+    stated?: boolean;
+    /**
+     * The whole form's container answer: none, as on a Mac with the AgentOrg app, which makes
+     * none, or greyed, as where the provider can't make one now.
+     */
+    container?: "none" | "greyed";
   } = {};
   const given: {
     secrets: unknown[];
@@ -586,7 +615,15 @@ async function setup(t: test.TestContext) {
         { slot: string; connection: string; client: { close(): void } }[]
       >();
       ctx.exports.provider.implement({
-        units: () => ({ units: UNITS as never }),
+        units: () => ({
+          units: UNITS.map((unit) =>
+            script.stated
+              ? statedComputer(unit)
+              : script.container
+                ? withContainer(unit, script.container)
+                : unit,
+          ) as never,
+        }),
         skill: ({ path, name }) => {
           failing("skill");
           return {
@@ -1074,6 +1111,48 @@ const FAILURES: [string, (s: Awaited<ReturnType<typeof setup>>) => void][] = [
   ["exposing a connection", (s) => (s.script.noTools = true)],
   ["exposing its chat", (s) => (s.script.chat = "nothing")],
 ];
+
+/**
+ * The Computer unit's whole form where no container can be made here: none among what it's made
+ * as, or one greyed.
+ */
+const withContainer = (unit: (typeof UNITS)[number], container: "none" | "greyed") =>
+  unit.id !== "computer"
+    ? unit
+    : {
+        ...unit,
+        form: unit.form.map((field) =>
+          field.id !== "made"
+            ? field
+            : {
+                ...field,
+                options: (
+                  (field.options ?? []) as readonly { value: string; title: string }[]
+                ).flatMap((option) =>
+                  option.value !== "container"
+                    ? [option]
+                    : container === "none"
+                      ? []
+                      : [{ ...option, unavailable: "The provider here can't make containers." }],
+                ),
+              },
+        ),
+      };
+/**
+ * The Computer unit as it states this computer: no question of which computer, and what can't be
+ * had here, its screen and the person's browser, never shown, as its `visible` names itself.
+ */
+const statedComputer = (unit: (typeof UNITS)[number]) =>
+  unit.id !== "computer"
+    ? unit
+    : {
+        ...unit,
+        form: unit.form
+          .filter((field) => ["access", "screen", "ownBrowser"].includes(field.id))
+          .map((field) =>
+            field.id === "access" ? field : { ...field, visible: { field: field.id, in: ["on"] } },
+          ),
+      };
 for (const [step, arrange] of FAILURES)
   test(`a failure at ${step} leaves nothing behind`, async (t) => {
     const s = await setup(t);
@@ -2893,6 +2972,62 @@ test("a new computer is a container on its parent's machine, and within its boun
     "Away",
   );
   assert.ok(!(await s.names(away.tools)).includes("create_worker"));
+});
+
+test("a child is offered a new computer only where the Computer unit makes one, whether its parent's record names this computer or not", async (t) => {
+  const s = await delegating(t);
+  const bound = { templates: ["worker"], places: ["own", "new"], access: "terminal" };
+  const placesOf = async (tools: ToolCalls) => {
+    const schema = (await tools.list({})).tools[0]?.inputSchema as never as {
+      properties: { place: { enum: string[] } };
+    };
+    return schema.properties.place.enum;
+  };
+  // Where a provider that makes is there, the unit asks which computer. One made then names this
+  // computer; one with none named is on this computer too, as one made where none makes is.
+  const named = await s.parent(bound, { kind: "this", access: "terminal" }, "Named");
+  const unnamed = await s.parent(bound, { access: "terminal" }, "Unnamed");
+  for (const [who, parent] of Object.entries({ named, unnamed })) {
+    assert.deepEqual(await placesOf(parent.tools), ["own", "new"], who);
+    const child = await s.made(parent.tools, "create_worker", {
+      name: `New of ${who}`,
+      purpose: "P.",
+      place: "new",
+    });
+    const applied = s.given.applied.find((one) => one.agent === child)?.values as {
+      kind?: unknown;
+      made?: unknown;
+    };
+    assert.equal(applied?.kind, "new", who);
+    assert.equal(applied?.made, "container", who);
+  }
+  // Where the unit asks which computer but no container can be made, as on a Mac with the AgentOrg
+  // app or while the provider can't make one, a new one would be refused: it isn't offered.
+  for (const container of ["none", "greyed"] as const) {
+    s.script.container = container;
+    for (const [who, parent] of Object.entries({ named, unnamed }))
+      assert.deepEqual(await placesOf(parent.tools), ["own"], `${who}, ${container}`);
+  }
+  s.script.container = undefined;
+  // Where none makes, the unit states this computer and has no new one: no agent is offered it,
+  // whatever its record says, and one asked for anyway is refused as a place it can't work.
+  s.script.stated = true;
+  const stated = await s.parent(bound, { access: "terminal" }, "Stated");
+  for (const [who, parent] of Object.entries({ named, unnamed, stated })) {
+    assert.deepEqual(await placesOf(parent.tools), ["own"], who);
+    const answer = await parent.tools.call({
+      name: "create_worker",
+      arguments: { name: `Refused of ${who}`, purpose: "P.", place: "new" },
+    });
+    assert.equal(answer.failed, true, who);
+    assert.match(answer.output, /It can't work there\./, who);
+    // Its own computer is shared as before.
+    await s.made(parent.tools, "create_worker", {
+      name: `Own of ${who}`,
+      purpose: "P.",
+      place: "own",
+    });
+  }
 });
 
 test("what an agent can see of connections is what its scope says", async (t) => {

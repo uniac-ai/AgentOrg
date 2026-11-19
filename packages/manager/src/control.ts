@@ -55,7 +55,7 @@ There is one create tool per template you may use. Read its description and fiel
 If a template you expected has no create tool, or you have none, tell the person why, using the titles in bold and quotes. In your AgentOrg control unit, in your Setup:
 - **Agents** is "None".
 - **Templates** doesn't tick it.
-- **Places**, for a template with a computer: nothing you can use is ticked. "Its own computer" needs the computer you hold now, **Most a computer can do** at least what it reaches, and **A computer can have a browser** on if it has one of its own. An agent sharing it gets its terminal and files, never the person's screen or their own browser. "A new computer on this machine" needs your computer to be on this machine: this computer, or a container here. A computer the person connected, ticked there, can always be used.
+- **Places**, for a template with a computer: nothing you can use is ticked. "Its own computer" needs the computer you hold now, **Most a computer can do** at least what it reaches, and **A computer can have a browser** on if it has one of its own. An agent sharing it gets its terminal and files, never the person's screen or their own browser. "A new computer on this machine" needs your computer to be on this machine: this computer, or a container here. It needs this machine to be able to make a container now, too. A computer the person connected, ticked there, can always be used.
 - **Levels below it** is 1, for a template whose agents get an AgentOrg control unit.
 
 Otherwise it is the template: a unit's provider isn't connected, or a unit lacks an answer you can't give. The person fills that in on the template. A token can't be kept in a template, so the person creates that agent themselves.
@@ -93,6 +93,7 @@ export const SKILL_SHIPPED = [
   "6971b805763a0aec8d900c0cd099c9d6e278af0a4138bdd398c4cd935aaed5e1",
   "34441ae86491bf1e266d3398daa7c3b1ced0ec5cd2af0631f71e08186085b71e",
   "11abbb6b16203dd94c3cbb1595b1dec6e1bce78b4d2ab4fca90888eb6b7e3cb6",
+  "ab484e7ea30019a35b14816b54a53c364d408326a4d15147791815e749ce37c2",
 ];
 /** The sha256 of each earlier text of a file of the skill, so a copy of one is told from an edit. */
 export const skillShipped = (path: string) => {
@@ -292,11 +293,13 @@ export function shareable(reach: Reach): Reach {
 }
 
 /**
- * Whether a computer unit's answers put it on this machine: this computer or a container here, or,
- * as an earlier version answered, the service here.
+ * Whether a computer unit's answers put it on this machine: this computer, named or, where the unit
+ * states it and asks no kind, unnamed; a container here; or, as an earlier version answered, the
+ * service here.
  */
 const onThisMachine = (values: Values) =>
   values.kind === "this" ||
+  (values.kind === undefined && values.service === undefined) ||
   (values.kind === "new" && (values.made ?? "container") === "container") ||
   values.service === "local";
 
@@ -459,13 +462,25 @@ function shapeOf(
     sharing.connections.length > 0 &&
     rank(sharing.access) <= rank(bound.access) &&
     (!sharing.browser || bound.browser);
-  // A new one is made within the bounds, as a container here, where its parent's computer is.
-  const fresh = reach.here === true;
+  // A new one is made within the bounds, as a container here, where its parent's computer is and
+  // where the Computer unit can make one now.
+  const fresh = reach.here === true && makesNew(computer.offer.unit.form);
   const places = bound.places.filter((place) => (place !== OWN || own) && (place !== NEW || fresh));
   return places.length ? { units, places, computer } : undefined;
 }
 
 const settable = (field: TheField) => field.authority === "setting";
+/**
+ * Whether the Computer unit's form takes what a new computer on this machine is made as: `new`
+ * among the answers to its `kind`, and `container`, not greyed, among those to its `made`.
+ */
+const makesNew = (form: TheField[]) => {
+  const answers = (id: string) => form.find((field) => field.id === id)?.options ?? [];
+  return (
+    answers("kind").some((one) => one.value === "new") &&
+    answers("made").some((one) => one.value === "container" && !one.unavailable)
+  );
+};
 
 /** A field with what may be chosen cut to a limit, by its type; gone if nothing is left. */
 function cutToLimit(field: TheField, limit: unknown): TheField[] {
