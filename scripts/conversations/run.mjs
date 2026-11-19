@@ -5,7 +5,7 @@
 //
 //   node scripts/conversations/run.mjs sign-in --dir DIR
 //   node scripts/conversations/run.mjs run --dir DIR --out FILE [--core | --only 1,4,9]
-//                                      [--max-requests N] [--dry]
+//                                      [--max-requests N] [--dry] [--open]
 //
 // `--dir` is the runner's own folder: the app's home is DIR/home, the AgentComputer service's data
 // DIR/computer, and nothing of the person's AgentOrg is used. `sign-in` opens a browser on the app
@@ -16,6 +16,12 @@
 // how many it made and how many tokens they took. `--dry` plays the set against a stand-in model
 // that answers every message in one line, to check the runner itself: it makes no request to
 // OpenAI, and needs no sign-in. It works in a folder of its own, never one a real sign-in is in.
+//
+// `--open` opens the app's page in the person's browser, signed in, once the app is up and before
+// the first conversation, so the person can watch it played; the address carries a one-time code
+// and is never printed. After the run it removes the computers but keeps the agents and their
+// conversations, and the app, up for the person to look over, until the runner is stopped or the
+// next run or sign-in in the folder ends it.
 //
 // The app is started on any free port, never 7731, and everything the runner starts it ends by the
 // PID it recorded. It needs a build (`npm run build`) and Docker for the containers.
@@ -46,6 +52,7 @@ const { values: flags, positionals } = parseArgs({
     core: { type: "boolean" },
     "max-requests": { type: "string" },
     dry: { type: "boolean" },
+    open: { type: "boolean" },
     help: { type: "boolean", short: "h" },
   },
   allowPositionals: true,
@@ -54,7 +61,7 @@ const [command] = positionals;
 const usage = (problem) => {
   if (problem) console.error(problem);
   console.error(
-    "Usage: run.mjs sign-in --dir DIR\n       run.mjs run --dir DIR --out FILE [--core | --only 1,4,9] [--max-requests N] [--dry]",
+    "Usage: run.mjs sign-in --dir DIR\n       run.mjs run --dir DIR --out FILE [--core | --only 1,4,9] [--max-requests N] [--dry] [--open]",
   );
   process.exit(2);
 };
@@ -66,6 +73,7 @@ const cap = Math.min(CAP, Number(flags["max-requests"] ?? CAP));
 if (!Number.isInteger(cap) || cap < 1) usage(`--max-requests takes a number from 1 to ${CAP}.`);
 if (command === "run" && !flags.out) usage("--out names the file the run is written to.");
 if (command === "sign-in" && flags.dry) usage("--dry needs no sign-in.");
+if (command === "sign-in" && flags.open) usage("--open is for a run: sign-in opens its own page.");
 
 // --- The runner's folder: its own, never the person's AgentOrg --------------------------------
 
@@ -90,6 +98,38 @@ for (const folder of [home, data, join(dir, "agents"), join(dir, "docker")])
   mkdirSync(folder, { recursive: true, mode: 0o700 });
 const logFd = openSync(join(dir, "runner.log"), "a");
 const note = (line) => writeFileSync(logFd, `${new Date().toISOString()} ${line}\n`);
+
+/**
+ * A runner an earlier run of this folder kept up for its page, ended by the PID it recorded once
+ * its command line shows it is a runner, and waited for: this one takes the folder's app after it.
+ */
+async function endEarlierRunner() {
+  const file = join(dir, "runner.pid");
+  let pid;
+  try {
+    pid = Number(readFileSync(file, "utf8").trim());
+  } catch {}
+  if (pid && pid !== process.pid) {
+    let command = "";
+    try {
+      command = execFileSync("ps", ["-o", "command=", "-p", String(pid)], { encoding: "utf8" });
+    } catch {}
+    if (command.includes(join("conversations", "run.mjs"))) {
+      note(`Ending ${pid}, the runner an earlier run kept up`);
+      process.kill(pid, "SIGTERM");
+      for (let waited = 0; waited < 120; waited++) {
+        try {
+          process.kill(pid, 0);
+        } catch {
+          break;
+        }
+        await new Promise((done) => setTimeout(done, 500));
+      }
+    }
+  }
+  writeFileSync(file, `${process.pid}\n`);
+}
+await endEarlierRunner();
 
 /** A stand-in sign-in for `--dry`, refused where a real one is kept. */
 const STAND_IN = "stand-in";
@@ -151,16 +191,7 @@ async function ending() {
     note(`Closing the app: ${error}`);
   }
   // Any computer an agent's removal left, killed while the service still answers.
-  if (service)
-    for (const { computerID } of await Computer.list(service).catch(() => [])) {
-      note(`Killing a computer left behind: ${computerID}`);
-      try {
-        execFileSync(process.execPath, [AGENTCOMPUTER, "kill", computerID, "--data", data], {
-          env: serviceEnv(),
-          stdio: ["ignore", logFd, logFd],
-        });
-      } catch {}
-    }
+  await killComputers("left behind");
   const running = () =>
     [...started].filter((child) => child.exitCode === null && child.signalCode === null);
   for (const child of running()) child.kill("SIGTERM");
@@ -168,6 +199,19 @@ async function ending() {
   for (const child of running()) {
     note(`${child.pid} outlived its TERM; KILL`);
     child.kill("SIGKILL");
+  }
+}
+/** Kill each computer the service still holds, while it answers: `why` is said in the log. */
+async function killComputers(why) {
+  if (!service) return;
+  for (const { computerID } of await Computer.list(service).catch(() => [])) {
+    note(`Killing a computer ${why}: ${computerID}`);
+    try {
+      execFileSync(process.execPath, [AGENTCOMPUTER, "kill", computerID, "--data", data], {
+        env: serviceEnv(),
+        stdio: ["ignore", logFd, logFd],
+      });
+    } catch {}
   }
 }
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
@@ -480,17 +524,24 @@ async function until(what, check, ms) {
   throw new Error(`${what} didn't happen in ${Math.round(ms / 1000)} s.`);
 }
 
+/**
+ * The app's page in the person's browser, signed in. Never printed: its address carries a
+ * one-time code.
+ */
+function openPage() {
+  spawn(process.platform === "darwin" ? "open" : "xdg-open", [app.signInUrl()], {
+    stdio: "ignore",
+    detached: true,
+  }).unref();
+}
+
 // --- sign-in -----------------------------------------------------------------------------------
 
 if (command === "sign-in") {
   await startTheApp();
   const { state } = await person.call("login", "status");
   if (state !== "signed_in") {
-    // Opened in the person's browser, never printed: the address carries a one-time code.
-    spawn(process.platform === "darwin" ? "open" : "xdg-open", [app.signInUrl()], {
-      stdio: "ignore",
-      detached: true,
-    }).unref();
+    openPage();
     console.log("Sign in with ChatGPT on the page that opened. This waits for it.");
     await until(
       "The sign-in",
@@ -540,6 +591,10 @@ try {
     note(`Removing ${name}, which an earlier run left`);
     await person.call("agents", "remove", { agent });
   }
+  if (flags.open) {
+    openPage();
+    console.log("Its page is open in the browser, signed in.");
+  }
   holding = false;
   for (const [at, group] of groups.entries()) {
     if (stoppedWhy) break;
@@ -549,7 +604,10 @@ try {
   exitCode = 1;
   run.error = error instanceof Error ? error.message : String(error);
 } finally {
-  await end();
+  // With its page open, the agents and the app stay up for the person to look over; only the
+  // computers go.
+  if (flags.open) await killComputers("after the run");
+  else await end();
 }
 if (stoppedWhy) {
   run.stopped = stoppedWhy;
@@ -567,6 +625,12 @@ if (stoppedWhy) console.error(stoppedWhy);
 console.log(
   `Model requests: ${spent.total} (front desk ${spent.frontDesk}); input tokens ${spent.input}; output tokens ${spent.output}, ${spent.reasoning} of them reasoning.`,
 );
+if (flags.open) {
+  console.log(
+    `The run is over (exit ${exitCode}). Its page stays up with its agents until the runner is stopped, or the next run in ${dir} starts.`,
+  );
+  await new Promise(() => {});
+}
 process.exit(exitCode);
 
 /** One group on an agent of its own: made, played, measured and removed. */
@@ -603,9 +667,11 @@ async function playGroup(group, at, service) {
     };
     return await playSteps(group, at, slot, files);
   } finally {
-    await person
-      .call("agents", "remove", { agent })
-      .catch((error) => note(`Removing ${name}: ${error}`));
+    // Kept with its page open, for the person to look over; the next run removes it.
+    if (!flags.open)
+      await person
+        .call("agents", "remove", { agent })
+        .catch((error) => note(`Removing ${name}: ${error}`));
   }
 }
 
