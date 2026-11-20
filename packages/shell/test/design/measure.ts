@@ -2272,7 +2272,8 @@ if (wants("templates"))
         await gateway?.close();
       }
 
-// What a page says where it has nothing it can show: Chat's list with no agents, or agents that
+// What a page says where it has nothing it can show: Chat's list with no conversations, the same with
+// no agents, or agents that
 // can't be read; each Settings list with none or none that can be read; an agent that isn't here. The design reaches each from its own bar; the built side from what the
 // stand-in has, or a call it refuses every time.
 if (wants("said")) {
@@ -2316,7 +2317,7 @@ if (wants("said")) {
     },
   ];
   const SAID: Said[] = [
-    { state: "no agents", presses: 2, set: (g) => g.agents.clear(), says: "No agents" },
+    { state: "no agents", presses: 2, set: (g) => g.agents.clear(), says: "No chats" },
     {
       state: "agents unread",
       presses: 3,

@@ -444,23 +444,20 @@ const SCREENS: Screen[] = [
       await page.locator('[data-beside="open"]').waitFor();
     },
   },
-  // The first start, from the later design: one agent, whose conversation hasn't begun, signed out
-  // as the design opens. Its "This Mac" card, which isn't built, is put away by its own control.
+  // The first start: one agent, the Assistant, whose conversation hasn't begun, open on Chat while
+  // the list says there are no chats; on a phone, the conversation alone.
   {
     name: "first-start",
     sizes: ["wide", "phone"],
     themes: ["dark", "light"],
     firstStart: true,
-    signIn: "out",
-    design: (page) => inDesign(page, "Nothing missing"),
-    built: async (page) => {
-      await chatRow(page, "Assistant").waitFor();
-      if ((page.viewportSize()?.width ?? 0) >= 640)
-        await page
-          .getByRole("main")
-          .getByRole("region", { name: "Conversation with Assistant" })
-          .waitFor();
-    },
+    design: (page) => inDesign(page, "A first start"),
+    built: (page) =>
+      page
+        .getByRole("main")
+        .getByRole("region", { name: "Conversation with Assistant" })
+        .getByRole("textbox", { name: "Message" })
+        .waitFor(),
   },
   // The team page, with Reviewer's details, by the bar's Team icon on both sides.
   ...(

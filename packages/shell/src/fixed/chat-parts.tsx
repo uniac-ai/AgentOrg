@@ -21,18 +21,20 @@ export function age(at: string, now = Date.now()): string {
 /**
  * One conversation in a list: the agent, and its latest message or its problem. One between two
  * agents is shown by the agent it is with, where the other's page lists it. The one open beside the
- * list is marked. Before your conversation with an agent has begun, its row is the agent alone: its
- * face and its name, with nothing under the name and no time.
+ * list is marked.
  */
-export function ChatRow(
-  props: (
-    | { chat: ListedChat; agent?: ListedChat["agent"] }
-    | { chat?: undefined; agent: ListedChat["agent"] }
-  ) & { current?: boolean; onOpen(): void },
-) {
-  const { chat, current = false, onOpen } = props;
-  const agent = props.chat ? (props.agent ?? props.chat.agent) : props.agent;
-  const fresh = chat?.unread;
+export function ChatRow({
+  chat,
+  agent = chat.agent,
+  current = false,
+  onOpen,
+}: {
+  chat: ListedChat;
+  agent?: ListedChat["agent"];
+  current?: boolean;
+  onOpen(): void;
+}) {
+  const fresh = chat.unread;
   return (
     <button
       type="button"
@@ -45,43 +47,34 @@ export function ChatRow(
         <span className={`block truncate text-[15px] ${fresh ? "font-semibold" : "font-medium"}`}>
           {agent.name}
         </span>
-        {chat && (
-          <span className="flex min-w-0 gap-1.5 text-[13px] text-muted-foreground">
-            {/* A conversation has no working state: only an agent works. A row says its problem, or its last words. */}
-            {chat.problem ? (
-              <span className="truncate text-[var(--bad)]">{chat.problem}</span>
-            ) : (
-              <span className="truncate">{chat.words}</span>
-            )}
-          </span>
-        )}
-      </span>
-      {chat && (
-        <span className="flex w-10 shrink-0 flex-col items-end gap-1.5 self-start pt-3.5">
-          <span className="text-xs tabular-nums text-muted-foreground">{age(chat.at)}</span>
-          <span
-            {...(fresh ? { role: "img", "aria-label": "New" } : {})}
-            className={`size-2 rounded-full ${fresh ? "bg-[var(--unread)]" : ""}`}
-          />
+        <span className="flex min-w-0 gap-1.5 text-[13px] text-muted-foreground">
+          {/* A conversation has no working state: only an agent works. A row says its problem, or its last words. */}
+          {chat.problem ? (
+            <span className="truncate text-[var(--bad)]">{chat.problem}</span>
+          ) : (
+            <span className="truncate">{chat.words}</span>
+          )}
         </span>
-      )}
+      </span>
+      <span className="flex w-10 shrink-0 flex-col items-end gap-1.5 self-start pt-3.5">
+        <span className="text-xs tabular-nums text-muted-foreground">{age(chat.at)}</span>
+        <span
+          {...(fresh ? { role: "img", "aria-label": "New" } : {})}
+          className={`size-2 rounded-full ${fresh ? "bg-[var(--unread)]" : ""}`}
+        />
+      </span>
     </button>
   );
 }
 
-/**
- * Your conversations, newest first, a row each, and after them the agents in `waiting`, whose
- * conversations haven't begun; `current` is the agent of the one open beside them.
- */
+/** Your conversations, newest first, a row each; `current` is the agent of the one open beside them. */
 export function ChatList({
   chats,
-  waiting = [],
   current,
   onOpen,
   className,
 }: {
   chats: ListedChat[];
-  waiting?: ListedChat["agent"][];
   current?: string | undefined;
   onOpen(agent: string): void;
   className: string;
@@ -97,11 +90,6 @@ export function ChatList({
             current={chat.agent.id === current}
             onOpen={() => onOpen(chat.agent.id)}
           />
-        </li>
-      ))}
-      {waiting.map((agent) => (
-        <li key={agent.id}>
-          <ChatRow agent={agent} current={agent.id === current} onOpen={() => onOpen(agent.id)} />
         </li>
       ))}
     </ul>
