@@ -820,14 +820,15 @@ export function createLooper(options: {
         // nothing placed and nothing said meanwhile, a thread nothing follows waits for its next
         // message, not for the next start; a message said meanwhile is still to be decided on.
         await inLine(thread, async () => {
-          // With nothing placed, the answer is what decides what came back: it names it.
+          // With nothing placed, the answer is what decides what it is about: it names it, so
+          // no work that takes the thread after has it to answer. A receipt beside work names none.
           const { entry, late } = await into.answer(
             answer,
             read.back.at(-1)?.seq ?? read.upTo,
             replyId,
             {
               followed: follows.length > 0,
-              answers: work === undefined ? read.back.map(({ id }) => id) : [],
+              answers: work === undefined ? about : [],
             },
           );
           out.message(thread, messageOf(entry));
