@@ -4,6 +4,10 @@ name: Release
 # environment, by its OIDC identity, so no token is stored anywhere, and the package carries a
 # provenance statement linking it to this repository and commit. The repository's other @agentorg
 # packages aren't published: they're bundled inside it.
+#
+# Once npm has the version, the last job makes the tag's GitHub release: the core and the frontend,
+# each alone, install.sh, the Mac app when the release carries one, and their SHA256SUMS, each
+# attested, with the notes in release-notes/v<version>.md.
 
 on:
   push:
@@ -19,6 +23,10 @@ jobs:
       tag: ${{ steps.tag.outputs.tag }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The GitHub release takes its notes from release-notes/v<version>.md, added in the release's
+      # PR. A tag without them, or with them empty, stops here, before anything is published.
+      - name: Check that the release has its notes
+        run: scripts/github-release.sh notes "${GITHUB_REF_NAME#v}"
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
@@ -59,6 +67,12 @@ jobs:
         run: |
           node packages/app/scripts/pack.js . --core
           node packages/app/scripts/pack.js . --frontend
+      # The last job gathers the release's files by name, after npm has the version. Gathered here
+      # too, from the files just packed and install.sh, a name that doesn't match, such as pack.js
+      # naming the core otherwise, stops the release before anything is published. The Mac app
+      # isn't known yet: the last job checks it.
+      - name: Check that the release's files gather
+        run: scripts/github-release.sh gather "${GITHUB_REF_NAME#v}" . "$RUNNER_TEMP/release-check"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: core-and-frontend
@@ -67,12 +81,14 @@ jobs:
             agentorg-frontend-*.tgz
 
   # The Mac app this release carries: AgentComputer's archive at the version mac-app.json pins,
-  # checked and named as install.sh fetches it, for the GitHub release made by hand after the tag.
+  # checked and named as install.sh fetches it, for the GitHub release the last job makes.
   # With no sum pinned there is no archive yet: the job says so, fetches nothing and passes, and
   # the release goes on without one. A pinned archive that doesn't check stops the publish.
   mac-app:
     needs: build
     runs-on: ubuntu-latest
+    outputs:
+      carried: ${{ steps.carry.outputs.carried }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - id: carry
@@ -104,3 +120,55 @@ jobs:
           registry-url: https://registry.npmjs.org
       - name: Publish
         run: npm publish agentorg-cli-*.tgz --access public --provenance --tag "${{ needs.build.outputs.tag }}"
+
+  # The tag's GitHub release, made once npm has the version, so a release never names a version
+  # npm doesn't have. Only this job may write to the repository, to make the release, and attest
+  # its files. If it fails after npm has published, re-run this job alone, with "Re-run failed
+  # jobs": it uses the same run's files. Re-running every job fails at publish, since npm refuses a
+  # version it already has.
+  github-release:
+    needs: [build, mac-app, publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      # The tag, for its install.sh and its notes. Nothing here pushes, so the token isn't kept in
+      # the checkout.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The core and the frontend the build packed, and the Mac app only when the release carries
+      # one: with none, there is no artifact to download.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: core-and-frontend
+          path: downloaded
+      # The mac-app artifact's own SHA256SUMS lands in downloaded/ too, and gather ignores it.
+      - if: needs.mac-app.outputs.carried == 'true'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: mac-app
+          path: downloaded
+      # Each file under the fixed name it is fetched by, install.sh as the tag has it, and
+      # SHA256SUMS over them, in a folder of their own. The Mac app is taken with --mac, only when
+      # the mac-app job carried one, and then must be there. A missing file stops the release here.
+      - name: Gather the release's files and their sums
+        env:
+          CARRIED: ${{ needs.mac-app.outputs.carried }}
+        run: |
+          cp install.sh downloaded/
+          if [ "$CARRIED" = true ]; then set -- --mac; fi
+          scripts/github-release.sh gather "${GITHUB_REF_NAME#v}" downloaded release "$@"
+      # A provenance attestation for each of those files, SHA256SUMS too, linking it to this
+      # workflow run, the repository and the tag's commit: `gh attestation verify` checks one.
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: release/*
+      # Last, the release itself, published and not marked latest, with the notes and the files.
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: scripts/github-release.sh create "${GITHUB_REF_NAME#v}" release
