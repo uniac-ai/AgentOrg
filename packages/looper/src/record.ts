@@ -101,8 +101,10 @@ export const Entry = z.object({
    */
   step: z.string().optional(),
   /**
-   * For what the main loop said in answer to messages that came back from all they were given
-   * to: their ids. Such a message is decided, and not put to the main loop again.
+   * For what the main loop said in answer to messages it decided with nothing placed: their ids.
+   * Such a message is answered, as one a reply `closes` is, and is no work's to answer after; one
+   * that came back from all it was given to is not put to the main loop again. What it says
+   * beside work it placed, a receipt, answers none.
    */
   answers: z.array(z.string()).optional(),
   /**
@@ -361,6 +363,14 @@ const earlierReply = (entry: Entry) =>
   entry.main === undefined &&
   !entry.unsent &&
   entry.closes === undefined;
+/**
+ * The user messages `entry` answers, by id: the one a reply sent closes, or those the main loop's
+ * answer names.
+ */
+const answeredBy = (entry: Entry) => [
+  ...(entry.closes === undefined ? [] : [entry.closes]),
+  ...(entry.answers ?? []),
+];
 /**
  * Such a reply as the model reads one sent now: a `send` to the message at `place`, and what it
  * was told of it, so it never takes it for words of its own that were not said.
@@ -653,12 +663,7 @@ export function createThread(
     for (;;) {
       const said = held.records.filter((one) => !isCall(one));
       if (said.reduce((sum, one) => sum + picturesIn(one.entry), 0) <= limits.keepBytes) return;
-      const answered = new Set(
-        said.flatMap(({ entry }) => [
-          ...(entry.closes === undefined ? [] : [entry.closes]),
-          ...(entry.answers ?? []),
-        ]),
-      );
+      const answered = new Set(said.flatMap(({ entry }) => answeredBy(entry)));
       const oldest = said.find(
         (one) =>
           one !== pushed &&
@@ -824,7 +829,7 @@ export function createThread(
      * Keep, under `id`, a reply the main loop gave after it had read up to `upTo`. `late` says
      * whether a message was said after that, which this reply doesn't answer. In a thread that
      * work follows it is `followed`: kept as no work's, so none takes it. `answers` names the
-     * messages that came back which it answers: they are decided by this one write.
+     * messages it answers: they are decided by this one write.
      */
     async answer(
       text: string,
@@ -1102,16 +1107,14 @@ export function createRecord(options: {
     );
   /**
    * Its user messages still to answer past the place `from`: not handed back, in a thread it
-   * hasn't left, not answered by a reply any piece of work sent to it, and not said to have gone
-   * unanswered.
+   * hasn't left, not answered by a reply any piece of work sent to it or by the main loop, and
+   * not said to have gone unanswered.
    */
   const openOf = (held: Map<string, Held>, from: number) => {
     const records = own(held);
     const answered = new Set(
       [...held].flatMap(([thread, { records }]) =>
-        records.flatMap(({ entry }) =>
-          entry.closes === undefined ? [] : [`${thread} ${entry.closes}`],
-        ),
+        records.flatMap(({ entry }) => answeredBy(entry).map((one) => `${thread} ${one}`)),
       ),
     );
     // A reply an earlier version kept answered the newest message before it, as the model reads it.

@@ -105,6 +105,80 @@ test("what the main loop answers itself, or stops work for, is answered; a recei
   ]);
 });
 
+/** Whether the message `text` in `thread` is kept as having gone unanswered. */
+const unanswered = (made: ReturnType<typeof looperWith>, thread: string, text: string) =>
+  [...made.values]
+    .filter(([key]) => key.startsWith(`thread/${encodeURIComponent(thread)}/msg/`))
+    .map(([, value]) => Entry.parse(value))
+    .some((entry) => textOf(entry) === text && entry.unanswered === true);
+
+test("what the main loop answered, or stopped work for, stays answered when new work takes its thread", async () => {
+  const made = looperWith({
+    routing: (text) =>
+      text === "Hello."
+        ? says("Hi there.")
+        : text === "Stop the report."
+          ? stops("b")
+          : [...says("On it."), ...newWork()],
+  });
+  await made.looper.send("b", "Write the report.");
+  await until(() => made.asked.length === 1, "the report's request");
+  await made.looper.send("a", "Hello.");
+  await until(() => made.said.includes("a: assistant: Hi there."), "the main loop's answer");
+  await made.looper.send("a", "Stop the report.");
+  await until(() => made.said.includes("a: assistant: Stopped."), "the stop's answer");
+  await made.looper.settled();
+  // The thread becomes new work's own, with all that was said there.
+  await made.looper.send("a", "Write the summary.");
+  await until(() => made.asked.length === 2, "the summary's request");
+  assert.deepEqual(made.inputs[1], [
+    "Hello.",
+    "Hi there.",
+    "Stop the report.",
+    "Stopped.",
+    "Write the summary.",
+    "On it.",
+  ]);
+  made.answer("Write the summary.", sends("Summary done."));
+  await made.looper.settled();
+  // Its turn answered its own message: nothing it holds went unanswered.
+  assert.deepEqual(made.failures, []);
+  assert.deepEqual(of(made, "Hello."), ["a: Hello. taken", "a: Hello. answered"]);
+  assert.deepEqual(of(made, "Stop the report."), [
+    "a: Stop the report. taken",
+    "a: Stop the report. answered",
+  ]);
+  assert.deepEqual(of(made, "Write the summary."), [
+    "a: Write the summary. taken",
+    "a: Write the summary. answered",
+  ]);
+  for (const text of ["Hello.", "Stop the report.", "Write the summary."])
+    assert.equal(unanswered(made, "a", text), false, text);
+});
+
+test("a receipt beside new work answers nothing: in a thread the main loop answered, the work's turn leaves only its own message unanswered", async () => {
+  const made = looperWith({
+    routing: (text) =>
+      text === "Hello." ? says("Hi there.") : [...says("On it."), ...newWork("The report")],
+  });
+  await made.looper.send("a", "Hello.");
+  await until(() => made.said.includes("a: assistant: Hi there."), "the main loop's answer");
+  await made.looper.settled();
+  await made.looper.send("a", "Write the report.");
+  await until(() => made.asked.length === 1, "the work's request");
+  made.answer("Write the report.", says("Thinking about it."));
+  await made.looper.settled();
+  assert.deepEqual(made.failures, ["a: not_answered"]);
+  assert.deepEqual(facts(made), [
+    "a: Hello. taken",
+    "a: Hello. answered",
+    "a: Write the report. taken",
+    "a: Write the report. closed",
+  ]);
+  assert.equal(unanswered(made, "a", "Hello."), false);
+  assert.equal(unanswered(made, "a", "Write the report."), true);
+});
+
 test("a message its turn ends without answering is closed, as it is said to have gone unanswered", async () => {
   const made = looperWith();
   await made.looper.send("a", "Write the report.");

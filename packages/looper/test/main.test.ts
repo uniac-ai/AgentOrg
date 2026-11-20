@@ -276,7 +276,7 @@ test("a looper made again on the same store tells of the work there was, with wh
 });
 
 test("a thread the main loop answered, then given to work there is, is read by that work in the order it was said", async () => {
-  const { looper, values, said, asked, inputs, answer } = looperWith({
+  const { looper, values, said, asked, inputs, answer, failures } = looperWith({
     routing: (text) =>
       text === "Write the report."
         ? newWork("The report")
@@ -308,6 +308,8 @@ test("a thread the main loop answered, then given to work there is, is read by t
   // What the main loop said there isn't what the work last said.
   assert.equal((values.get("work/a") as { last: string }).last, "Chart added.");
   assert.equal(said.at(-1), "c: assistant: Chart added.");
+  // What the main loop answered there stays answered for the work that took it.
+  assert.deepEqual(failures, []);
 
   // A looper made again on the same store reads it the same.
   const again = looperWith({ values });
