@@ -26,8 +26,6 @@ import {
   designAgents,
   docsAgent,
   downTriage,
-  HOLDS,
-  type Hold,
   inDesign,
   MOMENTS,
   messageDocs,
@@ -47,8 +45,8 @@ import {
   readChat,
   refuseSend,
   releaseNotes,
-  researchHolds,
   researchSays,
+  researchTypes,
   SECTIONS,
   SIGN_INS,
   SMALLS,
@@ -64,6 +62,8 @@ import {
   smallState,
   startTerminals,
   supportBefore,
+  TYPING,
+  type Typing,
   toTeam,
   unreadReply,
   WINDOWS,
@@ -81,7 +81,7 @@ const PARTS = [
   "browser",
   "chat",
   "thread",
-  "presence",
+  "typing",
   "agent",
   "computer",
   "signin",
@@ -133,7 +133,7 @@ type Part =
   | "browser"
   | "chat"
   | "thread"
-  | "presence"
+  | "typing"
   | "earlier"
   | "agent"
   | "setup"
@@ -1284,44 +1284,43 @@ const probe = (what: Part): Parts => {
     return parts;
   }
 
-  if (what === "presence") {
-    const shell = document.querySelector("[data-shell]");
-    const panel = document.querySelector('aside[aria-label="Chats"]');
-    if (!shell || !panel) return parts;
-    origin = shell.getBoundingClientRect();
-    controls("panel", panel);
-    // Each of the person's messages: its bubble, the line under it while it is in hand, and the
-    // steps under that line where the design draws them open.
-    const mine = [...panel.querySelectorAll('[data-slot="message"][data-align="end"]')];
+  if (what === "typing") {
+    const region = document.querySelector(
+      ':is([role="region"], section)[aria-label="Conversation with Research"]',
+    );
+    if (!region) return parts;
+    origin = region.getBoundingClientRect();
+    // Each of the person's messages: its bubble, and nothing under it in any state.
+    const mine = [...region.querySelectorAll('[data-slot="message"][data-align="end"]')];
     parts.said = mine.length;
     for (const [i, message] of mine.entries()) {
-      const at = `said.${i}`;
-      parts[at] = of(message.querySelector('[data-slot="bubble"]'));
-      const line = message.querySelector('[data-slot="marker"][role="status"]');
-      parts[`${at}.line`] = of(line);
-      parts[`${at}.line.heard`] = line?.querySelector(".sr-only")?.textContent ?? null;
-      parts[`${at}.line.words`] = of(line?.querySelector('[data-slot="marker-content"]'));
-      parts[`${at}.line.spinner`] = of(line?.querySelector('[data-slot="spinner"]'));
-      const button = line?.querySelector('[data-slot="trace-collapsible-trigger"]');
-      parts[`${at}.line.button`] = of(button);
-      parts[`${at}.line.open`] = button?.getAttribute("aria-expanded") ?? null;
-      parts[`${at}.line.chevron`] = of(button?.querySelector('[data-slot="trace-icon"]'));
-      parts[`${at}.steps`] = of(
-        message.querySelector('[data-slot="trace-collapsible-content-inner"]'),
-      );
-      const steps = [
-        ...message.querySelectorAll(
-          '[data-slot="trace-collapsible-content"] [data-slot="trace-line"]',
-        ),
-      ];
-      parts[`${at}.steps.count`] = steps.length;
-      for (const [n, step] of steps.entries()) {
-        parts[`${at}.steps.${n}`] = of(step);
-        parts[`${at}.steps.${n}.heard`] = step.textContent;
-        parts[`${at}.steps.${n}.title`] = of(step.querySelector('[data-slot="trace-title"]'));
-      }
+      parts[`said.${i}`] = of(message.querySelector('[data-slot="bubble"]'));
+      parts[`said.${i}.under`] = message.querySelectorAll(
+        '[role="status"], [data-slot="marker"]',
+      ).length;
     }
-    parts.wrong = of(panel.querySelector('[role="alert"]'));
+    // The agent's sign while it types: one, at the conversation's end, under its last bubble.
+    const bubbles = [...region.querySelectorAll('[data-slot="bubble"]')];
+    const signs = bubbles.filter((b) => b.querySelector(".typing-dot"));
+    parts.signs = signs.length;
+    parts.replies = bubbles.filter(
+      (b) => !signs.includes(b) && !b.closest('[data-slot="message"][data-align="end"]'),
+    ).length;
+    const sign = signs[0];
+    const dots = [...(sign?.querySelectorAll(".typing-dot") ?? [])];
+    parts.sign = of(sign);
+    parts["sign.content"] = of(sign?.querySelector('[data-slot="bubble-content"]'));
+    parts["sign.heard"] = sign?.querySelector(".sr-only")?.textContent ?? null;
+    parts["sign.dots"] = dots.length;
+    parts["sign.dot"] = of(dots[0]);
+    parts["sign.last"] = sign ? String(bubbles.at(-1) === sign) : null;
+    const before = bubbles.filter((b) => b !== sign).at(-1);
+    parts["sign.under"] =
+      sign && before
+        ? round(sign.getBoundingClientRect().top - before.getBoundingClientRect().bottom)
+        : null;
+    parts.problem = region.querySelector('[role="alert"]')?.textContent?.trim() ?? null;
+    return parts;
   }
   if (what === "thread") {
     const shell = document.querySelector("[data-shell]");
@@ -1873,36 +1872,44 @@ if (wants("thread"))
         });
     }
 
-// A message in hand: Research's conversation at each of the design's states for it, in the floating
-// chat. The design draws two of them with the steps open beneath the line, which the built line
-// doesn't have.
-if (wants("presence"))
-  for (const theme of ["dark", "light"] as const)
-    for (const side of ["design", "built"] as const)
-      for (const state of Object.keys(HOLDS) as Hold[]) {
-        const gateway = side === "built" ? await standIn() : undefined;
-        if (gateway) {
-          designAgents(gateway);
-          researchHolds(gateway, state);
+// The agent typing: Research's conversation on Chat at each of the design's states for it, wide and
+// on a phone, at its end. The design's "opened later" leaves the conversation for Team, and it is
+// opened again from Chat, as a person comes back to it.
+if (wants("typing"))
+  for (const size of ["wide", "phone"] as const)
+    for (const theme of ["dark", "light"] as const)
+      for (const side of ["design", "built"] as const)
+        for (const state of Object.keys(TYPING) as Typing[]) {
+          const gateway = side === "built" ? await standIn() : undefined;
+          if (gateway) {
+            designAgents(gateway);
+            researchTypes(gateway, state);
+          }
+          const page = gateway
+            ? await builtPage(gateway, size, theme, "#/chat/a-research")
+            : await designPage(size, theme);
+          if (!gateway) await inDesign(page, TYPING[state]);
+          const region = page.getByRole("region", { name: "Conversation with Research" });
+          if (!gateway && state === "late")
+            await page
+              .getByRole("navigation", { name: "Main" })
+              .getByRole("button", { name: /^Chat/ })
+              .click();
+          if (!(await region.count()))
+            await page
+              .getByRole("list", { name: "Conversations" })
+              .getByRole("button")
+              .filter({ hasText: "Research" })
+              .click();
+          await region.locator('[data-slot="bubble"]').first().waitFor();
+          await region.locator('[data-slot="message-scroller-viewport"]').evaluate((room) => {
+            room.scrollTop = room.scrollHeight;
+          });
+          await rest(page, size);
+          all[`typing.${state}.${size}.${theme}.${side}`] = await measure(page, "typing");
+          await page.close();
+          await gateway?.close();
         }
-        const page = gateway
-          ? await builtPage(gateway, "wide", theme)
-          : await designPage("wide", theme);
-        const panel = page.getByRole("complementary", { name: "Chats" });
-        await openConversation(page, "Research");
-        if (!gateway) await inDesign(page, HOLDS[state]);
-        await panel.locator(".whitespace-pre-wrap").first().waitFor();
-        // The same place on both sides: the design's control puts its newest message at the top as
-        // a message sent does, where the built conversation is opened as it stands. The long reply
-        // is at its end, as `thread` measures it.
-        await panel.locator('[data-slot="message-scroller-viewport"]').evaluate((room, end) => {
-          room.scrollTop = end ? room.scrollHeight : 0;
-        }, state === "answered");
-        await rest(page, "wide");
-        all[`presence.${state}.${theme}.${side}`] = await measure(page, "presence");
-        await page.close();
-        await gateway?.close();
-      }
 
 // An agent's page: who it is, how it stands, and what is under its tabs. Research has a computer,
 // shown wide and on a phone, and its chats; Reviewer is idle, Triage has a problem and Weekly
