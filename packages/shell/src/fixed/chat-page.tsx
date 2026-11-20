@@ -3,11 +3,15 @@
 // room for both, the list comes first and a conversation takes its place, with a way back. Wide, an
 // agent's computer opens beside the conversation rather than over the page. The list is your
 // conversations only: at the first start, before any has begun, it says it has none, and the first
-// agent's conversation is open, empty, wide and on a phone. Another agent is reached from Team.
+// agent's conversation is open, empty, wide and on a phone. Its head's compose icon picks who to
+// message, and opens that agent's conversation, empty if none has begun.
+import { SquarePenIcon } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api, go } from "../data.ts";
+import { Button } from "../ui/button.tsx";
 import { useAllChats } from "./all-chats.tsx";
 import { ChatList } from "./chat-parts.tsx";
+import { Compose } from "./compose.tsx";
 import { Computer, hasComputer, surfacesOf } from "./computer.tsx";
 import { useComputers } from "./computers.tsx";
 import { Nothing, UNREAD } from "./parts.tsx";
@@ -30,6 +34,7 @@ export function ChatPage({ agent }: { agent?: string | undefined }) {
   const fresh = listed && chats.length === 0 && !agents.unread ? agents.list[0]?.agent : undefined;
   // On a phone, its way back is to the list, which says it has none.
   const [back, setBack] = useState(false);
+  const [composing, setComposing] = useState(false);
   // Wide, it opens on the most recent conversation and stays on it while others get replies; at the
   // first start, on the first agent's.
   const first = useRef<string | undefined>(undefined);
@@ -50,15 +55,25 @@ export function ChatPage({ agent }: { agent?: string | undefined }) {
           aria-label="Chats"
           className={`flex min-h-0 flex-col ${split ? "w-[320px] shrink-0 border-r" : "min-w-0 flex-1"}`}
         >
-          <header className="flex h-14 shrink-0 items-center px-4">
-            <h1 className="text-[17px] font-semibold">Chats</h1>
+          {/* "Chats", and at its end who to message; a line the column's width under it. */}
+          <header className="flex h-14 shrink-0 items-center gap-1 border-b pr-2 pl-4">
+            <h1 className="min-w-0 flex-1 text-[17px] font-semibold">Chats</h1>
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label="Message"
+              aria-haspopup="dialog"
+              onClick={() => setComposing(true)}
+            >
+              <SquarePenIcon />
+            </Button>
           </header>
           {chats.length > 0 && (
             <ChatList
               chats={chats}
               current={split ? open : undefined}
               onOpen={(id) => go({ screen: "chat", agent: id })}
-              className="no-bar min-h-0 flex-1 overflow-y-auto px-2 pb-24"
+              className="no-bar min-h-0 flex-1 overflow-y-auto px-2 pt-3 pb-24"
             />
           )}
           {nothing && (
@@ -91,6 +106,7 @@ export function ChatPage({ agent }: { agent?: string | undefined }) {
         </section>
       )}
       {split && <Beside room={width} />}
+      <Compose open={composing} onOpenChange={setComposing} />
     </div>
   );
 }

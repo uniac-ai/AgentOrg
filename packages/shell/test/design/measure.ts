@@ -96,6 +96,7 @@ const PARTS = [
   "said",
   "bar",
   "offline",
+  "compose",
   "activity",
   "overview",
 ] as const;
@@ -150,6 +151,7 @@ type Part =
   | "said"
   | "bar"
   | "offline"
+  | "compose"
   | "activity"
   | "overview";
 type Gateway = Awaited<ReturnType<typeof standIn>>;
@@ -542,6 +544,39 @@ const probe = (what: Part): Parts => {
       (layer) => getComputedStyle(layer).backdropFilter,
     );
     parts["cover.blurs"] = layers.filter((one) => one.startsWith("blur(")).join(" | ");
+    return parts;
+  }
+
+  if (what === "compose") {
+    // Chat's head, from the shell's top left: its words, the compose icon and the line under it;
+    // and, open, the picker: its frame, "To", the field, and its first rows, each a face and a name.
+    const shell = document.querySelector("[data-shell]");
+    if (!shell) return parts;
+    origin = shell.getBoundingClientRect();
+    const head = document.querySelector('main [aria-label="Chats"] header');
+    parts.head = of(head);
+    parts["head.words"] = of(head?.querySelector("h1"));
+    const icon = head?.querySelector('button[aria-label="Message"]');
+    parts["head.icon"] = of(icon);
+    parts["head.icon.mark"] = of(icon?.querySelector("svg"));
+    const picker = document.querySelector('[role="dialog"]');
+    if (!picker) return parts;
+    const field = picker.querySelector('[data-slot="command-input-wrapper"]');
+    parts["picker.field"] = of(field);
+    parts["picker.to"] = of(field?.querySelector("span"));
+    parts["picker.input"] = of(field?.querySelector("input"));
+    parts["picker.placeholder"] =
+      field?.querySelector("input")?.getAttribute("placeholder") ?? null;
+    const rows = [...picker.querySelectorAll('[role="option"]')];
+    parts["picker.names"] = rows.map((row) => row.textContent?.trim()).join(" | ");
+    for (const [n, row] of rows.slice(0, 3).entries()) {
+      parts[`picker.row.${n}`] = of(row);
+      parts[`picker.row.${n}.face`] = of(row.querySelector('[aria-hidden="true"]'));
+      parts[`picker.row.${n}.name`] = of(row.querySelector("span.truncate"));
+    }
+    // The picker last: measuring what is opening stops its animation for a moment, and starting it
+    // again would leave what is inside it part way through its opening.
+    parts.picker = of(picker);
     return parts;
   }
 
@@ -2534,6 +2569,39 @@ if (wants("offline"))
             await page.getByRole("button", { name: "Reconnecting" }).waitFor();
           }
           all[`offline.${state}.${size}.${theme}.${side}`] = await measure(page, "offline");
+          await page.close();
+          await gateway?.close();
+        }
+
+// Chat's head, and the compose picker open from it, wide and on a phone.
+if (wants("compose"))
+  for (const state of ["head", "picker"] as const)
+    for (const size of ["wide", "phone"] as const)
+      for (const theme of ["dark", "light"] as const)
+        for (const side of ["design", "built"] as const) {
+          const gateway = side === "built" ? await standIn() : undefined;
+          let page: Page;
+          if (gateway) {
+            designAgents(gateway);
+            page = await builtPage(gateway, size, theme, "#/chat");
+          } else page = await designPage(size, theme);
+          await page
+            .getByRole("navigation", { name: "Main" })
+            .getByRole("button", { name: /^Chat/ })
+            .click();
+          const icon = page.getByRole("main").getByRole("button", { name: "Message", exact: true });
+          await icon.waitFor();
+          if (state === "picker") {
+            await icon.click();
+            // Once it has opened: nothing is measured while it opens.
+            await page
+              .getByRole("dialog")
+              .evaluate((e) =>
+                Promise.all(e.getAnimations({ subtree: true }).map((one) => one.finished)),
+              );
+          }
+          await rest(page, size);
+          all[`compose.${state}.${size}.${theme}.${side}`] = await measure(page, "compose");
           await page.close();
           await gateway?.close();
         }
