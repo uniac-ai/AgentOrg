@@ -8,6 +8,7 @@ import {
   summarize,
 } from "../src/compaction.ts";
 import { type Item, type OutputItem, Refusal, type Tool, type WorkEntry } from "../src/index.ts";
+import { HAND_BACK, SEND, STATUS } from "../src/loop.ts";
 import { INPUT_BUDGET, REQUEST_BUDGET } from "../src/record.ts";
 import { handsBack, idle, looperWith, says, sends, until } from "./support.ts";
 
@@ -369,4 +370,59 @@ test("a request that only decides whether to take a message makes no summary, th
   assert.equal(summaries.length, 1);
   answer("What is the weather?", sends("Sunny."));
   await looper.settled();
+});
+
+test("a request is fitted to its budget with all it carries beside its input, its id and keys too", async () => {
+  const output = "x".repeat(29_000);
+  const big: Tool = { name: "big", parameters: {}, run: async () => ({ output, ok: true }) };
+  const specs = [{ name: "big", parameters: {} }, SEND, HAND_BACK, STATUS];
+  const bytes = (value: unknown) => Buffer.byteLength(JSON.stringify(value));
+  /** Once its turn has ended and all it holds is written. */
+  const rested = async (made: ReturnType<typeof looperWith>) => {
+    await until(() => made.working.at(-1) === false, "the turn to end");
+    await made.looper.settled();
+  };
+  /** A long first turn, then "Go on.", whose request is made with `pad` from the host. */
+  const run = async (pad: string) => {
+    let padded = false;
+    const made = looperWith({ tools: [big], instructions: () => (padded ? pad : "") });
+    await made.looper.send("a", "Read them all.");
+    await until(() => made.asked.length === 1, "the request");
+    made.answer(
+      "Read them all.",
+      Array.from({ length: 31 }, (_, i) => ({
+        type: "function_call" as const,
+        callId: `c${String(i).padStart(2, "0")}`,
+        name: "big",
+        arguments: "{}",
+      })),
+    );
+    await until(() => made.asked.length === 2, "the request after the calls");
+    made.answer("Read them all.", sends("Read."));
+    await rested(made);
+    padded = true;
+    await made.looper.send("a", "Go on.");
+    await until(() => made.asked.length === 3, "the next turn's request");
+    return made;
+  };
+  const a = await run("");
+  // Its two exchanges as they are fitted, and what is beside them but its id and keys.
+  const input = bytes(a.raw[2]) + 1;
+  const besides = bytes({ instructions: a.told[2]?.instructions, tools: specs });
+  // The host's words, after a blank line, fill all but 25 bytes of the room: too few for the
+  // request's id and keys.
+  const b = await run("x".repeat(REQUEST_BUDGET - 25 - input - besides - 4));
+  assert.ok(
+    bytes({
+      requestId: crypto.randomUUID(),
+      instructions: b.told[2]?.instructions,
+      input: b.raw[2],
+      tools: specs,
+    }) <= REQUEST_BUDGET,
+  );
+  assert.ok(b.inputs[2]?.some((line) => line.includes("(Left out:")));
+  for (const made of [a, b]) {
+    made.answer("Go on.", sends("Done."));
+    await rested(made);
+  }
 });
