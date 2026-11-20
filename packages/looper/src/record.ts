@@ -1585,7 +1585,7 @@ export function createRecord(options: {
     },
     /**
      * The conversation to send: its exchanges (each from a user message that is not `joined` on),
-     * as `fit` fits them to the room one request has beside `besides`, its instructions and tools,
+     * as `fit` fits them to the room one request has beside `besides`, all else it carries,
      * and the pictures they hold, in the order `readable` gives. `read` is the place up to which
      * every user message was read, for `append` and `saidAfter`. `thread` is where what comes of
      * it is kept. Its pictures fit what the request leaves beside its words. After a compaction,

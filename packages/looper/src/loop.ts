@@ -732,12 +732,20 @@ export function createLoop(options: {
           );
       reported = true;
       const offered = { instructions: told.text, tools: specs };
-      let { items: input, read, thread, over } = await record.input(offered);
+      // Everything the request is made with beside its input, its id and model too, so that the
+      // whole of it stays within its budget.
+      const besides = {
+        requestId: crypto.randomUUID(),
+        ...(chosen ? { model: chosen } : {}),
+        ...offered,
+        input: [],
+      };
+      let { items: input, read, thread, over } = await record.input(besides);
       if (current.cancelled) return;
       // A request that only decides whether to take what it was given is cut to fit instead: one
       // that hands it back would have summarized for nothing.
       if (over && current.acted && (await compact(current, chosen, { thread, read }, false)))
-        ({ items: input, read, thread } = await record.input(offered));
+        ({ items: input, read, thread } = await record.input(besides));
       if (current.cancelled) return;
       current.thread = thread;
       current.upTo = Math.max(current.upTo ?? 0, read);
