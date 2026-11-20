@@ -87,7 +87,7 @@ function ChatPill({ returned }: { returned: boolean }) {
                     aria-label={`Open ${chat.agent.name}`}
                     title={chat.agent.name}
                     onClick={() => openChat(chat.agent.id)}
-                    className="grid rounded-full ring-2 ring-[var(--surface)]"
+                    className="grid rounded-[25%] ring-2 ring-[var(--surface)]"
                   >
                     <Face agent={chat.agent} size={ICON} plain bare />
                   </button>

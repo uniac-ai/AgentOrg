@@ -51,9 +51,10 @@ export function Face({
   const letters = initials(agent.name);
   return (
     <span className="relative inline-block shrink-0" style={{ width: size, height: size }}>
+      {/* A rounded square, its corners a quarter of its size at every size. */}
       <span
         aria-hidden
-        className={`grid size-full place-items-center rounded-full font-semibold text-white ${agent.tone === "stopped" ? "opacity-45 grayscale" : ""}`}
+        className={`grid size-full place-items-center rounded-[25%] font-semibold text-white ${agent.tone === "stopped" ? "opacity-45 grayscale" : ""}`}
         style={{
           background: `linear-gradient(140deg, ${tint.from}, ${tint.to})`,
           fontSize: Math.round(size * ([...letters].length > 1 ? 0.36 : 0.42)),
