@@ -61,7 +61,7 @@ const reply = (id: string, text: string) => ({
 });
 
 test(
-  "the bar runs the page's height with a hairline at its edge: Chat and Team in its middle, Settings at its foot, and no words, agents, search or Create",
+  "the bar runs the page's height with a hairline at its edge: Search, Chat and Team in its middle, Settings at its foot, and no words, agents, search box or Create",
   withGateway(async (gateway) => {
     const page = await open(gateway, WIDE);
     await page.getByRole("main").getByRole("list", { name: "Chats" }).waitFor();
@@ -74,18 +74,19 @@ test(
       }),
       ["1px", "rgba(255, 255, 255, 0.08)", "0px", "rgb(255 255 255 / 0.08)"],
     );
-    // Three places, each an icon of 22 in a place of 44, 12 apart, centred on the bar's height
-    // and across what the hairline leaves of it.
+    // Four places, each an icon of 22 in a place of 44: the first three 12 apart, centred on the
+    // bar's height and across what the hairline leaves of it.
     assert.deepEqual(
       await bar(page)
         .getByRole("button")
         .evaluateAll((places) => places.map((one) => one.getAttribute("aria-label"))),
-      ["Chat", "Team", "Settings"],
+      ["Search", "Chat", "Team", "Settings"],
     );
-    assert.deepEqual(await boxOf(place(page, "Chat")), [7.5, 400, 44, 44]);
-    assert.deepEqual(await boxOf(place(page, "Team")), [7.5, 456, 44, 44]);
+    assert.deepEqual(await boxOf(place(page, "Search")), [7.5, 372, 44, 44]);
+    assert.deepEqual(await boxOf(place(page, "Chat")), [7.5, 428, 44, 44]);
+    assert.deepEqual(await boxOf(place(page, "Team")), [7.5, 484, 44, 44]);
     assert.deepEqual(await boxOf(place(page, "Settings")), [7.5, 844, 44, 44]);
-    for (const name of ["Chat", "Team", "Settings"]) {
+    for (const name of ["Search", "Chat", "Team", "Settings"]) {
       const [x, y, width, height] = await boxOf(place(page, name).locator("svg"));
       const [px, py] = await boxOf(place(page, name));
       assert.deepEqual([width, height], [22, 22], name);
@@ -93,7 +94,7 @@ test(
     }
     assert.equal(await bar(page).innerText(), "", "no words");
     assert.equal(await bar(page).getByRole("list").count(), 0, "no agents");
-    assert.equal(await bar(page).getByRole("searchbox").count(), 0, "no search");
+    assert.equal(await bar(page).getByRole("searchbox").count(), 0, "no search box");
     assert.equal(await bar(page).getByRole("button", { name: "Create" }).count(), 0);
     assert.equal(await page.getByRole("button", { name: "Home" }).count(), 0, "no Home");
     // The page is everything beside the bar, with no frame of its own.
@@ -175,7 +176,7 @@ test(
     );
     const [x, y, , height] = await boxOf(label(page));
     assert.equal(Math.round(x * 10) / 10, 68);
-    assert.ok(Math.abs(y + height / 2 - 478) < 1, "on the place's middle");
+    assert.ok(Math.abs(y + height / 2 - 506) < 1, "on the place's middle");
     // Away from it: the pointer leaves the place and goes on, as a hand moves it.
     await page.mouse.move(700, 450, { steps: 4 });
     await page.locator('[data-slot="tooltip-content"][data-state="closed"]').waitFor();
@@ -280,11 +281,12 @@ test(
       }),
       ["1px", "rgba(255, 255, 255, 0.08)", "0px"],
     );
-    assert.deepEqual(await boxOf(place(page, "Chat")), [0, 789, 130, 55]);
-    assert.deepEqual(await boxOf(place(page, "Team")), [130, 789, 130, 55]);
-    assert.deepEqual(await boxOf(place(page, "Settings")), [260, 789, 130, 55]);
+    assert.deepEqual(await boxOf(place(page, "Search")), [0, 789, 97.5, 55]);
+    assert.deepEqual(await boxOf(place(page, "Chat")), [97.5, 789, 97.5, 55]);
+    assert.deepEqual(await boxOf(place(page, "Team")), [195, 789, 97.5, 55]);
+    assert.deepEqual(await boxOf(place(page, "Settings")), [292.5, 789, 97.5, 55]);
     // Each label is under its icon.
-    for (const name of ["Chat", "Team", "Settings"]) {
+    for (const name of ["Search", "Chat", "Team", "Settings"]) {
       assert.equal(await place(page, name).innerText(), name);
       const icon = await boxOf(place(page, name).locator("svg"));
       const words = await boxOf(place(page, name).getByText(name, { exact: true }));
@@ -306,6 +308,7 @@ test(
         ]),
       );
     assert.deepEqual(colours, [
+      ["Search", "rgb(161, 161, 161)", "rgba(0, 0, 0, 0)"],
       ["Chat", "rgb(161, 161, 161)", "rgba(0, 0, 0, 0)"],
       ["Team", "rgb(250, 250, 250)", "rgba(0, 0, 0, 0)"],
       ["Settings", "rgb(161, 161, 161)", "rgba(0, 0, 0, 0)"],

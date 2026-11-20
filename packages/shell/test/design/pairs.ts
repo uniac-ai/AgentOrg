@@ -140,6 +140,16 @@ const composeIcon = async (page: Page) => {
     .getByRole("dialog", { name: "Message" })
     .evaluate((e) => Promise.all(e.getAnimations({ subtree: true }).map((one) => one.finished)));
 };
+/** The bar's search, pressed, and its dialog once it has opened. */
+const searchPlace = async (page: Page) => {
+  await page
+    .getByRole("navigation", { name: "Main" })
+    .getByRole("button", { name: "Search" })
+    .click();
+  await page
+    .getByRole("dialog", { name: "Search" })
+    .evaluate((e) => Promise.all(e.getAnimations({ subtree: true }).map((one) => one.finished)));
+};
 /** The way to the team page, in the design and built: the bar's Team icon. */
 const teamIcon = (page: Page) =>
   page.getByRole("navigation", { name: "Main" }).getByRole("button", { name: "Team" }).click();
@@ -404,6 +414,19 @@ const SCREENS: Screen[] = [
       await asTheDesign(gateway);
       await chatIcon(page);
       await composeIcon(page);
+    },
+  },
+  // The search, from the bar: empty, the conversations.
+  {
+    name: "search-empty",
+    sizes: ["wide", "phone"],
+    themes: ["dark", "light"],
+    chats: true,
+    agents: true,
+    design: searchPlace,
+    built: async (page, gateway) => {
+      await asTheDesign(gateway);
+      await searchPlace(page);
     },
   },
   {
