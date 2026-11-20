@@ -8,7 +8,7 @@ import {
   summarize,
 } from "../src/compaction.ts";
 import { type Item, type OutputItem, Refusal, type Tool, type WorkEntry } from "../src/index.ts";
-import { HAND_BACK, SEND, STATUS } from "../src/loop.ts";
+import { HAND_BACK, NO_REPLY, SEND, STATUS } from "../src/loop.ts";
 import { INPUT_BUDGET, REQUEST_BUDGET } from "../src/record.ts";
 import { handsBack, idle, looperWith, says, sends, until } from "./support.ts";
 
@@ -375,7 +375,7 @@ test("a request that only decides whether to take a message makes no summary, th
 test("a request is fitted to its budget with all it carries beside its input, its id and keys too", async () => {
   const output = "x".repeat(29_000);
   const big: Tool = { name: "big", parameters: {}, run: async () => ({ output, ok: true }) };
-  const specs = [{ name: "big", parameters: {} }, SEND, HAND_BACK, STATUS];
+  const specs = [{ name: "big", parameters: {} }, SEND, HAND_BACK, STATUS, NO_REPLY];
   const bytes = (value: unknown) => Buffer.byteLength(JSON.stringify(value));
   /** Once its turn has ended and all it holds is written. */
   const rested = async (made: ReturnType<typeof looperWith>) => {

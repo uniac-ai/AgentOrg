@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { Json } from "../src/index.ts";
-import { HEARD_INSTRUCTIONS, MAIN_INSTRUCTIONS, ROUTE } from "../src/main.ts";
+import { CLOSE, HEARD_INSTRUCTIONS, MAIN_INSTRUCTIONS, ROUTE } from "../src/main.ts";
 import { gate, idle, looperWith, newWork, routeTo, sends, until } from "./support.ts";
 
 const texts = async (looper: ReturnType<typeof looperWith>["looper"], thread: string) =>
@@ -35,7 +35,7 @@ test("a message in a thread nothing follows is kept at once, and the main loop s
   assert.equal(values.has("unrouted/a"), false);
 });
 
-test("the main loop's request is its own words, one function, and what came in with the work in a turn", async () => {
+test("the main loop's request is its own words, its two functions, and what came in with the work in a turn", async () => {
   const { looper, asked, mains } = looperWith({
     routing: (text) => (text.includes("chart") ? routeTo("a") : newWork("The report")),
   });
@@ -45,7 +45,7 @@ test("the main loop's request is its own words, one function, and what came in w
   await until(() => mains.length === 2, "the main loop to be asked");
   assert.deepEqual(mains[1], {
     instructions: MAIN_INSTRUCTIONS,
-    tools: [ROUTE],
+    tools: [ROUTE, CLOSE],
     // Nothing of what it was put before, or decided.
     input: ["The work there is:\n- a: The report (in a turn)", "Add a chart to the report."],
   });

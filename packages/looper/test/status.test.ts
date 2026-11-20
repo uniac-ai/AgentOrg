@@ -478,8 +478,8 @@ test("a status call is no Activity entry, and the main loop isn't offered status
   await until(() => made.asked.length === 1, "the request");
   const names = (tools: unknown[] | undefined) =>
     (tools as { name: string }[]).map((one) => one.name);
-  assert.deepEqual(names(made.mains[0]?.tools), ["route"]);
-  assert.deepEqual(made.told[0]?.tools, ["note", "send", "hand_back", "status"]);
+  assert.deepEqual(names(made.mains[0]?.tools), ["route", "no_reply_needed"]);
+  assert.deepEqual(made.told[0]?.tools, ["note", "send", "hand_back", "status", "no_reply_needed"]);
   made.answer("Plan the trip.", [
     ...status({ steps: [{ text: "Find flights" }] }),
     { type: "function_call", callId: "n1", name: "note", arguments: "{}" },
