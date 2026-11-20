@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { Page } from "@playwright/test";
 import { browser, type Gateway, SESSION, withBrowser, withGateway } from "./build-kit.ts";
+import { noted } from "./design/samples.ts";
 
 withBrowser();
 
@@ -67,6 +68,8 @@ test(
     const page = await open(gateway, "#/team");
     const pill = page.getByRole("group", { name: "Chats, collapsed" });
     await pill.waitFor();
+    // Said before the page's note of what is read begins, a reply is read already: no ring.
+    await noted(gateway);
     gateway.addMessage("a-research", {
       id: "n1",
       role: "assistant",

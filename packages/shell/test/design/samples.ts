@@ -7,10 +7,16 @@ import type { Agent, Creatable, Held, standIn, Template, Units } from "../stand-
 
 type Gateway = Awaited<ReturnType<typeof standIn>>;
 
-/** Once the shell has begun its note of what is read: a reply said from here on is new. */
+/**
+ * Once the shell has begun its note of what is read: a reply said from here on is new. A reply said
+ * before it is read already, so whatever counts what is new waits for this first. Then a moment, so
+ * the reply's time is later than the note's start, not the same millisecond.
+ */
 export async function noted(gateway: Gateway) {
-  while (!gateway.notes.has("ui/read-conversations"))
+  for (let tries = 0; !gateway.notes.has("ui/read-conversations"); tries++) {
+    if (tries >= 400) throw new Error("timed out waiting for the note of what is read to begin");
     await new Promise((done) => setTimeout(done, 20));
+  }
   await new Promise((done) => setTimeout(done, 5));
 }
 
