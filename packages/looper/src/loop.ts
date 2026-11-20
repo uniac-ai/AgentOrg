@@ -52,7 +52,7 @@ import {
   type Tool,
   type ToolSpec,
 } from "./types.js";
-import { CHECK, CORE, JUDGMENT, MESSAGES, PLAIN, SEEN, TRUST, TURN } from "./words.js";
+import { BUBBLES, CHECK, CORE, JUDGMENT, MESSAGES, PLAIN, SEEN, TRUST, TURN } from "./words.js";
 
 /** What a message's thread is told when its work's turn ended without a reply to it. */
 const NOT_ANSWERED = { code: "not_answered", message: "Not answered" };
@@ -164,7 +164,9 @@ export const OWN_FUNCTIONS: readonly string[] = OWN.map(({ name }) => name);
  * What a worker is told first, before what its host tells it: how it works and speaks, whatever
  * the work and whoever the agent is.
  */
-export const FRAME = [JUDGMENT, SEEN, TURN, CORE, MESSAGES, PLAIN, TRUST, CHECK].join("\n\n");
+export const FRAME = [JUDGMENT, SEEN, TURN, CORE, MESSAGES, PLAIN, BUBBLES, TRUST, CHECK].join(
+  "\n\n",
+);
 /**
  * What a worker is told after what its host tells it: which work this is, how to answer, and how
  * to hand a message back.
