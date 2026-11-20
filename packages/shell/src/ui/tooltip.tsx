@@ -23,10 +23,38 @@ function Tooltip({
   return <TooltipPrimitive.Root data-slot="tooltip" {...props} />
 }
 
+/**
+ * Whether focus is being given back to a trigger by a menu or window that closes. Radix gives it back
+ * (for the keyboard), and its tooltip opens on any focus; with the pointer resting on the trigger,
+ * nothing then closed the tooltip until the pointer moved. A tooltip doesn't open from that focus;
+ * from focus the person moves, as with Tab, it still does.
+ */
+let returning = false
+
+/** Called by a menu or window as it gives focus back on closing (its `onCloseAutoFocus`). */
+function focusReturns() {
+  returning = true
+  // Radix focuses the trigger in the same task, just after this: then it is over.
+  setTimeout(() => {
+    returning = false
+  })
+}
+
 function TooltipTrigger({
+  onFocus,
   ...props
 }: React.ComponentProps<typeof TooltipPrimitive.Trigger>) {
-  return <TooltipPrimitive.Trigger data-slot="tooltip-trigger" {...props} />
+  return (
+    <TooltipPrimitive.Trigger
+      data-slot="tooltip-trigger"
+      onFocus={(event) => {
+        onFocus?.(event)
+        // Radix's own opening on focus is skipped for an event already prevented.
+        if (returning) event.preventDefault()
+      }}
+      {...props}
+    />
+  )
 }
 
 function TooltipContent({
@@ -53,4 +81,4 @@ function TooltipContent({
   )
 }
 
-export { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger }
+export { focusReturns, Tooltip, TooltipContent, TooltipProvider, TooltipTrigger }
