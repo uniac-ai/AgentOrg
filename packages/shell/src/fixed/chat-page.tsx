@@ -1,13 +1,12 @@
 // The chat page: a place of its own for messages. Your conversations at the left, newest first, and
 // the open one beside them at the page's full height, drawn as the chat draws it. Where there is no
 // room for both, the list comes first and a conversation takes its place, with a way back. Wide, an
-// agent's computer opens beside the conversation rather than over the page. At the first start,
-// before any conversation has begun, the list is your agents, and wide it opens on the first one's.
+// agent's computer opens beside the conversation rather than over the page. The list is your
+// conversations only: at the first start, before any has begun, it says it has none, and the first
+// agent's conversation is open, empty, wide and on a phone. Another agent is reached from Team.
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api, go } from "../data.ts";
-import { Button } from "../ui/button.tsx";
 import { useAllChats } from "./all-chats.tsx";
-import { useBuilding } from "./building.tsx";
 import { ChatList } from "./chat-parts.tsx";
 import { Computer, hasComputer, surfacesOf } from "./computer.tsx";
 import { useComputers } from "./computers.tsx";
@@ -19,7 +18,6 @@ import { useAgents } from "./watch.tsx";
 export function ChatPage({ agent }: { agent?: string | undefined }) {
   const { chats, listed } = useAllChats();
   const agents = useAgents();
-  const building = useBuilding();
   const [ref, split, width] = useSplit<HTMLDivElement>();
   // Wide, the open computer is shown here, beside the conversation, and not in the layer.
   const { showOnPage } = useComputers();
@@ -27,16 +25,11 @@ export function ChatPage({ agent }: { agent?: string | undefined }) {
     showOnPage(split);
     return () => showOnPage(false);
   }, [split, showOnPage]);
-  // The first start: while no conversation has begun at all, once that is known, the agents are
-  // listed, each by its face and name, in their conversations' place.
-  const waiting =
-    listed && chats.length === 0 && !agents.unread
-      ? agents.list.map((entry) => ({
-          id: entry.agent,
-          name: entry.name,
-          tone: agents.byId.get(entry.agent)?.now.tone ?? "idle",
-        }))
-      : [];
+  // The first start: while no conversation has begun at all, once that is known, the first agent's
+  // conversation is open, empty. Its row comes with its first message.
+  const fresh = listed && chats.length === 0 && !agents.unread ? agents.list[0]?.agent : undefined;
+  // On a phone, its way back is to the list, which says it has none.
+  const [back, setBack] = useState(false);
   // Wide, it opens on the most recent conversation and stays on it while others get replies; at the
   // first start, on the first agent's.
   const first = useRef<string | undefined>(undefined);
@@ -44,15 +37,12 @@ export function ChatPage({ agent }: { agent?: string | undefined }) {
     first.current = chats[0]?.agent.id;
   // An address naming an agent opens your conversation with it; one that isn't there, the list.
   const named = agent && agents.byId.has(agent) ? agent : undefined;
-  const open = named ?? (split ? (first.current ?? waiting[0]?.id) : undefined);
+  const open = named ?? (split ? (first.current ?? fresh) : back ? undefined : fresh);
   const watched = open ? agents.byId.get(open) : undefined;
   const listing = split || !watched;
-  // With nothing to list, it says which nothing it is.
-  const nothing = agents.unread
-    ? UNREAD
-    : agents.loaded && agents.list.length === 0
-      ? "No agents"
-      : undefined;
+  // With nothing to list, it says so: the same words whether or not there are agents, and no way to
+  // make one here. Agents that can't be read say that.
+  const nothing = agents.unread ? UNREAD : listed && chats.length === 0 ? "No chats" : undefined;
   return (
     <div ref={ref} className="flex h-full min-h-0">
       {listing && (
@@ -63,10 +53,9 @@ export function ChatPage({ agent }: { agent?: string | undefined }) {
           <header className="flex h-14 shrink-0 items-center px-4">
             <h1 className="text-[17px] font-semibold">Chats</h1>
           </header>
-          {chats.length + waiting.length > 0 && (
+          {chats.length > 0 && (
             <ChatList
               chats={chats}
-              waiting={waiting}
               current={split ? open : undefined}
               onOpen={(id) => go({ screen: "chat", agent: id })}
               className="no-bar min-h-0 flex-1 overflow-y-auto px-2 pb-24"
@@ -75,11 +64,6 @@ export function ChatPage({ agent }: { agent?: string | undefined }) {
           {nothing && (
             <div className="flex items-center gap-4 px-4">
               <Nothing>{nothing}</Nothing>
-              {nothing === "No agents" && (
-                <Button className="h-8 rounded-full px-4" onClick={building.show}>
-                  Create
-                </Button>
-              )}
             </div>
           )}
         </section>
@@ -93,7 +77,16 @@ export function ChatPage({ agent }: { agent?: string | undefined }) {
             key={open}
             agent={{ id: open, name: watched.entry.name, tone: watched.now.tone }}
             chat={chats.find((chat) => chat.agent.id === open)}
-            page={split ? {} : { back: () => go({ screen: "chat" }) }}
+            page={
+              split
+                ? {}
+                : {
+                    back: () => {
+                      setBack(true);
+                      go({ screen: "chat" });
+                    },
+                  }
+            }
           />
         </section>
       )}

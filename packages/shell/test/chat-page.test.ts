@@ -1,6 +1,6 @@
 // The chat page in a real browser, over the stand-in gateway: your conversations at the left and
 // the open one beside them, or one at a time where there is no room for both; at the first start,
-// your agents in their place.
+// no conversation listed and the first agent's open, empty.
 import assert from "node:assert/strict";
 import test from "node:test";
 import { type Browser, chromium, type Page } from "@playwright/test";
@@ -219,7 +219,7 @@ test(
 );
 
 test(
-  "at the first start, before any conversation has begun, the list is your agents, each by its face and name alone, and wide it opens on the first one's conversation, empty with its box",
+  "at the first start, wide, the list says there are no chats and lists no agent, and the first agent's conversation is open, empty with its box",
   withGateway(async (gateway) => {
     gateway.noChats();
     const holding = gateway.hold("chat.list");
@@ -236,40 +236,46 @@ test(
     ];
     holding();
     assert.deepEqual(before, [0, 0, 0], "nothing before the chats are listed");
-    await until(() => names(page), NAMES);
-    // Each row is the list's own, with its face and its name: nothing under the name, and no time.
-    for (const one of await rows(page).all()) {
-      assert.equal((await one.innerText()).split("\n").filter(Boolean).length, 2);
-      assert.equal((await one.boundingBox())?.height, 68);
-    }
-    assert.equal(await list(page).getByText("No chats").count(), 0, 'no longer "No chats"');
-    // Wide, it opens on the first one's conversation: empty, with its box, its row marked.
+    await list(page).getByText("No chats", { exact: true }).waitFor();
     const research = conversation(page, "Research");
     await research.getByRole("textbox", { name: "Message" }).waitFor();
     assert.equal(await research.locator('[data-slot="message-scroller-item"]').count(), 0);
-    assert.equal(await row(page, "Research").getAttribute("aria-current"), "true");
-    // Another row opens its own.
-    await row(page, "Triage").click();
-    await conversation(page, "Triage").getByRole("textbox", { name: "Message" }).waitFor();
-    assert.equal(await row(page, "Triage").getAttribute("aria-current"), "true");
-    assert.equal(await row(page, "Research").getAttribute("aria-current"), null);
+    assert.equal(await rows(page).count(), 0, "no agent's row");
     await page.close();
   }),
 );
 
 test(
-  "the first message makes it a conversation, and once one has begun the list is conversations only",
+  "on a phone, the first start opens the first agent's empty conversation alone, and its way back is to the list, which says there are no chats",
+  withGateway(async (gateway) => {
+    gateway.noChats();
+    const page = await open(gateway, "#/chat", PHONE);
+    const research = conversation(page, "Research");
+    await research.getByRole("textbox", { name: "Message" }).waitFor();
+    assert.equal(await list(page).count(), 0, "the conversation alone");
+    await research.getByRole("button", { name: "All chats" }).click();
+    await list(page).getByText("No chats", { exact: true }).waitFor();
+    assert.equal(await rows(page).count(), 0);
+    assert.equal(await anyConversation(page).count(), 0);
+    await page.close();
+  }),
+);
+
+test(
+  "no agent's row is listed before its conversation begins; the first message sent makes its row",
   withGateway(async (gateway) => {
     gateway.noChats();
     const page = await open(gateway);
-    await until(() => names(page), NAMES);
     const box = conversation(page, "Research").getByRole("textbox", { name: "Message" });
+    await box.waitFor();
+    assert.equal(await rows(page).count(), 0);
     await box.fill("Why are checkouts failing?");
     await box.press("Enter");
     await until(() => names(page), ["Research"]);
     assert.match(await row(page, "Research").innerText(), /You: Why are checkouts failing\?/);
     await conversation(page, "Research").getByText("Why are checkouts failing?").waitFor();
     assert.equal(await row(page, "Research").getAttribute("aria-current"), "true");
+    assert.equal(await list(page).getByText("No chats").count(), 0);
     // A page opened now lists the conversation alone.
     const late = await open(gateway);
     await until(() => names(late), ["Research"]);
@@ -279,31 +285,14 @@ test(
 );
 
 test(
-  "on a phone, the first start lists the agents, and a row opens its empty conversation alone, with the way back",
+  "with no agents at all, the chat page says there are no chats, with no way to make one there",
   withGateway(async (gateway) => {
-    gateway.noChats();
-    const page = await open(gateway, "#/chat", PHONE);
-    await until(() => names(page), NAMES);
-    assert.equal(await anyConversation(page).count(), 0);
-    await row(page, "Reviewer").click();
-    await conversation(page, "Reviewer").getByRole("textbox", { name: "Message" }).waitFor();
-    assert.equal(await list(page).count(), 0);
-    await conversation(page, "Reviewer").getByRole("button", { name: "All chats" }).click();
-    await page.waitForURL(/#\/chat$/);
-    await until(() => names(page), NAMES);
-    await page.close();
-  }),
-);
-
-test(
-  "with nothing to list, the chat page says which nothing it is: no agents, with the way to make one",
-  withGateway(async (gateway) => {
-    // No agents: it says so, with Create beside it, which opens the creation window.
     gateway.agents.clear();
     const page = await open(gateway);
-    await list(page).getByText("No agents", { exact: true }).waitFor();
-    await list(page).getByRole("button", { name: "Create" }).click();
-    await page.getByRole("dialog", { name: "Create" }).waitFor();
+    await list(page).getByText("No chats", { exact: true }).waitFor();
+    assert.equal(await list(page).getByText("No agents").count(), 0);
+    assert.equal(await list(page).getByRole("button", { name: "Create" }).count(), 0);
+    assert.equal(await anyConversation(page).count(), 0);
     await page.close();
   }),
 );
