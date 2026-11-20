@@ -53,6 +53,10 @@ export class Api {
   readonly #subscriptions = new Set<Subscription>();
   readonly #bySub = new Map<number, Subscription>();
   #attempt = 0;
+  /** The wait before the next try, while it is down. */
+  #retry: ReturnType<typeof setTimeout> | undefined;
+  /** Who waits on the try going on, to be told whether it opened. */
+  readonly #tries = new Set<(open: boolean) => void>();
 
   constructor() {
     this.#connect();
@@ -66,6 +70,26 @@ export class Api {
   watch(fn: (connection: Connection) => void): () => void {
     this.#watchers.add(fn);
     return () => void this.#watchers.delete(fn);
+  }
+
+  /**
+   * Tries to connect now, not waiting out the backoff: a person asking while it is down. Resolves
+   * with whether the try opened, or the one already going on; open, or signed out, at once.
+   */
+  connectNow(): Promise<boolean> {
+    if (this.#connection === "open") return Promise.resolve(true);
+    if (this.#connection === "signed-out") return Promise.resolve(false);
+    const tried = new Promise<boolean>((done) => this.#tries.add(done));
+    if (!this.#socket) {
+      clearTimeout(this.#retry);
+      this.#connect();
+    }
+    return tried;
+  }
+
+  #tried(open: boolean) {
+    for (const done of [...this.#tries]) done(open);
+    this.#tries.clear();
   }
 
   /** A call on one of the person's slots. */
@@ -119,8 +143,12 @@ export class Api {
   }
 
   #connect() {
+    this.#retry = undefined;
     const session = localStorage.getItem(SESSION);
-    if (!session) return this.#set("signed-out");
+    if (!session) {
+      this.#tried(false);
+      return this.#set("signed-out");
+    }
     const socket = new WebSocket(`${location.origin.replace(/^http/, "ws")}/api`);
     this.#socket = socket;
     socket.onopen = () => socket.send(JSON.stringify({ op: "hello", session }));
@@ -133,13 +161,14 @@ export class Api {
       this.#pending.clear();
       this.#bySub.clear();
       for (const subscription of this.#subscriptions) subscription.sub = undefined;
+      this.#tried(false);
       if (event.code === SIGN_IN_AGAIN) {
         localStorage.removeItem(SESSION);
         return this.#set("signed-out");
       }
       this.#set("connecting");
       const wait = BACKOFF_MS[Math.min(this.#attempt++, BACKOFF_MS.length - 1)];
-      setTimeout(() => this.#connect(), wait);
+      this.#retry = setTimeout(() => this.#connect(), wait);
     };
   }
 
@@ -153,7 +182,8 @@ export class Api {
     if (message.op === "hello") {
       this.#attempt = 0;
       for (const subscription of this.#subscriptions) this.#open(subscription);
-      return this.#set("open");
+      this.#set("open");
+      return this.#tried(true);
     }
     if (typeof message.id === "number") {
       const waiting = this.#pending.get(message.id);

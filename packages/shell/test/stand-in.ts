@@ -1652,8 +1652,17 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
   };
   /** While on, a page's connection is closed as it comes, as when the gateway is away. */
   let away = false;
+  /** How long a connection waits to be closed while away: none, or a slow network's while. */
+  let awayAfterMs = 0;
+  /** Every connection a page has tried, refused or not. */
+  let tried = 0;
   sockets.on("connection", (socket) => {
-    if (away) return socket.close(1013, "Away");
+    tried++;
+    if (away) {
+      if (!awayAfterMs) return socket.close(1013, "Away");
+      const close = setTimeout(() => socket.close(1013, "Away"), awayAfterMs);
+      return void socket.on("close", () => clearTimeout(close));
+    }
     socket.on("message", (data) => {
       const message = JSON.parse(String(data));
       if (message.op === "hello") return socket.send(JSON.stringify({ op: "hello" }));
@@ -1844,11 +1853,17 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
     endSessions() {
       for (const socket of sockets.clients) socket.close(4401, "Sign in again");
     },
-    /** The gateway goes away, and every page's connection with it, until it is back. */
-    goAway(gone = true) {
+    /**
+     * The gateway goes away, and every page's connection with it, until it is back. While away, a
+     * connection tried is closed after `afterMs`, as over a slow network, or at once.
+     */
+    goAway(gone = true, afterMs = 0) {
       away = gone;
+      awayAfterMs = afterMs;
       if (gone) for (const socket of sockets.clients) socket.close(1013, "Away");
     },
+    /** How many connections pages have tried, refused or not. */
+    tries: () => tried,
     /** The walks held are answered, and those to come are too. */
     endWalks() {
       live.files.walks = "answered";

@@ -162,6 +162,8 @@ try {
     if (!existsSync(join(built, "index.html")))
       throw new Error("The shell isn't built: npm run build first.");
     cpSync(built, join(work, "frontend"), { recursive: true });
+    // What the shell carries under licences of its own, beside it.
+    copyFileSync(join(root, "packages/shell/NOTICE"), join(work, "frontend", "NOTICE"));
     mkdirSync(destination, { recursive: true });
     const file = join(destination, `agentorg-frontend-${release}.tgz`);
     execFileSync("tar", ["-czf", file, "-C", work, "frontend"]);

@@ -16,7 +16,9 @@ await build({
   target: "es2022",
   minify: true,
   define: { "process.env.NODE_ENV": '"production"' },
-  legalComments: "none",
+  // Licence notices (`/*!`, `@license`) are kept, at the end: a file copied in whole under its own
+  // licence, as `src/ui/gradual-blur.tsx` is (see NOTICE), ships with its notice.
+  legalComments: "eof",
   logLevel: "warning",
 });
 copyFileSync(at("static/index.html"), at("dist/index.html"));
