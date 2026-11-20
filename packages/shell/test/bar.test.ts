@@ -81,21 +81,18 @@ test(
 );
 
 test(
-  "while the shell is reconnecting the same bar says so, and it goes once it is connected",
+  "out of reach, the bar at the foot says nothing of it: the notice that says so is at the top",
   withGateway(async (gateway) => {
     const page = await open(gateway);
     const notice = bar(page);
     await notice.getByRole("button", { name: "Dismiss" }).click();
     await notice.waitFor({ state: "detached" });
     gateway.goAway();
-    await notice.getByText("Reconnecting…", { exact: true }).waitFor();
-    const left = await boxOf(page.getByRole("navigation", { name: "Main" }));
-    const box = await boxOf(notice);
-    assert.equal(box.x, left.x + left.width + 20);
-    assert.equal(box.y + box.height, 900 - 20);
-    assert.equal(await notice.getByRole("link").count(), 0, "nothing to press in it");
-    gateway.goAway(false);
-    await notice.waitFor({ state: "detached", timeout: 15_000 });
+    const offline = page.getByRole("status").filter({ hasText: "You're offline" });
+    await offline.waitFor();
+    assert.equal((await boxOf(offline)).y, 20, "at the top");
+    assert.equal(await page.getByText("Reconnecting…").count(), 0);
+    assert.equal(await notice.count(), 0, "no bar at the foot");
     await page.close();
   }),
 );

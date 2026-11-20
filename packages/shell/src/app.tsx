@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api, useConnection, useLoad } from "./data.ts";
 import type { LoginStatus } from "./fixed/login.tsx";
+import { Offline, useOffline } from "./fixed/offline.tsx";
 import { CopyCommand } from "./fixed/parts.tsx";
 import { FixedShell } from "./fixed/shell.tsx";
 
@@ -14,20 +15,6 @@ export function App() {
   const connection = useConnection();
   if (connection === "signed-out") return <SignedOut />;
   return <SignedIn />;
-}
-
-function Card({ children }: { children: React.ReactNode }) {
-  return (
-    <main id="signin" aria-label="Sign in">
-      <section className="signin-card">
-        <div className="mark" aria-hidden>
-          A
-        </div>
-        <h1>AgentOrg</h1>
-        {children}
-      </section>
-    </main>
-  );
 }
 
 /**
@@ -62,8 +49,8 @@ function SignedIn() {
     () => api.call<LoginStatus>("login", "status"),
     ["login", "bindings", "actors"],
   );
-  const connection = useConnection();
-  const waited = useWaited(!login.loaded && connection !== "open");
+  // Before sign-in has loaded, out of reach, the same notice as over the shell.
+  const offline = useOffline();
   // Unbound (or unreachable): nothing to sign in to, and no account row.
   const status = login.error ? undefined : login.value;
   const signedIn = status?.state === "signed_in";
@@ -82,14 +69,7 @@ function SignedIn() {
       })
       .catch(() => {});
   }, [signedIn]);
-  if (!login.loaded)
-    return waited ? (
-      <Card>
-        <p className="quiet" role="status">
-          Reconnecting…
-        </p>
-      </Card>
-    ) : null;
+  if (!login.loaded) return offline ? <Offline /> : null;
   return <FixedShell login={status} notice={notice} dismiss={() => setNotice(false)} />;
 }
 

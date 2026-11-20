@@ -459,6 +459,50 @@ const SCREENS: Screen[] = [
         .getByRole("textbox", { name: "Message" })
         .waitFor(),
   },
+  // Out of reach: the notice over the blurred screen on Chat, Team and Settings, each open as the
+  // service goes; and pressed, while its try runs. The design's bar is pressed by its event: an
+  // open window keeps the rest of the page from the pointer.
+  ...(
+    [
+      ["offline-chat", "#/chat", undefined],
+      ["offline-team", "#/team", "Team"],
+      ["offline-settings", "#/settings", "Settings"],
+      ["offline-pressed", "#/chat", undefined],
+    ] as const
+  ).map(
+    ([name, hash, place]): Screen => ({
+      name,
+      sizes: ["wide", "phone"],
+      themes: ["dark", "light"],
+      agents: true,
+      hash,
+      design: async (page) => {
+        if (place)
+          await page
+            .getByRole("navigation", { name: "Main" })
+            .getByRole("button", { name: place, exact: true })
+            .click();
+        await page
+          .getByLabel("Draft controls")
+          .getByRole("button", { name: "Out of reach", exact: true, includeHidden: true })
+          .dispatchEvent("click");
+        const notice = page.getByRole("button", { name: "You're offline. Check again" });
+        await notice.waitFor();
+        if (name === "offline-pressed") await notice.click();
+      },
+      built: async (page, gateway) => {
+        // The page itself: with Settings open, it is hidden from the roles.
+        await page.locator("main").waitFor();
+        gateway.goAway(true, name === "offline-pressed" ? 60_000 : 0);
+        const notice = page.getByRole("button", { name: "You're offline. Check again" });
+        await notice.waitFor();
+        if (name === "offline-pressed") {
+          await notice.click();
+          await page.getByRole("button", { name: "Reconnecting" }).waitFor();
+        }
+      },
+    }),
+  ),
   // The team page, with Reviewer's details, by the bar's Team icon on both sides.
   ...(
     [

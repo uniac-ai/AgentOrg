@@ -1,9 +1,9 @@
 // The fixed frontend: a bar of icons down the left on every page, and the page beside it. On a
 // phone the bar runs along the foot.
-import { LoaderCircleIcon, MessageCircleIcon, SettingsIcon, UsersIcon, XIcon } from "lucide-react";
+import { MessageCircleIcon, SettingsIcon, UsersIcon, XIcon } from "lucide-react";
 import { useLayoutEffect } from "react";
-import { USAGE, useWaited } from "../app.tsx";
-import { go, openSettings, useConnection, useRoute, useSettings } from "../data.ts";
+import { USAGE } from "../app.tsx";
+import { go, openSettings, useRoute, useSettings } from "../data.ts";
 import { Button } from "../ui/button.tsx";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../ui/tooltip.tsx";
 import { AllChatsProvider, useAllChats } from "./all-chats.tsx";
@@ -15,6 +15,7 @@ import { ComputerViews } from "./computer.tsx";
 import { ComputersProvider } from "./computers.tsx";
 import { Layer } from "./layer.tsx";
 import { LoginProvider, type LoginStatus, SignInBanner } from "./login.tsx";
+import { Offline, useOffline } from "./offline.tsx";
 import { PresenceProvider } from "./presence.tsx";
 import { SettingsWindow } from "./settings-window.tsx";
 import { TeamPage } from "./team-page.tsx";
@@ -159,7 +160,7 @@ function IconBar() {
  * The shell's one bar, at the foot of the page beside the bar of icons, where it lies over nothing: a
  * page ends well above it, and the chat is at the other side. While the chat is open the bar ends
  * one gap short of it, its words cut as on a phone, so its link and its close stay whole. It holds
- * the plan's notice, once, until it is dismissed; while the shell is reconnecting it says so. On a
+ * the plan's notice, once, until it is dismissed (being offline is the notice at the top). On a
  * phone it sits above the chat's place, as wide as the page.
  */
 function ShellBar({ notice, dismiss }: Required<Notice>) {
@@ -167,8 +168,7 @@ function ShellBar({ notice, dismiss }: Required<Notice>) {
   const route = useRoute();
   // On the chat page there is no chat in the layer to leave room for.
   const open = chats.open && route.screen !== "chat";
-  const reconnecting = useWaited(useConnection() !== "open");
-  if (!notice && !reconnecting) return null;
+  if (!notice) return null;
   const room = open
     ? "max-w-[calc(100%-2*var(--inset)-var(--panel)-var(--gap))] phone:max-w-[calc(100%-2*var(--inset))]"
     : "max-w-[calc(100%-2*var(--inset))]";
@@ -177,59 +177,60 @@ function ShellBar({ notice, dismiss }: Required<Notice>) {
       role="status"
       className={`window absolute bottom-[var(--inset)] left-[var(--inset)] z-20 flex h-10 ${room} items-center gap-3 rounded-full bg-[var(--raised)] pr-1.5 pl-4 text-[13px] shadow-lg phone:right-[var(--inset)] phone:bottom-[calc(var(--inset)+var(--foot)+var(--tab)+var(--gap))]`}
     >
-      {reconnecting ? (
-        <>
-          <LoaderCircleIcon className="size-4 shrink-0 animate-spin text-muted-foreground motion-reduce:animate-none" />
-          <span className="pr-2.5">Reconnecting…</span>
-        </>
-      ) : (
-        <>
-          <span className="min-w-0 flex-1 truncate">You're using your ChatGPT plan</span>
-          <a
-            href={USAGE}
-            target="_blank"
-            rel="noreferrer"
-            className="shrink-0 text-muted-foreground underline underline-offset-2 hover:text-foreground"
-          >
-            Manage usage
-          </a>
-          <Button variant="ghost" size="icon-xs" aria-label="Dismiss" onClick={dismiss}>
-            <XIcon />
-          </Button>
-        </>
-      )}
+      <>
+        <span className="min-w-0 flex-1 truncate">You're using your ChatGPT plan</span>
+        <a
+          href={USAGE}
+          target="_blank"
+          rel="noreferrer"
+          className="shrink-0 text-muted-foreground underline underline-offset-2 hover:text-foreground"
+        >
+          Manage usage
+        </a>
+        <Button variant="ghost" size="icon-xs" aria-label="Dismiss" onClick={dismiss}>
+          <XIcon />
+        </Button>
+      </>
     </div>
   );
 }
 
 function Frame({ notice, dismiss }: Required<Notice>) {
   const route = useRoute();
+  // Out of reach, all of it is under the notice: the keyboard doesn't reach it either.
+  const offline = useOffline();
   return (
     // What is left to set up runs across the top, over the bar and the page; the shell, with its
     // layer, is below it.
-    <div className="@container/app flex h-full min-h-0 w-full flex-col bg-[var(--canvas)] text-[15px] leading-[1.5] text-foreground">
-      <SignInBanner />
+    <>
       <div
-        data-shell
-        className="@container/app relative flex min-h-0 w-full flex-1 overflow-hidden bg-[var(--canvas)]"
+        inert={offline || undefined}
+        className="@container/app flex h-full min-h-0 w-full flex-col bg-[var(--canvas)] text-[15px] leading-[1.5] text-foreground"
       >
-        {/* The page: the bar and the place beside it. On a phone the bar is along the foot. */}
-        <div className="flex min-h-0 min-w-0 flex-1 phone:flex-col">
-          <IconBar />
-          <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
-            <ShellBar notice={notice} dismiss={dismiss} />
-            <main className="@container/main relative min-h-0 flex-1">
-              {route.screen === "chat" && <ChatPage agent={route.agent} />}
-              {route.screen === "team" && <TeamPage agent={route.agent} tab={route.tab} />}
-            </main>
+        <SignInBanner />
+        <div
+          data-shell
+          className="@container/app relative flex min-h-0 w-full flex-1 overflow-hidden bg-[var(--canvas)]"
+        >
+          {/* The page: the bar and the place beside it. On a phone the bar is along the foot. */}
+          <div className="flex min-h-0 min-w-0 flex-1 phone:flex-col">
+            <IconBar />
+            <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+              <ShellBar notice={notice} dismiss={dismiss} />
+              <main className="@container/main relative min-h-0 flex-1">
+                {route.screen === "chat" && <ChatPage agent={route.agent} />}
+                {route.screen === "team" && <TeamPage agent={route.agent} tab={route.tab} />}
+              </main>
+            </div>
           </div>
+          {/* Over the page, bar included: the one layer, with the chat. */}
+          <Layer />
+          {/* Settings, a window over the place; the creation window opens over it. */}
+          <SettingsWindow />
+          <BuildDialog />
         </div>
-        {/* Over the page, bar included: the one layer, with the chat. */}
-        <Layer />
-        {/* Settings, a window over the place; the creation window opens over it. */}
-        <SettingsWindow />
-        <BuildDialog />
       </div>
-    </div>
+      {offline && <Offline />}
+    </>
   );
 }

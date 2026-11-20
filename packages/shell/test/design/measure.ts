@@ -95,6 +95,7 @@ const PARTS = [
   "settings",
   "said",
   "bar",
+  "offline",
   "activity",
   "overview",
 ] as const;
@@ -148,6 +149,7 @@ type Part =
   | "settings"
   | "said"
   | "bar"
+  | "offline"
   | "activity"
   | "overview";
 type Gateway = Awaited<ReturnType<typeof standIn>>;
@@ -521,6 +523,28 @@ const probe = (what: Part): Parts => {
     return parts;
   }
 
+  if (what === "offline") {
+    // The notice that the service is out of reach, from the shell's top left: its words, its name,
+    // its refresh mark, and the blur's cover over the screen, with its layers' blurs.
+    const shell = document.querySelector("[data-shell]");
+    if (!shell) return parts;
+    origin = shell.getBoundingClientRect();
+    const button = document.querySelector('[role="status"] > button');
+    parts.notice = of(button?.parentElement);
+    parts["notice.button"] = of(button);
+    parts["notice.words"] = button?.textContent?.trim() ?? null;
+    parts["notice.name"] = button?.getAttribute("aria-label") ?? null;
+    parts["notice.busy"] = button?.getAttribute("aria-busy") ?? null;
+    parts["notice.mark"] = of(button?.querySelector("span"));
+    const cover = document.querySelector("[data-offline-cover], [data-hold]");
+    parts.cover = of(cover);
+    const layers = [...(cover?.querySelectorAll("div") ?? [])].map(
+      (layer) => getComputedStyle(layer).backdropFilter,
+    );
+    parts["cover.blurs"] = layers.filter((one) => one.startsWith("blur(")).join(" | ");
+    return parts;
+  }
+
   if (what === "bar") {
     // The shell's one bar, from the frame's top left; and a refusal's red line, from the top left
     // of the window or the place it is said in.
@@ -528,7 +552,7 @@ const probe = (what: Part): Parts => {
     if (!shell) return parts;
     origin = shell.getBoundingClientRect();
     const bar = [...document.querySelectorAll('[role="status"]')].find((e) =>
-      /ChatGPT plan|Reconnecting/.test(e.textContent ?? ""),
+      /ChatGPT plan/.test(e.textContent ?? ""),
     );
     parts.bar = of(bar);
     for (const [n, part] of [...(bar?.children ?? [])].entries()) parts[`bar.${n}`] = of(part);
@@ -2378,7 +2402,7 @@ if (wants("said")) {
 }
 
 // The shell's one bar: the plan's notice, wide, as a rail and on a phone, and beside an open
-// chat; "Reconnecting…" in the same place. And what is said when something pressed is refused: a
+// chat. And what is said when something pressed is refused: a
 // file taken out of Files that changed on the way, and a sign-in that didn't start, in the banner.
 // A Start refused in a stopped agent's computer isn't measured: the design has no Stop on an
 // agent's page any more, so the agent can't be stopped there.
@@ -2390,7 +2414,6 @@ if (wants("bar")) {
     { state: "notice", size: "phone" },
     { state: "beside", size: "wide" },
     { state: "beside", size: "rail" },
-    { state: "reconnecting", size: "wide" },
     { state: "file", size: "wide" },
     { state: "signin", size: "wide" },
   ];
@@ -2428,7 +2451,6 @@ if (wants("bar")) {
         } else {
           page = await designPage(size, theme);
           if (notice) await inDesign(page, "Plan notice");
-          if (state === "reconnecting") await inDesign(page, "Reconnecting");
         }
         const main = page.getByRole("main");
         if (state === "beside") {
@@ -2440,7 +2462,6 @@ if (wants("bar")) {
           await page.getByRole("button", { name: /^Chats/ }).click();
           await page.getByRole("complementary", { name: "Chats" }).waitFor();
         }
-        if (state === "reconnecting") gateway?.goAway();
         if (state === "file") {
           if (!gateway) await openDesignAgent(page, "Research");
           await openFiles(page);
@@ -2473,16 +2494,49 @@ if (wants("bar")) {
         }
         if (state === "start" || state === "file") await main.getByRole("alert").waitFor();
         else if (state !== "signin")
-          await page
-            .getByRole("status")
-            .filter({ hasText: notice ? "ChatGPT plan" : "Reconnecting" })
-            .waitFor();
+          await page.getByRole("status").filter({ hasText: "ChatGPT plan" }).waitFor();
         await rest(page, size);
         all[`bar.${state}.${size}.${theme}.${side}`] = await measure(page, "bar");
         await page.close();
         await gateway?.close();
       }
 }
+
+// Out of reach: the notice at rest, pointed at, and pressed while its try runs, wide and on a phone.
+// The design's control puts the service out of reach; the built side's stand-in goes away, its tries
+// closed only after a long while, so a pressed try is still running when measured.
+if (wants("offline"))
+  for (const state of ["out", "pointed", "pressed"] as const)
+    for (const size of ["wide", "phone"] as const)
+      for (const theme of ["dark", "light"] as const)
+        for (const side of ["design", "built"] as const) {
+          const gateway = side === "built" ? await standIn() : undefined;
+          let page: Page;
+          if (gateway) {
+            designAgents(gateway);
+            page = await builtPage(gateway, size, theme, "#/chat");
+            await page.getByRole("main").waitFor();
+            gateway.goAway(true, 60_000);
+          } else {
+            page = await designPage(size, theme);
+            await inDesign(page, "Out of reach");
+          }
+          const button = page.getByRole("button", { name: "You're offline. Check again" });
+          await button.waitFor();
+          await rest(page, size);
+          if (state === "pointed") {
+            await button.hover();
+            await page.waitForTimeout(400);
+          }
+          // Pressed, it is measured at once: the design's try runs for a moment only.
+          if (state === "pressed") {
+            await button.click();
+            await page.getByRole("button", { name: "Reconnecting" }).waitFor();
+          }
+          all[`offline.${state}.${size}.${theme}.${side}`] = await measure(page, "offline");
+          await page.close();
+          await gateway?.close();
+        }
 
 // Settings' other sections, wide and on a phone, and what Skills and MCP connections offer.
 if (wants("settings")) {

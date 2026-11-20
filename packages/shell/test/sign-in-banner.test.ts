@@ -168,7 +168,7 @@ test(
 );
 
 test(
-  "the floating chat and the layer's window are below the banner, and Reconnecting… is at the foot as before",
+  "the floating chat and the layer's window are below the banner, and out of reach the notice is at the top, over it",
   withGateway(async (gateway) => {
     gateway.setAccount("signed_out");
     computerWith(gateway, "terminal");
@@ -183,10 +183,10 @@ test(
     await page.getByRole("main").getByRole("button", { name: "Expand" }).click();
     await below(page.getByRole("group", { name: "Window" }), "the layer's window");
     gateway.goAway();
-    const notice = page.getByRole("status").filter({ hasText: "Reconnecting…" });
+    const notice = page.getByRole("status").filter({ hasText: "You're offline" });
     await notice.waitFor();
     const box = await boxOf(notice);
-    assert.equal(box.y + box.height, 900 - 20, "an inset from the foot");
+    assert.equal(box.y, 20, "an inset from the top, over the banner");
     gateway.goAway(false);
     await page.close();
   }),
