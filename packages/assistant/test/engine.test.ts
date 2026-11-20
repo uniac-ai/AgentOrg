@@ -1396,9 +1396,11 @@ test("with no summary to be had, the model gets the opening message, a line for 
   // Past the room a request has: a megabyte, less what the agent is told and can call.
   const bigs = Array.from({ length: 12 }, (_, i) => `${i}${"x".repeat(95_000)}`);
   for (const big of bigs) await s.turn(big);
+  // A turn that has acted, past the room, asks for a summary first: none is to be had.
+  s.script.push(calls(callTool("layout__get", {}, "last")));
   await s.turn("Small.");
   const sent = s.requests.at(-1)?.input ?? [];
-  const texts = sent.map((item) => item.content as string);
+  const texts = sent.flatMap((item) => (item.type === "message" ? [item.content as string] : []));
   // What the work was asked stays, and what came between it and what is sent is one line.
   assert.equal(texts[0], "Message 1.");
   assert.match(texts[1] ?? "", /^\(Left out: /);
