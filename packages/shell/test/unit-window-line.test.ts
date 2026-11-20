@@ -88,7 +88,7 @@ async function added(gateway: Gateway, page: Page, from: number) {
  */
 const read = (window: Locator) =>
   window.evaluate((d) => {
-    const card = d.querySelector(".no-bar") as HTMLElement;
+    const card = d.querySelector(".bg-card") as HTMLElement;
     const title = card.firstElementChild as Element;
     const body = title.nextElementSibling as Element;
     const first = body.firstElementChild as HTMLElement | null;
