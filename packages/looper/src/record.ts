@@ -61,9 +61,10 @@ export const Entry = z.object({
   /** The piece of work it belongs to, when that isn't its thread's own. */
   work: z.string().optional(),
   /**
-   * For what the main loop said itself, which no piece of work said: the number in its thread it
-   * stands after, ahead of any said after that. For a reply that is the number it had read up to;
-   * for what it said as it stopped a piece of work, all the thread held then.
+   * For what the main loop said itself, which no piece of work said, or a message it closed
+   * quietly: the number in its thread it stands after, ahead of any said after that. For a reply,
+   * or a close, that is the number it had read up to; for what it said as it stopped a piece of
+   * work, all the thread held then.
    */
   main: z.number().optional(),
   /**
@@ -83,7 +84,10 @@ export const Entry = z.object({
   to: z.array(Given).optional(),
   /** For what a worker wrote and didn't send: its work's, said in no thread. */
   unsent: z.literal(true).optional(),
-  /** For a reply a worker sent: the id of the user message it answers, in its thread. */
+  /**
+   * For a reply a worker sent, or a line that closes a message quietly, with no reply: the id of
+   * the user message it decides, in its thread.
+   */
   closes: z.string().optional(),
   /**
    * For a user message a turn ended without a reply to: nothing more is asked of it. Its thread
@@ -101,10 +105,10 @@ export const Entry = z.object({
    */
   step: z.string().optional(),
   /**
-   * For what the main loop said in answer to messages it decided with nothing placed: their ids.
-   * Such a message is answered, as one a reply `closes` is, and is no work's to answer after; one
-   * that came back from all it was given to is not put to the main loop again. What it says
-   * beside work it placed, a receipt, answers none.
+   * For what the main loop said in answer to messages it decided with nothing placed, or the line
+   * it kept as it closed one quietly: their ids. Such a message is decided, as one a reply `closes`
+   * is, and is no work's to answer after; one that came back from all it was given to is not put to
+   * the main loop again. What it says beside work it placed, a receipt, answers none.
    */
   answers: z.array(z.string()).optional(),
   /**
@@ -216,8 +220,14 @@ export const SEND_NAME = "send";
 export const HAND_BACK_NAME = "hand_back";
 /** The looper's function by which a worker keeps its steps. */
 export const STATUS_NAME = "status";
+/** The looper's function by which a message is said to need no reply. */
+export const NO_REPLY_NAME = "no_reply_needed";
 /** What a worker is told of what it sent. */
 export const SENT = "Sent.";
+/** What a worker is told of a message it closed with no reply. */
+export const CLOSED = "Closed, with nothing said.";
+/** The line a message closed with no reply keeps for its work, which no model reads. */
+const CLOSED_LINE = `${NO_REPLY_NAME}: done`;
 /** Whether `call`, among `items`, is a `send` that was said: one whose output is `SENT`. */
 const said = (call: Item, items: Item[]) =>
   call.type === "function_call" &&
@@ -413,7 +423,12 @@ function workEntryOf(entry: Entry): WorkEntry | undefined {
   if (entry.unsent) return { id, at, words: textOf(entry) };
   const call = entry.items.find((item) => item.type === "function_call");
   if (call?.type === "function_call") {
-    if (call.name === SEND_NAME || call.name === HAND_BACK_NAME || call.name === STATUS_NAME)
+    if (
+      call.name === SEND_NAME ||
+      call.name === HAND_BACK_NAME ||
+      call.name === STATUS_NAME ||
+      call.name === NO_REPLY_NAME
+    )
       return;
     const output = entry.items.find((item) => item.type === "function_call_output");
     return {
@@ -472,6 +487,11 @@ export const unansweredLast = (said: { id: string; role: string }[]) =>
  * piece of work did, and what its worker wrote and didn't send, are its work's.
  */
 const saidIn = (entry: Entry) => entry.role !== "tool" && !entry.unsent;
+/**
+ * Whether a message counts in its thread's order for what waits for the main loop: what was said
+ * there, and what the main loop decided there without saying it, as a message it closed quietly.
+ */
+const countsIn = (entry: Entry) => saidIn(entry) || entry.main !== undefined;
 
 /** A message as it is stored: each text once, and nothing past its cap. */
 const kept = (entry: Entry): Entry => ({
@@ -509,9 +529,14 @@ const mainEntry = (text: string, after: number) => ({
   items: [{ type: "message" as const, role: "assistant" as const, content: text }],
 });
 
-/** Whether a record is a call: what the retention cap deletes. */
+/**
+ * Whether a record is a call: what the retention cap deletes. A line that closes a message is
+ * not one: it is what settles that message, as a reply is.
+ */
 const isCall = (one: { entry: Entry }) =>
-  one.entry.role === "tool" && one.entry.items.some((item) => item.type === "function_call");
+  one.entry.role === "tool" &&
+  one.entry.closes === undefined &&
+  one.entry.items.some((item) => item.type === "function_call");
 /** What the pictures said in `entry` carry, in characters of base64. */
 const picturesIn = (entry: Entry) =>
   entry.items.reduce(
@@ -599,7 +624,8 @@ export function createThread(
   /**
    * Keep a message in a thread already read, at once, under `id` or its own number; `stored`
    * settles when it is written and the oldest past the cap are deleted. A tool message the store
-   * refuses is still kept in memory, since its call has run; any other is taken out again.
+   * refuses is still kept in memory, since its call has run; any other is taken out again, a line
+   * that closes a message too.
    */
   const push = (held: Held, entry: Omit<Entry, "id" | "at">, id?: string) => {
     const seq = ++held.last;
@@ -624,7 +650,7 @@ export function createThread(
         await first;
         record.writing = false;
       } catch (error) {
-        if (entry.role !== "tool") {
+        if (entry.role !== "tool" || entry.closes !== undefined) {
           held.records.splice(held.records.indexOf(record), 1);
           throw error;
         }
@@ -807,23 +833,33 @@ export function createThread(
     push,
     /**
      * What was said in it, as a conversation: each message and each reply, in the order they
-     * were answered, up to the number `to` if one is given; and the number it holds up to.
+     * were answered, and each message the main loop closed with no reply, as its call and what
+     * it was told, up to the number `to` if one is given; the number it holds up to; and the
+     * ids of the user messages that end it, since anything else was said or decided there: what
+     * waits for an answer.
      */
     async said(to = Number.POSITIVE_INFINITY) {
       const held = await load();
-      const said = held.records
-        .filter((record) => saidIn(record.entry) && orderOf(record) <= to)
-        .sort((a, b) => orderOf(a) - orderOf(b))
-        .map(({ entry }) => {
-          const images = picturesOf(entry);
-          return {
-            id: entry.id,
-            role: entry.role as "user" | "assistant",
-            text: textOf(entry),
-            ...(images.length > 0 ? { images } : {}),
-          };
-        });
-      return { said, upTo: held.last };
+      const counted = held.records
+        .filter((record) => countsIn(record.entry) && orderOf(record) <= to)
+        .sort((a, b) => orderOf(a) - orderOf(b));
+      // What the main loop decided without saying it is put as what it called, which it reads.
+      const said = counted.map(({ entry }) => {
+        if (!saidIn(entry))
+          return { id: entry.id, role: "assistant" as const, text: "", items: entry.items };
+        const images = picturesOf(entry);
+        return {
+          id: entry.id,
+          role: entry.role as "user" | "assistant",
+          text: textOf(entry),
+          ...(images.length > 0 ? { images } : {}),
+        };
+      });
+      return {
+        said,
+        upTo: held.last,
+        waiting: unansweredLast(counted.map(({ entry }) => entry)),
+      };
     },
     /**
      * Keep, under `id`, a reply the main loop gave after it had read up to `upTo`. `late` says
@@ -849,6 +885,40 @@ export function createThread(
       return { entry: record.entry, late };
     },
     /**
+     * Keep that the main loop closed the user messages `ids` quietly, with no reply, after it had
+     * read up to `upTo`: for each, a line said in no thread that closes it as a reply does, with
+     * a call of `no_reply_needed` and what it was told, as a worker's close has them. One
+     * the store refuses rejects, as a reply would. `late`, `followed` and `answers` as `answer`
+     * takes and gives them.
+     */
+    async closeQuietly(
+      ids: string[],
+      upTo: number,
+      { followed = false, answers = [] }: { followed?: boolean; answers?: string[] } = {},
+    ) {
+      const held = await load();
+      for (const id of ids) {
+        // Its call and what it was told, which the main loop reads as it decides next here.
+        const callId = `closed-${crypto.randomUUID()}`;
+        const { stored } = push(held, {
+          role: "tool",
+          text: CLOSED_LINE,
+          main: upTo,
+          items: [
+            { type: "function_call", callId, name: NO_REPLY_NAME, arguments: "{}" },
+            { type: "function_call_output", callId, output: CLOSED },
+          ],
+          closes: id,
+          ...(followed ? { to: [] } : {}),
+          ...(answers.includes(id) ? { answers: [id] } : {}),
+        });
+        await stored;
+      }
+      return {
+        late: held.records.some(({ seq, entry }) => seq > upTo && entry.role === "user"),
+      };
+    },
+    /**
      * Change a message from now on, in memory: `store` writes it as it is when its turn among
      * its writes comes, and `undo` takes this change back out of it, and no other made since.
      */
@@ -872,7 +942,7 @@ export function createThread(
     /**
      * The ids of the user messages that wait here to be decided or taken: those that came back
      * from all they were given to, those a piece of work has still to take, and where nothing
-     * `followed` the thread, those said since anything else was.
+     * `followed` the thread, those said since anything else was said or decided there.
      */
     async undecided(followed: boolean): Promise<string[]> {
       const held = await load();
@@ -883,7 +953,7 @@ export function createThread(
       if (!followed)
         for (const id of unansweredLast(
           held.records
-            .filter((record) => saidIn(record.entry))
+            .filter((record) => countsIn(record.entry))
             .sort((a, b) => orderOf(a) - orderOf(b))
             .map(({ entry }) => entry),
         ))
@@ -1369,6 +1439,38 @@ export function createRecord(options: {
       if (!found) return undefined;
       const message = found.record.entry.id;
       return keep(found.thread, () => ({ role: "assistant" as const, items, closes: message }), at);
+    },
+    /**
+     * Close its user message at `place` quietly, with no reply: keep `items`, a
+     * `no_reply_needed` and its output, as a line that closes it as a reply does, in the thread
+     * that message was said in, said in none; `id` and `read` as `append` takes them. Nothing, as
+     * `reply` finds none, when it has no such message; or what it already is, when it is
+     * answered, or settled: something closes it already, a reply or an earlier close. One that a
+     * stop or a failure closed and nothing closes is still to settle, and is closed so.
+     */
+    async closeQuietly(
+      place: number,
+      items: Item[],
+      at: { id?: string; read?: number },
+    ): Promise<{ entry: Entry; thread: string } | "answered" | "closed" | undefined> {
+      const held = await load();
+      const found = answerable(own(held), place);
+      if (!found) return undefined;
+      const { entry } = found.record;
+      if (entry.progress === "answered") return "answered";
+      if (held.get(found.thread)?.records.some((one) => one.entry.closes === entry.id))
+        return "closed";
+      return keep(
+        found.thread,
+        () => ({
+          role: "tool" as const,
+          text: CLOSED_LINE,
+          state: "done" as const,
+          items,
+          closes: entry.id,
+        }),
+        at,
+      );
     },
     /** The thread of its user message at `place`, when it has one to answer there, as `reply` finds it. */
     async replyThread(place: number): Promise<string | undefined> {

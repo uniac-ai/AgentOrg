@@ -5,10 +5,11 @@
  * at its next model request. A loop is one piece of work's: its messages come in the threads the
  * work follows, and what comes of a request is kept in the thread of the newest message that
  * request read and the work has not handed back. Its worker is told which work this is and reads
- * each of the person's messages by a number. It has three functions beside its tools:
+ * each of the person's messages by a number. It has four functions beside its tools:
  * `send`, the only way anything it says reaches the person, which answers a message;
- * `hand_back`, which says a message is not this work's; and `status`, which keeps the work's
- * steps, a short checklist. What it writes without sending, and what its calls did,
+ * `hand_back`, which says a message is not this work's; `status`, which keeps the work's
+ * steps, a short checklist; and `no_reply_needed`, which closes a message that asks for nothing,
+ * with nothing said. What it writes without sending, and what its calls did,
  * are kept for the work and said in no thread. When what a request would send is
  * over its budget once its turn has done something of its own, or the model refuses it for its
  * length, the work's earlier steps are first summarized by its own model (see compaction.ts).
@@ -21,9 +22,11 @@ import {
   summarize,
 } from "./compaction.js";
 import {
+  CLOSED,
   HAND_BACK_NAME,
   type LoopRecord,
   messageOf,
+  NO_REPLY_NAME,
   PICTURES_BUDGET,
   SEND_NAME,
   SENT,
@@ -156,8 +159,21 @@ export const STATUS: ToolSpec = {
     },
   },
 };
+/** A function of the looper's own: it says a message needs no reply, and closes it quietly. */
+export const NO_REPLY: ToolSpec = {
+  name: NO_REPLY_NAME,
+  description:
+    "Says a message needs no reply: it is closed quietly, with nothing said to anyone. For a message that asks for nothing, such as thanks or an acknowledgement.",
+  parameters: {
+    type: "object",
+    properties: {
+      message: { type: "number", description: "The number the message starts with." },
+    },
+    required: ["message"],
+  },
+};
 /** The looper's own functions, offered to every worker after its host's tools. */
-const OWN = [SEND, HAND_BACK, STATUS];
+const OWN = [SEND, HAND_BACK, STATUS, NO_REPLY];
 /** Their names: a request carries these beside the tools its host gives. */
 export const OWN_FUNCTIONS: readonly string[] = OWN.map(({ name }) => name);
 /**
@@ -513,6 +529,40 @@ export function createLoop(options: {
     return true;
   };
   /**
+   * A `no_reply_needed`: the message it names is closed quietly. Nothing is said in any thread;
+   * it is kept where that message was said as the call and its output, which close it as a reply
+   * does, and which are all the model reads of it. One that names no message of this work's to
+   * decide, or one already answered or settled, is refused to the model; one the store refuses
+   * fails the turn, as a reply would. A message a stop or a failure closed is said closed no more.
+   * It says whether it closed one.
+   */
+  const quieting = async (call: FunctionCall, id: string, read: number, thread: string) => {
+    const refuse = async (message: string) => {
+      await answered(call, refused("invalid", message), id, read, thread);
+      return false;
+    };
+    let args: unknown;
+    try {
+      args = JSON.parse(call.arguments);
+    } catch {}
+    const { message } = (args ?? {}) as Record<string, unknown>;
+    if (typeof message !== "number")
+      return refuse("Give the number of the message that needs no reply.");
+    const output = { type: "function_call_output" as const, callId: call.callId, output: CLOSED };
+    const closed = await record.closeQuietly(message, [call, output], { id, read });
+    if (closed === undefined)
+      return refuse(
+        `There is no message [${message}] of this work to close: check its number, and that it wasn't handed back.`,
+      );
+    if (typeof closed === "string")
+      return refuse(`Message [${message}] is already ${closed}: it needs nothing more.`);
+    // Said once, where that may follow; any step it was at goes with it.
+    const closes = closed.entry.closes as string;
+    if (await record.progress(closed.thread, closes, "closed"))
+      out.progress?.(closed.thread, closes, "closed");
+    return true;
+  };
+  /**
    * A `status`: the work's steps as the call leaves them, kept, and the list as its answer. When
    * the words of the step in progress change, each message the turn holds that is taken is said
    * to be at that step, and keeps it. A call that breaks a rule is refused to the model, with it.
@@ -828,8 +878,8 @@ export function createLoop(options: {
       /** Whether every call of this request handed a message back. */
       let handedAll = true;
       /**
-       * Whether every call of this request was a send that was sent, or a `status` beside one,
-       * and whether one was.
+       * Whether every call of this request was a send that was sent or a message closed with no
+       * reply, or a `status` beside one, and whether one was.
        */
       let sentAll = true;
       let sentAny = false;
@@ -853,6 +903,15 @@ export function createLoop(options: {
           );
           sentAll &&= sent;
           sentAny ||= sent;
+          continue;
+        }
+        // Closing a message with no reply is the looper's own: kept for the model, shown to nobody.
+        // It counts as a send does, and is not the turn at something of its own.
+        if (call.name === NO_REPLY.name) {
+          handedAll = false;
+          const closed = await quieting(call, id, read, thread);
+          sentAll &&= closed;
+          sentAny ||= closed;
           continue;
         }
         // Keeping its steps is the looper's own: kept for the model, and no entry of its work. It
@@ -912,9 +971,9 @@ export function createLoop(options: {
         (await ends())
       )
         return;
-      // So does one that only sent, each reply sent, perhaps with its steps, once nothing it took
-      // is left unanswered: the next request would read only what it sent. A message said
-      // meanwhile is answered first.
+      // So does one that only sent, each reply sent, or closed messages with no reply, perhaps
+      // with its steps, once nothing it took is left unanswered: the next request would read only
+      // what it sent. A message said meanwhile is answered first.
       if (sentAll && sentAny && !(await record.unanswered(current.from ?? 0)) && (await ends()))
         return;
       status(current, { state: "thinking" });

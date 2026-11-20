@@ -2,12 +2,14 @@
  * The main loop: one per looper. It is given a thread in which a message waits that no piece of
  * work keeps: one said where nothing follows, or one every piece of work it was given to handed
  * back; and the work there is. It says whose the message is, new work or work there is, or
- * answers it itself when it needs no work, or stops a piece of work the message asks to stop. It
- * is also told of a message that joined turns of work, which that work has: then it is given
- * those pieces of work and that message, and may only stop one of them. It does none of the
- * work, and it has one function to call. Each time is one model request, which holds nothing of
- * those before it but what it is given.
+ * answers it itself when it needs no work, or closes it with no reply when it asks for nothing,
+ * or stops a piece of work the message asks to stop. It is also told of a message that joined
+ * turns of work, which that work has: then it is given those pieces of work and that message, and
+ * may only stop one of them. It does none of the work, and it has two functions to call: `route`,
+ * and `no_reply_needed`, which it is not offered for a message that joined turns. Each time is
+ * one model request, which holds nothing of those before it but what it is given.
  */
+import { NO_REPLY } from "./loop.js";
 import { PICTURES_BUDGET, withPictures } from "./record.js";
 import { build } from "./told.js";
 import {
@@ -45,7 +47,7 @@ export const LAST_ACTIVE =
   "None of the work that follows this conversation is in a turn. The one last active here: ";
 /** What is said where the main loop called to stop work and wrote nothing: whether a turn was cut. */
 export const stopWord = (cut: boolean) => (cut ? "Stopped." : "Nothing was stopped.");
-/** The one function the main loop calls. */
+/** The function the main loop calls to place or stop. */
 export const ROUTE: ToolSpec = {
   name: "route",
   description:
@@ -69,6 +71,12 @@ export const ROUTE: ToolSpec = {
   },
 };
 
+/**
+ * The function the main loop calls when what came in needs no reply: a worker's, but for all it
+ * decides on, which it names by no number.
+ */
+export const CLOSE: ToolSpec = { ...NO_REPLY, parameters: { type: "object", properties: {} } };
+
 /** A piece of work as the main loop is told of it. */
 export interface Listed {
   id: string;
@@ -86,17 +94,21 @@ export interface Said {
   text: string;
   /** The pictures the person sent with it. */
   images?: Picture[];
+  /** For a message it closed with no reply: its call, and what it was told, put in its place. */
+  items?: Item[];
 }
 /**
  * What the main loop decided. `answer` is what it wrote. `placed` is whose what came in is: work
  * it was told of, or new work by its title. `stop` is there when it called to stop work, and
  * then nothing is placed: the turn to cut is the one it was told of, and none when that work was
- * not told of as in a turn.
+ * not told of as in a turn. `quiet` is there when it said what came in needs no reply, and wrote
+ * and placed nothing: it is closed, with nothing said.
  */
 export interface Decided {
   answer?: string;
   placed?: { work: string } | { title: string };
   stop?: { work: string; turn?: number };
+  quiet?: true;
 }
 
 /** A work's title: the first line of `text` that says anything, in a few words. */
@@ -136,12 +148,17 @@ const put = (said: Said[], works: Listed[], back: Returned[] = [], last?: string
   { type: "message", role: "user", content: listing(works) },
   ...(withPictures(
     [
-      said.slice(-TOLD.messages).map(({ role, text, images }) => ({
-        type: "message" as const,
-        role,
-        content: text.length > TOLD.each ? `${head(text, TOLD.each)}…` : text,
-        ...(images ? { images } : {}),
-      })),
+      said.slice(-TOLD.messages).flatMap(
+        ({ role, text, images, items }): Item[] =>
+          items ?? [
+            {
+              type: "message" as const,
+              role,
+              content: text.length > TOLD.each ? `${head(text, TOLD.each)}…` : text,
+              ...(images ? { images } : {}),
+            },
+          ],
+      ),
     ],
     PICTURES_BUDGET,
   )[0] ?? []),
@@ -216,15 +233,17 @@ export function createMain(options: {
   };
 
   /**
-   * Make one request of the model: what it wrote, and what it called `route` with. `voiced` is
-   * whether it is told who it speaks as. None for a request that is dropped, which the model is
-   * then not asked, or told to cancel; one the model refuses rejects, as it refused.
+   * Make one request of the model, offering it `tools`: what it wrote, what it called `route`
+   * with, and whether it called `no_reply_needed`. `voiced` is whether it is told who it speaks
+   * as. None for a request that is dropped, which the model is then not asked, or told to cancel;
+   * one the model refuses rejects, as it refused.
    */
   const ask = async (
     instructions: string,
     voiced: boolean,
     input: Item[],
     written: (text: string) => void,
+    tools: ToolSpec[] = [ROUTE],
   ) => {
     let drop = () => {};
     const gone = new Promise<undefined>((resolve) => {
@@ -245,7 +264,7 @@ export function createMain(options: {
         ...(model ? { model } : {}),
         instructions: voiced ? spokenAs(instructions, voice) : instructions,
         input,
-        tools: [ROUTE],
+        tools,
       });
       // A model that never answers a request it was told to cancel holds nothing up.
       asked.catch(() => {});
@@ -265,7 +284,10 @@ export function createMain(options: {
           // Arguments that don't read: as a call that says nothing.
           routed = {};
         }
-      return { ...(text.trim() ? { text } : {}), routed };
+      const quiet = reply.output.some(
+        (item) => item.type === "function_call" && item.name === CLOSE.name,
+      );
+      return { ...(text.trim() ? { text } : {}), routed, quiet };
     } finally {
       if (asking === mine) asking = undefined;
       if (mine.retrying) {
@@ -291,12 +313,18 @@ export function createMain(options: {
       back: Returned[],
       last?: string,
     ): Promise<Decided | undefined> {
-      const asked = await ask(MAIN_INSTRUCTIONS, true, put(said, works, back, last), written);
+      const asked = await ask(MAIN_INSTRUCTIONS, true, put(said, works, back, last), written, [
+        ROUTE,
+        CLOSE,
+      ]);
       if (!asked) return undefined;
-      const { text, routed } = asked;
+      const { text, routed, quiet } = asked;
       const answered: Decided = text === undefined ? {} : { answer: text };
-      // Text and no call: it answered, and nothing is placed.
+      // Text and no call: it answered, and nothing is placed; and so with text beside saying it
+      // needs no reply, as what it wrote may already be showing.
       if (!routed && text !== undefined) return answered;
+      // No text and no `route`, and it needs no reply: closed, with nothing said or placed.
+      if (!routed && quiet) return { quiet: true };
       // A call that names work to stop only stops: nothing is placed.
       if (typeof routed?.stop === "string" && routed.stop !== "") {
         const turn = turnOf(routed.stop, works);

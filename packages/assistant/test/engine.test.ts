@@ -647,7 +647,7 @@ test("bound to settings, instructions and skills come from it, read at each requ
   assert.ok(front.startsWith("You are the front desk."));
   assert.ok(front.endsWith("\n\nYou keep the docs."));
   assert.ok(!front.includes("review"));
-  assert.deepEqual(offeredNames(s.routed[0]), ["route"]);
+  assert.deepEqual(offeredNames(s.routed[0]), ["route", "no_reply_needed"]);
 
   // Removed: gone at the next request, and with no skills there's nothing to read them with.
   skills = [];
@@ -1809,11 +1809,12 @@ test("another party's message is given only to work that follows its conversatio
     s.routed[1]?.input.map((item) => item.content),
     ["There is no work.", "(from act_two) Add a chart."],
   );
-  // Its request is the looper's own words, who the agent is, and one function: none of its tools.
+  // Its request is the looper's own words, who the agent is, and its own two functions: none of
+  // its tools.
   assert.match(String(s.routed[1]?.instructions), /^You are the front desk\./);
   assert.deepEqual(
     s.routed[1]?.tools?.map((tool) => tool.name),
-    ["route"],
+    ["route", "no_reply_needed"],
   );
   late.open(say("Report done."));
   await s.host.settled();

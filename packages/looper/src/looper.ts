@@ -43,15 +43,7 @@ import { z } from "zod";
 import type { FilesOf } from "./compaction.js";
 import { createLoop, type Place } from "./loop.js";
 import { createMain, type Listed, stopWord, TOLD, titled } from "./main.js";
-import {
-  createRecord,
-  createThread,
-  messageOf,
-  READS,
-  type Thread,
-  unansweredLast,
-  userEntry,
-} from "./record.js";
+import { createRecord, createThread, messageOf, READS, type Thread, userEntry } from "./record.js";
 import { MOST_STEPS, Step } from "./steps.js";
 import type { Part } from "./told.js";
 import {
@@ -734,10 +726,10 @@ export function createLooper(options: {
    * thread nothing follows that is what was said there; in one that work follows, the messages
    * that every piece of work they were given to handed back, or those said while several follow
    * and none was in a turn, which no work was given. It answers itself, which is the
-   * thread's next message; or says whose what waits is, which is new work or work there is,
-   * which then follows the thread too; or it cuts the turn it says to stop. It gives the work,
-   * or none when the main loop only answered or stopped, when nothing waits, or once `cut` says
-   * the looper stopped or closed.
+   * thread's next message; or closes what waits with no reply, saying nothing; or says whose
+   * what waits is, which is new work or work there is, which then follows the thread too; or it
+   * cuts the turn it says to stop. It gives the work, or none when the main loop only answered,
+   * closed or stopped, when nothing waits, or once `cut` says the looper stopped or closed.
    */
   const decide = async (thread: string, cut: () => boolean) => {
     const into = threadOf(thread);
@@ -757,8 +749,8 @@ export function createLooper(options: {
       return { ...read, back };
     });
     // Nothing waits: no message came back from all it was given to; or, where nothing follows,
-    // nothing was said, or the main loop has answered the newest.
-    if (read.back.length === 0 && (follows.length > 0 || read.said.at(-1)?.role !== "user"))
+    // nothing was said, or the main loop has answered or closed the newest.
+    if (read.back.length === 0 && (follows.length > 0 || read.waiting.length === 0))
       return undefined;
     // Work that handed a message back is not told of: it is never given it again.
     const why = new Map(read.back.flatMap(({ by }) => by.map((one) => [one.work, one.why])));
@@ -769,7 +761,7 @@ export function createLooper(options: {
     if (cut()) return undefined;
     // What this decision is about: what came back, or what was said since the thread's last
     // answer. Each is taken as the main loop's request is made, if nothing was said of it yet.
-    const about = read.back.length > 0 ? read.back.map(({ id }) => id) : unansweredLast(read.said);
+    const about = read.back.length > 0 ? read.back.map(({ id }) => id) : read.waiting;
     for (const id of await into.progress(about, "taken")) out.progress?.(thread, id, "taken");
     if (cut()) return undefined;
     const replyId = crypto.randomUUID();
@@ -839,6 +831,22 @@ export function createLooper(options: {
           // A message said after what came back, where nothing follows, is decided on next.
           if (follows.length === 0 && late && read.back.length > 0) unread.add(thread);
           if (follows.length === 0 && work === undefined && !late)
+            await wait(thread, false).catch((error: unknown) =>
+              log.warn("A thread's mark couldn't be written.", { thread, error: String(error) }),
+            );
+        });
+      else if (decided.quiet)
+        // What needs no reply is closed with nothing said, and decided as an answer decides it:
+        // said closed, not answered. The thread then waits as after an answer.
+        await inLine(thread, async () => {
+          const { late } = await into.closeQuietly(about, read.back.at(-1)?.seq ?? read.upTo, {
+            followed: follows.length > 0,
+            answers: read.back.map(({ id }) => id),
+          });
+          for (const id of await into.progress(about, "closed"))
+            out.progress?.(thread, id, "closed");
+          if (follows.length === 0 && late && read.back.length > 0) unread.add(thread);
+          if (follows.length === 0 && !late)
             await wait(thread, false).catch((error: unknown) =>
               log.warn("A thread's mark couldn't be written.", { thread, error: String(error) }),
             );
