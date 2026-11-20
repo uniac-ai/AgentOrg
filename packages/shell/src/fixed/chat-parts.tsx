@@ -38,7 +38,7 @@ export function ChatRow(
       type="button"
       aria-current={current ? "true" : undefined}
       onClick={onOpen}
-      className={`flex h-[68px] w-full items-center gap-3 rounded-xl px-2.5 text-left hover:bg-[var(--hover)] ${current ? "bg-[var(--selected)]" : ""}`}
+      className={`flex h-[68px] w-full items-center gap-3 rounded-xl px-2.5 text-left ${current ? "bg-[var(--selected)]" : "hover:bg-[var(--hover)]"}`}
     >
       <Face agent={agent} size={40} plain />
       <span className="min-w-0 flex-1">
