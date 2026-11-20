@@ -1,5 +1,6 @@
 // An agent's message as bubbles, in a real browser over the stand-in gateway: split at its blank
-// lines, each filled as the person's own bubble is, with one Copy for the whole message.
+// lines, each filled as the person's own bubble is, each with a menu whose Copy copies the whole
+// message.
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { Locator, Page, WebSocket } from "@playwright/test";
@@ -55,9 +56,16 @@ async function conversation(
   await page.mouse.move(1, 1);
   return { page, thread, sockets };
 }
+/** Copies a message as a person does: points at one of its bubbles, presses its "⋯", then Copy. */
+async function copyThrough(page: Page, bubble: Locator) {
+  await bubble.hover();
+  await bubble.getByRole("button", { name: "More" }).click();
+  await page.getByRole("menuitem", { name: "Copy" }).click();
+}
 /**
  * Each of the agent's messages, read at one moment: its bubbles, each with its kind, its words, its
- * box and its look; its Copy's box; and the width of the conversation it is in.
+ * buttons, its box and its look; the bottom of what is drawn for it; and the width of the
+ * conversation it is in.
  */
 const messages = (thread: Locator) =>
   thread.evaluate((root) => {
@@ -94,10 +102,7 @@ const messages = (thread: Locator) =>
               ...look(content),
             };
           }),
-          copy: (() => {
-            const copy = message.querySelector('button[aria-label="Copy"]');
-            return copy && { ...box(copy), seen: getComputedStyle(copy).visibility === "visible" };
-          })(),
+          bottom: box(message).bottom,
         })),
       page: [innerWidth, document.documentElement.scrollWidth],
     };
@@ -176,24 +181,27 @@ test(
 );
 
 test(
-  "4 px between a message's bubbles, the larger gap before the next message, and one Copy under the last bubble that copies the whole message as written",
+  "4 px between a message's bubbles and before the agent's next message, nothing under the last bubble, and each bubble's menu copies the whole message as written",
   withGateway(async (gateway) => {
     const { page, thread } = await conversation(gateway, "result");
     await thread.locator(".prose-chat").nth(1).waitFor();
-    await thread.getByRole("button", { name: "Copy" }).last().waitFor();
+    await thread.getByRole("button", { name: "More" }).last().waitFor();
     const said = await messages(thread);
     const [receipt, result] = said.agent.slice(-2);
-    assert.ok(receipt && result?.copy);
+    assert.ok(receipt && result);
     const [first, second] = result.bubbles;
     assert.ok(first && second);
     assert.equal(Math.round(second.top - first.bottom), 4, "4 px between its bubbles");
     const before = receipt.bubbles.at(-1);
     assert.ok(before);
-    assert.equal(Math.round(first.top - before.bottom), 56, "the gap before the next message");
-    assert.ok(result.copy.seen && result.copy.top >= second.bottom, "Copy under the last bubble");
-    assert.equal(Math.round(result.copy.left), Math.round(result.left), "at the start side");
+    assert.equal(Math.round(first.top - before.bottom), 4, "4 px before the next message");
+    assert.equal(Math.round(result.bottom), Math.round(second.bottom), "nothing under the last");
     assert.equal(receipt.bubbles.length, 1);
-    await thread.getByRole("button", { name: "Copy" }).last().click();
+    for (const bubble of result.bubbles) assert.deepEqual(bubble.buttons, ["More"]);
+    await copyThrough(
+      page,
+      thread.locator('[data-slot="bubble"]').filter({ hasText: second.words }),
+    );
     assert.equal(
       await page.evaluate(() => (globalThis as { copied?: string }).copied),
       SAID.result,
@@ -241,7 +249,7 @@ test(
       at: new Date().toISOString(),
     });
     gateway.setChatStatus("a-research", { state: "idle" });
-    await thread.getByRole("button", { name: "Copy" }).waitFor();
+    await thread.getByRole("button", { name: "More" }).first().waitFor();
     assert.deepEqual(await seen(), [0, 1, 2, 3, 4, 5], "recorded, the same six");
     await page.close();
   }),
@@ -355,7 +363,7 @@ test(
 );
 
 test(
-  "a message whose last paragraph is only a number: that number isn't drawn while it is written, and is once it is settled, with Copy as for any message",
+  "a message whose last paragraph is only a number: that number isn't drawn while it is written, and is once it is settled, with its menu as for any message",
   withGateway(async (gateway) => {
     const { page, thread, sockets } = await conversation(gateway, "writing");
     await piece(page, gateway, sockets, "The answer is below.\n\n42");
@@ -367,13 +375,12 @@ test(
       at: new Date().toISOString(),
     });
     gateway.setChatStatus("a-research", { state: "idle" });
-    const copy = thread.getByRole("button", { name: "Copy" });
-    await copy.waitFor();
+    await thread.getByRole("button", { name: "More" }).nth(1).waitFor();
     assert.deepEqual(await drawn(thread), [
       { words: "The answer is below.", was: true },
       { words: "42", was: false },
     ]);
-    await copy.click();
+    await copyThrough(page, thread.locator('[data-slot="bubble"]').filter({ hasText: "42" }));
     assert.equal(
       await page.evaluate(() => (globalThis as { copied?: string }).copied),
       "The answer is below.\n\n42",
