@@ -6,6 +6,7 @@ import { cn } from "../cn.ts"
 import { Dialog as DialogPrimitive } from "radix-ui"
 
 import { Button } from "./button"
+import { focusReturns } from "./tooltip.tsx"
 
 function Dialog({
   ...props
@@ -63,6 +64,7 @@ function DialogContent({
   children,
   showCloseButton = true,
   asWindow = false,
+  onCloseAutoFocus,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
   showCloseButton?: boolean
@@ -79,6 +81,10 @@ function DialogContent({
           asWindow && WINDOW,
           className
         )}
+        onCloseAutoFocus={(event) => {
+          focusReturns()
+          onCloseAutoFocus?.(event)
+        }}
         {...props}
       >
         {children}
