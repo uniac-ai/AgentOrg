@@ -5,9 +5,10 @@
 # is missing. With --update, or when the release it pins is newer than the one installed, it moves
 # to that release, and puts back what ran before if the new one doesn't answer.
 #
-#   curl -fsSL https://raw.githubusercontent.com/uniac-ai/AgentOrg/main/install.sh | bash
-#   curl -fsSL https://raw.githubusercontent.com/uniac-ai/AgentOrg/main/install.sh | bash -s -- --update
+#   curl -fsSL https://raw.githubusercontent.com/uniac-ai/AgentOrg/main/get.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/uniac-ai/AgentOrg/main/get.sh | bash -s -- --update
 #
+# get.sh fetches this script from the release npm's channel names, and runs it once its sum checks.
 # --app, --core and --node take files instead of downloading them, for a rehearsal of a build that
 # isn't published; Node's is still checked against the sum below.
 set -euo pipefail
@@ -21,7 +22,7 @@ APP_SHA256=""
 NODE_VERSION="24.22.3"
 NODE_SHA256="ff6e17d4874b76d272212b908cc020d6e815fba5a6c7eaaa06add725840307fd"
 
-LINE="curl -fsSL https://raw.githubusercontent.com/uniac-ai/AgentOrg/main/install.sh | bash"
+LINE="curl -fsSL https://raw.githubusercontent.com/uniac-ai/AgentOrg/main/get.sh | bash"
 RELEASES="https://github.com/uniac-ai/AgentOrg/releases/download"
 ROOT="$HOME/.agentorg"
 BIN="$HOME/.local/bin"

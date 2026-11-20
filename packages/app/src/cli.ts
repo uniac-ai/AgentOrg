@@ -331,7 +331,7 @@ async function serviceCommand(name: "start" | "stop" | "status" | "update" | "un
         }))
           write(process.stdout, line);
       else if (process.platform !== "darwin") throw new service.ServiceError(installed.ELSEWHERE);
-      else process.exitCode = await installed.update(installed.INSTALL_SCRIPT, home);
+      else process.exitCode = await installed.update(installed.RELEASE, home);
     } else if (name === "status") {
       const { lines, running: answers } = await service.status(system, home);
       for (const line of lines) write(process.stdout, line);
