@@ -85,7 +85,7 @@ function Place({
           aria-current={current ? "page" : undefined}
           onClick={onClick}
           {...rest}
-          className={`relative grid size-11 shrink-0 place-items-center rounded-xl hover:bg-[var(--hover)] ${current ? "bg-[var(--selected)]" : ""} phone:flex phone:h-full phone:w-auto phone:flex-1 phone:flex-col phone:items-center phone:justify-center phone:gap-0.5 phone:rounded-none phone:bg-transparent phone:hover:bg-transparent ${current ? "" : "phone:text-muted-foreground"}`}
+          className={`relative grid size-11 shrink-0 place-items-center rounded-xl ${current ? "bg-[var(--selected)]" : "hover:bg-[var(--hover)]"} phone:flex phone:h-full phone:w-auto phone:flex-1 phone:flex-col phone:items-center phone:justify-center phone:gap-0.5 phone:rounded-none phone:bg-transparent phone:hover:bg-transparent ${current ? "" : "phone:text-muted-foreground"}`}
         >
           {children}
           <span className="hidden text-[10px] leading-3 font-medium phone:block">{label}</span>
