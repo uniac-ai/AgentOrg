@@ -133,6 +133,13 @@ type Gateway = Awaited<ReturnType<typeof standIn>>;
 /** The way to the chat page, in the design and built: the bar's Chat icon. */
 const chatIcon = (page: Page) =>
   page.getByRole("navigation", { name: "Main" }).getByRole("button", { name: /^Chat/ }).click();
+/** Chat's compose icon, pressed, and its picker once it has opened. */
+const composeIcon = async (page: Page) => {
+  await page.getByRole("main").getByRole("button", { name: "Message", exact: true }).click();
+  await page
+    .getByRole("dialog", { name: "Message" })
+    .evaluate((e) => Promise.all(e.getAnimations({ subtree: true }).map((one) => one.finished)));
+};
 /** The way to the team page, in the design and built: the bar's Team icon. */
 const teamIcon = (page: Page) =>
   page.getByRole("navigation", { name: "Main" }).getByRole("button", { name: "Team" }).click();
@@ -380,6 +387,23 @@ const SCREENS: Screen[] = [
         .getByRole("main")
         .getByRole("region", { name: /^Conversation with / })
         .waitFor();
+    },
+  },
+  // Who to message, from Chat's head: the picker open.
+  {
+    name: "compose-picker",
+    sizes: ["wide", "phone"],
+    themes: ["dark", "light"],
+    chats: true,
+    agents: true,
+    design: async (page) => {
+      await chatIcon(page);
+      await composeIcon(page);
+    },
+    built: async (page, gateway) => {
+      await asTheDesign(gateway);
+      await chatIcon(page);
+      await composeIcon(page);
     },
   },
   {
