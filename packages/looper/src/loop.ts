@@ -196,7 +196,7 @@ Each message starts with its number in brackets, like [12]. One from anyone othe
   others.length > 0
     ? ` The other work in its conversations, in the order it began: ${others.map((one) => JSON.stringify(one)).join(", ")}. A message about what one of them did or decided is not this work's, though it says "you": call \`hand_back\` for it, naming the one it is about, rather than answering that this work didn't do it.`
     : ""
-} A message that asks for nothing, like thanks, still gets a short answer. A message you neither answer nor hand back is shown as not answered when you are done. When you have nothing more to do, end without calling anything.
+} A message that asks for nothing, like thanks or an acknowledgement, needs no reply: call \`no_reply_needed\` with its number instead of sending. A message you neither answer nor hand back is shown as not answered when you are done. When you have nothing more to do, end without calling anything.
 
 A message that begins "(Left out:" or "${SUMMARY_BEGINS}" is not from the person and needs no answer. It stands for earlier messages, and what was done for them, that no longer fit: all of it was said and done, so do not do it again. A call whose arguments or output say they were left out did run. Message [1] is what this work was asked.`;
 

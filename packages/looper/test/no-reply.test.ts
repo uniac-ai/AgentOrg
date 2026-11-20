@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   Entry,
@@ -9,6 +10,8 @@ import {
   textOf,
   type WorkEntry,
 } from "../src/index.ts";
+import { workInstructions } from "../src/loop.ts";
+import { MAIN_INSTRUCTIONS } from "../src/main.ts";
 import { createRecord, createThread } from "../src/record.ts";
 import { handsBack, held, kept, looperWith, newWork, says, sends, until } from "./support.ts";
 
@@ -497,4 +500,25 @@ test("the main loop's route beside its close wins: the work takes the message, a
   await rested(made);
   assert.deepEqual(facts(made), ["a: Write the report. taken", "a: Write the report. answered"]);
   assert.ok(!kept(made.values, "a").includes("no_reply_needed: done"));
+});
+
+test("the worker and the front desk are told that a message that asks for nothing needs no reply, as the saved copies show", () => {
+  const worker =
+    "A message that asks for nothing, like thanks or an acknowledgement, needs no reply: call `no_reply_needed` with its number instead of sending.";
+  const frontDesk =
+    "A message that asks for nothing, like thanks or an acknowledgement, needs no reply: call `no_reply_needed` instead of answering.";
+  const saved = (name: string) =>
+    readFileSync(new URL(`../../test/told/${name}`, import.meta.url), "utf8");
+  assert.ok(workInstructions("Work").includes(worker));
+  assert.ok(!workInstructions("Work").includes("still gets a short answer"));
+  // The worker reads of the function in that one sentence, and its turn's rules are as before.
+  assert.equal(workInstructions("Work").split("no_reply_needed").length, 2);
+  assert.ok(MAIN_INSTRUCTIONS.includes(`\n- ${frontDesk}`));
+  assert.ok(MAIN_INSTRUCTIONS.includes("close it with no reply when it asks for nothing"));
+  for (const name of ["worker.txt", "worker-beside-others.txt"]) {
+    assert.ok(saved(name).includes(worker), name);
+    assert.equal(saved(name).split("no_reply_needed").length, 2, name);
+  }
+  for (const name of ["front-desk.txt", "front-desk-voiced.txt"])
+    assert.ok(saved(name).includes(frontDesk), name);
 });
