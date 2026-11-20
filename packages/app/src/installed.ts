@@ -1,11 +1,21 @@
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { plistPath, ServiceError, type ServiceSystem, stop } from "./service.js";
 
-/** The one line's script, which also updates what it installed. */
-export const INSTALL_SCRIPT = "https://raw.githubusercontent.com/uniac-ai/AgentOrg/main/install.sh";
+/** The npm dist-tag of @agentorg/cli whose release `agentorg update` moves to: next, until decided. */
+export const CHANNEL = "next";
+/**
+ * Where `agentorg update` reads npm's dist-tags, `{"latest": …, "next": …}`, and fetches the
+ * channel's release's install.sh and SHA256SUMS, at `<releases>/v<version>/`. get.sh, the line's
+ * script, reads the same addresses: they change together.
+ */
+export const RELEASE = {
+  tags: "https://registry.npmjs.org/-/package/@agentorg/cli/dist-tags",
+  releases: "https://github.com/uniac-ai/AgentOrg/releases/download",
+};
 /** The line its launcher carries, so only a launcher the script wrote is removed. */
 export const LAUNCHER_MARK = "# AgentOrg's launcher, written by its install script.";
 
@@ -31,21 +41,76 @@ export function layout(userHome: string) {
 }
 
 /**
- * `agentorg update`: fetch the line's script and run it with `--update` on `home`, with the
- * terminal's output. It updates the core and the Mac app together, or puts both back. Its exit
- * code is the script's.
+ * The body at `url`, or its status when that isn't 2xx. A redirect is followed only to the
+ * address's own protocol, https for AgentOrg's, and five at most.
  */
-export async function update(from: string, home: string): Promise<number> {
-  let script: string;
-  try {
-    const answer = await fetch(from, { signal: AbortSignal.timeout(30_000) });
-    if (!answer.ok) throw new Error(`it answered ${answer.status}`);
-    script = await answer.text();
-  } catch (error) {
-    throw new ServiceError(
-      `Couldn't fetch the install script from ${from}: ${error instanceof Error ? error.message : String(error)}.`,
-    );
+async function body(url: string): Promise<Buffer | number> {
+  let at = new URL(url);
+  for (let hop = 0; hop <= 5; hop++) {
+    const answer = await fetch(at, { redirect: "manual", signal: AbortSignal.timeout(30_000) });
+    const to = answer.headers.get("location");
+    if (answer.status >= 300 && answer.status < 400 && to !== null) {
+      await answer.body?.cancel();
+      at = new URL(to, at);
+      if (at.protocol !== new URL(url).protocol) throw new Error(`it redirected to ${at.origin}`);
+      continue;
+    }
+    if (answer.ok) return Buffer.from(await answer.arrayBuffer());
+    await answer.body?.cancel();
+    return answer.status;
   }
+  throw new Error("it redirected more than five times");
+}
+
+/**
+ * `agentorg update`: read the version npm's `CHANNEL` names, fetch that release's install.sh and
+ * SHA256SUMS from `from`, and run install.sh with `--update` on `home`, with the terminal's output,
+ * once its SHA-256 is the one listed. It updates the core and the Mac app together, or puts both
+ * back. Its exit code is the script's.
+ */
+export async function update(from: typeof RELEASE, home: string): Promise<number> {
+  /** What `url` answers; a release's file that isn't there is its release not being up yet. */
+  const fetched = async (what: string, url: string, release?: string) => {
+    let got: Buffer | number;
+    try {
+      got = await body(url);
+    } catch (error) {
+      throw new ServiceError(
+        `Couldn't fetch ${what} from ${url}: ${error instanceof Error ? error.message : String(error)}.`,
+      );
+    }
+    if (got === 404 && release !== undefined)
+      throw new ServiceError(
+        `AgentOrg ${release} is on npm, but its release isn't up yet: try again in a few minutes.`,
+      );
+    if (typeof got === "number")
+      throw new ServiceError(`Couldn't fetch ${what} from ${url}: it answered ${got}.`);
+    return got;
+  };
+  const tags = await fetched("npm's dist-tags", from.tags);
+  let version: unknown;
+  try {
+    version = JSON.parse(tags.toString())[CHANNEL];
+  } catch {}
+  if (typeof version !== "string" || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version))
+    throw new ServiceError(
+      `npm names no version for AgentOrg's ${CHANNEL} channel, so nothing was run.`,
+    );
+  const at = `${from.releases}/v${version}`;
+  const script = await fetched(`AgentOrg ${version}'s install.sh`, `${at}/install.sh`, version);
+  const sums = (
+    await fetched(`AgentOrg ${version}'s SHA256SUMS`, `${at}/SHA256SUMS`, version)
+  ).toString();
+  const listed = sums.match(/^([0-9a-f]{64}) [ *]install\.sh$/m)?.[1];
+  if (listed === undefined)
+    throw new ServiceError(
+      `The SHA256SUMS of AgentOrg ${version} has no line for install.sh, so nothing was run.`,
+    );
+  const got = createHash("sha256").update(script).digest("hex");
+  if (got !== listed)
+    throw new ServiceError(
+      `install.sh of AgentOrg ${version} isn't the one its SHA256SUMS lists (its SHA-256 is ${got}), so nothing was run.`,
+    );
   const folder = mkdtempSync(join(tmpdir(), "agentorg-update-"));
   try {
     const file = join(folder, "install.sh");

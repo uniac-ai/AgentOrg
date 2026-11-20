@@ -36,8 +36,10 @@ AgentOrg creates and manages agents. Each part is a program that joins a Hub as 
 One line in Terminal sets AgentOrg up for the account that runs it:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/uniac-ai/AgentOrg/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/uniac-ai/AgentOrg/main/get.sh | bash
 ```
+
+[`get.sh`](get.sh), the one file the line takes from `main`, reads the version npm's `next` channel names (`latest` with `… | bash -s -- --channel latest`), fetches that release's `install.sh` and `SHA256SUMS`, and runs `install.sh` with its other arguments once its SHA-256 is the one listed. Nothing else that installs comes from `main`.
 
 [`install.sh`](install.sh) needs macOS 13 or later on Apple silicon, and is refused as root. Everything but the Mac app goes in the account's own folders; the Mac app goes in `/Applications` when the account can write there, else `~/Applications`. In order, it:
 
@@ -74,7 +76,7 @@ If either doesn't answer, the service is stopped and both go back to what ran be
 - **`agentorg start`**, on macOS, runs it as a background service of the person's own: a LaunchAgent, `ai.uniac.agentorg.core` in `~/Library/LaunchAgents`, one per account, which starts it on the home at every login and again whenever it ends, writing what it says to `<home>/logs/core.log`. It runs on the Node `agentorg` runs on, as the shell's `PATH` names it, with that `PATH` as it is now, so run it again after installing a program the app should find by name. It waits for the app to answer, then signs a browser in (`--no-open` doesn't). Run again, it changes nothing that runs as asked, starts the app again if it has ended, and takes the service over to another home if given one. It refuses while the app runs on the home outside the service.
 - **`agentorg stop`** stops the service, whichever home it runs on, and keeps it from starting at a login until `agentorg start`.
 - **`agentorg status`** says whether the app answers on the home, at which address and version, and whether the service is set up, on or stopped. It exits 0 while the app answers, else 3.
-- **`agentorg update`**, on a Mac where the one-line install put AgentOrg, runs that line's newest script with `--update`. It updates the core and the Mac app together, or puts both back as they were.
+- **`agentorg update`**, on a Mac where the one-line install put AgentOrg, runs the `install.sh` of the release npm's `next` channel names with `--update`, once its SHA-256 is the one that release's `SHA256SUMS` lists. It updates the core and the Mac app together, or puts both back as they were.
 - **`agentorg uninstall`** stops and removes the service, then what the one-line install put in `~/.agentorg` and its launcher. The home stays unless `--delete-home`, which removes only a folder that is an AgentOrg home. `~/Agents`, where agents work, and the Mac app stay; it prints the Mac app's own command to remove it.
 - **`agentorg hub [--port N]`** runs a bare Hub in its home, without the gateway or the shell, serving WebSocket on loopback, and writes the address to `<home>/url`.
 - **The person's commands**, one per hub method:

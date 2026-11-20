@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import test from "node:test";
-import { ELSEWHERE, LAUNCHER_MARK, layout, uninstall, update } from "../src/installed.ts";
+import { CHANNEL, ELSEWHERE, LAUNCHER_MARK, layout, uninstall, update } from "../src/installed.ts";
 import { LABEL, plistPath, ServiceError } from "../src/service.ts";
 import { folder, machine, setUpOn } from "./machine.ts";
 
@@ -110,27 +111,95 @@ test("uninstall leaves a launcher it didn't write, refuses while the app runs ou
   assert.deepEqual(elsewhere.log, []);
 });
 
-test("update runs the line's script with --update on the home, and answers its exit code", async (t) => {
-  const scratch = folder(t, "agentorg-update-");
-  const said = join(scratch, "said");
-  let served = `printf '%s\\n' "$@" "$AGENTORG_HUB_HOME" > '${said}'\nexit 3\n`;
+const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
+
+/**
+ * npm's dist-tags and the releases on 127.0.0.1, answering `files` by path. A release's download
+ * answers with a redirect elsewhere, as GitHub's does; one under /away/ with a redirect to https.
+ * `asked` is each file asked for, once.
+ */
+async function releases(t: test.TestContext, files: Record<string, string>) {
+  const asked: string[] = [];
   const server = createServer((request, response) => {
-    if (request.url === "/install.sh") response.end(served);
-    else response.writeHead(404).end();
+    const path = request.url ?? "";
+    if (path.startsWith("/releases/"))
+      return void response.writeHead(302, { location: `/assets${path}` }).end();
+    if (path.startsWith("/away/"))
+      return void response.writeHead(302, { location: `https://127.0.0.1:1${path}` }).end();
+    const file = path.startsWith("/assets/") ? path.slice("/assets".length) : path;
+    asked.push(file);
+    if (files[file] === undefined) response.writeHead(404).end();
+    else response.end(files[file]);
   });
   await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
   t.after(() => server.close());
   const at = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-  assert.equal(await update(`${at}/install.sh`, "/the/home"), 3);
+  return { at, asked, from: { tags: `${at}/dist-tags`, releases: `${at}/releases` } };
+}
+
+test("update runs the install.sh of the release npm's next names, with --update on the home, once its sum is listed, and answers its exit code", async (t) => {
+  const scratch = folder(t, "agentorg-update-");
+  const said = join(scratch, "said");
+  const script = `printf '%s\\n' "$@" "$AGENTORG_HUB_HOME" > '${said}'\nexit 3\n`;
+  const other = sha256("the core's archive");
+  const files: Record<string, string> = {
+    "/dist-tags": '{"latest":"0.0.30","next":"0.0.31"}',
+    "/releases/v0.0.31/install.sh": script,
+    "/releases/v0.0.31/SHA256SUMS": `${other}  agentorg-core-0.0.31.tgz\n${sha256(script)}  install.sh\n`,
+  };
+  const { asked, from } = await releases(t, files);
+  assert.equal(CHANNEL, "next");
+  assert.equal(await update(from, "/the/home"), 3);
   assert.equal(readFileSync(said, "utf8"), "--update\n/the/home\n");
-  served = "exit 0\n";
-  assert.equal(await update(`${at}/install.sh`, "/the/home"), 0);
-  await assert.rejects(update(`${at}/gone.sh`, "/the/home"), (error: Error) => {
-    assert.ok(error instanceof ServiceError);
-    assert.equal(
-      error.message,
-      `Couldn't fetch the install script from ${at}/gone.sh: it answered 404.`,
-    );
-    return true;
-  });
+  assert.deepEqual(asked, [
+    "/dist-tags",
+    "/releases/v0.0.31/install.sh",
+    "/releases/v0.0.31/SHA256SUMS",
+  ]);
+  // The form shasum writes for a file read as binary is taken too.
+  files["/releases/v0.0.31/install.sh"] = "exit 0\n";
+  files["/releases/v0.0.31/SHA256SUMS"] = `${sha256("exit 0\n")} *install.sh\n`;
+  assert.equal(await update(from, "/the/home"), 0);
+});
+
+test("update refuses an install.sh whose sum differs or isn't listed, a version that isn't one, and a fetch that fails or leaves https, and runs nothing", async (t) => {
+  const scratch = folder(t, "agentorg-update-");
+  const said = join(scratch, "said");
+  const script = `touch '${said}'\n`;
+  const files: Record<string, string> = {
+    "/dist-tags": '{"next":"0.0.31"}',
+    "/releases/v0.0.31/install.sh": script,
+  };
+  const { at, from } = await releases(t, files);
+  const refused = async (message: string, release = from) =>
+    assert.rejects(update(release, "/the/home"), (error: Error) => {
+      assert.ok(error instanceof ServiceError);
+      assert.equal(error.message, message);
+      return true;
+    });
+  files["/releases/v0.0.31/SHA256SUMS"] = `${sha256("another script")}  install.sh\n`;
+  await refused(
+    `install.sh of AgentOrg 0.0.31 isn't the one its SHA256SUMS lists (its SHA-256 is ${sha256(script)}), so nothing was run.`,
+  );
+  // A line for another file, with install.sh's own sum, isn't install.sh's.
+  files["/releases/v0.0.31/SHA256SUMS"] = `${sha256(script)}  install.sh.old\n`;
+  await refused(
+    "The SHA256SUMS of AgentOrg 0.0.31 has no line for install.sh, so nothing was run.",
+  );
+  await refused(
+    `Couldn't fetch AgentOrg 0.0.31's install.sh from ${at}/away/v0.0.31/install.sh: it redirected to https://127.0.0.1:1.`,
+    { ...from, releases: `${at}/away` },
+  );
+  // npm has a version whose release isn't up: none before this change carries install.sh.
+  files["/dist-tags"] = '{"next":"0.0.30"}';
+  await refused(
+    "AgentOrg 0.0.30 is on npm, but its release isn't up yet: try again in a few minutes.",
+  );
+  for (const tags of ['{"next":"0.0.31/../x"}', '{"next":"../0.0.31"}', '{"latest":"0.0.31"}']) {
+    files["/dist-tags"] = tags;
+    await refused("npm names no version for AgentOrg's next channel, so nothing was run.");
+  }
+  delete files["/dist-tags"];
+  await refused(`Couldn't fetch npm's dist-tags from ${at}/dist-tags: it answered 404.`);
+  assert.equal(existsSync(said), false);
 });
