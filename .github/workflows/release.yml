@@ -8,6 +8,8 @@ name: Release
 # Once npm has the version, the last job makes the tag's GitHub release: the core and the frontend,
 # each alone, install.sh, the Mac app when the release carries one, and their SHA256SUMS, each
 # attested, with the notes in release-notes/v<version>.md.
+#
+# Before npm, a macOS job checks the Mac app the release carries, when it carries one.
 
 on:
   push:
@@ -103,8 +105,69 @@ jobs:
           path: mac-app/
           if-no-files-found: error
 
-  publish:
+  # What the release carries, checked on a Mac before anything is published: the Mac app passes
+  # Apple's checks, installs fresh from this run's files, uninstalls, and updates from the release
+  # before. With no Mac app carried, which is every release so far, there is nothing to check yet:
+  # it says so and passes, on Linux, so a macOS outage can't hold a release that carries none. The
+  # steps are scripts/mac-release-check.sh's.
+  #
+  # Whether a GitHub runner can register the Mac app's background item, launchd's login item, isn't
+  # known: the first release with a pinned Mac app will show it. A failure there fails this job like
+  # any other, and its last line says that is where it stopped.
+  mac-check:
     needs: [build, mac-app]
+    runs-on: ${{ needs.mac-app.outputs.carried == 'true' && 'macos-latest' || 'ubuntu-latest' }}
+    permissions:
+      contents: read
+    steps:
+      - name: No Mac app to check
+        if: needs.mac-app.outputs.carried != 'true'
+        run: echo "No Mac app is pinned for this release, so there is nothing to check yet."
+      # The tag, for install.sh and the script. Nothing here pushes, so the token isn't kept in the
+      # checkout.
+      - if: needs.mac-app.outputs.carried == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The mac-app artifact's own SHA256SUMS lands in downloaded/ too, as in github-release, and
+      # nothing here reads it.
+      - if: needs.mac-app.outputs.carried == 'true'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: mac-app
+          path: downloaded
+      - if: needs.mac-app.outputs.carried == 'true'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: core-and-frontend
+          path: downloaded
+      - name: Apple's checks on the Mac app
+        if: needs.mac-app.outputs.carried == 'true'
+        run: scripts/mac-release-check.sh apple "${GITHUB_REF_NAME#v}" downloaded
+      - name: A fresh install from this run's files
+        if: needs.mac-app.outputs.carried == 'true'
+        run: scripts/mac-release-check.sh fresh "${GITHUB_REF_NAME#v}" downloaded
+      # agentorg uninstall, then the Mac app's own, so the update below starts clean.
+      - name: Uninstall it
+        if: needs.mac-app.outputs.carried == 'true'
+        run: scripts/mac-release-check.sh uninstall
+      # From the GitHub release before this tag, by its own install.sh and files, read with the
+      # job's read-only token. A release before with no install.sh, or no Mac app, is skipped.
+      - id: update
+        name: An update from the release before
+        if: needs.mac-app.outputs.carried == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: scripts/mac-release-check.sh update "${GITHUB_REF_NAME#v}" downloaded
+      - name: Uninstall the update
+        if: steps.update.outputs.updated == 'true'
+        run: scripts/mac-release-check.sh uninstall
+
+  # mac-check's checks are what stop a bad release: publish waits on them, so a Mac app that fails
+  # Apple's checks, an install, an update or an uninstall stops the release before npm has it.
+  publish:
+    needs: [build, mac-app, mac-check]
     runs-on: ubuntu-latest
     environment: npm
     permissions:
