@@ -308,6 +308,12 @@ cp "$file" "$out"
         (error, stdout, stderr) =>
           done({ code: error ? Number(error.code ?? 1) : 0, stdout, stderr }),
       );
+      // bash may be gone before its input is written, as when get.sh refuses its arguments at
+      // once: the write then fails with EPIPE, which says nothing of the run. The run is judged by
+      // its exit code, its output and what it left.
+      child.stdin?.on("error", (error: NodeJS.ErrnoException) => {
+        if (error.code !== "EPIPE") throw error;
+      });
       child.stdin?.end(piped ?? "");
     });
   };
