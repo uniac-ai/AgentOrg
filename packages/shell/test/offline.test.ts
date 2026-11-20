@@ -112,8 +112,9 @@ test(
   withGateway(async (gateway) => {
     const page = await open(gateway);
     await page.getByRole("main").waitFor();
-    // Each try is closed only after a slow network's while.
-    gateway.goAway(true, 1500);
+    // Each try is held open until the test lets it go: the press joins a try already going on, so a
+    // try closed on a timer could end between finding the words and reading them.
+    gateway.goAway(true, 60_000);
     await button(page).waitFor();
     await button(page).click();
     const running = page.getByRole("button", { name: "Reconnecting" });
@@ -127,7 +128,9 @@ test(
       ).length,
     }));
     assert.deepEqual(seen, { words: "Reconnecting…", busy: "true", marks: 0, turning: 0 });
-    await button(page).waitFor({ timeout: 10_000 });
+    // Let go, the try is refused, and every try after it at once.
+    gateway.goAway();
+    await button(page).waitFor();
     assert.equal((await notice(page).innerText()).trim(), "You're offline");
     await page.close();
   }),
