@@ -29,6 +29,11 @@ export function startEngine(
     store: Slot<typeof kv>["call"];
     /** What the agent is told while no `settings` is bound. */
     instructions(): string;
+    /**
+     * Words its template gave before what `instructions` gives now. Settings that open with them,
+     * as their own paragraph, are read with `instructions` in their place.
+     */
+    earlier?: string;
     /** Whether it starts stopped, as it was left. */
     stopped?: boolean;
   },
@@ -38,6 +43,13 @@ export function startEngine(
   const chosen = async () => {
     const { value } = await store.get({ key: MODEL_KEY });
     return typeof value === "string" ? value : undefined;
+  };
+  /** An agent's own instructions, with its template's earlier words read as its words now. */
+  const current = (instructions: string) => {
+    const { earlier } = options;
+    if (!earlier || !(instructions === earlier || instructions.startsWith(`${earlier}\n\n`)))
+      return instructions;
+    return `${options.instructions()}${instructions.slice(earlier.length)}`;
   };
   /** What was last reported as left out, so a change is logged once. */
   let reported = "[]";
@@ -65,7 +77,7 @@ export function startEngine(
   const request = async () => {
     const settings = ctx.slots.settings.bound ? await ctx.slots.settings.call.get({}) : undefined;
     // The agent's own instructions: who its main loop speaks as, with nothing of its skills.
-    const voice = settings ? settings.instructions : options.instructions();
+    const voice = settings ? current(settings.instructions) : options.instructions();
     const skills = settings?.skills ?? [];
     const always = settings ? await alwaysOf(ctx.slots.settings, skills) : [];
     const told = instructionsWith(voice, skills, always);

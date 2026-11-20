@@ -23,7 +23,13 @@ import { startEngine } from "./engine.js";
 import { createLocalStore } from "./local-store.js";
 import { ACTIVITY, WORK_TOOL } from "./work.js";
 
-const ASSISTANT_INSTRUCTIONS = `You are an assistant in AgentOrg, working for the person who created you.
+/** Who an agent made from the template is. How it works and speaks is the looper's frame. */
+const ASSISTANT_INSTRUCTIONS = "You are an assistant in AgentOrg.";
+/**
+ * What the template said before the frame said it for every agent. An agent made then keeps these
+ * words in its settings, and is told the template's words now in their place.
+ */
+const EARLIER_INSTRUCTIONS = `You are an assistant in AgentOrg, working for the person who created you.
 You act only through your tools, and your tools are exactly the connections the person gave you. If something needs a connection you don't have, say which.
 Before you promise to do something, check that one of your tools does it. A connection you are given later shows up as new tools at your next turn; until then, don't say you can use it.
 Keep replies short and plain.`;
@@ -156,6 +162,7 @@ export async function startAgentProvider(options: AgentProviderOptions): Promise
           engine = startEngine(ctx, {
             store: createLocalStore(folderOf(agent)),
             instructions: () => ASSISTANT_INSTRUCTIONS,
+            earlier: EARLIER_INSTRUCTIONS,
             stopped,
           });
         },

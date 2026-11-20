@@ -8,7 +8,7 @@ import { z } from "zod";
 import { MAX_INSTRUCTIONS } from "../src/settings.ts";
 import { filesOf, MAX_TOOLS, TOOLS_BUDGET } from "../src/tools.ts";
 import { asAsked, followsSend, named, sendOf } from "./as-asked.ts";
-import engine, { engines, INSTRUCTIONS } from "./engine-actor.ts";
+import engine, { EARLIER, engines, INSTRUCTIONS } from "./engine-actor.ts";
 
 /** An interface that isn't `tools@1`. */
 const other = defineInterface({
@@ -719,6 +719,23 @@ test("what skills always tell the agent fits within the limit too, in order, bef
   assert.deepEqual(warnings(s)[0]?.fields, {
     leftOut: [{ slot: "settings", tool: "b/ALWAYS.md", reason: "limit" }],
   });
+});
+
+test("settings that open with the template's earlier words are told its words now in their place", async () => {
+  const s = await setup();
+  let instructions = `${EARLIER}\n\nWhat you are for: notes.`;
+  s.actor.bind("settings", {
+    ...settingsOf("", []),
+    get: () => ({ instructions, skills: [] }),
+  });
+  await s.turn("hello");
+  const now = `${INSTRUCTIONS}\n\nWhat you are for: notes.`;
+  assert.equal(s.requests[0]?.instructions, now);
+  assert.ok(String(s.routed[0]?.instructions).endsWith(`\n\n${now}`));
+  // Words of the agent's own that only begin like them are its own, as they are.
+  instructions = `${EARLIER} Always sign as Ana.`;
+  await s.turn("again");
+  assert.equal(s.requests[1]?.instructions, instructions);
 });
 
 test("the model reads a skill's text and files through settings", async () => {
