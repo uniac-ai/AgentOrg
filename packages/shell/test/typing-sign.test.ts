@@ -1,6 +1,7 @@
 // The agent typing in a conversation, in a real browser over the stand-in gateway: one sign at the
 // conversation's end while the agent works on the party's newest message, taken or not yet heard
-// of, with no problem; what takes it away; and nothing under the person's own messages.
+// of, with no problem; what takes it away; nothing under the person's own messages; and the
+// message just sent kept still as the sign comes under it.
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { Locator, Page } from "@playwright/test";
@@ -165,6 +166,41 @@ test(
     const { page, thread } = await conversation(gateway);
     await page.waitForTimeout(300);
     assert.equal(await sign(thread).count(), 0);
+    await page.close();
+  }),
+);
+
+test(
+  "the message just sent stays where it is, frame by frame, as the sign comes under it",
+  withGateway(async (gateway) => {
+    researchTypes(gateway, "result");
+    const { page, thread } = await conversation(gateway);
+    const box = page.getByRole("textbox", { name: "Message" }).last();
+    await box.fill("One more thing");
+    // Where the message is drawn in each frame from the first it is in, until the sign has been
+    // there ten frames. The agent says it works as soon as the message is sent.
+    const drawnAt = page.evaluate(
+      () =>
+        new Promise<number[]>((done) => {
+          const seen: number[] = [];
+          let frames = 0;
+          let signed = 0;
+          const frame = () => {
+            const message = [
+              ...document.querySelectorAll('main [data-slot="message"][data-align="end"]'),
+            ].find((one) => one.textContent?.includes("One more thing"));
+            if (message) seen.push(Math.round(message.getBoundingClientRect().top));
+            if (document.querySelector('[aria-label="Research is typing"]')) signed++;
+            if (signed >= 10 || ++frames > 300) done(seen);
+            else requestAnimationFrame(frame);
+          };
+          requestAnimationFrame(frame);
+        }),
+    );
+    await box.press("Enter");
+    const tops = await drawnAt;
+    assert.equal(await sign(thread).count(), 1, "the sign came");
+    assert.deepEqual([...new Set(tops)], [tops[0]], `drawn at ${tops.join(", ")}`);
     await page.close();
   }),
 );

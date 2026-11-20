@@ -104,7 +104,16 @@ test(
     const words = panel(page).locator(".whitespace-pre-wrap", {
       hasText: "This is what the coupon does.",
     });
-    assert.ok(((await shown.boundingBox())?.y ?? 0) < ((await words.boundingBox())?.y ?? 0));
+    await words.waitFor();
+    // Both where one frame draws them.
+    const [picture, said] = await shown.evaluate((img, text) => {
+      const message = img.closest('[data-slot="message"]');
+      const bubble = [...(message?.querySelectorAll(".whitespace-pre-wrap") ?? [])].find(
+        (e) => e.textContent === text,
+      );
+      return [img.getBoundingClientRect().y, bubble?.getBoundingClientRect().y];
+    }, "This is what the coupon does.");
+    assert.ok(said !== undefined && picture < said, `picture at ${picture}, its words at ${said}`);
     await page.close();
   }),
 );
