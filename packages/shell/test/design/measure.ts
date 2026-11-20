@@ -42,6 +42,7 @@ import {
   openSetup,
   openTemplates,
   openWindow,
+  placeByTab,
   readChat,
   refuseSend,
   releaseNotes,
@@ -1594,6 +1595,10 @@ const probe = (what: Part): Parts => {
     parts[`bar.${name}.icon`] = of(place.querySelector("svg"));
     parts[`bar.${name}.label`] = of([...place.querySelectorAll(":scope > span")].at(-1));
   }
+  // A place's label, while one shows beside its place.
+  const label = document.querySelector('[data-slot="tooltip-content"]');
+  parts.label = of(label);
+  parts["label.words"] = label?.textContent ?? null;
   // The page area's own box and surface.
   parts.main = of(document.querySelector("main"));
   return parts;
@@ -1659,6 +1664,19 @@ if (wants("frame"))
         await page.close();
         await gateway?.close();
       }
+    }
+// A place's label, wide: Team reached by Tab, as a person reaches it by keyboard.
+if (wants("frame"))
+  for (const theme of ["dark", "light"] as const)
+    for (const side of ["design", "built"] as const) {
+      const gateway = side === "built" ? await standIn() : undefined;
+      const page = gateway
+        ? await builtPage(gateway, "wide", theme)
+        : await designPage("wide", theme);
+      await placeByTab(page, "Team");
+      all[`frame.label.wide.${theme}.${side}`] = await measure(page, "frame");
+      await page.close();
+      await gateway?.close();
     }
 
 // The terminal window: the design's own, and the built one with terminals of the same names in
