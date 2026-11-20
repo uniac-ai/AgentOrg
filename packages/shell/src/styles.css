@@ -311,6 +311,29 @@
 }
 
 @layer utilities {
+  /* On a phone, every field a person types into has its words at 16 px on screen, as iOS zooms the
+     page when a field with smaller words takes the keyboard. One rule for them all, and a media
+     query, not the phone variant: what opens over the page is outside the shell's container. It
+     outranks a field's own size, a class, by its element and attribute. */
+  @media (width < 40rem) {
+    :is(
+        input:not(
+          [type="checkbox"],
+          [type="radio"],
+          [type="range"],
+          [type="file"],
+          [type="color"],
+          [type="button"],
+          [type="submit"],
+          [type="reset"],
+          [type="image"],
+          [type="hidden"]
+        ),
+        textarea
+      ) {
+      font-size: 16px;
+    }
+  }
   /* The hairline on what still reads as a window. The element is already positioned. */
   .window::after {
     content: "";

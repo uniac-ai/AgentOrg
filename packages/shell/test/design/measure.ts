@@ -97,6 +97,7 @@ const PARTS = [
   "bar",
   "offline",
   "compose",
+  "search",
   "activity",
   "overview",
 ] as const;
@@ -152,6 +153,7 @@ type Part =
   | "bar"
   | "offline"
   | "compose"
+  | "search"
   | "activity"
   | "overview";
 type Gateway = Awaited<ReturnType<typeof standIn>>;
@@ -577,6 +579,34 @@ const probe = (what: Part): Parts => {
     // The picker last: measuring what is opening stops its animation for a moment, and starting it
     // again would leave what is inside it part way through its opening.
     parts.picker = of(picker);
+    return parts;
+  }
+
+  if (what === "search") {
+    // The search open, from the shell's top left: its field, and what it lists, each group's head
+    // and its first rows, a face and words; or what it says when nothing is found.
+    const shell = document.querySelector("[data-shell]");
+    const dialog = document.querySelector('[role="dialog"]');
+    if (!shell || !dialog) return parts;
+    origin = shell.getBoundingClientRect();
+    const field = dialog.querySelector('[data-slot="command-input-wrapper"]');
+    parts.field = of(field);
+    parts["field.mark"] = of(field?.querySelector("svg"));
+    parts["field.input"] = of(field?.querySelector("input"));
+    parts["field.placeholder"] = field?.querySelector("input")?.getAttribute("placeholder") ?? null;
+    parts.empty = of(dialog.querySelector("[cmdk-empty]"));
+    for (const [g, group] of [...dialog.querySelectorAll("[cmdk-group]")].entries()) {
+      parts[`group.${g}.head`] = of(group.querySelector("[cmdk-group-heading]"));
+      for (const [n, row] of [...group.querySelectorAll("[cmdk-item]")].slice(0, 2).entries()) {
+        parts[`group.${g}.row.${n}`] = of(row);
+        parts[`group.${g}.row.${n}.face`] = of(row.querySelector('[aria-hidden="true"]'));
+        const words = row.querySelector(":scope > span:last-child");
+        parts[`group.${g}.row.${n}.words`] = of(words);
+      }
+    }
+    // The dialog last: measuring what is opening stops its animation for a moment, and starting it
+    // again would leave what is inside it part way through its opening.
+    parts.dialog = of(dialog);
     return parts;
   }
 
@@ -2602,6 +2632,37 @@ if (wants("compose"))
           }
           await rest(page, size);
           all[`compose.${state}.${size}.${theme}.${side}`] = await measure(page, "compose");
+          await page.close();
+          await gateway?.close();
+        }
+
+// The search open from the bar, empty and finding nothing, wide and on a phone, over the design's
+// conversations.
+if (wants("search"))
+  for (const state of ["empty", "nothing"] as const)
+    for (const size of ["wide", "phone"] as const)
+      for (const theme of ["dark", "light"] as const)
+        for (const side of ["design", "built"] as const) {
+          const gateway = side === "built" ? await standIn() : undefined;
+          let page: Page;
+          if (gateway) {
+            designAgents(gateway);
+            sampleChats(gateway);
+            page = await builtPage(gateway, size, theme, "#/chat");
+          } else page = await designPage(size, theme);
+          await page
+            .getByRole("navigation", { name: "Main" })
+            .getByRole("button", { name: "Search" })
+            .click();
+          const dialog = page.getByRole("dialog");
+          await dialog.waitFor();
+          if (state === "nothing") await dialog.getByRole("combobox").fill("zzz");
+          // Once it has opened: nothing is measured while it opens.
+          await dialog.evaluate((e) =>
+            Promise.all(e.getAnimations({ subtree: true }).map((one) => one.finished)),
+          );
+          await rest(page, size);
+          all[`search.${state}.${size}.${theme}.${side}`] = await measure(page, "search");
           await page.close();
           await gateway?.close();
         }
