@@ -782,18 +782,16 @@ test(
       ([one, n]) => document.querySelectorAll(one as string).length === n,
       [said, before + 1] as const,
     );
-    // It is the last reply, whose Copy is seen without pointing at it: this one has none.
+    // It has no bubble, and so no menu to copy from.
     const turn = items.last();
-    const copy = turn.getByRole("button", { name: "Copy" });
-    assert.equal(await copy.count(), 0);
-    await turn.hover();
-    assert.equal(await copy.count(), 0, "nor when it is pointed at");
+    assert.equal(await turn.locator('[data-slot="bubble"]').count(), 0);
+    assert.equal(await turn.getByRole("button", { name: "More" }).count(), 0);
     // A reply with words has one, as before.
     gateway.addMessage("a-reviewer", reply("r-said", "It is a duplicate of #3."));
     await panel(page)
       .locator('[data-slot="message-scroller-item"]')
       .filter({ hasText: "It is a duplicate of #3." })
-      .getByRole("button", { name: "Copy" })
+      .getByRole("button", { name: "More" })
       .waitFor();
     await page.close();
   }),

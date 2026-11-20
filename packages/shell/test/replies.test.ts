@@ -1,5 +1,6 @@
 // Each of an agent's messages on its own, in a real browser over the stand-in gateway: its own
-// words, its own Copy, and the same gap before the next as between any two messages.
+// words, its own menu with Copy, 4 px before the agent's next message and 16 px where the side
+// changes.
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { Locator, Page } from "@playwright/test";
@@ -69,17 +70,11 @@ async function ask(gateway: Gateway, thread: Locator, text: string) {
   await thread.locator(".whitespace-pre-wrap", { hasText: text }).waitFor();
 }
 /**
- * The agent's messages, read at one moment once each Copy has settled: each one's words, whether
- * its Copy is seen, and its box; and the box of the person's last message above them.
+ * The agent's messages, read at one moment: each one's words, whether it offers its menu, and its
+ * box; and the box of the person's last message above them.
  */
 const said = (thread: Locator) =>
-  thread.evaluate(async (root) => {
-    // Once each Copy has finished showing or going.
-    await Promise.all(
-      [...root.querySelectorAll('button[aria-label="Copy"]')].flatMap((copy) =>
-        copy.getAnimations().map((one) => one.finished),
-      ),
-    );
+  thread.evaluate((root) => {
     const items = [...root.querySelectorAll('[data-slot="message-scroller-item"]')];
     const box = (e: Element) => {
       const r = e.getBoundingClientRect();
@@ -90,73 +85,72 @@ const said = (thread: Locator) =>
       asked: asked && box(asked),
       agent: items
         .filter((item) => item.querySelector(".prose-chat"))
-        .map((item) => {
-          const copy = item.querySelector('button[aria-label="Copy"]');
-          return {
-            text: (item.querySelector(".prose-chat")?.textContent ?? "").trim(),
-            copy: !!copy && getComputedStyle(copy).visibility === "visible",
-            ...box(item),
-          };
-        }),
+        .map((item) => ({
+          text: (item.querySelector(".prose-chat")?.textContent ?? "").trim(),
+          more: !!item.querySelector('button[aria-label="More"]'),
+          ...box(item),
+        })),
     };
   });
 /** The agent's message with these words, by its place in the thread. */
 const message = (thread: Locator, text: string) =>
   thread.locator('[data-slot="message-scroller-item"]').filter({ hasText: text });
+/** Copies a message as a person does: points at its bubble, presses its "⋯", then Copy. */
+async function copyThrough(page: Page, thread: Locator, text: string) {
+  const bubble = message(thread, text).locator('[data-slot="bubble"]').first();
+  await bubble.hover();
+  await bubble.getByRole("button", { name: "More" }).click();
+  await page.getByRole("menuitem", { name: "Copy" }).click();
+}
 /** What the last Copy pressed put on the clipboard. */
 const copied = (page: Page) => page.evaluate(() => (globalThis as { copied?: string }).copied);
 
 /**
- * A receipt, then its result: two messages, each with its own Copy that copies its words alone,
- * the earlier one's seen only under the pointer, and the gap between them any two messages' gap.
+ * A receipt, then its result: two messages, each with its own menu whose Copy copies its words
+ * alone, 4 px apart as any two of the agent's are, and 16 px under the person's.
  */
 async function receiptThenResult(gateway: Gateway, page: Page, thread: Locator) {
   await ask(gateway, thread, "Is #482 ready to merge?");
   gateway.addMessage("a-reviewer", reply("r-receipt", "Looking at #482 now."));
   await message(thread, "Looking at #482 now.").waitFor();
-  // While the result is being written, its Copy isn't offered.
+  // While the result is being written, it offers no menu; the receipt, settled, does.
   gateway.delta("a-reviewer", "r-result", "It is ready: ");
   await message(thread, "It is ready:").waitFor();
   let now = await said(thread);
   assert.deepEqual(
-    now.agent.slice(-2).map(({ text, copy }) => [text, copy]),
+    now.agent.slice(-2).map(({ text, more }) => [text, more]),
     [
-      ["Looking at #482 now.", false],
+      ["Looking at #482 now.", true],
       ["It is ready:", false],
     ],
   );
   gateway.addMessage("a-reviewer", reply("r-result", "It is ready: the tests pass."));
   gateway.setChatStatus("a-reviewer", { state: "idle" });
-  await message(thread, "the tests pass.").getByRole("button", { name: "Copy" }).waitFor();
+  await message(thread, "the tests pass.").getByRole("button", { name: "More" }).waitFor();
   now = await said(thread);
   const [receipt, result] = now.agent.slice(-2);
   assert.ok(receipt && result && now.asked);
   assert.deepEqual(
     [
-      [receipt.text, receipt.copy],
-      [result.text, result.copy],
+      [receipt.text, receipt.more],
+      [result.text, result.more],
     ],
     [
-      ["Looking at #482 now.", false],
+      ["Looking at #482 now.", true],
       ["It is ready: the tests pass.", true],
     ],
-    "two messages; the latest's Copy is seen once it is done",
+    "two messages, each with its menu once it is done",
   );
-  assert.equal(
-    Math.round(result.top - receipt.bottom),
-    Math.round(receipt.top - now.asked.bottom),
-    "the gap between them is any two messages' gap",
-  );
-  await message(thread, "the tests pass.").getByRole("button", { name: "Copy" }).click();
+  assert.equal(Math.round(result.top - receipt.bottom), 4, "4 px between the agent's two");
+  assert.equal(Math.round(receipt.top - now.asked.bottom), 16, "16 px where the side changes");
+  await copyThrough(page, thread, "the tests pass.");
   assert.equal(await copied(page), "It is ready: the tests pass.");
-  // The earlier one's Copy is seen while the pointer is on it, and copies its own words.
-  await message(thread, "Looking at #482 now.").hover();
-  await message(thread, "Looking at #482 now.").getByRole("button", { name: "Copy" }).click();
+  await copyThrough(page, thread, "Looking at #482 now.");
   assert.equal(await copied(page), "Looking at #482 now.");
 }
 
 test(
-  "a receipt and its result are two messages, each with its own Copy that copies it alone; the earlier one's is seen under the pointer, the latest one's once it is done",
+  "a receipt and its result are two messages, 4 px apart, each with its own menu whose Copy copies it alone, the latest's once it is done",
   withGateway(async (gateway) => {
     const { page, thread } = await conversation(gateway, "floating");
     await receiptThenResult(gateway, page, thread);
@@ -192,10 +186,10 @@ test(
     gateway.addMessage("a-reviewer", reply("r1", "Three causes explain it."));
     gateway.setChatStatus("a-reviewer", { state: "idle" });
     await message(thread, "Three causes explain it.")
-      .getByRole("button", { name: "Copy" })
+      .getByRole("button", { name: "More" })
       .waitFor();
     await thread.locator("[data-sd-animate]").waitFor({ state: "detached" });
-    // Its words: what Copy does as it appears is Copy's own.
+    // Its words: what its "⋯" does as it appears is its own.
     const after = await message(thread, "Three causes explain it.").evaluate((e) => ({
       kept: !!(e as HTMLElement & { kept?: true }).kept,
       moving: (e.querySelector(".prose-chat") as Element)
@@ -245,25 +239,25 @@ test(
 );
 
 test(
-  "a message nobody asked for, after a result, is a third message with its own Copy",
+  "a message nobody asked for, after a result, is a third message with its own menu",
   withGateway(async (gateway) => {
     const { page, thread } = await conversation(gateway, "floating");
     await receiptThenResult(gateway, page, thread);
     await page.mouse.move(1, 1);
     gateway.addMessage("a-reviewer", reply("r-later", "#483 needs a rebase too."));
     await message(thread, "#483 needs a rebase too.")
-      .getByRole("button", { name: "Copy" })
+      .getByRole("button", { name: "More" })
       .waitFor();
     const now = await said(thread);
     assert.deepEqual(
-      now.agent.slice(-3).map(({ text, copy }) => [text, copy]),
+      now.agent.slice(-3).map(({ text, more }) => [text, more]),
       [
-        ["Looking at #482 now.", false],
-        ["It is ready: the tests pass.", false],
+        ["Looking at #482 now.", true],
+        ["It is ready: the tests pass.", true],
         ["#483 needs a rebase too.", true],
       ],
     );
-    await message(thread, "#483 needs a rebase too.").getByRole("button", { name: "Copy" }).click();
+    await copyThrough(page, thread, "#483 needs a rebase too.");
     assert.equal(await copied(page), "#483 needs a rebase too.");
     await page.close();
   }),

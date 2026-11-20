@@ -6,11 +6,11 @@ import { MESSAGE_TEXT_MAX, PICTURES_MAX } from "@agentorg/interfaces";
 import { NotConnected } from "@agentorg/sdk";
 import {
   ArrowUpIcon,
-  CheckIcon,
   ChevronLeftIcon,
   CopyIcon,
   ImagePlusIcon,
   MonitorIcon,
+  MoreHorizontalIcon,
   XIcon,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
@@ -19,13 +19,19 @@ import { api, go, useConnection } from "../data.ts";
 import { Bubble, BubbleContent, BubbleGroup } from "../ui/bubble.tsx";
 import { Button } from "../ui/button.tsx";
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "../ui/dropdown-menu.tsx";
+import {
   InputGroup,
   InputGroupAddon,
   InputGroupButton,
   InputGroupTextarea,
 } from "../ui/input-group.tsx";
 import { Marker, MarkerContent } from "../ui/marker.tsx";
-import { Message, MessageContent, MessageFooter } from "../ui/message.tsx";
+import { Message, MessageContent } from "../ui/message.tsx";
 import {
   MessageScroller,
   MessageScrollerButton,
@@ -36,9 +42,10 @@ import {
   useMessageScroller,
   useMessageScrollerScrollable,
 } from "../ui/message-scroller.tsx";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip.tsx";
 import { type ListedChat, PERSON, useAllChats } from "./all-chats.tsx";
 import { bubblesOf, isCode } from "./bubbles.ts";
-import { CloseChats } from "./chat-parts.tsx";
+import { age, CloseChats } from "./chat-parts.tsx";
 import { useChats } from "./chats.tsx";
 import { surfacesOf, windowsOf } from "./computer.tsx";
 import { useComputers } from "./computers.tsx";
@@ -91,7 +98,7 @@ interface Sending {
 /** What the thread shows: each message of the person, and each of the agent's, on its own. */
 type Turn =
   | { kind: "user"; id: string; message?: string; text: string; images: readonly Sent[] }
-  | { kind: "agent"; id: string; text: string; streaming?: boolean };
+  | { kind: "agent"; id: string; text: string; at?: string; streaming?: boolean };
 
 function turnsOf(
   messages: readonly ChatMessage[],
@@ -112,7 +119,7 @@ function turnsOf(
         text: message.text,
         images: message.images ?? [],
       });
-    else turns.push({ kind: "agent", id: message.id, text: message.text });
+    else turns.push({ kind: "agent", id: message.id, text: message.text, at: message.at });
   }
   for (const { id, messageId, text, images } of unrecorded)
     turns.push({ kind: "user", id, ...(messageId ? { message: messageId } : {}), text, images });
@@ -727,11 +734,11 @@ export function Thread({
                   </Marker>
                 </MessageScrollerItem>
               )}
-              {turns.map((turn) => (
+              {turns.map((turn, n) => (
                 <MessageScrollerItem
                   key={turn.id}
                   scrollAnchor={turn.kind === "user"}
-                  className="[content-visibility:visible]"
+                  className={`[content-visibility:visible] ${n === 0 ? "" : turns[n - 1]?.kind === turn.kind ? SAME_SIDE : SIDE_CHANGES}`}
                 >
                   {turn.kind === "user" ? (
                     <Message align="end">
@@ -769,6 +776,7 @@ export function Thread({
                   ) : (
                     <Reply
                       text={turn.text}
+                      at={turn.at}
                       streaming={!!turn.streaming}
                       reduced={reduced}
                       isLast={turn === lastTurn}
@@ -781,7 +789,7 @@ export function Thread({
                   stand-in height for an item not yet drawn would size the room under the message
                   just sent for a taller sign, and the message would drop for a frame as it came. */}
               {typing && (
-                <MessageScrollerItem className="[content-visibility:visible]">
+                <MessageScrollerItem className={`[content-visibility:visible] ${SIDE_CHANGES}`}>
                   <TypingSign name={agent.name} />
                 </MessageScrollerItem>
               )}
@@ -807,6 +815,14 @@ export function Thread({
     </div>
   );
 }
+
+/**
+ * The room between two messages, in place of the list's 24 px between its items: 4 px between two
+ * of one side's, as between one message's bubbles, and 16 px where the side changes and before the
+ * agent's typing sign.
+ */
+const SAME_SIDE = "-mt-5";
+const SIDE_CHANGES = "-mt-2";
 
 /** How soon after a person moves the room its having moved is theirs, and not what came. */
 const THEIRS_MS = 400;
@@ -840,20 +856,23 @@ function Room({ children }: { children: React.ReactNode }) {
 }
 
 /**
- * One of the agent's messages: its bubbles, which its blank lines make, and one Copy for the whole
- * message under the last. Each bubble is filled as the person's is, at the start side, as wide as
- * its words up to 80%, 4 px apart; a code block keeps the conversation's whole width and the frame
- * code has, with no fill. A bubble is known by its place in the message: as the message is written,
- * bubbles are only added at its end, and only the last one's words change.
+ * One of the agent's messages: its bubbles, which its blank lines make. Each bubble is filled as the
+ * person's is, at the start side, as wide as its words up to 80%, 4 px apart; a code block keeps the
+ * conversation's whole width and the frame code has, with no fill, and its own Copy. Nothing is
+ * under the last. A bubble is known by its place in the message: as the message is written, bubbles
+ * are only added at its end, and only the last one's words change.
  */
 function Reply({
   text,
+  at,
   streaming,
   reduced,
   isLast,
   awaiting,
 }: {
   text: string;
+  /** When it was sent: one still being written has no time yet. */
+  at: string | undefined;
   /** Still being written. */
   streaming: boolean;
   reduced: boolean;
@@ -861,25 +880,23 @@ function Reply({
   /** The chat still awaits its reply: the last message isn't settled, and offers nothing yet. */
   awaiting: boolean;
 }) {
-  const [copied, setCopied] = useState(false);
   const settled = !(isLast && (awaiting || streaming));
-  /** It has no words: there is nothing to copy. */
-  const wordless = !text.trim();
   // What is still being written may hold back a last paragraph that isn't yet a list or words.
-  // Copy and whether it is settled are the message's, not what is drawn of it.
+  // The menu and whether it is settled are the message's, not what is drawn of it.
   const bubbles = useMemo(() => bubblesOf(text, streaming), [text, streaming]);
   return (
-    <Message className="group/reply">
+    <Message>
       <MessageContent className="gap-2">
         <BubbleGroup className="gap-1">
           {bubbles.map((bubble, n) => {
             const code = isCode(bubble);
             return (
-              <Bubble
+              <ReplyBubble
                 // biome-ignore lint/suspicious/noArrayIndexKey: a message's bubbles only grow at its end.
                 key={n}
-                variant={code ? "ghost" : "muted"}
-                className={code ? "w-full" : "max-w-[80%]"}
+                code={code}
+                text={text}
+                at={settled ? at : undefined}
               >
                 {/* Its size is said here: the bubble's own would outrank a rule of the sheet's. */}
                 <BubbleContent
@@ -900,28 +917,114 @@ function Reply({
                     {bubble}
                   </Streamdown>
                 </BubbleContent>
-              </Bubble>
+              </ReplyBubble>
             );
           })}
         </BubbleGroup>
-        {/* Its room is always kept, so nothing moves when it appears. */}
-        <MessageFooter
-          className={`h-6 gap-0.5 px-0 ${!settled || wordless ? "invisible" : isLast ? "" : "invisible group-hover/reply:visible"}`}
-        >
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            aria-label="Copy"
-            onClick={() => {
-              void navigator.clipboard.writeText(text);
-              setCopied(true);
-              setTimeout(() => setCopied(false), 1200);
-            }}
-          >
-            {copied ? <CheckIcon /> : <CopyIcon />}
-          </Button>
-        </MessageFooter>
       </MessageContent>
     </Message>
+  );
+}
+
+/** How long a press on a bubble is held before it opens the bubble's menu, as messengers do. */
+const LONG_PRESS_MS = 500;
+
+/**
+ * One bubble of the agent's message. One with words, once the message is settled, has its "⋯" at
+ * its outer side; a long press on it, held still, opens the same menu, as messengers do where there
+ * is no pointer. A code block's bubble has its own Copy in its frame, and no menu.
+ */
+function ReplyBubble({
+  code,
+  text,
+  at,
+  children,
+}: {
+  code: boolean;
+  /** The whole message's words, which its Copy copies. */
+  text: string;
+  /** When the message was sent; none while it isn't settled, which has no menu yet. */
+  at: string | undefined;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  const held = useRef<{ timer?: ReturnType<typeof setTimeout>; x: number; y: number }>({
+    x: 0,
+    y: 0,
+  });
+  const release = () => clearTimeout(held.current.timer);
+  const menu = !code && at !== undefined && !!text.trim();
+  return (
+    <Bubble
+      variant={code ? "ghost" : "muted"}
+      className={code ? "w-full" : "max-w-[80%]"}
+      {...(menu
+        ? {
+            onPointerDown: (event: React.PointerEvent) => {
+              release();
+              held.current = {
+                x: event.clientX,
+                y: event.clientY,
+                timer: setTimeout(() => setOpen(true), LONG_PRESS_MS),
+              };
+            },
+            // Moved, it is a scroll or a selection, not a press.
+            onPointerMove: (event: React.PointerEvent) => {
+              if (Math.hypot(event.clientX - held.current.x, event.clientY - held.current.y) > 4)
+                release();
+            },
+            onPointerUp: release,
+            onPointerLeave: release,
+            onPointerCancel: release,
+          }
+        : {})}
+    >
+      {children}
+      {menu && <More text={text} at={at} open={open} setOpen={setOpen} />}
+    </Bubble>
+  );
+}
+
+/**
+ * A bubble's "⋯", at its outer side, vertically centred, shown while the bubble is pointed at.
+ * Pointed at itself for a second, it says "More". Pressed, it opens Copy, which copies the whole
+ * message, with when the message was sent under it, in the words the chat list says it in.
+ */
+function More({
+  text,
+  at,
+  open,
+  setOpen,
+}: {
+  text: string;
+  at: string;
+  open: boolean;
+  setOpen(open: boolean): void;
+}) {
+  return (
+    <DropdownMenu open={open} onOpenChange={setOpen}>
+      <Tooltip delayDuration={1000}>
+        <TooltipTrigger asChild>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              aria-label="More"
+              className={`absolute top-1/2 left-full ml-1.5 -translate-y-1/2 rounded-full text-muted-foreground ${open ? "opacity-100" : "opacity-0 group-hover/bubble:opacity-100 focus-visible:opacity-100"}`}
+            >
+              <MoreHorizontalIcon />
+            </Button>
+          </DropdownMenuTrigger>
+        </TooltipTrigger>
+        <TooltipContent>More</TooltipContent>
+      </Tooltip>
+      <DropdownMenuContent align="start" side="right" className="min-w-36">
+        <DropdownMenuItem onSelect={() => void navigator.clipboard?.writeText(text)}>
+          <CopyIcon />
+          Copy
+        </DropdownMenuItem>
+        <p className="px-2 pt-0.5 pb-1.5 text-xs text-muted-foreground">{age(at)}</p>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
