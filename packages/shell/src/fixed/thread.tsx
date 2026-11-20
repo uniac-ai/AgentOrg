@@ -56,7 +56,6 @@ import { useReducedMotion } from "./motion.ts";
 import { fixOf } from "./notice.ts";
 import { fit, type Put, type Sent, sourceOf, together } from "./pictures.ts";
 import { useAgents } from "./watch.tsx";
-import { WorkingLine } from "./working-line.tsx";
 
 const PAGE = 100;
 
@@ -314,6 +313,36 @@ const ProblemLine = ({
       </Button>
     )}
   </div>
+);
+
+/**
+ * The agent typing in this conversation, as a messenger shows the other end typing: three dots in a
+ * muted bubble on its side, heard as "<agent> is typing". The dots rise in turn, and stay still for
+ * a person who asks for less motion.
+ */
+const TypingSign = ({ name }: { name: string }) => (
+  <Message>
+    <MessageContent>
+      <Bubble
+        variant="muted"
+        role="status"
+        aria-label={`${name} is typing`}
+        className="max-w-[80%]"
+      >
+        <BubbleContent className="flex h-10 items-center gap-1 rounded-3xl px-4">
+          <span className="sr-only">{name} is typing</span>
+          {[0, 1, 2].map((n) => (
+            <span
+              key={n}
+              aria-hidden
+              className="typing-dot size-1.5 rounded-full bg-current"
+              style={{ animationDelay: `${n * 160}ms` }}
+            />
+          ))}
+        </BubbleContent>
+      </Bubble>
+    </MessageContent>
+  </Message>
 );
 
 /**
@@ -599,17 +628,12 @@ export function Thread({
   // for it: the agent's own line says it works.
   const asked = messages.at(-1)?.role === "user";
   const awaiting = unrecorded.length > 0 || (sentHere && working && asked);
-  /** Whether a message is in hand: its line is drawn under it, and its chat's problem waits. */
+  /** Whether a message is in hand: its chat's problem waits while one is. */
   const taken = (now: Progress | undefined) => now?.state === "taken";
-  /** The message in hand, by its id. */
-  const inHand = (id: string | undefined) => {
-    const now = id === undefined ? undefined : progress.get(id);
-    return taken(now) ? now : undefined;
-  };
   const holding = [...progress.values()].filter(taken);
   // While it awaits a reply its problem is not said: the reply ends it, or it is said again. A
-  // call of this thread's that failed is said in its place. While a message is in hand its line
-  // says where it stands, and a problem is said once nothing is.
+  // call of this thread's that failed is said in its place. While a message is in hand, a problem
+  // is said once nothing is.
   const problem = failure || awaiting || holding.length > 0 ? undefined : entry?.problem;
   const wrong = failure?.said ?? problem?.message;
   // A problem that the plan's page can fix ends its line with the way there.
@@ -619,6 +643,15 @@ export function Thread({
     [messages, unrecorded, streaming],
   );
   const lastTurn = turns.at(-1);
+  // The agent types here, one sign at the conversation's end, while all four hold: it works; the
+  // newest thing said here is the party's, just sent or recorded; that message is taken or not yet
+  // heard of; and the conversation has no problem. So a message from the agent (a receipt counts),
+  // one closed with no reply, or its turn's end takes it away, and its first streamed piece takes
+  // its place. Two messages sent show one sign. A call of this page's own that failed is said at
+  // once, and the sign gives way to it: one or the other, never both.
+  const newest = lastTurn?.kind === "user" ? lastTurn : undefined;
+  const where = newest?.message === undefined ? undefined : progress.get(newest.message);
+  const typing = working && !!newest && (!where || taken(where)) && !entry?.problem && !failure;
 
   const send = async (text: string, images: Sent[]) => {
     if (!slot) return false;
@@ -731,8 +764,6 @@ export function Thread({
                             </BubbleContent>
                           </Bubble>
                         )}
-                        {/* While it is in hand, where it stands. */}
-                        <WorkingLine progress={inHand(turn.message)} />
                       </MessageContent>
                     </Message>
                   ) : (
@@ -746,6 +777,13 @@ export function Thread({
                   )}
                 </MessageScrollerItem>
               ))}
+              {typing && (
+                <MessageScrollerItem>
+                  <TypingSign name={agent.name} />
+                </MessageScrollerItem>
+              )}
+              {/* The conversation's own problem never shows with the sign (see `typing`), and the
+                  sign gives way to a failure of this page's own. */}
               {wrong && <ProblemLine fix={fix}>{wrong}</ProblemLine>}
             </MessageScrollerContent>
           </Room>

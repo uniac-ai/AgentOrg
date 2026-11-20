@@ -339,33 +339,29 @@ export function researchSays(gateway: Gateway, moment: Moment) {
 /** The reply being written, as far as the design has it: the words that have come. */
 export const writeSoFar = (gateway: Gateway) => gateway.delta("a-research", "v-a2", WRITTEN_SO_FAR);
 
-/**
- * The design's words for a message's step in progress: its active wording, or its text where it has
- * none, as "Read 4 files" hasn't; and one long enough to wrap.
- */
-export const STEP_WORDS = {
-  tests: "Running the demo's tests",
-  files: "Read 4 files",
-  long: "Comparing what the three card processors would charge a shop that takes about 400 orders a month",
-} as const;
-/** The person's second message, sent while the first is in hand. */
+/** The person's second message, sent while the agent types after the first. */
 export const SECOND_ASK = "Also, which folder has the coupons?";
+/** The person's message that needs no reply. */
+export const THANKS = "Thanks!";
 
-/** Research's conversation with the person's message in hand, at each of the design's states, by its control. */
-export const HOLDS = {
-  taken: "Taken, no step yet",
-  inProgress: "A step in progress",
-  replanned: "A step re-planned",
-  answered: "Answered",
-  two: "Two messages in hand",
-  longStep: "A long step",
+/** The agent typing in Research's conversation, at each of the design's states, by its control. */
+export const TYPING = {
+  one: "Typing, one message",
+  two: "Typing, two messages",
+  receipt: "A receipt, typing over",
+  result: "The result, after a receipt",
+  noReply: "No reply needed",
+  ended: "The turn ended, no answer",
+  late: "Typing, opened later",
 } as const;
-export type Hold = keyof typeof HOLDS;
+export type Typing = keyof typeof TYPING;
 /**
- * Research's conversation, built, at one of those states, as a page opened then reads it: each
- * message in hand taken, with its step's words once it has one. Answered is the long reply.
+ * Research's conversation, built, at one of those states, as a page opened then reads it. Typing,
+ * Research works and the newest message is the person's, taken. A receipt and the result are the
+ * agent's messages; a message that needs no reply is closed with no problem; a turn that ended
+ * unanswered says so.
  */
-export function researchHolds(gateway: Gateway, state: Hold) {
+export function researchTypes(gateway: Gateway, state: Typing) {
   const at = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
   const ask = (id: string, text: string, ago: number) => ({
     id,
@@ -373,25 +369,41 @@ export function researchHolds(gateway: Gateway, state: Hold) {
     text,
     at: at(ago),
   });
-  if (state === "answered") {
-    researchSays(gateway, "long");
+  const said = (id: string, text: string, ago: number) => ({
+    id,
+    role: "assistant" as const,
+    text,
+    at: at(ago),
+  });
+  if (state === "receipt" || state === "result") {
+    gateway.converse("a-research", [
+      ask("v-u3", SAID.workAsk, 6),
+      said("v-a3", SAID.receipt, 5),
+      ...(state === "result" ? [said("v-a4", SAID.result, 0)] : []),
+    ]);
+    gateway.setChatStatus("a-research", { state: state === "receipt" ? "working" : "idle" });
     return;
   }
-  gateway.converse("a-research", [
-    ask("v-u2", SAID.longAsk, 2),
-    ...(state === "two" ? [ask("v-u6", SECOND_ASK, 1)] : []),
-  ]);
-  gateway.setChatStatus("a-research", { state: "working" });
-  const step =
-    state === "inProgress" || state === "replanned"
-      ? STEP_WORDS.tests
-      : state === "two"
-        ? STEP_WORDS.files
-        : state === "longStep"
-          ? STEP_WORDS.long
-          : undefined;
-  gateway.progress("a-research", "v-u2", { state: "taken", ...(step ? { step } : {}) });
-  if (state === "two") gateway.progress("a-research", "v-u6", { state: "taken" });
+  if (state === "noReply") {
+    gateway.converse("a-research", [
+      ask("v-u2", SAID.longAsk, 3),
+      said("v-a2", SAID.long, 2),
+      ask("v-u7", THANKS, 0),
+    ]);
+    gateway.progress("a-research", "v-u7", { state: "closed" });
+    gateway.setChatStatus("a-research", { state: "idle" });
+    return;
+  }
+  const asks = [ask("v-u2", SAID.longAsk, state === "two" ? 1 : 0)];
+  if (state === "two") asks.push(ask("v-u6", SECOND_ASK, 0));
+  gateway.converse(
+    "a-research",
+    asks,
+    state === "ended" ? { code: "not_answered", message: "Not answered" } : undefined,
+  );
+  gateway.setChatStatus("a-research", { state: state === "ended" ? "idle" : "working" });
+  if (state !== "ended")
+    for (const one of asks) gateway.progress("a-research", one.id, { state: "taken" });
 }
 
 /** What a page asks, as the design's sample has each. */

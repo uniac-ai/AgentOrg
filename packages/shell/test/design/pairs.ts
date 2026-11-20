@@ -22,8 +22,6 @@ import {
   designAgents,
   docsAgent,
   firstStart,
-  HOLDS,
-  type Hold,
   inDesign,
   MOMENTS,
   type Moment,
@@ -42,8 +40,8 @@ import {
   readChat,
   refuseSend,
   releaseNotes,
-  researchHolds,
   researchSays,
+  researchTypes,
   SECTIONS,
   SIGN_INS,
   type SignIn,
@@ -59,6 +57,8 @@ import {
   smallSays,
   smallState,
   startTerminals,
+  TYPING,
+  type Typing,
   type UnitWindow,
   unreadReply,
   WINDOWS,
@@ -113,8 +113,8 @@ interface Screen {
   given?: ChatCase;
   /** Research's conversation, built, at one of the design's moments for a reply's bubbles. */
   research?: Moment;
-  /** Research's conversation, built, with the person's message in hand at one of the design's states. */
-  holds?: Hold;
+  /** Research's conversation, built, with the agent typing or done at one of the design's states. */
+  types?: Typing;
   /** Terminals the built side is given, as the design's sample has them. */
   terminals?: { cmd: string; running: boolean }[];
   design(page: Page): Promise<unknown>;
@@ -617,27 +617,38 @@ const SCREENS: Screen[] = [
       },
     }),
   ),
-  // A message in hand: Research's conversation at each of the design's states for it, on Chat.
-  ...(
-    [
-      ["presence-taken", "taken"],
-      ["presence-in-progress", "inProgress"],
-      ["presence-replanned", "replanned"],
-      ["presence-answered", "answered"],
-      ["presence-two", "two"],
-      ["presence-long-step", "longStep"],
-    ] as const
-  ).map(
-    ([name, held]): Screen => ({
-      name,
+  // The agent typing: Research's conversation at each of the design's states for it, on Chat. The
+  // design's "opened later" leaves it for Team, and it is opened again from Chat.
+  ...(Object.keys(TYPING) as Typing[]).map(
+    (state): Screen => ({
+      name: `typing-${state}`,
       sizes: ["wide", "phone"],
       themes: ["dark", "light"],
       agents: true,
       chats: true,
-      holds: held,
+      types: state,
       hash: "#/chat/a-research",
-      design: (page) => inDesign(page, HOLDS[held]),
-      built: (page) => page.getByRole("main").locator(".whitespace-pre-wrap").first().waitFor(),
+      design: async (page) => {
+        await inDesign(page, TYPING[state]);
+        if (state === "late")
+          await page
+            .getByRole("navigation", { name: "Main" })
+            .getByRole("button", { name: /^Chat/ })
+            .click();
+        const region = page.getByRole("region", { name: "Conversation with Research" });
+        if (!(await region.count()))
+          await page
+            .getByRole("list", { name: "Conversations" })
+            .getByRole("button")
+            .filter({ hasText: "Research" })
+            .click();
+        await region.locator('[data-slot="bubble"]').first().waitFor();
+      },
+      built: async (page) => {
+        await page.getByRole("main").locator('[data-slot="bubble"]').first().waitFor();
+        if (state === "one" || state === "two" || state === "late")
+          await page.locator(".typing-dot").first().waitFor();
+      },
     }),
   ),
   // Create for an agent, small: as it opens, from a template, signed out, and refused.
@@ -873,7 +884,7 @@ for (const screen of SCREENS.filter((one) => wanted(one.name)))
           if (screen.agents) designAgents(gateway);
           // Before the page is read, as a conversation opened later reads it.
           if (screen.research) researchSays(gateway, screen.research);
-          if (screen.holds) researchHolds(gateway, screen.holds);
+          if (screen.types) researchTypes(gateway, screen.types);
           if (screen.firstStart) firstStart(gateway);
           if (screen.build) sampleBuild(gateway);
           if (screen.create) computerSays(gateway, screen.create);

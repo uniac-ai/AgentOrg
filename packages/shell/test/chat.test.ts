@@ -43,7 +43,7 @@ const mine = (page: Page, text: string | RegExp) =>
 
 /**
  * Nothing is shown under what the person said last while its work runs: no row, no word that it is
- * being worked on, and no problem. The agent's line says it works.
+ * being worked on, and no problem. The conversation's end shows the agent typing, and nothing else.
  */
 async function nothingUnder(page: Page, text: string) {
   const items = panel(page).locator('[data-slot="message-scroller-item"]');
@@ -52,9 +52,15 @@ async function nothingUnder(page: Page, text: string) {
     .getByRole("status", { name: "State" })
     .getByText("Working")
     .waitFor();
+  await panel(page).getByRole("status", { name: "Reviewer is typing" }).waitFor();
   await page.waitForTimeout(300);
-  assert.equal((await items.last().innerText()).trim(), text);
-  assert.equal(await panel(page).getByRole("status").count(), 0);
+  const count = await items.count();
+  assert.equal((await items.nth(count - 2).innerText()).trim(), text);
+  assert.equal(
+    await panel(page).locator('[data-slot="message"][data-align="end"] [role="status"]').count(),
+    0,
+  );
+  assert.equal(await panel(page).getByRole("status").count(), 1, "the sign alone");
   assert.equal(await panel(page).getByRole("alert").count(), 0);
 }
 
@@ -765,14 +771,16 @@ test(
     await input(page).fill("Read the issue.");
     await input(page).press("Enter");
     await mine(page, "Read the issue.").waitFor();
-    // A reply with no words, as an earlier reply read as sent can be.
-    const items = panel(page).locator('[data-slot="message-scroller-item"]');
+    // A reply with no words, as an earlier reply read as sent can be. What was said is counted, not
+    // the agent's sign while it types, which goes as the reply comes.
+    const said = '[data-slot="message-scroller-item"]:not(:has(.typing-dot))';
+    const items = panel(page).locator(said);
     const before = await items.count();
     gateway.addMessage("a-reviewer", reply("r-none", ""));
     gateway.setChatStatus("a-reviewer", { state: "idle" });
     await page.waitForFunction(
-      (n) => document.querySelectorAll('[data-slot="message-scroller-item"]').length === n,
-      before + 1,
+      ([one, n]) => document.querySelectorAll(one as string).length === n,
+      [said, before + 1] as const,
     );
     // It is the last reply, whose Copy is seen without pointing at it: this one has none.
     const turn = items.last();

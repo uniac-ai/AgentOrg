@@ -452,3 +452,30 @@
     display: none;
   }
 }
+
+/* The agent typing in a conversation: its three dots rise and brighten in turn, as a messenger's do.
+   Still for a person who asks for less motion. */
+@keyframes typing-dot {
+  0%,
+  60%,
+  100% {
+    opacity: 0.35;
+    transform: translateY(0);
+  }
+  30% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
+}
+@layer components {
+  .typing-dot {
+    opacity: 0.35;
+    animation: typing-dot 1.2s ease-in-out infinite;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .typing-dot {
+      animation: none;
+      opacity: 0.6;
+    }
+  }
+}
