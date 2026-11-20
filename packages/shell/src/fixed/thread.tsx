@@ -777,8 +777,11 @@ export function Thread({
                   )}
                 </MessageScrollerItem>
               ))}
+              {/* Drawn at its own height from its first frame, as each turn is: the scroller's
+                  stand-in height for an item not yet drawn would size the room under the message
+                  just sent for a taller sign, and the message would drop for a frame as it came. */}
               {typing && (
-                <MessageScrollerItem>
+                <MessageScrollerItem className="[content-visibility:visible]">
                   <TypingSign name={agent.name} />
                 </MessageScrollerItem>
               )}
