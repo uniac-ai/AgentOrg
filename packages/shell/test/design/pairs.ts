@@ -37,6 +37,7 @@ import {
   openSetup,
   openTemplates,
   openWindow,
+  placeByTab,
   readChat,
   refuseSend,
   releaseNotes,
@@ -153,15 +154,6 @@ const searchPlace = async (page: Page) => {
 /** The way to the team page, in the design and built: the bar's Team icon. */
 const teamIcon = (page: Page) =>
   page.getByRole("navigation", { name: "Main" }).getByRole("button", { name: "Team" }).click();
-/**
- * A place's label, beside it: shown from the keyboard, which the pointer moving away leaves. A
- * key pressed first makes it the keyboard's focus, ring and all, after the built side's Dismiss.
- */
-const labelOf = async (page: Page, name: string) => {
-  await page.keyboard.press("Shift");
-  await page.getByRole("navigation", { name: "Main" }).getByRole("button", { name }).focus();
-  await page.locator('[data-slot="tooltip-content"]').waitFor();
-};
 /** A row of the team page's list, in the design or built. */
 const teamRow = (page: Page, name: string) =>
   page
@@ -279,11 +271,12 @@ const SCREENS: Screen[] = [
     themes: ["dark", "light"],
     chats: true,
     agents: true,
-    design: (page) => labelOf(page, "Team"),
+    // Reached by Tab, as a person reaches a place by keyboard: the pointer moving away leaves it.
+    design: (page) => placeByTab(page, "Team"),
     built: async (page, gateway) => {
       await asTheDesign(gateway);
       await chatRow(page, "Release notes").waitFor();
-      await labelOf(page, "Team");
+      await placeByTab(page, "Team");
     },
   },
   // The floating chat, on Team: it is on every page but Chat.

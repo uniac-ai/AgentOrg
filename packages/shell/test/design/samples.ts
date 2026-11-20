@@ -1021,6 +1021,25 @@ export async function closeEveryTab(page: Page) {
   }
 }
 
+/**
+ * A place of the bar reached as a person reaches it by keyboard, Tab after Tab until it has the
+ * focus, and its label beside it. The design opens a place's label on focus only when Tab moved
+ * it there; the built page opens it on Tab too.
+ */
+export async function placeByTab(page: Page, name: string) {
+  const place = page
+    .getByRole("navigation", { name: "Main" })
+    .getByRole("button", { name, exact: true });
+  for (let presses = 0; !(await place.evaluate((e) => e === document.activeElement)); presses++) {
+    // The design's own controls come first: many presses may pass before the bar.
+    if (presses > 150) throw new Error(`Tab didn't reach ${name}`);
+    await page.keyboard.press("Tab");
+  }
+  const label = page.locator('[data-slot="tooltip-content"]').filter({ hasText: name });
+  await label.waitFor();
+  await label.evaluate((e) => Promise.all(e.getAnimations().map((one) => one.finished)));
+}
+
 /** Presses one of the design page's own controls, which put it in a case it draws. */
 export const inDesign = (page: Page, name: string | RegExp) =>
   page
