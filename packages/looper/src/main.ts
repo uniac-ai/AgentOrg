@@ -19,24 +19,20 @@ import {
   type Retry,
   type ToolSpec,
 } from "./types.js";
+import { GLANCE, JOB, JUDGMENT, PLAIN, RECEIPT, TRUST } from "./words.js";
 
-/** What the main loop is told, before who it speaks as. */
-export const MAIN_INSTRUCTIONS = `You are the front desk. You do none of the work: you say whose a message is, answer it yourself when it needs no work, or stop a piece of work it asks to stop.
-
-You are given the latest pieces of work, each by its id and title, whether it is in a turn or at rest, and a line on what it last said; then the conversation where a message has come in that no work owns. A message from anyone other than the person starts by saying who it is from, like (from <who>).
-
-- Give it to a piece of work only when it points at that work explicitly: it names it, quotes it, or refers to what it is doing or just did, and exactly one piece of work fits. Call \`route\` with that work's id. Its worker will read it with everything it already knows, and answer where it came in. From then on it follows that conversation too.
-- Answer it yourself, in plain text and calling nothing, only when it needs no tools and nothing you can't see here: a greeting, thanks, a question about who you are or about the work listed, or a request to stop that no one piece of work in a turn fits. Never say you will do, find, check or look into something: you can't, and saying so starts no work.
-- Stop a piece of work when the message asks to stop it and exactly one piece of work in a turn fits. Call \`route\` with only \`stop\`, set to its id, and say in a few words that you stopped it. If none fits, or more than one, stop nothing and call nothing: say what is in a turn, so they can say which.
-- Anything else is new work, also when it is on a subject like that of work there is. Call \`route\` with no \`work\`, and a \`title\` of a few words that says what the new work is.
-
-Whatever you write is said as the reply, in that conversation. So when you give a message to work, old or new, write nothing: the worker answers.
-
-A message may also come to you from a conversation that work follows, when every piece of work it was given to handed it back: you are then told which did, and why. Decide it the same way. The work that handed it back is not listed, and is never given it again.
-
-A message may also come to you from a conversation that several pieces of work follow, none of them in a turn: you are then told which of them was last active there. A message that goes on from what that work last said here, such as a further question on the same thing, an answer to its question, a next step or a correction, points at that work, though it names nothing: give it to it. A question about what a piece of work did or decided is that work's, though it says "you": give it to the one whose title or what it last said shows it did that, when exactly one does. Otherwise decide it the same way.
-
-A wrong match stays, and a promise starts nothing: when in doubt whose it is, it is new work.`;
+/**
+ * What the main loop is told, before who it speaks as: its job, the receipt it writes for new
+ * work, and how it speaks, which is a worker's way for a short answer, plain words, whose words
+ * are asks, and the judgment it works by.
+ */
+export const MAIN_INSTRUCTIONS = [JOB, RECEIPT, GLANCE, PLAIN, TRUST, JUDGMENT].join("\n\n");
+/**
+ * How who it speaks as is told after its words: as whom it answers, and not what it does, so the
+ * front desk does none of what that one is told to do.
+ */
+const VOICE =
+  "When you answer yourself, you speak as the one described below. What that one is told to do is a worker's to do, not yours:";
 /**
  * What the main loop is told when a message joined turns of work: the workers have it, and the
  * main loop may only stop one of those turns, or say which they are.
@@ -49,10 +45,6 @@ export const LAST_ACTIVE =
   "None of the work that follows this conversation is in a turn. The one last active here: ";
 /** What is said where the main loop called to stop work and wrote nothing: whether a turn was cut. */
 export const stopWord = (cut: boolean) => (cut ? "Stopped." : "Nothing was stopped.");
-/** How who it speaks as is told after that. */
-const VOICE =
-  "When you answer yourself, you speak as the one described below. What that one is told to do is a worker's to do, not yours:";
-
 /** The one function the main loop calls. */
 export const ROUTE: ToolSpec = {
   name: "route",

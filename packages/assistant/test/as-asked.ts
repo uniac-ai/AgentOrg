@@ -1,10 +1,14 @@
-import { OWN_FUNCTIONS } from "@agentorg/looper";
+import { FRAME, OWN_FUNCTIONS } from "@agentorg/looper";
 
 /**
- * A worker's request as the agent's host made it, without what the looper adds: its words after
- * the agent's, its functions beside the agent's tools, and the number each of the person's
- * messages starts with. What the worker sent is put as the message it said.
+ * A worker's request as the agent's host made it, without what the looper adds: its frame before
+ * the agent's words and its words after them, its functions beside the agent's tools, and the
+ * number each of the person's messages starts with. What the worker sent is put as the message it
+ * said.
  */
+/** What a worker is told without the looper's frame before it. */
+const unframed = (text: string) =>
+  text.startsWith(FRAME) ? text.slice(FRAME.length).replace(/^\n\n/, "") : text;
 /** The looper's own functions, offered beside the agent's tools. */
 const LOOPERS = OWN_FUNCTIONS;
 
@@ -20,7 +24,7 @@ export function asAsked<
     ...(request.instructions === undefined
       ? {}
       : {
-          instructions: request.instructions.replace(
+          instructions: unframed(request.instructions).replace(
             /(\n\n)?This is one piece of work: [\s\S]*$/,
             "",
           ),

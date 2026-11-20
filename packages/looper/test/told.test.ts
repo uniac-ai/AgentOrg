@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync, writeFileSync } from "node:fs";
 import test from "node:test";
-import { workInstructions } from "../src/loop.ts";
+import { FRAME, workInstructions } from "../src/loop.ts";
 import { HEARD_INSTRUCTIONS, MAIN_INSTRUCTIONS } from "../src/main.ts";
 import { build, partsOf } from "../src/told.ts";
 import { looperWith, sends, until } from "./support.ts";
@@ -36,6 +36,7 @@ test("parts are joined in order by a blank line, an empty one left out, each cut
 });
 
 test("the texts the looper tells the model are the saved ones, word for word", () => {
+  matchesSaved("frame.txt", FRAME);
   matchesSaved("worker.txt", workInstructions("Make note.txt and date.txt"));
   matchesSaved(
     "worker-beside-others.txt",
@@ -70,7 +71,7 @@ test("a worker's requests in one turn are told the same bytes, and the next turn
   assert.equal(told[1]?.instructions, told[0]?.instructions);
   assert.equal(
     told[0]?.instructions,
-    `Version ${told[0]?.instructions.match(/\d+/)?.[0]}.\n\n${workInstructions("Work")}`,
+    `${FRAME}\n\nVersion ${told[0]?.instructions.match(/Version (\d+)/)?.[1]}.\n\n${workInstructions("Work")}`,
   );
   await looper.send("a", "Third.");
   await until(() => asked.length === 3, "the next turn's request");
@@ -79,7 +80,7 @@ test("a worker's requests in one turn are told the same bytes, and the next turn
   assert.notEqual(told[2]?.instructions, told[0]?.instructions);
 });
 
-test("a host's parts are told in order, each cut to its size, before the looper's own words", async () => {
+test("a host's parts are told in order, each cut to its size, between the frame and the work's own words", async () => {
   const { looper, asked, told, answer } = looperWith({
     instructions: [
       { owner: "agent", text: "You help with notes." },
@@ -92,6 +93,6 @@ test("a host's parts are told in order, each cut to its size, before the looper'
   await looper.settled();
   assert.equal(
     told[0]?.instructions,
-    `You help with notes.\n\n## Skills\n\n${workInstructions("Work")}`,
+    `${FRAME}\n\nYou help with notes.\n\n## Skills\n\n${workInstructions("Work")}`,
   );
 });

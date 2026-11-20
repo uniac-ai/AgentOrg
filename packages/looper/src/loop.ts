@@ -52,6 +52,7 @@ import {
   type Tool,
   type ToolSpec,
 } from "./types.js";
+import { CHECK, CORE, JUDGMENT, MESSAGES, PLAIN, SEEN, TRUST, TURN } from "./words.js";
 
 /** What a message's thread is told when its work's turn ended without a reply to it. */
 const NOT_ANSWERED = { code: "not_answered", message: "Not answered" };
@@ -59,6 +60,23 @@ const NOT_ANSWERED = { code: "not_answered", message: "Not answered" };
 const CUT_OFF = {
   kept: "Cut off by a restart: going on from where it stopped.",
   told: "This turn was cut off by a restart. Check what is already done before you repeat anything, then go on.",
+};
+/**
+ * What its work keeps, and its model is told, when the tools its host offers are not those of its
+ * last turn here: by their names, those new and those gone. None when the names are the same.
+ */
+const toolsChanged = (before: readonly string[], now: readonly string[]) => {
+  const added = now.filter((name) => !before.includes(name));
+  const gone = before.filter((name) => !now.includes(name));
+  if (added.length === 0 && gone.length === 0) return undefined;
+  const which = [
+    ...(added.length > 0 ? [`New: ${added.join(", ")}.`] : []),
+    ...(gone.length > 0 ? [`Gone: ${gone.join(", ")}.`] : []),
+  ].join(" ");
+  return {
+    kept: `Tools changed. ${which}`,
+    told: `(Not from the person, and needs no answer: your tools changed since your last turn. ${which})`,
+  };
 };
 
 /** A function of the looper's own: what a worker says to whoever said a message, in reply to it. */
@@ -143,6 +161,11 @@ const OWN = [SEND, HAND_BACK, STATUS];
 /** Their names: a request carries these beside the tools its host gives. */
 export const OWN_FUNCTIONS: readonly string[] = OWN.map(({ name }) => name);
 /**
+ * What a worker is told first, before what its host tells it: how it works and speaks, whatever
+ * the work and whoever the agent is.
+ */
+export const FRAME = [JUDGMENT, SEEN, TURN, CORE, MESSAGES, PLAIN, TRUST, CHECK].join("\n\n");
+/**
  * What a worker is told after what its host tells it: which work this is, how to answer, and how
  * to hand a message back.
  */
@@ -151,7 +174,7 @@ export const workInstructions = (
   others: string[] = [],
 ) => `This is one piece of work: ${title}. Other pieces of work may be going on beside it, each with a worker of its own, and a message may reach several of them at once.
 
-Each message starts with its number in brackets, like [12]. One from anyone other than the person then says who it is from, like [12] (from <who>): what you send in reply reaches them. Decide each one once. If it asks for something that belongs to this work, do it and answer it by calling \`send\` with its number: only what you send reaches whoever said it. What you write without sending is seen by no one but you, in your later requests. You may send while the work goes on, and more than once. If it asks for something that does not belong to this work, call \`hand_back\` with its number and one sentence why, and send nothing about it: it is then given to other work, or starts new work.${
+Each message starts with its number in brackets, like [12]. One from anyone other than the person then says who it is from, like [12] (from <who>): what you send in reply reaches them. Decide each one once. If it asks for something that belongs to this work, do it and answer it by calling \`send\` with its number: only what you send reaches whoever said it. What you write without sending is not a reply: it shows only in your Activity, if they open it. You may send while the work goes on, and more than once. If it asks for something that does not belong to this work, call \`hand_back\` with its number and one sentence why, and send nothing about it: it is then given to other work, or starts new work.${
   others.length > 0
     ? ` The other work in its conversations, in the order it began: ${others.map((one) => JSON.stringify(one)).join(", ")}. A message about what one of them did or decided is not this work's, though it says "you": call \`hand_back\` for it, naming the one it is about, rather than answering that this work didn't do it.`
     : ""
@@ -345,6 +368,8 @@ export function createLoop(options: {
    * has cut that turn and the call still runs.
    */
   let calling: WorkEntry | undefined;
+  /** The names of the tools its host offered the latest turn here, which the next is told against. */
+  let lastTools: string[] | undefined;
   /** The turns that began here. After the first, nothing cut off earlier is gone on with. */
   let turnsBegun = 0;
   /** Counts the cancels, so that what was asked before one can tell when it is taken after it. */
@@ -670,9 +695,26 @@ export function createLoop(options: {
     const parts = partsOf(instructions);
     const title = await options.title();
     const specs = [...theirs.map(({ run: _, ...tool }) => tool), ...OWN];
+    // A change of tools since the turn before is said once, where its model reads it before its
+    // first request, and kept as a line in its Activity.
+    const names = theirs.map(({ name }) => name);
+    const changed = lastTools && toolsChanged(lastTools, names);
+    lastTools = names;
+    if (changed) {
+      await record.append(
+        {
+          role: "tool",
+          text: changed.kept,
+          items: [{ type: "message", role: "user", content: changed.told }],
+        },
+        { thread: await record.where() },
+      );
+      out.worked();
+    }
     let reported = false;
     for (;;) {
       const told = build([
+        { owner: "looper", text: FRAME },
         ...parts,
         { owner: "looper", text: workInstructions(title, await options.others()) },
       ]);

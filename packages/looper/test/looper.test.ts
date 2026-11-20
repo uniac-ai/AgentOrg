@@ -8,7 +8,7 @@ import {
   type Shown,
   type Tool,
 } from "../src/index.ts";
-import { HAND_BACK, SEND, STATUS, workInstructions } from "../src/loop.ts";
+import { FRAME, HAND_BACK, SEND, STATUS, workInstructions } from "../src/loop.ts";
 import { newWork, sends } from "./support.ts";
 
 /**
@@ -116,8 +116,9 @@ test("a message is answered in its thread, through the tools it was given, on th
     requests.map(({ input }) => input.length),
     [1, 3, 5, 1, 3],
   );
-  // What its host tells it, then which work this is and how to answer and hand a message back.
-  assert.equal(requests[3]?.instructions, `Be brief.\n\n${workInstructions("Work")}`);
+  // The frame, what its host tells it, then which work this is and how to answer and hand a
+  // message back.
+  assert.equal(requests[3]?.instructions, `${FRAME}\n\nBe brief.\n\n${workInstructions("Work")}`);
   assert.deepEqual(
     [...values.keys()]
       .filter((key) => key.startsWith("thread/"))

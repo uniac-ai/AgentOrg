@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { OutputItem, WorkEntry } from "../src/index.ts";
+import type { OutputItem, Tool, WorkEntry } from "../src/index.ts";
 import {
   handsBack,
   held,
@@ -250,4 +250,39 @@ test("a model request being tried again is on its piece of work, or the main loo
   fail("Write it.");
   await looper.settled();
   assert.equal((await looper.works(6, 0))[0]?.retrying, undefined);
+});
+
+test("a change of tools since its last turn is told to its model once, at the next turn, and is a line of its own", async () => {
+  const tool = (name: string): Tool => ({
+    name,
+    parameters: {},
+    run: async () => ({ output: "Done.", ok: true }),
+  });
+  const tools = [tool("read"), tool("write")];
+  const { looper, asked, inputs, answer } = looperWith({ tools });
+  await looper.send("a", "First.");
+  await until(() => asked.length === 1, "the first turn's request");
+  answer("First.", sends("One."));
+  await looper.settled();
+  // Its host offers another tool in place of one: the next turn reads which, after the message.
+  tools.splice(1, 1, tool("search"));
+  await looper.send("a", "Second.");
+  await until(() => asked.length === 2, "the next turn's request");
+  const told =
+    "(Not from the person, and needs no answer: your tools changed since your last turn. New: search. Gone: write.)";
+  assert.deepEqual(inputs[1]?.slice(-2), ["Second.", told]);
+  answer(told, sends("Two."));
+  await looper.settled();
+  // The same tools again: nothing more is told.
+  await looper.send("a", "Third.");
+  await until(() => asked.length === 3, "the third turn's request");
+  assert.deepEqual(
+    inputs[2]?.filter((line) => line.includes("your tools changed")),
+    [told],
+  );
+  answer("Third.", sends("Three."));
+  await looper.settled();
+  assert.deepEqual((await looper.entries("a", undefined, 10)).entries.map(shown), [
+    "line: Tools changed. New: search. Gone: write.",
+  ]);
 });

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { workInstructions } from "../src/loop.ts";
+import { FRAME, workInstructions } from "../src/loop.ts";
 import { HEARD_INSTRUCTIONS } from "../src/main.ts";
 import {
   gate,
@@ -16,6 +16,10 @@ import {
   stops,
   until,
 } from "./support.ts";
+
+/** What a worker with nothing from its host is told: the frame, then which work it is. */
+const framed = (title: string, others?: string[]) =>
+  `${FRAME}\n\n${workInstructions(title, others)}`;
 
 const BACK = "That was given to this work, which handed it back:";
 const works = (values: Map<string, unknown>) =>
@@ -94,7 +98,7 @@ test("a worker is told which work it is, reads each message by its number, and i
   await until(() => asked.length === 1, "the work's request");
   assert.deepEqual(numbered[0], ["[1] Write the report."]);
   assert.deepEqual(told[0], {
-    instructions: workInstructions("The report"),
+    instructions: framed("The report"),
     tools: ["send", "hand_back", "status"],
   });
   answer("Write the report.", sends("Report done."));
@@ -1705,7 +1709,7 @@ test("a worker is told the titles of the other work in its conversation, and a q
   await looper.send("a", "Review the code's security.");
   await until(() => asked.length === 1, "the first work's request");
   // Alone in its conversation, it is told of no other work.
-  assert.equal(told[0]?.instructions, workInstructions("Review security"));
+  assert.equal(told[0]?.instructions, framed("Review security"));
   answer("Review the code's security.", sends("Fixed two."));
   await looper.settled();
   // The next message goes to it, the only work that follows; it hands it back, and new work takes
@@ -1714,28 +1718,19 @@ test("a worker is told the titles of the other work in its conversation, and a q
   await until(() => asked.length === 2, "its request");
   answer("Write the architecture.", handsBack(3, "Not the review."));
   await until(() => asked.length === 3, "the new work's request");
-  assert.equal(
-    told[2]?.instructions,
-    workInstructions("Write the architecture", ["Review security"]),
-  );
+  assert.equal(told[2]?.instructions, framed("Write the architecture", ["Review security"]));
   answer("Write the architecture.", sends("Written."));
   await looper.settled();
   // A question about the review reaches the work last active, which hands it back, and the main
   // loop gives it to the review, told of the other.
   await looper.send("a", "What did your review fix?");
   await until(() => asked.length === 4, "the last active work's request");
-  assert.equal(
-    told[3]?.instructions,
-    workInstructions("Write the architecture", ["Review security"]),
-  );
+  assert.equal(told[3]?.instructions, framed("Write the architecture", ["Review security"]));
   const asking = numbered[3]?.find((line) => line.endsWith("What did your review fix?")) ?? "";
   const number = Number(/^\[(\d+)\]/.exec(asking)?.[1]);
   answer("What did your review fix?", handsBack(number, "About the review."));
   await until(() => asked.length === 5, "the review's request");
-  assert.equal(
-    told[4]?.instructions,
-    workInstructions("Review security", ["Write the architecture"]),
-  );
+  assert.equal(told[4]?.instructions, framed("Review security", ["Write the architecture"]));
   answer("What did your review fix?", sends("Two fixes."));
   await looper.settled();
 });
