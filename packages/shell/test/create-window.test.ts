@@ -288,8 +288,10 @@ test(
     const line = window_.getByLabel("What it's for");
     assert.equal(await name.evaluate((e) => e === document.activeElement), true, "the keyboard");
     assert.equal(await name.getAttribute("placeholder"), "Scout");
-    // The face's disc, with its letters.
-    const disc = window_.locator('span[aria-hidden="true"].rounded-full').first();
+    // The face, with its letters.
+    const disc = window_
+      .locator('span[aria-hidden="true"][style*="linear-gradient(140deg"]')
+      .first();
     assert.equal(await disc.innerText(), "S");
     assert.equal((await boxOf(disc)).width, 80);
     assert.equal(await line.getAttribute("placeholder"), "Chats and uses what you connect");
