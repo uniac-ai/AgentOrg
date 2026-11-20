@@ -40,11 +40,20 @@ import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { Computer } from "@agentorg/computer-sdk";
+import { OWN_FUNCTIONS } from "@agentorg/looper";
 import WebSocket from "ws";
 import { CHECKS, CORE, FIXTURE, GROUPS } from "./set.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CAP = 150;
+/**
+ * The functions of the looper's own, the front desk's and each worker's: how the agent speaks and
+ * keeps its work, never a tool it uses, so never counted as one. Named here rather than read from
+ * the looper, so runs of builds that offer different ones are counted alike. A run refuses to
+ * start while the looper offers its workers one not named here; one only the front desk gains,
+ * like `route`, is added by hand.
+ */
+const OWN = new Set(["send", "route", "hand_back", "status", "no_reply_needed"]);
 const MARK = ".conversation-runner";
 const API = "https://api.openai.com/v1";
 /** The computer each agent gets: a new one, in a container, with commands and no browser. */
@@ -82,6 +91,10 @@ if (!Number.isInteger(cap) || cap < 1) usage(`--max-requests takes a number from
 if (command === "run" && !flags.out) usage("--out names the file the run is written to.");
 if (command === "sign-in" && flags.dry) usage("--dry needs no sign-in.");
 if (command === "sign-in" && flags.open) usage("--open is for a run: sign-in opens its own page.");
+// A function the built looper offers its workers that OWN doesn't name would count as a tool.
+const unnamed = OWN_FUNCTIONS.filter((name) => !OWN.has(name));
+if (command === "run" && unnamed.length > 0)
+  usage(`The looper offers ${unnamed.join(", ")}, which OWN doesn't name: add it there first.`);
 
 // --- The runner's folder: its own, never the person's AgentOrg --------------------------------
 
@@ -759,11 +772,7 @@ async function playSteps(group, at, slot, files) {
   const firstTool = (since) =>
     until(
       "A call to a tool",
-      async () =>
-        requests.some(
-          (r) =>
-            r.at >= since && r.tools.some((name) => !["send", "route", "hand_back"].includes(name)),
-        ),
+      async () => requests.some((r) => r.at >= since && r.tools.some((name) => !OWN.has(name))),
       flags.dry ? 5_000 : 90_000,
     ).catch(() => true);
 
@@ -859,9 +868,7 @@ async function playSteps(group, at, slot, files) {
       headings: (all.match(/^#{1,6}\s/gm) ?? []).length,
       lists: (all.match(/^\s*([-*]|\d+\.)\s/gm) ?? []).length,
       bold: (all.match(/\*\*[^*]+\*\*/g) ?? []).length,
-      tools: theirs
-        .flatMap((r) => r.tools)
-        .filter((name) => !["send", "route", "hand_back"].includes(name)),
+      tools: theirs.flatMap((r) => r.tools).filter((name) => !OWN.has(name)),
       firstSeen: shown ? round(shown.at - sent[i]) : undefined,
       requests: { total: theirs.length },
       unanswered: Math.max(0, asked - replies.length),
