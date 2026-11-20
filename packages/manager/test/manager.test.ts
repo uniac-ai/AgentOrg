@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -4082,6 +4083,30 @@ test("a skill a unit gave is brought up to date with its provider while it is as
   await new Promise((resolve) => setTimeout(resolve, 300));
   assert.match(await notes(), /Use it better\./);
   assert.equal(s.logged.filter((one) => one === left).length, 2);
+});
+
+test("a file a unit's skill gives later is added to the copy here, as a skill's ALWAYS.md is", async (t) => {
+  const s = await setup(t);
+  await s.makeStack([s.unit("files", { folder: "/work" })]);
+  const folder = join(s.dir, "skills", "notes");
+  assert.deepEqual(readdirSync(folder).sort(), ["SKILL.md", "more"]);
+  // Its unit now gives one more file of that skill: management, started again, copies it here.
+  const files = (UNITS[0] as unknown as { gives: { skills: { files: string[] }[] } }).gives
+    .skills[0]?.files as string[];
+  files.push("ALWAYS.md");
+  t.after(() => void files.pop());
+  await s.restart(() => {});
+  await until(() => existsSync(join(folder, "ALWAYS.md")));
+  assert.equal(readFileSync(join(folder, "ALWAYS.md"), "utf8"), "A guide.");
+  assert.match((await s.calls.skills.get({ name: "notes" })).text, /Use it well\./);
+  // Kept as the copy it now is: the next start finds it as copied, so it is never left as edited.
+  const copied = () =>
+    JSON.parse(readFileSync(join(s.dir, "manager.json"), "utf8")).copies.notes?.files ?? {};
+  await until(() => "ALWAYS.md" in copied());
+  await s.restart(() => {});
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.ok(!s.logged.some((one) => one.includes("isn't as it was copied here")));
+  assert.ok("ALWAYS.md" in copied());
 });
 
 test("a skill in a home from before copies were kept is brought up to date only when its text is one its provider shipped", async (t) => {

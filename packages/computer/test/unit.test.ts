@@ -173,7 +173,7 @@ test("this computer's screen and the person's browser: off unless chosen, greyed
   assert.equal(option(ready, "ownBrowser", "yours")?.caution, true);
   assert.deepEqual(option(ready, "screen", "on")?.adds, {
     slots: [{ name: "screen" }],
-    skills: [{ name: "screen", files: ["SKILL.md"] }],
+    skills: [{ name: "screen", files: ["SKILL.md", "ALWAYS.md"] }],
     surfaces: [{ surface: "screen", protocol: "screen@1" }],
   });
   assert.deepEqual(option(ready, "ownBrowser", "yours")?.adds?.slots, [{ name: "browser" }]);

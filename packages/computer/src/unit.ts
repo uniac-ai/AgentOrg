@@ -11,7 +11,14 @@ export const BROWSER_SLOT = "browser";
 /** The slot of this computer's screen, through its own endpoint. */
 export const SCREEN_SLOT = "screen";
 const SKILL = "SKILL.md";
-const skill = (name: string) => ({ name, files: [SKILL] });
+/** What a unit wants its agent always told while the skill is given: see the README. */
+const ALWAYS = "ALWAYS.md";
+/** The skills with an `ALWAYS.md`: the unit's own words on the computer, the screen and the browser. */
+const TOLD_ALWAYS = ["computer", "screen", "browser"];
+/** The files of the skill `name`, as a unit gives them. */
+export const skillFiles = (name: string) =>
+  TOLD_ALWAYS.includes(name) ? [SKILL, ALWAYS] : [SKILL];
+const skill = (name: string) => ({ name, files: skillFiles(name) });
 
 export type Access = "read" | "files" | "terminal";
 /** What a computer reaches at each level: the answer's title, and what the person reads of it. */
