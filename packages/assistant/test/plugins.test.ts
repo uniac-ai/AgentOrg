@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { Context } from "cordis";
-import { type AgentPlugin, createPluginHost, type Life, NO_PLUGINS } from "../src/plugins.ts";
+import { type Context, Service } from "cordis";
+import {
+  AGENT_EVENTS,
+  type AgentPlugin,
+  createPluginHost,
+  type Life,
+  NO_PLUGINS,
+} from "../src/plugins.ts";
 
 /** A kv store in memory, as an agent's own store answers. */
 function memory() {
@@ -29,37 +35,32 @@ const logged = () => {
   return { warnings, log: { ...quiet, warn: (message: string) => void warnings.push(message) } };
 };
 
-/** A plugin that gives a function and a block, keeps what it is told, and writes what it hears. */
+/**
+ * A plugin that gives a function and a section, keeps what it is told, and writes what it hears:
+ * it names the four services it uses.
+ */
 const notes: AgentPlugin<{ greeting: string }> = {
   name: "notes",
-  inject: ["agent"],
+  inject: ["tools", "prompt", "store", "agent"],
   apply(ctx: Context, { greeting }) {
     let count = 0;
-    ctx.effect(() =>
-      ctx.agent.tool({
-        name: "keep",
-        description: "Keeps a note.",
-        parameters: { type: "object", properties: { text: { type: "string" } } },
-        async run(input) {
-          count += 1;
-          await ctx.agent.store.set({ key: "last", value: (input as { text: string }).text });
-          return { output: "Kept.", ok: true } as never;
-        },
-      }),
-    );
-    ctx.effect(() => ctx.agent.block(() => `${greeting} ${ctx.agent.agent}: ${count} kept.`));
-    for (const event of [
-      "turnStarted",
-      "turnEnded",
-      "compacting",
-      "compacted",
-      "idle",
-      "stopped",
-    ] as Life[])
-      ctx.effect(() =>
-        ctx.agent.on(event, ({ work }) =>
-          ctx.agent.store.set({ key: `heard/${event}`, value: work ?? null }),
-        ),
+    ctx.tools.register({
+      name: "keep",
+      description: "Keeps a note.",
+      parameters: { type: "object", properties: { text: { type: "string" } } },
+      async run(input) {
+        count += 1;
+        await ctx.store.set({ key: "last", value: (input as { text: string }).text });
+        return { output: "Kept.", ok: true } as never;
+      },
+    });
+    ctx.prompt.section({
+      name: "count",
+      text: () => `${greeting} ${ctx.agent.id}: ${count} kept.`,
+    });
+    for (const [life, event] of Object.entries(AGENT_EVENTS) as [Life, string][])
+      ctx.on(event as "agent/idle", ({ work }) =>
+        ctx.store.set({ key: `heard/${life}`, value: work ?? null }),
       );
   },
 };
@@ -81,10 +82,10 @@ test("a plugin gives its agent a function under its own name, a block read afres
   const [tool] = plugins.tools();
   assert.equal(tool?.slot, "notes");
   assert.equal(tool?.name, "keep");
-  assert.deepEqual(plugins.blocks(), [{ owner: "plugin:notes", text: "Hello a: 0 kept." }]);
+  assert.deepEqual(plugins.blocks(), [{ owner: "plugin:notes/count", text: "Hello a: 0 kept." }]);
   await tool?.run({ text: "Buy milk." }, "g1");
-  // The block is read for each request: it says what changed since.
-  assert.deepEqual(plugins.blocks(), [{ owner: "plugin:notes", text: "Hello a: 1 kept." }]);
+  // The section is read for each request: it says what changed since.
+  assert.deepEqual(plugins.blocks(), [{ owner: "plugin:notes/count", text: "Hello a: 1 kept." }]);
   // Its store is its own, under the agent's.
   assert.equal(values.get("plugin/notes/last"), "Buy milk.");
   plugins.life("turnStarted", { work: "w1" });
@@ -92,16 +93,113 @@ test("a plugin gives its agent a function under its own name, a block read afres
   await new Promise((done) => setImmediate(done));
   assert.equal(values.get("plugin/notes/heard/turnStarted"), "w1");
   assert.equal(values.get("plugin/notes/heard/idle"), null);
+  // Unloading it leaves what it stored: adding it again finds it.
+  await plugins.close();
+  const again = await createPluginHost(quiet).open("a", {
+    store,
+    plugins: [{ plugin: notes, config: { greeting: "Hello" } }],
+  });
+  assert.equal(values.get("plugin/notes/last"), "Buy milk.");
+  await again.close();
 });
 
-test("each agent's plugins are its own: one agent's give another nothing, and closing one leaves the other", async () => {
-  const host = createPluginHost(quiet);
-  const a = await host.open("a", {
+test("a plugin's own components, and a service it provides, use the agent's services as that plugin", async () => {
+  const { store, values } = memory();
+  /** A service one plugin provides, written as Cordis services are: it reaches the others by `this.ctx`. */
+  class Keeping extends Service {
+    constructor(ctx: Context) {
+      super(ctx, "keeping");
+    }
+    keep(text: string) {
+      this.ctx.store.set({ key: "kept", value: text });
+      this.ctx.tools.register({
+        name: "recall",
+        parameters: { type: "object" },
+        run: async () => ({ output: text, ok: true }) as never,
+      });
+    }
+  }
+  const keeper: AgentPlugin = {
+    name: "keeper",
+    inject: ["store", "tools"],
+    provide: "keeping",
+    async apply(ctx: Context) {
+      await ctx.use(Keeping);
+      // A component of its own uses the store as it.
+      await ctx.use({
+        name: "inner",
+        inject: ["store"],
+        apply: (inner: Context) => void inner.store.set({ key: "inner", value: true }),
+      });
+    },
+  };
+  const user: AgentPlugin = {
+    name: "user",
+    inject: ["keeping"],
+    apply: (ctx: Context) => (ctx as Context & { keeping: Keeping }).keeping.keep("Sam"),
+  };
+  const plugins = await createPluginHost(quiet).open("a", {
+    store,
+    plugins: [{ plugin: keeper }, { plugin: user }],
+  });
+  await new Promise((done) => setImmediate(done));
+  // The service is the plugin that provides it, whoever calls it.
+  assert.equal(values.get("plugin/keeper/kept"), "Sam");
+  assert.equal(values.get("plugin/keeper/inner"), true);
+  assert.deepEqual(
+    [...values.keys()].filter((key) => key.startsWith("plugin/user/")),
+    [],
+  );
+  assert.deepEqual(
+    plugins.tools().map(({ slot, name }) => `${slot}__${name}`),
+    ["keeper__recall"],
+  );
+  await plugins.close();
+});
+
+test("sections come in their order, then by plugin and name, the same at every start; a plugin names each once", async () => {
+  const section = (name: string, sections: { name: string; order?: number }[]): AgentPlugin => ({
+    name,
+    inject: ["prompt"],
+    apply(ctx: Context) {
+      for (const one of sections) ctx.prompt.section({ ...one, text: () => one.name });
+    },
+  });
+  const plugins = await createPluginHost(quiet).open("a", {
     store: memory().store,
+    plugins: [
+      {
+        plugin: section("zeta", [
+          { name: "first", order: -1 },
+          { name: "last", order: 5 },
+        ]),
+      },
+      { plugin: section("alpha", [{ name: "b" }, { name: "a" }]) },
+    ],
+  });
+  assert.deepEqual(
+    plugins.blocks().map(({ owner }) => owner),
+    ["plugin:zeta/first", "plugin:alpha/a", "plugin:alpha/b", "plugin:zeta/last"],
+  );
+  await plugins.close();
+  await assert.rejects(
+    createPluginHost(quiet).open("a", {
+      store: memory().store,
+      plugins: [{ plugin: section("twice", [{ name: "same" }, { name: "same" }]) }],
+    }),
+    /The plugin twice has a section named same already\./,
+  );
+});
+
+test("each agent's plugins are its own: one agent's give another nothing and hear nothing of it, and closing one leaves the other", async () => {
+  const host = createPluginHost(quiet);
+  const [ofA, ofB] = [memory(), memory()];
+  const a = await host.open("a", {
+    store: ofA.store,
     plugins: [{ plugin: notes, config: { greeting: "Hi" } }],
   });
   const b = await host.open("b", {
-    store: memory().store,
+    store: ofB.store,
     plugins: [{ plugin: notes, config: { greeting: "Yo" } }],
   });
   assert.deepEqual(
@@ -112,6 +210,11 @@ test("each agent's plugins are its own: one agent's give another nothing, and cl
     b.blocks().map(({ text }) => text),
     ["Yo b: 0 kept."],
   );
+  // An agent's life is told to its own plugins only.
+  a.life("idle");
+  await new Promise((done) => setImmediate(done));
+  assert.equal(ofA.values.get("plugin/notes/heard/idle"), null);
+  assert.equal(ofB.values.has("plugin/notes/heard/idle"), false);
   await a.close();
   // What it registered goes with it.
   assert.deepEqual(a.tools(), []);
@@ -152,25 +255,26 @@ const naming: AgentPlugin = {
   inject: ["agent"],
   provide: "naming",
   apply(ctx: Context) {
-    ctx.provide("naming", { name: ctx.agent.agent });
+    ctx.provide("naming", { name: ctx.agent.id });
   },
 };
 /** A plugin that uses both services its agent's other plugins provide, and says them in a block. */
 const counting: AgentPlugin = {
   name: "counting",
-  inject: ["agent", "tally", "naming"],
+  inject: ["tools", "prompt", "tally", "naming"],
   apply(ctx: Context) {
-    ctx.effect(() =>
-      ctx.agent.tool({
-        name: "count",
-        parameters: { type: "object", properties: {} },
-        async run() {
-          ctx.tally.add();
-          return { output: "Counted.", ok: true } as never;
-        },
-      }),
-    );
-    ctx.effect(() => ctx.agent.block(() => `${ctx.naming.name} counted ${ctx.tally.count}.`));
+    ctx.tools.register({
+      name: "count",
+      parameters: { type: "object", properties: {} },
+      async run() {
+        ctx.tally.add();
+        return { output: "Counted.", ok: true } as never;
+      },
+    });
+    ctx.prompt.section({
+      name: "count",
+      text: () => `${ctx.naming.name} counted ${ctx.tally.count}.`,
+    });
   },
 };
 
@@ -231,31 +335,30 @@ test("a plugin that needs a service none of the agent's plugins provides fails t
   await again.close();
 });
 
-test("a plugin's failures are logged, never the agent's: a block that throws is left out, a listener that throws doesn't stop the others", async () => {
+test("a plugin's failures are logged, never the agent's: a section that throws is left out, a listener that throws doesn't stop the others", async () => {
   const { warnings, log } = logged();
   const heard: string[] = [];
   const failing: AgentPlugin = {
     name: "failing",
-    inject: ["agent"],
+    inject: ["prompt", "agent"],
     apply(ctx: Context) {
-      ctx.effect(() =>
-        ctx.agent.block(() => {
+      ctx.prompt.section({
+        name: "broken",
+        text: () => {
           throw new Error("no words");
-        }),
-      );
-      ctx.effect(() =>
-        ctx.agent.on("turnEnded", () => {
-          throw new Error("can't hear");
-        }),
-      );
-      ctx.effect(() => ctx.agent.on("turnEnded", async () => Promise.reject(new Error("later"))));
+        },
+      });
+      ctx.on("agent/turn-ended", () => {
+        throw new Error("can't hear");
+      });
+      ctx.on("agent/turn-ended", async () => Promise.reject(new Error("later")));
     },
   };
   const listening: AgentPlugin = {
     name: "listening",
     inject: ["agent"],
     apply(ctx: Context) {
-      ctx.effect(() => ctx.agent.on("turnEnded", ({ work }) => void heard.push(work ?? "")));
+      ctx.on("agent/turn-ended", ({ work }) => void heard.push(work ?? ""));
     },
   };
   const plugins = await createPluginHost(log).open("a", {
@@ -266,7 +369,7 @@ test("a plugin's failures are logged, never the agent's: a block that throws is 
   plugins.life("turnEnded", { work: "w1" });
   await new Promise((done) => setImmediate(done));
   assert.deepEqual(heard, ["w1"]);
-  assert.ok(warnings.includes("A plugin's block couldn't be read; the request goes without it."));
+  assert.ok(warnings.includes("A plugin's section couldn't be read; the request goes without it."));
   assert.equal(warnings.filter((one) => one === "A plugin failed on the agent's life.").length, 2);
 });
 

@@ -6,7 +6,7 @@ import { defineInterface, method, NotConnected, OutcomeUnknown, Refused } from "
 import { createTestContext } from "@agentorg/sdk/testing";
 import type { Context } from "cordis";
 import { z } from "zod";
-import { type AgentPlugin, createPluginHost, type Life } from "../src/plugins.ts";
+import { AGENT_EVENTS, type AgentPlugin, createPluginHost, type Life } from "../src/plugins.ts";
 import { MAX_INSTRUCTIONS } from "../src/settings.ts";
 import { filesOf, MAX_TOOLS, TOOLS_BUDGET } from "../src/tools.ts";
 import { asAsked, followsSend, named, sendOf } from "./as-asked.ts";
@@ -1230,19 +1230,18 @@ test("a plugin's function is offered under its name and its block follows the ag
   const heard: string[] = [];
   const notes: AgentPlugin = {
     name: "notes",
-    inject: ["agent"],
+    inject: ["tools", "prompt", "agent"],
     apply(ctx: Context) {
-      ctx.effect(() =>
-        ctx.agent.tool({
-          name: "keep",
-          parameters: { type: "object", properties: {} },
-          run: async () => ({ output: "Kept.", ok: true }) as never,
-        }),
-      );
-      ctx.effect(() => ctx.agent.block(() => "Notes: none yet."));
+      ctx.tools.register({
+        name: "keep",
+        parameters: { type: "object", properties: {} },
+        run: async () => ({ output: "Kept.", ok: true }) as never,
+      });
+      ctx.prompt.section({ name: "notes", text: () => "Notes: none yet." });
       for (const event of ["turnStarted", "turnEnded", "idle"] as Life[])
-        ctx.effect(() =>
-          ctx.agent.on(event, ({ work }) => void heard.push(work ? `${event} ${work}` : event)),
+        ctx.on(
+          AGENT_EVENTS[event] as "agent/idle",
+          ({ work }) => void heard.push(work ? `${event} ${work}` : event),
         );
     },
   };
@@ -1278,7 +1277,7 @@ test("a plugin hears the agent stopped last, once the turn it was in was cut", a
     inject: ["agent"],
     apply(ctx: Context) {
       for (const event of ["turnStarted", "turnEnded", "idle", "stopped"] as Life[])
-        ctx.effect(() => ctx.agent.on(event, () => void heard.push(event)));
+        ctx.on(AGENT_EVENTS[event] as "agent/idle", () => void heard.push(event));
     },
   };
   const quiet = { info() {}, warn() {}, error() {} };
