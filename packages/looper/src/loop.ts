@@ -283,7 +283,41 @@ export const askOf = (args: Record<string, unknown>): Card | undefined | false =
   return { questions: [one], ...(confirm === true && !one.many ? { confirm: true as const } : {}) };
 };
 /** The looper's own functions, offered to every worker after its host's tools. */
+/**
+ * A conversation's own loop's `route`: pass one of its messages on, to work there is or new work,
+ * whose worker answers it there, with a receipt said first; or stop a piece of work.
+ */
+export const ROUTE_ON: ToolSpec = {
+  name: "route",
+  description:
+    "Passes a message on: to a piece of work there is, or to new work, whose worker answers it here. Or stops a piece of work.",
+  parameters: {
+    type: "object",
+    properties: {
+      message: {
+        type: "number",
+        description: "The number of the message to pass on. Leave it out to stop work.",
+      },
+      work: {
+        type: "string",
+        description: "The id of the work it points at. Leave it out for new work.",
+      },
+      title: { type: "string", description: "For new work: a few words that say what it is." },
+      receipt: {
+        type: "string",
+        description:
+          "For new work: the receipt, said in the conversation before the work begins. It answers nothing; the work does.",
+      },
+      stop: {
+        type: "string",
+        description: "The id of the work in a turn to stop. With it, leave the others out.",
+      },
+    },
+  },
+};
 const OWN = [SEND, HAND_BACK, STATUS, NO_REPLY];
+/** A conversation's own loop's functions, beside its host's. */
+const TALK = [SEND, NO_REPLY, ROUTE_ON];
 /** Their names: a request carries these beside the tools its host gives. */
 export const OWN_FUNCTIONS: readonly string[] = OWN.map(({ name }) => name);
 /**
@@ -293,6 +327,8 @@ export const OWN_FUNCTIONS: readonly string[] = OWN.map(({ name }) => name);
 export const FRAME = [JUDGMENT, SEEN, TURN, CORE, MESSAGES, PLAIN, BUBBLES, TRUST, CHECK].join(
   "\n\n",
 );
+/** What stands for what no longer fits a request, as every loop is told it. */
+export const LEFT_OUT = `A message that begins "(Left out:" or "${SUMMARY_BEGINS}" is not from the person and needs no answer. It stands for earlier messages, and what was done for them, that no longer fit: all of it was said and done, so do not do it again. A call whose arguments or output say they were left out did run.`;
 /**
  * What a worker is told after what its host tells it: which work this is, how to answer, and how
  * to hand a message back.
@@ -308,9 +344,18 @@ Each message starts with its number in brackets, like [12]. One from anyone othe
     : ""
 } A message that asks for nothing, like thanks or an acknowledgement, needs no reply: call \`no_reply_needed\` with its number instead of sending. A message you neither answer nor hand back is shown as not answered when you are done. When you have nothing more to do, end without calling anything.
 
-A message that begins "(Left out:" or "${SUMMARY_BEGINS}" is not from the person and needs no answer. It stands for earlier messages, and what was done for them, that no longer fit: all of it was said and done, so do not do it again. A call whose arguments or output say they were left out did run. Message [1] is what this work was asked.`;
+${LEFT_OUT} Message [1] is what this work was asked.`;
 
 type FunctionCall = Extract<Item, { type: "function_call" }>;
+/** Whether a conversation's `route` call stops work, rather than passing a message on. */
+const stopsWork = (args: string) => {
+  try {
+    const { stop } = JSON.parse(args) as { stop?: unknown };
+    return typeof stop === "string" && stop.trim() !== "";
+  } catch {
+    return false;
+  }
+};
 /**
  * A `send` the model is writing: its arguments so far, the id its reply will have, where in them
  * the words not yet said begin, and the thread of the message it names: unknown until that is
@@ -454,6 +499,26 @@ export function createLoop(options: {
   back(handed: { message: number; why: string; leave: boolean }): Promise<string>;
   /** The files a call read and changed, by its name and arguments, for a compaction to list. */
   files?: FilesOf;
+  /**
+   * A conversation's own loop, in place of a piece of work's (see conversation.ts): told `first`
+   * before its host's words and `after` them, in place of a worker's, and `works()`, read for each
+   * request, as the last of its input; offered `send`, `no_reply_needed` and `route` in place of a
+   * worker's own functions. `route` passes a message on with `pass`, which settles it as a send
+   * does, or stops work with `stop`, whose result is read before the turn can end. Every turn of
+   * it counts as one at something of its own, so its record is summarized, never only cut.
+   */
+  conversation?: {
+    first: string;
+    after: string;
+    works(): Promise<string>;
+    pass(handed: {
+      message: number;
+      work?: string;
+      title?: string;
+      receipt?: string;
+    }): Promise<string>;
+    stop(work: string): Promise<string>;
+  };
   /** The work's steps, as `status` last kept them. */
   steps(): readonly Step[];
   /** Keep the work's steps: it rejects when they can't be kept, and they are as they were. */
@@ -470,6 +535,31 @@ export function createLoop(options: {
         throw new Refusal("invalid", "Give the message's number and one sentence why.");
       return {
         output: await options.back({ message, why: head(why, 2000), leave: leave === true }),
+        ok: true,
+      };
+    },
+  };
+  /** A conversation's `route`: what it passes on, or the work it stops, is its host's to do. */
+  const routeOn: Tool = {
+    ...ROUTE_ON,
+    async run(input) {
+      const talk = options.conversation as NonNullable<typeof options.conversation>;
+      const { message, work, title, receipt, stop } = (input ?? {}) as Record<string, unknown>;
+      const said = (value: unknown) =>
+        typeof value === "string" && value.trim() !== "" ? value : undefined;
+      if (said(stop)) return { output: await talk.stop(stop as string), ok: true };
+      if (typeof message !== "number")
+        throw new Refusal(
+          "invalid",
+          "Give the number of the message to pass on, or `stop` with the id of work to stop.",
+        );
+      return {
+        output: await talk.pass({
+          message,
+          ...(said(work) ? { work: work as string } : {}),
+          ...(said(title) ? { title: title as string } : {}),
+          ...(said(receipt) ? { receipt: receipt as string } : {}),
+        }),
         ok: true,
       };
     },
@@ -873,10 +963,12 @@ export function createLoop(options: {
     // is read for each request, as before: it changes only when work begins meanwhile, and a
     // worker that didn't know of that work could answer a message that is its.
     const { instructions, tools: theirs, model: chosen } = await options.request();
-    const tools = [...theirs, handBack];
+    const talk = options.conversation;
+    const tools = [...theirs, talk ? routeOn : handBack];
     const parts = partsOf(instructions);
     const title = await options.title();
-    const specs = [...theirs.map(({ run: _, ...tool }) => tool), ...OWN];
+    const specs = [...theirs.map(({ run: _, ...tool }) => tool), ...(talk ? TALK : OWN)];
+    if (talk) current.acted = true;
     // A change of tools since the turn before is said once, where its model reads it before its
     // first request, and kept as a line in its Activity.
     const names = theirs.map(({ name }) => name);
@@ -896,9 +988,12 @@ export function createLoop(options: {
     let reported = false;
     for (;;) {
       const told = build([
-        { owner: "looper", text: FRAME },
+        { owner: "looper", text: talk ? talk.first : FRAME },
         ...parts,
-        { owner: "looper", text: workInstructions(title, await options.others()) },
+        {
+          owner: "looper",
+          text: talk ? talk.after : workInstructions(title, await options.others()),
+        },
       ]);
       if (!reported)
         for (const part of told.cut)
@@ -915,12 +1010,20 @@ export function createLoop(options: {
         ...offered,
         input: [],
       };
+      // A conversation is told the work there is as the last of its input, so what comes before
+      // it, its record too, begins alike from one request to the next.
+      const tail: Item[] = talk
+        ? [{ type: "message", role: "user", content: await talk.works() }]
+        : [];
       let { items: input, read, thread, over } = await record.input(besides);
+      input = [...input, ...tail];
       if (current.cancelled) return;
       // A request that only decides whether to take what it was given is cut to fit instead: one
       // that hands it back would have summarized for nothing.
-      if (over && current.acted && (await compact(current, chosen, { thread, read }, false)))
+      if (over && current.acted && (await compact(current, chosen, { thread, read }, false))) {
         ({ items: input, read, thread } = await record.input(besides));
+        input = [...input, ...tail];
+      }
       if (current.cancelled) return;
       current.thread = thread;
       current.upTo = Math.max(current.upTo ?? 0, read);
@@ -1039,10 +1142,21 @@ export function createLoop(options: {
           sentAny ||= closed;
           continue;
         }
+        // A conversation's `route` passes a message on, which settles it as a send does; or stops
+        // work, whose result it reads before its turn can end.
+        if (talk && call.name === ROUTE_ON.name) {
+          handedAll = false;
+          const result = await runTool(tools, call.name, call.arguments, current.group);
+          const passed = result.ok && !stopsWork(call.arguments);
+          sentAll &&= passed;
+          sentAny ||= passed;
+          await answered(call, result, id, read, thread);
+          continue;
+        }
         // Keeping its steps is the looper's own: kept for the model, and no entry of its work. It
         // is not the turn at something of its own, nor only handing back; beside a send, it
-        // keeps the turn no longer than the send would alone.
-        if (call.name === STATUS.name) {
+        // keeps the turn no longer than the send would alone. A conversation isn't offered it.
+        if (!talk && call.name === STATUS.name) {
           handedAll = false;
           await answered(call, await stepping(current, call), id, read, thread);
           continue;

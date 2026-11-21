@@ -38,7 +38,7 @@ export const MAIN_INSTRUCTIONS = [JOB, RECEIPT, GLANCE, PLAIN, TRUST, JUDGMENT].
  * How who it speaks as is told after its words: as whom it answers, and not what it does, so the
  * front desk does none of what that one is told to do.
  */
-const VOICE =
+export const VOICE =
   "When you answer yourself, you speak as the one described below. What that one is told to do is a worker's to do, not yours:";
 /**
  * What the main loop is told when a message joined turns of work: the workers have it, and the
@@ -101,6 +101,8 @@ export interface Listed {
   last?: string | undefined;
   /** Whether its last turn failed. */
   failed?: boolean | undefined;
+  /** For a conversation's own loop: whether it follows another conversation, not this one. */
+  elsewhere?: boolean | undefined;
 }
 /** A message of the thread, as the main loop reads it. */
 export interface Said {
@@ -138,15 +140,16 @@ export const titled = (text: string) =>
  */
 export const TOLD = { messages: 8, each: 4000, works: 12, last: 1000, voice: 100_000 };
 /** The work there is, as the main loop is told of it. */
-const listing = (works: Listed[]) =>
+export const listing = (works: Listed[]) =>
   works.length === 0
     ? "There is no work."
     : [
         "The work there is:",
-        ...works.map(({ id, title, turn, last, failed }) => {
+        ...works.map(({ id, title, turn, last, failed, elsewhere }) => {
           const state =
             turn !== undefined ? "in a turn" : failed ? "at rest; its last turn failed" : "at rest";
-          return `- ${id}: ${title} (${state})${last ? `; it last said: ${last}` : ""}`;
+          const where = elsewhere ? "; in another conversation" : "";
+          return `- ${id}: ${title} (${state}${where})${last ? `; it last said: ${last}` : ""}`;
         }),
       ].join("\n");
 /** A piece of work that handed a message back, and why. */

@@ -47,6 +47,17 @@ export function looperWith(
     voice?: string;
     /** What the main loop answers when put `text`: by default, new work. */
     routing?: (text: string) => OutputItem[] | Promise<OutputItem[]> | undefined;
+    /** Whether each thread has a loop of its own, which every message reaches first. */
+    conversations?: boolean;
+    /**
+     * What a conversation's own loop answers, given the last thing said to it and its request
+     * whole: by default, it passes its newest message on to new work. A call naming
+     * `message: "newest"` names the newest message it was given.
+     */
+    talking?: (
+      text: string,
+      request: { instructions: string; input: Item[] },
+    ) => OutputItem[] | Promise<OutputItem[]> | undefined;
     /**
      * How the main loop places a message no work in a turn took, given that message and what it
      * is told of which work was last active: by default, it gives it to that work, as a follow-up
@@ -117,6 +128,8 @@ export function looperWith(
   /** Each worker's request's items, as the model got them. */
   const raw: unknown[][] = [];
   const told: { instructions: string; tools: string[] }[] = [];
+  /** Each request of a conversation's own loop: what it was told and offered, and its input. */
+  const talks: { instructions: string; tools: string[]; input: string[] }[] = [];
   /** Each request for a summary, as the model got it: what it was told, and the one message. */
   const summaries: { instructions: string; text: string }[] = [];
   /** The requests still out, each by the last thing said to it and the first. */
@@ -178,6 +191,41 @@ export function looperWith(
             Promise.resolve(
               options.summarizing?.(text) ?? says(`## Goal\n- Summary ${summaries.length}.`),
             ).then((output) => answer({ output }), fail);
+            return;
+          }
+          if (tools.some((tool) => tool.name === "route") && tools.some((t) => t.name === "send")) {
+            const newest = newestOf(input);
+            // The last thing said to it is its newest numbered message: the work there is comes after.
+            const said = input.findLast(
+              (item) =>
+                item.type === "message" && item.role === "user" && /^\[\d+\]/.test(item.content),
+            );
+            const text = said?.type === "message" ? unnumbered(said.content) : "";
+            talks.push({
+              instructions,
+              tools: tools.map((tool) => tool.name),
+              input: input.map((item) =>
+                item.type === "message"
+                  ? item.content
+                  : item.type === "function_call"
+                    ? `call ${item.name} ${item.arguments}`
+                    : `output ${item.output}`,
+              ),
+            });
+            open.push({
+              text: "the conversation",
+              first: "",
+              id: requestId,
+              newest,
+              answer: () => {},
+              fail: () => fail(gone()),
+            });
+            Promise.resolve(
+              options.talking?.(text, { instructions, input }) ?? passes("Work"),
+            ).then(
+              (output) => answer({ output: output.map((item) => naming(item, newest)) }),
+              fail,
+            );
             return;
           }
           if (tools.some((tool) => tool.name === "route")) {
@@ -315,6 +363,7 @@ export function looperWith(
     ...(options.stopGroup === undefined ? {} : { stopGroup: options.stopGroup }),
     ...(options.speaker === undefined ? {} : { speaker: options.speaker }),
     ...(options.files === undefined ? {} : { files: options.files }),
+    ...(options.conversations === undefined ? {} : { conversations: options.conversations }),
     log: { info() {}, warn: (message) => void warnings.push(message), error() {} },
   });
   /**
@@ -361,6 +410,7 @@ export function looperWith(
     lives,
     reactions,
     warnings,
+    talks,
     answer,
     fail,
     fill,
@@ -378,7 +428,8 @@ const sentText = (args: string) => {
 };
 /** A call of `send` that names no message, as `sends` makes it, made to name `newest`. */
 const naming = (item: OutputItem, newest: number): OutputItem => {
-  if (item.type !== "function_call" || item.name !== "send") return item;
+  if (item.type !== "function_call" || !["send", "route", "no_reply_needed"].includes(item.name))
+    return item;
   const args = JSON.parse(item.arguments) as { message?: unknown };
   return args.message === NEWEST
     ? { ...item, arguments: JSON.stringify({ ...args, message: newest }) }
@@ -427,6 +478,65 @@ export const followUp = (text: string) => routeTo(text.slice(IDLE.length, -1));
 export const stops = (work: string) => route({ stop: work });
 export const says = (content: string): OutputItem[] => [
   { type: "message", role: "assistant", content },
+];
+/** The newest message a request read and didn't hand back or pass on, by its number. */
+const newestOf = (input: Item[]) => {
+  // A call that was refused passed nothing on.
+  const refused = new Set(
+    input.flatMap((item) =>
+      item.type === "function_call_output" && item.output.startsWith('{"error"')
+        ? [item.callId]
+        : [],
+    ),
+  );
+  const gone = new Set(
+    input.flatMap((item) => {
+      if (
+        item.type !== "function_call" ||
+        !["hand_back", "route"].includes(item.name) ||
+        refused.has(item.callId)
+      )
+        return [];
+      const { message } = JSON.parse(item.arguments) as { message?: number };
+      return typeof message === "number" ? [message] : [];
+    }),
+  );
+  return (
+    input
+      .flatMap((item) =>
+        item.type === "message" && item.role === "user"
+          ? [Number(/^\[(\d+)\]/.exec(item.content)?.[1] ?? 0)]
+          : [],
+      )
+      .findLast((number) => number > 0 && !gone.has(number)) ?? 0
+  );
+};
+/** A conversation's loop passing a message on: to new work by its title, or to work there is. */
+export const passes = (
+  title: string,
+  work?: string,
+  message?: number,
+  receipt?: string,
+): OutputItem[] => [
+  {
+    type: "function_call",
+    callId: `route-${crypto.randomUUID()}`,
+    name: "route",
+    arguments: JSON.stringify({
+      message: message ?? NEWEST,
+      ...(work === undefined ? { title } : { work }),
+      ...(receipt === undefined ? {} : { receipt }),
+    }),
+  },
+];
+/** A conversation's loop closing a message with no reply, with a reaction if given. */
+export const closes = (reaction?: string, message?: number): OutputItem[] => [
+  {
+    type: "function_call",
+    callId: `close-${crypto.randomUUID()}`,
+    name: "no_reply_needed",
+    arguments: JSON.stringify({ message: message ?? NEWEST, ...(reaction ? { reaction } : {}) }),
+  },
 ];
 /** A worker sending `text` to the person, in reply to the message of that number: by default the newest it read. */
 export const sends = (text: string, message?: number): OutputItem[] => [
