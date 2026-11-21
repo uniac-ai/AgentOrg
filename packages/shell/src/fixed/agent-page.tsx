@@ -9,7 +9,7 @@ import { Button } from "../ui/button.tsx";
 import { Retry, useRetrying } from "./activity.tsx";
 import { useAllChats } from "./all-chats.tsx";
 import { useBuilding } from "./building.tsx";
-import { ChatRow } from "./chat-parts.tsx";
+import { CHAT_ROWS, ChatRow } from "./chat-parts.tsx";
 import { useChats } from "./chats.tsx";
 import { Computer, hasComputer, surfacesOf, targetOf } from "./computer.tsx";
 import { ComputerFacts, columnOf } from "./computer-facts.tsx";
@@ -207,7 +207,7 @@ export function AgentPage({
             // Your conversation with it, or the way to begin it; beneath, its conversations with other
             // agents, to read. Each opens in the chat at the right.
             <div className="mx-auto flex max-w-[720px] flex-col gap-7">
-              <ul aria-label={`Chats with ${entry.name}`}>
+              <ul aria-label={`Chats with ${entry.name}`} className={CHAT_ROWS}>
                 <li>
                   {mine ? (
                     <ChatRow chat={mine} onOpen={() => openChat(id)} />
@@ -215,7 +215,7 @@ export function AgentPage({
                     <button
                       type="button"
                       onClick={() => openChat(id)}
-                      className="flex h-[68px] w-full items-center gap-3 rounded-xl px-2.5 text-left hover:bg-[var(--hover)]"
+                      className="flex h-16 w-full items-center gap-3 rounded-xl px-2.5 text-left hover:bg-[var(--hover)]"
                     >
                       <Face agent={{ id, name: entry.name, tone: now.tone }} size={40} plain />
                       <span className="min-w-0 flex-1 truncate text-[15px] font-medium">
@@ -227,7 +227,7 @@ export function AgentPage({
               </ul>
               {between.length > 0 && (
                 <Section title="With other agents">
-                  <ul aria-label={`${entry.name}'s chats with other agents`}>
+                  <ul aria-label={`${entry.name}'s chats with other agents`} className={CHAT_ROWS}>
                     {between.map(({ chat, other }) => (
                       <li key={`${chat.agent.id} ${chat.with}`}>
                         <ChatRow

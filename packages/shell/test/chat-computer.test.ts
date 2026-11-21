@@ -79,10 +79,10 @@ test(
   "the sidebar is the page's width less 780, held between 480 and 720",
   withGateway(async (gateway) => {
     computerWith(gateway, "terminal");
-    // The page is the screen less the bar's 60.
+    // The page is the screen less the bar's 62, and the card's 6 at each side with its line.
     for (const [screen, wide] of [
       [1300, 480],
-      [1440, 600],
+      [1440, 584],
       [1600, 720],
     ] as const) {
       const page = await open(gateway, "#/chat", screen);

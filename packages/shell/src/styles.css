@@ -21,6 +21,13 @@
     @slot;
   }
 }
+/* Wider than a phone, everything `phone` leaves out: the page's card and the ground around it. A phone
+   has no card; its content runs to the window's edges. */
+@custom-variant wide {
+  @container app (width >= 40rem) {
+    @slot;
+  }
+}
 @custom-variant narrow {
   @container app (width < 68.75rem) {
     @slot;

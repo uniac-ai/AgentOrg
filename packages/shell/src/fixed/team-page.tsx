@@ -36,7 +36,7 @@ function AgentRow({
       type="button"
       aria-current={current ? "true" : undefined}
       onClick={onOpen}
-      className={`flex h-[60px] w-full items-center gap-3 rounded-xl px-2.5 text-left ${current ? "bg-[var(--selected)]" : "hover:bg-[var(--hover)]"}`}
+      className={`flex h-14 w-full items-center gap-3 rounded-xl px-2.5 text-left ${current ? "bg-[var(--selected)]" : "hover:bg-[var(--hover)]"}`}
     >
       <Face agent={{ id: entry.agent, name: entry.name, tone }} size={36} />
       <span className="min-w-0 flex-1">
@@ -106,7 +106,10 @@ export function TeamPage({
               )}
             </div>
           ) : (
-            <ul aria-label="Agents" className="no-bar min-h-0 flex-1 overflow-y-auto px-2 pb-24">
+            <ul
+              aria-label="Agents"
+              className="no-bar flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto px-2 pt-1 pb-24"
+            >
               {found.map((entry) => (
                 <li key={entry.agent}>
                   <AgentRow

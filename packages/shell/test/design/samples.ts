@@ -1040,12 +1040,31 @@ export async function placeByTab(page: Page, name: string) {
   await label.evaluate((e) => Promise.all(e.getAnimations().map((one) => one.finished)));
 }
 
-/** Presses one of the design page's own controls, which put it in a case it draws. */
-export const inDesign = (page: Page, name: string | RegExp) =>
-  page
+/**
+ * Presses one of the design page's own controls, which put it in a case it draws. From v30 a design
+ * keeps a few on its bar and reaches the rest by its address: the words its button showed, lower
+ * case, a dash between words, no marks (`#typing-taken`), or a round button's name alone to press it
+ * once (`#lists`). The address is cleared first, so the same one twice presses twice.
+ */
+export async function inDesign(page: Page, name: string | RegExp) {
+  const button = page
     .getByLabel("Draft controls")
-    .getByRole("button", { name, exact: typeof name === "string" })
-    .click();
+    .getByRole("button", { name, exact: typeof name === "string" });
+  if (await button.count()) return button.click();
+  const address = (typeof name === "string" ? name : name.source.replace(/^\^/, ""))
+    .toLowerCase()
+    .replace(/['’…"]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
+  await page.evaluate(() => {
+    location.hash = "";
+  });
+  await page.waitForFunction(() => document.documentElement.dataset.state === "");
+  await page.evaluate((a) => {
+    location.hash = a;
+  }, address);
+  await page.waitForFunction((a) => document.documentElement.dataset.state === a, address);
+}
 
 const chats = (page: Page) => page.getByRole("complementary", { name: "Chats" });
 
