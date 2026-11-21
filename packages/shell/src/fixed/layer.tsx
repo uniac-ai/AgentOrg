@@ -147,7 +147,7 @@ function ChatPanel() {
       ref={panel}
       tabIndex={-1}
       aria-label="Chats"
-      className="window outline-none absolute top-[var(--inset)] right-[var(--inset)] bottom-[var(--inset)] z-50 flex w-[var(--panel)] flex-col overflow-hidden rounded-3xl bg-background shadow-2xl phone:inset-0 phone:w-auto phone:rounded-none"
+      className="window outline-none [--thread:var(--surface)] absolute top-[var(--inset)] right-[var(--inset)] bottom-[var(--inset)] z-50 flex w-[var(--panel)] flex-col overflow-hidden rounded-3xl bg-background shadow-2xl phone:inset-0 phone:w-auto phone:rounded-none"
     >
       {open && agent ? (
         <Thread

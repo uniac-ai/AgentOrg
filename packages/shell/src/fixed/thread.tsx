@@ -16,7 +16,7 @@ import {
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Streamdown } from "streamdown";
 import { api, go, useConnection } from "../data.ts";
-import { Bubble, BubbleContent, BubbleGroup } from "../ui/bubble.tsx";
+import { Bubble, BubbleContent, BubbleGroup, BubbleReactions } from "../ui/bubble.tsx";
 import { Button } from "../ui/button.tsx";
 import {
   DropdownMenu,
@@ -462,6 +462,8 @@ export function Thread({
   const [streaming, setStreaming] = useState<ReadonlyMap<string, string>>(new Map());
   /** Where each message that came in stands, by its id, as the record and the latest word say. */
   const [progress, setProgress] = useState<ReadonlyMap<string, Progress>>(new Map());
+  /** The messages whose emoji came while the conversation was open: it grows in. One read with it is simply there. */
+  const reacted = useRef(new Set<string>());
   /** Whether the agent works, in this chat or another. */
   const [working, setWorking] = useState(false);
   /** A message was sent from here and the agent hasn't gone idle since: its reply may be coming. */
@@ -595,9 +597,18 @@ export function Thread({
         "progress",
         (payload) => {
           if (!here(payload)) return;
-          const { id, state, step } = payload as ProgressSaid;
-          // The latest word on a message replaces the earlier.
-          setProgress((was) => new Map(was).set(id, { state, ...(step ? { step } : {}) }));
+          const { id, state, step, reaction } = payload as ProgressSaid;
+          if (reaction) reacted.current.add(id);
+          // The latest word on a message replaces the earlier, all but the emoji it was closed with:
+          // that comes once, with the close, and stays.
+          setProgress((was) => {
+            const kept = reaction ?? was.get(id)?.reaction;
+            return new Map(was).set(id, {
+              state,
+              ...(step ? { step } : {}),
+              ...(kept ? { reaction: kept } : {}),
+            });
+          });
         },
         { again: load },
       ),
@@ -650,6 +661,11 @@ export function Thread({
     [messages, unrecorded, streaming],
   );
   const lastTurn = turns.at(-1);
+  /** The emoji the agent closed one of the party's messages with, drawn on its bubble. */
+  const reactionOf = (turn: Turn) =>
+    turn.kind === "user" && turn.message && turn.text
+      ? progress.get(turn.message)?.reaction
+      : undefined;
   // The agent types here, one sign at the conversation's end, while all four hold: it works; the
   // newest thing said here is the party's, just sent or recorded; that message is taken or not yet
   // heard of; and the conversation has no problem. So a message from the agent (a receipt counts),
@@ -738,7 +754,9 @@ export function Thread({
                 <MessageScrollerItem
                   key={turn.id}
                   scrollAnchor={turn.kind === "user"}
-                  className={`[content-visibility:visible] ${n === 0 ? "" : turns[n - 1]?.kind === turn.kind ? SAME_SIDE : SIDE_CHANGES}`}
+                  // A reacted message keeps the room its emoji hangs into, so what follows is as far
+                  // from the emoji as it would be from the bubble.
+                  className={`[content-visibility:visible] ${n === 0 ? "" : turns[n - 1]?.kind === turn.kind ? SAME_SIDE : SIDE_CHANGES} ${reactionOf(turn) ? "pb-5" : ""}`}
                 >
                   {turn.kind === "user" ? (
                     <Message align="end">
@@ -769,6 +787,19 @@ export function Thread({
                             <BubbleContent className="rounded-3xl px-4 py-2 text-[15px] whitespace-pre-wrap">
                               {turn.text}
                             </BubbleContent>
+                            {/* On the bubble's foot at its end corner, as a messenger puts one: 8 px past
+                                the end, and 4 px over the foot, 7 px with its ring, inside the bubble's
+                                8 px under the words, so it never meets them. Its ring is the
+                                conversation's ground, which cuts it out of the bubble. */}
+                            {reactionOf(turn) && (
+                              <BubbleReactions
+                                role="img"
+                                aria-label={`${agent.name} reacted ${reactionOf(turn)}`}
+                                className={`-right-2 translate-y-5 text-[16px] leading-5 ring-[var(--thread)] ${turn.message && reacted.current.has(turn.message) ? "reaction-in" : ""}`}
+                              >
+                                {reactionOf(turn)}
+                              </BubbleReactions>
+                            )}
                           </Bubble>
                         )}
                       </MessageContent>

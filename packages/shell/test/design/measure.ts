@@ -45,10 +45,14 @@ import {
   openTemplates,
   openWindow,
   placeByTab,
+  REACTION,
+  REACTIONS,
+  type Reacted,
   readChat,
   refuseSend,
   releaseNotes,
   researchChanges,
+  researchReacts,
   researchSays,
   researchTypes,
   SECTIONS,
@@ -68,6 +72,7 @@ import {
   supportBefore,
   TYPING,
   type Typing,
+  thanksComes,
   toTeam,
   unreadReply,
   WINDOWS,
@@ -86,6 +91,7 @@ const PARTS = [
   "chat",
   "thread",
   "typing",
+  "reaction",
   "agent",
   "computer",
   "signin",
@@ -141,6 +147,7 @@ type Part =
   | "chat"
   | "thread"
   | "typing"
+  | "reaction"
   | "earlier"
   | "agent"
   | "setup"
@@ -1415,6 +1422,58 @@ const probe = (what: Part): Parts => {
     parts.problem = region.querySelector('[role="alert"]')?.textContent?.trim() ?? null;
     return parts;
   }
+  if (what === "reaction") {
+    const region = document.querySelector(
+      ':is([role="region"], section)[aria-label="Conversation with Research"]',
+    );
+    if (!region) return parts;
+    // Each of the person's messages: its bubble. From the second, which is under the sample's long
+    // reply: where a state leaves the conversation scrolled, and that reply's height (a known
+    // difference), aren't this part's.
+    const mine = [...region.querySelectorAll('[data-slot="message"][data-align="end"]')];
+    const from = mine[1]?.querySelector('[data-slot="bubble"]');
+    if (!from) return parts;
+    origin = new DOMRect(region.getBoundingClientRect().x, from.getBoundingClientRect().y);
+    parts.said = mine.length;
+    for (const [i, message] of mine.entries())
+      if (i > 0) parts[`said.${i}`] = of(message.querySelector('[data-slot="bubble"]'));
+    // The agent's emoji: one, on its bubble's end corner, ringed in the conversation's ground.
+    const pills = [...region.querySelectorAll('[data-slot="bubble-reactions"]')];
+    parts.reactions = pills.length;
+    const pill = pills[0] as HTMLElement | undefined;
+    const bubble = pill?.closest('[data-slot="bubble"]');
+    parts.pill = of(pill);
+    parts["pill.heard"] = pill
+      ? `${pill.getAttribute("role")} ${pill.getAttribute("aria-label")}`
+      : null;
+    parts["pill.words"] = pill?.textContent ?? null;
+    if (pill && bubble) {
+      // At rest, as `of` measures it: it grows in as it comes.
+      const was = pill.style.animation;
+      pill.style.animation = "none";
+      const [p, b] = [pill.getBoundingClientRect(), bubble.getBoundingClientRect()];
+      pill.style.animation = was;
+      parts["pill.past"] = round(p.right - b.right);
+      parts["pill.over"] = round(b.bottom - p.top);
+      // How far its ring (3 px) keeps from the words, on their nearest line.
+      const range = document.createRange();
+      range.selectNodeContents(bubble.querySelector('[data-slot="bubble-content"]') as Node);
+      const apart = [...range.getClientRects()].map((line) =>
+        Math.max(
+          line.left - p.right,
+          p.left - line.right,
+          line.top - p.bottom,
+          p.top - line.bottom,
+        ),
+      );
+      parts["pill.clear"] = apart.every((a) => a >= 3) ? "clear" : "meets";
+      // What is drawn next, from the emoji's foot.
+      const bubbles = [...region.querySelectorAll('[data-slot="bubble"]')];
+      const next = bubbles[bubbles.indexOf(bubble) + 1];
+      parts["pill.next"] = next ? round(next.getBoundingClientRect().top - p.bottom) : null;
+    }
+    return parts;
+  }
   if (what === "thread") {
     const shell = document.querySelector("[data-shell]");
     const panel = document.querySelector('aside[aria-label="Chats"]');
@@ -2017,6 +2076,42 @@ if (wants("typing"))
           });
           await rest(page, size);
           all[`typing.${state}.${size}.${theme}.${side}`] = await measure(page, "typing");
+          await page.close();
+          await gateway?.close();
+        }
+
+// The agent's emoji on the person's message: Research's conversation on Chat at each of the design's
+// states for it, wide and on a phone, at its end, once the emoji has come.
+if (wants("reaction"))
+  for (const size of ["wide", "phone"] as const)
+    for (const theme of ["dark", "light"] as const)
+      for (const side of ["design", "built"] as const)
+        for (const state of Object.keys(REACTIONS) as Reacted[]) {
+          const gateway = side === "built" ? await standIn() : undefined;
+          // The design's first state is the emoji arriving as the typing sign goes: so is the built's.
+          const arrives = state === "arrives";
+          if (gateway) {
+            designAgents(gateway);
+            researchReacts(gateway, state, arrives ? "coming" : "closed");
+          }
+          const page = gateway
+            ? await builtPage(gateway, size, theme, "#/chat/a-research")
+            : await designPage(size, theme);
+          if (!gateway) await inDesign(page, REACTIONS[state]);
+          const region = page.getByRole("region", { name: "Conversation with Research" });
+          if (gateway && arrives) {
+            await region.locator('[data-slot="bubble"]').first().waitFor();
+            thanksComes(gateway);
+            await region.getByRole("status", { name: "Research is typing" }).waitFor();
+            gateway.progress("a-research", "v-u7", { state: "closed", reaction: REACTION });
+            gateway.setChatStatus("a-research", { state: "idle" });
+          }
+          await region.locator('[data-slot="bubble-reactions"]').waitFor();
+          await region.locator('[data-slot="message-scroller-viewport"]').evaluate((room) => {
+            room.scrollTop = room.scrollHeight;
+          });
+          await rest(page, size);
+          all[`reaction.${state}.${size}.${theme}.${side}`] = await measure(page, "reaction");
           await page.close();
           await gateway?.close();
         }
