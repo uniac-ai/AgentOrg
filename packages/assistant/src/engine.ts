@@ -96,7 +96,7 @@ export function startEngine(
     // them change.
     const given = settings
       ? await plugins.hold(settings.plugins ?? [])
-      : { tools: plugins.tools(), blocks: plugins.blocks() };
+      : { tools: plugins.tools(), blocks: plugins.blocks(), without: [] };
     // The agent's own instructions: who its main loop speaks as, with nothing of its skills.
     const voice = settings ? current(settings.instructions) : options.instructions();
     const skills = settings?.skills ?? [];
@@ -226,14 +226,14 @@ export function startEngine(
   /**
    * It holds the plugins its settings name from when its settings are bound, and again when they
    * say they changed, with no turn to wait for: a plugin may have work of its own between turns.
-   * One that can't be held is its host's to act on.
+   * One it can't hold it runs without, as its host says, and it is tried again at the next hold.
    */
   const hold = () =>
     void (async () => {
       if (!ctx.slots.settings.bound) return;
       await plugins.hold((await ctx.slots.settings.call.get({})).plugins ?? []);
     })().catch((error: unknown) =>
-      ctx.log.warn("Its settings couldn't be read for its plugins, or one can't be held.", {
+      ctx.log.warn("Its settings couldn't be read for its plugins.", {
         error: String(error),
       }),
     );

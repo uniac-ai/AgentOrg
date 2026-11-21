@@ -433,7 +433,7 @@ test("an agent given Memory keeps a line it writes, and is told it at its next t
   assert.match((await turn("Still there?")).instructions, line);
 });
 
-test("an agent whose settings name a plugin the app doesn't carry is down, and says why", async (t) => {
+test("an agent whose settings name a plugin the app doesn't carry runs without it, and says why", async (t) => {
   const s = await open(t);
   let { person } = await s.start();
   const agent = await createAssistant(person, "Scout");
@@ -454,9 +454,15 @@ test("an agent whose settings name a plugin the app doesn't carry is down, and s
   const status = async () =>
     (await person.call<{ status: { state: string; detail?: string } }>("agents", "get", { agent }))
       .status;
-  await until(async () => (await status()).state === "down", "the agent to be down");
-  const down = { state: "down", detail: "This provider carries no plugin named search." };
-  assert.deepEqual(await status(), down);
+  const without = {
+    state: "running",
+    detail: "It runs without search: this provider doesn't carry it.",
+  };
+  await until(
+    async () => (await status()).detail !== undefined,
+    "the agent to say what it runs without",
+  );
+  assert.deepEqual(await status(), without);
 });
 
 test("a turn cut off as the app stops goes on when it is started again, with the agent's settings", async (t) => {

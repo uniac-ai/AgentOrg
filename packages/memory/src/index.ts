@@ -51,9 +51,9 @@ export const memory: AgentPlugin = {
   inject: ["tools", "prompt", "store"],
   provide: "memory",
   async apply(ctx: Context) {
-    // Lines that can't be read fail its load, and so leave the agent down with the reason: an
-    // agent that went on without them would write new lines over them. Said plainly, with nothing
-    // of where the agent's files are.
+    // Lines that can't be read fail its load, so the agent runs without memory and says why,
+    // until a later turn reads them: memory that went on without them would write new lines over
+    // them. Said plainly, with nothing of where the agent's files are.
     const stored = await ctx.store.get({ key: KEY }).catch(() => {
       throw new Error("Its lines couldn't be read.");
     });

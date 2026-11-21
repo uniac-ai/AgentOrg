@@ -230,10 +230,25 @@ export interface Named {
   settings?: Record<string, unknown>;
 }
 
-/** What an agent's plugins give a turn: their functions, and their sections in order. */
+/**
+ * A plugin an agent's settings name that it runs without now, and why: its host doesn't carry it,
+ * it didn't load (`said` is what it said), or it needs a service none of the agent's plugins
+ * provides. Whoever tells of it words it for their own reader.
+ */
+export interface Without {
+  name: string;
+  why: "not carried" | "didn't load" | "needs a service";
+  said?: string;
+}
+
+/**
+ * What an agent's plugins give a turn: their functions, and their sections in order; and those its
+ * settings name that it runs without, each with why, in the order named.
+ */
 export interface Given {
   tools: Candidate[];
   blocks: Part[];
+  without: Without[];
 }
 
 /** An agent's plugins, as its engine reads them. */
@@ -245,12 +260,12 @@ export interface AgentPlugins {
   /** Tell them of the agent's life. */
   life(event: Life, heard?: Heard): void;
   /**
-   * Hold exactly the plugins named, of those the host carries: one newly named is loaded, one no
-   * longer named is unloaded, one named with other settings is loaded again with them, and the
-   * rest stay as they are loaded. It gives what they then give, read before any later change
-   * begins. Nothing changes for a name the host doesn't carry. A plugin that doesn't load, or
-   * needs a service none of them provides, fails it with the reason, and what this call loaded
-   * is unloaded.
+   * Hold the plugins named, all it can of them: one newly named is loaded, one no longer named is
+   * unloaded, one named with other settings is loaded again with them, and the rest stay as they
+   * are loaded. One it can't hold, it runs without, and says why: a name the host doesn't carry; a
+   * plugin that doesn't load, or that needs a service none it holds provides, each then unloaded.
+   * Each is tried again when next it is held. It gives what they then give, read before any later
+   * change begins.
    */
   hold(named: Named[]): Promise<Given>;
   /** Unload them all: what each registered goes with it. */
@@ -262,7 +277,7 @@ export const NO_PLUGINS: AgentPlugins = {
   tools: () => [],
   blocks: () => [],
   life: () => {},
-  hold: async () => ({ tools: [], blocks: [] }),
+  hold: async () => ({ tools: [], blocks: [], without: [] }),
   close: async () => {},
 };
 
@@ -338,54 +353,56 @@ export function createPluginHost(log: Log, carried: AgentPlugin<any>[] = []) {
         await one.loading.dispose();
         if (one.fiber) kept.plugins.delete(one.fiber);
       };
-      const hold = async (named: Named[]) => {
-        const missing = named.filter(({ name }) => !byName.has(name)).map(({ name }) => name);
-        if (missing.length)
-          throw new Error(`This provider carries no plugin named ${missing.join(", ")}.`);
+      // None is judged until all have settled: one that waits for another's service loads once
+      // that one has, whatever the order they were named in, and loads again when that one is
+      // loaded again.
+      const settle = async () => {
+        for (let moving = true; moving; ) {
+          moving = false;
+          for (const { loading } of held.values()) {
+            if (!loading.inertia) continue;
+            moving = true;
+            await loading.inertia.catch(() => {});
+          }
+        }
+      };
+      /** What it couldn't hold of `named`, each with why; it holds all the rest. */
+      const hold = async (named: Named[]): Promise<Without[]> => {
+        const without = new Map<string, Without>();
+        for (const { name } of named)
+          if (!byName.has(name)) without.set(name, { name, why: "not carried" });
         const wanted = new Map(
-          named.map(({ name, settings }) => [name, JSON.stringify(settings ?? {})]),
+          named
+            .filter(({ name }) => byName.has(name))
+            .map(({ name, settings }) => [name, { key: JSON.stringify(settings ?? {}), settings }]),
         );
         for (const [name, { settings }] of [...held])
-          if (wanted.get(name) !== settings) await unload(name);
-        const fresh: string[] = [];
-        try {
-          for (const { name, settings } of named) {
-            if (held.has(name)) continue;
-            const one = { settings: wanted.get(name) as string } as Loaded;
-            one.loading = own.use(asHeld(byName.get(name) as AgentPlugin, one), settings);
-            held.set(name, one);
-            fresh.push(name);
-          }
-          // None is judged until all have settled: one that waits for another's service loads
-          // once that one has, whatever the order they were named in, and loads again when that
-          // one is loaded again.
-          for (let moving = true; moving; ) {
-            moving = false;
-            for (const { loading } of held.values()) {
-              if (!loading.inertia) continue;
-              moving = true;
-              await loading.inertia.catch(() => {});
-            }
-          }
-          const waiting: string[] = [];
-          for (const [name, { loading }] of held) {
-            await loading.then(undefined, (error: unknown) => {
-              const said = error instanceof Error ? error.message : String(error);
-              throw new Error(
-                `The plugin ${name} didn't load: ${/[.!?]$/.test(said) ? said : `${said}.`}`,
-              );
-            });
-            // One still waiting for a service none of the agent's plugins provides never loads.
-            if (loading.state !== ACTIVE) waiting.push(name);
-          }
-          if (waiting.length)
-            throw new Error(
-              `${waiting.length > 1 ? "The plugins" : "The plugin"} ${waiting.join(", ")} ${waiting.length > 1 ? "need" : "needs"} a service none of the agent's plugins provides.`,
-            );
-        } catch (error) {
-          for (const name of fresh.reverse()) await unload(name);
-          throw error;
+          if (wanted.get(name)?.key !== settings) await unload(name);
+        for (const [name, { key, settings }] of wanted) {
+          if (held.has(name)) continue;
+          const one = { settings: key } as Loaded;
+          one.loading = own.use(asHeld(byName.get(name) as AgentPlugin, one), settings);
+          held.set(name, one);
         }
+        await settle();
+        // One that failed is unloaded; then one left waiting for a service, which may be one that
+        // failed, never loads, and is unloaded too.
+        for (const [name, { loading }] of [...held]) {
+          const failed = await loading.then(
+            () => undefined,
+            (error: unknown) => (error instanceof Error ? error.message : String(error)),
+          );
+          if (failed === undefined) continue;
+          without.set(name, { name, why: "didn't load", said: failed });
+          await unload(name);
+        }
+        await settle();
+        for (const [name, { loading }] of [...held]) {
+          if (loading.state === ACTIVE) continue;
+          without.set(name, { name, why: "needs a service" });
+          await unload(name);
+        }
+        return named.flatMap(({ name }) => without.get(name) ?? []);
       };
       const tools = () => [...kept.tools.values()];
       const blocks = () =>
@@ -434,8 +451,8 @@ export function createPluginHost(log: Log, carried: AgentPlugin<any>[] = []) {
         },
         hold: (named) =>
           inTurn(async () => {
-            if (!closed) await hold(named);
-            return { tools: tools(), blocks: blocks() };
+            const without = closed ? [] : await hold(named);
+            return { tools: tools(), blocks: blocks(), without };
           }),
         close: () =>
           inTurn(async () => {
