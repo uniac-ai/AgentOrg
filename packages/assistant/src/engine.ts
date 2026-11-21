@@ -8,6 +8,7 @@ import type { Model } from "@agentorg/looper";
 import { type Context, Refused, type Slot } from "@agentorg/sdk";
 import { agentTools } from "./agents.js";
 import { createChats } from "./chats.js";
+import { type AgentPlugins, NO_PLUGINS } from "./plugins.js";
 import { alwaysOf, instructionsWith, skillTool } from "./settings.js";
 import { type Candidate, type LeftOut, listedBy, listsTools, offered, relayed } from "./tools.js";
 import { ACTIVITY, serveWork } from "./work.js";
@@ -36,9 +37,12 @@ export function startEngine(
     earlier?: string;
     /** Whether it starts stopped, as it was left. */
     stopped?: boolean;
+    /** The plugins it holds, each with a part inside it; none by default. */
+    plugins?: AgentPlugins;
   },
 ) {
   const { store } = options;
+  const plugins = options.plugins ?? NO_PLUGINS;
   /** The model chosen for this agent, if any; read for each request. */
   const chosen = async () => {
     const { value } = await store.get({ key: MODEL_KEY });
@@ -85,6 +89,8 @@ export function startEngine(
       ...(settings?.skills.length ? [skillTool(ctx.slots.settings)] : []),
       // The agents whose conversations are exposed to it, which it talks to from itself.
       ...agentTools(ctx.exposed(), () => ctx.exposed()),
+      // What its plugins give it.
+      ...plugins.tools(),
     ];
     // In the order they came, each asked at once so one slow server delays only itself.
     const exposed = await Promise.all(
@@ -96,8 +102,12 @@ export function startEngine(
     const fitted = offered([...own, ...exposed.flatMap((one) => one.candidates)]);
     const leftOut = [...told.leftOut, ...exposed.flatMap((one) => one.leftOut), ...fitted.leftOut];
     report(leftOut);
+    // Its plugins' blocks, read once for the request: a worker is told them after its own words and
+    // its skills, the front desk after who it speaks as.
+    const blocks = plugins.blocks();
     return {
-      instructions: told.parts,
+      instructions: [...told.parts, ...blocks],
+      blocks,
       tools: fitted.tools,
       model: await chosen(),
       voice,
@@ -142,6 +152,7 @@ export function startEngine(
       chat: (entry, to) => ctx.exports.chat.emit("chat", entry, { to }),
       worked: () => ctx.exports.capability.emit("changed", { view: ACTIVITY }),
     },
+    life: plugins.life,
     log: ctx.log,
   });
   ctx.slots.model.on("delta", ({ requestId, text, call }) => chats.delta(requestId, text, call));
@@ -221,9 +232,11 @@ export function startEngine(
       await store.set({ key: MODEL_KEY, value: model });
     },
     /** Stop the agent: its turns are cut and none starts until `start`. Its conversations stay readable. */
-    stop() {
+    async stop() {
       done();
-      return chats.stop();
+      await chats.stop();
+      // Said last, once its turns were cut.
+      plugins.life("stopped");
     },
     start: () => chats.start(),
     /**

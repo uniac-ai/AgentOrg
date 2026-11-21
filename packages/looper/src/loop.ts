@@ -236,6 +236,8 @@ export interface LoopOut {
    * with `step`, the words of the step its work is at, said again when that changes.
    */
   progress?(thread: string, id: string, progress: Progress, step?: string): void;
+  /** Its record is about to be, or was, summarized. */
+  life?(event: "compacting" | "compacted"): void;
 }
 interface Turn {
   /** Its number among the starts of this loop: what names it to whoever stops it. */
@@ -704,6 +706,7 @@ export function createLoop(options: {
     try {
       const compacting = await record.toCompact(tooLong);
       if (!compacting || current.cancelled) return false;
+      out.life?.("compacting");
       const ask = async (instructions: string, text: string) => {
         if (current.cancelled) throw new Refusal("cancelled", "The turn was stopped.");
         return wordsOf(
@@ -729,6 +732,7 @@ export function createLoop(options: {
         at,
       );
       out.worked();
+      out.life?.("compacted");
       return true;
     } catch (error) {
       if (current.cancelled) return false;

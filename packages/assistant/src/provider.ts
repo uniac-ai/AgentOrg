@@ -21,6 +21,7 @@ import { connect } from "@agentorg/sdk/client";
 import { z } from "zod";
 import { startEngine } from "./engine.js";
 import { createLocalStore } from "./local-store.js";
+import { type AgentPlugins, createPluginHost } from "./plugins.js";
 import { ACTIVITY, WORK_TOOL } from "./work.js";
 
 /** Who an agent made from the template is. How it works and speaks is the looper's frame. */
@@ -77,6 +78,8 @@ interface Held {
   detail?: string;
   channel?: { close(): void; readonly closed: Promise<void> };
   engine?: ReturnType<typeof startEngine>;
+  /** The plugins it holds, loaded in its own context while it is open. */
+  plugins?: AgentPlugins;
   /** What is being done to it: one thing at a time. */
   queue: Promise<unknown>;
 }
@@ -87,6 +90,8 @@ const quiet: Log = { info() {}, warn() {}, error() {} };
 export async function startAgentProvider(options: AgentProviderOptions): Promise<AgentProvider> {
   const log = options.log ?? quiet;
   const { hubUrl, dir } = options;
+  /** Every agent's plugins, each agent in a context of its own. */
+  const host = createPluginHost(log);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   chmodSync(dir, 0o700);
   const path = join(dir, FILE);
@@ -148,9 +153,18 @@ export async function startAgentProvider(options: AgentProviderOptions): Promise
   const open = async (agent: string, one: Held) => {
     one.state = "starting";
     delete one.detail;
+    // One whose connection ended joins again: what its plugins held before goes first.
+    const earlier = one.plugins;
+    delete one.plugins;
+    await earlier?.close();
     const { stopped } = stored[agent] as z.infer<typeof Stored>;
     let engine: Held["engine"];
+    let plugins: AgentPlugins | undefined;
+    const store = createLocalStore(folderOf(agent));
     try {
+      // The plugins it holds: none yet, until a template gives an agent one.
+      const held = await host.open(agent, { store, plugins: [] });
+      plugins = held;
       const channel = await connect({
         hubUrl,
         actorId: agent,
@@ -160,15 +174,17 @@ export async function startAgentProvider(options: AgentProviderOptions): Promise
         log,
         start(ctx) {
           engine = startEngine(ctx, {
-            store: createLocalStore(folderOf(agent)),
+            store,
             instructions: () => ASSISTANT_INSTRUCTIONS,
             earlier: EARLIER_INSTRUCTIONS,
             stopped,
+            plugins: held,
           });
         },
       });
       one.channel = channel;
       one.engine = engine;
+      one.plugins = held;
       one.state = stopped ? "stopped" : "running";
       void channel.closed.then(() => {
         if (one.channel !== channel) return;
@@ -177,20 +193,26 @@ export async function startAgentProvider(options: AgentProviderOptions): Promise
         one.detail = "Its connection to the Hub ended.";
       });
     } catch (error) {
+      await plugins?.close();
       one.state = "down";
       one.detail = error instanceof Error ? error.message : String(error);
       throw error;
     }
   };
-  /** Cut its turns, close its channel, and wait until its engine has written all it will. */
+  /**
+   * Cut its turns, close its channel, wait until its engine has written all it will, and unload its
+   * plugins.
+   */
   const halt = async (one: Held) => {
-    const { channel, engine } = one;
+    const { channel, engine, plugins } = one;
     delete one.channel;
-    if (!channel || !engine) return;
+    delete one.plugins;
+    if (!channel || !engine) return void (await plugins?.close());
     await engine.close();
     channel.close();
     await channel.closed;
     await engine.settled();
+    await plugins?.close();
   };
 
   await Promise.all(

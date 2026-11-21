@@ -115,6 +115,12 @@ export interface Call {
  */
 export type Progress = "taken" | "answered" | "closed";
 
+/**
+ * What happens in a piece of work's life, for whoever follows it: a turn started or ended, or its
+ * record is about to be, or was, summarized.
+ */
+export type WorkLife = "turnStarted" | "turnEnded" | "compacting" | "compacted";
+
 /** A message as it is said in a thread: what a person said, or a reply. */
 export interface Shown {
   id: string;

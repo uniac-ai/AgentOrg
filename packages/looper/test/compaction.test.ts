@@ -55,7 +55,7 @@ const contentOf = (input: unknown[] | undefined, at: number) =>
   ((input ?? [])[at] as { content: string }).content;
 
 test("past the budget, a work's earlier steps are summarized once by its own model, and it is sent the opening message, the summary and its latest steps", async () => {
-  const { looper, asked, raw, summaries, answer } = looperWith({
+  const { looper, asked, raw, summaries, answer, lives } = looperWith({
     tools: [look],
     instructions: FLOOR,
   });
@@ -94,6 +94,11 @@ test("past the budget, a work's earlier steps are summarized once by its own mod
   answer(asked[2] as string, sends("Read them all."));
   await looper.settled();
   assert.equal(looper.state("a").state, "idle");
+  // Whoever follows the work's life hears its turn start, its summary before and after, and its end.
+  assert.deepEqual(
+    lives.map((line) => line.split(": ")[1]),
+    ["turnStarted", "compacting", "compacted", "turnEnded"],
+  );
 });
 
 test("each later summary updates the one before, and the files read and changed are carried", async () => {
