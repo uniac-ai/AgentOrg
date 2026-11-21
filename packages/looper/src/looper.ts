@@ -48,6 +48,8 @@ import { MOST_STEPS, Step } from "./steps.js";
 import type { Part } from "./told.js";
 import {
   type Call,
+  type Card,
+  type CardAnswer,
   codeOf,
   head,
   type Json,
@@ -63,6 +65,32 @@ import {
   type Tool,
   type WorkLife,
 } from "./types.js";
+
+/**
+ * What was picked on `card`, as the person's message says it: for one question, the labels picked,
+ * joined by ", "; for several, a line for each, "header: labels". Refused `invalid` unless `picks`
+ * holds, for each question in order, choices it has, once each, and one where it doesn't take
+ * `many`.
+ */
+export function pickedOf(card: Card, picks: number[][]): string {
+  const fits =
+    picks.length === card.questions.length &&
+    card.questions.every((question, at) => {
+      const picked = picks[at] ?? [];
+      return (
+        picked.length >= 1 &&
+        (question.many || picked.length === 1) &&
+        new Set(picked).size === picked.length &&
+        picked.every((one) => Number.isInteger(one) && one >= 0 && one < question.choices.length)
+      );
+    });
+  if (!fits) throw new Refusal("invalid", "Those picks aren't the card's.");
+  const labels = card.questions.map((question, at) =>
+    (picks[at] ?? []).map((one) => question.choices[one]?.label).join(", "),
+  );
+  if (card.questions.length === 1) return labels[0] as string;
+  return card.questions.map((question, at) => `${question.header}: ${labels[at]}`).join("\n");
+}
 
 /** The turns that run at once, not counting the one more for work already begun. */
 export const PLACES = 4;
@@ -148,9 +176,10 @@ export interface LooperOut {
    * The user message `id` in `thread` was taken (a model request first read it), answered, or
    * closed without an answer: said once it is kept on the message, each at most once. While it is
    * taken, `step` is the words of the step the work that holds it is at: taken is said again, with
-   * the new words or none, as they change.
+   * the new words or none, as they change. A close with no reply may come with a `reaction`, one
+   * emoji.
    */
-  progress?(thread: string, id: string, progress: Progress, step?: string): void;
+  progress?(thread: string, id: string, progress: Progress, step?: string, reaction?: string): void;
   /**
    * What happened in the life of the piece of work `work`: one of its turns started or ended, or
    * its record is about to be, or was, summarized. Said for whoever follows the agent's life; what
@@ -212,6 +241,8 @@ export function createLooper(options: {
   /** The pieces of work that have a loop here, by id. */
   const works = new Map<string, Work>();
   const threads = new Map<string, Thread>();
+  /** The cards being answered now, `thread\0reply`: a second answer to one is refused. */
+  const answering = new Set<string>();
   /** A thread's messages, read when first asked for. */
   const threadOf = (name: string) => {
     const found = threads.get(name) ?? createThread(under(store, recordOf(name)), log);
@@ -491,8 +522,8 @@ export function createLooper(options: {
           replied: (thread) => lastIn.set(thread, id),
           delta: out.delta,
           failed: out.failed,
-          progress: (thread, message, progress, step) =>
-            out.progress?.(thread, message, progress, step),
+          progress: (thread, message, progress, step, reaction) =>
+            out.progress?.(thread, message, progress, step, reaction),
           worked: () => out.worked(id),
           life: (event) => out.life?.({ event, work: id }),
           status(status) {
@@ -855,8 +886,8 @@ export function createLooper(options: {
             followed: follows.length > 0,
             answers: read.back.map(({ id }) => id),
           });
-          for (const id of await into.progress(about, "closed"))
-            out.progress?.(thread, id, "closed");
+          for (const id of await into.progress(about, "closed", decided.reaction))
+            out.progress?.(thread, id, "closed", undefined, decided.reaction);
           if (follows.length === 0 && late && read.back.length > 0) unread.add(thread);
           if (follows.length === 0 && !late)
             await wait(thread, false).catch((error: unknown) =>
@@ -1014,6 +1045,7 @@ export function createLooper(options: {
     at: number,
     images?: Picture[],
     several = false,
+    answer?: CardAnswer,
   ) => {
     const was = marks.get(thread);
     /** Whether the thread was held, so that a failure lets it go. */
@@ -1025,7 +1057,7 @@ export function createLooper(options: {
       } else await wait(thread, true);
       try {
         const into = threadOf(thread);
-        const said = userEntry(text, images);
+        const said = userEntry(text, images, answer);
         const { record, stored } = into.push(
           await into.load(),
           several ? { ...said, to: [] } : said,
@@ -1138,6 +1170,7 @@ export function createLooper(options: {
     text: string,
     at: number,
     images?: Picture[],
+    answer?: CardAnswer,
   ) => {
     const joined: { work: string; turn: number }[] = [];
     /** Whether one of its works couldn't take it: it waits for that work, marked. */
@@ -1148,7 +1181,9 @@ export function createLooper(options: {
     const latest = to.at(-1);
     if (latest !== undefined) lastIn.set(thread, latest);
     if (to.length === 1 && only !== undefined) {
-      const { turn, ...kept } = await using(only, (loop) => loop.send(text, thread, images));
+      const { turn, ...kept } = await using(only, (loop) =>
+        loop.send(text, thread, images, answer),
+      );
       if (turn !== undefined) joined.push({ work: only, turn });
       sent = kept;
     } else {
@@ -1161,7 +1196,7 @@ export function createLooper(options: {
         const entry = await started(
           (async () => {
             const { record, stored } = into.push(await into.load(), {
-              ...userEntry(text, images),
+              ...userEntry(text, images, answer),
               to: to.map((work) => ({ work })),
             });
             await stored;
@@ -1377,6 +1412,26 @@ export function createLooper(options: {
 
   return {
     /**
+     * Answer the card under the reply `answer.to` in `thread`, as the person picked: said as a
+     * message of theirs, as `send` says one, whose text is what was picked, and which keeps
+     * `answer`. Refused `state` when that reply carries no card or its card isn't open, and
+     * `invalid` unless the picks fit it: for each question in order, choices it has, once each,
+     * and one where it doesn't take `many`.
+     */
+    async answer(thread: string, answer: CardAnswer): Promise<{ messageId: string }> {
+      const key = `${thread}\0${answer.to}`;
+      const found = await threadOf(thread).card(answer.to);
+      if (!found?.open || answering.has(key)) throw new Refusal("state", "That card isn't open.");
+      const text = pickedOf(found.ask, answer.picks);
+      answering.add(key);
+      try {
+        // Kept as a card's answer is, and no more.
+        return await this.send(thread, text, undefined, { to: answer.to, picks: answer.picks });
+      } finally {
+        answering.delete(key);
+      }
+    },
+    /**
      * Say a message in a thread. It is recorded and said at once. In a thread that work follows
      * it is given to each piece of it in a turn, which takes it at its next model request; with
      * none in a turn, to the one that follows it, if only one does, which starts a turn, waiting
@@ -1385,7 +1440,7 @@ export function createLooper(options: {
      * Refused `busy` while `WAITING` turns already wait and it would start one more, or while the
      * looper is stopped; and `unavailable` once it has closed.
      */
-    send(thread: string, text: string, images?: Picture[]) {
+    send(thread: string, text: string, images?: Picture[], answer?: CardAnswer) {
       try {
         mayStart();
       } catch (error) {
@@ -1399,7 +1454,7 @@ export function createLooper(options: {
         followed.get(thread) ?? (!marks.has(thread) && works.has(thread) ? [thread] : []),
       );
       if (known.length === 1 && !lines.get(thread)?.waiting)
-        return give(known, thread, text, at, images);
+        return give(known, thread, text, at, images, answer);
       return started(
         inLine(thread, async () => {
           const followers = await followersOf(thread);
@@ -1407,8 +1462,8 @@ export function createLooper(options: {
           // Stopped or closed while its work was found: nothing of it is kept.
           mayStart(at);
           return to.length === 0
-            ? intake(thread, text, at, images, followers.length > 0)
-            : give(to, thread, text, at, images);
+            ? intake(thread, text, at, images, followers.length > 0, answer)
+            : give(to, thread, text, at, images, answer);
         }),
       );
     },

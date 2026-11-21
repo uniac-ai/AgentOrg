@@ -14,6 +14,8 @@ export { build, type CutPart, type Part, partsOf } from "./told.js";
 export { capped, MAX_OUTPUT } from "./tools.js";
 export {
   type Call,
+  type Card,
+  type CardAnswer,
   cut,
   cutInside,
   Item,
