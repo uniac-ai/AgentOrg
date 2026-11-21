@@ -1,6 +1,6 @@
 import { defineInterface, method } from "@agentorg/sdk";
 import { z } from "zod";
-import { SKILL_FILE_MAX, SkillName, SkillPath } from "./agent-settings.js";
+import { CapabilityPlugin, SKILL_FILE_MAX, SkillName, SkillPath } from "./agent-settings.js";
 import { ConnectionSecrets, ConnectionStatus, ConnectionTarget } from "./connection.js";
 import { Id, SlotName } from "./hub.js";
 
@@ -377,11 +377,15 @@ export const unitProvider = defineInterface({
          * are fixed now: exactly those views, or management undoes the creation. The Actor is
          * the instance's, like its connections, and not one of them: `remove` closes it with
          * them. Management connects the person to it and to the connections.
+         *
+         * `plugins` are the capability's parts inside the agent, for the agent's executor to
+         * load, each named once. A capability made only of those has no Actor.
          */
         capability: z
           .strictObject({
-            actor: Id,
+            actor: Id.optional(),
             rows: z.record(Slug, z.array(FactRow).max(32)).optional(),
+            plugins: z.array(CapabilityPlugin).max(16).optional(),
           })
           .optional(),
       }),

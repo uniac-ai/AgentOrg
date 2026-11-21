@@ -423,6 +423,10 @@ async function setup(t: test.TestContext) {
     during?: () => Promise<void>;
     /** A unit that builds no capability, though it said it would. */
     noCapability?: boolean;
+    /** A unit whose capability is made only of plugins, with no Actor. */
+    noActor?: boolean;
+    /** A unit whose capability has plugins beside its Actor. */
+    withPlugins?: boolean;
     /** The fixed rows a unit gives, by view, instead of those it declared. */
     rows?: Record<string, { label: string; value: string }[]>;
     /** What each instance's status says it is in today's words. */
@@ -708,7 +712,10 @@ async function setup(t: test.TestContext) {
             ...(desk
               ? {
                   capability: {
-                    actor: desk,
+                    ...(script.noActor ? {} : { actor: desk }),
+                    ...(script.noActor || script.withPlugins
+                      ? { plugins: [{ name: "memory" }] }
+                      : {}),
                     rows: script.rows ?? {
                       where: [{ label: "Where", value: "By the window", note: "Where it stands" }],
                     },
@@ -3786,6 +3793,17 @@ test("a unit that doesn't build the capability, or give the rows, it said it wou
   s.script.noCapability = true;
   await assert.rejects(create(), saying("Desk didn't build the Desk it said it would."));
   s.script.noCapability = false;
+  // One made only of plugins: management builds none of those from a provider yet.
+  s.script.noActor = true;
+  await assert.rejects(create(), saying("Desk built the Desk with no Actor to reach it by."));
+  s.script.noActor = false;
+  // Nor its plugins beside an Actor: none would be given, so none is taken.
+  s.script.withPlugins = true;
+  await assert.rejects(
+    create(),
+    saying("Desk built the Desk with plugins, given by no provider yet."),
+  );
+  s.script.withPlugins = false;
   // No rows for the view whose rows are fixed; then rows for a view that has an operation.
   s.script.rows = {};
   await assert.rejects(create(), saying('Desk gave no rows for its view "where".'));

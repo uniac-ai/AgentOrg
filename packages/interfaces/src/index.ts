@@ -9,6 +9,8 @@ export {
 } from "./agent-provider.js";
 export {
   agentSettings,
+  CapabilityPlugin,
+  PluginName,
   SKILL_FILE_MAX,
   SkillEntry,
   SkillName,

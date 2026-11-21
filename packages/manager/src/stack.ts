@@ -1034,6 +1034,15 @@ export function createStacks(parts: StackParts) {
     const { record, undo } = work;
     if (!built)
       throw new Refused("failed", `${unit.title} didn't build the ${title} it said it would.`);
+    // A capability with parts inside the agent is management's own to build, for now.
+    const { actor } = built;
+    if (!actor)
+      throw new Refused("failed", `${unit.title} built the ${title} with no Actor to reach it by.`);
+    if (built.plugins?.length)
+      throw new Refused(
+        "failed",
+        `${unit.title} built the ${title} with plugins, given by no provider yet.`,
+      );
     const rows = built.rows ?? {};
     const wrong = rowsProblem(unit.title, worked, rows);
     if (wrong) throw new Refused("failed", wrong);
@@ -1043,7 +1052,7 @@ export function createStacks(parts: StackParts) {
       return slot;
     };
     const person = {
-      capability: await reach(built.actor, CAPABILITY_EXPORT),
+      capability: await reach(actor, CAPABILITY_EXPORT),
       operations: {} as Record<string, string>,
     };
     for (const { slot, connection } of connections)
@@ -1052,7 +1061,7 @@ export function createStacks(parts: StackParts) {
       id,
       title,
       from: instance,
-      actor: built.actor,
+      actor,
       slots: connections.map(({ slot }) => slot),
       surfaces: worked.surfaces,
       views: withRows(worked, rows),
@@ -1101,7 +1110,7 @@ export function createStacks(parts: StackParts) {
           log.warn(`Removing a unit: ${messageOf(error)}`);
           await closeAll([
             ...applied.connections,
-            ...(applied.capability ? [{ connection: applied.capability.actor }] : []),
+            ...(applied.capability?.actor ? [{ connection: applied.capability.actor }] : []),
           ]);
         }
       });

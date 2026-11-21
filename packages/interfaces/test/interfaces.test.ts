@@ -156,6 +156,29 @@ test("a unit's status may restate an instance made under older words: its answer
   assert.equal(status({ state: "connected", connections: [], now: { rows: now.rows } }), false);
 });
 
+test("a capability may be made of plugins, with or without an Actor, and the agent's settings say every plugin it holds", () => {
+  const applied = compiled(unitProvider)["apply.output"];
+  assert.ok(applied);
+  const made = { instance: "i1", connections: [], results: [] };
+  // As before: an Actor, with no plugins.
+  assert.ok(applied({ ...made, capability: { actor: "a1" } }));
+  // Only parts inside the agent, each by name with its own settings; or both.
+  const memory = { name: "memory", settings: { keep: true, tidy: { after: "6h" } } };
+  assert.ok(applied({ ...made, capability: { plugins: [memory] } }));
+  assert.ok(applied({ ...made, capability: { actor: "a1", plugins: [{ name: "search" }] } }));
+  assert.equal(applied({ ...made, capability: { plugins: [{ name: "Memory" }] } }), false);
+  assert.equal(applied({ ...made, capability: { plugins: [{ ...memory, on: true }] } }), false);
+
+  const settings = compiled(agentSettings)["get.output"];
+  assert.ok(settings);
+  // From a management that doesn't say them: none, as before.
+  assert.ok(settings({ instructions: "Hi.", skills: [] }));
+  assert.ok(
+    settings({ instructions: "Hi.", skills: [], plugins: [{ ...memory, capability: "memory" }] }),
+  );
+  assert.equal(settings({ instructions: "Hi.", skills: [], plugins: [memory] }), false);
+});
+
 test("a fact may carry a note under its value, short and never empty", () => {
   const row = {
     label: "Its work happens in",
