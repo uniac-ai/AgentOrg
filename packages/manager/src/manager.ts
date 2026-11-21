@@ -24,7 +24,7 @@ import { createActivity } from "./activity.js";
 import { type Activity, AGENTS_UNIT, createControl } from "./control.js";
 import { schemaOf, secretsSchemaOf, settle } from "./form.js";
 import { createSkills, readSkillFolder } from "./skills.js";
-import { type AgentRecord, createStacks, Records, slotFieldOf } from "./stack.js";
+import { type AgentRecord, createStacks, pluginsOf, Records, slotFieldOf } from "./stack.js";
 
 type Origin = z.infer<typeof ConnectionOrigin>;
 type Agents = Slot<typeof agentProvider>["call"];
@@ -603,7 +603,8 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
 
       ctx.exports.settings.implement({
         get: (_, { caller }) => {
-          const { instructions, purpose, parent, skills: names } = settingsOf(caller);
+          const record = settingsOf(caller);
+          const { instructions, purpose, parent, skills: names } = record;
           // A message from its maker says it is from its id: this says whose that is, while the
           // maker is here. Its name is the maker's own words, kept to one line.
           const maker = parent && records.agents[parent.agent] ? parent : undefined;
@@ -618,6 +619,7 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
                 : []),
             ].join("\n\n"),
             skills: names.flatMap((name) => library.entry(name) ?? []),
+            plugins: pluginsOf(record),
           };
         },
         skill: ({ name, path: file }, { caller }) => {

@@ -8,6 +8,7 @@ import {
   AgentCapability,
   type agentProvider,
   type agents,
+  type CapabilityPlugin,
   ConnectionOrigin,
   type ConnectionStatus,
   type Creatable,
@@ -191,6 +192,7 @@ export const Records = z.object({
 });
 
 type TheAgent = z.infer<typeof AgentRecord>;
+type ThePlugin = z.infer<typeof CapabilityPlugin>;
 type TheRecords = z.infer<typeof Records>;
 type TheUnitRecord = z.infer<typeof UnitRecord>;
 type TheTemplate = z.infer<typeof Template>;
@@ -213,6 +215,8 @@ type Provided<T> = { actor: string; call: T };
 /** Management's own units. They ask no provider: each is an exposure, and is read back as one, no unit. */
 const SKILL_UNIT = "skill";
 const CONNECTION_UNIT = "connection";
+/** Its own Memory unit, which is no exposure: a unit of the stack, as the agents unit is. */
+const MEMORY_UNIT = "memory";
 /** One exposure, however it's reached: it stands for the Connection unit or a kind of connection. */
 const MCP_UNIT = "mcp";
 const MCP_SLOT = "slot";
@@ -226,6 +230,8 @@ const AGENT_TEMPLATES = 32;
 const MAX_OPTIONS = 256;
 const MAX_PROBLEMS = 256;
 const MAX_NAME = 128;
+/** How many plugins one agent holds at most: as many as its settings answer. */
+const AGENT_PLUGINS = 64;
 const TOOLS = "tools@1";
 
 export interface Offer {
@@ -266,6 +272,8 @@ interface Taken {
   skills: Set<string>;
   /** The capabilities held, by id. */
   capabilities: Set<string>;
+  /** The plugins those are made of, by name. */
+  plugins: Set<string>;
   givers: Giver[];
 }
 /** One application under way: what it made goes in `undo`, and origins are kept at the end. */
@@ -350,6 +358,11 @@ const chatSlot = (agent: string) => `chat_${agent}`;
 type AgentBinding = { slot: string; provider: string; export: string };
 
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
+/** Every plugin of every capability an agent holds, each with the capability it is of. */
+export const pluginsOf = (record: TheAgent) =>
+  record.capabilities.flatMap(({ id, plugins = [] }) =>
+    plugins.map((plugin) => ({ ...plugin, capability: id })),
+  );
 /** The sha256 of each file of a skill, by its path. */
 const hashesOf = (files: SkillFiles) =>
   Object.fromEntries(
@@ -407,6 +420,12 @@ export function createStacks(parts: StackParts) {
   };
 
   const isAgentsUnit = (offer: Offer) => offer.provider === self && offer.unit.id === AGENTS_UNIT;
+  /**
+   * The plugins the capability a unit builds is made of, where that is known before the unit
+   * runs: management's own Memory unit's. A provider's unit says its own when applied.
+   */
+  const insideOf = (offer: Offer): ThePlugin[] =>
+    offer.provider === self && offer.unit.id === MEMORY_UNIT ? [{ name: "memory" }] : [];
   /** The connections the person made, which an agents unit can list as places. */
   const places = async () => {
     const actors = await parts.openActors();
@@ -492,6 +511,15 @@ export function createStacks(parts: StackParts) {
       ],
       needs: [],
       gives: { slots: [], skills: [{ field: "skill" }], results: [] },
+    },
+    {
+      id: MEMORY_UNIT,
+      title: "Memory",
+      description: "It remembers what you tell it to, across its conversations.",
+      capability: { id: MEMORY_UNIT, title: "Memory" },
+      form: [],
+      needs: [],
+      gives: { slots: [], skills: [], results: [] },
     },
     {
       id: CONNECTION_UNIT,
@@ -674,10 +702,19 @@ export function createStacks(parts: StackParts) {
     if (unit.capability) {
       // An agent holds one of a capability; and a view shows what its capability has.
       const { id, title } = unit.capability;
-      if (taken.capabilities.has(id) && !twice)
-        problems.push({ message: `There is a ${title} already.` });
+      const held = taken.capabilities.has(id);
+      if (held && !twice) problems.push({ message: `There is a ${title} already.` });
       taken.capabilities.add(id);
       problems.push(...heldProblems(unit, worked).map((message) => ({ message })));
+      // A plugin is one capability's, since the agent's executor loads each by its name, and an
+      // agent holds at most `AGENT_PLUGINS`. A second of the capability itself was told above.
+      for (const { name } of insideOf(offer)) {
+        if (taken.plugins.has(name)) {
+          if (!held) problems.push({ message: `The agent already holds the plugin ${name}.` });
+        } else if (taken.plugins.size >= AGENT_PLUGINS)
+          problems.push({ message: `An agent holds at most ${AGENT_PLUGINS} plugins.` });
+        taken.plugins.add(name);
+      }
     }
     if (ref !== undefined)
       taken.givers.push({
@@ -712,6 +749,7 @@ export function createStacks(parts: StackParts) {
       slots: new Set(),
       skills: new Set(),
       capabilities: new Set(itself === undefined ? [] : [itself]),
+      plugins: new Set(),
       givers: [],
     };
     const placed: Placed[] = [];
@@ -758,6 +796,7 @@ export function createStacks(parts: StackParts) {
       ),
       skills: new Set(record.skills),
       capabilities: new Set(record.capabilities.map((one) => one.id)),
+      plugins: new Set(pluginsOf(record).map((one) => one.name)),
       givers: record.units.map((unit) => ({
         ref: unit.instance,
         provider: unit.provider,
@@ -1073,6 +1112,31 @@ export function createStacks(parts: StackParts) {
     });
   };
 
+  /**
+   * The record of one of management's own units that an agent's stack keeps. Management is its
+   * provider, so one id is both of its instances.
+   */
+  const ownRecord = (
+    { unit }: Offer,
+    values: Values,
+    worked: Worked,
+    connections: TheUnitRecord["connections"],
+  ): TheUnitRecord => {
+    const instance = `uni_${crypto.randomUUID().replaceAll("-", "")}`;
+    return {
+      instance,
+      provider: self,
+      providerInstance: instance,
+      unit: unit.id,
+      title: unit.title,
+      values,
+      needs: {},
+      results: [],
+      connections,
+      skills: worked.skills.map((skill) => skill.name),
+    };
+  };
+
   /** Run one placed unit for the agent, and give it what it gives. */
   const run = async (
     work: Work,
@@ -1169,19 +1233,23 @@ export function createStacks(parts: StackParts) {
     } else if (isAgentsUnit(offer)) {
       await parts.exposeConnection(agent, self, AGENTS_SLOT);
       undo.push(() => hub.grants.unexpose({ to: agent, slot: AGENTS_SLOT }));
-      const instance = `uni_${crypto.randomUUID().replaceAll("-", "")}`;
-      made = {
-        instance,
-        provider: self,
-        providerInstance: instance,
-        unit: offer.unit.id,
-        title: offer.unit.title,
-        values,
-        needs: {},
-        results: [],
-        connections: [{ slot: AGENTS_SLOT, connection: self }],
-        skills: worked.skills.map((skill) => skill.name),
-      };
+      made = ownRecord(offer, values, worked, [{ slot: AGENTS_SLOT, connection: self }]);
+    } else if (offer.unit.capability) {
+      // Its own unit that builds a capability, of plugins: no Actor is made and the person is
+      // connected to nothing. The agent's executor reads them in its settings.
+      made = ownRecord(offer, values, worked, []);
+      const { instance } = made;
+      record.capabilities.push({
+        ...offer.unit.capability,
+        from: instance,
+        slots: [],
+        surfaces: [],
+        views: [],
+        plugins: insideOf(offer),
+      });
+      undo.push(() => {
+        record.capabilities = record.capabilities.filter((one) => one.from !== instance);
+      });
     }
 
     for (const { name, files } of worked.skills) {
@@ -1318,12 +1386,16 @@ export function createStacks(parts: StackParts) {
   const dropUnit = async (agent: string, record: TheAgent, unit: TheUnitRecord) => {
     weighed.delete(unit.instance);
     if (unit.provider === self) {
-      await hub.grants.unexpose({ to: agent, slot: AGENTS_SLOT }).catch((error) => {
-        if (!alreadyGone(error)) throw error;
-      });
-      await unreach(agent);
+      // Only the agents unit has a slot, and a reach to other agents, to take with it.
+      if (unit.unit === AGENTS_UNIT) {
+        await hub.grants.unexpose({ to: agent, slot: AGENTS_SLOT }).catch((error) => {
+          if (!alreadyGone(error)) throw error;
+        });
+        await unreach(agent);
+      }
       record.skills = record.skills.filter((skill) => !unit.skills.includes(skill));
       record.units = record.units.filter((one) => one.instance !== unit.instance);
+      record.capabilities = record.capabilities.filter((one) => one.from !== unit.instance);
       save();
       return;
     }
@@ -1631,11 +1703,15 @@ export function createStacks(parts: StackParts) {
       ]);
       return {
         bases: bases.flat(),
-        // What the MCP unit stands for isn't listed apart from it.
+        // What the MCP unit stands for isn't listed apart from it. Nor is the Memory unit, which
+        // a stack or a template names: listed, a person could give an agent a capability no
+        // executor carries the plugin of.
         units: offers
           .filter(
             ({ unit, provider }) =>
-              !(provider === self ? unit.id === CONNECTION_UNIT : slotFieldOf(unit)),
+              !(provider === self
+                ? [CONNECTION_UNIT, MEMORY_UNIT].includes(unit.id)
+                : slotFieldOf(unit)),
           )
           .map(({ unit, provider, providerName }) => ({ ...unit, provider, providerName })),
       };

@@ -839,7 +839,11 @@ async function setup(t: test.TestContext) {
         settings: {
           bound: boolean;
           call: {
-            get(input: object): Promise<{ instructions: string; skills: { name: string }[] }>;
+            get(input: object): Promise<{
+              instructions: string;
+              skills: { name: string }[];
+              plugins?: { name: string; capability: string }[];
+            }>;
             skill(input: { name: string; path?: string }): Promise<{ text: string }>;
           };
         };
@@ -1321,6 +1325,7 @@ test("an agent sees only its own settings, and only it hears that they changed",
   assert.deepEqual(await one.slots.settings.call.get({}), {
     instructions: "Be plain.",
     skills: [{ name: "secret-sauce", description: "The secret-sauce skill." }],
+    plugins: [],
   });
   assert.deepEqual((await other.slots.settings.call.get({})).skills, []);
   assert.match((await one.slots.settings.call.skill({ name: "secret-sauce" })).text, /Use it well/);
@@ -4075,6 +4080,166 @@ test("an agent whose creatable gives it a capability holds it with no unit, the 
   const [now] = again;
   assert.ok((await bound()).includes(`${now?.person?.capability} ${agent} capability`));
   assert.ok((await bound()).includes(`${now?.person?.operations.work} ${agent} tools`));
+});
+
+test("the Memory unit builds a capability made of the memory plugin, with no Actor: the agent's settings say it, and the unit isn't among those on offer", async (t) => {
+  const s = await setup(t);
+  const actors = await s.openActors();
+  const reached = async () =>
+    (await s.bindingsOf(PERSON)).map((b) => `${b.provider} ${b.export}`).sort();
+  const before = await reached();
+  const memory = s.own("memory", {});
+  const agent = await s.makeStack([memory], "Keeper");
+  const other = await s.makeStack([], "Other");
+  const [one, another] = [s.agentChannel(agent), s.agentChannel(other)];
+  await until(() => one.slots.settings.bound && another.slots.settings.bound);
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  const plugins = async (channel = one) => (await channel.slots.settings.call.get({})).plugins;
+  const held = [{ name: "memory", capability: "memory" }];
+  // Its executor reads the plugin, with the capability it is of; another agent reads none.
+  assert.deepEqual(await plugins(), held);
+  assert.deepEqual(await plugins(another), []);
+  // No Actor was made for it, and the person reaches nothing new but the two agents' chats.
+  assert.deepEqual(await s.openActors(), [...actors, agent, other].sort());
+  assert.deepEqual(await reached(), [...before, `${agent} chat`, `${other} chat`].sort());
+  // Its unit is in the stack, to be taken off again, and what it built is listed as held: with
+  // its plugin, and no slots of the person's.
+  const read = await s.calls.agents.get({ agent });
+  assert.deepEqual(
+    read.units.map((one) => [one.provider, one.unit, one.title, one.values, one.status.state]),
+    [[s.management.actorId, "memory", "Memory", {}, "connected"]],
+  );
+  const built = {
+    id: "memory",
+    title: "Memory",
+    from: read.units[0]?.instance,
+    slots: [],
+    surfaces: [],
+    views: [],
+    plugins: [{ name: "memory" }],
+  };
+  assert.deepEqual(read.capabilities, [built]);
+  // Kept on the agent as it is listed: it has no Actor to keep.
+  const kept = () =>
+    JSON.parse(readFileSync(join(s.dir, "manager.json"), "utf8")).agents[agent].capabilities;
+  assert.deepEqual(kept(), [built]);
+  // The unit isn't among those on offer, though a stack names it: listed, a person could give
+  // an agent a capability no executor carries the plugin of.
+  assert.ok(!(await s.calls.agents.units({})).units.some((one) => one.id === "memory"));
+
+  // Taken off, the agent is told and holds no plugin; added to it living, it is told again.
+  await s.calls.agents.removeUnit({ agent, instance: built.from as string });
+  await until(() => (s.heard.get(agent) ?? 0) === 1);
+  assert.deepEqual(await plugins(), []);
+  assert.deepEqual(kept(), []);
+  const taken = await s.calls.agents.get({ agent });
+  assert.deepEqual([taken.units, taken.capabilities], [[], []]);
+  await s.calls.agents.addUnit({ agent, unit: memory } as never);
+  await until(() => (s.heard.get(agent) ?? 0) === 2);
+  assert.deepEqual(await plugins(), held);
+  assert.equal(s.heard.get(other) ?? 0, 0);
+  // A template names it, as it names any unit, by its provider's name.
+  await s.calls.agents.saveTemplate({
+    id: "keeper",
+    title: "Keeper",
+    description: "",
+    base: { provider: "Agents", creatable: "plain" },
+    units: [{ provider: "Management", unit: "memory" }],
+  });
+  const { agent: templated } = await s.calls.agents.create({ template: "keeper", name: "Made" });
+  const third = s.agentChannel(templated);
+  await until(() => third.slots.settings.bound);
+  assert.deepEqual(await plugins(third), held);
+
+  // Management started again answers it from its records, and reaches for no Actor of it.
+  await s.restart(() => {});
+  // Every pass a restart makes has had its turn.
+  await new Promise((later) => setTimeout(later, 200));
+  assert.deepEqual(await plugins(), held);
+  assert.deepEqual(
+    s.warned.filter(({ line }) => line.startsWith("Reaching what an agent holds")),
+    [],
+  );
+  // It goes with its agent.
+  await s.calls.agents.remove({ agent });
+  assert.deepEqual(
+    (await s.calls.agents.list({})).agents.map((one) => one.agent).sort(),
+    [other, templated].sort(),
+  );
+});
+
+test("a capability naming a plugin the agent already holds, or taking it past 64 plugins, is a problem before anything runs", async (t) => {
+  const s = await setup(t);
+  const memory = s.own("memory", {});
+  const problems = async (input: object) => (await s.calls.agents.check(input as never)).problems;
+  // A second Memory is a second of its capability, told once.
+  assert.deepEqual(await problems({ stack: { base: s.base, units: [memory, memory] } }), [
+    { message: "There is a Memory already.", unit: 1 },
+  ]);
+  const agent = await s.makeStack([memory], "Keeper");
+  const adding = () => s.calls.agents.addUnit({ agent, unit: memory } as never);
+  assert.deepEqual(await problems({ agent, unit: memory }), [
+    { message: "There is a Memory already." },
+  ]);
+
+  type Held = { id: string; title: string; plugins: { name: string }[] };
+  const holding = (change: (held: Held[]) => Held[]) =>
+    s.restart((kept) => {
+      const record = (kept.agents as unknown as Record<string, { capabilities: Held[] }>)[agent];
+      if (record) record.capabilities = change(record.capabilities);
+    });
+  // The plugin held by another capability: refused by its name.
+  await holding((held) => held.map((one) => ({ ...one, id: "notes", title: "Notes" })));
+  assert.deepEqual(await problems({ agent, unit: memory }), [
+    { message: "The agent already holds the plugin memory." },
+  ]);
+  await assert.rejects(adding(), refused("invalid"));
+
+  // At 64 plugins an agent takes no more; with one fewer it takes this one.
+  const full = (plugins: number) =>
+    Array.from({ length: 4 }, (_, n) => ({
+      id: `held-${n}`,
+      title: `Held ${n}`,
+      slots: [],
+      surfaces: [],
+      views: [],
+      plugins: Array.from({ length: n === 0 ? plugins - 48 : 16 }, (_, i) => ({
+        name: `part-${n}-${i}`,
+      })),
+    }));
+  await holding(() => full(64));
+  const channel = s.agentChannel(agent);
+  assert.equal((await channel.slots.settings.call.get({})).plugins?.length, 64);
+  assert.deepEqual(await problems({ agent, unit: memory }), [
+    { message: "An agent holds at most 64 plugins." },
+  ]);
+  await assert.rejects(adding(), refused("invalid"));
+  await holding(() => full(63));
+  await adding();
+  const now = (await channel.slots.settings.call.get({})).plugins ?? [];
+  assert.equal(now.length, 64);
+  assert.deepEqual(now.at(-1), { name: "memory", capability: "memory" });
+});
+
+test("taking the Memory unit off an agent leaves its control unit's slot and its reach to the agents it made", async (t) => {
+  const s = await delegating(t);
+  const { agent, tools } = await s.parent({ templates: ["helper"] });
+  const child = await s.made(tools, "create_helper", { name: "Kid", purpose: "P." });
+  const { instance } = await s.calls.agents.addUnit({ agent, unit: s.own("memory", {}) } as never);
+  const reach = async () =>
+    (await s.bindingsOf(agent))
+      .filter((b) => b.consumer === agent)
+      .map((b) => `${b.slot} ${b.provider}`)
+      .sort();
+  const before = await reach();
+  assert.ok(before.includes(`control ${s.management.actorId}`));
+  assert.ok(before.includes(`chat_${child} ${child}`));
+  await s.calls.agents.removeUnit({ agent, instance });
+  assert.deepEqual(await reach(), before);
+  assert.deepEqual(
+    (await s.calls.agents.get({ agent })).units.map((one) => one.unit),
+    ["control"],
+  );
 });
 
 /** A unit's skill "notes" as management keeps it, and a wait until it says `text`. */
