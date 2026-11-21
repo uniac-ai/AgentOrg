@@ -19,8 +19,10 @@ import {
 import { NotConnected, Refused } from "@agentorg/sdk";
 import { connect } from "@agentorg/sdk/client";
 import { createLocalStore } from "../src/local-store.ts";
+import type { AgentPlugin } from "../src/plugins.ts";
 import { startAgentProvider } from "../src/provider.ts";
 import { asAsked, followsSend, named, sendOf } from "./as-asked.ts";
+import { saying } from "./saying.ts";
 
 type Request = {
   requestId: string;
@@ -42,7 +44,8 @@ async function until(condition: () => boolean | Promise<boolean>, what: string) 
 /** The worker's reply, sent to the newest message. */
 const say = (content: string) => [sendOf(content)];
 
-async function setup(t: test.TestContext) {
+/** `plugins` are those the provider carries. */
+async function setup(t: test.TestContext, plugins: AgentPlugin[] = []) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "agentorg-agents-")));
   const home = join(root, "home");
   const dir = join(root, "provider");
@@ -129,6 +132,7 @@ async function setup(t: test.TestContext) {
       credential: made.credential as string,
       model: { actor: modelActor.actorId, export: "session" },
       dir,
+      plugins,
     });
   const running = { current: await start() };
   leaving.push(() => running.current.close());
@@ -443,6 +447,152 @@ test("settings and an exposed tools@1 reach the agent as they do any engine", as
   assert.ok(
     request.instructions.startsWith("You are an assistant in AgentOrg.\n\nWhat you are for: docs."),
   );
+});
+
+/**
+ * A stand-in for management's settings, bound to `agent` at `slot`: it names the plugins `names`
+ * gives when asked, each with the settings `settings` has for it, and `changed` tells the agent
+ * they changed.
+ */
+async function settingsOf(
+  s: Awaited<ReturnType<typeof setup>>,
+  agent: string,
+  slot: string,
+  names: () => string[],
+  settings: Record<string, Record<string, string>> = {},
+) {
+  const made = s.hub.state.createActor(PERSON, { name: "Management" });
+  const management = await s.join_(
+    connect({
+      hubUrl: s.hubUrl,
+      actorId: made.actorId,
+      credential: made.credential as string,
+      exports: { settings: agentSettings },
+    }),
+  );
+  management.exports.settings.implement({
+    get: async () => ({
+      instructions: "You keep the docs.",
+      skills: [],
+      plugins: names().map((name) => ({
+        name,
+        capability: name,
+        ...(settings[name] ? { settings: settings[name] } : {}),
+      })),
+    }),
+    skill: async () => {
+      throw new Refused("unknown", "No skill is exposed.");
+    },
+  });
+  s.hub.state.bind(PERSON, { consumer: agent, slot, provider: made.actorId, export: "settings" });
+  return { changed: () => management.exports.settings.emit("changed", {}, { to: agent }) };
+}
+const offered = (request: Request) => request.tools?.map((tool) => tool.name) ?? [];
+
+test("an agent holds the plugins its settings name, of those its provider carries: from when its settings are bound, at each turn, and when told they changed, with no restart", async (t) => {
+  const said: string[] = [];
+  const s = await setup(t, [saying("notes", said), saying("search", said)]);
+  const { agent, settings } = await s.create();
+  let names = ["notes"];
+  const management = await settingsOf(s, agent, settings, () => names, { notes: { as: "mine" } });
+  // Bound, with no message sent: what its settings name is loaded, with its settings.
+  await until(() => said.includes("notes loaded as mine"), "the plugin its settings name");
+  // Not told of a change, it still reads its settings for each turn: a turn is never behind
+  // them, and what stays named stays loaded.
+  names = ["notes", "search"];
+  assert.deepEqual(offered(await s.turn("hello")), ["notes__do", "search__do"]);
+  assert.deepEqual(said, ["notes loaded as mine", "search loaded"]);
+  // Told they changed, with no message sent, it unloads what is no longer named, and stays up.
+  names = ["search"];
+  await until(() => {
+    management.changed();
+    return said.includes("notes unloaded");
+  }, "the change to be heard");
+  assert.deepEqual(said, ["notes loaded as mine", "search loaded", "notes unloaded"]);
+  assert.deepEqual(await s.agents.status({ agent }), { state: "running" });
+  assert.deepEqual(offered(await s.turn("and now?")), ["search__do"]);
+});
+
+test("a plugin its settings name that its provider doesn't carry, or that doesn't load, leaves the agent down with the reason, until it starts with settings it can hold", async (t) => {
+  const said: string[] = [];
+  const broken: AgentPlugin = {
+    name: "broken",
+    inject: ["tools"],
+    apply() {
+      throw new Error("no room");
+    },
+  };
+  const s = await setup(t, [saying("notes", said), broken]);
+  const { agent, settings } = await s.create();
+  let names = ["notes"];
+  const management = await settingsOf(s, agent, settings, () => names);
+  const down = (detail: string) =>
+    until(async () => {
+      const status = await s.agents.status({ agent });
+      return status.state === "down" && status.detail === detail;
+    }, `the agent to be down: ${detail}`);
+  // Running, it is told its settings changed, and they name one its provider doesn't carry.
+  await until(() => said.includes("notes loaded"), "the plugin its settings name");
+  names = ["notes", "memory"];
+  await until(async () => {
+    management.changed();
+    return (await s.agents.status({ agent })).state === "down";
+  }, "the change to be heard");
+  await down("This provider carries no plugin named memory.");
+  // What it held went with it, and it is off its channel.
+  assert.deepEqual(said.splice(0), ["notes loaded", "notes unloaded"]);
+  await assert.rejects(s.agents.models({ agent }), { code: "unavailable" });
+  // Started while its settings still name it, it is down again, for the same reason, with
+  // nothing loaded.
+  await s.agents.start({ agent });
+  await down("This provider carries no plugin named memory.");
+  assert.equal(said.length, 0);
+  // One it carries that doesn't load: down with what that plugin said. What loaded before it
+  // in the same go was unloaded each time its settings were read, so nothing is left loaded.
+  names = ["notes", "broken"];
+  await s.agents.start({ agent });
+  await down("The plugin broken didn't load: no room.");
+  const went = said.splice(0);
+  assert.equal(went.at(-1), "notes unloaded");
+  assert.deepEqual(
+    went.filter((_, i) => i % 2 === 0).flatMap(() => ["notes loaded", "notes unloaded"]),
+    went,
+  );
+  // With settings it can hold, it starts, and runs.
+  names = ["notes"];
+  await s.agents.start({ agent });
+  await until(() => said.includes("notes loaded"), "the plugin its settings name");
+  await until(() => s.caller.slots.chat.bound && s.hub.connected(agent), "the agent to be back");
+  assert.deepEqual(offered(await s.turn("hello")), ["notes__do"]);
+  assert.deepEqual(await s.agents.status({ agent }), { state: "running" });
+});
+
+test("an agent that joins the Hub again unloads the plugins it held before, and holds what its settings name afresh", async (t) => {
+  const said: string[] = [];
+  const s = await setup(t, [saying("notes", said)]);
+  const { agent, settings } = await s.create();
+  await settingsOf(s, agent, settings, () => ["notes"]);
+  await until(() => said.includes("notes loaded"), "the plugin its settings name");
+  // Another channel for the same Actor takes its place, then goes: its connection has ended.
+  const { credential } = JSON.parse(readFileSync(join(s.dir, "agents.json"), "utf8"))[agent];
+  const other = await connect({
+    hubUrl: s.hubUrl,
+    actorId: agent,
+    credential,
+    slots: { model: llmSession, settings: agentSettings },
+    exports: { chat },
+    start() {},
+  });
+  other.close();
+  await until(
+    async () => (await s.agents.status({ agent })).state === "down",
+    "the agent to be down",
+  );
+  // What it held is still loaded, with no channel to work on, until it joins again.
+  assert.deepEqual(said, ["notes loaded"]);
+  await s.agents.start({ agent });
+  await until(() => said.length === 3, "its plugins to be held afresh");
+  assert.deepEqual(said, ["notes loaded", "notes unloaded", "notes loaded"]);
 });
 
 test("remove closes the Actor and deletes its record, and an agent closed elsewhere is down", async (t) => {

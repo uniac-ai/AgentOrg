@@ -21,7 +21,7 @@ import { connect } from "@agentorg/sdk/client";
 import { z } from "zod";
 import { startEngine } from "./engine.js";
 import { createLocalStore } from "./local-store.js";
-import { type AgentPlugins, createPluginHost } from "./plugins.js";
+import { type AgentPlugin, type AgentPlugins, createPluginHost } from "./plugins.js";
 import { ACTIVITY, WORK_TOOL } from "./work.js";
 
 /** Who an agent made from the template is. How it works and speaks is the looper's frame. */
@@ -64,6 +64,11 @@ export interface AgentProviderOptions {
   model: { actor: string; export: string };
   /** A private folder of the provider's, which holds each agent's credential and record. */
   dir: string;
+  /**
+   * The plugins it carries, which an agent holds by name, as its settings say: none unless given.
+   */
+  // biome-ignore lint/suspicious/noExplicitAny: each plugin's settings are its own.
+  plugins?: AgentPlugin<any>[];
   log?: Log;
 }
 
@@ -91,7 +96,7 @@ export async function startAgentProvider(options: AgentProviderOptions): Promise
   const log = options.log ?? quiet;
   const { hubUrl, dir } = options;
   /** Every agent's plugins, each agent in a context of its own. */
-  const host = createPluginHost(log);
+  const host = createPluginHost(log, options.plugins);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   chmodSync(dir, 0o700);
   const path = join(dir, FILE);
@@ -142,12 +147,13 @@ export async function startAgentProvider(options: AgentProviderOptions): Promise
         throw new Refused("not_connected", "Its model isn't connected.");
       throw error;
     });
-  const inTurn = <T>(agent: string, work: (one: Held) => Promise<T>) => {
-    const one = held(agent);
+  /** One thing at a time is done to an agent, in the order asked. */
+  const queued = <T>(one: Held, work: (one: Held) => Promise<T>) => {
     const done = one.queue.then(() => work(one));
     one.queue = done.catch(() => {});
     return done;
   };
+  const inTurn = <T>(agent: string, work: (one: Held) => Promise<T>) => queued(held(agent), work);
 
   /** Join the Hub as the agent, with its engine running, or stopped if it was left so. */
   const open = async (agent: string, one: Held) => {
@@ -162,9 +168,27 @@ export async function startAgentProvider(options: AgentProviderOptions): Promise
     let plugins: AgentPlugins | undefined;
     const store = createLocalStore(folderOf(agent));
     try {
-      // The plugins it holds: none yet, until a template gives an agent one.
-      const held = await host.open(agent, { store, plugins: [] });
-      plugins = held;
+      // Its context: it holds the plugins its settings name once its engine reads them.
+      const context = await host.open(agent, { store });
+      plugins = context;
+      /**
+       * A plugin its settings name that isn't carried, or doesn't load, leaves the agent down with
+       * the reason, once what is being done to it is done: it runs with what its settings say it
+       * holds, or not at all.
+       */
+      const held: AgentPlugins = {
+        ...context,
+        hold: (named) =>
+          context.hold(named).catch((error: unknown) => {
+            void queued(one, async () => {
+              if (one.plugins !== context) return;
+              await halt(one);
+              one.state = "down";
+              one.detail = error instanceof Error ? error.message : String(error);
+            });
+            throw error;
+          }),
+      };
       const channel = await connect({
         hubUrl,
         actorId: agent,
@@ -184,7 +208,7 @@ export async function startAgentProvider(options: AgentProviderOptions): Promise
       });
       one.channel = channel;
       one.engine = engine;
-      one.plugins = held;
+      one.plugins = context;
       one.state = stopped ? "stopped" : "running";
       void channel.closed.then(() => {
         if (one.channel !== channel) return;
@@ -220,7 +244,7 @@ export async function startAgentProvider(options: AgentProviderOptions): Promise
       const one: Held = { state: "stopped", queue: Promise.resolve() };
       agents.set(agent, one);
       try {
-        await open(agent, one);
+        await queued(one, () => open(agent, one));
       } catch (error) {
         log.error(`Agent ${agent} didn't rejoin the Hub: ${String(error)}`);
         // The Hub no longer knows it: its Actor was closed while the provider was away.
@@ -258,7 +282,7 @@ export async function startAgentProvider(options: AgentProviderOptions): Promise
           const one: Held = { state: "starting", queue: Promise.resolve() };
           try {
             stored[agent] = { credential: credential as string, stopped: false };
-            await open(agent, one);
+            await queued(one, () => open(agent, one));
             if (closing) throw new Refused("unavailable", "This provider is stopping.");
             agents.set(agent, one);
             save();

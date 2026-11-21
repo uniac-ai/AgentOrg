@@ -37,7 +37,10 @@ export function startEngine(
     earlier?: string;
     /** Whether it starts stopped, as it was left. */
     stopped?: boolean;
-    /** The plugins it holds, each with a part inside it; none by default. */
+    /**
+     * Its plugins, each with a part inside it: it holds those its settings name, of those its host
+     * carries. None by default.
+     */
     plugins?: AgentPlugins;
   },
 ) {
@@ -80,6 +83,12 @@ export function startEngine(
    */
   const request = async () => {
     const settings = ctx.slots.settings.bound ? await ctx.slots.settings.call.get({}) : undefined;
+    // It holds the plugins its settings name and reads what they give in one step, which no
+    // other change comes between: a turn is never behind its settings, whether or not it heard
+    // them change.
+    const given = settings
+      ? await plugins.hold(settings.plugins ?? [])
+      : { tools: plugins.tools(), blocks: plugins.blocks() };
     // The agent's own instructions: who its main loop speaks as, with nothing of its skills.
     const voice = settings ? current(settings.instructions) : options.instructions();
     const skills = settings?.skills ?? [];
@@ -90,7 +99,7 @@ export function startEngine(
       // The agents whose conversations are exposed to it, which it talks to from itself.
       ...agentTools(ctx.exposed(), () => ctx.exposed()),
       // What its plugins give it.
-      ...plugins.tools(),
+      ...given.tools,
     ];
     // In the order they came, each asked at once so one slow server delays only itself.
     const exposed = await Promise.all(
@@ -104,7 +113,7 @@ export function startEngine(
     report(leftOut);
     // Its plugins' blocks, read once for the request: a worker is told them after its own words and
     // its skills, the front desk after who it speaks as.
-    const blocks = plugins.blocks();
+    const { blocks } = given;
     return {
       instructions: [...told.parts, ...blocks],
       blocks,
@@ -203,6 +212,22 @@ export function startEngine(
       looking = undefined;
     })();
   };
+  /**
+   * It holds the plugins its settings name from when its settings are bound, and again when they
+   * say they changed, with no turn to wait for: a plugin may have work of its own between turns.
+   * One that can't be held is its host's to act on.
+   */
+  const hold = () =>
+    void (async () => {
+      if (!ctx.slots.settings.bound) return;
+      await plugins.hold((await ctx.slots.settings.call.get({})).plugins ?? []);
+    })().catch((error: unknown) =>
+      ctx.log.warn("Its settings couldn't be read for its plugins, or one can't be held.", {
+        error: String(error),
+      }),
+    );
+  ctx.slots.settings.onBind(hold);
+  ctx.slots.settings.on("changed", hold);
   ctx.slots.model.onBind(look);
   ctx.slots.settings.onBind(look);
   ctx.onExposed(look);

@@ -1247,10 +1247,10 @@ test("a plugin's function is offered under its name and its block follows the ag
     },
   };
   const quiet = { info() {}, warn() {}, error() {} };
-  given.plugins = await createPluginHost(quiet).open("assistant", {
+  given.plugins = await createPluginHost(quiet, [notes]).open("assistant", {
     store: memory().handlers as never,
-    plugins: [{ plugin: notes }],
   });
+  await given.plugins.hold([{ name: "notes" }]);
   t.after(() => {
     delete given.plugins;
   });
@@ -1282,10 +1282,10 @@ test("a plugin hears the agent stopped last, once the turn it was in was cut", a
     },
   };
   const quiet = { info() {}, warn() {}, error() {} };
-  given.plugins = await createPluginHost(quiet).open("assistant", {
+  given.plugins = await createPluginHost(quiet, [listening]).open("assistant", {
     store: memory().handlers as never,
-    plugins: [{ plugin: listening }],
   });
+  await given.plugins.hold([{ name: "listening" }]);
   t.after(() => {
     delete given.plugins;
   });
@@ -1318,10 +1318,11 @@ test("a plugin that gives nothing changes no byte of what a request carries: the
   };
   const none = await run();
   const quiet = { info() {}, warn() {}, error() {} };
-  given.plugins = await createPluginHost(quiet).open("assistant", {
+  const silent: AgentPlugin = { name: "silent", inject: ["agent"], apply() {} };
+  given.plugins = await createPluginHost(quiet, [silent]).open("assistant", {
     store: memory().handlers as never,
-    plugins: [{ plugin: { name: "silent", inject: ["agent"], apply() {} } }],
   });
+  await given.plugins.hold([{ name: "silent" }]);
   t.after(() => {
     delete given.plugins;
   });

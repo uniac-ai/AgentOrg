@@ -5,7 +5,9 @@
  * - `tools`: functions it gives the model, offered as `<plugin>__<name>`;
  * - `prompt`: sections it adds to what the model is told, each named and ordered;
  * - `store`: its own keys in the agent's durable store;
- * - `agent`: the agent's id, and its life, said as Cordis events (`AgentEvents`).
+ * - `agent`: the agent's id.
+ * The host says the agent's life to its plugins as Cordis events (`AGENT_EVENTS`), which a plugin
+ * hears with `ctx.on`: no plugin can say them through a service.
  * Each service knows which plugin calls it: in a service's method, Cordis gives `this.ctx` as the
  * caller's context, and its fiber is the plugin. What a plugin registers is its own, that agent's
  * alone, and goes when the plugin unloads. Its failures are logged, never the agent's.
@@ -80,7 +82,7 @@ interface Kept {
   sections: Map<string, Section & { plugin: string }>;
   /** Each plugin this agent holds, by the fiber it was loaded as, with its name. */
   plugins: Map<Fiber, string>;
-  /** The agent's own `agent` service, which says its life. */
+  /** The agent's own `agent` service: the sender its life is said with. */
   said?: Agent;
 }
 
@@ -109,13 +111,25 @@ export class Tools extends Service {
     super(ctx, "tools");
     this.kept = kept;
   }
-  /** Give the model a function until the plugin unloads, or until the function it gives is called. */
+  /**
+   * Give the model a function until the plugin unloads, or until the function it gives is called.
+   * A turn keeps the functions it was offered: a call that comes after is answered that the
+   * function is no longer held, and nothing of the plugin runs.
+   */
   register(tool: Omit<Candidate, "slot">): () => void {
     const { name: slot, ctx } = callerOf(this.kept, this);
+    let held = true;
+    const run: Candidate["run"] = async (input, group) =>
+      held
+        ? tool.run(input, group)
+        : { output: `The function ${slot}__${tool.name} is no longer held.`, ok: false };
     const gone = ctx.effect(() => {
       const key = Symbol(tool.name);
-      this.kept.tools.set(key, { ...tool, slot });
-      return () => void this.kept.tools.delete(key);
+      this.kept.tools.set(key, { ...tool, slot, run });
+      return () => {
+        held = false;
+        this.kept.tools.delete(key);
+      };
     });
     return () => void gone();
   }
@@ -184,7 +198,7 @@ export class Store extends Service implements KvStore {
   }
 }
 
-/** The agent itself: its id, and its life, said to its own plugins only. */
+/** The agent itself, as its plugins reach it: its id. */
 export class Agent extends Service {
   private kept: Kept;
   constructor(ctx: Context, kept: Kept) {
@@ -195,19 +209,6 @@ export class Agent extends Service {
   /** The agent's id. */
   get id() {
     return this.kept.agent;
-  }
-  /**
-   * Tell the agent's plugins of its life. Each listener is called; none is awaited; what fails is
-   * given to `failed`. Said with this service as its sender, so only the plugins in its agent's
-   * context hear it.
-   */
-  say(event: Life, heard: Heard, failed: (error: unknown) => void) {
-    // One object, which no listener can change under the next.
-    this.ctx
-      .parallel(this, AGENT_EVENTS[event], Object.freeze({ ...heard }))
-      .catch((error: unknown) =>
-        error instanceof AggregateError ? error.errors.forEach(failed) : failed(error),
-      );
   }
 }
 
@@ -223,11 +224,16 @@ export interface AgentPlugin<C = unknown> {
   apply(ctx: Context, config: C): unknown;
 }
 
-/** A plugin an agent holds, with its settings. */
-export interface Held {
-  // biome-ignore lint/suspicious/noExplicitAny: each plugin's settings are its own.
-  plugin: AgentPlugin<any>;
-  config?: unknown;
+/** A plugin an agent holds, as its settings name it: one the host carries, with its settings. */
+export interface Named {
+  name: string;
+  settings?: Record<string, unknown>;
+}
+
+/** What an agent's plugins give a turn: their functions, and their sections in order. */
+export interface Given {
+  tools: Candidate[];
+  blocks: Part[];
 }
 
 /** An agent's plugins, as its engine reads them. */
@@ -238,6 +244,15 @@ export interface AgentPlugins {
   blocks(): Part[];
   /** Tell them of the agent's life. */
   life(event: Life, heard?: Heard): void;
+  /**
+   * Hold exactly the plugins named, of those the host carries: one newly named is loaded, one no
+   * longer named is unloaded, one named with other settings is loaded again with them, and the
+   * rest stay as they are loaded. It gives what they then give, read before any later change
+   * begins. Nothing changes for a name the host doesn't carry. A plugin that doesn't load, or
+   * needs a service none of them provides, fails it with the reason, and what this call loaded
+   * is unloaded.
+   */
+  hold(named: Named[]): Promise<Given>;
   /** Unload them all: what each registered goes with it. */
   close(): Promise<void>;
 }
@@ -247,8 +262,19 @@ export const NO_PLUGINS: AgentPlugins = {
   tools: () => [],
   blocks: () => [],
   life: () => {},
+  hold: async () => ({ tools: [], blocks: [] }),
   close: async () => {},
 };
+
+/**
+ * A plugin as an agent holds it: what Cordis gave when it was asked to load, the settings it was
+ * asked with, and the fiber it runs as, once it has begun to.
+ */
+interface Loaded {
+  loading: Fiber & PromiseLike<Fiber>;
+  settings: string;
+  fiber?: Fiber;
+}
 
 /** The services every agent's context has, by the names they are provided under. */
 const SERVICES = { tools: Tools, prompt: Prompt, store: Store, agent: Agent };
@@ -258,13 +284,24 @@ const inOrder = (a: Section & { plugin: string }, b: Section & { plugin: string 
   a.plugin.localeCompare(b.plugin) ||
   a.name.localeCompare(b.name);
 
-/** The executor's plugin host: one Cordis root, a context of its own for each agent. */
-export function createPluginHost(log: Log) {
+/**
+ * The executor's plugin host: one Cordis root, the plugins it carries, by name, and a context of
+ * its own for each agent.
+ */
+// biome-ignore lint/suspicious/noExplicitAny: each plugin's settings are its own.
+export function createPluginHost(log: Log, carried: AgentPlugin<any>[] = []) {
   const root = new Context();
+  const byName = new Map(carried.map((plugin) => [plugin.name, plugin]));
+  // What an agent's context keeps to itself: its four services, and every service a plugin it may
+  // come to hold provides, each isolated under a label of its own (Cordis keeps a service by its
+  // label), so its plugins share them and no other agent sees them.
+  const provided = new Set([
+    ...Object.keys(SERVICES),
+    ...carried.flatMap((plugin) => [plugin.provide ?? []].flat()),
+  ]);
   return {
-    /** Load the plugins `agent` holds, each with its settings, in a context of the agent's own. */
-    async open(agent: string, options: { store: KvStore; plugins: Held[] }): Promise<AgentPlugins> {
-      if (options.plugins.length === 0) return NO_PLUGINS;
+    /** Give `agent` a context of its own, with its four services: it holds no plugin until told. */
+    async open(agent: string, options: { store: KvStore }): Promise<AgentPlugins> {
       const kept: Kept = {
         agent,
         kv: options.store,
@@ -274,82 +311,142 @@ export function createPluginHost(log: Log) {
       };
       // Each plugin as the host loads it: what it is, and the fiber it runs as, named as the agent
       // holds it, so its services know it, and its own components, as that plugin.
-      const asHeld = (plugin: AgentPlugin) => ({
+      const asHeld = (plugin: AgentPlugin, one: Loaded) => ({
         name: plugin.name,
         inject: plugin.inject,
         ...(plugin.provide === undefined ? {} : { provide: plugin.provide }),
         apply(ctx: Context, config: unknown) {
+          one.fiber = ctx.fiber;
           kept.plugins.set(ctx.fiber, plugin.name);
           return plugin.apply(ctx, config);
         },
       });
-      // The agent's own context: its four services, and every service its plugins provide, each
-      // isolated in it under a label of its own (Cordis keeps a service by its label), so its
-      // plugins share them and no other agent sees them.
-      const provided = new Set([
-        ...Object.keys(SERVICES),
-        ...options.plugins.flatMap(({ plugin }) => [plugin.provide ?? []].flat()),
-      ]);
       let own: Context = root;
       for (const name of provided) own = own.isolate(name);
-      const loaded: Fiber[] = [];
-      const unload = () => Promise.all(loaded.reverse().map((fiber) => fiber.dispose()));
-      try {
-        for (const service of Object.values(SERVICES)) {
-          const fiber = own.use(service, kept);
-          loaded.push(fiber);
-          await fiber;
-        }
-        for (const { plugin, config } of options.plugins) {
-          const fiber = own.use(asHeld(plugin), config);
-          loaded.push(fiber);
-          await fiber;
-        }
-        // One that waits for a service none of the agent's plugins provides would never apply.
-        const waiting = options.plugins.filter(
-          (_, i) => loaded[Object.keys(SERVICES).length + i]?.state !== ACTIVE,
-        );
-        if (waiting.length)
-          throw new Error(
-            `${waiting.map(({ plugin }) => plugin.name).join(", ")} needs a service none of the agent's plugins provides.`,
-          );
-      } catch (error) {
-        await unload();
-        throw error;
+      const services: Fiber[] = [];
+      for (const service of Object.values(SERVICES)) {
+        const fiber = own.use(service, kept);
+        services.push(fiber);
+        await fiber;
       }
-      return {
-        tools: () => [...kept.tools.values()],
-        blocks: () =>
-          [...kept.sections.values()].sort(inOrder).flatMap(({ plugin, name, text, max }) => {
-            const owner = `plugin:${plugin}/${name}`;
-            let words: string | undefined;
-            try {
-              words = text();
-            } catch (error) {
-              log.warn("A plugin's section couldn't be read; the request goes without it.", {
-                agent,
-                owner,
-                error: String(error),
-              });
+      /** Each plugin it holds, by name. */
+      const held = new Map<string, Loaded>();
+      const unload = async (name: string) => {
+        const one = held.get(name);
+        if (!one) return;
+        held.delete(name);
+        await one.loading.dispose();
+        if (one.fiber) kept.plugins.delete(one.fiber);
+      };
+      const hold = async (named: Named[]) => {
+        const missing = named.filter(({ name }) => !byName.has(name)).map(({ name }) => name);
+        if (missing.length)
+          throw new Error(`This provider carries no plugin named ${missing.join(", ")}.`);
+        const wanted = new Map(
+          named.map(({ name, settings }) => [name, JSON.stringify(settings ?? {})]),
+        );
+        for (const [name, { settings }] of [...held])
+          if (wanted.get(name) !== settings) await unload(name);
+        const fresh: string[] = [];
+        try {
+          for (const { name, settings } of named) {
+            if (held.has(name)) continue;
+            const one = { settings: wanted.get(name) as string } as Loaded;
+            one.loading = own.use(asHeld(byName.get(name) as AgentPlugin, one), settings);
+            held.set(name, one);
+            fresh.push(name);
+          }
+          // None is judged until all have settled: one that waits for another's service loads
+          // once that one has, whatever the order they were named in, and loads again when that
+          // one is loaded again.
+          for (let moving = true; moving; ) {
+            moving = false;
+            for (const { loading } of held.values()) {
+              if (!loading.inertia) continue;
+              moving = true;
+              await loading.inertia.catch(() => {});
             }
-            return words ? [{ owner, text: words, ...(max === undefined ? {} : { max }) }] : [];
-          }),
+          }
+          const waiting: string[] = [];
+          for (const [name, { loading }] of held) {
+            await loading.then(undefined, (error: unknown) => {
+              const said = error instanceof Error ? error.message : String(error);
+              throw new Error(
+                `The plugin ${name} didn't load: ${/[.!?]$/.test(said) ? said : `${said}.`}`,
+              );
+            });
+            // One still waiting for a service none of the agent's plugins provides never loads.
+            if (loading.state !== ACTIVE) waiting.push(name);
+          }
+          if (waiting.length)
+            throw new Error(
+              `${waiting.length > 1 ? "The plugins" : "The plugin"} ${waiting.join(", ")} ${waiting.length > 1 ? "need" : "needs"} a service none of the agent's plugins provides.`,
+            );
+        } catch (error) {
+          for (const name of fresh.reverse()) await unload(name);
+          throw error;
+        }
+      };
+      const tools = () => [...kept.tools.values()];
+      const blocks = () =>
+        [...kept.sections.values()].sort(inOrder).flatMap(({ plugin, name, text, max }) => {
+          const owner = `plugin:${plugin}/${name}`;
+          let words: string | undefined;
+          try {
+            words = text();
+          } catch (error) {
+            log.warn("A plugin's section couldn't be read; the request goes without it.", {
+              agent,
+              owner,
+              error: String(error),
+            });
+          }
+          return words ? [{ owner, text: words, ...(max === undefined ? {} : { max }) }] : [];
+        });
+      /** One change at a time, in the order they were asked; none once it is closed. */
+      let closed = false;
+      let changing: Promise<unknown> = Promise.resolve();
+      const inTurn = <T>(change: () => Promise<T>) => {
+        const done = changing.then(change);
+        changing = done.catch(() => {});
+        return done;
+      };
+      return {
+        tools,
+        blocks,
+        // The host says the agent's life, with the agent's own `agent` service as the sender, so
+        // only the plugins in its context hear it. Each listener is called and none is awaited;
+        // each that fails is logged. They are given one object, which none can change under the
+        // next.
         life(event, heard = {}) {
-          kept.said?.say(event, heard, (error) =>
+          if (!kept.said) return;
+          const failed = (error: unknown) =>
             log.warn("A plugin failed on the agent's life.", {
               agent,
               event,
               error: String(error),
-            }),
-          );
+            });
+          own
+            .parallel(kept.said, AGENT_EVENTS[event], Object.freeze({ ...heard }))
+            .catch((error: unknown) =>
+              error instanceof AggregateError ? error.errors.forEach(failed) : failed(error),
+            );
         },
-        async close() {
-          await unload();
-          kept.tools.clear();
-          kept.sections.clear();
-          kept.plugins.clear();
-          delete kept.said;
-        },
+        hold: (named) =>
+          inTurn(async () => {
+            if (!closed) await hold(named);
+            return { tools: tools(), blocks: blocks() };
+          }),
+        close: () =>
+          inTurn(async () => {
+            closed = true;
+            for (const name of [...held.keys()].reverse()) await unload(name);
+            await Promise.all(services.reverse().map((fiber) => fiber.dispose()));
+            kept.tools.clear();
+            kept.sections.clear();
+            kept.plugins.clear();
+            delete kept.said;
+          }),
       };
     },
   };
