@@ -36,6 +36,7 @@
     "@agentorg/interfaces": "0.0.0",
     "@agentorg/manager": "0.0.0",
     "@agentorg/mcp": "0.0.0",
+    "@agentorg/memory": "0.0.0",
     "@agentorg/sdk": "0.0.0",
     "@agentorg/shell": "0.0.0",
     "@modelcontextprotocol/client": "2.4.0",

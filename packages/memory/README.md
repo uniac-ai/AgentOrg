@@ -1,0 +1,35 @@
+# Memory
+
+An agent's memory, as a plugin of its executor: a few short lines the agent writes itself. It is
+loaded only in an agent whose settings name it, and an agent without it is told and offered
+nothing of it.
+
+## What the model sees
+
+- **One function, `memory__edit`,** offered to each piece of the agent's work. `action` is `add`,
+  `replace` or `remove`; `replace` and `remove` take a line's `id`, `add` and `replace` its `text`.
+  Its description is one sentence. The agent's main loop, which only says whose a message is, is
+  offered no plugin's function.
+- **One section of its instructions, `## What you remember`,** while there is at least one line:
+  each line as `- [id] text (day)`. With no lines there is no section. The main loop is told it
+  too.
+
+## What it costs
+
+- **The function:** roughly 90 tokens in the tools of each request that offers it. Counted by
+  hand, not measured.
+- **The section:** the lines as they are told, with their ids and days, hold at most 2,000
+  characters together; the heading is on top of that.
+- **The prompt cache:** the section changes only when a line is added, replaced or removed. A
+  change is read from the next turn; a turn under way keeps what it was told.
+
+## Where the lines are kept
+
+In the plugin's own part of the agent's store, `plugin/memory/lines`. Unloading the plugin leaves
+them: an agent that holds it again finds its lines. A line's id is never used for another line.
+Changes are made one at a time, and one the store didn't keep is refused and changes nothing.
+
+## For the agent's other plugins
+
+Memory provides the service `memory` in its agent's context: `read`, `add`, `replace` and `remove`,
+with the same limit as the model's function. A plugin names `memory` in its `inject` to use it.

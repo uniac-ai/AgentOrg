@@ -7,6 +7,7 @@ import { startComputerProvider } from "@agentorg/computer-connector";
 import { HubState, PERSON } from "@agentorg/hub";
 import { type ManagerOptions, startManager } from "@agentorg/manager";
 import { startMcpProvider } from "@agentorg/mcp";
+import { memory } from "@agentorg/memory";
 import type { Log } from "@agentorg/sdk";
 import { startAgentProvider } from "assistant/provider";
 import { startChatGPT } from "chatgpt";
@@ -202,6 +203,8 @@ export async function startPrograms(
         credential,
         model: { actor: chatgpt, export: "session" },
         dir: dirOf("agents"),
+        // The plugins an agent's capabilities may name: each loaded only in an agent that holds it.
+        plugins: [memory],
         log: programLog,
       });
       closers.unshift(() => running.close());

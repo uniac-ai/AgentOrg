@@ -1,0 +1,25 @@
+{
+  "name": "@agentorg/memory",
+  "version": "0.0.0",
+  "private": true,
+  "description": "An agent's memory, as a plugin: a few lines it writes itself, is told in every turn, and keeps in its own store.",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    }
+  },
+  "files": [
+    "dist/src"
+  ],
+  "scripts": {
+    "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.json",
+    "test": "node --test \"dist/test/**/*.test.js\""
+  },
+  "devDependencies": {
+    "assistant": "0.0.1",
+    "cordis": "4.0.0-rc.13"
+  }
+}

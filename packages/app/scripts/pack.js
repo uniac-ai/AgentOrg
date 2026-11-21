@@ -46,6 +46,7 @@ const BUNDLED = [
   "chatgpt",
   "looper",
   "assistant",
+  "memory",
   "computer",
 ];
 /** The names of the workspace's own packages: shipped inside the cli, never fetched. */
