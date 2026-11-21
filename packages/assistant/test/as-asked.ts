@@ -72,7 +72,7 @@ export const sendOf = (text: string): Item => ({
   name: "send",
   arguments: JSON.stringify({ message: NEWEST, text }),
 });
-/** `output`'s `send`s that name no message, as `sendOf` makes them, made to name the newest one `input` holds that wasn't handed back. */
+/** `output`'s `send`s and `no_reply_needed`s that name no message, as `sendOf` makes them, made to name the newest one `input` holds that wasn't handed back. */
 export function named(output: Item[], input: Item[]): Item[] {
   const back = new Set(
     input.flatMap((item) =>
@@ -96,7 +96,8 @@ export function named(output: Item[], input: Item[]): Item[] {
     )
     .findLast((number) => number > 0 && !back.has(number));
   return output.map((item) => {
-    if (item.type !== "function_call" || item.name !== "send") return item;
+    if (item.type !== "function_call" || (item.name !== "send" && item.name !== "no_reply_needed"))
+      return item;
     const args = JSON.parse(String(item.arguments)) as { message?: unknown };
     return args.message === NEWEST
       ? { ...item, arguments: JSON.stringify({ ...args, message: newest }) }
