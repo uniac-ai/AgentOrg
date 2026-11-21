@@ -139,13 +139,14 @@ export function AgentPage({
         <div
           role="status"
           aria-label="State"
-          className="mt-5 flex h-8 items-center gap-2.5 text-[15px]"
+          className="mt-5 flex min-h-8 items-center gap-2.5 text-[15px]"
         >
           <span
             className={`mx-1 inline-block size-2 shrink-0 rounded-full ${needs ? "bg-[var(--warn)]" : (MARK[tone] ?? "bg-[var(--faint)]")}`}
           />
+          {/* Read whole: it wraps where it must, and each of several sentences has a line. */}
           <span
-            className={`min-w-0 truncate ${!needs && tone === "trouble" ? "text-[var(--bad)]" : ""}`}
+            className={`min-w-0 whitespace-pre-line ${!needs && tone === "trouble" ? "text-[var(--bad)]" : ""}`}
           >
             {needs ??
               failed ??

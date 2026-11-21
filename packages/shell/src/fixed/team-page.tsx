@@ -44,7 +44,8 @@ function AgentRow({
         <span
           className={`block truncate text-[13px] ${!needs && tone === "trouble" ? "text-[var(--bad)]" : "text-muted-foreground"}`}
         >
-          {needs ?? now?.text}
+          {/* Of several sentences, the first: the page shows each. */}
+          {needs ?? now?.text.split("\n")[0]}
         </span>
       </span>
     </button>
