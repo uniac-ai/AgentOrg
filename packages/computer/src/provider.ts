@@ -186,6 +186,12 @@ export interface ComputerProviderOptions {
   /** The first wait before a failed computer is tried again; a minute by default. For tests. */
   mendFirstMs?: number;
   /**
+   * How long a service has to answer what the provider asks or tells it before the provider goes
+   * on without the answer: a service on this machine that hasn't said what it offers by then is
+   * taken as not there. Two seconds by default. For tests.
+   */
+  answersMs?: number;
+  /**
    * Where AgentOrg Mac keeps its service's record: `MAC_RECORD` in the home on a Mac, and none
    * elsewhere. With null, none is looked for. For tests.
    */
@@ -595,6 +601,7 @@ export async function startComputerProvider(
 ): Promise<ComputerProvider> {
   const log = options.log ?? quiet;
   const { hubUrl, dir } = options;
+  const answersMs = options.answersMs ?? SERVICE_ANSWERS_MS;
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   chmodSync(dir, 0o700);
   const path = join(dir, FILE);
@@ -698,7 +705,7 @@ export async function startComputerProvider(
    */
   const answering = async () => {
     const reached = localService();
-    const info = reached && (await within(SERVICE_ANSWERS_MS, Computer.serviceInfo(reached)));
+    const info = reached && (await within(answersMs, Computer.serviceInfo(reached)));
     if (!reached || !info) return undefined;
     if (!Array.isArray(info.made))
       throw new Refused("unavailable", macHere() ? UPDATE_MAC : UPDATE_STEPS);
@@ -707,7 +714,7 @@ export async function startComputerProvider(
       throw new Refused("unavailable", UPDATE_MAC);
     // On a Mac with AgentOrg Mac, a part the person switched off, or a screen grant it lacks, is
     // said in its words.
-    const setup = macHere() ? await within(SERVICE_ANSWERS_MS, setupOf(reached)) : undefined;
+    const setup = macHere() ? await within(answersMs, setupOf(reached)) : undefined;
     return {
       reached,
       found: {
@@ -820,7 +827,7 @@ export async function startComputerProvider(
       if (!entry.computer || !("local" in entry.computer.service)) continue;
       const reached = reachOf(entry.computer.service);
       const info =
-        reached && (await within(SERVICE_ANSWERS_MS, Computer.getInfo(entry.computer.id, reached)));
+        reached && (await within(answersMs, Computer.getInfo(entry.computer.id, reached)));
       if (info) learnKind(entry.computer, info);
       if (info && fromBefore(info)) before.set(instance, beforeOf(info));
       else if (info && attachedBefore(entry.computer, info))
@@ -1248,8 +1255,7 @@ export async function startComputerProvider(
       const entry = stored[instance];
       const computer = entry?.computer;
       const reached = computer && reachOf(computer.service);
-      const info =
-        reached && (await within(SERVICE_ANSWERS_MS, Computer.getInfo(computer.id, reached)));
+      const info = reached && (await within(answersMs, Computer.getInfo(computer.id, reached)));
       if (mending.get(instance) !== mine) return;
       if (!entry || !computer || before.has(instance) || (info && fromBefore(info))) {
         mending.delete(instance);
@@ -1738,7 +1744,7 @@ export async function startComputerProvider(
       const ended = signal ? AbortSignal.any([stopping.signal, signal]) : stopping.signal;
       for (let wait = 2_000; !ended.aborted; wait = Math.min(wait * 2, 30_000)) {
         const reached = macReached();
-        if (reached && (await within(SERVICE_ANSWERS_MS, Computer.serviceInfo(reached))))
+        if (reached && (await within(answersMs, Computer.serviceInfo(reached))))
           return !ended.aborted;
         await pause(wait, ended);
       }
@@ -1750,7 +1756,7 @@ export async function startComputerProvider(
       for (const part of parts) {
         const answer = reached
           ? await within(
-              SERVICE_ANSWERS_MS,
+              answersMs,
               fetch(`${reached.apiUrl}/v1/setup/${part}`, {
                 method: "PUT",
                 headers: {

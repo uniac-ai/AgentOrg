@@ -353,6 +353,10 @@ async function setup(
     // A provider that makes is there, so the form asks which computer, as these tests were
     // written for; without it, the form states this computer.
     makes = true,
+    // How long a service has to answer. Long: the real one runs other programs, Docker among
+    // them, each time it says what it offers, and on a busy machine it answers later than the
+    // two seconds it has by default, which is no part of what these tests are about.
+    answersMs = 20_000,
   } = {},
 ) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "agentorg-computer-")));
@@ -397,6 +401,7 @@ async function setup(
       ...(webUrl ? { webUrl } : {}),
       timing: { firstDelayMs, pingEveryMs },
       mendFirstMs,
+      answersMs,
       macRecord: mac ? macRecord : null,
       makes: on,
       log: { info() {}, warn() {}, error: (line: string) => void logged.push(line) },
@@ -2437,6 +2442,30 @@ test("at a start, a service here whose record names somewhere else isn't started
     3000,
   );
   assert.equal(command.ran(), false, "agentcomputer wasn't run");
+});
+
+test("a service on this machine has a while to answer, and is taken as not there after it", async (t) => {
+  // One that takes a moment to say what it offers, as the real one does on a busy machine.
+  const slow = createServer((_, response) => {
+    setTimeout(() => {
+      response.setHeader("content-type", "application/json");
+      response.end(JSON.stringify({ version: "0.0.41", thisComputer: { ready: true }, made: [] }));
+    }, 300);
+  });
+  await new Promise<void>((resolve) => slow.listen(0, "127.0.0.1", resolve));
+  t.after(() => slow.close());
+  const apiUrl = `http://127.0.0.1:${(slow.address() as AddressInfo).port}`;
+  /** Why this computer can't be had, as the form says it to a provider that waits `answersMs`. */
+  const why = async (answersMs: number) => {
+    const { units, data } = await setup(t, { service: false, answersMs });
+    recordIn(t, data, { apiUrl, apiKey: "token" });
+    const unit = (await units.units({})).units.find((one) => one.id === "computer");
+    return form(unit, "kind")?.options?.[0]?.unavailable;
+  };
+  // Given less than it takes, it is as no service: with no `agentcomputer` to start, the form
+  // says to install one. Given longer, it is found.
+  assert.match((await why(100)) ?? "", /npm install -g/);
+  assert.equal(await why(5_000), undefined);
 });
 
 test("a service that crashed isn't found, and its port gets no token", async (t) => {
