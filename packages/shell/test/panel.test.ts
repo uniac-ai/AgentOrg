@@ -3,6 +3,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { type Browser, chromium, type Locator, type Page } from "@playwright/test";
+import { noted } from "./design/samples.ts";
 import { SESSION, standIn } from "./stand-in.ts";
 
 let browser: Browser;
@@ -22,14 +23,6 @@ async function open(gateway: Gateway, hash = "#/team", width = 1440): Promise<Pa
   await chatButton(page).waitFor();
   await noted(gateway);
   return page;
-}
-/** The shell has its note of what is read: a reply said from here on is new. */
-async function noted(gateway: Gateway) {
-  for (let tries = 0; !gateway.notes.has("ui/read-conversations"); tries++) {
-    assert.ok(tries < 400, "the note of what is read is begun");
-    await new Promise((done) => setTimeout(done, 20));
-  }
-  await new Promise((done) => setTimeout(done, 5));
 }
 /** The list, open, with every conversation it will show: `count` rows. */
 async function listed(page: Page, count: number) {

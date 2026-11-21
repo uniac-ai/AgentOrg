@@ -612,7 +612,8 @@ export interface Call {
 export async function standIn(options: { creatables?: Creatable[] } = {}) {
   /** The address a sign-in gives. */
   let authorizeUrl = "https://auth.example/authorize";
-  let sendDelayMs = 0;
+  /** While held, what the record says of a message sent waits for the test to let it go. */
+  let sendsHeld: Promise<void> | undefined;
   /** How many units were added to living agents, to name each one. */
   let added = 0;
   const { agents, connections } = seed();
@@ -1266,8 +1267,8 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
         if (idle) say(agent, "status", agent.chat.status);
       };
       // A real agent says these before it answers the call. A test may hold them back.
-      if (sendDelayMs === 0) said();
-      else setTimeout(said, sendDelayMs);
+      if (sendsHeld) void sendsHeld.then(said);
+      else said();
       return { messageId: message.id };
     }
     throw new Refusal("invalid", `chat has no method ${method} here.`);
@@ -1960,9 +1961,14 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
       failed.chat.status = { state: "idle" };
       say(failed, "status", failed.chat.status);
     },
-    /** How long the record takes to say what was sent. */
-    delaySends: (ms: number) => {
-      sendDelayMs = ms;
+    /** What the record says of each message sent waits until what this returns is called. */
+    holdSends(): () => void {
+      let release = () => {};
+      sendsHeld = new Promise<void>((done) => (release = done));
+      return () => {
+        sendsHeld = undefined;
+        release();
+      };
     },
     /** A piece of a reply as it is written: in the person's conversation, or another party's. */
     delta: (agent: string, id: string, text: string, party = PERSON) =>

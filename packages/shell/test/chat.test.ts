@@ -103,15 +103,23 @@ test(
 test(
   "a sent message shows at once, once, and stays where it is when the record has it",
   withGateway(async (gateway) => {
-    gateway.delaySends(1200);
+    // What the record says of it waits until the test lets it go.
+    const release = gateway.holdSends();
     const page = await open(gateway);
     await input(page).fill("slow to record");
     await input(page).press("Enter");
     const sent = mine(page, "slow to record");
     await sent.waitFor();
     await page.waitForTimeout(400);
+    const working = page
+      .getByRole("main")
+      .getByRole("status", { name: "State" })
+      .getByText("Working");
+    assert.equal(await working.count(), 0, "the record hasn't said it yet");
     const before = await sent.boundingBox();
-    await page.waitForTimeout(1200);
+    release();
+    // The record says the message, then the agent at work: once that shows, the message is in it.
+    await working.waitFor();
     assert.equal(await sent.count(), 1, "never twice");
     assert.deepEqual(await sent.boundingBox(), before);
     await page.close();

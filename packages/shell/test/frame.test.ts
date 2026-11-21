@@ -3,6 +3,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { type Browser, chromium, type Locator, type Page } from "@playwright/test";
+import { noted } from "./design/samples.ts";
 import { SESSION, standIn } from "./stand-in.ts";
 
 let browser: Browser;
@@ -45,14 +46,6 @@ const place = (page: Page, name: string | RegExp) =>
   bar(page).getByRole("button", { name, exact: typeof name === "string" });
 /** The label a place shows beside it. */
 const label = (page: Page) => page.locator('[data-slot="tooltip-content"]');
-/** The shell has its note of what is read: a reply said from here on is new. */
-async function noted(gateway: Gateway) {
-  for (let tries = 0; !gateway.notes.has("ui/read-conversations"); tries++) {
-    assert.ok(tries < 400, "the note of what is read is begun");
-    await new Promise((done) => setTimeout(done, 20));
-  }
-  await new Promise((done) => setTimeout(done, 5));
-}
 const reply = (id: string, text: string) => ({
   id,
   role: "assistant" as const,
