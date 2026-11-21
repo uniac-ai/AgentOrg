@@ -132,6 +132,11 @@ mkdir "$work/install"
 (cd "$work/install" && echo '{"private":true}' >package.json &&
   npm install --silent --no-audit --no-fund --cache "$work/cache" "$tarball")
 agentorg="$work/install/node_modules/.bin/agentorg"
+# The frontend inside it carries the licences of the packages it bundles, beside its notice.
+for file in NOTICE dist/THIRD_PARTY_LICENSES.txt; do
+  [ -s "$work/install/node_modules/@agentorg/cli/dist/node_modules/@agentorg/shell/$file" ] ||
+    { echo "The cli's frontend has no $file" >&2; exit 1; }
+done
 # Beside the cli, the one @agentorg package from the registry is AgentComputer's SDK, at the version
 # the cli names; every other one is inside the cli.
 top="$(ls "$work/install/node_modules/@agentorg" | tr '\n' ' ')"
@@ -311,6 +316,10 @@ mkdir "$work/core" "$work/front"
 (cd "$work/core" && echo '{"private":true}' >package.json &&
   npm install --silent --no-audit --no-fund --cache "$work/cache" "$core")
 tar -xzf "$front" -C "$work/front"
+# The frontend carries its own licence, its notice, and the licences of the packages it bundles.
+for file in LICENSE NOTICE THIRD_PARTY_LICENSES.txt; do
+  [ -s "$work/front/frontend/$file" ] || { echo "The frontend tarball has no $file" >&2; exit 1; }
+done
 corebin="$work/core/node_modules/.bin/agentorg"
 [ ! -e "$work/core/node_modules/@agentorg/cli/dist/node_modules/@agentorg/shell" ] ||
   { echo "The core alone carries the shell" >&2; exit 1; }

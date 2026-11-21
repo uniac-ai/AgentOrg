@@ -162,7 +162,9 @@ try {
     if (!existsSync(join(built, "index.html")))
       throw new Error("The shell isn't built: npm run build first.");
     cpSync(built, join(work, "frontend"), { recursive: true });
-    // What the shell carries under licences of its own, beside it.
+    // Its own licence, the repository's, and what the shell carries under licences of its own; the
+    // packages it bundles are in its THIRD_PARTY_LICENSES.txt, which the build wrote.
+    copyFileSync(join(root, "LICENSE"), join(work, "frontend", "LICENSE"));
     copyFileSync(join(root, "packages/shell/NOTICE"), join(work, "frontend", "NOTICE"));
     mkdirSync(destination, { recursive: true });
     const file = join(destination, `agentorg-frontend-${release}.tgz`);

@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 The agentorg authors
 # Installs AgentOrg on this Mac, for the account that runs it: the Mac app, which lends this Mac to
 # agents; a Node of AgentOrg's own; the core, as a background service that starts at every login;
 # and a launcher, `agentorg`. Then it opens the dashboard, signed in. Run again, it puts back what

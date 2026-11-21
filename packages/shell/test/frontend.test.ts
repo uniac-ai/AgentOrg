@@ -35,10 +35,10 @@ test("the tab's icon is AgentOrg's, a PNG at each size the page names", () => {
 test("the built folder has its index.html, and nothing the core wouldn't serve as what it is", () => {
   const files = readdirSync(dist);
   assert.ok(files.includes("index.html"));
-  // The core serves .html, .js, .css, .svg and .png as what they are; frontend.json is read, not
-  // fetched.
-  assert.deepEqual(
-    files.filter((file) => !/\.(html|js|css|svg|png)$/.test(file)),
-    ["frontend.json"],
-  );
+  // The core serves .html, .js, .css, .svg and .png as what they are; frontend.json is read, and
+  // THIRD_PARTY_LICENSES.txt kept for whoever has the folder: neither is fetched.
+  assert.deepEqual(files.filter((file) => !/\.(html|js|css|svg|png)$/.test(file)).sort(), [
+    "THIRD_PARTY_LICENSES.txt",
+    "frontend.json",
+  ]);
 });

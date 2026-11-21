@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 The agentorg authors
 # Installs AgentOrg on this Mac from a release: it reads the version npm's channel names, fetches
 # that release's install.sh and SHA256SUMS, and runs install.sh once its sum is the one listed.
 #
