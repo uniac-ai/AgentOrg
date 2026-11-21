@@ -23,7 +23,7 @@ import { DatabaseSync } from "node:sqlite";
 import test, { after } from "node:test";
 import { Computer } from "@agentorg/computer-sdk";
 import { HubState } from "@agentorg/hub";
-import { completed, fakeOpenAI, type Script, text } from "chatgpt/fake-openai";
+import { completed, fakeOpenAI, type Script } from "chatgpt/fake-openai";
 import WebSocket from "ws";
 import { type App, startApp } from "../src/index.ts";
 
@@ -87,6 +87,13 @@ async function until(condition: () => boolean | Promise<boolean>, what: string) 
 /** This machine's screen and the person's own browser are never a test's: off, whatever is ready. */
 const NEITHER = { screen: "off", ownBrowser: "none" };
 const refused = (code: string) => (error: unknown) => (error as { code?: string }).code === code;
+/** The number of the newest message a conversation's own loop reads: the work there is comes after. */
+const newestIn = (input: unknown[] = []) => {
+  const said = (input as { role?: string; content?: unknown }[]).findLast(
+    (item) => item.role === "user" && /^\[\d+\]/.test(String(item.content)),
+  );
+  return Number(/^\[(\d+)\]/.exec(String(said?.content ?? ""))?.[1] ?? 0);
+};
 /** The browser Playwright installed for the tests. */
 function headlessShell(): string {
   const root =
@@ -354,12 +361,14 @@ test("an agent given Memory keeps a line it writes, and is told it at its next t
     if (!request.url.endsWith("/responses")) return fake.handle(request);
     const body = (await request.clone().json()) as {
       instructions: string;
+      input: unknown[];
       tools?: { name: string }[];
     };
     const tools = (body.tools ?? []).map((tool) => tool.name);
     if (tools.includes("route")) {
       const call = { type: "function_call", call_id: `r${++routed}`, name: "route" };
-      fake.script({ events: [completed([{ ...call, arguments: '{"title":"Talk"}' }])] });
+      const to = JSON.stringify({ message: newestIn(body.input), title: "Talk" });
+      fake.script({ events: [completed([{ ...call, arguments: to }])] });
       return fake.handle(request);
     }
     worker.push({ instructions: body.instructions, tools });
@@ -470,7 +479,7 @@ test("a turn cut off as the app stops goes on when it is started again, with the
   const fake = await fakeOpenAI();
   const asked: { instructions: string; said: unknown }[] = [];
   let held = false;
-  /** How often the agent's main loop was asked whose a message is: it says new work. */
+  /** How often a conversation's own loop was asked: it passes the message on to new work. */
   let routed = 0;
   const s = await open(t, undefined, async (request) => {
     if (!request.url.endsWith("/responses")) return fake.handle(request);
@@ -481,9 +490,8 @@ test("a turn cut off as the app stops goes on when it is started again, with the
     };
     if (body.tools?.some((tool) => tool.name === "route")) {
       const call = { type: "function_call", call_id: `r${++routed}`, name: "route" };
-      fake.script({
-        events: [completed([{ ...call, arguments: '{"title":"Long"}' }])],
-      });
+      const to = JSON.stringify({ message: newestIn(body.input), title: "Long" });
+      fake.script({ events: [completed([{ ...call, arguments: to }])] });
       return fake.handle(request);
     }
     asked.push({ instructions: body.instructions, said: body.input.at(-1) });
@@ -536,19 +544,20 @@ test("a turn cut off as the app stops goes on when it is started again, with the
   assert.equal(asked.length, 2);
 });
 
-test("a model request being tried again is on the agent's Activity: the main loop's at its top, a piece of work's on it, gone at the answer and at giving up", async (t) => {
-  // OpenAI's responses on a port of this machine. A request of the main loop, or of a piece of
+test("a model request being tried again is on the agent's Activity, on the conversation's entry or a piece of work's, gone at the answer and at giving up", async (t) => {
+  // OpenAI's responses on a port of this machine. A request of a conversation's own loop, or of a piece of
   // work, is dropped while it is cut, as a connection that breaks; else each is answered with the
   // next of its own answers.
   const fake = await fakeOpenAI();
   const cut = { main: false, work: false };
   type Answer = Script | ((number: number) => Script);
   const answers: { main: Answer[]; work: Answer[] } = { main: [], work: [] };
-  /** The number the newest message a request reads starts with, as a worker is shown it. */
+  /** The number the newest message a request reads starts with, as a loop is shown it. */
   const numberOf = (input: { role?: string; content?: unknown }[]) => {
-    const said = input.findLast((item) => item.role === "user")?.content;
-    const words = typeof said === "string" ? said : JSON.stringify(said ?? "");
-    return Number(/\[(\d+)\]/.exec(words)?.[1] ?? 0);
+    const words = (item: { content?: unknown }) =>
+      typeof item.content === "string" ? item.content : JSON.stringify(item.content ?? "");
+    const said = input.findLast((item) => item.role === "user" && /^\[\d+\]/.test(words(item)));
+    return Number(/\[(\d+)\]/.exec(said ? words(said) : "")?.[1] ?? 0);
   };
   const server = createServer(async (request, response) => {
     const chunks: Buffer[] = [];
@@ -611,7 +620,7 @@ test("a model request being tried again is on the agent's Activity: the main loo
   // Its Activity, read as a page reads it: the view's operation, through the person's own slot.
   type Retry = { attempt: number; of: number; at: string };
   type Read = {
-    works: { id: string; state: string; failed?: true; retrying?: Retry }[];
+    works: { id: string; title: string; state: string; failed?: true; retrying?: Retry }[];
     retrying?: Retry;
   };
   const { capabilities } = await person.call<{
@@ -668,56 +677,67 @@ test("a model request being tried again is on the agent's Activity: the main loo
     }
   };
 
-  // A message to a conversation that follows no work: the main loop's request, cut, is tried
-  // again, said at Activity's top, and goes when it answers once the connection is back.
+  const sent = { type: "function_call", call_id: "s1", name: "send" };
+  const sends = (text: string) => (number: number) => ({
+    events: [completed([{ ...sent, arguments: JSON.stringify({ message: number, text }) }])],
+  });
+  /** The conversation's own entry in Activity. */
+  const conversation = async () =>
+    (await activity()).works.find((one) => one.title === "This conversation");
+
+  // A message: the conversation's own loop's request, cut, is tried again, said on its entry, and
+  // goes when it answers once the connection is back.
   cut.main = true;
-  answers.main.push({ events: [completed([text("Here.")])] });
+  answers.main.push(sends("Here."));
   let asked = Date.now();
   await person.call(slot, "send", { text: "Are you there?" });
   const main = await watch(
-    async () => (await activity()).retrying,
+    async () => (await conversation())?.retrying,
     (seen) => (seen.at(-1)?.attempt ?? 0) >= 2,
   );
   sane(main, asked);
   cut.main = false;
-  await until(async () => (await texts()).at(-1) === "Here.", "the main loop to answer");
+  await until(async () => (await texts()).at(-1) === "Here.", "the conversation to answer");
   await idle();
+  assert.equal((await conversation())?.retrying, undefined);
   assert.equal((await activity()).retrying, undefined);
 
   // New work: its request, cut, is tried again, said on the piece of work, and goes when it
   // answers.
-  answers.main.push({
+  const route = (to: object) => (number: number) => ({
     events: [
       completed([
-        { type: "function_call", call_id: "r1", name: "route", arguments: '{"title":"Report"}' },
+        {
+          type: "function_call",
+          call_id: "r1",
+          name: "route",
+          arguments: JSON.stringify({ message: number, ...to }),
+        },
       ]),
     ],
   });
-  const sent = { type: "function_call", call_id: "s1", name: "send" };
-  answers.work.push((number) => ({
-    events: [
-      completed([{ ...sent, arguments: JSON.stringify({ message: number, text: "Done." }) }]),
-    ],
-  }));
+  answers.main.push(route({ title: "Report" }));
+  answers.work.push(sends("Done."));
   cut.work = true;
   asked = Date.now();
   await person.call(slot, "send", { text: "Write the report." });
-  const piece = async () => (await activity()).works[0];
+  const piece = async () => (await activity()).works.find((one) => one.title === "Report");
   const work = await watch(
     async () => (await piece())?.retrying,
     (seen) => seen.length === 1,
   );
   sane(work, asked);
   assert.equal((await piece())?.state, "working");
-  assert.equal((await activity()).retrying, undefined, "the main loop isn't trying again");
+  assert.equal((await conversation())?.retrying, undefined, "the conversation isn't trying again");
   cut.work = false;
   await until(async () => (await texts()).at(-1) === "Done.", "the work to answer");
   await idle();
   assert.equal((await piece())?.retrying, undefined);
 
-  // Given up: the piece of work that follows the conversation, at rest, takes the next message
-  // itself. The try after a retry asks for a wait longer than a minute, so its failure is the
-  // answer, and the retry goes with it.
+  // Given up: the conversation passes the next message on to that piece of work. The try after a
+  // retry asks for a wait longer than a minute, so its failure is the answer, and the retry goes
+  // with it.
+  answers.main.push(route({ work: (await piece())?.id }));
   answers.work.push({ status: 429, code: "rate_limit_exceeded", retryAfterMs: "61000" });
   cut.work = true;
   asked = Date.now();
@@ -1241,7 +1261,7 @@ function matchesSaved(name: string, text: string) {
   );
 }
 
-test("an agent made from the Assistant template is told the saved words, by its main loop and in its work", async (t) => {
+test("an agent made from the Assistant template is told the saved words, by its conversation's own loop and in its work", async (t) => {
   const root = newFolder("agentorg-told-");
   const data = join(root, "data");
   const workspace = join(root, "work");
@@ -1257,12 +1277,14 @@ test("an agent made from the Assistant template is told the saved words, by its 
       if (!request.url.endsWith("/responses")) return fake.handle(request);
       const body = (await request.clone().json()) as {
         instructions: string;
+        input: unknown[];
         tools?: { name: string }[];
       };
       if (body.tools?.some((tool) => tool.name === "route")) {
         told.frontDesk.push(body.instructions);
         const call = { type: "function_call", call_id: "r1", name: "route" };
-        fake.script({ events: [completed([{ ...call, arguments: '{"title":"Say hello"}' }])] });
+        const to = JSON.stringify({ message: newestIn(body.input), title: "Say hello" });
+        fake.script({ events: [completed([{ ...call, arguments: to }])] });
         return fake.handle(request);
       }
       told.worker.push(body.instructions);

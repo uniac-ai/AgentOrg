@@ -22,7 +22,7 @@ import type { Context } from "cordis";
 import { createLocalStore } from "../src/local-store.ts";
 import type { AgentPlugin } from "../src/plugins.ts";
 import { startAgentProvider, withoutOf } from "../src/provider.ts";
-import { asAsked, followsSend, named, sendOf } from "./as-asked.ts";
+import { asAsked, followsSend, named, passOn, sendOf } from "./as-asked.ts";
 import { saying } from "./saying.ts";
 
 type Request = {
@@ -96,13 +96,10 @@ async function setup(t: test.TestContext, plugins: AgentPlugin[] = []) {
       ],
     }),
     respond: async (request) => {
-      // The main loop is answered at once, with new work; `requests` are the workers'.
+      // A conversation's own loop passes its newest message on to new work at once; `requests` are
+      // the workers'.
       if (request.tools?.some((tool) => tool.name === "route"))
-        return {
-          output: [
-            { type: "function_call", callId: "r", name: "route", arguments: '{"title":"Work"}' },
-          ],
-        };
+        return { output: named([passOn(request.input)], request.input as never) as never };
       // One that only follows what was sent is answered with nothing, and is not among `requests`.
       if (followsSend(request.input as never)) return { output: [] };
       requests.push(asAsked(request) as Request);

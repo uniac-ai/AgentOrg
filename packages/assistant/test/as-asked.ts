@@ -65,6 +65,25 @@ export function asAsked<
 
 type Item = { type: string; [key: string]: unknown };
 const NEWEST = "newest";
+/**
+ * A conversation's own loop passing the newest message it holds on (see `named`): to the work it
+ * was told of first, in the last item of its request, which is what a follow-up is given to; or
+ * with none, to new work.
+ */
+export const passOn = (input: readonly unknown[] = [], title = "Work"): Item => {
+  const listed = String((input.at(-1) as { content?: unknown } | undefined)?.content ?? "");
+  // Of the work this conversation has: another conversation's is not where its follow-ups go.
+  const there = listed
+    .split("\n")
+    .find((line) => line.startsWith("- ") && !/; in another conversation\)/.test(line))
+    ?.match(/^- ([^:\s]+): /)?.[1];
+  return {
+    type: "function_call",
+    callId: crypto.randomUUID(),
+    name: "route",
+    arguments: JSON.stringify({ message: NEWEST, ...(there ? { work: there } : { title }) }),
+  };
+};
 /** A worker's reply, sent to the newest message it read and hasn't handed back (see `named`). */
 export const sendOf = (text: string): Item => ({
   type: "function_call",
@@ -74,15 +93,16 @@ export const sendOf = (text: string): Item => ({
 });
 /** `output`'s `send`s and `no_reply_needed`s that name no message, as `sendOf` makes them, made to name the newest one `input` holds that wasn't handed back. */
 export function named(output: Item[], input: Item[]): Item[] {
+  // Handed back, or passed on by a conversation's own loop.
   const back = new Set(
     input.flatMap((item) =>
       item.type === "function_call" &&
-      item.name === "hand_back" &&
+      (item.name === "hand_back" || item.name === "route") &&
       input.some(
         (one) =>
           one.type === "function_call_output" &&
           one.callId === item.callId &&
-          String(one.output).startsWith("Handed back."),
+          /^(Handed back|Passed on)/.test(String(one.output)),
       )
         ? [(JSON.parse(String(item.arguments)) as { message: number }).message]
         : [],
@@ -96,7 +116,10 @@ export function named(output: Item[], input: Item[]): Item[] {
     )
     .findLast((number) => number > 0 && !back.has(number));
   return output.map((item) => {
-    if (item.type !== "function_call" || (item.name !== "send" && item.name !== "no_reply_needed"))
+    if (
+      item.type !== "function_call" ||
+      !["send", "no_reply_needed", "route"].includes(String(item.name))
+    )
       return item;
     const args = JSON.parse(String(item.arguments)) as { message?: unknown };
     return args.message === NEWEST

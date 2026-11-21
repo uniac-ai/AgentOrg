@@ -160,7 +160,7 @@ export function createChats(options: {
   store: Store;
   /**
    * The agent's model, and what a request to it says and offers, as its looper asks for them;
-   * `voice` is the agent's own instructions, which its main loop speaks as.
+   * `voice` is the agent's own instructions, which each conversation's own loop speaks as.
    */
   model: Model;
   request(): Promise<{
@@ -184,7 +184,10 @@ export function createChats(options: {
     /** What a piece of the agent's work did changed. */
     worked(): void;
   };
-  /** Its plugins, told of its life: its work's turns and summaries, and its going idle. */
+  /**
+   * Its plugins, told of its life: the turns and summaries of its work and of each conversation's
+   * own loop, and its going idle.
+   */
   life?(event: Life, heard?: Heard): void;
   log: Log;
 }) {
@@ -279,6 +282,8 @@ export function createChats(options: {
         return party === PERSON ? undefined : (party ?? "a party it doesn't know");
       },
       files: filesOf,
+      // Each conversation has the agent's own loop, which every message there reaches first.
+      conversations: true,
       log,
     }),
   );
