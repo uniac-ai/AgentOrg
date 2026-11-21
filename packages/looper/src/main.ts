@@ -9,7 +9,7 @@
  * and `no_reply_needed`, which it is not offered for a message that joined turns. Each time is
  * one model request, which holds nothing of those before it but what it is given.
  */
-import { NO_REPLY } from "./loop.js";
+import { NO_REPLY, reactionOf } from "./loop.js";
 import { PICTURES_BUDGET, withPictures } from "./record.js";
 import { build, type Part } from "./told.js";
 import {
@@ -109,6 +109,8 @@ export interface Decided {
   placed?: { work: string } | { title: string };
   stop?: { work: string; turn?: number };
   quiet?: true;
+  /** With `quiet`: the emoji it closed with, if it gave one. */
+  reaction?: string;
 }
 
 /** A work's title: the first line of `text` that says anything, in a few words. */
@@ -300,10 +302,17 @@ export function createMain(options: {
           // Arguments that don't read: as a call that says nothing.
           routed = {};
         }
-      const quiet = reply.output.some(
+      const close = reply.output.find(
         (item) => item.type === "function_call" && item.name === CLOSE.name,
       );
-      return { ...(text.trim() ? { text } : {}), routed, quiet };
+      const quiet = close !== undefined;
+      // Its emoji, if it gave one that is: one that isn't is let go, and the message closed all the same.
+      let reaction: string | undefined;
+      if (close?.type === "function_call")
+        try {
+          reaction = reactionOf((JSON.parse(close.arguments) as { reaction?: unknown })?.reaction);
+        } catch {}
+      return { ...(text.trim() ? { text } : {}), routed, quiet, reaction };
     } finally {
       if (asking === mine) asking = undefined;
       if (mine.retrying) {
@@ -334,13 +343,13 @@ export function createMain(options: {
         CLOSE,
       ]);
       if (!asked) return undefined;
-      const { text, routed, quiet } = asked;
+      const { text, routed, quiet, reaction } = asked;
       const answered: Decided = text === undefined ? {} : { answer: text };
       // Text and no call: it answered, and nothing is placed; and so with text beside saying it
       // needs no reply, as what it wrote may already be showing.
       if (!routed && text !== undefined) return answered;
       // No text and no `route`, and it needs no reply: closed, with nothing said or placed.
-      if (!routed && quiet) return { quiet: true };
+      if (!routed && quiet) return { quiet: true, ...(reaction ? { reaction } : {}) };
       // A call that names work to stop only stops: nothing is placed.
       if (typeof routed?.stop === "string" && routed.stop !== "") {
         const turn = turnOf(routed.stop, works);

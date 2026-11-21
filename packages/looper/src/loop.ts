@@ -40,6 +40,8 @@ import { build, type Part, partsOf } from "./told.js";
 import { capped, refused, runTool } from "./tools.js";
 import {
   type Call,
+  type Card,
+  type CardAnswer,
   codeOf,
   head,
   type Item,
@@ -172,6 +174,76 @@ export const NO_REPLY: ToolSpec = {
     required: ["message"],
   },
 };
+/** Whole characters as a person sees them, a flag or a sequence joined into one included. */
+const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+/**
+ * A close's reaction as given: one emoji, a flag or a sequence joined into one included, or nothing
+ * when what was given is no emoji. Not yet offered to the model: `no_reply_needed` takes it.
+ */
+export const reactionOf = (value: unknown): string | undefined =>
+  typeof value === "string" &&
+  value.length <= 16 &&
+  [...graphemes.segment(value)].length === 1 &&
+  /\p{Extended_Pictographic}|\p{Regional_Indicator}/u.test(value)
+    ? value
+    : undefined;
+/** The most a card holds: questions, choices each, and characters of each of its words. */
+const CARD = { most: 4, label: 48, detail: 120, question: 200, header: 12 };
+/** Words of a card: trimmed, at most `max` characters; none when not given; `false` when broken. */
+const cardWords = (value: unknown, max: number, optional = true): string | undefined | false => {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "string") return false;
+  const words = value.trim();
+  // Words that may be left out, left empty, are left out.
+  if (words.length === 0) return optional ? undefined : false;
+  return words.length <= max ? words : false;
+};
+/** Whether a model gave something: not none at all, and not `null`, which it gives for nothing. */
+const given = (value: unknown) => value !== undefined && value !== null;
+/** One question of a card, as given; `false` when it breaks what a card holds. */
+const questionOf = (value: Record<string, unknown>): Card["questions"][number] | false => {
+  const { choices, question, header, many } = value;
+  if (!Array.isArray(choices) || choices.length < 1 || choices.length > CARD.most) return false;
+  const kept: Card["questions"][number]["choices"] = [];
+  for (const one of choices) {
+    const choice =
+      typeof one === "string" ? { label: one } : ((one ?? {}) as Record<string, unknown>);
+    const label = cardWords(choice.label, CARD.label, false);
+    const detail = cardWords(choice.detail, CARD.detail);
+    if (!label || detail === false) return false;
+    kept.push({ label, ...(detail ? { detail } : {}) });
+  }
+  const words = cardWords(question, CARD.question);
+  const tab = cardWords(header, CARD.header);
+  if (words === false || tab === false) return false;
+  return {
+    ...(words ? { question: words } : {}),
+    ...(tab ? { header: tab } : {}),
+    choices: kept,
+    ...(many === true ? { many: true as const } : {}),
+  };
+};
+/**
+ * A reply's card as `send` gives it: `choices`, with `question`, `many` and `confirm`, for one
+ * question; or `questions`, two to four, each named by its `header`. None when neither is given;
+ * `false` when what is given breaks what a card holds. Not yet offered to the model.
+ */
+export const askOf = (args: Record<string, unknown>): Card | undefined | false => {
+  const { questions, choices, confirm } = args;
+  if (!given(questions) && !given(choices)) return undefined;
+  if (given(questions)) {
+    if (given(choices) || !Array.isArray(questions)) return false;
+    if (questions.length < 2 || questions.length > CARD.most) return false;
+    const kept = questions.map((one) => questionOf((one ?? {}) as Record<string, unknown>));
+    return kept.every((one) => one !== false && one.header !== undefined)
+      ? { questions: kept as Card["questions"] }
+      : false;
+  }
+  const one = questionOf(args);
+  if (!one) return false;
+  // A question of which several are picked is always confirmed: a confirm beside it says nothing.
+  return { questions: [one], ...(confirm === true && !one.many ? { confirm: true as const } : {}) };
+};
 /** The looper's own functions, offered to every worker after its host's tools. */
 const OWN = [SEND, HAND_BACK, STATUS, NO_REPLY];
 /** Their names: a request carries these beside the tools its host gives. */
@@ -233,9 +305,10 @@ export interface LoopOut {
   failed(thread: string, problem: { code: string; message: string }): void;
   /**
    * What became of the user message `id` in `thread`, once it is kept on it; while it is taken,
-   * with `step`, the words of the step its work is at, said again when that changes.
+   * with `step`, the words of the step its work is at, said again when that changes; closed with
+   * no reply, with the `reaction` it was closed with, if any.
    */
-  progress?(thread: string, id: string, progress: Progress, step?: string): void;
+  progress?(thread: string, id: string, progress: Progress, step?: string, reaction?: string): void;
   /** Its record is about to be, or was, summarized. */
   life?(event: "compacting" | "compacted"): void;
 }
@@ -509,13 +582,20 @@ export function createLoop(options: {
     try {
       args = JSON.parse(call.arguments);
     } catch {}
-    const { message, text } = (args ?? {}) as Record<string, unknown>;
+    const given = (args ?? {}) as Record<string, unknown>;
+    const { message, text } = given;
     if (typeof message !== "number" || typeof text !== "string" || text.trim() === "") {
       await refuse("Give the message's number and what to say.");
       return false;
     }
+    // What it says may already be showing as it was written, so a card that breaks what a card
+    // holds is let go, never a reason to refuse it.
+    const card = askOf(given);
+    if (card === false)
+      log.warn("A reply's card broke what a card holds and was let go.", { thread });
+    const ask = card || undefined;
     const output = { type: "function_call_output" as const, callId: call.callId, output: SENT };
-    const sent = await record.reply(message, [call, output], { id, read });
+    const sent = await record.reply(message, [call, output], { id, read }, ask);
     if (!sent) {
       await refuse(
         `There is no message [${message}] of this work to answer: check its number, and that it wasn't handed back.`,
@@ -547,9 +627,12 @@ export function createLoop(options: {
     try {
       args = JSON.parse(call.arguments);
     } catch {}
-    const { message } = (args ?? {}) as Record<string, unknown>;
+    const { message, reaction: given } = (args ?? {}) as Record<string, unknown>;
     if (typeof message !== "number")
       return refuse("Give the number of the message that needs no reply.");
+    const reaction = reactionOf(given ?? undefined);
+    if (given != null && reaction === undefined)
+      return refuse("A reaction is one emoji, such as 👍.");
     const output = { type: "function_call_output" as const, callId: call.callId, output: CLOSED };
     const closed = await record.closeQuietly(message, [call, output], { id, read });
     if (closed === undefined)
@@ -558,10 +641,10 @@ export function createLoop(options: {
       );
     if (typeof closed === "string")
       return refuse(`Message [${message}] is already ${closed}: it needs nothing more.`);
-    // Said once, where that may follow; any step it was at goes with it.
+    // Said once, where that may follow, with its reaction; any step it was at goes with it.
     const closes = closed.entry.closes as string;
-    if (await record.progress(closed.thread, closes, "closed"))
-      out.progress?.(closed.thread, closes, "closed");
+    if (await record.progress(closed.thread, closes, "closed", reaction))
+      out.progress?.(closed.thread, closes, "closed", undefined, reaction);
     return true;
   };
   /**
@@ -1008,9 +1091,15 @@ export function createLoop(options: {
     current.waiting = true;
   };
 
-  const said = async (text: string, thread: string, joined: boolean, images?: Picture[]) => {
+  const said = async (
+    text: string,
+    thread: string,
+    joined: boolean,
+    images?: Picture[],
+    answer?: CardAnswer,
+  ) => {
     const kept = await record.append(
-      { ...userEntry(text, images), ...(joined ? { joined: true as const } : {}) },
+      { ...userEntry(text, images, answer), ...(joined ? { joined: true as const } : {}) },
       { thread },
     );
     show(kept);
@@ -1074,12 +1163,12 @@ export function createLoop(options: {
      * running or waiting for its place, the turn takes it at its next model request: `turn` is
      * then that turn's number. With no turn it starts one, whose progress is said through `out`.
      */
-    send: (text: string, thread: string, images?: Picture[]) =>
+    send: (text: string, thread: string, images?: Picture[], answer?: CardAnswer) =>
       inOrder(async (cancelled, closed): Promise<{ messageId: string; turn?: number }> => {
         const into = turn;
         if (into) {
           into.took.add(thread);
-          const { id, place } = await said(text, thread, true, images);
+          const { id, place } = await said(text, thread, true, images, answer);
           // It joined the turn: the turn holds it, whether or not a request of it reads it.
           into.upTo = Math.max(into.upTo ?? 0, place ?? 0);
           return { messageId: id, turn: into.id };
@@ -1089,7 +1178,7 @@ export function createLoop(options: {
           async (current) => {
             enter(current, await record.begun());
             current.took.add(thread);
-            const { id } = await said(text, thread, draining !== undefined, images);
+            const { id } = await said(text, thread, draining !== undefined, images, answer);
             return { opened: { messageId: id } };
           },
           true,

@@ -122,6 +122,25 @@ export type Progress = "taken" | "answered" | "closed";
 export type WorkLife = "turnStarted" | "turnEnded" | "compacting" | "compacted";
 
 /** A message as it is said in a thread: what a person said, or a reply. */
+/**
+ * A decision card under a reply: one question, or two to four each named for its tab, of one to
+ * four choices. A tap on a lone question is the answer, unless `confirm` or `many`.
+ */
+export interface Card {
+  questions: {
+    question?: string;
+    header?: string;
+    choices: { label: string; detail?: string }[];
+    many?: true;
+  }[];
+  confirm?: true;
+}
+/** A card's answer: the reply that carries it, and the choices picked, by place, per question. */
+export interface CardAnswer {
+  to: string;
+  picks: number[][];
+}
+
 export interface Shown {
   id: string;
   role: "user" | "assistant";
@@ -132,9 +151,14 @@ export interface Shown {
   images?: Picture[];
   /**
    * For what a person said: the latest of what has become of it, once anything has, and while it
-   * is taken, the words of the step its work is at.
+   * is taken, the words of the step its work is at. `reaction` is the emoji it was closed with, if
+   * any, which stays whatever is said of it after.
    */
-  progress?: { state: Progress; step?: string };
+  progress?: { state: Progress; step?: string; reaction?: string };
+  /** For a reply: the decision card under it, for the person to answer by picking. */
+  ask?: Card;
+  /** For what a person said by picking on a card: that card, and what was picked. */
+  answer?: CardAnswer;
 }
 
 /**

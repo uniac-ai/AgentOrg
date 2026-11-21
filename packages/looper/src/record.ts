@@ -10,6 +10,8 @@
 import { z } from "zod";
 import { Compacted, summaryItem, type ToCompact } from "./compaction.js";
 import {
+  type Card,
+  type CardAnswer,
   cutInside,
   head,
   Item,
@@ -104,6 +106,24 @@ export const Entry = z.object({
    * last set by any that does. Dropped once it is answered or closed.
    */
   step: z.string().optional(),
+  /** For a user message closed with no reply: the emoji it was closed with, if any. */
+  reaction: z.string().optional(),
+  /** For a reply: the decision card under it. */
+  ask: z
+    .object({
+      questions: z.array(
+        z.object({
+          question: z.string().optional(),
+          header: z.string().optional(),
+          choices: z.array(z.object({ label: z.string(), detail: z.string().optional() })),
+          many: z.literal(true).optional(),
+        }),
+      ),
+      confirm: z.literal(true).optional(),
+    })
+    .optional(),
+  /** For a user message said by picking on a card: that card's reply, and what was picked. */
+  answer: z.object({ to: z.string(), picks: z.array(z.array(z.number())) }).optional(),
   /**
    * For what the main loop said in answer to messages it decided with nothing placed, or the line
    * it kept as it closed one quietly: their ids. Such a message is decided, as one a reply `closes`
@@ -461,8 +481,16 @@ export function messageOf(entry: Entry): Shown {
     at: entry.at,
     ...(images.length > 0 ? { images } : {}),
     ...(entry.role === "user" && entry.progress
-      ? { progress: { state: entry.progress, ...(entry.step ? { step: entry.step } : {}) } }
+      ? {
+          progress: {
+            state: entry.progress,
+            ...(entry.step ? { step: entry.step } : {}),
+            ...(entry.reaction ? { reaction: entry.reaction } : {}),
+          },
+        }
       : {}),
+    ...(entry.role === "assistant" && entry.ask ? { ask: entry.ask as Card } : {}),
+    ...(entry.role === "user" && entry.answer ? { answer: entry.answer } : {}),
   };
 }
 
@@ -509,9 +537,10 @@ const kept = (entry: Entry): Entry => ({
 /** Stored values read at once when what is kept is first loaded. */
 export const READS = 16;
 
-/** A user message as it is kept when said. */
-export const userEntry = (text: string, images?: Picture[]) => ({
+/** A user message as it is kept when said; one said by picking on a card keeps what was picked. */
+export const userEntry = (text: string, images?: Picture[], answer?: CardAnswer) => ({
   role: "user" as const,
+  ...(answer ? { answer } : {}),
   items: [
     {
       type: "message" as const,
@@ -745,21 +774,39 @@ export function createThread(
    * the store refuses is as it was, and is logged: what became of a message is never what fails
    * its work.
    */
-  const advance = (record: Kept, to: Progress, step?: string): Promise<boolean> | undefined => {
-    const { progress: was, step: stood } = record.entry;
+  const advance = (
+    record: Kept,
+    to: Progress,
+    step?: string,
+    reaction?: string,
+  ): Promise<boolean> | undefined => {
+    const { progress: was, step: stood, reaction: had } = record.entry;
     if (record.entry.role !== "user" || !mayFollow(was, to)) return undefined;
     const now = to === "taken" ? step : undefined;
+    // A reaction comes with a close, and stays on the message whatever is said of it after.
+    const reacted = to === "closed" && reaction ? reaction : undefined;
     const advanced = change(
       record,
-      ({ step: _, ...entry }) => ({ ...entry, progress: to, ...(now ? { step: now } : {}) }),
-      ({ progress, step, ...entry }) =>
-        progress !== to
-          ? { ...entry, ...(progress === undefined ? {} : { progress }), ...(step ? { step } : {}) }
-          : {
-              ...entry,
-              ...(was === undefined ? {} : { progress: was }),
-              ...(stood ? { step: stood } : {}),
-            },
+      ({ step: _, ...entry }) => ({
+        ...entry,
+        progress: to,
+        ...(now ? { step: now } : {}),
+        ...(reacted ? { reaction: reacted } : {}),
+      }),
+      ({ progress, step, reaction: shown, ...entry }) => {
+        // The reaction it set goes back to the one before, unless another was set since.
+        const back = reacted && shown === reacted ? had : shown;
+        return {
+          ...entry,
+          ...(back ? { reaction: back } : {}),
+          ...(progress !== to
+            ? { ...(progress === undefined ? {} : { progress }), ...(step ? { step } : {}) }
+            : {
+                ...(was === undefined ? {} : { progress: was }),
+                ...(stood ? { step: stood } : {}),
+              }),
+        };
+      },
     );
     return advanced.store().then(
       () => true,
@@ -929,11 +976,13 @@ export function createThread(
      * Say `to` of each user message `ids` names, where it may follow: once written, the ids of
      * those it was kept of.
      */
-    async progress(ids: string[], to: Progress): Promise<string[]> {
+    async progress(ids: string[], to: Progress, reaction?: string): Promise<string[]> {
       const held = await load();
       const kept = await Promise.all(
         held.records.flatMap((record) => {
-          const written = ids.includes(record.entry.id) ? advance(record, to) : undefined;
+          const written = ids.includes(record.entry.id)
+            ? advance(record, to, undefined, reaction)
+            : undefined;
           return written ? [written.then((ok) => (ok ? [record.entry.id] : []))] : [];
         }),
       );
@@ -1004,6 +1053,20 @@ export function createThread(
       while (held.records.some((record) => record.taking?.size))
         await Promise.all(held.records.map((record) => record.writes));
       return { returned: returnedOf(held), offers: offersOf(held) };
+    },
+    /**
+     * The card under the reply `to`, if it carries one, and whether it is open: nothing said by
+     * the person after it, and no newer card.
+     */
+    async card(to: string): Promise<{ ask: Card; open: boolean } | undefined> {
+      const records = (await load()).records.filter(({ entry }) => saidIn(entry));
+      const at = records.findIndex(({ entry }) => entry.id === to);
+      const ask = records[at]?.entry.ask;
+      if (at === -1 || records[at]?.entry.role !== "assistant" || !ask) return undefined;
+      const open = !records
+        .slice(at + 1)
+        .some(({ entry }) => entry.role === "user" || entry.ask !== undefined);
+      return { ask: ask as Card, open };
     },
     /** Messages before `before`, oldest first, as many as fit `limit` and `PAGE_BUDGET`. */
     async page(before: string | undefined, limit: number) {
@@ -1430,15 +1493,24 @@ export function createRecord(options: {
     },
     /**
      * Say what `items`, a `send` and its output, sent, in reply to its user message at `place`,
-     * in the thread that message was said in; `id` and `read` as `append` takes them. Nothing,
-     * when it has no such message to answer: none at that place, one it handed back, or one in a
-     * thread it has left.
+     * in the thread that message was said in, with the card under it if any; `id` and `read` as
+     * `append` takes them. Nothing, when it has no such message to answer: none at that place,
+     * one it handed back, or one in a thread it has left.
      */
-    async reply(place: number, items: Item[], at: { id?: string; read?: number }) {
+    async reply(place: number, items: Item[], at: { id?: string; read?: number }, ask?: Card) {
       const found = answerable(own(await load()), place);
       if (!found) return undefined;
       const message = found.record.entry.id;
-      return keep(found.thread, () => ({ role: "assistant" as const, items, closes: message }), at);
+      return keep(
+        found.thread,
+        () => ({
+          role: "assistant" as const,
+          items,
+          closes: message,
+          ...(ask ? { ask } : {}),
+        }),
+        at,
+      );
     },
     /**
      * Close its user message at `place` quietly, with no reply: keep `items`, a
@@ -1555,9 +1627,12 @@ export function createRecord(options: {
     async closeOpen(from: number, upTo: number) {
       return (await advanceOpen(from, upTo, (into, record) => into.advance(record, "closed"))).kept;
     },
-    /** Say `to` of its user message `id` in `thread`, where that may follow: whether it was said. */
-    async progress(thread: string, id: string, to: Progress): Promise<boolean> {
-      return (await options.thread(thread).progress([id], to)).length > 0;
+    /**
+     * Say `to` of its user message `id` in `thread`, where that may follow, with the emoji it was
+     * closed with if any: whether it was said.
+     */
+    async progress(thread: string, id: string, to: Progress, reaction?: string): Promise<boolean> {
+      return (await options.thread(thread).progress([id], to, reaction)).length > 0;
     },
     /**
      * Hand back what waits for it in `thread`, which it is leaving: a message there that names

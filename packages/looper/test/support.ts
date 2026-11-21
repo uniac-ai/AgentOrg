@@ -1,4 +1,6 @@
 import {
+  type Card,
+  type CardAnswer,
   createLooper,
   Entry,
   type FilesOf,
@@ -81,6 +83,8 @@ export function looperWith(
     role: string;
     text: string;
     images?: Picture[];
+    ask?: Card;
+    answer?: CardAnswer;
   }[] = [];
   const deltas: { thread: string; id: string; text: string }[] = [];
   /** Each time it said whether anything is at work, and each message that got no answer. */
@@ -95,6 +99,8 @@ export function looperWith(
   const progress: string[] = [];
   /** What each piece of work's life said, in order: `work: event`. */
   const lives: string[] = [];
+  /** Each close said with a reaction: `thread: id emoji`. */
+  const reactions: string[] = [];
   /**
    * What each worker's request held, in the order the model reads it, each of the person's
    * messages without the number it starts with, and what was sent as its words; `numbered` has
@@ -276,8 +282,16 @@ export function looperWith(
       ...(options.voice === undefined ? {} : { voice: options.voice }),
     }),
     out: {
-      message(thread, { id, role, text, images }) {
-        messages.push({ thread, id, role, text, ...(images ? { images } : {}) });
+      message(thread, { id, role, text, images, ask, answer }) {
+        messages.push({
+          thread,
+          id,
+          role,
+          text,
+          ...(images ? { images } : {}),
+          ...(ask ? { ask } : {}),
+          ...(answer ? { answer } : {}),
+        });
         said.push(`${thread}: ${role}: ${text}`);
         options.saying?.(`${thread}: ${role}: ${text}`);
       },
@@ -287,8 +301,10 @@ export function looperWith(
       // None for the main loop: its model request being tried again, or no longer.
       worked: (work) => void worked.push(work ?? ""),
       life: ({ event, work }) => void lives.push(`${work}: ${event}`),
-      progress: (thread, id, fact, step) =>
-        void progress.push(`${thread}: ${id} ${fact}${step === undefined ? "" : `: ${step}`}`),
+      progress: (thread, id, fact, step, reaction) => {
+        progress.push(`${thread}: ${id} ${fact}${step === undefined ? "" : `: ${step}`}`);
+        if (reaction !== undefined) reactions.push(`${thread}: ${id} ${reaction}`);
+      },
     },
     ...(options.stopped === undefined ? {} : { stopped: options.stopped }),
     ...(options.stopGroup === undefined ? {} : { stopGroup: options.stopGroup }),
@@ -338,6 +354,7 @@ export function looperWith(
     worked,
     progress,
     lives,
+    reactions,
     answer,
     fail,
     fill,
