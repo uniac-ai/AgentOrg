@@ -765,7 +765,7 @@ async function listAll(computer, path = ".") {
 async function playSteps(group, at, slot, files) {
   const events = [];
   const watch = () => {
-    for (const event of ["message", "delta", "status"])
+    for (const event of ["message", "delta", "status", "progress"])
       person.subscribe(slot, event, (payload) => events.push({ at: now(), event, payload }));
   };
   watch();
@@ -879,6 +879,8 @@ async function playSteps(group, at, slot, files) {
       words: words.reduce((a, b) => a + b, 0),
       lastWords: words.at(-1) ?? 0,
       questions: (all.match(/\?/g) ?? []).length,
+      // Replies that carry a decision card: a card asks as a question mark does.
+      cards: replies.filter((e) => e.payload.ask).length,
       headings: (all.match(/^#{1,6}\s/gm) ?? []).length,
       lists: (all.match(/^\s*([-*]|\d+\.)\s/gm) ?? []).length,
       bold: (all.match(/\*\*[^*]+\*\*/g) ?? []).length,
@@ -913,7 +915,16 @@ async function playSteps(group, at, slot, files) {
         finalReply: replies.length ? round(replies.at(-1).at - sent[i]) : undefined,
         idle: idle ? round(idle.at - sent[i]) : undefined,
       },
-      replies: texts.map((text, k) => ({ text, words: words[k] })),
+      replies: texts.map((text, k) => ({
+        text,
+        words: words[k],
+        // The decision card under it, if it carries one.
+        ...(replies[k]?.payload.ask ? { ask: replies[k].payload.ask } : {}),
+      })),
+      // The emoji a message was closed with, each time one was.
+      reactions: mine.flatMap((e) =>
+        e.event === "progress" && e.payload.reaction ? [e.payload.reaction] : [],
+      ),
       words: { total: c.words, longest: Math.max(0, ...words) },
       form: {
         headings: c.headings,
